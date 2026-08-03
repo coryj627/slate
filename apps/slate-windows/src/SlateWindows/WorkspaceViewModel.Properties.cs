@@ -468,7 +468,7 @@ internal sealed partial class WorkspaceViewModel
             System.IO.Path.GetFileName(path),
             row.Key,
             () => RetryPropertyEditWithFreshHash(row, deleted),
-            () => ReloadPropertiesFromDisk(path, row.Key));
+            () => ReloadDiscardingOnOwner(path, row));
     }
 
     /// <summary>Keep Mine: re-issue THE SAME OPERATION against the
@@ -519,8 +519,29 @@ internal sealed partial class WorkspaceViewModel
     /// at the refresh's COMPLETION by the header VM — PropertiesReloaded
     /// on success, PropertiesReloadFailed with the reason on failure
     /// (contract 9; never an eager success echo).</summary>
-    private void ReloadPropertiesFromDisk(string path, string? discardDraftKey) =>
-        RefreshPropertiesFor(path, ReloadAnnounce.SuccessAndFailure, discardDraftKey);
+    /// <summary>Reload after a ROW conflict: the conflicted row's own
+    /// header discards that draft and speaks the outcome; every other
+    /// same-path header refreshes silently and KEEPS its drafts
+    /// (round 7 — the discard must not land on whichever duplicate
+    /// was enumerated first).</summary>
+    private void ReloadDiscardingOnOwner(string path, PropertyRowViewModel row)
+    {
+        if (row.Owner is { } owner)
+        {
+            owner.ReloadDiscarding(row.Key);
+            foreach (WorkspaceTabViewModel tab in Groups.SelectMany(group => group.Tabs))
+            {
+                if (string.Equals(tab.Path, path, StringComparison.Ordinal)
+                    && tab.Properties is { } peer
+                    && !ReferenceEquals(peer, owner))
+                {
+                    peer.RefreshProperties();
+                }
+            }
+            return;
+        }
+        RefreshPropertiesFor(path, ReloadAnnounce.SuccessAndFailure);
+    }
 
     /// <summary>Terminal completion (contract 4): success
     /// re-baselines clean same-path tabs to the report hash BEFORE

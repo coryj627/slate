@@ -173,7 +173,7 @@ internal sealed class AddPropertyViewModel : BindableBase
         // trip. A mismatch means the choice would silently become
         // something else on the authoritative re-read; null means the
         // value can't be stored at all.
-        string? storedKind = SlateUniffiMethods.RoundTripPropertyKind(key, built!);
+        string? storedKind = PropertyKindAuthority.WouldStoreAs(key, built!);
         if (storedKind is null)
         {
             built = null;

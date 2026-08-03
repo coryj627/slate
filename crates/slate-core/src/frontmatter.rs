@@ -1125,6 +1125,20 @@ fn parse_hash(yaml_src: &str) -> Result<YamlHash, FrontmatterEditError> {
     let docs = YamlLoader::load_from_str(yaml_src).map_err(|e| {
         FrontmatterEditError::MalformedFrontmatter(rewrite_duplicate_key_message(e.to_string()))
     })?;
+    // Audit W4-4 round 7: a block can hold MORE than one YAML document
+    // when it contains an interior separator our delimiter scan doesn't
+    // treat as the closing fence (`--- # note`). Every edit path
+    // replaces the whole frontmatter range from this single parsed
+    // mapping, so keeping only the first document would silently delete
+    // the rest. Refuse, exactly like anchors/aliases above.
+    if docs.len() > 1 {
+        return Err(FrontmatterEditError::MalformedFrontmatter(
+            "frontmatter block contains more than one YAML document; editing would \
+             silently drop all but the first. Remove the interior `---` separator \
+             before editing properties"
+                .to_string(),
+        ));
+    }
     match docs.into_iter().next() {
         Some(Yaml::Hash(h)) => Ok(h),
         // Empty `---\n---` is a valid starting point for edits — treat
@@ -1883,6 +1897,22 @@ mod tests {
                 "round-trip failed for key {k}"
             );
         }
+    }
+
+    #[test]
+    fn set_property_refuses_multi_document_frontmatter_instead_of_truncating() {
+        // `--- # second` is a YAML document separator but not a Slate
+        // closing fence, so the block parses as TWO documents. Editing
+        // rewrites the whole range, which would drop everything after
+        // the separator (W4-4 adversarial round 7).
+        let src = "---\ntitle: A\n--- # second\nperson: Alice\n---\nbody\n";
+        let err = set_property_in_source(src, "added", &PropertyValue::Text("x".to_string()))
+            .unwrap_err();
+        assert!(
+            matches!(err, FrontmatterEditError::MalformedFrontmatter(ref m)
+                if m.contains("more than one YAML document")),
+            "unexpected error: {err:?}"
+        );
     }
 
     #[test]

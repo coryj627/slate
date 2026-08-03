@@ -871,6 +871,90 @@ public sealed class NotePropertiesTests
     }
 
     [Fact]
+    public void RowCommitAcceptsStructuralDatesCoreWouldStore()
+    {
+        RunSta(() =>
+        {
+            using FixtureVault fixture = MakeVault("props-structural-date");
+            using VaultSession session = OpenScanned(fixture.Root);
+            using var workspace = new WorkspaceViewModel(
+                session, fixture.Root, () => [], _ => { },
+                startInteractionBackgroundWork: false);
+            NotePropertiesViewModel properties = AttachProperties(workspace, "props.md");
+            PropertyRowViewModel due = properties.Rows.Single(r => r.Key == "due");
+
+            // Round 7, contract 10: core classifies dates
+            // STRUCTURALLY, so a calendar-invalid but well-shaped
+            // value is a real stored date — the row must NOT refuse
+            // what core would happily keep as a date.
+            due.EditorText = "2026-99-99";
+            Assert.True(due.ValidateForCommit());
+            due.CommitCommand.Execute(null);
+            WaitForUi(() => !workspace.PropertyWriteInFlightFor("props.md"));
+            Property stored = SlateUniffiMethods
+                .ParseFrontmatterProperties(session.ReadNoteParts("props.md").FmSource)
+                .Single(property => property.Key == "due");
+            Assert.Equal("date", stored.Kind);
+            Assert.Contains("2026-99-99", stored.ValueJson, StringComparison.Ordinal);
+
+            // A value core would NOT keep as a date still refuses with
+            // the mac shape message — the guard survives, it just uses
+            // core's rule instead of a mirror.
+            due.EditorText = "sometime";
+            Assert.False(due.ValidateForCommit());
+            Assert.Equal("Date must be YYYY-MM-DD.", due.ValidationError);
+        });
+    }
+
+    [Fact]
+    public void ReloadDiscardsOnTheCONFLICTEDHeaderNotTheFirstDuplicate()
+    {
+        using FixtureVault fixture = MakeVault("props-owner-discard");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new List<A11yEvent>();
+        using var workspace = new WorkspaceViewModel(
+            session, fixture.Root, () => [], announced.Add,
+            startInteractionBackgroundWork: false);
+        (Action KeepMine, Action Reload)? resolution = null;
+        workspace.PropertyConflictDialog = (_, _, keepMine, reload) =>
+            resolution = (keepMine, reload);
+        NotePropertiesViewModel first = AttachProperties(workspace, "props.md");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        workspace.DuplicateTabCommand.Execute(null);
+        NotePropertiesViewModel second =
+            workspace.EnsureActiveTabProperties(synchronousForTests: true)!;
+        Assert.NotSame(first, second);
+
+        _ = session.SaveText(
+            "props.md",
+            PropsFrontmatter.Replace("title: Hello", "title: External") + PropsBody,
+            tab.SavedContentHash);
+        first.RefreshProperties();
+        second.RefreshProperties();
+
+        // BOTH headers hold a dirty `title` draft; the conflict comes
+        // from the SECOND (later duplicate) header.
+        first.Rows.Single(r => r.Key == "title").EditorText = "FirstHeaderEdit";
+        PropertyRowViewModel conflicted = second.Rows.Single(r => r.Key == "title");
+        conflicted.EditorText = "SecondHeaderEdit";
+        conflicted.CommitCommand.Execute(null);
+        Assert.NotNull(resolution);
+
+        // Round 7, contract 2: the discard lands on the header that
+        // OWNS the conflicted row — the first duplicate's unrelated
+        // draft for the same key must survive.
+        resolution!.Value.Reload();
+        Assert.Equal("External", second.Rows.Single(r => r.Key == "title").EditorText);
+        Assert.False(second.Rows.Single(r => r.Key == "title").IsDirty);
+        Assert.Equal(
+            "FirstHeaderEdit", first.Rows.Single(r => r.Key == "title").EditorText);
+        Assert.True(first.Rows.Single(r => r.Key == "title").IsDirty);
+        Assert.Equal(
+            1, announced.Count(item => item is A11yEvent.PropertiesReloaded));
+    }
+
+    [Fact]
     public void StoredValueDatePickerTruthTableIsPinned()
     {
         Assert.True(PropertyRowViewModel.StoredValueTakesDatePicker(

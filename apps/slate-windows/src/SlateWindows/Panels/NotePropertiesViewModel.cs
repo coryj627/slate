@@ -164,6 +164,12 @@ internal sealed class NotePropertiesViewModel : PanelWorkScheduler
     /// spoken at this refresh's completion, never eagerly, and a
     /// stale discarded publish cannot hand its announcement to a
     /// later request.</summary>
+    /// <summary>Discard the named draft on THIS header only — used by
+    /// the conflict resolution so the edit that was actually
+    /// conflicted is the one dropped (round 7).</summary>
+    public void ReloadDiscarding(string discardDraftKey) =>
+        RefreshProperties(ReloadAnnounce.SuccessAndFailure, discardDraftKey);
+
     public void RefreshProperties(
         ReloadAnnounce announce = ReloadAnnounce.None, string? discardDraftKey = null)
     {
@@ -248,7 +254,10 @@ internal sealed class NotePropertiesViewModel : PanelWorkScheduler
             foreach (var property in properties)
             {
                 var row = new PropertyRowViewModel(
-                    property, path, contentHash, _commit, _revertAnnounce, _requestDelete);
+                    property, path, contentHash, _commit, _revertAnnounce, _requestDelete)
+                {
+                    Owner = this,
+                };
                 if (parkedDrafts.TryGetValue(row.Key, out PropertyDraft? parked))
                 {
                     row.Draft = parked;

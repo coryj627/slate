@@ -321,3 +321,37 @@ Two were genuine data-loss paths that earlier rounds never reached:
   WORDING once core reports a mismatch. The matrix now fails on false
   refusals too — a refusal is legitimate only when core would not
   have stored the chosen kind.
+
+## Round-7 resolutions (2026-08-03)
+
+Round 7 falsified 2, 6, and 10 again (1, 3, 4, 5, 7, 8, 9 held). The
+recurrence was diagnostic: each earlier fix repaired the SITE the
+finding named instead of the CLASS, so the same defect kept surfacing
+at the next site. Round 7 closes the classes:
+
+- **Contract 6 — core truncated multi-document frontmatter.** A block
+  containing an interior separator that is not a Slate closing fence
+  (`--- # note`) parses as two YAML documents; every edit path kept
+  only the first and rewrote the whole range, deleting the rest. This
+  was a CORE write-path bug reachable from add, delete, and rename
+  alike. `parse_hash` now refuses `docs.len() > 1` with
+  `MalformedFrontmatter`, exactly like the anchors/aliases guard
+  beside it, so all three surfaces fail closed. Pinned in core.
+- **Contract 10 — the mirror still lived in ROW validation.** Rounds
+  5–6 removed it from the add sheet only. Classification authority is
+  now a TYPE, `PropertyKindAuthority`, used by both surfaces: rows
+  ask core whether a date/datetime draft still stores as that kind
+  (so `2026-99-99` commits, `sometime` still refuses with the mac
+  message) and otherwise only require storability.
+- **Contract 2 — the discard hit the wrong header.** The fan-out gave
+  the discard key to the FIRST same-path header; a conflict raised
+  from a later duplicate discarded someone else's draft and kept its
+  own. Rows now carry their publishing `Owner`, and the resolution
+  discards there, refreshing peers silently.
+- **The round-6 matrix was tautological.** Its expected verdict came
+  from `BuildInitialValue`, the very routine under test, which nulls
+  its candidate on every refusal — so the false-refusal guard could
+  never fire. The test now builds candidates itself and prices them
+  with core directly. **Mutation-verified:** reinstating the
+  pre-round-6 calendar rejection makes the matrix fail with the exact
+  false-refusal message; before this change it passed.

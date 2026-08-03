@@ -51,6 +51,11 @@ internal sealed partial class PropertyRowViewModel : INotifyPropertyChanged
 
     public Property Property { get; }
 
+    /// <summary>The header VM that published this row. The conflict
+    /// resolution discards the draft on THIS header (round 7), not on
+    /// whichever duplicate tab happens to be enumerated first.</summary>
+    internal NotePropertiesViewModel? Owner { get; set; }
+
     /// <summary>The note PATH of the read that produced this row —
     /// the write seam resolves the target tab by THIS, never by the
     /// active tab (contract 1; adversarial round 1: an old row must
@@ -171,11 +176,12 @@ internal sealed partial class PropertyRowViewModel : INotifyPropertyChanged
                     || double.IsNaN(parsed) || double.IsInfinity(parsed):
                 ValidationError = PropertyPhrase.FloatShapeError;
                 return false;
-            case PropertyDraft.ScalarText { Kind: "date" } d
-                when !DateOnly.TryParseExact(d.Value, "yyyy-MM-dd",
-                    CultureInfo.InvariantCulture, DateTimeStyles.None, out _):
-                ValidationError = PropertyPhrase.DateShapeError;
-                return false;
+            // NOTE: date/datetime shape is NOT calendar-checked here.
+            // Core classifies dates STRUCTURALLY (the fixture's
+            // `almost_date: 2026-13-45` is a real stored date), so a
+            // calendar check would falsely refuse values core stores
+            // fine — the round-7 finding. Kind preservation is asked
+            // of core below, once, for every draft.
             case PropertyDraft.WikilinkDraft blank when blank.Target.Trim().Length == 0:
                 // Trim before the emptiness check (mac parity) — a
                 // whitespace-only target is empty.
@@ -191,9 +197,43 @@ internal sealed partial class PropertyRowViewModel : INotifyPropertyChanged
                 ValidationError = PropertyPhrase.WikilinkNewlineError;
                 return false;
             default:
-                ValidationError = null;
-                return true;
+                break;
         }
+
+        // THE authority (round 7 class fix): a date/datetime row whose
+        // draft would no longer be stored as that kind is a typo, not
+        // an intent to retype the property — refuse with the shape
+        // message, exactly as mac does, but using CORE's rule instead
+        // of a host mirror of it. Other kinds may legitimately change
+        // kind when the user changes the value, so they only need to
+        // be storable at all.
+        PropertyValue candidate;
+        try
+        {
+            candidate = PropertyValueCodec.Encode(_draft);
+        }
+        catch (Exception exception) when (
+            exception is FormatException or OverflowException)
+        {
+            ValidationError = PropertyPhrase.IntegerShapeError;
+            return false;
+        }
+        string? storedKind = PropertyKindAuthority.WouldStoreAs(Key, candidate);
+        if (storedKind is null)
+        {
+            ValidationError = PropertyPhrase.AddFailedDraftKept;
+            return false;
+        }
+        if (Kind is "date" or "datetime"
+            && !string.Equals(storedKind, Kind, StringComparison.Ordinal))
+        {
+            ValidationError = Kind == "date"
+                ? PropertyPhrase.DateShapeError
+                : PropertyPhrase.DatetimeShapeError;
+            return false;
+        }
+        ValidationError = null;
+        return true;
     }
 
     /// <summary>Restore the last committed value byte-exactly and

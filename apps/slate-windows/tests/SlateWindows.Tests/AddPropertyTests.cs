@@ -190,15 +190,16 @@ public sealed class AddPropertyTests
             sheet.Key = key;
             sheet.Kind = kind;
             sheet.Value = seed;
-            // A refusal is only legitimate when core would NOT have
-            // stored the chosen kind (round 6: the earlier matrix
-            // accepted every refusal, hiding false refusals — the
-            // exact defect class this pins).
-            _ = AddPropertyViewModel.BuildInitialValue(
-                key, kind, seed, out PropertyValue? candidate);
-            string? coreKind = candidate is null
-                ? null
-                : SlateUniffiMethods.RoundTripPropertyKind(key, candidate);
+            // The expected verdict is derived INDEPENDENTLY of the code
+            // under test (round 7: deriving it from BuildInitialValue
+            // made the refusal branch tautological — that helper nulls
+            // its candidate on every refusal, so the guard could never
+            // fire). This candidate is built by the test itself and
+            // priced by core directly.
+            string? coreKind = CandidateFor(kind, seed) is { } candidate
+                ? SlateUniffiMethods.RoundTripPropertyKind(key, candidate)
+                : null;
+            bool corePreservesKind = coreKind == kind;
             if (!sheet.Add())
             {
                 Assert.NotNull(sheet.ValidationError);
@@ -206,8 +207,8 @@ public sealed class AddPropertyTests
                     key + ":",
                     session.ReadNoteParts("note.md").FmSource,
                     StringComparison.Ordinal);
-                Assert.True(
-                    coreKind is null || coreKind != kind,
+                Assert.False(
+                    corePreservesKind,
                     $"FALSE REFUSAL: core stores ({key}, {kind}, '{seed}') as "
                         + $"{coreKind} — the sheet refused it anyway with "
                         + $"'{sheet.ValidationError}'");
@@ -400,6 +401,39 @@ public sealed class AddPropertyTests
                 sheet.ValidationError);
             Assert.Equal(before, File.ReadAllText(notePath));
         });
+    }
+
+    /// <summary>Test-owned candidate construction: deliberately does
+    /// NOT call production validation, so mutating that validation
+    /// cannot move the expected verdict with it (round 7).</summary>
+    private static PropertyValue? CandidateFor(string kind, string seed)
+    {
+        string value = seed.Trim();
+        return kind switch
+        {
+            "text" => new PropertyValue.Text(seed),
+            "number" when long.TryParse(value, out long integer) =>
+                new PropertyValue.Integer(integer),
+            "number" when double.TryParse(
+                value, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out double floating) =>
+                new PropertyValue.Float(floating),
+            "number" when value.Length == 0 => new PropertyValue.Integer(0),
+            "number" => null,
+            "boolean" when value.Length == 0 => new PropertyValue.Boolean(false),
+            "boolean" when bool.TryParse(value, out bool flag) =>
+                new PropertyValue.Boolean(flag),
+            "boolean" => null,
+            "date" => new PropertyValue.Date(value),
+            "datetime" => new PropertyValue.Datetime(value),
+            "wikilink" when value.Length == 0 => null,
+            "wikilink" => new PropertyValue.Wikilink(value),
+            "list" when value.Length == 0 => new PropertyValue.List([]),
+            "list" => new PropertyValue.List([new PropertyValue.Text(value)]),
+            "tag_list" when value.Length == 0 => new PropertyValue.TagList([]),
+            "tag_list" => new PropertyValue.TagList([value.TrimStart('#')]),
+            _ => null,
+        };
     }
 
     private static VaultSession OpenScanned(string root)
