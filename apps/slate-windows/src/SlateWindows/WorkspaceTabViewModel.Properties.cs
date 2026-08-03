@@ -65,6 +65,55 @@ internal sealed partial class WorkspaceTabViewModel
 
     internal void ShutdownProperties() => Properties?.Shutdown();
 
+    /// <summary>A property write (set/delete/rename) rewrote this
+    /// tab's file WITHOUT publishing through its buffer. Contract 8:
+    /// a CLEAN tab re-baselines — reload the buffer from disk and
+    /// adopt the new hash, exactly like a save settles — while a
+    /// dirty tab takes the W4-3 stale-flag honesty (the divergence
+    /// copy, verbatim) because overwriting unsaved edits is worse
+    /// than a reopen prompt.</summary>
+    internal void RebaselineAfterPropertyWrite(
+        string newContentHash, Action<A11yEvent> announce)
+    {
+        if (!IsMarkdown || _disposed)
+        {
+            return;
+        }
+        if (string.Equals(_contentHash, newContentHash, StringComparison.Ordinal))
+        {
+            IsExternallyStale = false;
+            return;
+        }
+        if (IsDirty)
+        {
+            ReconcileAfterExternalTaskWrite(newContentHash, announce);
+            return;
+        }
+        string fresh;
+        try
+        {
+            fresh = _session.ReadText(Path);
+        }
+        catch (VaultException)
+        {
+            // Can't re-read: honest containment beats a silent stale
+            // baseline.
+            ReconcileAfterExternalTaskWrite(newContentHash, announce);
+            return;
+        }
+        if (_editorSession is not null)
+        {
+            _editorSession.ReplaceAll(fresh);
+            _editorSession.MarkSaved(fresh);
+        }
+        _text = fresh;
+        _contentHash = SlateUniffiMethods.EditorTextContentHash(fresh);
+        IsDirty = false;
+        IsExternallyStale = false;
+        _editorInteractions?.InvalidateExternalState();
+        _documentChanged?.Invoke(this, null);
+    }
+
     /// <summary>Run one property write off the UI thread. The
     /// completion ALWAYS fires (on the dispatcher) with either the
     /// report or the failure plus the post-failure disk hash — the
@@ -102,6 +151,12 @@ internal sealed partial class WorkspaceTabViewModel
                 catch (Exception inner) when (
                     inner is VaultException or InvalidOperationException)
                 {
+                    // The fault seam can throw AFTER the core write
+                    // landed; the completion keys on report-vs-failure,
+                    // so a landed-then-faulted write must present as a
+                    // FAILURE (the read-back reconcile recovers the
+                    // landed bytes) — never as a clean success.
+                    report = null;
                     repairs?.EndMutation(
                         path, indexConsistent: inner is VaultException.WriteConflict);
                     leaseSettled = true;

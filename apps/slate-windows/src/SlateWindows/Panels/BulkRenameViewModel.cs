@@ -267,7 +267,8 @@ internal sealed class BulkRenameViewModel : PanelWorkScheduler
     {
         RenameSkipReason.NoSuchKey => "Skipped: key not present",
         RenameSkipReason.KeyCollision => "Skipped: new key already exists",
-        _ => "Skipped: would change tags / list type",
+        RenameSkipReason.TagsKeyTypeDrift => "Skipped: would change tags / list type",
+        _ => "Skipped",
     };
 
     internal static string FailStatus(RenameFailureKind kind, string message) => kind switch

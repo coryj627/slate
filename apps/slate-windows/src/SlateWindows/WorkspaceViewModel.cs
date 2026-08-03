@@ -1367,13 +1367,13 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     {
         Panels.NoteChanged(
             ActiveGroup.ActiveTab is { IsMarkdown: true } tab ? tab.Path : null);
-        // W4-4: the properties header attaches at activation. App
-        // only (the Reading.Activate posture) — tests attach
-        // explicitly with synchronousForTests.
-        if (_startInteractionBackgroundWork)
-        {
-            EnsureActiveTabProperties();
-        }
+        // W4-4: the properties header attaches at activation, in the
+        // Reading posture — background work in the app, inline in
+        // tests (the flag decides the VM's mode at first creation,
+        // so a test's later EnsureActiveTabProperties call gets the
+        // same synchronous instance).
+        EnsureActiveTabProperties(
+            synchronousForTests: !_startInteractionBackgroundWork);
     }
 
     /// <summary>External links launch through the shell (the default

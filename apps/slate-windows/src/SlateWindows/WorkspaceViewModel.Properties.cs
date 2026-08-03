@@ -147,7 +147,7 @@ internal sealed partial class WorkspaceViewModel
                 if (report is not null)
                 {
                     AddPropertySheet = null;
-                    ReconcileTabsAfterDirectTaskWrite(path, report.NewContentHash);
+                    ReconcileTabsAfterPropertyWrite(path, report.NewContentHash);
                     RefreshPropertiesFor(path);
                     Panels.NoteSaved(path);
                     _announce(new A11yEvent.PropertyChanged(key, false));
@@ -228,8 +228,13 @@ internal sealed partial class WorkspaceViewModel
         {
             return false;
         }
-        if (!row.ValidateForCommit() || row.WriteInFlight)
+        if (!row.ValidateForCommit())
         {
+            return true;
+        }
+        if (row.WriteInFlight)
+        {
+            AnnounceWriteInFlightRefusal();
             return true;
         }
         if (RefusePropertyWriteGates(tab, row))
@@ -246,6 +251,13 @@ internal sealed partial class WorkspaceViewModel
         return true;
     }
 
+    private void AnnounceWriteInFlightRefusal() =>
+        _announce(new A11yEvent.HostComposed(
+            // W0.5-3 residue: the in-flight disabled reason is spoken
+            // (double-activation on immediate-commit controls cannot
+            // issue two writes against one hash).
+            "Wait for the current save to finish.", A11yPriority.High));
+
     /// <summary>Delete a row's key via delete_property (called only
     /// after the confirmation flow chose Delete).</summary>
     internal bool DeletePanelProperty(PropertyRowViewModel row)
@@ -256,6 +268,7 @@ internal sealed partial class WorkspaceViewModel
         }
         if (row.WriteInFlight)
         {
+            AnnounceWriteInFlightRefusal();
             return true;
         }
         if (RefusePropertyWriteGates(tab, row))
@@ -354,7 +367,7 @@ internal sealed partial class WorkspaceViewModel
             if (report is not null)
             {
                 row.MarkCommitted();
-                ReconcileTabsAfterDirectTaskWrite(path, report.NewContentHash);
+                ReconcileTabsAfterPropertyWrite(path, report.NewContentHash);
                 RefreshPropertiesFor(path);
                 Panels.NoteSaved(path);
                 _announce(new A11yEvent.PropertyChanged(row.Key, deleted));
@@ -382,7 +395,7 @@ internal sealed partial class WorkspaceViewModel
                 && !string.Equals(
                     tab.SavedContentHash, postFailureDiskHash, StringComparison.Ordinal))
             {
-                ReconcileTabsAfterDirectTaskWrite(path, postFailureDiskHash);
+                ReconcileTabsAfterPropertyWrite(path, postFailureDiskHash);
                 RefreshPropertiesFor(path);
                 Panels.NoteSaved(path);
             }
@@ -426,7 +439,7 @@ internal sealed partial class WorkspaceViewModel
             }
             try
             {
-                ReconcileTabsAfterDirectTaskWrite(affected.Path, affected.NewContentHash);
+                ReconcileTabsAfterPropertyWrite(affected.Path, affected.NewContentHash);
                 RefreshPropertiesFor(affected.Path);
                 Panels.NoteSaved(affected.Path);
             }
@@ -440,6 +453,21 @@ internal sealed partial class WorkspaceViewModel
         {
             _announce(new A11yEvent.RenameReloadFailed(
                 "Some open notes could not be reloaded."));
+        }
+    }
+
+    /// <summary>Contract 8 fan-out: every open same-path tab either
+    /// re-baselines its buffer to the just-written disk state (clean
+    /// tabs) or takes the stale-flag honesty (dirty tabs).</summary>
+    internal void ReconcileTabsAfterPropertyWrite(string path, string newContentHash)
+    {
+        foreach (WorkspaceTabViewModel tab in Groups.SelectMany(group => group.Tabs))
+        {
+            if (tab.IsMarkdown
+                && string.Equals(tab.Path, path, StringComparison.Ordinal))
+            {
+                tab.RebaselineAfterPropertyWrite(newContentHash, _announce);
+            }
         }
     }
 
