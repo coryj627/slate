@@ -69,6 +69,14 @@ try
     using var cancel = new CancelToken();
     session.ScanInitial(cancel);
 
+    // W4-5: seed the bibliography from the vault's own citation config
+    // BEFORE serializing anything — citation rendering, the per-file
+    // `citations` sections, and the vault artifact all read the loaded
+    // entries. This is the harness's only write and it lands in the temp
+    // vault's cache DB. The Swift twin performs the identical call.
+    BibLoadWarning[] bibWarnings =
+        session.SetBibliographySources(session.CitationsPrefs().Sources);
+
     foreach (var f in files)
     {
         byte[] bytes = File.ReadAllBytes(Path.Combine(vaultRoot, f));
@@ -84,8 +92,11 @@ try
     WriteArtifact(
         Path.Combine(outDir, "properties.json"),
         SurfaceSerializer.PropertiesArtifact(session));
+    WriteArtifact(
+        Path.Combine(outDir, "bibliography.json"),
+        SurfaceSerializer.BibliographyArtifact(session, bibWarnings));
 
-    Console.WriteLine($"parity-harness: {files.Count + 5} artifacts -> {outDir}");
+    Console.WriteLine($"parity-harness: {files.Count + 6} artifacts -> {outDir}");
     return 0;
 }
 finally

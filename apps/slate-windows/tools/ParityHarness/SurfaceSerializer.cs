@@ -31,15 +31,14 @@ public static class SurfaceSerializer
     /// accessible text are now byte-checked across platforms.
     /// </para>
     /// <para>
-    /// <b>Citation join, deliberately empty.</b> The fixture vault ships
-    /// no CSL style and no bibliography, so there is nothing deterministic
-    /// to render citations against; both twins therefore pass an EMPTY
-    /// citation list. Core still emits <c>citation</c> runs — the kind
-    /// comes from the span classifier, not from the rendered list — with
-    /// the raw text as both display and speech, which is deterministic on
-    /// every platform. Matched-citation rendering is covered by the core
-    /// unit tests instead; committing a style + <c>.bib</c> fixture to
-    /// bring it under §W-A is a recorded W8-4 candidate.
+    /// <b>Citation join, now real (W4-5 #737).</b> The corpus ships
+    /// <c>library.bib</c> + <c>ieee.csl</c> + a <c>slate.json</c> naming
+    /// both, and the harness seeds the bibliography before serializing, so
+    /// citation runs carry genuinely RENDERED display and speech text
+    /// instead of the raw fallback. This closes the gap the W0 skeleton
+    /// recorded as a W8-4 candidate. A render failure is fatal to the
+    /// harness rather than falling back — a silent fallback would make the
+    /// golden meaningless.
     /// </para>
     /// </remarks>
     public static string FileArtifact(string relPath, string text, VaultSession session)
@@ -89,9 +88,19 @@ public static class SurfaceSerializer
         }
         j.Raw("]");
 
+        // W4-5: the rendered citations for THIS file, reused by both the
+        // inline-run join below and the `citations` section further down.
+        var references = session.ListCitationsInFile(relPath);
+        string styleId = CitationStyleId(session);
+        var rendered = new RenderedCitation[references.Length];
+        for (int i = 0; i < references.Length; i++)
+        {
+            rendered[i] = session.RenderCitation(references[i], styleId);
+        }
+
         j.Raw(",\"inline_runs\":[");
         var inlines = SlateUniffiMethods.ReadingInlineSegmentsSource(
-            text, Array.Empty<RenderedCitation>(), session.OutgoingLinks(relPath));
+            text, rendered, session.OutgoingLinks(relPath));
         for (int i = 0; i < inlines.Length; i++)
         {
             if (i > 0)
@@ -297,6 +306,21 @@ public static class SurfaceSerializer
             }
             AppendProperty(j, p);
         }
+        j.Raw("]");
+
+        // W4-5 (#736 shape, appended after "properties" so existing key
+        // order never moves): the per-file citation surface — parsed
+        // reference, its cited items, and the RENDERED output both
+        // platforms must agree on byte for byte.
+        j.Raw(",\"citations\":[");
+        for (int i = 0; i < references.Length; i++)
+        {
+            if (i > 0)
+            {
+                j.Raw(",");
+            }
+            AppendCitation(j, references[i], rendered[i]);
+        }
         j.Raw("]}");
         return j + "\n";
     }
@@ -308,6 +332,82 @@ public static class SurfaceSerializer
          .Raw(",\"value_json\":").Str(p.ValueJson)
          .Raw("}");
     }
+
+    /// <summary>The style id the harness renders with: the configured
+    /// default style's file stem (core matches ids, not paths). An
+    /// unconfigured style yields an empty id, which renders nothing —
+    /// the corpus configures one, so that path is not exercised.</summary>
+    private static string CitationStyleId(VaultSession session)
+    {
+        string? defaultStyle = session.CitationsPrefs().DefaultStyle;
+        return string.IsNullOrEmpty(defaultStyle)
+            ? string.Empty
+            : System.IO.Path.GetFileNameWithoutExtension(defaultStyle);
+    }
+
+    private static void AppendCitation(
+        CanonicalJson j, CitationReference reference, RenderedCitation rendered)
+    {
+        j.Raw("{\"raw\":").Str(reference.Raw)
+         .Raw(",\"line\":").Num((ulong)reference.Line)
+         .Raw(",\"offset\":").Num((ulong)reference.ByteOffset)
+         .Raw(",\"items\":[");
+        for (int i = 0; i < reference.Citations.Length; i++)
+        {
+            var item = reference.Citations[i];
+            if (i > 0)
+            {
+                j.Raw(",");
+            }
+            j.Raw("{\"key\":").Str(item.Key)
+             .Raw(",\"mode\":").Str(CitationModeToken(item.Mode))
+             .Raw(",\"locator\":");
+            if (item.Locator is { } locator)
+            {
+                j.Raw("{\"label\":").Str(locator.Label)
+                 .Raw(",\"value\":").Str(locator.Value)
+                 .Raw("}");
+            }
+            else
+            {
+                j.Null();
+            }
+            j.Raw(",\"prefix\":");
+            AppendOptionalString(j, item.Prefix);
+            j.Raw(",\"suffix\":");
+            AppendOptionalString(j, item.Suffix);
+            j.Raw("}");
+        }
+        j.Raw("]")
+         .Raw(",\"rendered\":{\"visual\":").Str(rendered.VisualText)
+         .Raw(",\"speech\":").Str(rendered.SpeechText)
+         .Raw(",\"style_id\":").Str(rendered.StyleId)
+         .Raw(",\"bib_key\":");
+        AppendOptionalString(j, rendered.BibEntry?.Key);
+        j.Raw("}}");
+    }
+
+    private static void AppendOptionalString(CanonicalJson j, string? value)
+    {
+        if (value is null)
+        {
+            j.Null();
+        }
+        else
+        {
+            j.Str(value);
+        }
+    }
+
+    /// <summary>Stable wire tokens for the citation mode — the enum's
+    /// C# spelling is a binding detail, the token is the contract.</summary>
+    private static string CitationModeToken(CitationMode mode) => mode switch
+    {
+        CitationMode.Bracketed => "bracketed",
+        CitationMode.InText => "in_text",
+        CitationMode.SuppressAuthor => "suppress_author",
+        _ => mode.ToString().ToLowerInvariant(),
+    };
 
     /// <summary>W4-4: the vault-wide property-key artifact — pins
     /// list_property_keys' ordering contract (key-sorted, unpaged)
@@ -341,6 +441,152 @@ public static class SurfaceSerializer
         j.Raw("]}");
         return j + "\n";
     }
+
+    /// <summary>W4-5 (#737): the vault-wide citation artifact — the
+    /// configured sources and style set, the load warnings core reported
+    /// when the bibliography was seeded, the resolved entries, and the
+    /// vault's unresolved citation keys.
+    ///
+    /// <para><c>raw_csl_json</c> is deliberately EXCLUDED: it is a serde
+    /// re-serialization of a foreign document, so its field ordering is a
+    /// serializer contract rather than a citation contract.
+    /// <c>abstract_text</c> rides as <c>abstract_present</c> only — the DB
+    /// read path hardcodes it absent while the in-memory path populates it,
+    /// which is a cache-state property, not a platform property.</para>
+    ///
+    /// <para>Entry and unresolved ORDER is core's, emitted as given: the
+    /// artifact pins whatever core guarantees rather than imposing a host
+    /// sort that would hide an ordering regression.</para></summary>
+    public static string BibliographyArtifact(
+        VaultSession session, BibLoadWarning[] loadWarnings)
+    {
+        var j = new CanonicalJson();
+        var prefs = session.CitationsPrefs();
+
+        j.Raw("{\"prefs\":{\"sources\":[");
+        for (int i = 0; i < prefs.Sources.Length; i++)
+        {
+            var source = prefs.Sources[i];
+            if (i > 0)
+            {
+                j.Raw(",");
+            }
+            j.Raw("{\"path\":").Str(Slash(source.Path))
+             .Raw(",\"format\":").Str(BibFormatToken(source.Format))
+             .Raw(",\"watch\":").Bool(source.Watch)
+             .Raw("}");
+        }
+        j.Raw("],\"default_style\":");
+        AppendOptionalString(j, prefs.DefaultStyle);
+        j.Raw(",\"additional_styles\":[");
+        for (int i = 0; i < prefs.AdditionalStyles.Length; i++)
+        {
+            if (i > 0)
+            {
+                j.Raw(",");
+            }
+            j.Str(prefs.AdditionalStyles[i]);
+        }
+        j.Raw("]}");
+
+        j.Raw(",\"load_warnings\":[");
+        for (int i = 0; i < loadWarnings.Length; i++)
+        {
+            if (i > 0)
+            {
+                j.Raw(",");
+            }
+            j.Raw("{\"source\":").Str(Slash(loadWarnings[i].SourcePath))
+             .Raw(",\"message\":").Str(loadWarnings[i].Message)
+             .Raw("}");
+        }
+        j.Raw("]");
+
+        // Style PATHS are absolute and machine-dependent, so only the id
+        // and title (both read out of the CSL document) are pinned.
+        j.Raw(",\"styles\":[");
+        var styles = session.ListCslStyles();
+        for (int i = 0; i < styles.Length; i++)
+        {
+            if (i > 0)
+            {
+                j.Raw(",");
+            }
+            j.Raw("{\"id\":").Str(styles[i].Id)
+             .Raw(",\"title\":").Str(styles[i].Title)
+             .Raw("}");
+        }
+        j.Raw("]");
+
+        j.Raw(",\"entries\":[");
+        var entries = session.GetBibliographyEntries();
+        for (int i = 0; i < entries.Length; i++)
+        {
+            var e = entries[i];
+            if (i > 0)
+            {
+                j.Raw(",");
+            }
+            j.Raw("{\"key\":").Str(e.Key)
+             .Raw(",\"item_type\":").Str(e.ItemType)
+             .Raw(",\"title\":").Str(e.Title)
+             .Raw(",\"authors\":[");
+            for (int a = 0; a < e.Authors.Length; a++)
+            {
+                if (a > 0)
+                {
+                    j.Raw(",");
+                }
+                j.Raw("{\"family\":").Str(e.Authors[a].Family)
+                 .Raw(",\"given\":");
+                AppendOptionalString(j, e.Authors[a].Given);
+                j.Raw("}");
+            }
+            j.Raw("],\"year\":");
+            if (e.Year is int year)
+            {
+                j.Num(year);
+            }
+            else
+            {
+                j.Null();
+            }
+            j.Raw(",\"journal\":");
+            AppendOptionalString(j, e.Journal);
+            j.Raw(",\"doi\":");
+            AppendOptionalString(j, e.Doi);
+            j.Raw(",\"url\":");
+            AppendOptionalString(j, e.Url);
+            j.Raw(",\"publisher\":");
+            AppendOptionalString(j, e.Publisher);
+            j.Raw(",\"abstract_present\":").Bool(e.AbstractText is not null)
+             .Raw("}");
+        }
+        j.Raw("]");
+
+        j.Raw(",\"unresolved\":[");
+        var unresolved = session.ListUnresolvedCitations();
+        for (int i = 0; i < unresolved.Length; i++)
+        {
+            if (i > 0)
+            {
+                j.Raw(",");
+            }
+            j.Raw("{\"path\":").Str(Slash(unresolved[i].Path))
+             .Raw(",\"key\":").Str(unresolved[i].Key)
+             .Raw("}");
+        }
+        j.Raw("]}");
+        return j + "\n";
+    }
+
+    private static string BibFormatToken(BibFormat format) => format switch
+    {
+        BibFormat.BibTeX => "bibtex",
+        BibFormat.BibLaTeX => "biblatex",
+        BibFormat.CslJson => "csl_json",
+        _ => format.ToString().ToLowerInvariant(),
+    };
 
     private static void AppendTaskItem(CanonicalJson j, TaskItem t)
     {
