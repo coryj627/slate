@@ -244,12 +244,14 @@ public partial class MainWindow : Window
         if (_observedWorkspace is not null)
         {
             _observedWorkspace.EditorPaneFocusRequested -= Workspace_EditorPaneFocusRequested;
+            UnwireWorkspaceProperties(_observedWorkspace);
         }
 
         _observedWorkspace = workspace;
         if (workspace is not null)
         {
             workspace.EditorPaneFocusRequested += Workspace_EditorPaneFocusRequested;
+            WireWorkspaceProperties(workspace);
         }
     }
 

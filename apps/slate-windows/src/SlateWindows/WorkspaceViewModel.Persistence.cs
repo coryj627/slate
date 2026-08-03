@@ -185,6 +185,10 @@ internal sealed partial class WorkspaceViewModel
 
     internal void PersistLayoutWeights() => Persist();
 
+    /// <summary>Per-tab state that changes outside a workspace
+    /// mutation (W4-4: properties-header expansion).</summary>
+    internal void PersistTabState() => Persist();
+
     private void PersistCore()
     {
         if (_restoring)

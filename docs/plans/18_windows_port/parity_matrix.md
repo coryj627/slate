@@ -1,6 +1,6 @@
 # Milestone W parity matrix (§W-F row-level checklist)
 
-Generated 2026-08-01 at `0df8626` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
+Generated 2026-08-03 at `1ab0dd4` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
 
 ## Entry-criteria snapshot (w0_spec §W0-4 item 3)
 
@@ -113,8 +113,8 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 | `slate.canvas.zoomToSelection` | Canvas: Zoom to Selection | — | — | #745 (W6-1) | pending |
 | `slate.diagnostics.refreshSync` | Refresh Sync Diagnostics | — | — | #740 (W4-8) | pending |
 | `slate.editor.actualSize` | Editor: Actual Size | — | — | #725 (W2-3) | implemented; local gates green 2026-07-23; interactive CI + human AT pending |
-| `slate.editor.addProperty` | Add Property… | — | — | #736 (W4-4) | pending |
-| `slate.editor.bulkRenameProperties` | Bulk Rename Properties… | ⇧⌘R | Shift Command R | #736 (W4-4) | pending |
+| `slate.editor.addProperty` | Add Property… | — | — | #736 (W4-4) | implemented; local gates green 2026-08-03; interactive CI + human AT pending |
+| `slate.editor.bulkRenameProperties` | Bulk Rename Properties… | ⇧⌘R | Shift Command R | #736 (W4-4) | implemented; local gates green 2026-08-03; interactive CI + human AT pending |
 | `slate.editor.citationSummary` | Citation Summary | ⇧⌘J | Shift Command J | #737 (W4-5) | pending |
 | `slate.editor.findInNote` | Find… | ⌘F | Command F | #742 (W5-2) | pending |
 | `slate.editor.save` | Save | ⌘S | Command S | #724 (W2-1) | implemented; local gates green 2026-07-23; interactive CI + human AT pending |
@@ -188,7 +188,7 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 | `slate.sidebar.unpinAllInFolder` | Unpin All in Folder | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
 | `slate.sidebar.unpinNote` | Unpin | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
 | `slate.sidebar.useVaultDefaultSort` | Use Vault Default Sort | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
-| `slate.tasks.review` | Tasks Review | ⌘R | Command R | #735 (W4-3) | implemented; local gates green 2026-08-01; interactive CI + human AT pending |
+| `slate.tasks.review` | Tasks Review | ⌘R | Command R | #735 (W4-3) | implemented; local gates green 2026-08-03; interactive CI + human AT pending |
 | `slate.vault.close` | Close Vault | — | — | #720 (W1-1) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
 | `slate.vault.open` | Open Vault… | ⇧⌘O | Shift Command O | #720 (W1-1) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
 | `slate.view.toggleRightPane` | Toggle Right Pane | ⌥⌘I | Option Command I | #722 (W1-3) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |

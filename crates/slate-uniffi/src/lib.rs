@@ -232,6 +232,41 @@ pub fn parse_frontmatter_properties(fm_source: String) -> Vec<Property> {
         .collect()
 }
 
+/// The TOP-LEVEL keys of a frontmatter block, in document order.
+///
+/// Add-property surfaces must collision-check against THIS, not against
+/// parsed properties: property records flatten nested mappings
+/// (`person: {name: …}` → `person.name`) and omit untypeable shapes, so a
+/// flat `person` add would look non-colliding and then silently replace the
+/// whole container on write (W4-4 adversarial round 6).
+#[uniffi::export]
+pub fn frontmatter_top_level_keys(fm_source: String) -> Vec<String> {
+    core::frontmatter_top_level_keys(&core::compose_note(&fm_source, ""))
+}
+
+/// The kind a value would ACTUALLY have once stored under `key` and read
+/// back — core's own emit-then-classify round trip, run in memory against a
+/// scratch document. Pure, allocation-only, no vault access.
+///
+/// Hosts building "add property" surfaces must not mirror the classifier:
+/// classification is key-sensitive (`tags:` is always a tag list, case
+/// insensitively) and shape-sensitive (a `YYYY-MM-DD`-shaped string is a
+/// date, `[[x]]` is a wikilink), and every host copy of those rules has
+/// drifted (W4-4 adversarial rounds 3–5). Ask instead: build the candidate
+/// value, call this, and refuse when the answer differs from what the user
+/// picked. `None` means the value can't be stored at all (core rejects it —
+/// e.g. an empty wikilink target or a non-finite float).
+#[uniffi::export]
+pub fn round_trip_property_kind(key: String, value: PropertyValue) -> Option<String> {
+    let core_value: core::PropertyValue = value.into();
+    let source = core::set_property_in_source("", &key, &core_value).ok()?;
+    core::extract_frontmatter(&source)
+        .0
+        .into_iter()
+        .find(|property| property.key == key)
+        .map(|property| Property::from(property).kind)
+}
+
 /// Read a Markdown file from disk and return its headings.
 ///
 /// The host platform supplies the absolute path. On sandboxed platforms
@@ -9143,6 +9178,76 @@ mod tests {
             .expect("exclusive folder create");
 
         assert!(tmp.path().join("imported").is_dir());
+    }
+
+    #[test]
+    fn frontmatter_top_level_keys_sees_containers_properties_flatten_away() {
+        // The flattened property view reports person.name/person.role and
+        // never the container, which is exactly what made a flat `person`
+        // add look safe (W4-4 round 6).
+        let source = "person:\n  name: Alice\n  role: author\ntitle: Hi\n".to_string();
+        assert_eq!(
+            frontmatter_top_level_keys(source.clone()),
+            vec!["person".to_string(), "title".to_string()]
+        );
+        let flattened: Vec<String> = parse_frontmatter_properties(source)
+            .into_iter()
+            .map(|property| property.key)
+            .collect();
+        assert!(!flattened.contains(&"person".to_string()));
+    }
+
+    #[test]
+    fn round_trip_property_kind_answers_with_the_real_write_read_path() {
+        // The host asks this instead of mirroring the classifier
+        // (W4-4 adversarial round 5). Key-sensitive:
+        let tags_case = round_trip_property_kind(
+            "Tags".to_string(),
+            PropertyValue::List {
+                items: vec![PropertyValue::Text {
+                    value: "x".to_string(),
+                }],
+            },
+        );
+        assert_eq!(tags_case.as_deref(), Some("tag_list"));
+        // Shape-sensitive, including STRUCTURALLY date-shaped but
+        // calendar-invalid text:
+        assert_eq!(
+            round_trip_property_kind(
+                "fresh".to_string(),
+                PropertyValue::Text {
+                    value: "2026-99-99".to_string()
+                }
+            )
+            .as_deref(),
+            Some("date")
+        );
+        assert_eq!(
+            round_trip_property_kind(
+                "fresh".to_string(),
+                PropertyValue::Text {
+                    value: "plain".to_string()
+                }
+            )
+            .as_deref(),
+            Some("text")
+        );
+        // Integral floats keep their kind (the round-4 emitter fix):
+        assert_eq!(
+            round_trip_property_kind("fresh".to_string(), PropertyValue::Float { value: 1.0 })
+                .as_deref(),
+            Some("number")
+        );
+        // Unstorable values answer None rather than lying:
+        assert_eq!(
+            round_trip_property_kind(
+                "fresh".to_string(),
+                PropertyValue::Wikilink {
+                    target: String::new()
+                }
+            ),
+            None
+        );
     }
 
     #[test]

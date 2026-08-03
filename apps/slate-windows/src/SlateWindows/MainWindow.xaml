@@ -2,6 +2,8 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:SlateWindows"
+        xmlns:panels="clr-namespace:SlateWindows.Panels"
+        xmlns:grids="clr-namespace:SlateWindows.Grids"
         Title="Slate"
         Height="720" Width="1120"
         MinHeight="480" MinWidth="760"
@@ -29,6 +31,7 @@
         <KeyBinding Key="T" Modifiers="Control" Command="{Binding Workspace.DuplicateTabCommand}" />
         <KeyBinding Key="T" Modifiers="Control+Shift" Command="{Binding Workspace.ReopenClosedTabCommand}" />
         <KeyBinding Key="R" Modifiers="Control" Command="{Binding Workspace.OpenTasksReviewCommand}" />
+        <KeyBinding Key="R" Modifiers="Control+Shift" Command="{Binding Workspace.OpenBulkRenameSheetCommand}" />
         <KeyBinding Key="Oem5" Modifiers="Control" Command="{Binding Workspace.SplitRightCommand}" />
         <KeyBinding Key="Oem5" Modifiers="Control+Alt" Command="{Binding Workspace.SplitDownCommand}" />
         <KeyBinding Key="OemCloseBrackets" Modifiers="Control+Shift" Command="{Binding Workspace.NextTabCommand}" />
@@ -117,6 +120,17 @@
                           AutomationProperties.AutomationId="EditorToggleReadingModeMenuItem"
                           InputGestureText="Ctrl+Shift+E"
                           Command="{Binding Workspace.ToggleReadingModeCommand}" />
+                <Separator />
+                <!-- W4-4 (#736): menu-homed so bulk rename works when
+                     the properties header isn't mounted; both disable
+                     without a session (null Workspace). -->
+                <MenuItem Header="Add _Property…"
+                          AutomationProperties.AutomationId="AddPropertyMenuItem"
+                          Command="{Binding Workspace.OpenAddPropertySheetCommand}" />
+                <MenuItem Header="Bulk Rename Pr_operties…"
+                          AutomationProperties.AutomationId="BulkRenamePropertiesMenuItem"
+                          InputGestureText="Ctrl+Shift+R"
+                          Command="{Binding Workspace.OpenBulkRenameSheetCommand}" />
                 <Separator />
                 <MenuItem Header="Check _Spelling While Typing"
                           AutomationProperties.AutomationId="EditorToggleSpellCheckMenuItem"
@@ -1212,6 +1226,190 @@
                                                                Visibility="{Binding IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}"
                                                                Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                     </DockPanel>
+                </Grid>
+            </local:AutomationLandmarkBorder>
+            <!-- ==========================================================
+                 W4-4 (#736): the add-property sheet. Focus lands on the
+                 Key field at open; Enter = Add, Esc = Cancel (code-behind
+                 PreviewKeyDown — no window-global default button).
+                 ========================================================== -->
+            <Border Background="Transparent"
+                    Visibility="{Binding Workspace.AddPropertySheet, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
+            <local:AutomationLandmarkBorder x:Name="AddPropertyOverlay"
+                    Width="460"
+                    Padding="16"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Background="{DynamicResource Slate.SurfaceBrush}"
+                    BorderBrush="{DynamicResource Slate.BorderBrush}"
+                    BorderThickness="1"
+                    Visibility="{Binding DataContext.Workspace.AddPropertySheet, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}"
+                    DataContext="{Binding Workspace.AddPropertySheet}"
+                    FocusManager.IsFocusScope="True"
+                    KeyboardNavigation.TabNavigation="Cycle"
+                    KeyboardNavigation.ControlTabNavigation="Cycle"
+                    PreviewKeyDown="AddPropertyOverlay_PreviewKeyDown"
+                    AutomationProperties.AutomationId="AddPropertySheet"
+                    AutomationProperties.Name="Add property"
+                    AutomationProperties.IsDialog="True">
+                <local:AutomationLandmarkBorder.Effect>
+                    <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
+                </local:AutomationLandmarkBorder.Effect>
+                <StackPanel>
+                    <TextBlock Text="Add property"
+                               FontSize="16"
+                               FontWeight="SemiBold"
+                               AutomationProperties.HeadingLevel="Level2" />
+                    <local:AutomationPresentationTextBlock Margin="0,10,0,2" Text="Property key" />
+                    <TextBox x:Name="AddPropertyKeyTextBox"
+                             Padding="6,4"
+                             Text="{Binding Key, UpdateSourceTrigger=PropertyChanged}"
+                             AutomationProperties.AutomationId="AddPropertyKey"
+                             AutomationProperties.Name="Property key" />
+                    <local:AutomationPresentationTextBlock Margin="0,8,0,2" Text="Property type" />
+                    <ComboBox ItemsSource="{x:Static panels:AddPropertyViewModel.Kinds}"
+                              SelectedItem="{Binding Kind}"
+                              AutomationProperties.AutomationId="AddPropertyType"
+                              AutomationProperties.Name="Property type" />
+                    <!-- Round 3: shape-derived kinds need a shape-valid
+                         seed — core classifies stored values by shape,
+                         so the chosen type must survive the re-read. -->
+                    <local:AutomationPresentationTextBlock Margin="0,8,0,2" Text="Initial value" />
+                    <TextBox Padding="6,4"
+                             Text="{Binding Value, UpdateSourceTrigger=PropertyChanged}"
+                             AutomationProperties.AutomationId="AddPropertyValue"
+                             AutomationProperties.Name="Initial value" />
+                    <TextBlock Margin="0,8,0,0"
+                               Text="{Binding ValidationError}"
+                               Foreground="{DynamicResource Slate.WarningBrush}"
+                               TextWrapping="Wrap"
+                               Visibility="{Binding ValidationError, Converter={StaticResource NullToVisibilityConverter}}" />
+                    <StackPanel Margin="0,12,0,0"
+                                HorizontalAlignment="Right"
+                                Orientation="Horizontal">
+                        <Button Padding="10,4"
+                                Content="Add"
+                                Click="AddPropertyAdd_Click"
+                                AutomationProperties.AutomationId="AddPropertyConfirm"
+                                AutomationProperties.HelpText="Add this property to the note." />
+                        <Button Margin="8,0,0,0"
+                                Padding="10,4"
+                                Content="Cancel"
+                                Command="{Binding DataContext.Workspace.CloseAddPropertySheetCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                AutomationProperties.AutomationId="AddPropertyCancel" />
+                    </StackPanel>
+                </StackPanel>
+            </local:AutomationLandmarkBorder>
+            <!-- ==========================================================
+                 W4-4 (#736): the bulk-rename sheet. Default action is
+                 PREVIEW, never Apply; Apply arms only after a preview on
+                 the exact key pair (any key edit disarms it); Esc cancels
+                 in-flight core work through the CancelToken and closes.
+                 ========================================================== -->
+            <Border Background="Transparent"
+                    Visibility="{Binding Workspace.BulkRenameSheet, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
+            <local:AutomationLandmarkBorder x:Name="BulkRenameOverlay"
+                    Width="760"
+                    MaxHeight="560"
+                    Padding="16"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Background="{DynamicResource Slate.SurfaceBrush}"
+                    BorderBrush="{DynamicResource Slate.BorderBrush}"
+                    BorderThickness="1"
+                    Visibility="{Binding DataContext.Workspace.BulkRenameSheet, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}"
+                    DataContext="{Binding Workspace.BulkRenameSheet}"
+                    FocusManager.IsFocusScope="True"
+                    KeyboardNavigation.TabNavigation="Cycle"
+                    KeyboardNavigation.ControlTabNavigation="Cycle"
+                    PreviewKeyDown="BulkRenameOverlay_PreviewKeyDown"
+                    AutomationProperties.AutomationId="BulkRenameSheet"
+                    AutomationProperties.Name="Rename property across the vault"
+                    AutomationProperties.IsDialog="True">
+                <local:AutomationLandmarkBorder.Effect>
+                    <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
+                </local:AutomationLandmarkBorder.Effect>
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <TextBlock Text="Rename property across the vault"
+                               FontSize="16"
+                               FontWeight="SemiBold"
+                               AutomationProperties.HeadingLevel="Level2" />
+                    <Grid Grid.Row="1" Margin="0,10,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="12" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0">
+                            <local:AutomationPresentationTextBlock Margin="0,0,0,2" Text="Old property key" />
+                            <TextBox x:Name="BulkRenameOldKeyTextBox"
+                                     Padding="6,4"
+                                     Text="{Binding OldKey, UpdateSourceTrigger=PropertyChanged}"
+                                     AutomationProperties.AutomationId="BulkRenameOldKey"
+                                     AutomationProperties.Name="Old property key" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="2">
+                            <local:AutomationPresentationTextBlock Margin="0,0,0,2" Text="New property key" />
+                            <TextBox Padding="6,4"
+                                     Text="{Binding NewKey, UpdateSourceTrigger=PropertyChanged}"
+                                     AutomationProperties.AutomationId="BulkRenameNewKey"
+                                     AutomationProperties.Name="New property key" />
+                        </StackPanel>
+                    </Grid>
+                    <StackPanel Grid.Row="2" Margin="0,8,0,0">
+                        <TextBlock Text="{Binding ProgressText}"
+                                   Foreground="{DynamicResource Slate.SecondaryTextBrush}"
+                                   Visibility="{Binding ProgressText, Converter={StaticResource NullToVisibilityConverter}}" />
+                        <TextBlock Text="{Binding ErrorText}"
+                                   Foreground="{DynamicResource Slate.WarningBrush}"
+                                   TextWrapping="Wrap"
+                                   Visibility="{Binding ErrorText, Converter={StaticResource NullToVisibilityConverter}}" />
+                    </StackPanel>
+                    <TextBlock Grid.Row="3"
+                               Margin="0,12"
+                               Text="{Binding EmptyStateText}"
+                               Foreground="{DynamicResource Slate.SecondaryTextBrush}"
+                               Visibility="{Binding ShowEmptyState, Converter={StaticResource BooleanToVisibilityConverter}}"
+                               AutomationProperties.Name="{Binding EmptyStateText}" />
+                    <grids:AccessibleDataGrid x:Name="BulkRenamePreviewGrid"
+                                              Grid.Row="3"
+                                              Margin="0,8"
+                                              MinHeight="120"
+                                              Visibility="{Binding ShowEmptyState, Converter={StaticResource InverseBooleanToVisibilityConverter}}" />
+                    <TextBlock Grid.Row="4"
+                               Text="{Binding FooterText}"
+                               Foreground="{DynamicResource Slate.SecondaryTextBrush}"
+                               AutomationProperties.AutomationId="BulkRenameFooter" />
+                    <StackPanel Grid.Row="5"
+                                Margin="0,12,0,0"
+                                HorizontalAlignment="Right"
+                                Orientation="Horizontal">
+                        <Button Padding="10,4"
+                                Content="Preview"
+                                Click="BulkRenamePreview_Click"
+                                IsEnabled="{Binding CanPreview}"
+                                AutomationProperties.AutomationId="BulkRenamePreviewButton" />
+                        <Button Margin="8,0,0,0"
+                                Padding="10,4"
+                                Content="Apply"
+                                Click="BulkRenameApply_Click"
+                                IsEnabled="{Binding CanApply}"
+                                AutomationProperties.AutomationId="BulkRenameApplyButton"
+                                AutomationProperties.HelpText="Apply the previewed property rename across the vault." />
+                        <Button Margin="8,0,0,0"
+                                Padding="10,4"
+                                Content="Close"
+                                Command="{Binding DataContext.Workspace.CloseBulkRenameSheetCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                AutomationProperties.AutomationId="BulkRenameClose" />
+                    </StackPanel>
                 </Grid>
             </local:AutomationLandmarkBorder>
         </Grid>

@@ -107,6 +107,7 @@ final class ParityHarnessTests: XCTestCase {
         artifacts["links.json"] = Data(try linksArtifact(session: session, relPaths: files).utf8)
         artifacts["editor_scale.json"] = Data(editorScaleArtifact().utf8)
         artifacts["tasks.json"] = Data(try tasksArtifact(session: session).utf8)
+        artifacts["properties.json"] = Data(try propertiesArtifact(session: session).utf8)
         return artifacts
     }
 
@@ -292,6 +293,46 @@ final class ParityHarnessTests: XCTestCase {
         for (i, task) in tasks.enumerated() {
             if i > 0 { j.raw(",") }
             appendTaskItem(j, task)
+        }
+        j.raw("]")
+
+        // W4-4: the canonical property-row artifact — mirrors
+        // SurfaceSerializer.cs. value_json is emitted exactly as the
+        // FFI hands it, never re-parsed or re-serialized.
+        j.raw(",\"properties\":[")
+        let properties = try session.getFileMetadata(path: relPath)?.properties ?? []
+        for (i, property) in properties.enumerated() {
+            if i > 0 { j.raw(",") }
+            appendProperty(j, property)
+        }
+        j.raw("]}")
+        return j.output + "\n"
+    }
+
+    private static func appendProperty(_ j: CanonicalJson, _ p: Property) {
+        j.raw("{\"key\":").str(p.key)
+            .raw(",\"kind\":").str(p.kind)
+            .raw(",\"value_json\":").str(p.valueJson)
+            .raw("}")
+    }
+
+    /// W4-4: the vault-wide property-key artifact — mirrors
+    /// SurfaceSerializer.cs (list_property_keys is key-sorted and
+    /// unpaged).
+    private static func propertiesArtifact(session: VaultSession) throws -> String {
+        let j = CanonicalJson()
+        let keys = try session.listPropertyKeys()
+        j.raw("{\"keys\":[")
+        for (i, k) in keys.enumerated() {
+            if i > 0 { j.raw(",") }
+            j.raw("{\"key\":").str(k.key)
+                .raw(",\"file_count\":").num(k.fileCount)
+                .raw(",\"kinds\":[")
+            for (v, kind) in k.valueKinds.enumerated() {
+                if v > 0 { j.raw(",") }
+                j.str(kind)
+            }
+            j.raw("]}")
         }
         j.raw("]}")
         return j.output + "\n"

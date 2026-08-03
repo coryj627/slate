@@ -1,6 +1,7 @@
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     xmlns:local="clr-namespace:SlateWindows"
+                    xmlns:panels="clr-namespace:SlateWindows.Panels"
                     xmlns:reading="clr-namespace:SlateWindows.Reading">
     <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
     <local:InverseBooleanToVisibilityConverter x:Key="InverseBooleanToVisibilityConverter" />
@@ -55,15 +56,333 @@
         </StackPanel>
     </DataTemplate>
 
+<!-- ============================================================
+     W4-4 (#736): per-kind property editor templates. The editor
+     control is FIXED at row construction from the STORED value
+     (EditorMode) — it never swaps mid-edit; rows are rebuilt by
+     every publish. All edits are draft-local; Enter commits, Esc
+     reverts, Ctrl+Backspace opens the delete confirmation (the
+     Cmd-Backspace substitution, chords.json).
+     ============================================================ -->
+    <DataTemplate x:Key="PropertyTextEditorTemplate"
+                  DataType="{x:Type panels:PropertyRowViewModel}">
+        <TextBox MinWidth="160"
+                 Text="{Binding EditorText, UpdateSourceTrigger=PropertyChanged}"
+                 ToolTip="{Binding EditorTooltip}"
+                 AutomationProperties.Name="{Binding AutomationName}">
+            <TextBox.InputBindings>
+                <KeyBinding Key="Return" Command="{Binding CommitCommand}" />
+                <KeyBinding Key="Escape" Command="{Binding RevertCommand}" />
+                <KeyBinding Key="Back" Modifiers="Control" Command="{Binding DeleteCommand}" />
+            </TextBox.InputBindings>
+        </TextBox>
+    </DataTemplate>
+
+    <DataTemplate x:Key="PropertyDatePickerTemplate"
+                  DataType="{x:Type panels:PropertyRowViewModel}">
+        <!-- Only mounted when the STORED value parses yyyy-MM-dd, so
+             SelectedDate never invents a date; a CALENDAR pick
+             commits immediately (mac parity). The text portion is
+             read-only (adversarial round 1, contract 2): WPF's
+             DatePicker parses typed text on LostFocus, which would
+             turn a focus change into a disk write. -->
+        <DatePicker SelectedDate="{Binding DateValue, Mode=TwoWay}"
+                    ToolTip="{Binding EditorTooltip}"
+                    AutomationProperties.Name="{Binding AutomationName}">
+            <DatePicker.Resources>
+                <Style TargetType="DatePickerTextBox">
+                    <Setter Property="IsReadOnly" Value="True" />
+                </Style>
+            </DatePicker.Resources>
+        </DatePicker>
+    </DataTemplate>
+
+    <DataTemplate x:Key="PropertyNumberEditorTemplate"
+                  DataType="{x:Type panels:PropertyRowViewModel}">
+        <StackPanel Orientation="Horizontal">
+            <TextBox MinWidth="100"
+                     Text="{Binding EditorText, UpdateSourceTrigger=PropertyChanged}"
+                     AutomationProperties.Name="{Binding AutomationName}">
+                <TextBox.InputBindings>
+                    <KeyBinding Key="Return" Command="{Binding CommitCommand}" />
+                    <KeyBinding Key="Escape" Command="{Binding RevertCommand}" />
+                    <KeyBinding Key="Up" Command="{Binding StepUpCommand}" />
+                    <KeyBinding Key="Down" Command="{Binding StepDownCommand}" />
+                    <KeyBinding Key="Back" Modifiers="Control" Command="{Binding DeleteCommand}" />
+                </TextBox.InputBindings>
+            </TextBox>
+            <RepeatButton Margin="4,0,0,0"
+                          Padding="6,0"
+                          Content="▲"
+                          Command="{Binding StepUpCommand}"
+                          AutomationProperties.Name="{Binding StepUpLabel}" />
+            <RepeatButton Margin="2,0,0,0"
+                          Padding="6,0"
+                          Content="▼"
+                          Command="{Binding StepDownCommand}"
+                          AutomationProperties.Name="{Binding StepDownLabel}" />
+        </StackPanel>
+    </DataTemplate>
+
+    <DataTemplate x:Key="PropertyBooleanEditorTemplate"
+                  DataType="{x:Type panels:PropertyRowViewModel}">
+        <!-- ToggleButton flips IsChecked (the TwoWay binding lands in
+             the draft) BEFORE the command runs, so one click is
+             flip + immediate commit — never a double flip. -->
+        <CheckBox VerticalAlignment="Center"
+                  IsChecked="{Binding BoolValue, Mode=TwoWay}"
+                  Command="{Binding CommitCommand}"
+                  AutomationProperties.Name="{Binding AutomationName}" />
+    </DataTemplate>
+
+    <DataTemplate x:Key="PropertyWikilinkEditorTemplate"
+                  DataType="{x:Type panels:PropertyRowViewModel}">
+        <StackPanel Orientation="Horizontal">
+            <TextBox MinWidth="160"
+                     Text="{Binding EditorText, UpdateSourceTrigger=PropertyChanged}"
+                     ToolTip="{Binding EditorTooltip}"
+                     AutomationProperties.Name="{Binding AutomationName}">
+                <TextBox.InputBindings>
+                    <KeyBinding Key="Return" Command="{Binding CommitCommand}" />
+                    <KeyBinding Key="Escape" Command="{Binding RevertCommand}" />
+                    <KeyBinding Key="Back" Modifiers="Control" Command="{Binding DeleteCommand}" />
+                </TextBox.InputBindings>
+            </TextBox>
+            <Button Margin="6,0,0,0"
+                    Padding="8,2"
+                    Content="Pick…"
+                    Command="{Binding DataContext.Workspace.PickWikilinkTargetCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                    CommandParameter="{Binding}"
+                    AutomationProperties.Name="{Binding PickerLabel}" />
+        </StackPanel>
+    </DataTemplate>
+
+    <DataTemplate x:Key="PropertyListEditorTemplate"
+                  DataType="{x:Type panels:PropertyRowViewModel}">
+        <StackPanel>
+            <!-- Unnamed on purpose: it is non-focusable structure and
+                 the type-cued row name contains "list", which trips
+                 axe's NameExcludesControlType on a List control. The
+                 per-item editors carry the full labels. -->
+            <ItemsControl ItemsSource="{Binding Items}"
+                          Focusable="False"
+                          IsTabStop="False">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate DataType="{x:Type panels:PropertyListItemViewModel}">
+                        <StackPanel Margin="0,2" Orientation="Horizontal">
+                            <!-- Enter commits the ROW (contract 2 —
+                                 lists have the same commit triggers
+                                 as scalars), Esc reverts it. -->
+                            <TextBox MinWidth="140"
+                                     Text="{Binding Text, UpdateSourceTrigger=PropertyChanged}"
+                                     AutomationProperties.Name="{Binding ItemLabel}">
+                                <TextBox.InputBindings>
+                                    <KeyBinding Key="Return" Command="{Binding CommitCommand}" />
+                                    <KeyBinding Key="Escape" Command="{Binding RevertCommand}" />
+                                    <KeyBinding Key="Back" Modifiers="Control" Command="{Binding DeleteCommand}" />
+                                </TextBox.InputBindings>
+                            </TextBox>
+                            <Button Margin="6,0,0,0"
+                                    Padding="8,2"
+                                    Content="Remove"
+                                    Command="{Binding RemoveCommand}"
+                                    AutomationProperties.Name="{Binding RemoveLabel}" />
+                        </StackPanel>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <Button Margin="0,4,0,0"
+                    Padding="8,2"
+                    HorizontalAlignment="Left"
+                    Content="{Binding AddItemVisibleText}"
+                    Command="{Binding AddItemCommand}"
+                    AutomationProperties.Name="{Binding AddItemLabel}" />
+        </StackPanel>
+    </DataTemplate>
+
+    <DataTemplate x:Key="PropertyRowTemplate"
+                  DataType="{x:Type panels:PropertyRowViewModel}">
+        <Grid Margin="0,3">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="150" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <!-- The key text is visual context only — the editor's
+                 AutomationName carries the key for AT. -->
+            <local:AutomationPresentationTextBlock Text="{Binding Key}"
+                                                   VerticalAlignment="Center"
+                                                   TextTrimming="CharacterEllipsis" />
+            <ContentControl Grid.Column="1"
+                            Margin="8,0,0,0"
+                            Content="{Binding}"
+                            Focusable="False">
+                <ContentControl.Style>
+                    <Style TargetType="ContentControl">
+                        <Setter Property="ContentTemplate" Value="{StaticResource PropertyTextEditorTemplate}" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding EditorMode}" Value="datePicker">
+                                <Setter Property="ContentTemplate" Value="{StaticResource PropertyDatePickerTemplate}" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding EditorMode}" Value="integer">
+                                <Setter Property="ContentTemplate" Value="{StaticResource PropertyNumberEditorTemplate}" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding EditorMode}" Value="float">
+                                <Setter Property="ContentTemplate" Value="{StaticResource PropertyNumberEditorTemplate}" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding EditorMode}" Value="boolean">
+                                <Setter Property="ContentTemplate" Value="{StaticResource PropertyBooleanEditorTemplate}" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding EditorMode}" Value="wikilink">
+                                <Setter Property="ContentTemplate" Value="{StaticResource PropertyWikilinkEditorTemplate}" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding EditorMode}" Value="list">
+                                <Setter Property="ContentTemplate" Value="{StaticResource PropertyListEditorTemplate}" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </ContentControl.Style>
+            </ContentControl>
+            <StackPanel Grid.Column="2"
+                        Margin="8,0,0,0"
+                        Orientation="Horizontal"
+                        VerticalAlignment="Center">
+                <!-- Row traversal: editor → Save → Revert (dirty
+                     only) → Delete → validation error (§2.3). -->
+                <Button Padding="8,2"
+                        Content="Save"
+                        Command="{Binding CommitCommand}"
+                        AutomationProperties.Name="{Binding SaveLabel}">
+                    <Button.Style>
+                        <Style TargetType="Button">
+                            <Setter Property="IsEnabled" Value="False" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsDirty}" Value="True">
+                                    <Setter Property="IsEnabled" Value="True" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding WriteInFlight}" Value="True">
+                                    <Setter Property="IsEnabled" Value="False" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Button.Style>
+                </Button>
+                <Button Margin="6,0,0,0"
+                        Padding="8,2"
+                        Content="Revert"
+                        Command="{Binding RevertCommand}"
+                        Visibility="{Binding IsDirty, Converter={StaticResource BooleanToVisibilityConverter}}"
+                        AutomationProperties.Name="{Binding RevertLabel}"
+                        AutomationProperties.HelpText="{Binding RevertHint}" />
+                <Button Margin="6,0,0,0"
+                        Padding="8,2"
+                        Content="Delete"
+                        Command="{Binding DeleteCommand}"
+                        AutomationProperties.Name="{Binding DeleteLabel}">
+                    <Button.Style>
+                        <Style TargetType="Button">
+                            <Style.Triggers>
+                                <!-- Delete is disabled while the draft
+                                     is dirty; the reason is exposed as
+                                     HelpText (§2.3). -->
+                                <DataTrigger Binding="{Binding IsDirty}" Value="True">
+                                    <Setter Property="IsEnabled" Value="False" />
+                                    <Setter Property="AutomationProperties.HelpText"
+                                            Value="Revert or save this property draft before deleting the property." />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Button.Style>
+                </Button>
+            </StackPanel>
+            <TextBlock Grid.Row="1"
+                       Grid.Column="1"
+                       Grid.ColumnSpan="2"
+                       Margin="8,2,0,0"
+                       Text="{Binding ValidationError}"
+                       Foreground="{DynamicResource Slate.WarningBrush}"
+                       TextWrapping="Wrap"
+                       Visibility="{Binding ValidationError, Converter={StaticResource NullToVisibilityConverter}}"
+                       AutomationProperties.Name="{Binding ValidationLabel}" />
+        </Grid>
+    </DataTemplate>
+
     <DataTemplate x:Key="WorkspaceTabContentTemplate"
                   DataType="{x:Type local:WorkspaceTabViewModel}">
         <Grid Background="{DynamicResource Slate.WindowBackgroundBrush}">
             <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
+            <!-- W4-4 (#736): the in-note properties header — above the
+                 editor host, OUTSIDE its scroll viewer (UIA reads
+                 Properties before content, where frontmatter lives in
+                 the file). Shown in editing and reading modes;
+                 collapsed until the per-tab VM attaches (markdown tabs
+                 only). -->
+            <Expander Grid.Row="0"
+                      Margin="12,8,12,0"
+                      IsExpanded="{Binding Properties.IsExpanded, Mode=TwoWay}"
+                      Visibility="{Binding Properties, Converter={StaticResource NullToVisibilityConverter}}"
+                      AutomationProperties.AutomationId="PropertiesHeader"
+                      AutomationProperties.Name="{Binding Properties.HeaderGroupName}">
+                <Expander.Header>
+                    <DockPanel LastChildFill="False">
+                        <TextBlock VerticalAlignment="Center"
+                                   FontWeight="SemiBold"
+                                   Text="{Binding Properties.HeaderText}"
+                                   AutomationProperties.HeadingLevel="Level2" />
+                        <Button DockPanel.Dock="Right"
+                                Margin="8,0,0,0"
+                                MinHeight="28"
+                                Padding="8,2"
+                                Content="Rename property across the vault"
+                                AutomationProperties.AutomationId="PropertiesBulkRenameButton"
+                                Command="{Binding DataContext.Workspace.OpenBulkRenameSheetCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
+                        <Button DockPanel.Dock="Right"
+                                Margin="16,0,0,0"
+                                MinHeight="28"
+                                Padding="8,2"
+                                Content="Add property"
+                                AutomationProperties.AutomationId="PropertiesAddButton"
+                                AutomationProperties.HelpText="Add a property to this note."
+                                Command="{Binding DataContext.Workspace.OpenAddPropertySheetCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
+                    </DockPanel>
+                </Expander.Header>
+                <StackPanel Margin="4,4,4,8">
+                    <TextBlock Text="Loading properties"
+                               Foreground="{DynamicResource Slate.SecondaryTextBrush}"
+                               Visibility="{Binding Properties.IsLoading, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                    <TextBlock Text="{Binding Properties.LoadError, StringFormat=Error: {0}}"
+                               Foreground="{DynamicResource Slate.WarningBrush}"
+                               TextWrapping="Wrap"
+                               Visibility="{Binding Properties.LoadError, Converter={StaticResource NullToVisibilityConverter}}" />
+                    <TextBlock Text="{Binding Properties.EmptyStateText}"
+                               Foreground="{DynamicResource Slate.SecondaryTextBrush}"
+                               Visibility="{Binding Properties.ShowEmptyState, Converter={StaticResource BooleanToVisibilityConverter}}"
+                               AutomationProperties.Name="{Binding Properties.EmptyStateText}" />
+                    <!-- Hugs small sets, scrolls internally past
+                         ~280px (mac parity). -->
+                    <ScrollViewer MaxHeight="280"
+                                  VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled"
+                                  Visibility="{Binding Properties.HasRows, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <ItemsControl ItemsSource="{Binding Properties.Rows}"
+                                      ItemTemplate="{StaticResource PropertyRowTemplate}"
+                                      Focusable="False"
+                                      IsTabStop="False"
+                                      AutomationProperties.AutomationId="PropertiesRows"
+                                      AutomationProperties.Name="{Binding Properties.HeaderGroupName}" />
+                    </ScrollViewer>
+                </StackPanel>
+            </Expander>
             <local:SlateTextEditor x:Name="MarkdownEditor"
-                                   Grid.Row="0"
+                                   Grid.Row="1"
                                    Margin="12"
                                    Padding="12"
                                    Document="{Binding EditorDocument}"
@@ -104,7 +423,7 @@
             <!-- W3-1 (#728): the reading surface swaps in for the editor
                  on the persisted per-tab mode. Same grid cell — one of
                  the two is always collapsed, so UIA never sees both. -->
-            <reading:ReadingSurface Grid.Row="0"
+            <reading:ReadingSurface Grid.Row="1"
                                     Margin="12"
                                     Padding="12"
                                     Model="{Binding Reading}"
@@ -114,7 +433,7 @@
                  source so UIA ownership is stable across providers. The
                  transparent layer intentionally makes Close/Escape the only
                  dismissal paths and prevents pointer input reaching the editor. -->
-            <local:AutomationLandmarkGrid Grid.RowSpan="2"
+            <local:AutomationLandmarkGrid Grid.RowSpan="3"
                                           Panel.ZIndex="100"
                                           Background="Transparent"
                                           Visibility="{Binding EditorInteractions.IsPopoverOpen, Converter={StaticResource BooleanToVisibilityConverter}}"
@@ -195,7 +514,7 @@
                     </Border>
                 </local:EditorInteractionPopoverHost>
             </local:AutomationLandmarkGrid>
-            <StackPanel Grid.Row="0"
+            <StackPanel Grid.Row="1"
                         Margin="32"
                         HorizontalAlignment="Center"
                         VerticalAlignment="Center"
@@ -212,7 +531,7 @@
                            TextAlignment="Center"
                            TextWrapping="Wrap" />
             </StackPanel>
-            <TextBlock Grid.Row="1"
+            <TextBlock Grid.Row="2"
                        Margin="12,0,12,8"
                        Text="{Binding Status}"
                        Foreground="{DynamicResource Slate.SecondaryTextBrush}"

@@ -461,12 +461,17 @@ W3_DELIVERED_COMMANDS = {
 }
 
 W4_IMPLEMENTED_STATUS = (
-    "implemented; local gates green 2026-08-01; interactive CI + human AT pending"
+    "implemented; local gates green 2026-08-03; interactive CI + human AT pending"
 )
 
 # W4 delivery, same per-command shape as W3.
+# slate.editor.togglePropertiesSource stays PENDING: YAML source mode
+# was scoped out of W4-4 (no set_frontmatter_source call site) — the
+# deferral is recorded in docs/plans/22_property_panel_contracts.md.
 W4_DELIVERED_COMMANDS = {
     "slate.tasks.review",
+    "slate.editor.addProperty",
+    "slate.editor.bulkRenameProperties",
 }
 
 # §W-F waivers: status text the generator must preserve across
@@ -537,7 +542,9 @@ def load_delivery_evidence(
         if group_name not in groups:
             fail(f"command {command_id} references unknown evidence group {group_name!r}")
 
-    expected_issues = {"#381", "#720", "#721", "#722", "#723", "#724", "#725", "#728", "#735"}
+    expected_issues = {
+        "#381", "#720", "#721", "#722", "#723", "#724", "#725", "#728", "#735", "#736",
+    }
     if set(issue_map) != expected_issues:
         fail(
             "delivery-evidence issue drift: expected "

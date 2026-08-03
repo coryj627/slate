@@ -10828,7 +10828,12 @@ fn crosses_tags_boundary(old_key: &str, new_key: &str, value: &crate::PropertyVa
     if !is_list {
         return false;
     }
-    (old_key == "tags") ^ (new_key == "tags")
+    // Case-INSENSITIVE, matching `classify_list`'s own tags predicate
+    // (W4-4 adversarial round 8). An exact-lowercase guard let
+    // `authors` → `Tags` through, and the authoritative reread then
+    // silently flipped List to TagList — precisely the drift this
+    // refusal exists to prevent.
+    old_key.eq_ignore_ascii_case("tags") ^ new_key.eq_ignore_ascii_case("tags")
 }
 
 /// Map a `FrontmatterEditError` to the `VaultError` shape the FFI

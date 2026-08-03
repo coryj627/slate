@@ -467,6 +467,27 @@ pub fn extract_frontmatter(source: &str) -> (Vec<Property>, Vec<PropertyParseWar
     (properties, warnings)
 }
 
+/// The TOP-LEVEL YAML keys of a frontmatter block, in document order.
+///
+/// This is deliberately *not* derivable from [`extract_frontmatter`]: that
+/// flattens nested mappings (`person: {name: …}` becomes `person.name`) and
+/// drops shapes it can't type, so a caller checking "does this key already
+/// exist?" against properties would miss the container key and silently
+/// replace it on write (W4-4 adversarial round 6). Add-property surfaces must
+/// collision-check against this instead.
+pub fn frontmatter_top_level_keys(source: &str) -> Vec<String> {
+    let Some(range) = frontmatter_range(source) else {
+        return Vec::new();
+    };
+    let Ok(docs) = YamlLoader::load_from_str(&source[range]) else {
+        return Vec::new();
+    };
+    match docs.into_iter().next() {
+        Some(Yaml::Hash(map)) => map.iter().map(|(k, _)| yaml_key_to_string(k)).collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// Parse frontmatter once while allowing another crate-internal projection to
 /// inspect the same raw YAML root before it is converted to Slate's typed,
 /// flattened [`Property`] model.
@@ -931,6 +952,7 @@ pub fn set_property_in_source(
         Some(range) => {
             let yaml_src = &source[range.clone()];
             let mut hash = parse_hash(yaml_src)?;
+            reject_projected_non_string_key(&hash, key)?;
             hash.replace(yaml_key, yaml_value);
             let new_yaml = emit_hash_body(&hash);
             Ok(replace_range(source, range, &new_yaml))
@@ -957,6 +979,7 @@ pub fn delete_property_in_source(
     };
     let yaml_src = &source[range.clone()];
     let mut hash = parse_hash(yaml_src)?;
+    reject_projected_non_string_key(&hash, key)?;
     let yaml_key = Yaml::String(key.to_string());
     if hash.remove(&yaml_key).is_none() {
         return Ok(FrontmatterEdit::Unchanged);
@@ -1042,10 +1065,18 @@ fn property_value_to_yaml(value: &PropertyValue) -> Result<Yaml, FrontmatterEdit
             }
             // yaml-rust2's `Real` is the string form a YAML float
             // would be written as. `f64::to_string` matches Rust's
-            // canonical decimal form, which the parser will accept
-            // back as `Real` and the layered classifier converts to
-            // `Float` again.
-            Yaml::Real(f.to_string())
+            // canonical decimal form — EXCEPT for integral values,
+            // where it drops the decimal point ("1.0" → "1") and the
+            // re-read would classify Integer, silently flipping the
+            // number kind (W4-4 adversarial round 4). Append ".0" so
+            // an integral float survives the round trip as a float.
+            {
+                let mut s = f.to_string();
+                if !s.contains('.') && !s.contains('e') && !s.contains('E') {
+                    s.push_str(".0");
+                }
+                Yaml::Real(s)
+            }
         }
         PropertyValue::Boolean(b) => Yaml::Boolean(*b),
         PropertyValue::Date(s) | PropertyValue::Datetime(s) => Yaml::String(s.clone()),
@@ -1096,6 +1127,20 @@ fn parse_hash(yaml_src: &str) -> Result<YamlHash, FrontmatterEditError> {
     let docs = YamlLoader::load_from_str(yaml_src).map_err(|e| {
         FrontmatterEditError::MalformedFrontmatter(rewrite_duplicate_key_message(e.to_string()))
     })?;
+    // Audit W4-4 round 7: a block can hold MORE than one YAML document
+    // when it contains an interior separator our delimiter scan doesn't
+    // treat as the closing fence (`--- # note`). Every edit path
+    // replaces the whole frontmatter range from this single parsed
+    // mapping, so keeping only the first document would silently delete
+    // the rest. Refuse, exactly like anchors/aliases above.
+    if docs.len() > 1 {
+        return Err(FrontmatterEditError::MalformedFrontmatter(
+            "frontmatter block contains more than one YAML document; editing would \
+             silently drop all but the first. Remove the interior `---` separator \
+             before editing properties"
+                .to_string(),
+        ));
+    }
     match docs.into_iter().next() {
         Some(Yaml::Hash(h)) => Ok(h),
         // Empty `---\n---` is a valid starting point for edits — treat
@@ -1120,6 +1165,28 @@ fn parse_hash(yaml_src: &str) -> Result<YamlHash, FrontmatterEditError> {
             yaml_type_name(&other)
         ))),
     }
+}
+
+/// Refuse to edit a key whose live YAML form is NOT a string.
+///
+/// The read path stringifies keys for the flat `Property` model
+/// (`1: x` publishes as key `"1"`), but every write path constructs
+/// `Yaml::String`. Editing such a row would therefore INSERT a second,
+/// quoted key rather than replace the original, and deleting it would
+/// miss entirely and report success — a host that announces "Property
+/// 1 deleted." while the key is still on disk (W4-4 adversarial round
+/// 8). Fail closed until typed key identity exists end to end.
+fn reject_projected_non_string_key(hash: &YamlHash, key: &str) -> Result<(), FrontmatterEditError> {
+    for (existing, _) in hash.iter() {
+        if !matches!(existing, Yaml::String(_)) && yaml_key_to_string(existing) == key {
+            return Err(FrontmatterEditError::MalformedFrontmatter(format!(
+                "frontmatter key `{key}` is a non-string YAML key; editing it would \
+                 duplicate rather than replace it. Quote the key in the note before \
+                 editing this property"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Walk the parser event stream looking for anchor IDs or aliases.
@@ -1818,6 +1885,11 @@ mod tests {
             ("text_k", PropertyValue::Text("hello world".to_string())),
             ("int_k", PropertyValue::Integer(-7)),
             ("float_k", PropertyValue::Float(3.5)),
+            // Integral floats must NOT flip to Integer on re-read
+            // (W4-4 adversarial round 4): the emitter keeps a real
+            // decimal marker.
+            ("float_int_k", PropertyValue::Float(1.0)),
+            ("float_exp_k", PropertyValue::Float(1e3)),
             ("bool_k", PropertyValue::Boolean(true)),
             ("date_k", PropertyValue::Date("2026-05-24".to_string())),
             (
@@ -1849,6 +1921,124 @@ mod tests {
                 "round-trip failed for key {k}"
             );
         }
+    }
+
+    #[test]
+    fn editing_a_non_string_key_refuses_instead_of_duplicating_or_false_deleting() {
+        // The read path publishes `1: old` as key "1"; the write path
+        // builds Yaml::String("1"). Without the guard, set INSERTS a
+        // second quoted key and delete reports success while the
+        // numeric key survives (W4-4 adversarial round 8).
+        let src = "---\n1: old\ntitle: Hi\n---\nbody\n";
+        let props = props(src);
+        assert_eq!(
+            find(&props, "1"),
+            Some(PropertyValue::Text("old".to_string()))
+        );
+
+        let set_err =
+            set_property_in_source(src, "1", &PropertyValue::Text("new".to_string())).unwrap_err();
+        assert!(
+            matches!(set_err, FrontmatterEditError::MalformedFrontmatter(ref m)
+                if m.contains("non-string YAML key")),
+            "unexpected set error: {set_err:?}"
+        );
+
+        let delete_err = delete_property_in_source(src, "1").unwrap_err();
+        assert!(
+            matches!(delete_err, FrontmatterEditError::MalformedFrontmatter(ref m)
+                if m.contains("non-string YAML key")),
+            "unexpected delete error: {delete_err:?}"
+        );
+
+        // Ordinary string keys in the same block still edit fine.
+        let out =
+            set_property_in_source(src, "title", &PropertyValue::Text("Bye".to_string())).unwrap();
+        assert!(out.contains("title: Bye"));
+    }
+
+    #[test]
+    fn non_string_key_guard_covers_every_key_shape_without_false_positives() {
+        // The guard compares with the SAME `yaml_key_to_string` the
+        // read path uses, so its verdict cannot drift from what the
+        // row actually published. These pin each shape.
+        // (A float key like `1.5` stringifies to "1.5" and is already
+        // refused one guard earlier by `reject_dotted_key`, so it is
+        // covered without reaching this one.)
+        for (src, key) in [
+            ("---\ntrue: x\n---\nbody\n", "true"),
+            ("---\n~: x\n---\nbody\n", ""),
+        ] {
+            // The row really does publish under this stringified key…
+            assert!(
+                props(src).iter().any(|p| p.key == key),
+                "expected published key {key:?} for {src:?}"
+            );
+            // …and both write paths refuse it.
+            let set_err = set_property_in_source(src, key, &PropertyValue::Text("new".to_string()))
+                .unwrap_err();
+            assert!(
+                matches!(set_err, FrontmatterEditError::MalformedFrontmatter(ref m)
+                    if m.contains("non-string YAML key")),
+                "set should refuse {key:?}: {set_err:?}"
+            );
+            let delete_err = delete_property_in_source(src, key).unwrap_err();
+            assert!(
+                matches!(delete_err, FrontmatterEditError::MalformedFrontmatter(ref m)
+                    if m.contains("non-string YAML key")),
+                "delete should refuse {key:?}: {delete_err:?}"
+            );
+        }
+
+        // NO FALSE POSITIVES: an explicitly QUOTED numeric key is a
+        // real string key and must stay editable, even though it
+        // stringifies identically to the numeric form.
+        let quoted = "---\n\"1\": old\n---\nbody\n";
+        let out =
+            set_property_in_source(quoted, "1", &PropertyValue::Text("new".to_string())).unwrap();
+        assert_eq!(
+            find(&props(&out), "1"),
+            Some(PropertyValue::Text("new".to_string()))
+        );
+        assert!(
+            matches!(
+                delete_property_in_source(quoted, "1").unwrap(),
+                FrontmatterEdit::Changed(_)
+            ),
+            "a quoted string key must delete normally"
+        );
+
+        // Keys differing only by CASE are distinct string keys; the
+        // guard must not couple them.
+        let cased = "---\ntitle: lower\nTitle: upper\n---\nbody\n";
+        let out =
+            set_property_in_source(cased, "Title", &PropertyValue::Text("edited".to_string()))
+                .unwrap();
+        let after = props(&out);
+        assert_eq!(
+            find(&after, "Title"),
+            Some(PropertyValue::Text("edited".to_string()))
+        );
+        assert_eq!(
+            find(&after, "title"),
+            Some(PropertyValue::Text("lower".to_string()))
+        );
+    }
+
+    #[test]
+    fn set_property_refuses_multi_document_frontmatter_instead_of_truncating() {
+        // `--- # second` is a YAML document separator but not a Slate
+        // closing fence, so the block parses as TWO documents. Editing
+        // rewrites the whole range, which would drop everything after
+        // the separator (W4-4 adversarial round 7).
+        let src = "---\ntitle: A\n--- # second\nperson: Alice\n---\nbody\n";
+        let err = set_property_in_source(src, "added", &PropertyValue::Text("x".to_string()))
+            .unwrap_err();
+        assert!(
+            matches!(err, FrontmatterEditError::MalformedFrontmatter(ref m)
+                if m.contains("more than one YAML document")),
+            "unexpected error: {err:?}"
+        );
     }
 
     #[test]

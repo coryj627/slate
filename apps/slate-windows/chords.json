@@ -207,6 +207,12 @@
       "mac": "Shift Command E",
       "windows": "Ctrl+Shift+E",
       "windowsSpoken": "Control Shift E"
+    },
+    {
+      "id": "slate.editor.bulkRenameProperties",
+      "mac": "Shift Command R",
+      "windows": "Ctrl+Shift+R",
+      "windowsSpoken": "Control Shift R"
     }
   ],
   "deliveryEvidence": {
@@ -296,6 +302,19 @@
         "tests": [
           "apps/slate-windows/tests/SlateWindows.Tests/TasksReviewTests.cs#TasksReviewTests"
         ]
+      },
+      "properties": {
+        "implementation": [
+          "apps/slate-windows/src/SlateWindows/Panels/NotePropertiesViewModel.cs#NotePropertiesViewModel",
+          "apps/slate-windows/src/SlateWindows/WorkspaceViewModel.Properties.cs#SetPanelProperty",
+          "apps/slate-windows/src/SlateWindows/Panels/AddPropertyViewModel.cs#AddPropertyViewModel",
+          "apps/slate-windows/src/SlateWindows/Panels/BulkRenameViewModel.cs#BulkRenameViewModel"
+        ],
+        "tests": [
+          "apps/slate-windows/tests/SlateWindows.Tests/NotePropertiesTests.cs#NotePropertiesTests",
+          "apps/slate-windows/tests/SlateWindows.Tests/AddPropertyTests.cs#AddPropertyTests",
+          "apps/slate-windows/tests/SlateWindows.Tests/BulkRenameTests.cs#BulkRenameTests"
+        ]
       }
     },
     "commands": {
@@ -365,7 +384,9 @@
       "slate.workspace.splitDown": "workspace",
       "slate.workspace.splitRight": "workspace",
       "slate.editor.toggleViewMode": "reading",
-      "slate.tasks.review": "tasksReview"
+      "slate.tasks.review": "tasksReview",
+      "slate.editor.addProperty": "properties",
+      "slate.editor.bulkRenameProperties": "properties"
     },
     "issues": {
       "#720": "vault",
@@ -376,7 +397,8 @@
       "#381": "editorSpans",
       "#725": "editorInteractions",
       "#728": "reading",
-      "#735": "tasksReview"
+      "#735": "tasksReview",
+      "#736": "properties"
     }
   }
 }

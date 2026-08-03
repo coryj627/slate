@@ -76,7 +76,7 @@ internal enum TabTaskToggle
     Started,
 }
 
-internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
+internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
 {
     private readonly VaultSession _session;
     private readonly Action<WorkspaceTabViewModel, EditorDocumentSyncEvent?>? _documentChanged;
@@ -296,7 +296,17 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
     }
 
     public WorkspaceTabState Snapshot() =>
-        new(Id, Item, Mode, PropsCollapsed, ActiveCanvasSurface);
+        // Sparse per-tab expansion (W4-4): collapsed persists as true,
+        // expanded as absent; a header never materialized this session
+        // keeps the restored value.
+        new(
+            Id,
+            Item,
+            Mode,
+            Properties is { } properties
+                ? (properties.IsExpanded ? null : true)
+                : PropsCollapsed,
+            ActiveCanvasSurface);
 
     public void ReplaceItem(WorkspaceItemState item)
     {
@@ -517,6 +527,9 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
     {
         _disposed = true;
         _taskToggleGeneration++;
+        // W4-4: refuse new property-header work before the session
+        // this tab's header reads from goes away.
+        ShutdownProperties();
         // The reading projection goes first: it observes the editor
         // document and schedules background FFI work against this
         // tab's session — both torn down below.
@@ -1350,9 +1363,18 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     /// called from every activation funnel (tab activation, pane focus,
     /// workspace mutations). Same-path calls are no-ops in the panels
     /// VM, so over-calling is safe and refetch-free.</summary>
-    internal void SyncPanels() =>
+    internal void SyncPanels()
+    {
         Panels.NoteChanged(
             ActiveGroup.ActiveTab is { IsMarkdown: true } tab ? tab.Path : null);
+        // W4-4: the properties header attaches at activation, in the
+        // Reading posture — background work in the app, inline in
+        // tests (the flag decides the VM's mode at first creation,
+        // so a test's later EnsureActiveTabProperties call gets the
+        // same synchronous instance).
+        EnsureActiveTabProperties(
+            synchronousForTests: !_startInteractionBackgroundWork);
+    }
 
     /// <summary>External links launch through the shell (the default
     /// browser / mail client); the panels VM allowlists schemes before
@@ -1602,6 +1624,16 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
 
     public void Dispose()
     {
+        // W4-4 (adversarial round 2): the bulk-rename worker holds
+        // the shared session too — cancel any in-flight run through
+        // its CancelToken and shut the scheduler down so a terminal
+        // publish can't land in this dying workspace. The rename's
+        // per-file CAS writes are individually safe; cancellation
+        // reports the unprocessed remainder at the core layer.
+        _bulkRenameSheet?.CancelInFlight();
+        _bulkRenameSheet?.Shutdown();
+        _bulkRenameSheet = null;
+        _addPropertySheet = null;
         // Panels first: their workers hold the shared session, which
         // the vault lifecycle disposes right after this workspace —
         // invalidate every in-flight load before that happens.
@@ -1624,6 +1656,11 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             // Headings move under edits — the outline leaf re-reads
             // after a save (link rows deliberately do not; mac parity).
             Panels.NoteSaved(tab.Path);
+            // W4-4: frontmatter can be hand-edited in the whole-file
+            // buffer on Windows — the header re-derives from the
+            // just-saved bytes so its rows and CAS tokens are never
+            // a stale generation behind the tab (contract 4).
+            RefreshPropertiesFor(tab.Path);
         }
     }
 

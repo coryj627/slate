@@ -2133,6 +2133,208 @@ public sealed class ShellAccessibilityTests
         }
     }
 
+    [Fact]
+    public void PropertiesHeader_RowsEditSheetsAndRenameCarryTheMacShapes()
+    {
+        string testRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"slate-props-{Guid.NewGuid():N}");
+        string vaultRoot = Path.Combine(testRoot, "Props Vault");
+        string logDirectory = Path.Combine(testRoot, "logs");
+        Directory.CreateDirectory(vaultRoot);
+        string notePath = Path.Combine(vaultRoot, "props.md");
+        File.WriteAllText(
+            notePath, "---\ntitle: Hello\ncount: 42\n---\nBody.\n");
+
+        Process? process = null;
+        try
+        {
+            var startInfo = new ProcessStartInfo(SlateWindowsExe())
+            {
+                RedirectStandardError = true,
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+            };
+            startInfo.ArgumentList.Add(vaultRoot);
+            startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
+                $"slate-props-{Guid.NewGuid():N}";
+            startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            process = Process.Start(startInfo)
+                ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+
+            if (!Environment.UserInteractive)
+            {
+                Assert.False(
+                    process.WaitForExit(3_000),
+                    "Slate exited during the properties startup smoke. " +
+                    $"app log: {ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log"))}");
+                return;
+            }
+
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(
+                process,
+                automation,
+                Path.Combine(logDirectory, "slate-windows.log"),
+                TimeSpan.FromSeconds(30));
+
+            AutomationElement filesTree = WaitForElement(
+                window, "FilesTree", TimeSpan.FromSeconds(30));
+            AutomationElement? noteItem = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        // The sidebar leads with the frontmatter
+                        // title ("Hello"), not the filename.
+                        noteItem = filesTree
+                            .FindAllDescendants(
+                                automation.ConditionFactory.ByControlType(
+                                    ControlType.TreeItem))
+                            .FirstOrDefault(item =>
+                                item.Name.StartsWith(
+                                    "Hello", StringComparison.OrdinalIgnoreCase));
+                        return noteItem is not null;
+                    },
+                    TimeSpan.FromSeconds(30)),
+                "The props TreeItem never appeared.");
+            noteItem!.Patterns.SelectionItem.Pattern.Select();
+            WaitForEditor(
+                window, automation, "props.md editor", TimeSpan.FromSeconds(10));
+
+            // The header group name counts the properties (§2.1) and
+            // sits ABOVE the editor as its own expander.
+            AutomationElement header = WaitForElement(
+                window, "PropertiesHeader", TimeSpan.FromSeconds(15));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => (header.Properties.Name.ValueOrDefault ?? "")
+                        == "Properties, 2 properties",
+                    TimeSpan.FromSeconds(15)),
+                "the header never took the counted group name; "
+                    + $"last='{header.Properties.Name.ValueOrDefault}'");
+
+            // The type-cued row editor (§2.8): edit through UIA and
+            // commit with Enter — the DISK write is the observable.
+            AutomationElement rows = WaitForElement(
+                window, "PropertiesRows", TimeSpan.FromSeconds(10));
+            AutomationElement? titleEditor = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        titleEditor = rows
+                            .FindAllDescendants(
+                                automation.ConditionFactory.ByControlType(
+                                    ControlType.Edit))
+                            .FirstOrDefault(item =>
+                                (item.Properties.Name.ValueOrDefault ?? "")
+                                    == "Property title, text, editable");
+                        return titleEditor is not null;
+                    },
+                    TimeSpan.FromSeconds(15)),
+                "the type-cued title editor is absent");
+            titleEditor!.Patterns.Value.Pattern.SetValue("Renamed");
+            titleEditor.Focus();
+            Keyboard.Type(VirtualKeyShort.ENTER);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            return File.ReadAllText(notePath)
+                                .Contains("title: Renamed");
+                        }
+                        catch (IOException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(20)),
+                "the Enter commit never reached disk");
+
+            // The add sheet opens as a named UIA dialog and Cancel
+            // dismisses it.
+            AutomationElement addButton = WaitForElement(
+                window, "PropertiesAddButton", TimeSpan.FromSeconds(10));
+            addButton.Patterns.Invoke.Pattern.Invoke();
+            AutomationElement addSheet = WaitForElement(
+                window, "AddPropertySheet", TimeSpan.FromSeconds(10));
+            Assert.Equal(
+                "Add property", addSheet.Properties.Name.ValueOrDefault);
+            WaitForElement(window, "AddPropertyCancel", TimeSpan.FromSeconds(10))
+                .Patterns.Invoke.Pattern.Invoke();
+
+            // The bulk-rename sheet: old key prefills from the note,
+            // preview populates the AccessibleDataGrid and the
+            // core-rendered footer.
+            AutomationElement renameButton = WaitForElement(
+                window, "PropertiesBulkRenameButton", TimeSpan.FromSeconds(10));
+            renameButton.Patterns.Invoke.Pattern.Invoke();
+            _ = WaitForElement(window, "BulkRenameSheet", TimeSpan.FromSeconds(10));
+            AutomationElement oldKey = WaitForElement(
+                window, "BulkRenameOldKey", TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => (oldKey.Patterns.Value.Pattern.Value.ValueOrDefault ?? "")
+                        == "title",
+                    TimeSpan.FromSeconds(10)),
+                "the old key never prefilled from the active note");
+            WaitForElement(window, "BulkRenameNewKey", TimeSpan.FromSeconds(10))
+                .Patterns.Value.Pattern.SetValue("heading");
+            WaitForElement(window, "BulkRenamePreviewButton", TimeSpan.FromSeconds(10))
+                .Patterns.Invoke.Pattern.Invoke();
+            AutomationElement footer = WaitForElement(
+                window, "BulkRenameFooter", TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => (footer.Properties.Name.ValueOrDefault ?? "").Length > 0,
+                    TimeSpan.FromSeconds(15)),
+                "the preview footer never rendered");
+            AutomationElement grid = WaitForElement(
+                window, "AccessibleDataGrid", TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => grid
+                        .FindAllDescendants(
+                            automation.ConditionFactory.ByControlType(
+                                ControlType.HeaderItem))
+                        .Select(item => item.Properties.Name.ValueOrDefault ?? "")
+                        .Where(name => name.Length > 0)
+                        .ToHashSet()
+                        .IsSupersetOf(["Path", "Status", "Before", "After"]),
+                    TimeSpan.FromSeconds(15)),
+                "the preview grid never exposed the four column headers");
+            WaitForElement(window, "BulkRenameClose", TimeSpan.FromSeconds(10))
+                .Patterns.Invoke.Pattern.Invoke();
+
+            AssertAxeClean(process, "properties-header");
+        }
+        finally
+        {
+            if (process is not null && !process.HasExited)
+            {
+                process.CloseMainWindow();
+                if (!process.WaitForExit(5_000))
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+
+            try
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
     private static Window WaitForMainWindow(
         Process process,
         UIA3Automation automation,
