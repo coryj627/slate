@@ -257,3 +257,38 @@ addressing the ROOT causes rather than the instances:
 - Below-bar: the disposal regression now bites (a real CancelToken
   is asserted cancelled); wikilink newline targets refuse pre-core
   in both the sheet and the row editor with host copy.
+
+## Round-5 resolutions (2026-08-03)
+
+Round 5 confirmed contracts 1–9 unfalsifiable and found no
+under-refresh path, but contract 10 fell again on two more
+classifier-mirror gaps (case-insensitive `tags`, structural-vs-
+calendar date validation). Four rounds on one contract means the
+mirror itself was the defect:
+
+- **CLASSIFICATION AUTHORITY MOVED TO CORE.** New pure export
+  `round_trip_property_kind(key, value) -> Option<String>` runs
+  core's own emit-then-classify round trip on a scratch document and
+  returns the kind the value would ACTUALLY have — or None when core
+  won't store it at all. The add sheet builds its candidate, asks,
+  and refuses on mismatch. Every mirrored rule (tags casing, date
+  shape, datetime time-component, `#`-prefixed lists, YAML-scalar
+  text shapes) is DELETED from the host; the remaining host checks
+  exist only to produce a better message than "would be stored as
+  text". The matrix grew to 31 cases including all round-5
+  counterexamples, and a core-side test pins the export directly.
+- **Reload-from-disk now actually discards** (self-caught while
+  writing the requested regression): round 2's universal draft
+  parking silently preserved the very edit the Reload hint promises
+  to discard. Parking is now skipped for the explicit reload flow
+  (the SuccessAndFailure mode) — the deliberate discard round 2
+  called for and did not implement. Cancel and no-op saves still
+  park.
+- Below-bar: edited wikilink list elements degrade to Text on CR/LF
+  (matching the other kind-fit guards) rather than failing the whole
+  list write.
+
+**Ship posture:** contracts 1–9 unfalsifiable across rounds 3–5;
+contract 10 is now enforced by core's own round trip instead of a
+host copy, so the defect class behind four rounds of findings cannot
+recur without failing core's test and the 31-case matrix at once.

@@ -777,6 +777,49 @@ public sealed class NotePropertiesTests
     }
 
     [Fact]
+    public void CoreConflictReloadPublishesCurrentRowsAndOneAnnouncement()
+    {
+        RunSta(() =>
+        {
+            using FixtureVault fixture = MakeVault("props-core-conflict-reload");
+            using VaultSession session = OpenScanned(fixture.Root);
+            var announced = new List<A11yEvent>();
+            using var workspace = new WorkspaceViewModel(
+                session, fixture.Root, () => [], announced.Add,
+                startInteractionBackgroundWork: false);
+            (Action KeepMine, Action Reload)? resolution = null;
+            workspace.PropertyConflictDialog = (_, _, keepMine, reload) =>
+                resolution = (keepMine, reload);
+            NotePropertiesViewModel properties = AttachProperties(workspace, "props.md");
+            WorkspaceTabViewModel tab =
+                Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+
+            // A direct session write moves the disk hash; the
+            // refreshed rows pin the NEW hash while the tab lags, so
+            // the commit is refused and the resolution dialog opens.
+            string external = PropsFrontmatter.Replace("title: Hello", "title: External")
+                + PropsBody;
+            _ = session.SaveText("props.md", external, tab.SavedContentHash);
+            properties.RefreshProperties();
+            PropertyRowViewModel title = properties.Rows[0];
+            title.EditorText = "Mine";
+            title.CommitCommand.Execute(null);
+            Assert.Single(announced.OfType<A11yEvent.PropertyEditConflict>());
+            Assert.NotNull(resolution);
+
+            // Round 4/5: the RESOLUTION owns the follow-up refresh —
+            // Reload publishes the CURRENT disk rows and speaks
+            // exactly one outcome, with no trailing request to
+            // supersede it.
+            resolution!.Value.Reload();
+            Assert.Equal("External", properties.Rows[0].EditorText);
+            Assert.Equal(
+                1, announced.Count(item => item is A11yEvent.PropertiesReloaded));
+            Assert.False(properties.Rows[0].IsDirty);
+        });
+    }
+
+    [Fact]
     public void StoredValueDatePickerTruthTableIsPinned()
     {
         Assert.True(PropertyRowViewModel.StoredValueTakesDatePicker(

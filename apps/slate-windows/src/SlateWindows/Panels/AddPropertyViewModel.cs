@@ -147,28 +147,57 @@ internal sealed class AddPropertyViewModel : BindableBase
     internal void MarkAddFailed() => ValidationError = PropertyPhrase.AddFailedDraftKept;
 
     /// <summary>Build the initial PropertyValue from the chosen KEY,
-    /// kind, and seed text (rounds 3+4, contract 10): every
-    /// advertised kind must SURVIVE the authoritative re-read as
-    /// itself. Core classifies stored values by KEY and SHAPE, so
-    /// validation is key-aware and shape-aware — a selection that
-    /// cannot be represented with the given seed refuses with the
-    /// verbatim message rather than lying about the stored type. The
-    /// either-refuse-or-match matrix fact pins this table against
-    /// core end-to-end. Returns the error, or null with
-    /// <paramref name="built"/> set.</summary>
+    /// kind, and seed text (contract 10). The SHAPE of the seed is
+    /// checked here only to produce a good message; whether the
+    /// stored kind will actually match is ASKED OF CORE
+    /// (round_trip_property_kind) rather than mirrored — every host
+    /// copy of core's key/shape classifier drifted (rounds 3–5), so
+    /// the authority now lives in one place. Returns the error, or
+    /// null with <paramref name="built"/> set.</summary>
     internal static string? BuildInitialValue(
+        string key, string kind, string rawValue, out PropertyValue? built)
+    {
+        string? shapeError = BuildCandidate(key, kind, rawValue, out built);
+        if (shapeError is not null)
+        {
+            built = null;
+            return shapeError;
+        }
+        // THE authority: core runs its real emit-then-classify round
+        // trip. A mismatch means the choice would silently become
+        // something else on the authoritative re-read; null means the
+        // value can't be stored at all.
+        string? storedKind = SlateUniffiMethods.RoundTripPropertyKind(key, built!);
+        if (storedKind is null)
+        {
+            built = null;
+            return PropertyPhrase.AddFailedDraftKept;
+        }
+        if (!string.Equals(storedKind, kind, StringComparison.Ordinal))
+        {
+            built = null;
+            return PropertyPhrase.StoredKindMismatchError(storedKind);
+        }
+        return null;
+    }
+
+    /// <summary>Shape-level candidate construction. Its refusals are
+    /// about MESSAGE QUALITY (a typo'd date says so instead of
+    /// "would be stored as text"); correctness is core's answer
+    /// above.</summary>
+    private static string? BuildCandidate(
         string key, string kind, string rawValue, out PropertyValue? built)
     {
         built = null;
         string value = rawValue.Trim();
-        // Core classifies EVERY list under the `tags` key as a tag
-        // list; only that choice is representable there. An empty
-        // seed is fine — the key itself carries the classification.
-        if (key == "tags")
+        if (kind == "tag_list")
         {
-            if (kind != "tag_list")
+            // A tag list needs a seed tag on any key EXCEPT one core
+            // classifies by key alone.
+            if (value.Length == 0
+                && !key.Equals("tags", StringComparison.OrdinalIgnoreCase))
             {
-                return PropertyPhrase.TagsKeyKindError;
+                return PropertyPhrase.TagListSeedError;
             }
             built = value.Length == 0
                 ? new PropertyValue.TagList([])
@@ -222,17 +251,13 @@ internal sealed class AddPropertyViewModel : BindableBase
                 built = new PropertyValue.Date(value);
                 return null;
             case "datetime":
-                // A date-only seed parses via DateTimeOffset but
-                // core would classify it DATE (round 4): a datetime
-                // requires an explicit time component.
-                if (!value.Contains('T')
-                    || (!DateTimeOffset.TryParse(
-                            value, System.Globalization.CultureInfo.InvariantCulture,
-                            System.Globalization.DateTimeStyles.None, out _)
-                        && !DateTime.TryParseExact(
-                            value, "yyyy-MM-ddTHH:mm:ss",
-                            System.Globalization.CultureInfo.InvariantCulture,
-                            System.Globalization.DateTimeStyles.None, out _)))
+                if (!DateTimeOffset.TryParse(
+                        value, System.Globalization.CultureInfo.InvariantCulture,
+                        System.Globalization.DateTimeStyles.None, out _)
+                    && !DateTime.TryParseExact(
+                        value, "yyyy-MM-ddTHH:mm:ss",
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        System.Globalization.DateTimeStyles.None, out _))
                 {
                     return PropertyPhrase.DatetimeShapeError;
                 }
@@ -254,50 +279,11 @@ internal sealed class AddPropertyViewModel : BindableBase
                 built = new PropertyValue.Wikilink(value);
                 return null;
             case "list":
-                // A #-prefixed element would classify the whole list
-                // as a tag list (round 4).
-                if (value.StartsWith('#'))
-                {
-                    return PropertyPhrase.StoredKindMismatchError("tag_list");
-                }
                 built = value.Length == 0
                     ? new PropertyValue.List([])
                     : new PropertyValue.List([new PropertyValue.Text(value)]);
                 return null;
-            case "tag_list":
-                // An EMPTY tag list has no #-shape for the classifier
-                // to recognize — it would re-read as a plain list, so
-                // the type choice requires a seed tag.
-                if (value.Length == 0)
-                {
-                    return PropertyPhrase.TagListSeedError;
-                }
-                built = new PropertyValue.TagList([value.TrimStart('#')]);
-                return null;
             default:
-                // Core QUOTES YAML-scalar shapes (true/123/1.5) so
-                // those stay text, but date/datetime/wikilink shapes
-                // are emitted bare and would reclassify (round 4 —
-                // pinned empirically by the either-refuse-or-match
-                // matrix).
-                if (DateOnly.TryParseExact(
-                    value, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture,
-                    System.Globalization.DateTimeStyles.None, out _))
-                {
-                    return PropertyPhrase.StoredKindMismatchError("date");
-                }
-                if (value.Contains('T')
-                    && DateTimeOffset.TryParse(
-                        value, System.Globalization.CultureInfo.InvariantCulture,
-                        System.Globalization.DateTimeStyles.None, out _))
-                {
-                    return PropertyPhrase.StoredKindMismatchError("datetime");
-                }
-                if (value.StartsWith("[[", StringComparison.Ordinal)
-                    && value.EndsWith("]]", StringComparison.Ordinal))
-                {
-                    return PropertyPhrase.StoredKindMismatchError("wikilink");
-                }
                 built = new PropertyValue.Text(rawValue);
                 return null;
         }

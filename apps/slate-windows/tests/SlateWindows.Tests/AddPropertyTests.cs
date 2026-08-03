@@ -157,6 +157,17 @@ public sealed class AddPropertyTests
     [InlineData("tags", "tag_list", "")]
     [InlineData("tags", "list", "x")]
     [InlineData("tags", "text", "x")]
+    // Round 5 counterexamples: core's tags rule is CASE-INSENSITIVE
+    // and its date check is STRUCTURAL (not calendar-valid), which
+    // no host mirror got right — core now answers instead.
+    [InlineData("Tags", "list", "x")]
+    [InlineData("TAGS", "tag_list", "x")]
+    [InlineData("Tags", "text", "x")]
+    [InlineData("fresh", "text", "2026-99-99")]
+    [InlineData("fresh", "date", "2026-99-99")]
+    [InlineData("fresh", "text", "2026-13-45T99:99:99")]
+    [InlineData("fresh", "wikilink", "[[nested]]")]
+    [InlineData("fresh", "tag_list", "#beta")]
     public void EveryAddEitherRefusesOrStoresExactlyTheChosenKind(
         string key, string kind, string seed)
     {

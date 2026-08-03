@@ -213,12 +213,21 @@ internal sealed class NotePropertiesViewModel : PanelWorkScheduler
         // parked draft lands on the rebuilt row for the same key with
         // the FRESH baseline and hash; if the refreshed disk value now
         // equals the draft, the row is naturally clean.
+        //
+        // The EXPLICIT "Reload from Disk" resolution is the one
+        // deliberate discard (round 5): its hint promises "Discard
+        // this property edit and reload properties from disk", so
+        // parking there would silently keep the edit the user asked
+        // to drop. That flow is exactly the SuccessAndFailure mode.
         var parkedDrafts = new Dictionary<string, PropertyDraft>(StringComparer.Ordinal);
-        foreach (var existing in Rows)
+        if (announce != ReloadAnnounce.SuccessAndFailure)
         {
-            if (existing.IsDirty)
+            foreach (var existing in Rows)
             {
-                parkedDrafts[existing.Key] = existing.Draft;
+                if (existing.IsDirty)
+                {
+                    parkedDrafts[existing.Key] = existing.Draft;
+                }
             }
         }
         Rows.Clear();

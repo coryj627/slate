@@ -154,8 +154,13 @@ internal static class PropertyValueCodec
                     item.Text, "yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture,
                     System.Globalization.DateTimeStyles.None, out _) =>
                 new PropertyValue.Datetime(item.Text),
+            // A CR/LF target is rejected by core outright, so it
+            // degrades like the other unfit edits (round-5
+            // below-bar) rather than failing the whole list write.
             PropertyValue.Wikilink when item.Text.Trim().Length > 0
-                && !item.Text.Contains("]]") =>
+                && !item.Text.Contains("]]")
+                && !item.Text.Contains('\n')
+                && !item.Text.Contains('\r') =>
                 new PropertyValue.Wikilink(item.Text),
             PropertyValue.Integer when long.TryParse(
                 item.Text, System.Globalization.NumberStyles.Integer,
