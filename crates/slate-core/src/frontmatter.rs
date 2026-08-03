@@ -1958,6 +1958,74 @@ mod tests {
     }
 
     #[test]
+    fn non_string_key_guard_covers_every_key_shape_without_false_positives() {
+        // The guard compares with the SAME `yaml_key_to_string` the
+        // read path uses, so its verdict cannot drift from what the
+        // row actually published. These pin each shape.
+        // (A float key like `1.5` stringifies to "1.5" and is already
+        // refused one guard earlier by `reject_dotted_key`, so it is
+        // covered without reaching this one.)
+        for (src, key) in [
+            ("---\ntrue: x\n---\nbody\n", "true"),
+            ("---\n~: x\n---\nbody\n", ""),
+        ] {
+            // The row really does publish under this stringified key…
+            assert!(
+                props(src).iter().any(|p| p.key == key),
+                "expected published key {key:?} for {src:?}"
+            );
+            // …and both write paths refuse it.
+            let set_err = set_property_in_source(src, key, &PropertyValue::Text("new".to_string()))
+                .unwrap_err();
+            assert!(
+                matches!(set_err, FrontmatterEditError::MalformedFrontmatter(ref m)
+                    if m.contains("non-string YAML key")),
+                "set should refuse {key:?}: {set_err:?}"
+            );
+            let delete_err = delete_property_in_source(src, key).unwrap_err();
+            assert!(
+                matches!(delete_err, FrontmatterEditError::MalformedFrontmatter(ref m)
+                    if m.contains("non-string YAML key")),
+                "delete should refuse {key:?}: {delete_err:?}"
+            );
+        }
+
+        // NO FALSE POSITIVES: an explicitly QUOTED numeric key is a
+        // real string key and must stay editable, even though it
+        // stringifies identically to the numeric form.
+        let quoted = "---\n\"1\": old\n---\nbody\n";
+        let out =
+            set_property_in_source(quoted, "1", &PropertyValue::Text("new".to_string())).unwrap();
+        assert_eq!(
+            find(&props(&out), "1"),
+            Some(PropertyValue::Text("new".to_string()))
+        );
+        assert!(
+            matches!(
+                delete_property_in_source(quoted, "1").unwrap(),
+                FrontmatterEdit::Changed(_)
+            ),
+            "a quoted string key must delete normally"
+        );
+
+        // Keys differing only by CASE are distinct string keys; the
+        // guard must not couple them.
+        let cased = "---\ntitle: lower\nTitle: upper\n---\nbody\n";
+        let out =
+            set_property_in_source(cased, "Title", &PropertyValue::Text("edited".to_string()))
+                .unwrap();
+        let after = props(&out);
+        assert_eq!(
+            find(&after, "Title"),
+            Some(PropertyValue::Text("edited".to_string()))
+        );
+        assert_eq!(
+            find(&after, "title"),
+            Some(PropertyValue::Text("lower".to_string()))
+        );
+    }
+
+    #[test]
     fn set_property_refuses_multi_document_frontmatter_instead_of_truncating() {
         // `--- # second` is a YAML document separator but not a Slate
         // closing fence, so the block parses as TWO documents. Editing
