@@ -664,6 +664,72 @@ public sealed class NotePropertiesTests
     }
 
     [Fact]
+    public void TheLeaseIsNoteScopedAcrossDuplicateTabsAndSurvivesTabClose()
+    {
+        RunSta(() =>
+        {
+            using FixtureVault fixture = MakeVault("props-dup-lease");
+            using VaultSession session = OpenScanned(fixture.Root);
+            var announced = new List<A11yEvent>();
+            using var workspace = new WorkspaceViewModel(
+                session, fixture.Root, () => [], announced.Add,
+                startInteractionBackgroundWork: false);
+            NotePropertiesViewModel firstHeader = AttachProperties(workspace, "props.md");
+            WorkspaceTabViewModel firstTab =
+                Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+            workspace.DuplicateTabCommand.Execute(null);
+            NotePropertiesViewModel secondHeader =
+                workspace.EnsureActiveTabProperties(synchronousForTests: true)!;
+            Assert.NotSame(firstHeader, secondHeader);
+
+            // Dispatch from the FIRST tab's header row, then close
+            // that tab mid-flight: the lease is keyed by NOTE PATH
+            // (round 2), so the surviving duplicate is still refused
+            // until the terminal completion releases it.
+            PropertyRowViewModel fromFirst = firstHeader.Rows[0];
+            fromFirst.EditorText = "One";
+            fromFirst.CommitCommand.Execute(null);
+            Assert.True(workspace.PropertyWriteInFlightFor("props.md"));
+            workspace.CloseTabCommand.Execute(firstTab);
+            Assert.True(workspace.PropertyWriteInFlightFor("props.md"));
+
+            PropertyRowViewModel fromSecond = secondHeader.Rows[0];
+            fromSecond.EditorText = "Two";
+            fromSecond.CommitCommand.Execute(null);
+            Assert.False(fromSecond.WriteInFlight);
+            Assert.Contains(
+                announced.OfType<A11yEvent.HostComposed>(),
+                item => item.Text == "Wait for the current save to finish.");
+
+            WaitForUi(() => !workspace.PropertyWriteInFlightFor("props.md"));
+        });
+    }
+
+    [Fact]
+    public void AFailedReloadAcrossDuplicateHeadersAnnouncesExactlyOnce()
+    {
+        using FixtureVault fixture = MakeVault("props-dup-reload");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new List<A11yEvent>();
+        using var workspace = new WorkspaceViewModel(
+            session, fixture.Root, () => [], announced.Add,
+            startInteractionBackgroundWork: false);
+        _ = AttachProperties(workspace, "props.md");
+        workspace.DuplicateTabCommand.Execute(null);
+        _ = workspace.EnsureActiveTabProperties(synchronousForTests: true);
+
+        // Both duplicate headers refresh; the read fails for both —
+        // ONE user action speaks ONE PropertiesReloadFailed
+        // (adversarial round 3: ownership is per-request, granted to
+        // the first header only).
+        File.Delete(Path.Combine(fixture.Root, "props.md"));
+        workspace.RefreshPropertiesFor(
+            "props.md", ReloadAnnounce.SuccessAndFailure);
+        Assert.Equal(
+            1, announced.Count(item => item is A11yEvent.PropertiesReloadFailed));
+    }
+
+    [Fact]
     public void ReloadResolutionAnnouncesItsOutcomeAtCompletion()
     {
         using FixtureVault fixture = MakeVault("props-reload-outcome");

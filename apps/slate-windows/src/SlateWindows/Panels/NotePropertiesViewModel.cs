@@ -6,6 +6,25 @@ using uniffi.slate_uniffi;
 
 namespace SlateWindows.Panels;
 
+/// <summary>Per-REQUEST announcement ownership for header refreshes
+/// (adversarial round 3): exactly one header in a fan-out owns the
+/// outcome announcement, and the mode is captured with the request —
+/// a discarded stale publish can never migrate it to a later
+/// path.</summary>
+internal enum ReloadAnnounce
+{
+    /// <summary>Silent refresh (peer duplicates, initial load).</summary>
+    None,
+
+    /// <summary>Failure speaks PropertiesReloadFailed; success is
+    /// silent (post-write and post-rename refresh funnels).</summary>
+    FailureOnly,
+
+    /// <summary>The explicit Reload resolution: success speaks
+    /// PropertiesReloaded, failure PropertiesReloadFailed.</summary>
+    SuccessAndFailure,
+}
+
 /// <summary>
 /// W4-4 (#736): the in-note properties header — one instance PER
 /// TAB, owned by WorkspaceTabViewModel, so drafts and the expansion
@@ -35,7 +54,6 @@ internal sealed class NotePropertiesViewModel : PanelWorkScheduler
     private bool _isLoading;
     private string? _loadError;
     private string _path = "";
-    private bool _announceReloadOutcome;
 
     public NotePropertiesViewModel(
         VaultSession session,
@@ -135,21 +153,17 @@ internal sealed class NotePropertiesViewModel : PanelWorkScheduler
     }
 
     /// <summary>Fresh read of the CURRENT path (post-write refresh,
-    /// save-funnel refresh, external-change reconcile). With
-    /// announceReloadOutcome the publish speaks the canonical
-    /// PropertiesReloaded / PropertiesReloadFailed for THIS refresh
-    /// — success is announced at completion, never eagerly
-    /// (contract 9, adversarial round 1).</summary>
-    public void RefreshProperties(bool announceReloadOutcome = false)
+    /// save-funnel refresh, external-change reconcile). The announce
+    /// mode is CAPTURED with the request (round 3): the outcome is
+    /// spoken at this refresh's completion, never eagerly, and a
+    /// stale discarded publish cannot hand its announcement to a
+    /// later request.</summary>
+    public void RefreshProperties(ReloadAnnounce announce = ReloadAnnounce.None)
     {
         string path = _path;
         if (path.Length == 0)
         {
             return;
-        }
-        if (announceReloadOutcome)
-        {
-            _announceReloadOutcome = true;
         }
         long generation = Interlocked.Read(ref _generation);
         int requestId = Interlocked.Increment(ref _requestId);
@@ -161,7 +175,8 @@ internal sealed class NotePropertiesViewModel : PanelWorkScheduler
                 var parts = _session.ReadNoteParts(path);
                 var properties = SlateUniffiMethods.ParseFrontmatterProperties(parts.FmSource);
                 Post(() => PublishProperties(
-                    generation, requestId, path, properties, parts.ContentHash, null));
+                    generation, requestId, path, properties, parts.ContentHash, null,
+                    announce));
             }
             catch (Exception exception) when (
                 exception is not OutOfMemoryException
@@ -169,7 +184,7 @@ internal sealed class NotePropertiesViewModel : PanelWorkScheduler
                     and not AccessViolationException)
             {
                 Post(() => PublishProperties(
-                    generation, requestId, path, [], "", exception.Message));
+                    generation, requestId, path, [], "", exception.Message, announce));
             }
         });
     }
@@ -183,7 +198,8 @@ internal sealed class NotePropertiesViewModel : PanelWorkScheduler
         string path,
         Property[] properties,
         string contentHash,
-        string? loadError)
+        string? loadError,
+        ReloadAnnounce announce = ReloadAnnounce.None)
     {
         if (IsShutDown
             || generation != Interlocked.Read(ref _generation)
@@ -222,16 +238,19 @@ internal sealed class NotePropertiesViewModel : PanelWorkScheduler
         }
         IsLoading = false;
         LoadError = loadError;
-        bool announceOutcome = _announceReloadOutcome;
-        _announceReloadOutcome = false;
-        // Any failed refresh surfaces the canonical reload-failure
-        // event (the honest-containment posture); the success echo is
-        // reserved for the explicit reload flow.
+        // Ownership-scoped announcements (round 3): only the request
+        // that was GRANTED the outcome speaks — peer duplicate
+        // headers refresh silently, so one user action announces
+        // exactly once. The success echo is reserved for the
+        // explicit reload flow.
         if (loadError is not null)
         {
-            _announce?.Invoke(new A11yEvent.PropertiesReloadFailed(loadError));
+            if (announce != ReloadAnnounce.None)
+            {
+                _announce?.Invoke(new A11yEvent.PropertiesReloadFailed(loadError));
+            }
         }
-        else if (announceOutcome)
+        else if (announce == ReloadAnnounce.SuccessAndFailure)
         {
             _announce?.Invoke(new A11yEvent.PropertiesReloaded());
         }

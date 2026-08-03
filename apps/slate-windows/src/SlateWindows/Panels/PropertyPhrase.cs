@@ -111,6 +111,17 @@ internal static class PropertyPhrase
     public const string KeyDottedError = "Dotted keys aren't supported yet — use a flat key.";
     public const string NoNoteError = "No note is loaded.";
 
+    // Add-sheet initial-value validation (Windows addition, round 3:
+    // shape-derived kinds need a shape-valid seed or the
+    // authoritative re-read reclassifies them — the type choice must
+    // never lie).
+    public const string InitialValueLabel = "Initial value";
+    public const string DatetimeShapeError =
+        "Enter a date and time like 2026-05-01T10:00:00.";
+    public const string TagListSeedError =
+        "Tag lists need at least one tag to keep their type.";
+    public const string BooleanShapeError = "Enter true or false.";
+
     public static string KeyDuplicateError(string key) =>
         $"A property named `{key}` already exists on this note.";
 

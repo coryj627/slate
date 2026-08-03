@@ -267,6 +267,48 @@ public sealed class BulkRenameTests : IDisposable
     }
 
     [Fact]
+    public void ArmingSurvivesIncidentalWhitespaceInTheKeyFields()
+    {
+        var sheet = MakeSheet();
+        sheet.OldKey = "oldkey ";
+        sheet.NewKey = " renamed";
+        sheet.Preview();
+        // Round-3 below-bar: runs consume trimmed keys, so the
+        // arming comparison trims too — whitespace never leaves a
+        // valid preview unarmed.
+        Assert.True(sheet.CanApply);
+        sheet.NewKey = " renamed2";
+        Assert.False(sheet.CanApply);
+    }
+
+    [Fact]
+    public void WorkspaceDisposalShutsDownAnInFlightRenameSheet()
+    {
+        var reconciled = new List<RenameReport>();
+        var announced = new List<A11yEvent>();
+        BulkRenameViewModel sheet;
+        using (var workspace = new WorkspaceViewModel(
+            _session, _fixture.Root, () => [], announced.Add,
+            startInteractionBackgroundWork: false))
+        {
+            workspace.OpenBulkRenameSheet(synchronousForTests: true);
+            sheet = workspace.BulkRenameSheet!;
+            sheet.MarkWorkInFlightForTests();
+        }
+
+        // Round 3: disposal cancelled and SHUT DOWN the sheet — a
+        // late terminal publish cannot mutate UI state, while an
+        // apply report's disk truth still reconciles (unconditional
+        // block).
+        sheet.OldKey = "oldkey";
+        sheet.PublishRun(
+            sheet.RequestIdForTests, dryRun: true, "oldkey", "renamed",
+            new RenameReport(Affected: [], Skipped: [], Failed: []), null);
+        Assert.Empty(sheet.Rows);
+        Assert.Equal("", sheet.FooterText);
+    }
+
+    [Fact]
     public void RunsAreSerializedAndStaleApplyReportsStillLandDiskTruth()
     {
         var announced = new List<A11yEvent>();

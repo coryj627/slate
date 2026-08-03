@@ -192,3 +192,35 @@ not falsifiable. Additional resolutions and accepted risks:
   bulk-rename arming compares TRIMMED keys; an edited typed list
   element keeps its kind only when the new text still fits it, else
   degrades to Text (byte-identical emission either way).
+
+## Round-3 review resolutions (2026-08-03)
+
+Round 3 returned 2 mediums (contracts 1–8 and core INV1–4 not
+falsifiable) plus a below-bar list of vacuous regressions; all
+addressed:
+
+- **The add sheet gained an "Initial value" field** (Windows
+  addition, recorded divergence): core classifies stored values by
+  SHAPE, so shape-derived kinds require a shape-valid seed or the
+  authoritative re-read would reclassify them — date/datetime
+  validate their shape, wikilink requires a non-empty bracketless
+  target, tag_list requires a seed tag (an empty tag list has no
+  #-shape and would re-read as list), number/boolean parse or
+  default. Every advertised kind is pinned add→disk→authoritative
+  re-read by a parameterized fact.
+- **Reload announcement ownership is per-REQUEST**: the announce
+  mode (None / FailureOnly / SuccessAndFailure) is captured with the
+  refresh request and consumed at its own publish — duplicate
+  headers refresh silently on failure too, and a discarded stale
+  publish can never migrate an announcement to a later path.
+  Post-write funnels are FailureOnly; the explicit Reload is
+  SuccessAndFailure; initial loads are silent (the LoadError region
+  is the surface).
+- Vacuous regressions strengthened: duplicate-tab lease exclusion
+  with the dispatching tab closed mid-flight; duplicate-header
+  failed-reload single announcement; whitespace arming; the
+  kind-fitting encode guards proven to bite (including the tagged
+  wikilink decode branch); disposal shutdown pinned behaviorally.
+- Accepted risk (recorded): a dead application dispatcher skips the
+  wrapped completion and retains the note's write lease — terminal
+  app teardown only, when no further writes can be issued.

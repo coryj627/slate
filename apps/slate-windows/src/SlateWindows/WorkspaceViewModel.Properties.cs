@@ -503,7 +503,7 @@ internal sealed partial class WorkspaceViewModel
     /// on success, PropertiesReloadFailed with the reason on failure
     /// (contract 9; never an eager success echo).</summary>
     private void ReloadPropertiesFromDisk(string path) =>
-        RefreshPropertiesFor(path, announceReloadOutcome: true);
+        RefreshPropertiesFor(path, ReloadAnnounce.SuccessAndFailure);
 
     /// <summary>Terminal completion (contract 4): success
     /// re-baselines clean same-path tabs to the report hash BEFORE
@@ -635,19 +635,22 @@ internal sealed partial class WorkspaceViewModel
 
     /// <summary>Refresh the header VM of every open tab on this path
     /// (duplicate same-path tabs each hold their own instance). One
-    /// user action announces ONCE (adversarial round 2, contract 9):
-    /// the reload outcome is spoken by the first header only; peer
-    /// duplicates refresh silently.</summary>
-    internal void RefreshPropertiesFor(string path, bool announceReloadOutcome = false)
+    /// user action announces ONCE (adversarial rounds 2+3,
+    /// contract 9): the outcome mode — success AND failure — is
+    /// granted to the first EXISTING header only; peer duplicates
+    /// refresh silently. Post-write funnels default to FailureOnly
+    /// (honest containment without a success echo).</summary>
+    internal void RefreshPropertiesFor(
+        string path, ReloadAnnounce announce = ReloadAnnounce.FailureOnly)
     {
-        bool announcePending = announceReloadOutcome;
+        ReloadAnnounce pending = announce;
         foreach (WorkspaceTabViewModel tab in Groups.SelectMany(group => group.Tabs))
         {
             if (string.Equals(tab.Path, path, StringComparison.Ordinal)
                 && tab.Properties is { } properties)
             {
-                properties.RefreshProperties(announcePending);
-                announcePending = false;
+                properties.RefreshProperties(pending);
+                pending = ReloadAnnounce.None;
             }
         }
     }

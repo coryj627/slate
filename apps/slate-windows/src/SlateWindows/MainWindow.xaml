@@ -1271,6 +1271,14 @@
                               SelectedItem="{Binding Kind}"
                               AutomationProperties.AutomationId="AddPropertyType"
                               AutomationProperties.Name="Property type" />
+                    <!-- Round 3: shape-derived kinds need a shape-valid
+                         seed — core classifies stored values by shape,
+                         so the chosen type must survive the re-read. -->
+                    <local:AutomationPresentationTextBlock Margin="0,8,0,2" Text="Initial value" />
+                    <TextBox Padding="6,4"
+                             Text="{Binding Value, UpdateSourceTrigger=PropertyChanged}"
+                             AutomationProperties.AutomationId="AddPropertyValue"
+                             AutomationProperties.Name="Initial value" />
                     <TextBlock Margin="0,8,0,0"
                                Text="{Binding ValidationError}"
                                Foreground="{DynamicResource Slate.WarningBrush}"

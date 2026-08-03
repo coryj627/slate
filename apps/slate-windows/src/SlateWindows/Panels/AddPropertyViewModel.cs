@@ -33,6 +33,7 @@ internal sealed class AddPropertyViewModel : BindableBase
     private readonly Action<A11yEvent> _announce;
     private string _key = "";
     private string _kind = "text";
+    private string _value = "";
     private string? _validationError;
 
     public AddPropertyViewModel(
@@ -64,7 +65,30 @@ internal sealed class AddPropertyViewModel : BindableBase
     public string Kind
     {
         get => _kind;
-        set => SetField(ref _kind, value);
+        set
+        {
+            if (SetField(ref _kind, value))
+            {
+                ValidationError = null;
+            }
+        }
+    }
+
+    /// <summary>The initial value (round 3): shape-derived kinds
+    /// (date, datetime, wikilink, tag_list) REQUIRE a shape-valid
+    /// seed — core reclassifies stored values by shape on the
+    /// authoritative re-read, so an empty seed would silently change
+    /// the chosen type (or, for wikilink, be rejected outright).</summary>
+    public string Value
+    {
+        get => _value;
+        set
+        {
+            if (SetField(ref _value, value))
+            {
+                ValidationError = null;
+            }
+        }
     }
 
     public string? ValidationError
@@ -97,6 +121,8 @@ internal sealed class AddPropertyViewModel : BindableBase
         {
             error = PropertyPhrase.KeyDuplicateError(key);
         }
+        PropertyValue? built = null;
+        error ??= BuildInitialValue(_kind, _value, out built);
         if (error is not null)
         {
             ValidationError = error;
@@ -105,7 +131,7 @@ internal sealed class AddPropertyViewModel : BindableBase
             _announce(new A11yEvent.HostComposed(error, A11yPriority.High));
             return false;
         }
-        if (!_commit(_intent!, key, DefaultValueFor(_kind)))
+        if (!_commit(_intent!, key, built!))
         {
             // The seam refused (dirty owner, conflict, in-flight) and
             // already announced its reason; the sheet keeps the draft
@@ -120,17 +146,107 @@ internal sealed class AddPropertyViewModel : BindableBase
     /// intact, with the verbatim failure copy inline (§2.4).</summary>
     internal void MarkAddFailed() => ValidationError = PropertyPhrase.AddFailedDraftKept;
 
-    /// <summary>The kind-appropriate empty/default value a fresh key
-    /// starts with (mac sheet shape).</summary>
-    internal static PropertyValue DefaultValueFor(string kind) => kind switch
+    /// <summary>Build the initial PropertyValue from the chosen kind
+    /// and the seed text (round 3, contract 10): every advertised
+    /// kind must SURVIVE the authoritative re-read as itself. Core
+    /// classifies stored values by shape, so shape-derived kinds
+    /// validate their seed pre-core; a kind that cannot be
+    /// represented with the given seed refuses with the verbatim
+    /// message rather than lying about the stored type. Returns the
+    /// error, or null with <paramref name="built"/> set.</summary>
+    internal static string? BuildInitialValue(
+        string kind, string rawValue, out PropertyValue? built)
     {
-        "number" => new PropertyValue.Integer(0),
-        "boolean" => new PropertyValue.Boolean(false),
-        "date" => new PropertyValue.Date(""),
-        "datetime" => new PropertyValue.Datetime(""),
-        "wikilink" => new PropertyValue.Wikilink(""),
-        "list" => new PropertyValue.List([]),
-        "tag_list" => new PropertyValue.TagList([]),
-        _ => new PropertyValue.Text(""),
-    };
+        built = null;
+        string value = rawValue.Trim();
+        switch (kind)
+        {
+            case "number":
+                if (value.Length == 0)
+                {
+                    built = new PropertyValue.Integer(0);
+                    return null;
+                }
+                if (long.TryParse(
+                    value, System.Globalization.NumberStyles.Integer,
+                    System.Globalization.CultureInfo.InvariantCulture, out long integer))
+                {
+                    built = new PropertyValue.Integer(integer);
+                    return null;
+                }
+                if (double.TryParse(
+                        value, System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out double floating)
+                    && !double.IsNaN(floating) && !double.IsInfinity(floating))
+                {
+                    built = new PropertyValue.Float(floating);
+                    return null;
+                }
+                return PropertyPhrase.FloatShapeError;
+            case "boolean":
+                if (value.Length == 0)
+                {
+                    built = new PropertyValue.Boolean(false);
+                    return null;
+                }
+                if (bool.TryParse(value, out bool flag))
+                {
+                    built = new PropertyValue.Boolean(flag);
+                    return null;
+                }
+                return PropertyPhrase.BooleanShapeError;
+            case "date":
+                if (!DateOnly.TryParseExact(
+                    value, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.None, out _))
+                {
+                    return PropertyPhrase.DateShapeError;
+                }
+                built = new PropertyValue.Date(value);
+                return null;
+            case "datetime":
+                if (!DateTimeOffset.TryParse(
+                        value, System.Globalization.CultureInfo.InvariantCulture,
+                        System.Globalization.DateTimeStyles.None, out _)
+                    && !DateTime.TryParseExact(
+                        value, "yyyy-MM-ddTHH:mm:ss",
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        System.Globalization.DateTimeStyles.None, out _))
+                {
+                    return PropertyPhrase.DatetimeShapeError;
+                }
+                built = new PropertyValue.Datetime(value);
+                return null;
+            case "wikilink":
+                if (value.Length == 0)
+                {
+                    return PropertyPhrase.WikilinkEmptyError;
+                }
+                if (value.Contains("]]"))
+                {
+                    return PropertyPhrase.WikilinkBracketError;
+                }
+                built = new PropertyValue.Wikilink(value);
+                return null;
+            case "list":
+                built = value.Length == 0
+                    ? new PropertyValue.List([])
+                    : new PropertyValue.List([new PropertyValue.Text(value)]);
+                return null;
+            case "tag_list":
+                // An EMPTY tag list has no #-shape for the classifier
+                // to recognize — it would re-read as a plain list, so
+                // the type choice requires a seed tag.
+                if (value.Length == 0)
+                {
+                    return PropertyPhrase.TagListSeedError;
+                }
+                built = new PropertyValue.TagList([value.TrimStart('#')]);
+                return null;
+            default:
+                built = new PropertyValue.Text(rawValue);
+                return null;
+        }
+    }
 }

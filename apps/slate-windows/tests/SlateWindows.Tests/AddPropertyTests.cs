@@ -86,26 +86,90 @@ public sealed class AddPropertyTests
     }
 
     [Fact]
-    public void DefaultValuesFollowTheMacSheetShape()
+    public void InitialValuesValidateShapeDerivedKindsPreCore()
     {
-        Assert.Equal(new PropertyValue.Text(""), AddPropertyViewModel.DefaultValueFor("text"));
+        // Round 3, contract 10: the chosen kind must SURVIVE the
+        // authoritative re-read — shape-derived kinds require a
+        // shape-valid seed, refused with the verbatim message.
+        Assert.Null(AddPropertyViewModel.BuildInitialValue("text", "", out var text));
+        Assert.Equal(new PropertyValue.Text(""), text);
+        Assert.Null(AddPropertyViewModel.BuildInitialValue("number", "", out var zero));
+        Assert.Equal(new PropertyValue.Integer(0), zero);
+        Assert.Null(AddPropertyViewModel.BuildInitialValue("number", "1.5", out var real));
+        Assert.Equal(new PropertyValue.Float(1.5), real);
         Assert.Equal(
-            new PropertyValue.Integer(0), AddPropertyViewModel.DefaultValueFor("number"));
+            "Must be a finite decimal number.",
+            AddPropertyViewModel.BuildInitialValue("number", "seven", out _));
+        Assert.Null(AddPropertyViewModel.BuildInitialValue("boolean", "true", out var flag));
+        Assert.Equal(new PropertyValue.Boolean(true), flag);
         Assert.Equal(
-            new PropertyValue.Boolean(false),
-            AddPropertyViewModel.DefaultValueFor("boolean"));
-        Assert.Equal(new PropertyValue.Date(""), AddPropertyViewModel.DefaultValueFor("date"));
+            "Enter true or false.",
+            AddPropertyViewModel.BuildInitialValue("boolean", "yep", out _));
         Assert.Equal(
-            new PropertyValue.Datetime(""),
-            AddPropertyViewModel.DefaultValueFor("datetime"));
+            "Date must be YYYY-MM-DD.",
+            AddPropertyViewModel.BuildInitialValue("date", "", out _));
+        Assert.Null(
+            AddPropertyViewModel.BuildInitialValue("date", "2026-05-01", out var date));
+        Assert.Equal(new PropertyValue.Date("2026-05-01"), date);
         Assert.Equal(
-            new PropertyValue.Wikilink(""),
-            AddPropertyViewModel.DefaultValueFor("wikilink"));
-        Assert.IsType<PropertyValue.List>(AddPropertyViewModel.DefaultValueFor("list"));
-        Assert.IsType<PropertyValue.TagList>(
-            AddPropertyViewModel.DefaultValueFor("tag_list"));
+            "Enter a date and time like 2026-05-01T10:00:00.",
+            AddPropertyViewModel.BuildInitialValue("datetime", "soon", out _));
         Assert.Equal(
-            new PropertyValue.Text(""), AddPropertyViewModel.DefaultValueFor("unknown"));
+            "Wikilink target can't be empty.",
+            AddPropertyViewModel.BuildInitialValue("wikilink", "  ", out _));
+        Assert.Null(AddPropertyViewModel.BuildInitialValue("list", "", out var list));
+        Assert.Equal([], Assert.IsType<PropertyValue.List>(list).Items);
+        Assert.Equal(
+            "Tag lists need at least one tag to keep their type.",
+            AddPropertyViewModel.BuildInitialValue("tag_list", "", out _));
+        Assert.Null(
+            AddPropertyViewModel.BuildInitialValue("tag_list", "#alpha", out var tags));
+        Assert.Equal(["alpha"], Assert.IsType<PropertyValue.TagList>(tags).Tags);
+    }
+
+    [Theory]
+    [InlineData("text", "hello", "text")]
+    [InlineData("number", "7", "number")]
+    [InlineData("number", "1.5", "number")]
+    [InlineData("boolean", "true", "boolean")]
+    [InlineData("date", "2026-05-01", "date")]
+    [InlineData("datetime", "2026-05-01T10:00:00Z", "datetime")]
+    [InlineData("wikilink", "other", "wikilink")]
+    [InlineData("list", "", "list")]
+    [InlineData("tag_list", "alpha", "tag_list")]
+    public void EveryAdvertisedKindSurvivesTheAuthoritativeReadBack(
+        string kind, string seed, string expectedStoredKind)
+    {
+        RunSta(() =>
+        {
+            using FixtureVault fixture = FixtureVault.Create(
+                0, $"add-kind-{kind.Replace('_', '-')}-{seed.Length}");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note.md"), "---\nfirst: one\n---\nBody.\n");
+            File.WriteAllText(Path.Combine(fixture.Root, "other.md"), "# Other\n");
+            using VaultSession session = OpenScanned(fixture.Root);
+            using var workspace = new WorkspaceViewModel(
+                session, fixture.Root, () => [], _ => { },
+                startInteractionBackgroundWork: false);
+            workspace.OpenPath("note.md");
+            _ = workspace.EnsureActiveTabProperties(synchronousForTests: true);
+
+            workspace.OpenAddPropertySheet(synchronousForTests: true);
+            AddPropertyViewModel sheet = workspace.AddPropertySheet!;
+            sheet.Key = "fresh";
+            sheet.Kind = kind;
+            sheet.Value = seed;
+            Assert.True(sheet.Add());
+            WaitForUi(() => workspace.AddPropertySheet is null);
+
+            // Round 3, contract 10: the stored kind after the
+            // authoritative re-read IS the chosen kind — the sheet's
+            // type choice never lies.
+            Property stored = SlateUniffiMethods
+                .ParseFrontmatterProperties(session.ReadNoteParts("note.md").FmSource)
+                .Single(property => property.Key == "fresh");
+            Assert.Equal(expectedStoredKind, stored.Kind);
+        });
     }
 
     [Fact]

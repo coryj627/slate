@@ -17,6 +17,9 @@ public class PropertyValueCodecTests
 {
     /// <summary>A tagged date element with the invisible U+F8FF
     /// discriminator prefix spelled as an escape.</summary>
+    private const string TaggedWikilinkElement =
+        "{\"slate.property-kind\":\"wikilink\",\"value\":\"basic\"}";
+
     private const string TaggedDateElement =
         "{\"slate.property-kind\":\"date\",\"value\":\"2026-04-01\"}";
 
@@ -125,14 +128,34 @@ public class PropertyValueCodecTests
         Assert.Equal(new PropertyValue.Boolean(true), reEncoded.Items[3]);
         Assert.Equal(new PropertyValue.Text("edited"), reEncoded.Items[4]);
 
-        // An EDITED typed element converts along its kind when the
-        // new text still fits it.
+        // An EDITED typed element converts along its kind only when
+        // the new text still FITS it (round-3 below-bar: the guards
+        // must bite) — an invalid date or a bracketed wikilink
+        // degrades to Text instead of handing core an unencodable
+        // value.
         typed.Items[0] = typed.Items[0] with { Text = "2027-01-02", Edited = true };
         typed.Items[1] = typed.Items[1] with { Text = "not a number", Edited = true };
         var converted = Assert.IsType<PropertyValue.List>(
             PropertyValueCodec.Encode(typed));
         Assert.Equal(new PropertyValue.Date("2027-01-02"), converted.Items[0]);
         Assert.Equal(new PropertyValue.Text("not a number"), converted.Items[1]);
+
+        typed.Items[0] = typed.Items[0] with { Text = "not a date", Edited = true };
+        var degraded = Assert.IsType<PropertyValue.List>(
+            PropertyValueCodec.Encode(typed));
+        Assert.Equal(new PropertyValue.Text("not a date"), degraded.Items[0]);
+
+        var link = Assert.IsType<PropertyDraft.ListDraft>(
+            PropertyValueCodec.Decode(
+                "list", "[" + TaggedWikilinkElement + "]"));
+        // Prove the tagged decode reached the Wikilink branch — the
+        // degradation below must exercise the real guard.
+        Assert.IsType<PropertyValue.Wikilink>(link.Items[0].Source);
+        link.Items[0] = link.Items[0] with { Text = "a]]b", Edited = true };
+        Assert.Equal(
+            new PropertyValue.Text("a]]b"),
+            Assert.IsType<PropertyValue.List>(
+                PropertyValueCodec.Encode(link)).Items[0]);
     }
 
     [Fact]
