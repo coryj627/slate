@@ -57,6 +57,25 @@ internal abstract class BindableBase : INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 }
 
+/// <summary>What the tab did with a toggle request (adversarial
+/// round 2): the legacy bool conflated "busy — refused, announced"
+/// with "started", so review routing armed refresh state for
+/// operations that never ran. Refused stays SILENT — the caller
+/// owns that announcement (the reading-view precedent).</summary>
+internal enum TabTaskToggle
+{
+    /// <summary>Not a saved markdown tab; nothing announced.</summary>
+    Refused,
+
+    /// <summary>An earlier toggle is still in flight; the refusal
+    /// was announced here.</summary>
+    RefusedBusy,
+
+    /// <summary>The guarded toggle started; completion arrives as a
+    /// whole-document refresh.</summary>
+    Started,
+}
+
 internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
 {
     private readonly VaultSession _session;
@@ -291,6 +310,11 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
         Item = item;
         _text = string.Empty;
         _contentHash = null;
+        // The staleness verdict belongs to the PREVIOUS note
+        // (adversarial round 10): a reused current tab must not make
+        // the replacement note inherit it — every identity guard
+        // would falsely refuse the fresh rows.
+        IsExternallyStale = false;
         _isDirty = false;
         _status = string.Empty;
         _isMissingFromDisk = false;
@@ -363,6 +387,7 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
 
         _text = source._text;
         _contentHash = source._contentHash;
+        IsExternallyStale = source.IsExternallyStale;
         _isDirty = source._isDirty;
         _isMissingFromDisk = source._isMissingFromDisk;
         _status = source._status;
@@ -444,10 +469,23 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
             return false;
         }
 
+        // Ordinary saves route through the same file-before-index
+        // core pipeline as task toggles (adversarial round 20): a
+        // post-write failure leaves disk newer than the rolled-back
+        // task index with no revision counter moved — the mutation
+        // lease covers the interval, and a non-conflict failure
+        // converts into the pending repair atomically, so a manual
+        // checkbox edit can never resurrect ghost task rows either.
+        Panels.TaskIndexRepairCoordinator? repairs = TaskRepairs;
+        repairs?.BeginMutation(Path);
+        bool leaseSettled = false;
         try
         {
             SaveReport report = _session.SaveText(Path, saveText, _contentHash);
+            repairs?.EndMutation(Path, indexConsistent: true);
+            leaseSettled = true;
             _contentHash = report.NewContentHash;
+            IsExternallyStale = false;
             _text = saveText;
             _editorSession?.MarkSaved(saveText);
             IsDirty = false;
@@ -457,9 +495,21 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
         }
         catch (VaultException exception)
         {
+            repairs?.EndMutation(
+                Path, indexConsistent: exception is VaultException.WriteConflict);
+            leaseSettled = true;
             Status = $"Save blocked: {exception.Message}";
             _documentChanged?.Invoke(this, null);
             return false;
+        }
+        finally
+        {
+            // Fail-closed on exception types the arms above miss -
+            // a leaked lease bars every task query forever.
+            if (!leaseSettled)
+            {
+                repairs?.EndMutation(Path, indexConsistent: false);
+            }
         }
     }
 
@@ -491,20 +541,31 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
     // surface rebind that hides it), and Dispose still tears it down.
     public void Deactivate() => _editorInteractions?.CloseTransientUi();
 
-    public bool ToggleTask(TaskItem task, Action<A11yEvent> announce)
+    /// <summary>Toggle a task through this tab's guarded splice path.
+    /// <paramref name="completion"/> (adversarial round 3) fires on
+    /// the dispatcher at the toggle's TERMINAL state — with the save
+    /// report when disk changed, the error when it didn't, and
+    /// whether this tab was still alive to publish — EVEN when the
+    /// tab was disposed mid-flight: a review-originated toggle must
+    /// neither complete silently nor leave its refresh armed just
+    /// because the user closed the originating tab.</summary>
+    public TabTaskToggle ToggleTask(
+        TaskItem task,
+        Action<A11yEvent> announce,
+        Action<SaveReport?, VaultException?, string?, bool>? completion = null)
     {
         ArgumentNullException.ThrowIfNull(task);
         ArgumentNullException.ThrowIfNull(announce);
         if (!IsMarkdown || IsDirty)
         {
-            return false;
+            return TabTaskToggle.Refused;
         }
         if (_taskToggleInFlight)
         {
             announce(new A11yEvent.HostComposed(
                 "A task update is already in progress.",
                 A11yPriority.Medium));
-            return true;
+            return TabTaskToggle.RefusedBusy;
         }
 
         _taskToggleInFlight = true;
@@ -522,14 +583,52 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
             baseline,
             task,
             nextStatus,
-            announce));
-        return true;
+            announce,
+            completion));
+        return TabTaskToggle.Started;
     }
 
     private sealed record TaskToggleOutcome(
         SaveReport? Report,
         VaultException? Error,
-        string? UpdatedText);
+        string? UpdatedText,
+        string? PostFailureDiskHash = null);
+
+    /// <summary>Test seam (adversarial round 11): runs INSIDE the
+    /// toggle worker after the core write succeeded — throwing here
+    /// simulates the core's real partial-failure window (file
+    /// written, index commit failed) with an actual landed write.</summary>
+    internal Action? TaskToggleFaultForTests { get; set; }
+
+    /// <summary>The workspace's shared repair quarantine (adversarial
+    /// round 19): set at tab creation so EVERY toggle route through
+    /// this tab — panel, review, editor, reading view — leases the
+    /// path around the session write. Null only in tab-level unit
+    /// tests that construct tabs directly.</summary>
+    internal Panels.TaskIndexRepairCoordinator? TaskRepairs { get; set; }
+
+    /// <summary>Disk hash read back after a failed toggle
+    /// (adversarial round 11): the core writes the FILE before
+    /// committing the index, so an error without a SaveReport does
+    /// NOT mean disk is unchanged. WriteConflict refuses BEFORE any
+    /// write, so it skips the read; unreadable disk reports null
+    /// (unknown).</summary>
+    private string? ReadBackDiskHashAfterFailure(
+        string path, VaultException? error)
+    {
+        if (error is VaultException.WriteConflict)
+        {
+            return null;
+        }
+        try
+        {
+            return _session.ReadNoteParts(path).ContentHash;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            return null;
+        }
+    }
 
     private void PerformTaskToggle(
         int generation,
@@ -539,28 +638,70 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
         EditorSavedBaseline baseline,
         TaskItem task,
         string nextStatus,
-        Action<A11yEvent> announce)
+        Action<A11yEvent> announce,
+        Action<SaveReport?, VaultException?, string?, bool>? completion = null)
     {
         TaskToggleOutcome outcome;
+        Panels.TaskIndexRepairCoordinator? repairs = TaskRepairs;
         try
         {
             string updatedText = ApplyTaskStatusToBaseline(
                 baseline.Text,
                 task,
                 nextStatus);
-            SaveReport report = _session.ToggleTaskStatus(
-                path,
-                task.Ordinal,
-                nextStatus,
-                expectedHash);
-            outcome = new TaskToggleOutcome(report, null, updatedText);
-        }
-        catch (VaultException exception)
-        {
-            outcome = new TaskToggleOutcome(null, exception, null);
+            // The mutation LEASE brackets the session write
+            // (adversarial round 19): the stale-index interval
+            // starts at the file write, not at the dispatcher-side
+            // completion — a clean ticket taken in between must
+            // refuse or invalidate. A non-conflict failure converts
+            // the lease into the pending repair atomically.
+            repairs?.BeginMutation(path);
+            bool leaseSettled = false;
+            try
+            {
+                try
+                {
+                    SaveReport report = _session.ToggleTaskStatus(
+                        path,
+                        task.Ordinal,
+                        nextStatus,
+                        expectedHash);
+                    TaskToggleFaultForTests?.Invoke();
+                    repairs?.EndMutation(path, indexConsistent: true);
+                    leaseSettled = true;
+                    outcome = new TaskToggleOutcome(report, null, updatedText);
+                }
+                catch (Exception inner) when (
+                    inner is VaultException or InvalidOperationException)
+                {
+                    repairs?.EndMutation(
+                        path, indexConsistent: inner is VaultException.WriteConflict);
+                    leaseSettled = true;
+                    VaultException error = inner as VaultException
+                        ?? new VaultException.InvalidArgument(inner.Message);
+                    outcome = new TaskToggleOutcome(
+                        null,
+                        error,
+                        null,
+                        ReadBackDiskHashAfterFailure(path, error));
+                }
+            }
+            finally
+            {
+                // A leaked lease bars every task query FOREVER - an
+                // exception type outside the arms above (a runtime
+                // panic surfacing through the FFI, say) must still
+                // settle it, fail-closed.
+                if (!leaseSettled)
+                {
+                    repairs?.EndMutation(path, indexConsistent: false);
+                }
+            }
         }
         catch (InvalidOperationException exception)
         {
+            // The splice failed BEFORE any session write: a certain
+            // no-write, no lease was taken.
             outcome = new TaskToggleOutcome(
                 null,
                 new VaultException.InvalidArgument(exception.Message),
@@ -582,7 +723,8 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
                 task,
                 nextStatus,
                 announce,
-                outcome)));
+                outcome,
+                completion)));
     }
 
     private void PublishTaskToggle(
@@ -593,13 +735,35 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
         TaskItem task,
         string nextStatus,
         Action<A11yEvent> announce,
+        TaskToggleOutcome outcome,
+        Action<SaveReport?, VaultException?, string?, bool>? completion = null)
+    {
+        // The completion outlives THIS TAB deliberately (adversarial
+        // round 3): the dispatcher belongs to the app, so a caller
+        // that needs the terminal state — the review's pending
+        // refresh, the disposed-tab announcement — hears it even
+        // when disposal suppresses the tab-state publish. It fires
+        // AFTER the tab publish so the source tab and its mirrored
+        // peers are already re-baselined when the caller reconciles.
+        bool tabPublished = !_disposed && generation == _taskToggleGeneration;
+        if (tabPublished)
+        {
+            PublishTaskToggleThroughTab(
+                path, expectedHash, revision, task, nextStatus, announce, outcome);
+        }
+        completion?.Invoke(
+            outcome.Report, outcome.Error, outcome.PostFailureDiskHash, tabPublished);
+    }
+
+    private void PublishTaskToggleThroughTab(
+        string path,
+        string? expectedHash,
+        long revision,
+        TaskItem task,
+        string nextStatus,
+        Action<A11yEvent> announce,
         TaskToggleOutcome outcome)
     {
-        if (_disposed || generation != _taskToggleGeneration)
-        {
-            return;
-        }
-
         _taskToggleInFlight = false;
         if (outcome.Error is VaultException.WriteConflict)
         {
@@ -645,6 +809,7 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
         _editorSession.Document.Replace(statusStartUtf16, statusLengthUtf16, nextStatus);
         _text = updatedText;
         _contentHash = report.NewContentHash;
+        IsExternallyStale = false;
         _editorSession.MarkSavedAfterVerifiedDelta(
             new EditorSavedBaseline(
                 updatedText,
@@ -655,6 +820,69 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
         Status = task.Completed ? "Task reopened." : "Task completed.";
         _documentChanged?.Invoke(this, null);
         announce(new A11yEvent.HostComposed(Status, A11yPriority.Medium));
+    }
+
+    /// <summary>True when the vault change stream reported this
+    /// file modified and the INDEX now carries a different content
+    /// hash than this tab's saved baseline (adversarial round 9):
+    /// the buffer is clean but obsolete, so row hashes born from the
+    /// same baseline match it vacuously — every snapshot-identity
+    /// guard must refuse until the tab re-baselines. Cleared by the
+    /// re-baselining writes (save, verified toggle splice, peer
+    /// mirror) and re-derived on every Modified event.</summary>
+    internal bool IsExternallyStale { get; private set; }
+
+    /// <summary>Re-derive <see cref="IsExternallyStale"/> against
+    /// the index. Own saves also flow through the change stream
+    /// (the #802 single emission seat), so this must COMPARE, never
+    /// assume: a just-saved tab's baseline equals the index and
+    /// derives false. An unreadable index leaves the flag alone.</summary>
+    internal void RefreshExternalStaleness()
+    {
+        if (!IsMarkdown || _disposed)
+        {
+            return;
+        }
+        string indexedHash;
+        try
+        {
+            indexedHash = _session.NoteTasks(Path, 1).ContentHash;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            return;
+        }
+        IsExternallyStale = indexedHash.Length > 0
+            && !string.Equals(_contentHash, indexedHash, StringComparison.Ordinal);
+    }
+
+    /// <summary>A task toggle wrote this tab's file WITHOUT
+    /// publishing through it (adversarial round 3: the review's
+    /// tabless route decided before this tab raced open, or the
+    /// originating same-path tab was disposed mid-flight). A buffer
+    /// still holding pre-write content is a stale editor over
+    /// changed disk — reuse the splice path's divergence honesty,
+    /// verbatim, and drop the interaction caches.</summary>
+    internal void ReconcileAfterExternalTaskWrite(
+        string newContentHash, Action<A11yEvent> announce)
+    {
+        ArgumentNullException.ThrowIfNull(announce);
+        if (!IsMarkdown || _disposed)
+        {
+            return;
+        }
+        if (string.Equals(_contentHash, newContentHash, StringComparison.Ordinal))
+        {
+            // The write landed exactly where this tab already is.
+            IsExternallyStale = false;
+            return;
+        }
+        // Definitionally stale against the just-written hash: the
+        // identity guards refuse until the tab re-baselines (round 9).
+        IsExternallyStale = true;
+        _editorInteractions?.InvalidateExternalState();
+        Status = "Task toggled on disk, but the editor no longer matches it. Reopen the note before editing.";
+        announce(new A11yEvent.HostComposed(Status, A11yPriority.High));
     }
 
     private static string ApplyTaskStatusToBaseline(
@@ -932,6 +1160,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
 {
     private readonly VaultSession _session;
     private readonly Action<A11yEvent> _announce;
+    private readonly Panels.TaskIndexRepairCoordinator _taskIndexRepairs;
     private readonly Func<WorkspaceTabViewModel, WorkspaceItemState, WorkspaceDirtyNavigationDecision>
         _dirtyNavigationDecision;
     private readonly Func<WorkspaceTabViewModel, WorkspaceDirtyNavigationDecision>
@@ -979,6 +1208,11 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             }
         };
         _activeLeaf = Leaves[0];
+        // ONE repair quarantine shared by every task surface
+        // (adversarial round 15): a path whose post-write index
+        // repair failed is known stale, and no surface may query it
+        // past another surface's quarantine.
+        _taskIndexRepairs = new Panels.TaskIndexRepairCoordinator(session);
         // The right-pane link/structure leaves (W4-2). Constructed
         // BEFORE Restore so the activation funnels can sync into it.
         Panels = new Panels.RightPanePanelsViewModel(
@@ -1002,7 +1236,33 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                     () => ReferenceEquals(ActiveGroup, group)
                         && ReferenceEquals(group.ActiveTab, tab));
             },
+            TogglePanelTask,
+            ScrollToPanelTaskIfCurrent,
+            repairs: _taskIndexRepairs,
             synchronousForTests: !startInteractionBackgroundWork);
+        // The vault-wide Tasks Review leaf (W4-3): vault-lifetime
+        // state, deliberately NOT keyed on the active note.
+        TasksReview = new Panels.TasksReviewViewModel(
+            session,
+            announce,
+            TryActivateTaskRow,
+            TryToggleTaskInOpenTab,
+            repairs: _taskIndexRepairs,
+            synchronousForTests: !startInteractionBackgroundWork);
+        // Round 3: a tab can open for a file BETWEEN the review's
+        // NoOpenTab route decision and its direct write landing —
+        // the workspace re-checks at write completion. Round 17:
+        // that raced-open tab's NOTE PANEL can also have finished a
+        // pre-write read — NoteSaved re-snapshots it (and ignores
+        // non-active paths).
+        TasksReview.DiskWriteLanded = (path, newContentHash) =>
+        {
+            ReconcileTabsAfterDirectTaskWrite(path, newContentHash);
+            Panels.NoteSaved(path);
+        };
+        // Round 15: a repair landing inside a review load worker
+        // refreshes the note panel too — both surfaces converge.
+        TasksReview.RepairLanded = path => Panels.NoteSaved(path);
         (_root, _activeGroup) = Restore(_persistence.Load());
         SyncPanels();
 
@@ -1052,6 +1312,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         ShrinkPaneCommand = new RelayCommand(_ => ResizeActivePane(-0.05), _ => Groups.Count > 1);
         SaveActiveCommand = new RelayCommand(_ => SaveActive(), _ => ActiveGroup.ActiveTab?.IsMarkdown == true);
         ToggleRightPaneCommand = new RelayCommand(_ => IsRightPaneVisible = !IsRightPaneVisible, _ => true);
+        OpenTasksReviewCommand = new RelayCommand(_ => OpenTasksReview(), _ => true);
     }
 
     public event EventHandler<string>? FileOpened;
@@ -1082,6 +1343,8 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     /// <summary>The W4-2 link/structure leaf data (backlinks, outgoing
     /// links, outline, embeds).</summary>
     public Panels.RightPanePanelsViewModel Panels { get; }
+
+    public Panels.TasksReviewViewModel TasksReview { get; }
 
     /// <summary>Re-derive the panels' active note from the workspace —
     /// called from every activation funnel (tab activation, pane focus,
@@ -1122,9 +1385,35 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             if (value is not null && SetField(ref _activeLeaf, value))
             {
                 _announce(new A11yEvent.LeafPanelShown(value.Title));
+                // Rail reveal of the review is an idempotent snapshot
+                // load (mac ensureVaultTasksLoaded); only the review
+                // COMMAND forces a fresh page.
+                if (string.Equals(value.Id, "tasksReview", StringComparison.Ordinal))
+                {
+                    TasksReview.EnsureLoaded();
+                }
                 Persist();
             }
         }
+    }
+
+    /// <summary>W4-3 (mac openTasksReview, ⌘R → Ctrl+R): reveal the
+    /// review leaf, load a FRESH first page, announce, and move
+    /// focus to the pane.</summary>
+    public void OpenTasksReview()
+    {
+        WorkspaceLeafOption leaf = Leaves.First(
+            option => string.Equals(option.Id, "tasksReview", StringComparison.Ordinal));
+        if (!IsRightPaneVisible)
+        {
+            IsRightPaneVisible = true;
+        }
+        ActiveLeaf = leaf;
+        TasksReview.ForceReload();
+        _announce(new A11yEvent.TasksReviewShown(
+            SlateWindows.Panels.TasksReviewViewModel.DisplayName(
+                TasksReview.ActiveFilter)));
+        FocusBoundaryRequested?.Invoke(this, WorkspaceFocusBoundary.RightPane);
     }
 
     public bool IsRightPaneVisible
@@ -1161,6 +1450,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     public ICommand ShrinkPaneCommand { get; }
     public ICommand SaveActiveCommand { get; }
     public ICommand ToggleRightPaneCommand { get; }
+    public ICommand OpenTasksReviewCommand { get; }
 
     public void OpenPath(string path, WorkspaceOpenTarget target = WorkspaceOpenTarget.CurrentTab) =>
         RunWorkspaceMutation(() => OpenPathCore(path, target));
@@ -1316,6 +1606,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         // the vault lifecycle disposes right after this workspace —
         // invalidate every in-flight load before that happens.
         Panels.Shutdown();
+        TasksReview.Shutdown();
         Persist();
         foreach (WorkspaceTabViewModel tab in Groups.SelectMany(group => group.Tabs))
         {
@@ -1361,6 +1652,322 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 && string.Equals(tab.Path, item.Path, StringComparison.Ordinal))
             : null;
 
+    /// <summary>The review's tab-route seam (W4-3): a file with an
+    /// open tab must toggle through THAT tab's guarded path so the
+    /// buffer re-baselines — a direct session write would leave the
+    /// open editor stale. The result distinguishes refusals from
+    /// started toggles (adversarial round 1: a lossy bool armed
+    /// refresh state for refusals), and the row's snapshot hash is
+    /// verified against the tab's SAVED content first — a stale
+    /// ordinal against newer content could toggle a different task.</summary>
+    private SlateWindows.Panels.ReviewToggleRoute TryToggleTaskInOpenTab(
+        string path, TaskItem task, string expectedContentHash)
+    {
+        WorkspaceTabViewModel? tab = Groups
+            .SelectMany(group => group.Tabs)
+            .FirstOrDefault(candidate => candidate.IsMarkdown
+                && string.Equals(candidate.Path, path, StringComparison.Ordinal));
+        if (tab is null)
+        {
+            return SlateWindows.Panels.ReviewToggleRoute.NoOpenTab;
+        }
+        if (tab.IsDirty)
+        {
+            _announce(new A11yEvent.TaskToggleUnsaved(
+                System.IO.Path.GetFileName(tab.Path)));
+            return SlateWindows.Panels.ReviewToggleRoute.RefusedDirty;
+        }
+        // Round 9: an externally rewritten file leaves this clean
+        // tab AND rows born from its baseline sharing the obsolete
+        // hash — matching vacuously. Refusing here (instead of
+        // letting the core CAS conflict) breaks the retry loop the
+        // doomed write would otherwise announce forever.
+        if (tab.IsExternallyStale
+            || !string.Equals(
+                tab.SavedContentHash, expectedContentHash, StringComparison.Ordinal))
+        {
+            _announce(new A11yEvent.TaskToggleConflict(
+                System.IO.Path.GetFileName(tab.Path)));
+            return SlateWindows.Panels.ReviewToggleRoute.RefusedStale;
+        }
+        return tab.ToggleTask(
+            task, _announce, TaskToggleCompletion(path, task, tab.SavedContentHash)) switch
+        {
+            TabTaskToggle.Started => SlateWindows.Panels.ReviewToggleRoute.Started,
+            // Busy: the tab announced; the review must NOT arm a
+            // refresh for an operation that never ran (round 2).
+            TabTaskToggle.RefusedBusy => SlateWindows.Panels.ReviewToggleRoute.RefusedBusy,
+            // A dirty race between the check above and the call.
+            _ => SlateWindows.Panels.ReviewToggleRoute.RefusedDirty,
+        };
+    }
+
+    /// <summary>Terminal-state handling for tab-routed toggles that
+    /// OUTLIVES the originating tab (adversarial rounds 3-4, both
+    /// the review route and the note panel's): closing the tab
+    /// mid-flight must not eat the outcome. Failures disarm the
+    /// review's pending refresh; successes announce when the tab
+    /// could not, re-snapshot the panels and the review, and give
+    /// orphaned same-path tabs the divergence honesty.</summary>
+    private Action<SaveReport?, VaultException?, string?, bool> TaskToggleCompletion(
+        string path, TaskItem task, string? preToggleHash)
+    {
+        string fileName = System.IO.Path.GetFileName(path);
+        return (report, error, postFailureDiskHash, publishedThroughTab) =>
+        {
+            if (report is null)
+            {
+                // No SaveReport does NOT mean disk is unchanged
+                // (adversarial round 11): the core writes the FILE
+                // before committing the index, so a post-write
+                // failure leaves the checkbox flipped on disk with
+                // no report. The worker read the disk back — a moved
+                // hash reconciles tabs and re-snapshots both task
+                // surfaces instead of retaining an obsolete clean
+                // editor over changed disk.
+                bool diskMoved = postFailureDiskHash is not null
+                    && preToggleHash is not null
+                    && !string.Equals(
+                        postFailureDiskHash, preToggleHash, StringComparison.Ordinal);
+                // A WriteConflict refused BEFORE any write — the one
+                // failure whose no-write outcome is CERTAIN. Every
+                // other failure with an unreadable read-back is
+                // UNKNOWN, and unknown fails closed (round 16):
+                // treating it as "no write" would let both surfaces
+                // query a possibly-stale index with nothing barring
+                // them.
+                bool outcomeUnknown = postFailureDiskHash is null
+                    && error is not VaultException.WriteConflict;
+                if (diskMoved || outcomeUnknown)
+                {
+                    // Repair the INDEX first (adversarial round 12):
+                    // the real failure window is file-written /
+                    // index-uncommitted, so reloading before the
+                    // repair would re-query the stale index and
+                    // resurrect the pre-write state as ghost rows.
+                    // Tab reconciliation is hash-truth and runs when
+                    // the hash is known; the surface reloads are
+                    // GATED on the repair succeeding (rounds 14-15)
+                    // — a failed repair enters the SHARED
+                    // quarantine, which bars both surfaces' queries
+                    // until a retry lands.
+                    bool repaired = _taskIndexRepairs.TryRepairNow(path, out _);
+                    if (diskMoved)
+                    {
+                        ReconcileTabsAfterDirectTaskWrite(path, postFailureDiskHash!);
+                    }
+                    if (repaired)
+                    {
+                        Panels.NoteSaved(path);
+                        TasksReview.NoteRefreshed(path);
+                    }
+                }
+                // Idempotent after NoteRefreshed consumed the marker;
+                // disarms it when disk truly never changed.
+                TasksReview.ToggleAbandoned(path);
+                if (!publishedThroughTab)
+                {
+                    if (error is VaultException.WriteConflict)
+                    {
+                        _announce(new A11yEvent.TaskToggleConflict(fileName));
+                    }
+                    else
+                    {
+                        _announce(new A11yEvent.HostComposed(
+                            $"Task could not be toggled: {error!.Message}",
+                            A11yPriority.High));
+                    }
+                }
+                return;
+            }
+            if (!publishedThroughTab)
+            {
+                // W0.5-3 residue: WorkspaceTabViewModel.PublishTaskToggle
+                _announce(new A11yEvent.HostComposed(
+                    task.Completed ? "Task reopened." : "Task completed.",
+                    A11yPriority.Medium));
+            }
+            // Refreshes are completion-driven, independent of the
+            // tab's lifetime: the panel save funnel and the review
+            // NoteRefreshed can't fire from a disposed tab, and
+            // same-path tabs that lost their mirror source (or raced
+            // open) re-baseline honesty here.
+            Panels.NoteSaved(path);
+            TasksReview.NoteRefreshed(path);
+            ReconcileTabsAfterDirectTaskWrite(path, report.NewContentHash);
+        };
+    }
+
+    /// <summary>A task toggle changed <paramref name="path"/> on disk
+    /// WITHOUT publishing through an open tab (adversarial round 3):
+    /// either the review's tabless route decided before a tab raced
+    /// open, or the originating tab was disposed mid-flight and its
+    /// same-path peers lost their mirror source. Any tab still
+    /// holding pre-write content is a stale editor over changed disk
+    /// — it gets the tab's own divergence honesty.</summary>
+    private void ReconcileTabsAfterDirectTaskWrite(string path, string newContentHash)
+    {
+        foreach (WorkspaceTabViewModel tab in Groups.SelectMany(group => group.Tabs))
+        {
+            if (tab.IsMarkdown
+                && string.Equals(tab.Path, path, StringComparison.Ordinal))
+            {
+                tab.ReconcileAfterExternalTaskWrite(newContentHash, _announce);
+            }
+        }
+    }
+
+    /// <summary>The panels' task-toggle seam (W4-3): the guarded tab
+    /// path owns conflict detection, generation gating, and the
+    /// canonical announcements. The tab's raw ToggleTask refuses
+    /// dirty WITHOUT announcing, so the refusal is spoken here (the
+    /// reading-view precedent). The row's snapshot hash is verified
+    /// against the tab's SAVED content first (adversarial round 2):
+    /// panel rows survive a save until the async refresh publishes,
+    /// and the tab's own CAS uses the CURRENT hash — it would happily
+    /// toggle whichever task inherited a stale row's ordinal.</summary>
+    private bool TogglePanelTask(TaskItem task, string expectedContentHash)
+    {
+        if (ActiveGroup.ActiveTab is not { IsMarkdown: true } tab)
+        {
+            return false;
+        }
+        if (tab.IsDirty)
+        {
+            _announce(new A11yEvent.TaskToggleUnsaved(
+                System.IO.Path.GetFileName(tab.Path)));
+            return true;
+        }
+        if (tab.IsExternallyStale
+            || !string.Equals(
+                tab.SavedContentHash, expectedContentHash, StringComparison.Ordinal))
+        {
+            _announce(new A11yEvent.TaskToggleConflict(
+                System.IO.Path.GetFileName(tab.Path)));
+            Panels.ReloadTasks();
+            return true;
+        }
+        // The same terminal completion as the review route
+        // (adversarial round 4): a panel toggle whose tab is closed
+        // mid-flight must still announce and re-snapshot.
+        return tab.ToggleTask(
+                task,
+                _announce,
+                TaskToggleCompletion(tab.Path, task, tab.SavedContentHash))
+            != TabTaskToggle.Refused;
+    }
+
+    /// <summary>The review's row-activation seam (adversarial rounds
+    /// 6 and 8): open the file if it isn't the active note, then
+    /// verify the row's snapshot hash against the tab's SAVED
+    /// content and refuse DIRTY buffers before scrolling — the
+    /// snapshot's byte offset only means anything against the exact
+    /// text the caret would move through, and the toggle paths
+    /// already guard both conditions.</summary>
+    private SlateWindows.Panels.ReviewOpenRoute TryActivateTaskRow(
+        string path, TaskItem task, string expectedContentHash)
+    {
+        bool wasActive = ActiveGroup.ActiveTab is WorkspaceTabViewModel
+        {
+            IsMarkdown: true
+        } active
+            && string.Equals(active.Path, path, StringComparison.Ordinal);
+        if (!wasActive)
+        {
+            bool navigated = false;
+            RunWorkspaceMutation(
+                () => navigated = OpenPathCore(path, WorkspaceOpenTarget.CurrentTab));
+            if (!navigated)
+            {
+                return SlateWindows.Panels.ReviewOpenRoute.OpenFailed;
+            }
+        }
+        if (ActiveGroup.ActiveTab is not WorkspaceTabViewModel { IsMarkdown: true } tab
+            || !string.Equals(tab.Path, path, StringComparison.Ordinal))
+        {
+            return SlateWindows.Panels.ReviewOpenRoute.OpenFailed;
+        }
+        // Dirty buffers refuse (adversarial round 8): the saved hash
+        // still matches the row, but the LIVE text the caret moves
+        // through has shifted under unsaved edits — a saved-content
+        // offset can land on unrelated words while announcing
+        // success. The platform's dirty posture (editor, panel, and
+        // review toggles) extends to activation; a divergence from
+        // the mac review's unverified line scroll, recorded.
+        if (tab.IsDirty)
+        {
+            return SlateWindows.Panels.ReviewOpenRoute.RefusedDirty;
+        }
+        // Round 9: after an EXTERNAL write, a clean-but-obsolete tab
+        // and rows born from the same baseline match each other
+        // vacuously — the index-derived staleness refuses too.
+        if (tab.IsExternallyStale
+            || !string.Equals(
+                tab.SavedContentHash, expectedContentHash, StringComparison.Ordinal))
+        {
+            return SlateWindows.Panels.ReviewOpenRoute.RefusedStale;
+        }
+        ScrollToPanelTask(task);
+        return wasActive
+            ? SlateWindows.Panels.ReviewOpenRoute.ScrolledInPlace
+            : SlateWindows.Panels.ReviewOpenRoute.Opened;
+    }
+
+    /// <summary>The note panel's activation seam (adversarial round
+    /// 7, the review guard's note-panel twin): after a save, the old
+    /// rows stay actionable until the async refresh publishes, and a
+    /// stale byte offset against the new text moves the caret to
+    /// unrelated content. A hash mismatch refuses SILENTLY — the
+    /// panel's activation posture is a silent scroll, so the caret
+    /// NOT moving is the honest observable — and re-snapshots.</summary>
+    private void ScrollToPanelTaskIfCurrent(TaskItem task, string expectedContentHash)
+    {
+        if (ActiveGroup.ActiveTab is not { IsMarkdown: true } tab)
+        {
+            return;
+        }
+        // Dirty buffers refuse LOUDLY (adversarial round 8): the
+        // saved hash still matches these rows, but unsaved edits
+        // have shifted the live text — a saved-content offset can
+        // park the caret on unrelated words. The panel's toggle
+        // already announces its dirty refusal; activation joins it
+        // (W0.5-3 residue: the TaskToggleUnsaved family's wording
+        // with the activation verb).
+        if (tab.IsDirty)
+        {
+            _announce(new A11yEvent.HostComposed(
+                $"Cannot open this task. The editor has unsaved changes in {System.IO.Path.GetFileName(tab.Path)}. Save the note first.",
+                A11yPriority.High));
+            return;
+        }
+        if (tab.IsExternallyStale
+            || !string.Equals(
+                tab.SavedContentHash, expectedContentHash, StringComparison.Ordinal))
+        {
+            Panels.ReloadTasks();
+            return;
+        }
+        ScrollToPanelTask(task);
+    }
+
+    /// <summary>The panels' task-activation seam (W4-3): park the
+    /// caret at the task's line start — a silent scroll, the mac
+    /// note-panel behavior (the caret move is the observable).</summary>
+    private void ScrollToPanelTask(TaskItem task)
+    {
+        if (ActiveGroup.ActiveTab is not { IsMarkdown: true } tab
+            || tab.EditorInteractions is null)
+        {
+            return;
+        }
+        string source = tab.Text;
+        uint byteOffset = Math.Min(
+            task.ByteOffset, checked((uint)Encoding.UTF8.GetByteCount(source)));
+        int target = checked((int)SlateUniffiMethods.TextByteToUtf16(
+            source, byteOffset));
+        tab.EditorInteractions.RequestCaret(target);
+    }
+
     private void MirrorSamePathDocumentState(
         WorkspaceTabViewModel source,
         EditorDocumentSyncEvent? syncEvent)
@@ -1386,6 +1993,16 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 }
             }
         }
+
+        // A null sync event on a CLEAN buffer is a whole-document
+        // refresh — the task-toggle publish re-baselines saved
+        // (W4-3): the panels re-read what just changed on disk (the
+        // save command's own funnel covers ordinary saves).
+        if (syncEvent is null && !source.IsDirty)
+        {
+            Panels.NoteSaved(source.Path);
+            TasksReview.NoteRefreshed(source.Path);
+        }
     }
 
     public void InvalidateModifiedPath(string path)
@@ -1397,6 +2014,12 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 && string.Equals(tab.Path, modified, StringComparison.Ordinal))
             {
                 tab.InvalidateExternalState();
+                // Round 9: an external write leaves this CLEAN tab
+                // and any task rows born from its baseline sharing
+                // the same obsolete hash — they match each other
+                // vacuously, so the snapshot-identity guards need an
+                // index-derived staleness signal to refuse on.
+                tab.RefreshExternalStaleness();
             }
         }
     }

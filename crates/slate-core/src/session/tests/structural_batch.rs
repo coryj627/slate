@@ -3244,3 +3244,331 @@ fn batch_trash_saved_file_and_folder_descendant_keep_deleted_timestamps() {
     assert!(rows.get("folder/child.md").copied().flatten().is_some());
     assert!(!rows.contains_key("keep.md"));
 }
+
+#[test]
+fn crashed_folder_recovery_marks_every_descendant_file() {
+    let _env_guard = super::common::ENV_FAULT_GUARD.lock().unwrap();
+    // Adversarial round 37: recovery planted markers from
+    // `inflight.entries` — top-level DIRECTORY paths only — so a
+    // crashed folder batch reversed its renames with every
+    // descendant FILE unmarked. If the forward markers were swept
+    // while the process was down (they age within 15s of the
+    // crash), a racing save around the reverse rename had no
+    // reconciliation trigger. Recovery now plants from
+    // `inflight.moved`, the per-file mapping.
+    let (tmp, session, _state) = fixture(&[("left/a.md", "- [ ] carried\n")], &["left", "dest"]);
+    let provider = Arc::clone(&session.provider);
+    let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = session.batch_move_with_faults(
+            BatchMoveRequest {
+                items: vec![folder("left")],
+                new_parent: "dest".into(),
+            },
+            &PanicBatchFault(BatchFaultPoint::MoveJournal),
+        );
+    }));
+    assert!(crashed.is_err());
+    assert_eq!(structural_inflight_count(tmp.path()), 1);
+    drop(session);
+
+    // The crashed process's forward markers were swept while it was
+    // down — the exact scenario recovery must not depend on them.
+    {
+        let conn = rusqlite::Connection::open(tmp.path().join(".slate/cache.sqlite")).unwrap();
+        conn.execute("DELETE FROM text_write_intents", []).unwrap();
+    }
+
+    let reopened = VaultSession::open(provider, SessionConfig::new(tmp.path().join(".slate")))
+        .expect("interrupted folder batch is rolled back");
+    assert!(tmp.path().join("left/a.md").is_file());
+    assert_eq!(structural_inflight_count(tmp.path()), 0);
+    {
+        // Recovery planted per-FILE markers on both sides of the
+        // reversal — descendants, not just the directory paths.
+        let conn = reopened.conn.lock().unwrap();
+        let descendant_markers: i64 = conn
+            .query_row(
+                "SELECT COUNT(DISTINCT path) FROM text_write_intents
+                 WHERE path IN ('left/a.md', 'dest/left/a.md')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            descendant_markers, 2,
+            "recovery must mark every moved FILE, not the directory entries"
+        );
+    }
+
+    // The markers age naturally; a zero-threshold sweep converges
+    // both sides by reading and the restored file serves.
+    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "a.md") };
+    let page = reopened
+        .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
+        .expect("the query succeeds");
+    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    assert!(
+        page.items.iter().any(|r| r.path == "left/a.md"),
+        "the restored descendant serves after the read"
+    );
+}
+
+#[test]
+fn recovery_marker_failure_defers_without_consuming_the_journal() {
+    let _env_guard = super::common::ENV_FAULT_GUARD.lock().unwrap();
+    // Adversarial round 37: a marker-persistence failure during
+    // open-time recovery flowed into the barrier handler, which
+    // DELETES the inflight journal — the next open then had nothing
+    // to retry and accepted the crashed batch's mixed topology.
+    // The failure must return directly: this open fails, the
+    // journal survives untouched, the filesystem is unmutated, and
+    // the next open retries successfully.
+    let (tmp, session, _state) = fixture(&[("x.md", "- [ ] xray\n")], &["dest"]);
+    let provider = Arc::clone(&session.provider);
+    let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = session.batch_move_with_faults(
+            BatchMoveRequest {
+                items: vec![file("x.md")],
+                new_parent: "dest".into(),
+            },
+            &PanicBatchFault(BatchFaultPoint::MoveJournal),
+        );
+    }));
+    assert!(crashed.is_err());
+    assert_eq!(structural_inflight_count(tmp.path()), 1);
+    assert!(tmp.path().join("dest/x.md").is_file());
+    drop(session);
+
+    unsafe { std::env::set_var("SLATE_TEST_FAULT_PLANT_MARKERS", "x.md") };
+    let deferred = VaultSession::open(
+        Arc::clone(&provider),
+        SessionConfig::new(tmp.path().join(".slate")),
+    );
+    unsafe { std::env::remove_var("SLATE_TEST_FAULT_PLANT_MARKERS") };
+    let error = deferred.err().expect("the deferred open fails");
+    assert!(
+        error.to_string().contains("recovery deferred"),
+        "unexpected error: {error}"
+    );
+    assert_eq!(
+        structural_inflight_count(tmp.path()),
+        1,
+        "the journal must survive a deferred recovery"
+    );
+    assert!(
+        tmp.path().join("dest/x.md").is_file(),
+        "the filesystem must be untouched by a deferred recovery"
+    );
+
+    let recovered = VaultSession::open(provider, SessionConfig::new(tmp.path().join(".slate")))
+        .expect("the next open retries and completes recovery");
+    assert!(tmp.path().join("x.md").is_file());
+    assert!(!tmp.path().join("dest/x.md").exists());
+    assert_eq!(structural_inflight_count(tmp.path()), 0);
+    drop(recovered);
+}
+
+#[test]
+fn recovery_marker_failures_leave_no_partial_markers() {
+    let _env_guard = super::common::ENV_FAULT_GUARD.lock().unwrap();
+    // Adversarial round 38: each marker insert autocommitting
+    // individually let a mid-loop persistence failure strand a
+    // PARTIAL marker set — durable rows another process could age
+    // and sweep against the mid-crash topology (deleting an
+    // absent-side descendant row and consuming its marker) before
+    // the deferred recovery retried. Planting is one transaction
+    // now: the fault below matches the SECOND descendant, so the
+    // first descendant's markers were already inserted when the
+    // failure hits — and none of them may survive. Crashed at
+    // MoveIndex, so this also covers the Original-indexed topology
+    // (filesystem Forward, index Original).
+    let (tmp, session, _state) = fixture(
+        &[
+            ("left/a.md", "- [ ] alpha\n"),
+            ("left/b.md", "- [ ] beta\n"),
+        ],
+        &["left", "dest"],
+    );
+    let provider = Arc::clone(&session.provider);
+    let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = session.batch_move_with_faults(
+            BatchMoveRequest {
+                items: vec![folder("left")],
+                new_parent: "dest".into(),
+            },
+            &PanicBatchFault(BatchFaultPoint::MoveIndex),
+        );
+    }));
+    assert!(crashed.is_err());
+    assert_eq!(structural_inflight_count(tmp.path()), 1);
+    drop(session);
+
+    // The crashed process's forward markers were swept while it was
+    // down; recovery must replant atomically.
+    {
+        let conn = rusqlite::Connection::open(tmp.path().join(".slate/cache.sqlite")).unwrap();
+        conn.execute("DELETE FROM text_write_intents", []).unwrap();
+    }
+
+    unsafe { std::env::set_var("SLATE_TEST_FAULT_PLANT_MARKERS", "b.md") };
+    let deferred = VaultSession::open(
+        Arc::clone(&provider),
+        SessionConfig::new(tmp.path().join(".slate")),
+    );
+    unsafe { std::env::remove_var("SLATE_TEST_FAULT_PLANT_MARKERS") };
+    let error = deferred.err().expect("the deferred open fails");
+    assert!(
+        error.to_string().contains("recovery deferred"),
+        "unexpected error: {error}"
+    );
+    assert_eq!(
+        structural_inflight_count(tmp.path()),
+        1,
+        "the journal must survive a deferred recovery"
+    );
+    {
+        // The first descendant's markers were attempted BEFORE the
+        // fault — none may have persisted.
+        let conn = rusqlite::Connection::open(tmp.path().join(".slate/cache.sqlite")).unwrap();
+        let partials: i64 = conn
+            .query_row("SELECT COUNT(*) FROM text_write_intents", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(partials, 0, "marker planting must be all-or-nothing");
+    }
+
+    // The next open retries cleanly: filesystem reversed, every
+    // descendant indexed at the source, and the tasks converge.
+    let recovered = VaultSession::open(provider, SessionConfig::new(tmp.path().join(".slate")))
+        .expect("the next open retries and completes recovery");
+    assert!(tmp.path().join("left/a.md").is_file());
+    assert!(tmp.path().join("left/b.md").is_file());
+    assert!(!tmp.path().join("dest/left").exists());
+    assert_eq!(structural_inflight_count(tmp.path()), 0);
+    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "left/") };
+    let page = recovered
+        .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
+        .expect("the query succeeds");
+    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    assert!(page.items.iter().any(|r| r.path == "left/a.md"));
+    assert!(page.items.iter().any(|r| r.path == "left/b.md"));
+}
+
+#[test]
+fn recovery_finalization_failure_defers_without_consuming_the_journal() {
+    let _env_guard = super::common::ENV_FAULT_GUARD.lock().unwrap();
+    // Adversarial round 40: a failure in the final marker
+    // re-assertion flowed through the generic recovery handler,
+    // which appends a barrier and DELETES the inflight journal —
+    // recreating the round-37 journal-loss bug at the second
+    // marker-persistence point, after the reversals already ran.
+    // Finalization is now one atomic transaction (re-assert + journal
+    // deletion) and its failure defers: the journal survives, the
+    // reversals are idempotent to re-enter, and the next open
+    // completes recovery.
+    let (tmp, session, _state) = fixture(&[("y.md", "- [ ] yankee\n")], &["dest"]);
+    let provider = Arc::clone(&session.provider);
+    let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = session.batch_move_with_faults(
+            BatchMoveRequest {
+                items: vec![file("y.md")],
+                new_parent: "dest".into(),
+            },
+            &PanicBatchFault(BatchFaultPoint::MoveJournal),
+        );
+    }));
+    assert!(crashed.is_err());
+    assert_eq!(structural_inflight_count(tmp.path()), 1);
+    drop(session);
+
+    unsafe { std::env::set_var("SLATE_TEST_FAULT_RECOVERY_FINALIZE", "y.md") };
+    let deferred = VaultSession::open(
+        Arc::clone(&provider),
+        SessionConfig::new(tmp.path().join(".slate")),
+    );
+    unsafe { std::env::remove_var("SLATE_TEST_FAULT_RECOVERY_FINALIZE") };
+    let error = deferred.err().expect("the deferred open fails");
+    assert!(
+        error.to_string().contains("deferred at finalization"),
+        "unexpected error: {error}"
+    );
+    assert_eq!(
+        structural_inflight_count(tmp.path()),
+        1,
+        "the journal must survive a deferred finalization"
+    );
+    // The reversals already ran before finalization — that is fine,
+    // because re-entry is idempotent.
+    assert!(tmp.path().join("y.md").is_file());
+
+    let recovered = VaultSession::open(provider, SessionConfig::new(tmp.path().join(".slate")))
+        .expect("the next open re-enters recovery and finalizes");
+    assert!(tmp.path().join("y.md").is_file());
+    assert!(!tmp.path().join("dest/y.md").exists());
+    assert_eq!(structural_inflight_count(tmp.path()), 0);
+    drop(recovered);
+}
+
+#[test]
+fn deletes_keep_rows_and_markers_for_recreated_paths() {
+    let _env_guard = super::common::ENV_FAULT_GUARD.lock().unwrap();
+    // Re-confirmation review: a concurrent save can recreate a path
+    // between delete_file's filesystem delete and its index
+    // transaction. Deleting the row and clearing the marker would
+    // leave a REAL file unindexed with no trigger. Disk truth
+    // decides: a recreated path keeps its row AND the held marker,
+    // and the orphan sweep converges both by reading.
+    let (_tmp, session, state) = fixture(&[("x.md", "- [ ] original task\n")], &[]);
+    state
+        .lock()
+        .unwrap()
+        .replace_after_delete_with_kind
+        .insert("x.md".to_string(), EntryKind::File);
+
+    session.delete_file("x.md").unwrap();
+
+    {
+        let conn = session.conn.lock().unwrap();
+        let (rows, held): (i64, i64) = (
+            conn.query_row(
+                "SELECT COUNT(*) FROM files WHERE path = 'x.md'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap(),
+            conn.query_row(
+                "SELECT COUNT(*) FROM text_write_intents WHERE path = 'x.md' AND created_ms = ?1",
+                rusqlite::params![i64::MAX],
+                |row| row.get(0),
+            )
+            .unwrap(),
+        );
+        assert_eq!(rows, 1, "a recreated path keeps its files row");
+        assert_eq!(held, 1, "and keeps the held delete marker");
+    }
+
+    // The orphan sweep re-reads: the row converges to the
+    // replacement bytes (task-free) and the original task can never
+    // serve as a ghost.
+    let page = session
+        .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
+        .expect("the query succeeds");
+    assert!(
+        page.items
+            .iter()
+            .all(|r| !r.task.text.contains("original task")),
+        "the deleted incarnation's tasks must not serve"
+    );
+    {
+        let conn = session.conn.lock().unwrap();
+        let markers: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM text_write_intents WHERE path = 'x.md'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(markers, 0, "the read resolved the delete marker");
+    }
+}

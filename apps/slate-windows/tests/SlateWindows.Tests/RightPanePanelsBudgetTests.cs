@@ -172,6 +172,8 @@ public sealed class RightPanePanelsBudgetTests : IDisposable
                 return true;
             },
             _ => true,
+            (_, _) => { },
+            (_, _) => true,
             (_, _) => { });
         panels.NoteChanged("budget.md");
         Assert.True(
@@ -216,6 +218,8 @@ public sealed class RightPanePanelsBudgetTests : IDisposable
             _ => { },
             (_, _) => true,
             _ => true,
+            (_, _) => { },
+            (_, _) => true,
             (_, _) => { });
         panels.NoteChanged("decoded.md");
         Assert.True(
@@ -267,6 +271,8 @@ public sealed class RightPanePanelsBudgetTests : IDisposable
             _ => { },
             (_, _) => true,
             _ => true,
+            (_, _) => { },
+            (_, _) => true,
             (_, _) => { });
         panels.NoteChanged("nested.md");
         Assert.True(
@@ -300,6 +306,8 @@ public sealed class RightPanePanelsBudgetTests : IDisposable
             _ => { },
             (_, _) => true,
             _ => true,
+            (_, _) => { },
+            (_, _) => true,
             (_, _) => { });
         panels.NoteChanged("deep.md");
         Assert.True(
@@ -332,6 +340,8 @@ public sealed class RightPanePanelsBudgetTests : IDisposable
             _ => { },
             (_, _) => true,
             _ => true,
+            (_, _) => { },
+            (_, _) => true,
             (_, _) => { });
         panels.NoteChanged("huge.md");
         Assert.True(
@@ -360,6 +370,8 @@ public sealed class RightPanePanelsBudgetTests : IDisposable
             _ => { },
             (_, _) => true,
             _ => true,
+            (_, _) => { },
+            (_, _) => true,
             (_, _) => { });
         panels.NoteChanged("hugepng.md");
         Assert.True(

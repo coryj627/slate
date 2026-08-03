@@ -11,6 +11,12 @@
 use super::*;
 use std::sync::atomic::AtomicU32;
 
+/// Serializes tests that mutate the process-global fault-seam env
+/// vars (`SLATE_TEST_FAULT_AFTER_WRITE` and friends): two parallel
+/// tests setting different trigger values overwrite each other and
+/// the loser's fault never fires.
+pub(super) static ENV_FAULT_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub(super) fn make_vault(
     setup: impl FnOnce(&FsVaultProvider),
 ) -> (tempfile::TempDir, VaultSession) {

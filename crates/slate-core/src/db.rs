@@ -191,6 +191,14 @@ const MIGRATIONS: &[Migration] = &[
         description: "tasks: canonical checkbox action offsets (W2-3)",
         sql: include_str!("../migrations/034_task_checkbox_offsets.sql"),
     },
+    Migration {
+        description: "text writes: durable cross-process write intents (W4-3)",
+        sql: include_str!("../migrations/035_text_write_intents.sql"),
+    },
+    Migration {
+        description: "files: per-file index epoch for write-intent supersession (W4-3)",
+        sql: include_str!("../migrations/036_files_index_epoch.sql"),
+    },
 ];
 
 /// Open or create a SQLite database at `path` with Slate's standard PRAGMAs.

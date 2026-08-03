@@ -28,6 +28,7 @@
         <KeyBinding Key="W" Modifiers="Control" Command="{Binding Workspace.CloseActiveTabCommand}" />
         <KeyBinding Key="T" Modifiers="Control" Command="{Binding Workspace.DuplicateTabCommand}" />
         <KeyBinding Key="T" Modifiers="Control+Shift" Command="{Binding Workspace.ReopenClosedTabCommand}" />
+        <KeyBinding Key="R" Modifiers="Control" Command="{Binding Workspace.OpenTasksReviewCommand}" />
         <KeyBinding Key="Oem5" Modifiers="Control" Command="{Binding Workspace.SplitRightCommand}" />
         <KeyBinding Key="Oem5" Modifiers="Control+Alt" Command="{Binding Workspace.SplitDownCommand}" />
         <KeyBinding Key="OemCloseBrackets" Modifiers="Control+Shift" Command="{Binding Workspace.NextTabCommand}" />
@@ -97,6 +98,10 @@
                 <MenuItem Header="_Shrink Pane" InputGestureText="Ctrl+Alt+-" Command="{Binding Workspace.ShrinkPaneCommand}" />
                 <Separator />
                 <MenuItem Header="Toggle Right _Pane" InputGestureText="Ctrl+Alt+I" Command="{Binding Workspace.ToggleRightPaneCommand}" />
+                <MenuItem Header="Show Tasks _Review"
+                          AutomationProperties.AutomationId="ShowTasksReviewMenuItem"
+                          InputGestureText="Ctrl+R"
+                          Command="{Binding Workspace.OpenTasksReviewCommand}" />
             </MenuItem>
             <MenuItem Header="_Editor"
                       AutomationProperties.AutomationId="EditorMenu">
@@ -616,6 +621,37 @@
                                 <Setter Property="BorderThickness" Value="0" />
                                 <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
                             </Style>
+                            <!-- W4-3: one note-task row — checkbox (pointer
+                                 toggle; Space on the row is the keyboard route)
+                                 plus text and the optional metadata caption. -->
+                            <DataTemplate x:Key="PanelTaskRowTemplate">
+                                <StackPanel Margin="0,2" Orientation="Horizontal">
+                                    <CheckBox IsChecked="{Binding Completed, Mode=OneWay}"
+                                              Focusable="False"
+                                              Margin="0,2,6,0"
+                                              VerticalAlignment="Top"
+                                              Click="PanelTaskCheckbox_Click"
+                                              AutomationProperties.Name="{Binding CheckboxLabel}"
+                                              AutomationProperties.HelpText="{Binding CheckboxHelpText}" />
+                                    <StackPanel>
+                                        <local:AutomationPresentationTextBlock x:Name="TaskText"
+                                                                               Text="{Binding DisplayText}"
+                                                                               TextWrapping="Wrap" />
+                                        <local:AutomationPresentationTextBlock x:Name="TaskMetadata"
+                                                                               Text="{Binding MetadataCaption}"
+                                                                               FontSize="11"
+                                                                               Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
+                                    </StackPanel>
+                                </StackPanel>
+                                <DataTemplate.Triggers>
+                                    <DataTrigger Binding="{Binding Completed}" Value="True">
+                                        <Setter TargetName="TaskText" Property="TextDecorations" Value="Strikethrough" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding HasMetadata}" Value="False">
+                                        <Setter TargetName="TaskMetadata" Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </DataTemplate.Triggers>
+                            </DataTemplate>
                         </local:AutomationLandmarkBorder.Resources>
                         <Grid>
                             <Grid.ColumnDefinitions>
@@ -841,6 +877,185 @@
                                     </ItemsControl>
                                 </ScrollViewer>
                             </DockPanel>
+                            <!-- W4-3 (#735): the note-scoped Tasks leaf — the mac
+                                 TasksPanel shape: header with true totals, Open
+                                 then Done sections (grouped by the COMPLETED
+                                 derivation), checkbox + activation per row. Rows
+                                 are display-capped VM-side, so the non-virtualized
+                                 sections stay bounded. -->
+                            <DockPanel Grid.Column="0" Margin="12">
+                                <DockPanel.Style>
+                                    <Style TargetType="DockPanel">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding ActiveLeaf.Id}" Value="tasks">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </DockPanel.Style>
+                                <TextBlock DockPanel.Dock="Top"
+                                           Style="{StaticResource PanelHeading}"
+                                           Text="{Binding Panels.TasksHeader}" />
+                                <TextBlock DockPanel.Dock="Top"
+                                           Style="{StaticResource PanelEmptyMessage}"
+                                           Text="{Binding Panels.TasksEmptyMessage}" />
+                                <TextBlock DockPanel.Dock="Bottom"
+                                           Style="{StaticResource PanelEmptyMessage}"
+                                           Text="{Binding Panels.TasksTruncationNotice}" />
+                                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                              HorizontalScrollBarVisibility="Disabled">
+                                    <StackPanel>
+                                        <TextBlock x:Name="PanelTasksOpenHeader"
+                                                   Text="{Binding Panels.OpenTasksGroupHeader}"
+                                                   FontWeight="SemiBold"
+                                                   AutomationProperties.HeadingLevel="Level3" />
+                                        <ListBox x:Name="PanelTasksOpenList"
+                                                 Style="{StaticResource PanelListBox}"
+                                                 ItemsSource="{Binding Panels.OpenTasks}"
+                                                 ItemContainerStyle="{StaticResource PanelRowContainer}"
+                                                 ItemTemplate="{StaticResource PanelTaskRowTemplate}"
+                                                 MouseDoubleClick="PanelTasks_MouseDoubleClick"
+                                                 PreviewKeyDown="PanelTasks_PreviewKeyDown"
+                                                 AutomationProperties.AutomationId="PanelTasksOpenList"
+                                                 AutomationProperties.Name="Open tasks" />
+                                        <TextBlock x:Name="PanelTasksDoneHeader"
+                                                   Margin="0,8,0,0"
+                                                   Text="{Binding Panels.DoneTasksGroupHeader}"
+                                                   FontWeight="SemiBold"
+                                                   AutomationProperties.HeadingLevel="Level3" />
+                                        <ListBox x:Name="PanelTasksDoneList"
+                                                 Style="{StaticResource PanelListBox}"
+                                                 ItemsSource="{Binding Panels.DoneTasks}"
+                                                 ItemContainerStyle="{StaticResource PanelRowContainer}"
+                                                 ItemTemplate="{StaticResource PanelTaskRowTemplate}"
+                                                 MouseDoubleClick="PanelTasks_MouseDoubleClick"
+                                                 PreviewKeyDown="PanelTasks_PreviewKeyDown"
+                                                 AutomationProperties.AutomationId="PanelTasksDoneList"
+                                                 AutomationProperties.Name="Done tasks" />
+                                    </StackPanel>
+                                </ScrollViewer>
+                            </DockPanel>
+                            <!-- W4-3 (#735): the vault-wide Tasks Review leaf — the
+                                 mac TasksReviewPanel flow: pinned filter chips
+                                 (focus-then-activate, never commit-on-arrow), a
+                                 paged row list, and an explicit Load more row. -->
+                            <DockPanel Grid.Column="0" Margin="12">
+                                <DockPanel.Style>
+                                    <Style TargetType="DockPanel">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding ActiveLeaf.Id}" Value="tasksReview">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </DockPanel.Style>
+                                <TextBlock DockPanel.Dock="Top"
+                                           Style="{StaticResource PanelHeading}"
+                                           Text="{Binding TasksReview.Header}" />
+                                <!-- Radio buttons, not plain buttons (adversarial
+                                     round 3): the active filter is a real UIA
+                                     selection state with a non-color visual, and
+                                     WPF radios keep the mac chip semantics — arrow
+                                     keys move focus without committing; Space or
+                                     click commits. -->
+                                <WrapPanel DockPanel.Dock="Top"
+                                           Margin="0,0,0,6"
+                                           AutomationProperties.Name="Filter">
+                                    <RadioButton x:Name="PanelReviewFilterAll"
+                                                 Content="All"
+                                                 GroupName="PanelReviewFilters"
+                                                 Margin="0,0,10,0"
+                                                 IsChecked="{Binding TasksReview.AllFilterActive, Mode=TwoWay}"
+                                                 AutomationProperties.Name="{Binding TasksReview.AllFilterName}"
+                                                 AutomationProperties.HelpText="Filter the review to all tasks." />
+                                    <RadioButton x:Name="PanelReviewFilterDueToday"
+                                                 Content="Due today"
+                                                 GroupName="PanelReviewFilters"
+                                                 Margin="0,0,10,0"
+                                                 IsChecked="{Binding TasksReview.DueTodayFilterActive, Mode=TwoWay}"
+                                                 AutomationProperties.Name="{Binding TasksReview.DueTodayFilterName}"
+                                                 AutomationProperties.HelpText="Filter the review to due today tasks." />
+                                    <RadioButton x:Name="PanelReviewFilterOverdue"
+                                                 Content="Overdue"
+                                                 GroupName="PanelReviewFilters"
+                                                 Margin="0,0,10,0"
+                                                 IsChecked="{Binding TasksReview.OverdueFilterActive, Mode=TwoWay}"
+                                                 AutomationProperties.Name="{Binding TasksReview.OverdueFilterName}"
+                                                 AutomationProperties.HelpText="Filter the review to overdue tasks." />
+                                    <RadioButton x:Name="PanelReviewFilterThisWeek"
+                                                 Content="This week"
+                                                 GroupName="PanelReviewFilters"
+                                                 IsChecked="{Binding TasksReview.ThisWeekFilterActive, Mode=TwoWay}"
+                                                 AutomationProperties.Name="{Binding TasksReview.ThisWeekFilterName}"
+                                                 AutomationProperties.HelpText="Filter the review to this week tasks." />
+                                </WrapPanel>
+                                <TextBlock DockPanel.Dock="Top"
+                                           Style="{StaticResource PanelEmptyMessage}"
+                                           Text="{Binding TasksReview.EmptyMessage}" />
+                                <Button x:Name="PanelReviewLoadMore"
+                                        DockPanel.Dock="Bottom"
+                                        Margin="0,6,0,0"
+                                        HorizontalAlignment="Left"
+                                        Content="{Binding TasksReview.LoadMoreLabel}"
+                                        Click="PanelReviewLoadMore_Click"
+                                        Visibility="{Binding TasksReview.HasMore, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                        AutomationProperties.Name="{Binding TasksReview.LoadMoreAutomationName}"
+                                        AutomationProperties.HelpText="{Binding TasksReview.LoadMoreHelpText}">
+                                    <Button.Style>
+                                        <Style TargetType="Button">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding TasksReview.IsLoadingMore}" Value="True">
+                                                    <Setter Property="IsEnabled" Value="False" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Button.Style>
+                                </Button>
+                                <ListBox x:Name="PanelReviewList"
+                                         Style="{StaticResource PanelListBox}"
+                                         ItemsSource="{Binding TasksReview.Rows}"
+                                         ItemContainerStyle="{StaticResource PanelRowContainer}"
+                                         MouseDoubleClick="PanelReview_MouseDoubleClick"
+                                         PreviewKeyDown="PanelReview_PreviewKeyDown"
+                                         AutomationProperties.AutomationId="PanelReviewList"
+                                         AutomationProperties.Name="Tasks Review">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Margin="0,2" Orientation="Horizontal">
+                                                <CheckBox IsChecked="{Binding Completed, Mode=OneWay}"
+                                                          Focusable="False"
+                                                          Margin="0,2,6,0"
+                                                          VerticalAlignment="Top"
+                                                          Click="PanelReviewCheckbox_Click"
+                                                          AutomationProperties.Name="{Binding CheckboxLabel}"
+                                                          AutomationProperties.HelpText="{Binding CheckboxHelpText}" />
+                                                <StackPanel>
+                                                    <local:AutomationPresentationTextBlock Text="{Binding FileName}"
+                                                                                           FontSize="11"
+                                                                                           Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
+                                                    <local:AutomationPresentationTextBlock x:Name="ReviewTaskText"
+                                                                                           Text="{Binding DisplayText}"
+                                                                                           TextWrapping="Wrap" />
+                                                    <local:AutomationPresentationTextBlock x:Name="ReviewTaskMetadata"
+                                                                                           Text="{Binding MetadataCaption}"
+                                                                                           FontSize="11"
+                                                                                           Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
+                                                </StackPanel>
+                                            </StackPanel>
+                                            <DataTemplate.Triggers>
+                                                <DataTrigger Binding="{Binding Completed}" Value="True">
+                                                    <Setter TargetName="ReviewTaskText" Property="TextDecorations" Value="Strikethrough" />
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding HasMetadata}" Value="False">
+                                                    <Setter TargetName="ReviewTaskMetadata" Property="Visibility" Value="Collapsed" />
+                                                </DataTrigger>
+                                            </DataTemplate.Triggers>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </DockPanel>
                             <StackPanel Grid.Column="0" Margin="12">
                                 <StackPanel.Style>
                                     <Style TargetType="StackPanel">
@@ -855,6 +1070,12 @@
                                                 <Setter Property="Visibility" Value="Collapsed" />
                                             </DataTrigger>
                                             <DataTrigger Binding="{Binding ActiveLeaf.Id}" Value="embeds">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding ActiveLeaf.Id}" Value="tasks">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding ActiveLeaf.Id}" Value="tasksReview">
                                                 <Setter Property="Visibility" Value="Collapsed" />
                                             </DataTrigger>
                                         </Style.Triggers>

@@ -57,8 +57,17 @@ fn slow_path_update_replaces_fts_tokens() {
     session.scan_initial(&CancelToken::new()).unwrap();
     assert_eq!(fts_match_count(&session, "oldmarkertext"), 1);
 
+    // A DIFFERENT-length rewrite: the scanner's fast path compares
+    // (mtime, size, ctime), Windows reports no portable ctime, and a
+    // same-length rewrite landing in the same coarse-mtime granule
+    // matched the tuple and skipped the re-read — a rare CI-only
+    // flake in this test (observed 2026-08-02; the W4-3 rounds 13-15
+    // coarse-mtime analysis explains it). Changing the size keeps
+    // the test about FTS replacement, not stat granularity.
     let provider = FsVaultProvider::new(tmp.path().to_path_buf());
-    provider.write_file("notes/n.md", b"newmarkertext").unwrap();
+    provider
+        .write_file("notes/n.md", b"newmarkertext now longer")
+        .unwrap();
     session.scan_initial(&CancelToken::new()).unwrap();
 
     assert_eq!(

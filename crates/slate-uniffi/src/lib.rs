@@ -1353,6 +1353,44 @@ impl VaultSession {
             .collect())
     }
 
+    /// Bounded per-note task read (W4-3): the panel twin of
+    /// `tasks_for_file`, limited in SQL with true totals alongside.
+    pub fn note_tasks(&self, path: String, limit: u32) -> Result<NoteTasksPage, VaultError> {
+        Ok(self.inner.note_tasks(&path, limit)?.into())
+    }
+
+    /// Repair one path's index after a post-write failure
+    /// (adversarial round 12): `save_text` writes the file before
+    /// the index commit, so a failure in between leaves disk newer
+    /// than the index — hosts call this before re-querying task
+    /// surfaces so the stale index cannot resurrect ghost rows.
+    pub fn reindex_path(&self, path: String) -> Result<(), VaultError> {
+        Ok(self.inner.reindex_path(&path)?)
+    }
+
+    /// Repair-or-contain for the host repair coordinator (W4-3
+    /// adversarial round 31). `Repaired`: index is disk truth.
+    /// `Contained`: a persistent file condition (unreadable,
+    /// non-UTF-8, oversize) was contained honest-empty with a
+    /// self-healing durable marker — task queries are safe, the
+    /// host may release its gate. `Declined`: another process
+    /// committed mid-attempt; retry. Database failures throw.
+    pub fn repair_or_contain_path(
+        &self,
+        path: String,
+    ) -> Result<TaskIndexRepairOutcome, VaultError> {
+        Ok(self.inner.repair_or_contain_path(&path)?.into())
+    }
+
+    /// Cross-process-aware revision for paged index snapshots
+    /// (adversarial round 14): the session-local generation cannot
+    /// see another process committing to the shared cache database;
+    /// this folds SQLite's `data_version` in so paging drift checks
+    /// stay honest across sessions and processes.
+    pub fn tasks_index_revision(&self) -> u64 {
+        self.inner.tasks_index_revision()
+    }
+
     /// Paged vault-wide task query. Used by the Mac TasksReviewView
     /// to render filtered overdue / today / soon views without
     /// loading every task into memory.
@@ -1807,6 +1845,25 @@ impl From<core::sync_detect::SyncProviderKind> for SyncProviderKind {
             K::GoogleDrive => Self::GoogleDrive,
             K::Git => Self::Git,
             K::Syncthing => Self::Syncthing,
+        }
+    }
+}
+
+/// Mirrors `slate_core::TaskIndexRepairOutcome` (W4-3 round 31).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum TaskIndexRepairOutcome {
+    Repaired,
+    Contained,
+    Declined,
+}
+
+impl From<core::TaskIndexRepairOutcome> for TaskIndexRepairOutcome {
+    fn from(o: core::TaskIndexRepairOutcome) -> Self {
+        use core::TaskIndexRepairOutcome as O;
+        match o {
+            O::Repaired => Self::Repaired,
+            O::Contained => Self::Contained,
+            O::Declined => Self::Declined,
         }
     }
 }
@@ -2840,6 +2897,30 @@ impl From<core::OutlinePage> for OutlinePage {
         Self {
             headings: p.headings.into_iter().map(Into::into).collect(),
             total: p.total,
+        }
+    }
+}
+
+/// FFI mirror of `slate_core::NoteTasksPage` (W4-3): the bounded
+/// per-note task read with true totals for the panel header, plus
+/// the file's content hash at read time so snapshot rows can prove
+/// their ordinals still name the same tasks before a toggle
+/// (adversarial round 2).
+#[derive(uniffi::Record)]
+pub struct NoteTasksPage {
+    pub tasks: Vec<TaskItem>,
+    pub total: u32,
+    pub open_total: u32,
+    pub content_hash: String,
+}
+
+impl From<core::NoteTasksPage> for NoteTasksPage {
+    fn from(p: core::NoteTasksPage) -> Self {
+        Self {
+            tasks: p.tasks.into_iter().map(Into::into).collect(),
+            total: p.total,
+            open_total: p.open_total,
+            content_hash: p.content_hash,
         }
     }
 }
@@ -4430,6 +4511,10 @@ pub struct TaskWithLocation {
     pub task: TaskItem,
     pub path: String,
     pub file_name: String,
+    /// Snapshot content hash (W4-3): a review toggle passes this as
+    /// the expected hash so a stale ordinal can never silently
+    /// toggle a different task.
+    pub content_hash: String,
 }
 
 impl From<core::TaskWithLocation> for TaskWithLocation {
@@ -4438,6 +4523,7 @@ impl From<core::TaskWithLocation> for TaskWithLocation {
             task: t.task.into(),
             path: t.path,
             file_name: t.file_name,
+            content_hash: t.content_hash,
         }
     }
 }

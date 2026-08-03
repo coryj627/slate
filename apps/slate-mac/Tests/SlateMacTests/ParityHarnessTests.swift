@@ -106,6 +106,7 @@ final class ParityHarnessTests: XCTestCase {
         artifacts["search.json"] = Data(try searchArtifact(session: session, cancel: cancel).utf8)
         artifacts["links.json"] = Data(try linksArtifact(session: session, relPaths: files).utf8)
         artifacts["editor_scale.json"] = Data(editorScaleArtifact().utf8)
+        artifacts["tasks.json"] = Data(try tasksArtifact(session: session).utf8)
         return artifacts
     }
 
@@ -280,6 +281,61 @@ final class ParityHarnessTests: XCTestCase {
                 .raw(",\"truncated\":").raw(preview.truncated ? "true" : "false")
                 .raw(",\"resolution\":")
             appendEmbedResolution(j, preview.resolution)
+            j.raw("}")
+        }
+        j.raw("]")
+
+        // W4-3: the canonical task-row artifact — byte-checks the
+        // exact TaskItem surface both task panels consume.
+        j.raw(",\"tasks\":[")
+        let tasks = try session.tasksForFile(path: relPath)
+        for (i, task) in tasks.enumerated() {
+            if i > 0 { j.raw(",") }
+            appendTaskItem(j, task)
+        }
+        j.raw("]}")
+        return j.output + "\n"
+    }
+
+    private static func appendTaskItem(_ j: CanonicalJson, _ t: TaskItem) {
+        j.raw("{\"ordinal\":").num(UInt64(t.ordinal))
+            .raw(",\"text\":").str(t.text)
+            .raw(",\"status\":").str(t.statusChar)
+            .raw(",\"completed\":").bool(t.completed)
+            .raw(",\"due_ms\":")
+        if let due = t.dueMs { j.num(due) } else { j.null() }
+        j.raw(",\"scheduled_ms\":")
+        if let scheduled = t.scheduledMs { j.num(scheduled) } else { j.null() }
+        j.raw(",\"priority\":")
+        if let priority = t.priority { j.num(Int64(priority)) } else { j.null() }
+        j.raw(",\"recurrence\":")
+        if let recurrence = t.recurrence { j.str(recurrence) } else { j.null() }
+        j.raw(",\"line\":").num(UInt64(t.line))
+            .raw(",\"offset\":").num(UInt64(t.byteOffset))
+            .raw(",\"checkbox_start\":").num(UInt64(t.checkboxStartByte))
+            .raw(",\"checkbox_end\":").num(UInt64(t.checkboxEndByte))
+            .raw("}")
+    }
+
+    /// W4-3: the vault-wide task-review artifact — pins
+    /// tasks_in_vault's DEFAULT-filter ordering contract plus the
+    /// joined location fields. The default filter carries no due
+    /// windows, so the artifact is wall-clock-free.
+    private static func tasksArtifact(session: VaultSession) throws -> String {
+        let j = CanonicalJson()
+        let page = try session.tasksInVault(
+            filter: TaskFilter(
+                completed: nil, dueFromMs: nil, dueToMs: nil,
+                priorityAtLeast: nil),
+            paging: Paging(cursor: nil, limit: 1000))
+        j.raw("{\"total\":").num(page.totalFiltered)
+            .raw(",\"rows\":[")
+        for (i, row) in page.items.enumerated() {
+            if i > 0 { j.raw(",") }
+            j.raw("{\"path\":").str(row.path)
+                .raw(",\"file\":").str(row.fileName)
+                .raw(",\"task\":")
+            appendTaskItem(j, row.task)
             j.raw("}")
         }
         j.raw("]}")
@@ -671,6 +727,15 @@ private final class CanonicalJson {
 
     @discardableResult
     func num(_ value: UInt64) -> CanonicalJson {
+        output += String(value)
+        return self
+    }
+
+    /// Signed twin of `num(UInt64)` — the C# side's `Num(long)`
+    /// (invariant decimal). Task due/scheduled epoch millis and the
+    /// signed priority scale need it (W4-3).
+    @discardableResult
+    func num(_ value: Int64) -> CanonicalJson {
         output += String(value)
         return self
     }

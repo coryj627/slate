@@ -168,6 +168,14 @@ LEAF_DELIVERED = {
         "implemented 2026-08-01 (#734): `RightPanePanelsViewModel` + "
         "shared `EditorEmbedPreviewView` cards; `RightPanePanelsTests` "
         "+ FlaUI `RightPanePanels_LeafBodiesCarryRowsAndBacklinkNavigates`"),
+    "tasks": (
+        "implemented 2026-08-01 (#735): `RightPanePanelsViewModel` task "
+        "sections + MainWindow leaf body; `TasksPanelTests` + FlaUI "
+        "`TaskPanels_RowsToggleAndReviewCarriesTheMacShapes`"),
+    "tasksReview": (
+        "implemented 2026-08-01 (#735): `TasksReviewViewModel` + "
+        "MainWindow leaf body + Ctrl+R command; `TasksReviewTests` + "
+        "FlaUI `TaskPanels_RowsToggleAndReviewCarriesTheMacShapes`"),
 }
 
 # Milestones unshipped at the 2026-07-19 snapshot: their rows drop out
@@ -452,6 +460,15 @@ W3_DELIVERED_COMMANDS = {
     "slate.editor.toggleViewMode",
 }
 
+W4_IMPLEMENTED_STATUS = (
+    "implemented; local gates green 2026-08-01; interactive CI + human AT pending"
+)
+
+# W4 delivery, same per-command shape as W3.
+W4_DELIVERED_COMMANDS = {
+    "slate.tasks.review",
+}
+
 # §W-F waivers: status text the generator must preserve across
 # regeneration — a waiver that lives only in the generated file is
 # silently erased by the next run.
@@ -509,7 +526,7 @@ def load_delivery_evidence(
     delivered_commands = {
         cid for cid, _, _, _, issue in cmd_rows
         if issue.startswith(("#720", "#721", "#722", "#723", "#724", "#725"))
-    } | W3_DELIVERED_COMMANDS
+    } | W3_DELIVERED_COMMANDS | W4_DELIVERED_COMMANDS
     mapped_commands = set(command_map)
     if mapped_commands != delivered_commands:
         missing = sorted(delivered_commands - mapped_commands)
@@ -520,7 +537,7 @@ def load_delivery_evidence(
         if group_name not in groups:
             fail(f"command {command_id} references unknown evidence group {group_name!r}")
 
-    expected_issues = {"#381", "#720", "#721", "#722", "#723", "#724", "#725", "#728"}
+    expected_issues = {"#381", "#720", "#721", "#722", "#723", "#724", "#725", "#728", "#735"}
     if set(issue_map) != expected_issues:
         fail(
             "delivery-evidence issue drift: expected "
@@ -544,6 +561,8 @@ def command_delivery_status(
         return "pending"
     if command_id in W3_DELIVERED_COMMANDS:
         return W3_IMPLEMENTED_STATUS
+    if command_id in W4_DELIVERED_COMMANDS:
+        return W4_IMPLEMENTED_STATUS
     return (
         W2_IMPLEMENTED_STATUS
         if issue.startswith(("#381", "#724", "#725"))

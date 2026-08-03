@@ -75,7 +75,10 @@ internal sealed partial class WorkspaceViewModel
                     ActivateEditorTag,
                     _announce,
                     EditorPreferences,
-                    startInteractionBackgroundWork: _startInteractionBackgroundWork));
+                    startInteractionBackgroundWork: _startInteractionBackgroundWork)
+                {
+                    TaskRepairs = _taskIndexRepairs,
+                });
             }
 
             WorkspaceTabViewModel? active = group.Tabs.FirstOrDefault(tab => tab.Id == groupState.ActiveTab)

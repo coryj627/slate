@@ -7,7 +7,7 @@
 //! exclusively by the scanner's slow path (and by `save_text`); the
 //! query side serves the Mac Tasks panel + vault-wide review view.
 
-use rusqlite::{Connection, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::VaultError;
 use crate::session::{Page, Paging};
@@ -21,6 +21,12 @@ pub struct TaskWithLocation {
     pub task: TaskItem,
     pub path: String,
     pub file_name: String,
+    /// The file's content hash AT SNAPSHOT time (W4-3 adversarial
+    /// round 1): task ordinals are only stable for a given source
+    /// text, so a toggle from a review row must verify the file has
+    /// not changed since the row was read — a stale ordinal would
+    /// silently toggle a DIFFERENT task.
+    pub content_hash: String,
 }
 
 /// Filter shape for `tasks_in_vault`. `None` fields mean "no
@@ -78,17 +84,41 @@ pub(crate) fn replace_tasks_for_file(
 /// Fetch every task in a file in document order. Empty result if
 /// the path isn't indexed yet — same shape as `outgoing_links`.
 pub(crate) fn tasks_for_file(conn: &Connection, path: &str) -> Result<Vec<TaskItem>, VaultError> {
-    let file_id: Option<i64> = conn
+    // ONE read snapshot for the id lookup and the rows (design
+    // audit, post-round-41): SQLite recycles rowids, so between two
+    // autocommit reads another process can delete this file's row
+    // and a NEW file's row can land on the same id — the rows query
+    // would then serve a DIFFERENT file's tasks under this path's
+    // name. Same posture as `note_tasks_bounded` (round 33).
+    let tx = conn.unchecked_transaction()?;
+    // `.optional()`, not `.ok()` (adversarial round 3): only a
+    // missing row means "not indexed" — corruption or schema skew
+    // must surface as an error, never as a task-free file.
+    let file_id: Option<i64> = tx
         .query_row(
             "SELECT id FROM files WHERE path = ?1",
             params![path],
             |row| row.get(0),
         )
-        .ok();
+        .optional()?;
     let Some(file_id) = file_id else {
         return Ok(Vec::new());
     };
-    let mut stmt = conn.prepare_cached(
+    // Test-only seam: lets a regression commit through a SECOND
+    // connection between the id lookup and the row read, proving
+    // the two cannot tear apart.
+    if std::env::var_os("SLATE_TEST_TORN_FILE_TASKS")
+        .is_some_and(|trigger| path.contains(trigger.to_string_lossy().as_ref()))
+        && let Some(db_path) = conn.path()
+        && let Ok(other) = Connection::open(db_path)
+    {
+        let _ = other.execute(
+            "UPDATE tasks SET text = 'torn-by-second-connection', completed = 1
+             WHERE file_id = ?1",
+            params![file_id],
+        );
+    }
+    let mut stmt = tx.prepare_cached(
         "SELECT ordinal, text, status_char, completed,
                 due_ms, scheduled_ms, priority, recurrence, line, byte_offset,
                 checkbox_start_byte, checkbox_end_byte
@@ -101,6 +131,106 @@ pub(crate) fn tasks_for_file(conn: &Connection, path: &str) -> Result<Vec<TaskIt
         out.push(r?);
     }
     Ok(out)
+}
+
+/// Bounded per-file task read for the panel (W4-3, the W4-2 round-10
+/// posture): the LIMIT lives in SQL so a task-dense note never
+/// materializes an unbounded `Vec` before a UI display cap can
+/// apply, and the true totals ride alongside so the header can say
+/// "N open of M tasks" past the cap.
+///
+/// OPEN tasks first (adversarial round 1): the panel displays Open
+/// then Done, so a document-order LIMIT would let a note whose first
+/// N tasks are completed spend the entire display budget on finished
+/// work and hide every actionable row. Each group reads in document
+/// order via its own PK-ordered scan — no temp sort on adversarial
+/// task counts.
+///
+/// The file's `content_hash` rides alongside (adversarial round 2):
+/// panel rows are snapshots, and a toggle against a row read before
+/// a save must be able to prove its ordinals still name the same
+/// tasks. Unknown paths return an empty hash with the empty page.
+pub(crate) fn note_tasks_bounded(
+    conn: &Connection,
+    path: &str,
+    limit: u32,
+) -> Result<(Vec<TaskItem>, u32, u32, String), VaultError> {
+    // ONE read snapshot for hash + rows + totals (adversarial round
+    // 33): these are separate statements, and another PROCESS can
+    // commit between autocommit reads — pairing an old content_hash
+    // with new task offsets would defeat the exact hash/offset
+    // identity premise the hash exists to serve. A deferred read
+    // transaction pins every statement below to a single database
+    // snapshot; the session mutex only excludes THIS session's
+    // writers. `unchecked_transaction` because only a shared borrow
+    // is available — no nesting is possible on this connection while
+    // the session mutex is held.
+    let tx = conn.unchecked_transaction()?;
+    // Test-only seam: lets a regression commit through a SECOND
+    // connection between this snapshot's establishment and the row
+    // reads, proving the page cannot tear.
+    let torn_probe = std::env::var_os("SLATE_TEST_TORN_NOTE_READ")
+        .filter(|trigger| path.contains(trigger.to_string_lossy().as_ref()));
+    // `.optional()`, not `.ok()` (adversarial round 3): `.ok()`
+    // collapsed EVERY SQLite failure — corruption, schema skew, type
+    // errors — into "no tasks in this note", bypassing the panel's
+    // read-fault surface entirely. Only a genuinely missing row is
+    // the empty page.
+    let file_row: Option<(i64, String)> = tx
+        .query_row(
+            "SELECT id, content_hash FROM files WHERE path = ?1",
+            params![path],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let Some((file_id, content_hash)) = file_row else {
+        return Ok((Vec::new(), 0, 0, String::new()));
+    };
+    if torn_probe.is_some()
+        && let Some(db_path) = conn.path()
+        && let Ok(other) = Connection::open(db_path)
+    {
+        let _ = other.execute(
+            "UPDATE files SET content_hash = 'torn-by-second-connection' WHERE path = ?1",
+            params![path],
+        );
+        let _ = other.execute(
+            "DELETE FROM tasks WHERE file_id = (SELECT id FROM files WHERE path = ?1)",
+            params![path],
+        );
+    }
+    let mut stmt = tx.prepare_cached(
+        "SELECT ordinal, text, status_char, completed,
+                due_ms, scheduled_ms, priority, recurrence, line, byte_offset,
+                checkbox_start_byte, checkbox_end_byte
+         FROM tasks WHERE file_id = ?1 AND completed = ?2
+         ORDER BY ordinal ASC
+         LIMIT ?3",
+    )?;
+    let mut out = Vec::new();
+    for completed in [0i64, 1] {
+        let remaining = limit.saturating_sub(out.len() as u32);
+        if remaining == 0 {
+            break;
+        }
+        let rows = stmt.query_map(params![file_id, completed, remaining], row_to_task)?;
+        for r in rows {
+            out.push(r?);
+        }
+    }
+    drop(stmt);
+    let (total, open_total): (i64, i64) = tx.query_row(
+        "SELECT COUNT(*), COUNT(*) FILTER (WHERE completed = 0)
+         FROM tasks WHERE file_id = ?1",
+        params![file_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    Ok((
+        out,
+        total.max(0) as u32,
+        open_total.max(0) as u32,
+        content_hash,
+    ))
 }
 
 /// Vault-wide paged task query. Order:
@@ -209,10 +339,20 @@ pub(crate) fn tasks_in_vault(
     // (Codoki PR #134 High regression fix).
     const DUE_NULL_SENTINEL: i64 = i64::MAX;
     const PRIORITY_NULL_SENTINEL: i64 = i32::MIN as i64;
+    // `text` and `recurrence` are DISPLAY-BOUNDED here (adversarial
+    // round 4): the LIMIT bounds row COUNT, but a valid indexed task
+    // line can approach the per-file byte ceiling, and a vault-wide
+    // page spans many files — 200 exact rows could marshal gigabytes
+    // through SQLite → Rust → FFI → host before any display ceiling
+    // applies. Identity fields (ordinal, status, offsets, hash) stay
+    // exact — toggling and scrolling never read the text. substr
+    // bounds CHARS inside SQLite so the full text is never
+    // materialized; `bound_snippet` re-bounds BYTES on the way out
+    // (the links-panel snippet ceiling, shared).
     let sql = format!(
-        "SELECT f.path, f.name,
-                t.ordinal, t.text, t.status_char, t.completed,
-                t.due_ms, t.scheduled_ms, t.priority, t.recurrence,
+        "SELECT f.path, f.name, f.content_hash,
+                t.ordinal, substr(t.text, 1, {snippet_chars}), t.status_char, t.completed,
+                t.due_ms, t.scheduled_ms, t.priority, substr(t.recurrence, 1, {snippet_chars}),
                 t.line, t.byte_offset, t.checkbox_start_byte, t.checkbox_end_byte,
                 (SELECT COUNT(*) FROM tasks t JOIN files f ON f.id = t.file_id {count_where}) AS total_filtered
          FROM tasks t
@@ -223,6 +363,7 @@ pub(crate) fn tasks_in_vault(
                   f.path COLLATE BINARY ASC,
                   t.ordinal ASC
          LIMIT ?",
+        snippet_chars = crate::links_db::MAX_LINK_SNIPPET_BYTES,
         count_where = build_count_where(&filter),
         where_clause = where_clause,
         due_sentinel = DUE_NULL_SENTINEL,
@@ -265,26 +406,30 @@ pub(crate) fn tasks_in_vault(
         .query_map(rusqlite::params_from_iter(bound_refs.iter()), |row| {
             let path: String = row.get(0)?;
             let name: String = row.get(1)?;
+            let content_hash: String = row.get(2)?;
             let item = TaskItem {
-                ordinal: row.get::<_, i64>(2)? as u32,
-                text: row.get(3)?,
-                status_char: row.get::<_, String>(4)?.chars().next().unwrap_or(' '),
-                completed: row.get::<_, i64>(5)? != 0,
-                due_ms: row.get(6)?,
-                scheduled_ms: row.get(7)?,
-                priority: row.get::<_, Option<i64>>(8)?.map(|p| p as i32),
-                recurrence: row.get(9)?,
-                line: row.get::<_, i64>(10)? as u32,
-                byte_offset: row.get::<_, i64>(11)? as u32,
-                checkbox_start_byte: row.get::<_, i64>(12)? as u32,
-                checkbox_end_byte: row.get::<_, i64>(13)? as u32,
+                ordinal: row.get::<_, i64>(3)? as u32,
+                text: crate::links_db::bound_snippet(row.get(4)?),
+                status_char: row.get::<_, String>(5)?.chars().next().unwrap_or(' '),
+                completed: row.get::<_, i64>(6)? != 0,
+                due_ms: row.get(7)?,
+                scheduled_ms: row.get(8)?,
+                priority: row.get::<_, Option<i64>>(9)?.map(|p| p as i32),
+                recurrence: row
+                    .get::<_, Option<String>>(10)?
+                    .map(crate::links_db::bound_snippet),
+                line: row.get::<_, i64>(11)? as u32,
+                byte_offset: row.get::<_, i64>(12)? as u32,
+                checkbox_start_byte: row.get::<_, i64>(13)? as u32,
+                checkbox_end_byte: row.get::<_, i64>(14)? as u32,
             };
-            let count: i64 = row.get(14)?;
+            let count: i64 = row.get(15)?;
             total_filtered = count as u64;
             Ok(TaskWithLocation {
                 task: item,
                 path,
                 file_name: name,
+                content_hash,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -416,4 +561,23 @@ fn parse_cursor(s: &str) -> Option<(i64, i64, String, i64)> {
     };
     let ord: i64 = ord_part.parse().ok()?;
     Some((due, prio, path_part.to_string(), ord))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Adversarial round 3: `.ok()` on the file lookup collapsed
+    /// EVERY SQLite failure into a successful empty page, so
+    /// corruption or schema skew read as "No tasks in this note"
+    /// instead of surfacing through the panel's read-fault path. A
+    /// connection with no schema at all must be an error, never an
+    /// empty result.
+    #[test]
+    fn broken_schemas_error_instead_of_reading_as_task_free() {
+        let conn = Connection::open_in_memory().expect("in-memory db");
+
+        assert!(note_tasks_bounded(&conn, "a.md", 10).is_err());
+        assert!(tasks_for_file(&conn, "a.md").is_err());
+    }
 }
