@@ -467,6 +467,27 @@ pub fn extract_frontmatter(source: &str) -> (Vec<Property>, Vec<PropertyParseWar
     (properties, warnings)
 }
 
+/// The TOP-LEVEL YAML keys of a frontmatter block, in document order.
+///
+/// This is deliberately *not* derivable from [`extract_frontmatter`]: that
+/// flattens nested mappings (`person: {name: …}` becomes `person.name`) and
+/// drops shapes it can't type, so a caller checking "does this key already
+/// exist?" against properties would miss the container key and silently
+/// replace it on write (W4-4 adversarial round 6). Add-property surfaces must
+/// collision-check against this instead.
+pub fn frontmatter_top_level_keys(source: &str) -> Vec<String> {
+    let Some(range) = frontmatter_range(source) else {
+        return Vec::new();
+    };
+    let Ok(docs) = YamlLoader::load_from_str(&source[range]) else {
+        return Vec::new();
+    };
+    match docs.into_iter().next() {
+        Some(Yaml::Hash(map)) => map.iter().map(|(k, _)| yaml_key_to_string(k)).collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// Parse frontmatter once while allowing another crate-internal projection to
 /// inspect the same raw YAML root before it is converted to Slate's typed,
 /// flattened [`Property`] model.

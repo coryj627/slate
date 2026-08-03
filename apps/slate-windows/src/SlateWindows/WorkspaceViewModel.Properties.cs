@@ -124,7 +124,9 @@ internal sealed partial class WorkspaceViewModel
             ActiveGroup.ActiveTab is WorkspaceTabViewModel { IsMarkdown: true } tab
             && properties is { LoadError: null } header
             && header.ContentHash.Length > 0
-                ? new PropertyAddIntent(tab.Path, header.ContentHash, header.CurrentKeys)
+                // Collision-check against the AUTHORITATIVE top-level
+                // YAML keys (round 6), never the flattened rows.
+                ? new PropertyAddIntent(tab.Path, header.ContentHash, header.TopLevelKeys)
                 : null;
         var sheet = new AddPropertyViewModel(intent, CommitAddProperty, _announce);
         AddPropertySheet = sheet;
@@ -213,7 +215,7 @@ internal sealed partial class WorkspaceViewModel
             System.IO.Path.GetFileName(path),
             key,
             () => RetryAddWithFreshHash(path, sheet, key, value),
-            () => ReloadPropertiesFromDisk(path));
+            () => DiscardAddDraftAndReload(path, sheet));
     }
 
     /// <summary>Keep Mine for adds — the sanctioned fresh-hash
@@ -270,13 +272,25 @@ internal sealed partial class WorkspaceViewModel
                     System.IO.Path.GetFileName(path),
                     key,
                     () => RetryAddWithFreshHash(path, sheet, key, value),
-                    () => ReloadPropertiesFromDisk(path));
+                    () => DiscardAddDraftAndReload(path, sheet));
                 return;
             }
             _announce(new A11yEvent.PropertyEditFailed(
                 failure?.Message ?? "unknown failure"));
             ReconcileAfterReadBack(path, postFailureDiskHash);
         };
+
+    /// <summary>Reload after an ADD conflict: the edit the dialog was
+    /// about is the SHEET's draft, so that is what gets discarded
+    /// (round 6) — open row drafts are unrelated and survive.</summary>
+    private void DiscardAddDraftAndReload(string path, AddPropertyViewModel? sheet)
+    {
+        if (ReferenceEquals(AddPropertySheet, sheet))
+        {
+            AddPropertySheet = null;
+        }
+        RefreshPropertiesFor(path, ReloadAnnounce.SuccessAndFailure);
+    }
 
     /// <summary>Attach (or return) the active tab's header VM with
     /// the workspace seam delegates wired. Called at tab activation
@@ -454,7 +468,7 @@ internal sealed partial class WorkspaceViewModel
             System.IO.Path.GetFileName(path),
             row.Key,
             () => RetryPropertyEditWithFreshHash(row, deleted),
-            () => ReloadPropertiesFromDisk(path));
+            () => ReloadPropertiesFromDisk(path, row.Key));
     }
 
     /// <summary>Keep Mine: re-issue THE SAME OPERATION against the
@@ -505,8 +519,8 @@ internal sealed partial class WorkspaceViewModel
     /// at the refresh's COMPLETION by the header VM — PropertiesReloaded
     /// on success, PropertiesReloadFailed with the reason on failure
     /// (contract 9; never an eager success echo).</summary>
-    private void ReloadPropertiesFromDisk(string path) =>
-        RefreshPropertiesFor(path, ReloadAnnounce.SuccessAndFailure);
+    private void ReloadPropertiesFromDisk(string path, string? discardDraftKey) =>
+        RefreshPropertiesFor(path, ReloadAnnounce.SuccessAndFailure, discardDraftKey);
 
     /// <summary>Terminal completion (contract 4): success
     /// re-baselines clean same-path tabs to the report hash BEFORE
@@ -647,16 +661,23 @@ internal sealed partial class WorkspaceViewModel
     /// refresh silently. Post-write funnels default to FailureOnly
     /// (honest containment without a success echo).</summary>
     internal void RefreshPropertiesFor(
-        string path, ReloadAnnounce announce = ReloadAnnounce.FailureOnly)
+        string path,
+        ReloadAnnounce announce = ReloadAnnounce.FailureOnly,
+        string? discardDraftKey = null)
     {
         ReloadAnnounce pending = announce;
+        // The discard is scoped to the row the dialog was about, and
+        // only on the header that owns the outcome (round 6): peer
+        // duplicates refresh silently AND keep their drafts.
+        string? pendingDiscard = discardDraftKey;
         foreach (WorkspaceTabViewModel tab in Groups.SelectMany(group => group.Tabs))
         {
             if (string.Equals(tab.Path, path, StringComparison.Ordinal)
                 && tab.Properties is { } properties)
             {
-                properties.RefreshProperties(pending);
+                properties.RefreshProperties(pending, pendingDiscard);
                 pending = ReloadAnnounce.None;
+                pendingDiscard = null;
             }
         }
     }

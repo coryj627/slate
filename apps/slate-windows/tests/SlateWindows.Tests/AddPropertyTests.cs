@@ -190,14 +190,27 @@ public sealed class AddPropertyTests
             sheet.Key = key;
             sheet.Kind = kind;
             sheet.Value = seed;
+            // A refusal is only legitimate when core would NOT have
+            // stored the chosen kind (round 6: the earlier matrix
+            // accepted every refusal, hiding false refusals — the
+            // exact defect class this pins).
+            _ = AddPropertyViewModel.BuildInitialValue(
+                key, kind, seed, out PropertyValue? candidate);
+            string? coreKind = candidate is null
+                ? null
+                : SlateUniffiMethods.RoundTripPropertyKind(key, candidate);
             if (!sheet.Add())
             {
-                // Refused pre-core: nothing may have been written.
                 Assert.NotNull(sheet.ValidationError);
                 Assert.DoesNotContain(
                     key + ":",
                     session.ReadNoteParts("note.md").FmSource,
                     StringComparison.Ordinal);
+                Assert.True(
+                    coreKind is null || coreKind != kind,
+                    $"FALSE REFUSAL: core stores ({key}, {kind}, '{seed}') as "
+                        + $"{coreKind} — the sheet refused it anyway with "
+                        + $"'{sheet.ValidationError}'");
                 return;
             }
             WaitForUi(() => workspace.AddPropertySheet is null);
@@ -348,6 +361,44 @@ public sealed class AddPropertyTests
                 announced,
                 item => SlateUniffiMethods.A11yRender(item).Text
                     == "Property second updated.");
+        });
+    }
+
+    [Fact]
+    public void AddRefusesAKeyThatWouldReplaceAnExistingNestedContainer()
+    {
+        RunSta(() =>
+        {
+            using FixtureVault fixture = FixtureVault.Create(0, "add-container-collision");
+            string notePath = Path.Combine(fixture.Root, "note.md");
+            // `person` is a nested mapping: properties flatten it to
+            // person.name / person.role, so a flat `person` add used
+            // to look non-colliding and REPLACED the whole container
+            // (round 6, contract 6).
+            File.WriteAllText(
+                notePath,
+                "---\nperson:\n  name: Alice\n  role: author\ntitle: Hi\n---\nBody.\n");
+            string before = File.ReadAllText(notePath);
+            using VaultSession session = OpenScanned(fixture.Root);
+            var announced = new List<A11yEvent>();
+            using var workspace = new WorkspaceViewModel(
+                session, fixture.Root, () => [], announced.Add,
+                startInteractionBackgroundWork: false);
+            workspace.OpenPath("note.md");
+            NotePropertiesViewModel properties =
+                workspace.EnsureActiveTabProperties(synchronousForTests: true)!;
+            Assert.DoesNotContain(properties.CurrentKeys, key => key == "person");
+            Assert.Contains("person", properties.TopLevelKeys);
+
+            workspace.OpenAddPropertySheet(synchronousForTests: true);
+            AddPropertyViewModel sheet = workspace.AddPropertySheet!;
+            sheet.Key = "person";
+            sheet.Value = "Bob";
+            Assert.False(sheet.Add());
+            Assert.Equal(
+                "A property named `person` already exists on this note.",
+                sheet.ValidationError);
+            Assert.Equal(before, File.ReadAllText(notePath));
         });
     }
 

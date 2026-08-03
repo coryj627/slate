@@ -292,3 +292,32 @@ mirror itself was the defect:
 contract 10 is now enforced by core's own round trip instead of a
 host copy, so the defect class behind four rounds of findings cannot
 recur without failing core's test and the 31-case matrix at once.
+
+## Round-6 resolutions (2026-08-03)
+
+Round 6 falsified contracts 2, 6, and 10 (1, 3, 4, 5, 7, 8, 9 held).
+Two were genuine data-loss paths that earlier rounds never reached:
+
+- **Contract 6 — add could erase a nested container.** The duplicate
+  gate read FLATTENED property rows, where `person: {name: …}`
+  appears only as `person.name`; a flat `person` add therefore looked
+  collision-free and the write replaced the whole mapping. Core gains
+  a second pure export, `frontmatter_top_level_keys`, and the add
+  intent captures THAT — the authoritative top-level YAML keys,
+  including containers and shapes properties can't type. Pinned by a
+  core test (properties genuinely omit the container) and a
+  real-vault regression asserting byte-identical disk on refusal.
+- **Contract 2 — reload discarded the wrong drafts.** Round 5's
+  discard was mode-scoped, so an explicit Reload dropped EVERY dirty
+  row on the announcing header (and never the add sheet's draft it
+  was actually about). Discard policy is now separated from
+  announcement ownership: the refresh request carries the specific
+  key to drop, add conflicts drop the sheet instead, and peer headers
+  keep their drafts. "Discard this property edit" is singular.
+- **Contract 10 — the last mirror was a FALSE refusal.** Host
+  calendar parsing rejected structurally-valid dates core stores
+  happily (`2026-99-99`). Date/datetime candidates are now built
+  unconditionally and core decides; host parsing only selects nicer
+  WORDING once core reports a mismatch. The matrix now fails on false
+  refusals too — a refusal is legitimate only when core would not
+  have stored the chosen kind.

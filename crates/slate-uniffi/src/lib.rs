@@ -232,6 +232,18 @@ pub fn parse_frontmatter_properties(fm_source: String) -> Vec<Property> {
         .collect()
 }
 
+/// The TOP-LEVEL keys of a frontmatter block, in document order.
+///
+/// Add-property surfaces must collision-check against THIS, not against
+/// parsed properties: property records flatten nested mappings
+/// (`person: {name: …}` → `person.name`) and omit untypeable shapes, so a
+/// flat `person` add would look non-colliding and then silently replace the
+/// whole container on write (W4-4 adversarial round 6).
+#[uniffi::export]
+pub fn frontmatter_top_level_keys(fm_source: String) -> Vec<String> {
+    core::frontmatter_top_level_keys(&core::compose_note(&fm_source, ""))
+}
+
 /// The kind a value would ACTUALLY have once stored under `key` and read
 /// back — core's own emit-then-classify round trip, run in memory against a
 /// scratch document. Pure, allocation-only, no vault access.
@@ -9166,6 +9178,23 @@ mod tests {
             .expect("exclusive folder create");
 
         assert!(tmp.path().join("imported").is_dir());
+    }
+
+    #[test]
+    fn frontmatter_top_level_keys_sees_containers_properties_flatten_away() {
+        // The flattened property view reports person.name/person.role and
+        // never the container, which is exactly what made a flat `person`
+        // add look safe (W4-4 round 6).
+        let source = "person:\n  name: Alice\n  role: author\ntitle: Hi\n".to_string();
+        assert_eq!(
+            frontmatter_top_level_keys(source.clone()),
+            vec!["person".to_string(), "title".to_string()]
+        );
+        let flattened: Vec<String> = parse_frontmatter_properties(source)
+            .into_iter()
+            .map(|property| property.key)
+            .collect();
+        assert!(!flattened.contains(&"person".to_string()));
     }
 
     #[test]

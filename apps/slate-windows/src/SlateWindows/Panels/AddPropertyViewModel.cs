@@ -9,7 +9,13 @@ namespace SlateWindows.Panels;
 /// (contract 1, adversarial round 1): the owner path, the header's
 /// publish hash, and the key set of THAT read. Captured when the
 /// sheet opens; the commit never re-resolves the active tab or
-/// re-reads a hash.</summary>
+/// re-reads a hash.
+///
+/// <paramref name="Keys"/> holds the AUTHORITATIVE top-level YAML
+/// keys (round 6), not the flattened property rows: a nested
+/// container like `person: {name: …}` appears in properties only as
+/// `person.name`, so collision-checking against rows would let a
+/// flat `person` add silently replace the whole mapping.</summary>
 internal sealed record PropertyAddIntent(
     string Path, string ContentHash, IReadOnlyList<string> Keys);
 
@@ -176,7 +182,14 @@ internal sealed class AddPropertyViewModel : BindableBase
         if (!string.Equals(storedKind, kind, StringComparison.Ordinal))
         {
             built = null;
-            return PropertyPhrase.StoredKindMismatchError(storedKind);
+            // Core has spoken; the host only picks better WORDING for
+            // the shape-typo cases (round 6).
+            return kind switch
+            {
+                "date" => PropertyPhrase.DateShapeError,
+                "datetime" => PropertyPhrase.DatetimeShapeError,
+                _ => PropertyPhrase.StoredKindMismatchError(storedKind),
+            };
         }
         return null;
     }
@@ -242,25 +255,12 @@ internal sealed class AddPropertyViewModel : BindableBase
                 }
                 return PropertyPhrase.BooleanShapeError;
             case "date":
-                if (!DateOnly.TryParseExact(
-                    value, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture,
-                    System.Globalization.DateTimeStyles.None, out _))
-                {
-                    return PropertyPhrase.DateShapeError;
-                }
+                // No calendar check here (round 6): core classifies
+                // date STRUCTURALLY, so refusing 2026-99-99 would be
+                // a FALSE refusal of something core stores as a date.
                 built = new PropertyValue.Date(value);
                 return null;
             case "datetime":
-                if (!DateTimeOffset.TryParse(
-                        value, System.Globalization.CultureInfo.InvariantCulture,
-                        System.Globalization.DateTimeStyles.None, out _)
-                    && !DateTime.TryParseExact(
-                        value, "yyyy-MM-ddTHH:mm:ss",
-                        System.Globalization.CultureInfo.InvariantCulture,
-                        System.Globalization.DateTimeStyles.None, out _))
-                {
-                    return PropertyPhrase.DatetimeShapeError;
-                }
                 built = new PropertyValue.Datetime(value);
                 return null;
             case "wikilink":

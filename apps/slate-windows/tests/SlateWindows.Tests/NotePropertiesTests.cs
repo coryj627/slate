@@ -820,6 +820,57 @@ public sealed class NotePropertiesTests
     }
 
     [Fact]
+    public void ReloadDiscardsOnlyTheConflictedRowAndKeepsPeerDrafts()
+    {
+        using FixtureVault fixture = MakeVault("props-scoped-discard");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new List<A11yEvent>();
+        using var workspace = new WorkspaceViewModel(
+            session, fixture.Root, () => [], announced.Add,
+            startInteractionBackgroundWork: false);
+        (Action KeepMine, Action Reload)? resolution = null;
+        workspace.PropertyConflictDialog = (_, _, keepMine, reload) =>
+            resolution = (keepMine, reload);
+        NotePropertiesViewModel properties = AttachProperties(workspace, "props.md");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        workspace.DuplicateTabCommand.Execute(null);
+        NotePropertiesViewModel peer =
+            workspace.EnsureActiveTabProperties(synchronousForTests: true)!;
+
+        // Two dirty rows on the first header plus one on the peer.
+        _ = session.SaveText(
+            "props.md",
+            PropsFrontmatter.Replace("title: Hello", "title: External") + PropsBody,
+            tab.SavedContentHash);
+        properties.RefreshProperties();
+        peer.RefreshProperties();
+        PropertyRowViewModel conflicted = properties.Rows.Single(r => r.Key == "title");
+        PropertyRowViewModel bystander = properties.Rows.Single(r => r.Key == "count");
+        PropertyRowViewModel peerRow = peer.Rows.Single(r => r.Key == "rating");
+        conflicted.EditorText = "Mine";
+        bystander.EditorText = "99";
+        peerRow.EditorText = "2.5";
+
+        conflicted.CommitCommand.Execute(null);
+        Assert.NotNull(resolution);
+        resolution!.Value.Reload();
+
+        // Round 6, contract 2: "discard THIS property edit" is
+        // singular — the conflicted row drops its draft, the
+        // bystander row and the peer header's draft survive.
+        Assert.Equal(
+            "External", properties.Rows.Single(r => r.Key == "title").EditorText);
+        Assert.False(properties.Rows.Single(r => r.Key == "title").IsDirty);
+        Assert.Equal("99", properties.Rows.Single(r => r.Key == "count").EditorText);
+        Assert.True(properties.Rows.Single(r => r.Key == "count").IsDirty);
+        Assert.Equal("2.5", peer.Rows.Single(r => r.Key == "rating").EditorText);
+        Assert.True(peer.Rows.Single(r => r.Key == "rating").IsDirty);
+        Assert.Equal(
+            1, announced.Count(item => item is A11yEvent.PropertiesReloaded));
+    }
+
+    [Fact]
     public void StoredValueDatePickerTruthTableIsPinned()
     {
         Assert.True(PropertyRowViewModel.StoredValueTakesDatePicker(

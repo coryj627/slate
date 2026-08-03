@@ -119,7 +119,8 @@ pub use embeds::{
 };
 pub use frontmatter::{
     NoteParts, Property, PropertyParseWarning, PropertyValue, compose_note, extract_frontmatter,
-    frontmatter_range, set_property_in_source, split_note, validate_frontmatter_source,
+    frontmatter_range, frontmatter_top_level_keys, set_property_in_source, split_note,
+    validate_frontmatter_source,
 };
 pub use history_prefs::HistoryPrefs;
 pub use link_resolver::{

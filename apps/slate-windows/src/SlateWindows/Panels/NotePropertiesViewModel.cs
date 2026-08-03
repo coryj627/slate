@@ -128,6 +128,12 @@ internal sealed class NotePropertiesViewModel : PanelWorkScheduler
     /// duplicate gate reads this, not a separate query.</summary>
     public IReadOnlyList<string> CurrentKeys => Rows.Select(row => row.Key).ToList();
 
+    /// <summary>The AUTHORITATIVE top-level YAML keys of the last
+    /// publish (round 6): properties flatten nested containers away,
+    /// so only this can tell the add sheet that a flat `person`
+    /// would replace an existing `person:` mapping.</summary>
+    public IReadOnlyList<string> TopLevelKeys { get; private set; } = [];
+
     /// <summary>(Re)load for a path. A new PATH bumps the generation
     /// (parked work for the old path can never publish) and clears
     /// the old note's rows and hash SYNCHRONOUSLY — a stale row must
@@ -158,7 +164,8 @@ internal sealed class NotePropertiesViewModel : PanelWorkScheduler
     /// spoken at this refresh's completion, never eagerly, and a
     /// stale discarded publish cannot hand its announcement to a
     /// later request.</summary>
-    public void RefreshProperties(ReloadAnnounce announce = ReloadAnnounce.None)
+    public void RefreshProperties(
+        ReloadAnnounce announce = ReloadAnnounce.None, string? discardDraftKey = null)
     {
         string path = _path;
         if (path.Length == 0)
@@ -174,9 +181,11 @@ internal sealed class NotePropertiesViewModel : PanelWorkScheduler
             {
                 var parts = _session.ReadNoteParts(path);
                 var properties = SlateUniffiMethods.ParseFrontmatterProperties(parts.FmSource);
+                var topLevel =
+                    SlateUniffiMethods.FrontmatterTopLevelKeys(parts.FmSource);
                 Post(() => PublishProperties(
                     generation, requestId, path, properties, parts.ContentHash, null,
-                    announce));
+                    announce, discardDraftKey, topLevel));
             }
             catch (Exception exception) when (
                 exception is not OutOfMemoryException
@@ -184,7 +193,8 @@ internal sealed class NotePropertiesViewModel : PanelWorkScheduler
                     and not AccessViolationException)
             {
                 Post(() => PublishProperties(
-                    generation, requestId, path, [], "", exception.Message, announce));
+                    generation, requestId, path, [], "", exception.Message, announce,
+                    discardDraftKey, []));
             }
         });
     }
@@ -199,7 +209,9 @@ internal sealed class NotePropertiesViewModel : PanelWorkScheduler
         Property[] properties,
         string contentHash,
         string? loadError,
-        ReloadAnnounce announce = ReloadAnnounce.None)
+        ReloadAnnounce announce = ReloadAnnounce.None,
+        string? discardDraftKey = null,
+        IReadOnlyList<string>? topLevelKeys = null)
     {
         if (IsShutDown
             || generation != Interlocked.Read(ref _generation)
@@ -214,24 +226,23 @@ internal sealed class NotePropertiesViewModel : PanelWorkScheduler
         // the FRESH baseline and hash; if the refreshed disk value now
         // equals the draft, the row is naturally clean.
         //
-        // The EXPLICIT "Reload from Disk" resolution is the one
-        // deliberate discard (round 5): its hint promises "Discard
-        // this property edit and reload properties from disk", so
-        // parking there would silently keep the edit the user asked
-        // to drop. That flow is exactly the SuccessAndFailure mode.
+        // The EXPLICIT "Reload from Disk" resolution discards ONE
+        // draft — the edit its dialog was about (rounds 5+6). It is
+        // scoped by KEY, so unrelated dirty rows (and peer headers,
+        // which never receive the key) keep their input: "discard
+        // this property edit" is singular.
         var parkedDrafts = new Dictionary<string, PropertyDraft>(StringComparer.Ordinal);
-        if (announce != ReloadAnnounce.SuccessAndFailure)
+        foreach (var existing in Rows)
         {
-            foreach (var existing in Rows)
+            if (existing.IsDirty
+                && !string.Equals(existing.Key, discardDraftKey, StringComparison.Ordinal))
             {
-                if (existing.IsDirty)
-                {
-                    parkedDrafts[existing.Key] = existing.Draft;
-                }
+                parkedDrafts[existing.Key] = existing.Draft;
             }
         }
         Rows.Clear();
         ContentHash = loadError is null ? contentHash : "";
+        TopLevelKeys = loadError is null ? (topLevelKeys ?? []) : [];
         if (loadError is null)
         {
             foreach (var property in properties)
