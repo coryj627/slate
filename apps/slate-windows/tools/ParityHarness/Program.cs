@@ -81,8 +81,11 @@ try
     WriteArtifact(Path.Combine(outDir, "links.json"), SurfaceSerializer.LinksArtifact(session, files));
     WriteArtifact(Path.Combine(outDir, "editor_scale.json"), SurfaceSerializer.EditorScaleArtifact());
     WriteArtifact(Path.Combine(outDir, "tasks.json"), SurfaceSerializer.TasksArtifact(session));
+    WriteArtifact(
+        Path.Combine(outDir, "properties.json"),
+        SurfaceSerializer.PropertiesArtifact(session));
 
-    Console.WriteLine($"parity-harness: {files.Count + 4} artifacts -> {outDir}");
+    Console.WriteLine($"parity-harness: {files.Count + 5} artifacts -> {outDir}");
     return 0;
 }
 finally

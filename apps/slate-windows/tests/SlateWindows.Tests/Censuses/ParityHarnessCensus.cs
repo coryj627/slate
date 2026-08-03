@@ -165,6 +165,9 @@ public class ParityHarnessCensus
             File.WriteAllBytes(
                 Path.Combine(outDir, "tasks.json"),
                 System.Text.Encoding.UTF8.GetBytes(SurfaceSerializer.TasksArtifact(session)));
+            File.WriteAllBytes(
+                Path.Combine(outDir, "properties.json"),
+                System.Text.Encoding.UTF8.GetBytes(SurfaceSerializer.PropertiesArtifact(session)));
         }
         finally
         {

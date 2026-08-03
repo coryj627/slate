@@ -276,6 +276,68 @@ public static class SurfaceSerializer
             }
             AppendTaskItem(j, t);
         }
+        j.Raw("]");
+
+        // W4-4: the canonical property-row artifact — byte-checks
+        // the exact Property surface the in-note header consumes:
+        // key, the inferred kind, and the stored value's JSON
+        // encoding EXACTLY as the FFI hands it (value_json is never
+        // re-parsed or re-serialized here — float formatting and the
+        // tagged list-element objects must round-trip untouched).
+        // Source is GetFileMetadata so the SQLite round-trip is
+        // pinned, not just the parser.
+        j.Raw(",\"properties\":[");
+        var properties = session.GetFileMetadata(relPath)?.Properties ?? [];
+        for (int i = 0; i < properties.Length; i++)
+        {
+            var p = properties[i];
+            if (i > 0)
+            {
+                j.Raw(",");
+            }
+            AppendProperty(j, p);
+        }
+        j.Raw("]}");
+        return j + "\n";
+    }
+
+    private static void AppendProperty(CanonicalJson j, Property p)
+    {
+        j.Raw("{\"key\":").Str(p.Key)
+         .Raw(",\"kind\":").Str(p.Kind)
+         .Raw(",\"value_json\":").Str(p.ValueJson)
+         .Raw("}");
+    }
+
+    /// <summary>W4-4: the vault-wide property-key artifact — pins
+    /// list_property_keys' ordering contract (key-sorted, unpaged)
+    /// plus the per-key file counts and kind sets the add-property
+    /// and bulk-rename surfaces consume.</summary>
+    public static string PropertiesArtifact(VaultSession session)
+    {
+        var j = new CanonicalJson();
+        var keys = session.ListPropertyKeys();
+        j.Raw("{\"keys\":[");
+        for (int i = 0; i < keys.Length; i++)
+        {
+            var k = keys[i];
+            if (i > 0)
+            {
+                j.Raw(",");
+            }
+            j.Raw("{\"key\":").Str(k.Key)
+             .Raw(",\"file_count\":").Num(k.FileCount)
+             .Raw(",\"kinds\":[");
+            for (int v = 0; v < k.ValueKinds.Length; v++)
+            {
+                if (v > 0)
+                {
+                    j.Raw(",");
+                }
+                j.Str(k.ValueKinds[v]);
+            }
+            j.Raw("]}");
+        }
         j.Raw("]}");
         return j + "\n";
     }
