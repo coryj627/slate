@@ -156,6 +156,11 @@ internal sealed class BulkRenameViewModel : PanelWorkScheduler
     /// <summary>Esc / sheet close: cancel in-flight core work.</summary>
     public void CancelInFlight() => _inFlightCancel?.Cancel();
 
+    /// <summary>Raised once at the end of every publish (rows and
+    /// footer are final) — the window layer rebinds the preview grid
+    /// on it instead of per-row collection churn.</summary>
+    internal event Action? RunPublished;
+
     private void Run(bool dryRun)
     {
         string oldKey = _oldKey.Trim();
@@ -208,6 +213,7 @@ internal sealed class BulkRenameViewModel : PanelWorkScheduler
             ErrorText = $"Error: {error}";
             Disarm();
             _announce(new A11yEvent.RenameFailed(error ?? "unknown failure"));
+            RunPublished?.Invoke();
             return;
         }
         Rows.Clear();
@@ -252,6 +258,7 @@ internal sealed class BulkRenameViewModel : PanelWorkScheduler
         }
         OnPropertyChanged(nameof(CanApply));
         OnPropertyChanged(nameof(CanPreview));
+        RunPublished?.Invoke();
     }
 
     /// <summary>Row status strings, rendered from the TYPED reason

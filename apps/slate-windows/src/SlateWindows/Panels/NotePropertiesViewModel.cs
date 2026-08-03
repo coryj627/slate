@@ -50,6 +50,12 @@ internal sealed class NotePropertiesViewModel : PanelWorkScheduler
 
     public string Path => _path;
 
+    /// <summary>The content hash of the read that produced the
+    /// current rows — the CAS token for ADD writes, which have no
+    /// row to pin one (contract 1, same discipline). Empty until the
+    /// first successful publish and after a failed one.</summary>
+    public string ContentHash { get; private set; } = "";
+
     public bool IsExpanded
     {
         get => _isExpanded;
@@ -155,6 +161,7 @@ internal sealed class NotePropertiesViewModel : PanelWorkScheduler
             return;
         }
         Rows.Clear();
+        ContentHash = loadError is null ? contentHash : "";
         if (loadError is null)
         {
             foreach (var property in properties)

@@ -99,6 +99,10 @@ internal sealed class AddPropertyViewModel : BindableBase
         return true;
     }
 
+    /// <summary>Async write failed: the sheet stays open, the draft
+    /// intact, with the verbatim failure copy inline (§2.4).</summary>
+    internal void MarkAddFailed() => ValidationError = PropertyPhrase.AddFailedDraftKept;
+
     /// <summary>The kind-appropriate empty/default value a fresh key
     /// starts with (mac sheet shape).</summary>
     internal static PropertyValue DefaultValueFor(string kind) => kind switch

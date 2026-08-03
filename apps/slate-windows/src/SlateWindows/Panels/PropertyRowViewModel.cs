@@ -19,7 +19,7 @@ namespace SlateWindows.Panels;
 /// delegates and the workspace owns the write seam (refusals,
 /// leases, CAS, announcements).
 /// </summary>
-internal sealed class PropertyRowViewModel : INotifyPropertyChanged
+internal sealed partial class PropertyRowViewModel : INotifyPropertyChanged
 {
     private PropertyDraft _draft;
     private PropertyDraft _committedBaseline;
@@ -40,7 +40,12 @@ internal sealed class PropertyRowViewModel : INotifyPropertyChanged
         RequestDeleteDelegate = requestDelete;
         _committedBaseline = PropertyValueCodec.Decode(property.Kind, property.ValueJson);
         _draft = PropertyDraft.Copy(_committedBaseline);
+        InitializeEditor();
     }
+
+    partial void InitializeEditor();
+
+    partial void OnDraftReplaced();
 
     public Property Property { get; }
 
@@ -66,6 +71,7 @@ internal sealed class PropertyRowViewModel : INotifyPropertyChanged
             _draft = value;
             OnPropertyChanged(nameof(Draft));
             OnPropertyChanged(nameof(IsDirty));
+            OnDraftReplaced();
         }
     }
 

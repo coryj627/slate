@@ -1363,9 +1363,18 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     /// called from every activation funnel (tab activation, pane focus,
     /// workspace mutations). Same-path calls are no-ops in the panels
     /// VM, so over-calling is safe and refetch-free.</summary>
-    internal void SyncPanels() =>
+    internal void SyncPanels()
+    {
         Panels.NoteChanged(
             ActiveGroup.ActiveTab is { IsMarkdown: true } tab ? tab.Path : null);
+        // W4-4: the properties header attaches at activation. App
+        // only (the Reading.Activate posture) — tests attach
+        // explicitly with synchronousForTests.
+        if (_startInteractionBackgroundWork)
+        {
+            EnsureActiveTabProperties();
+        }
+    }
 
     /// <summary>External links launch through the shell (the default
     /// browser / mail client); the panels VM allowlists schemes before

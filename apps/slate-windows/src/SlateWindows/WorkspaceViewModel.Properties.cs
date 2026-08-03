@@ -17,10 +17,157 @@ namespace SlateWindows;
 /// </summary>
 internal sealed partial class WorkspaceViewModel
 {
+    private AddPropertyViewModel? _addPropertySheet;
+    private BulkRenameViewModel? _bulkRenameSheet;
+    private System.Windows.Input.ICommand? _openAddPropertySheetCommand;
+    private System.Windows.Input.ICommand? _closeAddPropertySheetCommand;
+    private System.Windows.Input.ICommand? _openBulkRenameSheetCommand;
+    private System.Windows.Input.ICommand? _closeBulkRenameSheetCommand;
+    private System.Windows.Input.ICommand? _pickWikilinkTargetCommand;
+
     /// <summary>The conflict dialog request: (filename, key,
     /// keep-mine, reload-from-disk). The window layer presents it;
     /// tests intercept it.</summary>
     internal Action<string, string, Action, Action>? PropertyConflictDialog { get; set; }
+
+    /// <summary>Window-supplied vault-rooted .md picker for wikilink
+    /// rows; returns the vault-relative target (minus .md) or null
+    /// on cancel.</summary>
+    internal Func<string?>? WikilinkPicker { get; set; }
+
+    /// <summary>Non-null while the add-property sheet is open.</summary>
+    public AddPropertyViewModel? AddPropertySheet
+    {
+        get => _addPropertySheet;
+        private set => SetField(ref _addPropertySheet, value);
+    }
+
+    /// <summary>Non-null while the bulk-rename sheet is open.</summary>
+    public BulkRenameViewModel? BulkRenameSheet
+    {
+        get => _bulkRenameSheet;
+        private set => SetField(ref _bulkRenameSheet, value);
+    }
+
+    public System.Windows.Input.ICommand OpenAddPropertySheetCommand =>
+        _openAddPropertySheetCommand ??= new RelayCommand(
+            _ => OpenAddPropertySheet(), _ => true);
+
+    public System.Windows.Input.ICommand CloseAddPropertySheetCommand =>
+        _closeAddPropertySheetCommand ??= new RelayCommand(
+            _ => AddPropertySheet = null, _ => true);
+
+    public System.Windows.Input.ICommand OpenBulkRenameSheetCommand =>
+        _openBulkRenameSheetCommand ??= new RelayCommand(
+            _ => OpenBulkRenameSheet(), _ => true);
+
+    public System.Windows.Input.ICommand CloseBulkRenameSheetCommand =>
+        _closeBulkRenameSheetCommand ??= new RelayCommand(
+            _ => CloseBulkRenameSheet(), _ => true);
+
+    /// <summary>The wikilink "Pick…" button: dialog result lands in
+    /// the row DRAFT (contract 2 — no write until commit).</summary>
+    public System.Windows.Input.ICommand PickWikilinkTargetCommand =>
+        _pickWikilinkTargetCommand ??= new RelayCommand(
+            parameter =>
+            {
+                if (parameter is PropertyRowViewModel row
+                    && WikilinkPicker?.Invoke() is { } target)
+                {
+                    row.EditorText = target;
+                }
+            },
+            _ => true);
+
+    internal void OpenAddPropertySheet(bool synchronousForTests = false)
+    {
+        var properties = EnsureActiveTabProperties(synchronousForTests);
+        var sheet = new AddPropertyViewModel(
+            () => properties is { LoadError: null } header
+                && ActiveGroup.ActiveTab is { IsMarkdown: true }
+                ? header.CurrentKeys
+                : null,
+            (key, value) => CommitAddProperty(key, value),
+            _announce);
+        AddPropertySheet = sheet;
+        sheet.SheetShown();
+    }
+
+    internal void OpenBulkRenameSheet(bool synchronousForTests = false)
+    {
+        var sheet = CreateBulkRename(synchronousForTests);
+        BulkRenameSheet = sheet;
+        sheet.SheetShown();
+    }
+
+    internal void CloseBulkRenameSheet()
+    {
+        BulkRenameSheet?.CancelInFlight();
+        BulkRenameSheet?.Shutdown();
+        BulkRenameSheet = null;
+    }
+
+    /// <summary>The ADD write: same seam as row commits, with the
+    /// header's read-time hash as the CAS token (contract 1 — adds
+    /// have no row to pin one). Success closes the sheet; failure
+    /// keeps it open with the draft intact (§2.4).</summary>
+    internal bool CommitAddProperty(string key, PropertyValue value)
+    {
+        if (ActiveGroup.ActiveTab is not WorkspaceTabViewModel { IsMarkdown: true } tab
+            || tab.Properties is not { LoadError: null } properties
+            || properties.ContentHash.Length == 0)
+        {
+            return false;
+        }
+        if (tab.IsDirty)
+        {
+            _announce(new A11yEvent.HostComposed(
+                // W0.5-3 residue: dirty-tab refusal (recorded
+                // divergence), same copy as the row seam.
+                "Save the note before editing properties. The editor has unsaved "
+                    + $"changes in {System.IO.Path.GetFileName(tab.Path)}.",
+                A11yPriority.High));
+            return false;
+        }
+        string hash = properties.ContentHash;
+        if (tab.IsExternallyStale
+            || !string.Equals(tab.SavedContentHash, hash, StringComparison.Ordinal))
+        {
+            _announce(new A11yEvent.PropertyEditConflict(
+                System.IO.Path.GetFileName(tab.Path)));
+            RefreshPropertiesFor(tab.Path);
+            return false;
+        }
+        string path = tab.Path;
+        tab.WriteProperty(
+            hash,
+            expectedHash => _session.SetProperty(path, key, value, expectedHash),
+            (report, failure, postFailureDiskHash) =>
+            {
+                if (report is not null)
+                {
+                    AddPropertySheet = null;
+                    ReconcileTabsAfterDirectTaskWrite(path, report.NewContentHash);
+                    RefreshPropertiesFor(path);
+                    Panels.NoteSaved(path);
+                    _announce(new A11yEvent.PropertyChanged(key, false));
+                    return;
+                }
+                AddPropertySheet?.MarkAddFailed();
+                if (failure is VaultException.WriteConflict)
+                {
+                    _announce(new A11yEvent.PropertyEditConflict(
+                        System.IO.Path.GetFileName(path)));
+                }
+                else
+                {
+                    _announce(new A11yEvent.PropertyEditFailed(
+                        failure?.Message ?? "unknown failure"));
+                }
+                RefreshPropertiesFor(path);
+            });
+        return true;
+    }
 
     /// <summary>Attach (or return) the active tab's header VM with
     /// the workspace seam delegates wired. Called at tab activation

@@ -17,10 +17,17 @@ namespace SlateWindows;
 /// </summary>
 internal sealed partial class WorkspaceTabViewModel
 {
+    private NotePropertiesViewModel? _properties;
+
     /// <summary>The per-tab properties header. Created lazily by the
     /// workspace when the tab first shows a markdown note; null for
-    /// non-markdown tabs.</summary>
-    internal NotePropertiesViewModel? Properties { get; private set; }
+    /// non-markdown tabs. Notifies so the header region can appear
+    /// after the attach.</summary>
+    internal NotePropertiesViewModel? Properties
+    {
+        get => _properties;
+        private set => SetField(ref _properties, value);
+    }
 
     /// <summary>Test seam: thrown after the core write lands, before
     /// the completion publishes (the W4-3 fault pattern).</summary>
@@ -33,17 +40,17 @@ internal sealed partial class WorkspaceTabViewModel
         Action? persistExpansion = null,
         bool synchronousForTests = false)
     {
-        if (Properties is null)
+        if (_properties is null)
         {
-            Properties = new NotePropertiesViewModel(
+            var created = new NotePropertiesViewModel(
                 _session, commit, revertAnnounce, requestDelete, synchronousForTests);
             if (PropsCollapsed == true)
             {
-                Properties.IsExpanded = false;
+                created.IsExpanded = false;
             }
             if (persistExpansion is not null)
             {
-                Properties.PropertyChanged += (_, args) =>
+                created.PropertyChanged += (_, args) =>
                 {
                     if (args.PropertyName == nameof(NotePropertiesViewModel.IsExpanded))
                     {
@@ -51,8 +58,9 @@ internal sealed partial class WorkspaceTabViewModel
                     }
                 };
             }
+            Properties = created;
         }
-        return Properties;
+        return _properties!;
     }
 
     internal void ShutdownProperties() => Properties?.Shutdown();
