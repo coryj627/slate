@@ -1234,7 +1234,7 @@
                  PreviewKeyDown — no window-global default button).
                  ========================================================== -->
             <Border Background="Transparent"
-                    Visibility="{Binding Workspace.AddPropertySheet, Converter={StaticResource NullToVisibilityConverter}}" />
+                    Visibility="{Binding Workspace.AddPropertySheet, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
             <local:AutomationLandmarkBorder x:Name="AddPropertyOverlay"
                     Width="460"
                     Padding="16"
@@ -1243,7 +1243,7 @@
                     Background="{DynamicResource Slate.SurfaceBrush}"
                     BorderBrush="{DynamicResource Slate.BorderBrush}"
                     BorderThickness="1"
-                    Visibility="{Binding DataContext.Workspace.AddPropertySheet, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource NullToVisibilityConverter}}"
+                    Visibility="{Binding DataContext.Workspace.AddPropertySheet, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}"
                     DataContext="{Binding Workspace.AddPropertySheet}"
                     FocusManager.IsFocusScope="True"
                     KeyboardNavigation.TabNavigation="Cycle"
@@ -1299,7 +1299,7 @@
                  in-flight core work through the CancelToken and closes.
                  ========================================================== -->
             <Border Background="Transparent"
-                    Visibility="{Binding Workspace.BulkRenameSheet, Converter={StaticResource NullToVisibilityConverter}}" />
+                    Visibility="{Binding Workspace.BulkRenameSheet, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
             <local:AutomationLandmarkBorder x:Name="BulkRenameOverlay"
                     Width="760"
                     MaxHeight="560"
@@ -1309,7 +1309,7 @@
                     Background="{DynamicResource Slate.SurfaceBrush}"
                     BorderBrush="{DynamicResource Slate.BorderBrush}"
                     BorderThickness="1"
-                    Visibility="{Binding DataContext.Workspace.BulkRenameSheet, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource NullToVisibilityConverter}}"
+                    Visibility="{Binding DataContext.Workspace.BulkRenameSheet, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}"
                     DataContext="{Binding Workspace.BulkRenameSheet}"
                     FocusManager.IsFocusScope="True"
                     KeyboardNavigation.TabNavigation="Cycle"
