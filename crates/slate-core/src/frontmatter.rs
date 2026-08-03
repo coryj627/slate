@@ -952,6 +952,7 @@ pub fn set_property_in_source(
         Some(range) => {
             let yaml_src = &source[range.clone()];
             let mut hash = parse_hash(yaml_src)?;
+            reject_projected_non_string_key(&hash, key)?;
             hash.replace(yaml_key, yaml_value);
             let new_yaml = emit_hash_body(&hash);
             Ok(replace_range(source, range, &new_yaml))
@@ -978,6 +979,7 @@ pub fn delete_property_in_source(
     };
     let yaml_src = &source[range.clone()];
     let mut hash = parse_hash(yaml_src)?;
+    reject_projected_non_string_key(&hash, key)?;
     let yaml_key = Yaml::String(key.to_string());
     if hash.remove(&yaml_key).is_none() {
         return Ok(FrontmatterEdit::Unchanged);
@@ -1163,6 +1165,28 @@ fn parse_hash(yaml_src: &str) -> Result<YamlHash, FrontmatterEditError> {
             yaml_type_name(&other)
         ))),
     }
+}
+
+/// Refuse to edit a key whose live YAML form is NOT a string.
+///
+/// The read path stringifies keys for the flat `Property` model
+/// (`1: x` publishes as key `"1"`), but every write path constructs
+/// `Yaml::String`. Editing such a row would therefore INSERT a second,
+/// quoted key rather than replace the original, and deleting it would
+/// miss entirely and report success — a host that announces "Property
+/// 1 deleted." while the key is still on disk (W4-4 adversarial round
+/// 8). Fail closed until typed key identity exists end to end.
+fn reject_projected_non_string_key(hash: &YamlHash, key: &str) -> Result<(), FrontmatterEditError> {
+    for (existing, _) in hash.iter() {
+        if !matches!(existing, Yaml::String(_)) && yaml_key_to_string(existing) == key {
+            return Err(FrontmatterEditError::MalformedFrontmatter(format!(
+                "frontmatter key `{key}` is a non-string YAML key; editing it would \
+                 duplicate rather than replace it. Quote the key in the note before \
+                 editing this property"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Walk the parser event stream looking for anchor IDs or aliases.
@@ -1897,6 +1921,40 @@ mod tests {
                 "round-trip failed for key {k}"
             );
         }
+    }
+
+    #[test]
+    fn editing_a_non_string_key_refuses_instead_of_duplicating_or_false_deleting() {
+        // The read path publishes `1: old` as key "1"; the write path
+        // builds Yaml::String("1"). Without the guard, set INSERTS a
+        // second quoted key and delete reports success while the
+        // numeric key survives (W4-4 adversarial round 8).
+        let src = "---\n1: old\ntitle: Hi\n---\nbody\n";
+        let props = props(src);
+        assert_eq!(
+            find(&props, "1"),
+            Some(PropertyValue::Text("old".to_string()))
+        );
+
+        let set_err =
+            set_property_in_source(src, "1", &PropertyValue::Text("new".to_string())).unwrap_err();
+        assert!(
+            matches!(set_err, FrontmatterEditError::MalformedFrontmatter(ref m)
+                if m.contains("non-string YAML key")),
+            "unexpected set error: {set_err:?}"
+        );
+
+        let delete_err = delete_property_in_source(src, "1").unwrap_err();
+        assert!(
+            matches!(delete_err, FrontmatterEditError::MalformedFrontmatter(ref m)
+                if m.contains("non-string YAML key")),
+            "unexpected delete error: {delete_err:?}"
+        );
+
+        // Ordinary string keys in the same block still edit fine.
+        let out =
+            set_property_in_source(src, "title", &PropertyValue::Text("Bye".to_string())).unwrap();
+        assert!(out.contains("title: Bye"));
     }
 
     #[test]

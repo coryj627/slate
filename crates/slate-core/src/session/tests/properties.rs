@@ -781,6 +781,36 @@ fn rename_property_skips_tags_boundary_crossing_with_list_value() {
     assert_eq!(skipped_paths, vec!["b.md"]);
     let raw = session.read_text("b.md").unwrap();
     assert_eq!(raw, "---\nauthors:\n  - alice\n  - bob\n---\nbody\n");
+
+    // Case 3 (W4-4 adversarial round 8): the boundary guard is
+    // CASE-INSENSITIVE, matching `classify_list`'s own tags predicate.
+    // An exact-lowercase guard let `authors` → `Tags` through and the
+    // authoritative reread silently flipped List to TagList.
+    let report = session
+        .rename_property_across_vault("authors", "Tags", false, &CancelToken::new())
+        .unwrap();
+    let skipped_paths: Vec<&str> = report
+        .skipped
+        .iter()
+        .filter(|s| s.reason == RenameSkipReason::TagsKeyTypeDrift)
+        .map(|s| s.path.as_str())
+        .collect();
+    assert_eq!(skipped_paths, vec!["b.md"]);
+    let raw = session.read_text("b.md").unwrap();
+    assert_eq!(raw, "---\nauthors:\n  - alice\n  - bob\n---\nbody\n");
+
+    // ...and a capitalization-only rename across the same boundary is
+    // NOT drift, so it must not be falsely skipped.
+    let report = session
+        .rename_property_across_vault("tags", "Tags", false, &CancelToken::new())
+        .unwrap();
+    assert!(
+        !report
+            .skipped
+            .iter()
+            .any(|s| s.reason == RenameSkipReason::TagsKeyTypeDrift),
+        "tags → Tags stays inside the tags boundary; nothing should drift"
+    );
 }
 
 struct RaceOnFirstReadProvider {

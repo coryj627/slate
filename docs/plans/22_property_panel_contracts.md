@@ -355,3 +355,33 @@ at the next site. Round 7 closes the classes:
   with core directly. **Mutation-verified:** reinstating the
   pre-round-6 calendar rejection makes the matrix fail with the exact
   false-refusal message; before this change it passed.
+
+## Round-8 resolutions (2026-08-03) — both defects in CORE
+
+Round 8 could not falsify contracts 1, 2, 3, 4, 6, 7, 8, 9 or core
+INV1–4. Its two findings were PRE-EXISTING core write-path bugs that
+W4-4 is simply the first surface to make user-reachable; both are
+fixed fail-closed:
+
+- **Non-string YAML keys (contracts 5/10).** The read path
+  stringifies keys for the flat property model (`1: old` publishes as
+  key `"1"`), but every write path builds `Yaml::String`. Editing such
+  a row INSERTED a second quoted key instead of replacing it, and
+  deleting it missed entirely while returning success — so the header
+  would announce "Property 1 deleted." with the key still on disk, an
+  accessibility lie. `set_property_in_source` and
+  `delete_property_in_source` now refuse any key whose live YAML form
+  is not a string, until typed key identity exists end to end.
+- **Bulk rename's tags guard was case-SENSITIVE.**
+  `crosses_tags_boundary` compared `== "tags"` while `classify_list`
+  uses `eq_ignore_ascii_case`, so `authors` → `Tags` slipped past the
+  drift refusal and the authoritative reread silently flipped List to
+  TagList. The guard now shares the classifier's case-insensitive
+  predicate; `tags` → `Tags` correctly stays inside the boundary and
+  is not falsely skipped. This is the same mirror-vs-authority defect
+  class as rounds 5–7, found in core rather than the host.
+
+Accepted (below bar, recorded): the add sheet's empty-tag-list
+`tags` special case is a message-quality shortcut rather than a
+classifier mirror; `PropertyRowViewModel.Owner` is nullable but set
+by every production construction site.
