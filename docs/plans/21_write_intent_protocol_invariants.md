@@ -80,6 +80,34 @@ byte-mutating step, fail-closed with the journal retained; finalization
 Reads: `note_tasks_bounded` and `tasks_for_file` read one WAL snapshot
 (33, audit) — rowids recycle, so id→rows must not tear.
 
+## Model-confirmation review resolutions (2026-08-02)
+
+The single-pass model review surfaced eight classes; five became code fixes
+(deletes/trash plant held markers; folder moves rewrite only their FROZEN
+pre-rename snapshot; `.` path components are rejected — one canonical string
+key per file; clock-anomaly markers (`now < created_ms`) are sweep-eligible;
+`ensure_aged_healing_marker` counts only non-superseded or held rows), one
+became a durability rule (below), and two are scope clarifications:
+
+- **Durability rule.** Commits that must be durable BEFORE a filesystem
+  mutation — save registrations, fence re-registrations, marker plants, the
+  inflight journal INSERT — run under `PRAGMA synchronous = FULL`
+  (`commit_durably`); everything else keeps WAL NORMAL. Inflight progress
+  UPDATEs stay NORMAL deliberately: a lost counter only causes an idempotent
+  re-reversal. Terminal aging and journal deletion stay NORMAL: losing them
+  reverts markers to HELD/aged states whose convergence paths already cover
+  re-entry.
+- **Repair converges to SCANNER semantics.** `reindex_path_locked` indexes
+  exactly as the scanner does: oversized files index as metadata-only (their
+  tasks intentionally do not serve), and non-UTF-8 bytes decode lossily. A
+  successful repair is BY DEFINITION convergence to what a scan would produce;
+  the `FileTooLarge`/`InvalidUtf8` containment arms are defensive dead code
+  for these normal cases and containment is effectively the `Io` class.
+- **INV1 scope.** INV1 binds Slate-coordinated actors only. External editors
+  mutate without markers by nature; their divergence is the watcher/scanner's
+  domain, including the known coarse-mtime/same-size stat-tuple evasion — see
+  accepted risk 5.
+
 ## Accepted-risk register (documented, not defects)
 
 1. `create_exclusive_binding` (new-file publish) can crash post-write with no
@@ -96,13 +124,35 @@ Reads: `note_tasks_bounded` and `tasks_for_file` read one WAL snapshot
 4. A crashed recovery whose reversals ran but whose finalization deferred
    re-enters idempotently: physical/index truth detection tolerates the
    already-reversed state, and rewrite restoration is hash-guarded CAS.
+5. External-edit staleness: an external same-size, coarse-mtime rewrite can
+   evade the scanner's stat fast path with no marker. Watcher events cover the
+   ordinary case; the pathological tuple-collision case is a filesystem
+   limitation accepted vault-wide (see round-13's stat-poison for the repair
+   path, which never fast-paths).
+6. Quarantine DB failures are reported as the original file error (the
+   database root cause is logged context, not the surfaced error); fail-closed
+   behavior is what matters and is preserved.
+7. Host containment's epoch-equality fence can theoretically ABA across a
+   move-out/move-in with equal zero epochs; it requires several independent
+   events and the planted healing marker converges the transient containment.
+8. Fresh and actively-HELD markers do not gate task reads: queries may serve
+   the committed pre-operation snapshot until the operation commits or the
+   marker becomes sweep-eligible. This transient, bounded, marked staleness is
+   intentional — the alternative is blocking reads on every in-flight write.
+9. Batch-trash marker release is best-effort after proven outcomes; an
+   uncleared marker costs one orphan-sweep read, never correctness.
 
 ## Rules for future changes
 
 - New fallible steps between a save's registration and `provider.write_file`
   must clear the token on their error path (round 27's invariant comment).
 - New `files.path` mutation sites must plant both-sides held markers first and
-  ensure-and-age them in their index commit.
+  ensure-and-age them in their index commit. New DELETION sites plant held
+  markers before the filesystem delete and clear them token-scoped with the
+  row deletion.
+- Folder-scale index rewrites operate on the FROZEN pre-mutation snapshot the
+  markers were planted for — never a fresh prefix enumeration.
+- Pre-filesystem-mutation durable commits go through `commit_durably`.
 - New task-read entry points must sweep first, bind the returned orphan guard
   across the read, and read from one snapshot.
 - Epoch stamps may only be written by code that read the file's bytes inside

@@ -1637,6 +1637,280 @@ fn held_markers_are_never_epoch_superseded() {
 }
 
 #[test]
+fn self_referencing_path_components_are_rejected() {
+    // Model-confirmation review: `a/./note.md` passed validation but
+    // keyed the index, markers, and epochs by RAW string — two index
+    // identities for one physical file, with saves through the alias
+    // clearing only the alias's marker. One canonical key per file.
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/canon.md", b"- [ ] one\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    for alias in ["notes/./canon.md", "notes//canon.md", "notes\\canon.md"] {
+        let err = session.save_text(alias, "- [x] one\n", None).unwrap_err();
+        assert!(
+            matches!(err, VaultError::InvalidPath { .. }),
+            "alias {alias:?} must be rejected, got: {err}"
+        );
+    }
+}
+
+#[test]
+fn clock_anomaly_markers_are_sweep_eligible() {
+    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    // Model-confirmation review: a marker stamped before a backward
+    // clock correction reads as NEGATIVE age — treating it as fresh
+    // would defer its repair until wall time catches up, hours of
+    // stale serving after a large correction. `now < created_ms` is
+    // an anomaly and sweeps immediately; a LIVE save is safe because
+    // its transaction-boundary fence re-registers a swept row.
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/clocked.md", b"- [ ] timely\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    {
+        // A marker from "the future" — stamped pre-correction.
+        let conn = session.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO text_write_intents(path, created_ms, token, registered_epoch)
+             VALUES (?1, ?2, ?3, COALESCE((SELECT index_epoch FROM files WHERE path = ?1), 0))",
+            rusqlite::params!["notes/clocked.md", now_ms() + 3_600_000, 0xC10Ci64],
+        )
+        .unwrap();
+    }
+
+    // No zero-threshold override: eligibility must come from the
+    // anomaly rule itself.
+    let page = session
+        .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
+        .expect("the query succeeds");
+    assert!(
+        page.items.iter().any(|r| r.path == "notes/clocked.md"),
+        "the repaired path serves"
+    );
+    {
+        let conn = session.conn.lock().unwrap();
+        let markers: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM text_write_intents WHERE path = ?1",
+                rusqlite::params!["notes/clocked.md"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            markers, 0,
+            "the anomalous marker swept and resolved by a read"
+        );
+    }
+}
+
+#[test]
+fn containment_plants_over_superseded_markers() {
+    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    // Model-confirmation review: an OLD aged marker whose epoch is
+    // behind the file's current epoch satisfied the "aged marker
+    // exists" check, so containment planted nothing — and the next
+    // sweep deleted that old row as superseded, leaving the
+    // contained path task-empty with NO healing trigger. The check
+    // now counts only markers that will SURVIVE to fire.
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/stale-trigger.md", b"- [ ] revivable\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    {
+        // An aged marker stamped one epoch BEHIND current — a relic
+        // a later full commit superseded.
+        let conn = session.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO text_write_intents(path, created_ms, token, registered_epoch)
+             VALUES (?1, ?2, ?3,
+                     COALESCE((SELECT index_epoch FROM files WHERE path = ?1), 1) - 1)",
+            rusqlite::params!["notes/stale-trigger.md", now_ms() - 60_000, 0x51A1Ei64],
+        )
+        .unwrap();
+    }
+
+    // Transient file failure: containment must plant a CURRENT
+    // healing marker despite the superseded relic.
+    unsafe { std::env::set_var("SLATE_TEST_FAULT_REINDEX", "stale-trigger") };
+    assert_eq!(
+        session
+            .repair_or_contain_path("notes/stale-trigger.md")
+            .unwrap(),
+        TaskIndexRepairOutcome::Contained,
+    );
+    unsafe { std::env::remove_var("SLATE_TEST_FAULT_REINDEX") };
+    {
+        let conn = session.conn.lock().unwrap();
+        let live: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM text_write_intents i
+                 WHERE i.path = ?1
+                   AND i.registered_epoch >=
+                       COALESCE((SELECT index_epoch FROM files WHERE path = ?1), 0)",
+                rusqlite::params!["notes/stale-trigger.md"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            live >= 1,
+            "containment must leave a trigger that survives supersession sweeps"
+        );
+    }
+
+    // The condition clears with no filesystem event: the planted
+    // marker heals on the next query.
+    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "stale-trigger") };
+    let healed = session
+        .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
+        .expect("the healed query succeeds");
+    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    assert!(
+        healed
+            .items
+            .iter()
+            .any(|r| r.path == "notes/stale-trigger.md"),
+        "the contained path revives without a scan"
+    );
+}
+
+#[test]
+fn folder_moves_never_relocate_post_snapshot_entrants() {
+    // Model-confirmation review: the folder move's index rewrite
+    // re-enumerated the source prefix at commit time, so a file
+    // saved into a recreated source directory AFTER the filesystem
+    // rename — with its row at its true on-disk path and no move
+    // marker — was dynamically relocated to the destination. The
+    // rewrite now operates on the FROZEN pre-rename snapshot only.
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("f/a.md", b"- [ ] planned\n").unwrap();
+        p.write_file("f/late.md", b"- [ ] post-snapshot\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    {
+        // Directly exercise the rewrite with a frozen set that
+        // excludes late.md — standing in for the racing save that
+        // indexed it after the snapshot.
+        let mut conn = session.conn.lock().unwrap();
+        let tx = conn.transaction().unwrap();
+        rename_prefix_in_index(
+            &tx,
+            "f",
+            "g",
+            &[("f/a.md".to_string(), "g/a.md".to_string())],
+        )
+        .unwrap();
+        tx.commit().unwrap();
+    }
+    {
+        let conn = session.conn.lock().unwrap();
+        let (moved, late): (i64, i64) = (
+            conn.query_row(
+                "SELECT COUNT(*) FROM files WHERE path = 'g/a.md'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap(),
+            conn.query_row(
+                "SELECT COUNT(*) FROM files WHERE path = 'f/late.md'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap(),
+        );
+        assert_eq!(moved, 1, "frozen entries move");
+        assert_eq!(
+            late, 1,
+            "post-snapshot entrants stay at their true on-disk paths"
+        );
+    }
+}
+
+#[test]
+fn crashed_deletes_leave_markers_that_heal_ghosts() {
+    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    // Model-confirmation review: deletions mutated the filesystem
+    // before the index transaction with NO marker — a crash between
+    // left files/tasks rows serving a deleted file's ghosts until an
+    // unrelated scan. Deletes now plant held markers first; this
+    // stages the crash residue (file gone, rows present, marker
+    // held, lock released) and pins that the orphan sweep converges
+    // the ghost away.
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/doomed42.md", b"- [ ] ghost me\n")
+            .unwrap();
+        p.write_file("notes/bystander42.md", b"- [ ] serving\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    {
+        let conn = session.conn.lock().unwrap();
+        let _ = session
+            .plant_move_markers_locked(&conn, ["notes/doomed42.md"])
+            .unwrap();
+    }
+    session.provider.delete("notes/doomed42.md").unwrap();
+    // (Crash here: no index transaction ran; the structural lock is
+    // not held, so the held marker is an orphan.)
+
+    let page = session
+        .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
+        .expect("the query succeeds");
+    assert!(
+        page.items.iter().all(|r| r.path != "notes/doomed42.md"),
+        "the deleted file's ghost rows must not serve"
+    );
+    assert!(
+        page.items.iter().any(|r| r.path == "notes/bystander42.md"),
+        "unrelated tasks still serve"
+    );
+    {
+        let conn = session.conn.lock().unwrap();
+        let (rows, markers): (i64, i64) = (
+            conn.query_row(
+                "SELECT COUNT(*) FROM files WHERE path = 'notes/doomed42.md'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap(),
+            conn.query_row(
+                "SELECT COUNT(*) FROM text_write_intents WHERE path = 'notes/doomed42.md'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap(),
+        );
+        assert_eq!(rows, 0, "deletion convergence removed the ghost row");
+        assert_eq!(markers, 0, "the read resolved the delete marker");
+    }
+}
+
+#[test]
+fn completed_deletes_release_their_markers() {
+    // Model-confirmation review companion: the happy path leaves no
+    // residue — delete_file and delete_folder clear their own tokens
+    // atomically with the row deletions.
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("gone/one.md", b"- [ ] a\n").unwrap();
+        p.write_file("gone/two.md", b"- [ ] b\n").unwrap();
+        p.write_file("solo.md", b"- [ ] c\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    session.delete_file("solo.md").unwrap();
+    session.delete_folder("gone").unwrap();
+    {
+        let conn = session.conn.lock().unwrap();
+        let markers: i64 = conn
+            .query_row("SELECT COUNT(*) FROM text_write_intents", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(markers, 0, "completed deletes leave no marker residue");
+    }
+}
+
+#[test]
 fn held_orphan_sweeps_hold_the_structural_lock_through_repair() {
     let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
     // Adversarial round 41: the round-40 probe released the lock

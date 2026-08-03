@@ -249,8 +249,14 @@ fn create_folder_exclusive_applies_leaf_validation() {
 
     let error = session.create_folder_exclusive("bad\\name").unwrap_err();
 
+    // Since the model-confirmation review, the RAW-segment canonical
+    // key gate rejects backslashes before the leaf validator can —
+    // an earlier, stricter refusal of the same bad input.
     assert!(
-        matches!(error, VaultError::InvalidArgument { .. }),
+        matches!(
+            error,
+            VaultError::InvalidPath { .. } | VaultError::InvalidArgument { .. }
+        ),
         "{error:?}"
     );
     assert!(!dir.path().join("bad\\name").exists());
