@@ -40,6 +40,7 @@ internal sealed class CitationDetailsViewModel : BindableBase
         string? abstractText,
         bool isUnresolved,
         string unresolvedKey,
+        string entryKey,
         string automationName,
         object? returnFocusToken)
     {
@@ -47,9 +48,17 @@ internal sealed class CitationDetailsViewModel : BindableBase
         AbstractText = abstractText;
         IsUnresolved = isUnresolved;
         UnresolvedKey = unresolvedKey;
+        EntryKey = entryKey;
         AutomationName = automationName;
         ReturnFocusToken = returnFocusToken;
     }
+
+    /// <summary>The citation KEY this expansion is about — the
+    /// bibliography's row identity, so Jump to Bibliography has
+    /// something exact to land on. Resolved expansions carry the
+    /// matched entry's key; unresolved ones carry the key core
+    /// parsed. Never derived from display text.</summary>
+    public string EntryKey { get; }
 
     public IReadOnlyList<CitationField> Fields { get; }
 
@@ -116,6 +125,7 @@ internal sealed class CitationDetailsViewModel : BindableBase
                 entry.AbstractText,
                 isUnresolved: false,
                 unresolvedKey: "",
+                entryKey: entry.Key,
                 automationName: CitationPhrase.DetailsSummary(entry.Title),
                 returnFocusToken);
         }
@@ -127,6 +137,7 @@ internal sealed class CitationDetailsViewModel : BindableBase
             abstractText: null,
             isUnresolved: true,
             unresolvedKey: key,
+            entryKey: key,
             automationName: CitationPhrase.DetailsUnresolvedSpoken(key),
             returnFocusToken);
     }
@@ -141,6 +152,7 @@ internal sealed class CitationDetailsViewModel : BindableBase
             entry.AbstractText,
             isUnresolved: false,
             unresolvedKey: "",
+            entryKey: entry.Key,
             automationName: CitationPhrase.DetailsSummary(entry.Title),
             returnFocusToken);
 

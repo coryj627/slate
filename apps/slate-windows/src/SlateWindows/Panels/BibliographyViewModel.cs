@@ -197,6 +197,11 @@ internal sealed class BibliographyViewModel : PanelWorkScheduler
     public string UnresolvedSummary =>
         CitationPhrase.Counted(Unresolved.Count, "unresolved key", "unresolved keys");
 
+    /// <summary>The key Ctrl+J asked the grid to land on. The window
+    /// layer consumes it once and clears it — a stale value must
+    /// never steal focus from a later interaction.</summary>
+    public string? PendingKeyFocus { get; set; }
+
     internal Action? InterleaveForTests { get; set; }
 
     internal long GenerationForTests => Interlocked.Read(ref _generation);

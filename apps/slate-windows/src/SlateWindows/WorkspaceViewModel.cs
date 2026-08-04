@@ -1276,8 +1276,20 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         // Round 15: a repair landing inside a review load worker
         // refreshes the note panel too — both surfaces converge.
         TasksReview.RepairLanded = path => Panels.NoteSaved(path);
+        // W4-5: the citations suite. Citations is note-scoped (fed by
+        // SyncPanels); Bibliography is vault-scoped and loads lazily
+        // on rail reveal. Both must exist before Restore/SyncPanels so
+        // the first note selection can publish into them.
+        Citations = new Panels.CitationsPanelViewModel(
+            session, announce, synchronousForTests: !startInteractionBackgroundWork);
+        Bibliography = new Panels.BibliographyViewModel(
+            session, announce, synchronousForTests: !startInteractionBackgroundWork);
         (_root, _activeGroup) = Restore(_persistence.Load());
         SyncPanels();
+        // Seed the vault's bibliography ONCE per open. Silent on both
+        // success and failure — the leaf's notice region is the
+        // surface (W4-5 contract 5).
+        SeedBibliographySources(synchronousForTests: !startInteractionBackgroundWork);
 
         CloseTabCommand = new RelayCommand(
             parameter => RunWorkspaceMutation(() => CloseTab(parameter)),
@@ -1359,6 +1371,12 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
 
     public Panels.TasksReviewViewModel TasksReview { get; }
 
+    /// <summary>W4-5: the note-scoped citations leaf.</summary>
+    public Panels.CitationsPanelViewModel Citations { get; }
+
+    /// <summary>W4-5: the vault-scoped bibliography leaf.</summary>
+    public Panels.BibliographyViewModel Bibliography { get; }
+
     /// <summary>Re-derive the panels' active note from the workspace —
     /// called from every activation funnel (tab activation, pane focus,
     /// workspace mutations). Same-path calls are no-ops in the panels
@@ -1367,6 +1385,10 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     {
         Panels.NoteChanged(
             ActiveGroup.ActiveTab is { IsMarkdown: true } tab ? tab.Path : null);
+        // W4-5: the citations leaf follows the same active-note funnel;
+        // same-path calls are no-ops, so over-calling is refetch-free.
+        Citations.NoteChanged(
+            ActiveGroup.ActiveTab is { IsMarkdown: true } citedTab ? citedTab.Path : null);
         // W4-4: the properties header attaches at activation, in the
         // Reading posture — background work in the app, inline in
         // tests (the flag decides the VM's mode at first creation,
@@ -1413,6 +1435,12 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 if (string.Equals(value.Id, "tasksReview", StringComparison.Ordinal))
                 {
                     TasksReview.EnsureLoaded();
+                }
+                // W4-5: same idempotent-reveal posture — revealing the
+                // bibliography must never re-query the whole vault.
+                if (string.Equals(value.Id, "bibliography", StringComparison.Ordinal))
+                {
+                    Bibliography.EnsureLoaded();
                 }
                 Persist();
             }
@@ -1634,6 +1662,15 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         _bulkRenameSheet?.Shutdown();
         _bulkRenameSheet = null;
         _addPropertySheet = null;
+        // W4-5: the citation workers hold the shared session too —
+        // shut them down before it dies, and drop the sheets so a
+        // late publish cannot touch a dying UI.
+        _filesCiting?.Shutdown();
+        _filesCiting = null;
+        _citationDetails = null;
+        _citationSummary = null;
+        Citations.Shutdown();
+        Bibliography.Shutdown();
         // Panels first: their workers hold the shared session, which
         // the vault lifecycle disposes right after this workspace —
         // invalidate every in-flight load before that happens.
