@@ -214,6 +214,43 @@ internal sealed class AccessibleDataGrid : UserControl
     }
 
     /// <summary>
+    /// Put keyboard focus on the first cell of the row matching
+    /// <paramref name="predicate"/>, if the bound set contains one.
+    /// Returns false and moves nothing when it does not — the caller
+    /// decides what to say about a miss.
+    ///
+    /// The bool reports whether the row was IN THE BOUND SET, not
+    /// whether the OS granted keyboard focus. Those differ whenever
+    /// the grid is not in a loaded window, and currency plus selection
+    /// — which is what AT reports — is set either way; conflating them
+    /// would make a successful jump indistinguishable from a missing
+    /// key.
+    ///
+    /// W4-5 (#737) needed this for the Ctrl+J bibliography jump. It
+    /// lives here rather than in the citations code because reaching
+    /// into <see cref="Grid"/> to set currency by hand would be a
+    /// second implementation of cell focus, which the grid-conformance
+    /// contract forbids (W4-5 contract 8 / D-12).
+    /// </summary>
+    public bool FocusRow(Func<object, bool> predicate)
+    {
+        ArgumentNullException.ThrowIfNull(predicate);
+        if (_grid.Columns.Count == 0)
+        {
+            return false;
+        }
+        foreach (object item in _items)
+        {
+            if (predicate(item))
+            {
+                _ = FocusCellElement(item, _grid.Columns[0]);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
     /// Put keyboard focus on the CELL ELEMENT for (item, column):
     /// scroll, realize the container synchronously (under a starved
     /// session the deferred generation leaves Focus() on the grid, and
@@ -238,6 +275,28 @@ internal sealed class AccessibleDataGrid : UserControl
             return cell.Focus();
         }
         return _grid.Focus();
+    }
+
+    /// <summary>
+    /// The automation id of the inner grid; the summary region takes
+    /// the same id with a "Summary" suffix. Defaults to
+    /// <c>AccessibleDataGrid</c> / <c>AccessibleDataGridSummary</c>.
+    ///
+    /// Hosts must set this when a window shows MORE THAN ONE grid.
+    /// W4-5 (#737) is the first — two bibliography segments plus the
+    /// bulk-rename preview — and with a hardcoded id an AT user, or a
+    /// FlaUI lookup, cannot tell the three apart. Fixing it in the
+    /// substrate rather than working around it in the citations code
+    /// is what D-12 requires.
+    /// </summary>
+    public string GridAutomationId
+    {
+        get => AutomationProperties.GetAutomationId(_grid);
+        set
+        {
+            AutomationProperties.SetAutomationId(_grid, value);
+            AutomationProperties.SetAutomationId(_summary, $"{value}Summary");
+        }
     }
 
     /// <summary>The separately-focusable summary region.</summary>

@@ -133,6 +133,56 @@ public sealed class AccessibleDataGridTests
         });
     }
 
+    /// <summary>
+    /// Two grids in one window must be tellable apart. The default is
+    /// unchanged so W4-1's conformance fixture and the bulk-rename
+    /// preview keep the ids they already publish.
+    /// </summary>
+    [Fact]
+    public void GridAutomationIdDefaultsAndRenamesTheSummaryWithIt()
+    {
+        RunSta(() =>
+        {
+            var grid = MakeGrid(new List<A11yEvent>());
+            Assert.Equal("AccessibleDataGrid", grid.GridAutomationId);
+            Assert.Equal(
+                "AccessibleDataGridSummary",
+                AutomationProperties.GetAutomationId(grid.SummaryRegion));
+
+            grid.GridAutomationId = "BibliographyEntries";
+            Assert.Equal(
+                "BibliographyEntries",
+                AutomationProperties.GetAutomationId(grid.Grid));
+            Assert.Equal(
+                "BibliographyEntriesSummary",
+                AutomationProperties.GetAutomationId(grid.SummaryRegion));
+        });
+    }
+
+    /// <summary>
+    /// W4-5 (#737) needs to land Ctrl+J on a named bibliography row.
+    /// A HIT moves currency to that row's first cell; a MISS moves
+    /// nothing at all — landing on row one after a failed jump would
+    /// tell a screen-reader user they had arrived somewhere they had
+    /// not.
+    /// </summary>
+    [Fact]
+    public void FocusRowMovesCurrencyOnAHitAndLeavesItAloneOnAMiss()
+    {
+        RunSta(() =>
+        {
+            var grid = MakeGrid(new List<A11yEvent>());
+            grid.Grid.CurrentCell = new DataGridCellInfo(People[0], grid.Grid.Columns[0]);
+
+            Assert.True(grid.FocusRow(row => ((Person)row).Name == "Bora"));
+            Assert.Equal("Bora", Assert.IsType<Person>(grid.Grid.CurrentCell.Item).Name);
+            Assert.Equal(grid.Grid.Columns[0], grid.Grid.CurrentCell.Column);
+
+            Assert.False(grid.FocusRow(row => ((Person)row).Name == "Nobody"));
+            Assert.Equal("Bora", Assert.IsType<Person>(grid.Grid.CurrentCell.Item).Name);
+        });
+    }
+
     [Fact]
     public void RowMovesPostGridRowMovedWithTheCoreDedup()
     {

@@ -2335,6 +2335,246 @@ public sealed class ShellAccessibilityTests
         }
     }
 
+    /// <summary>
+    /// W4-5 (#737): the citation surfaces over the live app. The
+    /// citations leaf carries its rows, activation opens the details
+    /// sheet as an IN-WINDOW dialog (D-1 — a Popup would put the UIA
+    /// subtree in a sibling window), Escape returns focus to the row
+    /// that opened it (contract 11), Ctrl+J lands on the bibliography
+    /// entry, and BOTH bibliography segments expose grid column
+    /// headers because both ride the substrate (contract 8 / D-6).
+    /// </summary>
+    [Fact]
+    [Trait("gate", "W-C")]
+    public void CitationSurfaces_GridsSheetsAndChords_AreClean()
+    {
+        string testRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"slate-citations-{Guid.NewGuid():N}");
+        string vaultRoot = Path.Combine(testRoot, "Citations Vault");
+        string logDirectory = Path.Combine(testRoot, "logs");
+        Directory.CreateDirectory(vaultRoot);
+        File.WriteAllText(
+            Path.Combine(vaultRoot, "library.bib"),
+            "@article{knuth1984,\n  title = {Literate Programming},\n"
+                + "  author = {Knuth, Donald E.},\n  year = {1984},\n"
+                + "  journal = {The Computer Journal}\n}\n");
+        File.WriteAllText(
+            Path.Combine(vaultRoot, "cited.md"),
+            "# Cited\n\nA citation [@knuth1984] and a ghost [@ghostkey].\n");
+        File.Copy(
+            Path.Combine(RepoRootForFixtures(), "demo-vault", "csl", "ieee.csl"),
+            Path.Combine(vaultRoot, "ieee.csl"));
+        // A style is REQUIRED for rows to render; without one every row
+        // is a placeholder and nothing is expandable (contract 2).
+        File.WriteAllText(
+            Path.Combine(vaultRoot, "slate.json"),
+            "{\"citations\":{\"bibliography\":\"library.bib\",\"cite_style\":\"ieee\"}}");
+
+        Process? process = null;
+        try
+        {
+            var startInfo = new ProcessStartInfo(SlateWindowsExe())
+            {
+                RedirectStandardError = true,
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+            };
+            startInfo.ArgumentList.Add(vaultRoot);
+            startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
+                $"slate-citations-{Guid.NewGuid():N}";
+            startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            process = Process.Start(startInfo)
+                ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+
+            if (!Environment.UserInteractive)
+            {
+                // Session-0 fallback, as the shell gate.
+                Assert.False(
+                    process.WaitForExit(3_000),
+                    "Slate exited during the citations startup smoke. " +
+                    $"app log: {ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log"))}");
+                return;
+            }
+
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(
+                process,
+                automation,
+                Path.Combine(logDirectory, "slate-windows.log"),
+                TimeSpan.FromSeconds(30));
+
+            AutomationElement filesTree = WaitForElement(
+                window, "FilesTree", TimeSpan.FromSeconds(30));
+            AutomationElement citedItem = filesTree
+                .FindAllDescendants(
+                    automation.ConditionFactory.ByControlType(ControlType.TreeItem))
+                .FirstOrDefault(item =>
+                    item.Name.StartsWith("cited", StringComparison.OrdinalIgnoreCase))
+                ?? throw new Xunit.Sdk.XunitException("The cited TreeItem is absent.");
+            citedItem.Patterns.SelectionItem.Pattern.Select();
+            WaitForEditor(
+                window, automation, "cited.md editor", TimeSpan.FromSeconds(10));
+
+            AutomationElement leaves = WaitForElement(
+                window, "RightPaneLeaves", TimeSpan.FromSeconds(10));
+            void SelectLeaf(string title)
+            {
+                AutomationElement? entry = null;
+                Assert.True(
+                    SpinWait.SpinUntil(
+                        () =>
+                        {
+                            entry = leaves
+                                .FindAllDescendants(
+                                    automation.ConditionFactory.ByControlType(
+                                        ControlType.ListItem))
+                                .FirstOrDefault(item =>
+                                    (item.Properties.Name.ValueOrDefault ?? "") == title);
+                            return entry is not null;
+                        },
+                        TimeSpan.FromSeconds(15)),
+                    $"No rail entry named {title}.");
+                entry!.Patterns.SelectionItem.Pattern.Select();
+            }
+
+            // ---- The citations leaf ------------------------------
+            SelectLeaf("Citations");
+            AutomationElement citations = WaitForElement(
+                window, "PanelCitationsList", TimeSpan.FromSeconds(15));
+            AutomationElement? resolvedRow = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        resolvedRow = citations
+                            .FindAllDescendants(
+                                automation.ConditionFactory.ByControlType(
+                                    ControlType.ListItem))
+                            .FirstOrDefault(item =>
+                                (item.Properties.Name.ValueOrDefault ?? "")
+                                    .Contains("Knuth", StringComparison.OrdinalIgnoreCase));
+                        return resolvedRow is not null;
+                    },
+                    TimeSpan.FromSeconds(20)),
+                "the citations leaf never rendered the resolved Knuth row");
+
+            // The unresolved key is a real state, not an error
+            // (contract 7): it is a row, and it says so.
+            Assert.Contains(
+                citations
+                    .FindAllDescendants(
+                        automation.ConditionFactory.ByControlType(ControlType.ListItem))
+                    .Select(item => item.Properties.Name.ValueOrDefault ?? ""),
+                name => name.Contains("Unresolved", StringComparison.OrdinalIgnoreCase));
+
+            // ---- Details sheet: in-window, and focus returns -------
+            resolvedRow!.Patterns.SelectionItem.Pattern.Select();
+            resolvedRow.Focus();
+            PressKey(VirtualKeyShort.RETURN);
+            AutomationElement details = WaitForElement(
+                window, "CitationDetailsSheet", TimeSpan.FromSeconds(10));
+            // D-1: the sheet is inside THIS window's subtree. A Popup
+            // would make it a sibling HWND and this lookup would miss.
+            Assert.NotNull(window.FindFirstDescendant(
+                automation.ConditionFactory.ByAutomationId("CitationDetailsSheet")));
+            Assert.True(
+                details.Patterns.Window.IsSupported
+                    || details.Properties.ControlType.ValueOrDefault == ControlType.Pane,
+                "the details sheet did not surface as a dialog-shaped element");
+            AutomationElement detailsClose = WaitForElement(
+                window, "CitationDetailsClose", TimeSpan.FromSeconds(10));
+            AssertEventuallyFocused(
+                detailsClose, "The details sheet did not focus its Close button.");
+            AssertAxeClean(process, "citation-details-sheet");
+
+            PressKey(VirtualKeyShort.ESCAPE);
+            AssertElementDisappears(window, automation, "CitationDetailsSheet");
+            AssertEventuallyFocused(
+                resolvedRow, "Escape did not return focus to the citation row.");
+
+            // ---- Ctrl+Shift+J: the summary sheet ------------------
+            PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_J);
+            WaitForElement(window, "CitationSummarySheet", TimeSpan.FromSeconds(10));
+            AssertAxeClean(process, "citation-summary-sheet");
+            WaitForElement(window, "CitationSummaryDismiss", TimeSpan.FromSeconds(10))
+                .Patterns.Invoke.Pattern.Invoke();
+            AssertElementDisappears(window, automation, "CitationSummarySheet");
+
+            // ---- The bibliography leaf: BOTH segments are grids ----
+            SelectLeaf("Bibliography");
+            AutomationElement entriesGrid = WaitForElement(
+                window, "BibliographyEntries", TimeSpan.FromSeconds(15));
+            Assert.True(entriesGrid.Patterns.Grid.IsSupported, "Grid pattern missing on entries");
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => entriesGrid
+                        .FindAllDescendants(
+                            automation.ConditionFactory.ByControlType(ControlType.HeaderItem))
+                        .Select(item => item.Properties.Name.ValueOrDefault ?? "")
+                        .Where(name => name.Length > 0)
+                        .ToHashSet()
+                        .IsSupersetOf(["Title", "Authors", "Year", "Journal", "Key"]),
+                    TimeSpan.FromSeconds(15)),
+                "the entries grid never exposed its five column headers");
+
+            WaitForElement(window, "BibliographySegmentUnresolved", TimeSpan.FromSeconds(10))
+                .Patterns.SelectionItem.Pattern.Select();
+            AutomationElement unresolvedGrid = WaitForElement(
+                window, "BibliographyUnresolved", TimeSpan.FromSeconds(15));
+            Assert.True(
+                unresolvedGrid.Patterns.Grid.IsSupported,
+                "the unresolved segment did not render as a grid (D-6)");
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => unresolvedGrid
+                        .FindAllDescendants(
+                            automation.ConditionFactory.ByControlType(ControlType.HeaderItem))
+                        .Select(item => item.Properties.Name.ValueOrDefault ?? "")
+                        .Where(name => name.Length > 0)
+                        .ToHashSet()
+                        .IsSupersetOf(["Key", "File"]),
+                    TimeSpan.FromSeconds(15)),
+                "the unresolved grid never exposed its Key/File headers");
+            AssertAxeClean(process, "bibliography-leaf");
+        }
+        finally
+        {
+            if (process is not null && !process.HasExited)
+            {
+                process.CloseMainWindow();
+                if (!process.WaitForExit(5_000))
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+
+            try
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    /// <summary>Walks up to the repo root so fixtures can borrow the
+    /// committed demo-vault CSL style.</summary>
+    private static string RepoRootForFixtures()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !Directory.Exists(Path.Combine(dir.FullName, "demo-vault")))
+        {
+            dir = dir.Parent;
+        }
+        return dir?.FullName
+            ?? throw new InvalidOperationException("repo root not found");
+    }
+
     private static Window WaitForMainWindow(
         Process process,
         UIA3Automation automation,
@@ -2504,6 +2744,20 @@ public sealed class ShellAccessibilityTests
         VirtualKeyShort key)
     {
         using (Keyboard.Pressing(modifier))
+        {
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+            PressKey(key);
+        }
+        Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+    }
+
+    /// <summary>Two-modifier form, for chords like Ctrl+Shift+J.</summary>
+    private static void PressChord(
+        VirtualKeyShort firstModifier,
+        VirtualKeyShort secondModifier,
+        VirtualKeyShort key)
+    {
+        using (Keyboard.Pressing(firstModifier, secondModifier))
         {
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
             PressKey(key);

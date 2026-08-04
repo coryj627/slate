@@ -176,6 +176,16 @@ LEAF_DELIVERED = {
         "implemented 2026-08-01 (#735): `TasksReviewViewModel` + "
         "MainWindow leaf body + Ctrl+R command; `TasksReviewTests` + "
         "FlaUI `TaskPanels_RowsToggleAndReviewCarriesTheMacShapes`"),
+    "citations": (
+        "implemented 2026-08-04 (#737): `CitationsPanelViewModel` + "
+        "MainWindow leaf body + details/summary sheets; "
+        "`CitationsPanelTests` + FlaUI "
+        "`CitationSurfaces_GridsSheetsAndChords_AreClean`"),
+    "bibliography": (
+        "implemented 2026-08-04 (#737): `BibliographyViewModel` + "
+        "MainWindow leaf body, BOTH segments on `AccessibleDataGrid`; "
+        "`BibliographyPanelTests` + FlaUI "
+        "`CitationSurfaces_GridsSheetsAndChords_AreClean`"),
 }
 
 # Milestones unshipped at the 2026-07-19 snapshot: their rows drop out
@@ -464,6 +474,18 @@ W4_IMPLEMENTED_STATUS = (
     "implemented; local gates green 2026-08-03; interactive CI + human AT pending"
 )
 
+# The gate date is per-ISSUE, not per-wave: stamping every W4 row with
+# one date would claim gates ran on a day they did not for whichever
+# issue landed later.
+W4_STATUS_BY_COMMAND = {
+    "slate.navigation.jumpToBibliography":
+        "implemented; local gates green 2026-08-04; "
+        "interactive CI + human AT pending",
+    "slate.editor.citationSummary":
+        "implemented; local gates green 2026-08-04; "
+        "interactive CI + human AT pending",
+}
+
 # W4 delivery, same per-command shape as W3.
 # slate.editor.togglePropertiesSource stays PENDING: YAML source mode
 # was scoped out of W4-4 (no set_frontmatter_source call site) — the
@@ -472,6 +494,9 @@ W4_DELIVERED_COMMANDS = {
     "slate.tasks.review",
     "slate.editor.addProperty",
     "slate.editor.bulkRenameProperties",
+    # W4-5 (#737)
+    "slate.navigation.jumpToBibliography",
+    "slate.editor.citationSummary",
 }
 
 # §W-F waivers: status text the generator must preserve across
@@ -544,6 +569,7 @@ def load_delivery_evidence(
 
     expected_issues = {
         "#381", "#720", "#721", "#722", "#723", "#724", "#725", "#728", "#735", "#736",
+        "#737",
     }
     if set(issue_map) != expected_issues:
         fail(
@@ -569,7 +595,7 @@ def command_delivery_status(
     if command_id in W3_DELIVERED_COMMANDS:
         return W3_IMPLEMENTED_STATUS
     if command_id in W4_DELIVERED_COMMANDS:
-        return W4_IMPLEMENTED_STATUS
+        return W4_STATUS_BY_COMMAND.get(command_id, W4_IMPLEMENTED_STATUS)
     return (
         W2_IMPLEMENTED_STATUS
         if issue.startswith(("#381", "#724", "#725"))

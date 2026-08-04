@@ -18,9 +18,8 @@ review round.** A plan held anywhere else does not count as written
 down, which is why round 2 re-litigated design choices with nothing
 marked off-limits.
 
-Contract 8 and D-1, D-6, D-7, D-12 are VIEW-layer items and are
-uncited in code because the view layer does not exist yet — that is
-expected ordering, not a gap.
+The view layer landed 2026-08-04, so contract 8 and D-1, D-6, D-7,
+D-12 are now cited in code rather than pending.
 
 Numbering is PER-WAVE: W4-4 also has a "contract 7" and a "contract
 10" and they are unrelated. Only the citation surfaces
@@ -79,8 +78,8 @@ arrows, Ctrl+Alt+S sort, grid-scoped Ctrl+F, and the addressable
 summary region unmodified. `exportProducer` is `null` on both
 (O8/G29). No re-implementation of grid behaviour lives in the
 citations code.
-*(Not yet cited in code: this is a VIEW-layer contract and the view
-layer does not exist yet. It becomes citable when the XAML lands.)*
+*(MainWindow.xaml bibliography leaf body, MainWindow.Citations.cs:29-104
+column definitions)*
 
 **9 — The entry grid is bounded and the bound is SPOKEN.** The cap is
 `MaxEntryRows` = 5000 and the truncation sentence rides the grid
@@ -238,6 +237,32 @@ invoke the command and then read a property — it would see null.
 `ConsumePopoverFocusRequest` (consumer pattern:
 `EditorInteractionPopoverHost.cs:69,84`). `Shutdown` and `ForceReload`
 drop unconsumed requests. **The W4-5 XAML must SUBSCRIBE, not poll.**
+
+## Substrate gaps the view layer exposed (D-12 in practice)
+
+D-12 said the citation leaves are the first production consumers of
+`AccessibleDataGrid` outside the bulk-rename preview and reading
+tables, and that any conformance gap they expose is a W4-1 substrate
+bug to fix in `Grids/` rather than a citations workaround. Two
+appeared, and both were fixed there:
+
+- **`AccessibleDataGrid.GridAutomationId`.** The inner grid's
+  automation id was hardcoded to `AccessibleDataGrid` for every
+  instance. W4-5 is the first window to show more than one grid — two
+  bibliography segments plus the bulk-rename preview — so an AT user
+  and a FlaUI lookup alike could not tell them apart. The id is now
+  settable and renames the summary region with it; the default is
+  unchanged, so W4-1's conformance fixture and bulk-rename keep the
+  ids they already publish.
+- **`AccessibleDataGrid.FocusRow`.** Ctrl+J must land on a NAMED row.
+  Reaching into the exposed `Grid` to set currency by hand would have
+  been a second implementation of cell focus, which contract 8
+  forbids. `FocusRow` delegates to the same private
+  `FocusCellElement` that `FocusFirstCell` uses. Its bool reports
+  whether the row was in the bound set, NOT whether the OS granted
+  focus — those differ off-window, and conflating them made a
+  successful jump indistinguishable from a missing key (caught by the
+  test, which failed against the first implementation).
 
 ## Review resolutions
 

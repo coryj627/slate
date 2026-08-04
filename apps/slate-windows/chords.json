@@ -213,6 +213,18 @@
       "mac": "Shift Command R",
       "windows": "Ctrl+Shift+R",
       "windowsSpoken": "Control Shift R"
+    },
+    {
+      "id": "slate.navigation.jumpToBibliography",
+      "mac": "Command J",
+      "windows": "Ctrl+J",
+      "windowsSpoken": "Control J"
+    },
+    {
+      "id": "slate.editor.citationSummary",
+      "mac": "Shift Command J",
+      "windows": "Ctrl+Shift+J",
+      "windowsSpoken": "Control Shift J"
     }
   ],
   "deliveryEvidence": {
@@ -315,6 +327,19 @@
           "apps/slate-windows/tests/SlateWindows.Tests/AddPropertyTests.cs#AddPropertyTests",
           "apps/slate-windows/tests/SlateWindows.Tests/BulkRenameTests.cs#BulkRenameTests"
         ]
+      },
+      "citations": {
+        "implementation": [
+          "apps/slate-windows/src/SlateWindows/Panels/CitationsPanelViewModel.cs#CitationsPanelViewModel",
+          "apps/slate-windows/src/SlateWindows/Panels/BibliographyViewModel.cs#BibliographyViewModel",
+          "apps/slate-windows/src/SlateWindows/WorkspaceViewModel.Citations.cs#JumpToBibliography",
+          "apps/slate-windows/src/SlateWindows/MainWindow.Citations.cs#BindBibliographyEntriesGrid"
+        ],
+        "tests": [
+          "apps/slate-windows/tests/SlateWindows.Tests/CitationsPanelTests.cs#CitationsPanelTests",
+          "apps/slate-windows/tests/SlateWindows.Tests/BibliographyPanelTests.cs#BibliographyPanelTests",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#CitationSurfaces_GridsSheetsAndChords_AreClean"
+        ]
       }
     },
     "commands": {
@@ -386,7 +411,9 @@
       "slate.editor.toggleViewMode": "reading",
       "slate.tasks.review": "tasksReview",
       "slate.editor.addProperty": "properties",
-      "slate.editor.bulkRenameProperties": "properties"
+      "slate.editor.bulkRenameProperties": "properties",
+      "slate.navigation.jumpToBibliography": "citations",
+      "slate.editor.citationSummary": "citations"
     },
     "issues": {
       "#720": "vault",
@@ -398,7 +425,8 @@
       "#725": "editorInteractions",
       "#728": "reading",
       "#735": "tasksReview",
-      "#736": "properties"
+      "#736": "properties",
+      "#737": "citations"
     }
   }
 }
