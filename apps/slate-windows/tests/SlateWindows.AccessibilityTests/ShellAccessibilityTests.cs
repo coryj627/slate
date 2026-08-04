@@ -2362,9 +2362,7 @@ public sealed class ShellAccessibilityTests
         File.WriteAllText(
             Path.Combine(vaultRoot, "cited.md"),
             "# Cited\n\nA citation [@knuth1984] and a ghost [@ghostkey].\n");
-        File.Copy(
-            Path.Combine(RepoRootForFixtures(), "demo-vault", "csl", "ieee.csl"),
-            Path.Combine(vaultRoot, "ieee.csl"));
+        File.Copy(CitationStyleFixture(), Path.Combine(vaultRoot, "ieee.csl"));
         // A style is REQUIRED for rows to render; without one every row
         // is a placeholder and nothing is expandable (contract 2).
         File.WriteAllText(
@@ -2562,17 +2560,25 @@ public sealed class ShellAccessibilityTests
         }
     }
 
-    /// <summary>Walks up to the repo root so fixtures can borrow the
-    /// committed demo-vault CSL style.</summary>
-    private static string RepoRootForFixtures()
+    /// <summary>
+    /// The committed demo-vault CSL style, copied into this project's
+    /// output by a linked Content item.
+    ///
+    /// It is read from the OUTPUT DIRECTORY, never by walking up to a
+    /// repo root: this gate downloads built binaries and runs with no
+    /// checkout, so the repo does not exist at run time. Walking up
+    /// passes locally and fails only on CI, which is how the first
+    /// version of this shipped.
+    /// </summary>
+    private static string CitationStyleFixture()
     {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !Directory.Exists(Path.Combine(dir.FullName, "demo-vault")))
-        {
-            dir = dir.Parent;
-        }
-        return dir?.FullName
-            ?? throw new InvalidOperationException("repo root not found");
+        string path = Path.Combine(AppContext.BaseDirectory, "fixtures", "ieee.csl");
+        Assert.True(
+            File.Exists(path),
+            $"The CSL fixture is missing at {path}. It is a linked Content " +
+            "item in SlateWindows.AccessibilityTests.csproj and must be " +
+            "copied to the output directory.");
+        return path;
     }
 
     private static Window WaitForMainWindow(

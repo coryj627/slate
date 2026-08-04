@@ -1220,8 +1220,25 @@
                                            Visibility="{Binding Bibliography.ShowUnresolvedEmptyState, Converter={StaticResource BooleanToVisibilityConverter}}" />
                                 <!-- Notices verbatim, per segment (contract 5). -->
                                 <ItemsControl DockPanel.Dock="Bottom"
+                                              Focusable="False"
                                               ItemsSource="{Binding Bibliography.LoadNotices}"
                                               AutomationProperties.AutomationId="BibliographyNotices">
+                                    <!-- With no notices this renders at
+                                         zero size but stays on-screen in
+                                         the UIA tree, which axe flags as
+                                         a null bounding rectangle. An
+                                         empty notice region should leave
+                                         the tree, as the inactive leaf
+                                         bodies above do. -->
+                                    <ItemsControl.Style>
+                                        <Style TargetType="ItemsControl">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Bibliography.LoadNotices.Count}" Value="0">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </ItemsControl.Style>
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
                                             <TextBlock Style="{StaticResource PanelEmptyMessage}"
@@ -1637,7 +1654,13 @@
                     </StackPanel>
                     <!-- Absent values never produce a row (contract 10):
                          Fields carries only what is present. -->
+                    <!-- Presentational grouping only: every field item
+                         carries its own name (FieldSpoken), and a
+                         focusable container with no name of its own is
+                         an axe NameNotNull violation — caught by the
+                         FlaUI gate, not by any unit test. -->
                     <ItemsControl ItemsSource="{Binding Fields}"
+                                  Focusable="False"
                                   Visibility="{Binding IsUnresolved, Converter={StaticResource InverseBooleanToVisibilityConverter}}"
                                   AutomationProperties.AutomationId="CitationDetailsFields">
                         <ItemsControl.ItemTemplate>
