@@ -18,6 +18,7 @@ internal abstract class PanelWorkScheduler : BindableBase
     private readonly SynchronizationContext? _uiContext;
     private readonly bool _synchronous;
     private volatile bool _isShutDown;
+    private Task? _prerequisite;
 
     protected PanelWorkScheduler(bool synchronousForTests)
     {
@@ -30,6 +31,16 @@ internal abstract class PanelWorkScheduler : BindableBase
     /// <summary>Workspace teardown: refuse new work. Subclasses
     /// override to also invalidate their in-flight publishes.</summary>
     internal virtual void Shutdown() => _isShutDown = true;
+
+    /// <summary>Hold every background body until a workspace-level
+    /// prerequisite has landed. W4-5: a citation render issued before
+    /// SetBibliographySources completes sees no sources and publishes
+    /// every key as unresolved, and nothing re-queries afterwards — so
+    /// the ordering has to be a real dependency, not a hope about which
+    /// Task.Run wins. Synchronous mode needs no gate: the workspace
+    /// completes the prerequisite inline before it starts any load.
+    /// </summary>
+    internal void GateWorkOn(Task prerequisite) => _prerequisite = prerequisite;
 
     /// <summary>All load work funnels through here. Synchronous mode
     /// (the ReadingContentViewModel test pattern) runs the body
@@ -47,7 +58,26 @@ internal abstract class PanelWorkScheduler : BindableBase
             body();
             return;
         }
-        TrackWork(Task.Run(body));
+        Task? gate = _prerequisite;
+        if (gate is null)
+        {
+            TrackWork(Task.Run(body));
+            return;
+        }
+        TrackWork(Task.Run(() =>
+        {
+            // A faulted prerequisite is NOT this body's failure to
+            // report — the seeding path owns that notice. Swallow it so
+            // tracked tasks stay non-faulting, then load anyway.
+            try
+            {
+                gate.Wait();
+            }
+            catch (AggregateException)
+            {
+            }
+            body();
+        }));
     }
 
     private void TrackWork(Task work)

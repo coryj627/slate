@@ -28,6 +28,15 @@ internal sealed partial class WorkspaceViewModel
     private System.Windows.Input.ICommand? _closeFilesCitingCommand;
     private bool _bibliographySeeded;
 
+    /// <summary>Completed once SetBibliographySources has landed (or
+    /// definitively failed). Both citation leaves gate their background
+    /// loads on this, so no render can outrun the sources it needs.
+    /// ALWAYS completes — a seeding failure that left this pending
+    /// would hang every citation load for the life of the workspace.
+    /// </summary>
+    private readonly TaskCompletionSource _bibliographySourcesReady =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
     /// <summary>Non-null while the details overlay is open.</summary>
     public CitationDetailsViewModel? CitationDetails
     {
@@ -97,8 +106,15 @@ internal sealed partial class WorkspaceViewModel
 
         if (synchronousForTests)
         {
-            (var notices, bool hasSources) = ReadAndSeedSources();
-            Bibliography.ApplySeedOutcome(notices, hasSources);
+            try
+            {
+                (var notices, bool hasSources) = ReadAndSeedSources();
+                Bibliography.ApplySeedOutcome(notices, hasSources);
+            }
+            finally
+            {
+                _ = _bibliographySourcesReady.TrySetResult();
+            }
             return;
         }
         // Marshal the outcome back the way the panel schedulers do —
@@ -106,13 +122,26 @@ internal sealed partial class WorkspaceViewModel
         SynchronizationContext? uiContext = SynchronizationContext.Current;
         _ = Task.Run(() =>
         {
-            (var notices, bool hasSources) = ReadAndSeedSources();
-            if (uiContext is null)
+            try
             {
-                Bibliography.ApplySeedOutcome(notices, hasSources);
-                return;
+                (var notices, bool hasSources) = ReadAndSeedSources();
+                if (uiContext is null)
+                {
+                    Bibliography.ApplySeedOutcome(notices, hasSources);
+                }
+                else
+                {
+                    uiContext.Post(
+                        _ => Bibliography.ApplySeedOutcome(notices, hasSources), null);
+                }
             }
-            uiContext.Post(_ => Bibliography.ApplySeedOutcome(notices, hasSources), null);
+            finally
+            {
+                // Release the gate on EVERY path: the sources are as
+                // seeded as they are ever going to get, and a pending
+                // gate would deadlock both leaves permanently.
+                _ = _bibliographySourcesReady.TrySetResult();
+            }
         });
     }
 
@@ -207,20 +236,17 @@ internal sealed partial class WorkspaceViewModel
 
         ActiveLeaf = Leaves.First(
             leaf => string.Equals(leaf.Id, "bibliography", StringComparison.Ordinal));
-        Bibliography.EnsureLoaded();
-
-        bool present = Bibliography.Entries.Any(
-            row => string.Equals(row.Key, key, StringComparison.Ordinal));
-        // W0.5-3 residue: bibliography-jump message builder, the 1:1
-        // twin of the mac AppState site.
-        _announce(new A11yEvent.HostComposed(
-            present
-                ? CitationPhrase.JumpedToEntry(key)
-                : CitationPhrase.SearchingBibliographyFor(key),
-            A11yPriority.Medium));
-        if (present)
-        {
-            Bibliography.PendingKeyFocus = key;
-        }
+        // The outcome depends on entries that may still be loading, so
+        // the leaf decides it — immediately when they are already
+        // published, at publish time otherwise.
+        Bibliography.RequestKeyFocus(
+            key,
+            // W0.5-3 residue: bibliography-jump message builder, the
+            // 1:1 twin of the mac AppState site.
+            (jumpedKey, present) => _announce(new A11yEvent.HostComposed(
+                present
+                    ? CitationPhrase.JumpedToEntry(jumpedKey)
+                    : CitationPhrase.SearchingBibliographyFor(jumpedKey),
+                A11yPriority.Medium)));
     }
 }

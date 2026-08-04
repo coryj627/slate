@@ -1284,12 +1284,17 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             session, announce, synchronousForTests: !startInteractionBackgroundWork);
         Bibliography = new Panels.BibliographyViewModel(
             session, announce, synchronousForTests: !startInteractionBackgroundWork);
-        (_root, _activeGroup) = Restore(_persistence.Load());
-        SyncPanels();
-        // Seed the vault's bibliography ONCE per open. Silent on both
+        // Both leaves read through the session's bibliography sources,
+        // so neither may query before seeding lands.
+        Citations.GateWorkOn(_bibliographySourcesReady.Task);
+        Bibliography.GateWorkOn(_bibliographySourcesReady.Task);
+        // Seed the vault's bibliography ONCE per open, BEFORE the first
+        // note selection can start a citation render. Silent on both
         // success and failure — the leaf's notice region is the
         // surface (W4-5 contract 5).
         SeedBibliographySources(synchronousForTests: !startInteractionBackgroundWork);
+        (_root, _activeGroup) = Restore(_persistence.Load());
+        SyncPanels();
 
         CloseTabCommand = new RelayCommand(
             parameter => RunWorkspaceMutation(() => CloseTab(parameter)),

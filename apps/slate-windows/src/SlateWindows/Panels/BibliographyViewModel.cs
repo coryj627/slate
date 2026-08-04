@@ -202,6 +202,64 @@ internal sealed class BibliographyViewModel : PanelWorkScheduler
     /// never steal focus from a later interaction.</summary>
     public string? PendingKeyFocus { get; set; }
 
+    private string? _pendingJumpKey;
+    private Action<string, bool>? _pendingJumpOutcome;
+    private long _pendingJumpGeneration;
+
+    /// <summary>Ctrl+J's entry point. "Is this key in the bibliography"
+    /// is only answerable once the entries have landed, and on the
+    /// first press EnsureLoaded merely STARTS that load — answering
+    /// from the empty pre-load list would tell the user an entry they
+    /// are looking at does not exist. So the outcome is decided now if
+    /// the entries are already published, and parked until the publish
+    /// otherwise.</summary>
+    internal void RequestKeyFocus(string key, Action<string, bool> announceOutcome)
+    {
+        EnsureLoaded();
+        if (!IsLoadingEntries)
+        {
+            ResolveKeyFocus(key, announceOutcome);
+            return;
+        }
+        _pendingJumpKey = key;
+        _pendingJumpOutcome = announceOutcome;
+        _pendingJumpGeneration = Interlocked.Read(ref _generation);
+    }
+
+    /// <summary>Membership is asked of the LOADED SET, not the visible
+    /// rows: those are filtered by the search box and capped at
+    /// <see cref="MaxEntryRows"/>, so a present entry can be absent
+    /// from them.</summary>
+    private void ResolveKeyFocus(string key, Action<string, bool> announceOutcome)
+    {
+        bool present = _allEntries.Any(
+            entry => string.Equals(entry.Key, key, StringComparison.Ordinal));
+        announceOutcome(key, present);
+        if (present)
+        {
+            PendingKeyFocus = key;
+        }
+    }
+
+    /// <summary>Called once the entries publish. Generation-gated: a
+    /// reload or a path change between the press and the publish
+    /// invalidates the parked jump rather than focusing a stale grid.
+    /// </summary>
+    private void ResolveParkedKeyFocus()
+    {
+        if (_pendingJumpKey is not { } key || _pendingJumpOutcome is not { } outcome)
+        {
+            return;
+        }
+        _pendingJumpKey = null;
+        _pendingJumpOutcome = null;
+        if (_pendingJumpGeneration != Interlocked.Read(ref _generation))
+        {
+            return;
+        }
+        ResolveKeyFocus(key, outcome);
+    }
+
     internal Action? InterleaveForTests { get; set; }
 
     internal long GenerationForTests => Interlocked.Read(ref _generation);
@@ -331,6 +389,7 @@ internal sealed class BibliographyViewModel : PanelWorkScheduler
         IsLoadingEntries = false;
         EntriesError = loadError;
         ApplyFilter();
+        ResolveParkedKeyFocus();
     }
 
     internal void PublishUnresolved(
