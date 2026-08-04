@@ -142,12 +142,64 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
         Assert.True(workspace.Bibliography.IsLoadingEntries);
         await QuiesceAsync(workspace);
 
-        Assert.Equal("knuth1984", workspace.Bibliography.PendingKeyFocus);
+        Assert.Equal("knuth1984", workspace.Bibliography.ConsumeKeyFocusRequest());
         Assert.Contains(
             announced.OfType<A11yEvent.HostComposed>(),
             e => e.Text == "Jumped to bibliography entry: knuth1984.");
         Assert.DoesNotContain(
             announced.OfType<A11yEvent.HostComposed>(),
             e => e.Text == "Searching bibliography for: knuth1984.");
+    }
+
+    /// <summary>The focus request is now settled ASYNCHRONOUSLY on the
+    /// first press, so a view cannot invoke the command and read a
+    /// property straight afterwards — it has to be told. This is the
+    /// contract the W4-5 XAML will bind against.</summary>
+    [Fact]
+    public async Task ADeferredJumpNotifiesTheViewAndIsConsumableExactlyOnce()
+    {
+        var announced = new List<A11yEvent>();
+        using VaultSession session = OpenScanned();
+        using var workspace = MakeAsyncWorkspace(session, announced);
+        workspace.OpenPath("cited.md");
+        await QuiesceAsync(workspace);
+        workspace.OpenCitationDetails(
+            workspace.Citations.Rows.First(row => !row.IsUnresolved));
+
+        int notifications = 0;
+        workspace.Bibliography.KeyFocusRequested += (_, _) => notifications++;
+
+        workspace.JumpToBibliography();
+        // Nothing to consume yet, and the view has not been told.
+        Assert.True(workspace.Bibliography.IsLoadingEntries);
+        Assert.Equal(0, notifications);
+
+        await QuiesceAsync(workspace);
+
+        Assert.Equal(1, notifications);
+        Assert.Equal("knuth1984", workspace.Bibliography.ConsumeKeyFocusRequest());
+        // Consumed exactly once: a stale value must never steal focus
+        // from a later interaction.
+        Assert.Null(workspace.Bibliography.ConsumeKeyFocusRequest());
+    }
+
+    /// <summary>A jump that never resolves must not leave a live focus
+    /// request behind for whatever binds next.</summary>
+    [Fact]
+    public async Task ShutdownDropsAnUnconsumedFocusRequest()
+    {
+        var announced = new List<A11yEvent>();
+        using VaultSession session = OpenScanned();
+        using var workspace = MakeAsyncWorkspace(session, announced);
+        workspace.OpenPath("cited.md");
+        await QuiesceAsync(workspace);
+        workspace.OpenCitationDetails(
+            workspace.Citations.Rows.First(row => !row.IsUnresolved));
+
+        workspace.JumpToBibliography();
+        await QuiesceAsync(workspace);
+        workspace.Bibliography.Shutdown();
+
+        Assert.Null(workspace.Bibliography.ConsumeKeyFocusRequest());
     }
 }

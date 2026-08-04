@@ -197,7 +197,7 @@ public sealed class CitationWorkspaceSeamTests : IDisposable
         Assert.Contains(
             announced.OfType<A11yEvent.HostComposed>(),
             e => e.Text == "Jumped to bibliography entry: knuth1984.");
-        Assert.Equal("knuth1984", workspace.Bibliography.PendingKeyFocus);
+        Assert.Equal("knuth1984", workspace.Bibliography.ConsumeKeyFocusRequest());
 
         // Unresolved key absent from the entries → "Searching for".
         workspace.OpenCitationDetails(

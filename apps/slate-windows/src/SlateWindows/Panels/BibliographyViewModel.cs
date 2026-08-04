@@ -197,10 +197,23 @@ internal sealed class BibliographyViewModel : PanelWorkScheduler
     public string UnresolvedSummary =>
         CitationPhrase.Counted(Unresolved.Count, "unresolved key", "unresolved keys");
 
-    /// <summary>The key Ctrl+J asked the grid to land on. The window
-    /// layer consumes it once and clears it — a stale value must
-    /// never steal focus from a later interaction.</summary>
-    public string? PendingKeyFocus { get; set; }
+    /// <summary>Raised when Ctrl+J has settled on an entry the grid
+    /// should land on. This is an EVENT rather than a bindable
+    /// property because the outcome is settled asynchronously on the
+    /// first press: the entries are still loading when the command
+    /// returns, so a view that invoked the command and then read a
+    /// property would see nothing and silently fail to move focus.
+    /// </summary>
+    internal event EventHandler? KeyFocusRequested;
+
+    private string? _pendingKeyFocus;
+
+    /// <summary>Atomically take the outstanding focus request. Returns
+    /// null when there is none — a request is delivered to exactly one
+    /// consumer, so a stale value can never steal focus from a later
+    /// interaction.</summary>
+    internal string? ConsumeKeyFocusRequest() =>
+        Interlocked.Exchange(ref _pendingKeyFocus, null);
 
     private string? _pendingJumpKey;
     private Action<string, bool>? _pendingJumpOutcome;
@@ -235,10 +248,12 @@ internal sealed class BibliographyViewModel : PanelWorkScheduler
         bool present = _allEntries.Any(
             entry => string.Equals(entry.Key, key, StringComparison.Ordinal));
         announceOutcome(key, present);
-        if (present)
+        if (!present || IsShutDown)
         {
-            PendingKeyFocus = key;
+            return;
         }
+        _ = Interlocked.Exchange(ref _pendingKeyFocus, key);
+        KeyFocusRequested?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>Called once the entries publish. Generation-gated: a
@@ -294,11 +309,21 @@ internal sealed class BibliographyViewModel : PanelWorkScheduler
         }
     }
 
+    /// <summary>A parked jump and an unconsumed focus request are both
+    /// scoped to the identity that produced them.</summary>
+    private void DropKeyFocusState()
+    {
+        _ = Interlocked.Exchange(ref _pendingKeyFocus, null);
+        _pendingJumpKey = null;
+        _pendingJumpOutcome = null;
+    }
+
     /// <summary>Explicit reload: a new identity for both segments, so
     /// every parked publish is invalidated first (contract 3).</summary>
     public void ForceReload()
     {
         Interlocked.Increment(ref _generation);
+        DropKeyFocusState();
         _loadStarted = true;
         Entries.Clear();
         Unresolved.Clear();
@@ -462,6 +487,9 @@ internal sealed class BibliographyViewModel : PanelWorkScheduler
     {
         base.Shutdown();
         Interlocked.Increment(ref _generation);
+        // Drop any focus request nobody consumed, so a leaf that binds
+        // later cannot inherit it.
+        DropKeyFocusState();
     }
 }
 
