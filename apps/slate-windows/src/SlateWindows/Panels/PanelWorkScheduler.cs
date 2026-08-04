@@ -64,20 +64,41 @@ internal abstract class PanelWorkScheduler : BindableBase
             TrackWork(Task.Run(body));
             return;
         }
-        TrackWork(Task.Run(() =>
+        TrackWork(RunGatedAsync(gate, body));
+    }
+
+    /// <summary>
+    /// Wait for the prerequisite WITHOUT occupying a pool thread.
+    ///
+    /// The first version called <c>gate.Wait()</c> inside a
+    /// <c>Task.Run</c>, so every gated request parked a pool thread
+    /// while the seed it was waiting for was itself queued on that same
+    /// pool — opening several tabs during initialization could starve
+    /// the work that would release them.
+    /// </summary>
+    private async Task RunGatedAsync(Task gate, Action body)
+    {
+        try
+        {
+            await gate.ConfigureAwait(false);
+        }
+        catch (Exception exception) when (
+            exception is not OutOfMemoryException
+                and not StackOverflowException
+                and not AccessViolationException)
         {
             // A faulted prerequisite is NOT this body's failure to
             // report — the seeding path owns that notice. Swallow it so
             // tracked tasks stay non-faulting, then load anyway.
-            try
-            {
-                gate.Wait();
-            }
-            catch (AggregateException)
-            {
-            }
-            body();
-        }));
+        }
+        // Re-checked AFTER the wait. Teardown routinely lands while
+        // bodies are parked here, and the check before the wait cannot
+        // see it — without this, shutdown publishes into a dying UI.
+        if (_isShutDown)
+        {
+            return;
+        }
+        body();
     }
 
     private void TrackWork(Task work)

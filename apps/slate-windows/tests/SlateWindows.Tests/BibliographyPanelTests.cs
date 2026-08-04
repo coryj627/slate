@@ -220,7 +220,8 @@ public sealed class BibliographyPanelTests : IDisposable
         var leaf = MakeLeaf();
         // Contract 5: sources absent is distinct from sources present
         // but empty, and from a load error.
-        leaf.ApplySeedOutcome([], hasSources: false);
+        leaf.ApplySeedOutcome(
+            new BibliographySeedOutcome(BibliographySeedStatus.NoSources, []));
         leaf.EnsureLoaded();
 
         Assert.True(leaf.ShowNoSourcesState);
@@ -234,14 +235,65 @@ public sealed class BibliographyPanelTests : IDisposable
     public void SeedWarningsAreSurfacedVerbatim()
     {
         var leaf = MakeLeaf();
-        leaf.ApplySeedOutcome(
-            ["missing.bib: no such file or directory"], hasSources: true);
+        leaf.ApplySeedOutcome(new BibliographySeedOutcome(
+            BibliographySeedStatus.Seeded, ["missing.bib: no such file or directory"]));
         leaf.EnsureLoaded();
 
         // Contract 5: never swallowed — the notice names the source.
         string notice = Assert.Single(leaf.LoadNotices);
         Assert.Equal("missing.bib: no such file or directory", notice);
         Assert.False(leaf.ShowNoSourcesState);
+    }
+
+    /// <summary>
+    /// The stale-on-failure defect, fixed (D-13). This fixture's
+    /// session HAS seeded entries — exactly the condition that makes
+    /// the bug reachable: core's index is live from an earlier
+    /// successful seed, so a query would answer with two entries while
+    /// the notice says loading failed. Presenting them would be stale
+    /// bytes served as authoritative, which contract 5 forbids.
+    ///
+    /// Discrimination: with the refusal removed this publishes the two
+    /// fixture entries and the assertion fails.
+    /// </summary>
+    [Fact]
+    public void AFailedSeedPublishesNothingRatherThanLastSessionsEntries()
+    {
+        // Core really would answer — prove it before asserting refusal,
+        // so a fixture that silently stopped loading cannot pass this.
+        Assert.NotEmpty(_session.GetBibliographyEntries());
+
+        var leaf = MakeLeaf();
+        var seed = new BibliographySeed();
+        seed.Complete(new BibliographySeedOutcome(
+            BibliographySeedStatus.Failed, ["library.bib: permission denied"]));
+        leaf.AttachSeed(seed);
+        leaf.ApplySeedOutcome(seed.Outcome!);
+
+        leaf.EnsureLoaded();
+        leaf.Segment = BibliographySegment.Unresolved;
+
+        Assert.Empty(leaf.Entries);
+        Assert.Empty(leaf.Unresolved);
+        // The notice region carries the reason, verbatim (contract 5).
+        Assert.Equal("library.bib: permission denied", Assert.Single(leaf.LoadNotices));
+        // NOT "no sources configured" — sources existed and failed.
+        Assert.False(leaf.ShowNoSourcesState);
+    }
+
+    /// <summary>A successful seed still reads core, so the refusal
+    /// above cannot be a blanket "never query" regression.</summary>
+    [Fact]
+    public void ASeededOutcomeStillReadsCore()
+    {
+        var leaf = MakeLeaf();
+        var seed = new BibliographySeed();
+        seed.Complete(new BibliographySeedOutcome(BibliographySeedStatus.Seeded, []));
+        leaf.AttachSeed(seed);
+
+        leaf.EnsureLoaded();
+
+        Assert.NotEmpty(leaf.Entries);
     }
 
     [Fact]

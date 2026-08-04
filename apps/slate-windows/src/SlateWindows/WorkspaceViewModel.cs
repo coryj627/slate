@@ -1285,9 +1285,10 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         Bibliography = new Panels.BibliographyViewModel(
             session, announce, synchronousForTests: !startInteractionBackgroundWork);
         // Both leaves read through the session's bibliography sources,
-        // so neither may query before seeding lands.
-        Citations.GateWorkOn(_bibliographySourcesReady.Task);
-        Bibliography.GateWorkOn(_bibliographySourcesReady.Task);
+        // so neither may query before seeding SETTLES — and the
+        // bibliography also branches on how it settled.
+        Citations.GateWorkOn(_bibliographySeed.Completion);
+        Bibliography.AttachSeed(_bibliographySeed);
         // Seed the vault's bibliography ONCE per open, BEFORE the first
         // note selection can start a citation render. Silent on both
         // success and failure — the leaf's notice region is the
@@ -1676,6 +1677,14 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         _citationSummary = null;
         Citations.Shutdown();
         Bibliography.Shutdown();
+        // Settle the seed AFTER marking both leaves shut down. A body
+        // parked on the gate would otherwise wait for a seed that is
+        // never coming; releasing it here lets it wake, observe
+        // IsShutDown, and return without publishing. Cancelled is a
+        // STATUS, not a cancelled Task — a cancelled Task would throw
+        // into the scheduler's catch, be swallowed, and run the body
+        // anyway.
+        _bibliographySeed.Cancel();
         // Panels first: their workers hold the shared session, which
         // the vault lifecycle disposes right after this workspace —
         // invalidate every in-flight load before that happens.

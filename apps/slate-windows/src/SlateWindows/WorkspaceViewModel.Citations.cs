@@ -28,14 +28,13 @@ internal sealed partial class WorkspaceViewModel
     private System.Windows.Input.ICommand? _closeFilesCitingCommand;
     private bool _bibliographySeeded;
 
-    /// <summary>Completed once SetBibliographySources has landed (or
-    /// definitively failed). Both citation leaves gate their background
-    /// loads on this, so no render can outrun the sources it needs.
-    /// ALWAYS completes — a seeding failure that left this pending
-    /// would hang every citation load for the life of the workspace.
-    /// </summary>
-    private readonly TaskCompletionSource _bibliographySourcesReady =
-        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    /// <summary>The terminal seed outcome both citation leaves wait on
+    /// and BRANCH on. A bare "ready" gate said only when seeding
+    /// finished; the leaves also need to know whether it succeeded,
+    /// because a failed seed must stop them reading core rather than
+    /// merely let them through late (see
+    /// <see cref="BibliographySeedOutcome.MayReadEntries"/>).</summary>
+    private readonly BibliographySeed _bibliographySeed = new();
 
     /// <summary>Non-null while the details overlay is open.</summary>
     public CitationDetailsViewModel? CitationDetails
@@ -106,15 +105,11 @@ internal sealed partial class WorkspaceViewModel
 
         if (synchronousForTests)
         {
-            try
-            {
-                (var notices, bool hasSources) = ReadAndSeedSources();
-                Bibliography.ApplySeedOutcome(notices, hasSources);
-            }
-            finally
-            {
-                _ = _bibliographySourcesReady.TrySetResult();
-            }
+            BibliographySeedOutcome outcome = ReadAndSeedSources();
+            // Settle BEFORE publishing: a leaf that reacts to the
+            // publish must never observe an unsettled seed.
+            _bibliographySeed.Complete(outcome);
+            Bibliography.ApplySeedOutcome(outcome);
             return;
         }
         // Marshal the outcome back the way the panel schedulers do —
@@ -122,39 +117,54 @@ internal sealed partial class WorkspaceViewModel
         SynchronizationContext? uiContext = SynchronizationContext.Current;
         _ = Task.Run(() =>
         {
+            BibliographySeedOutcomeHolder holder = default;
             try
             {
-                (var notices, bool hasSources) = ReadAndSeedSources();
-                if (uiContext is null)
-                {
-                    Bibliography.ApplySeedOutcome(notices, hasSources);
-                }
-                else
-                {
-                    uiContext.Post(
-                        _ => Bibliography.ApplySeedOutcome(notices, hasSources), null);
-                }
+                holder = new BibliographySeedOutcomeHolder(ReadAndSeedSources());
             }
             finally
             {
-                // Release the gate on EVERY path: the sources are as
-                // seeded as they are ever going to get, and a pending
-                // gate would deadlock both leaves permanently.
-                _ = _bibliographySourcesReady.TrySetResult();
+                // Settle on EVERY path: the sources are as seeded as
+                // they are ever going to get, and an unsettled seed
+                // would hang both leaves for the life of the workspace.
+                _bibliographySeed.Complete(
+                    holder.Outcome
+                        ?? new BibliographySeedOutcome(
+                            BibliographySeedStatus.Failed, []));
+            }
+            BibliographySeedOutcome settled = _bibliographySeed.Outcome!;
+            if (uiContext is null)
+            {
+                Bibliography.ApplySeedOutcome(settled);
+            }
+            else
+            {
+                uiContext.Post(_ => Bibliography.ApplySeedOutcome(settled), null);
             }
         });
     }
 
+    /// <summary>Lets the finally block distinguish "the body produced
+    /// an outcome" from "the body died before producing one" without
+    /// catching fatal exceptions it has no business handling.</summary>
+    private readonly struct BibliographySeedOutcomeHolder(BibliographySeedOutcome outcome)
+    {
+        public BibliographySeedOutcome? Outcome { get; } = outcome;
+    }
+
     /// <summary>The seed body, shared by the sync and async paths so
     /// the test mode cannot drift from production.</summary>
-    private (List<string> Notices, bool HasSources) ReadAndSeedSources()
+    private BibliographySeedOutcome ReadAndSeedSources()
     {
         var notices = new List<string>();
-        bool hasSources = false;
         try
         {
             BibliographySource[] sources = _session.CitationsPrefs().Sources;
-            hasSources = sources.Length > 0;
+            if (sources.Length == 0)
+            {
+                return new BibliographySeedOutcome(
+                    BibliographySeedStatus.NoSources, notices);
+            }
             foreach (BibLoadWarning warning in _session.SetBibliographySources(sources))
             {
                 // Verbatim, naming the source — never swallowed.
@@ -167,8 +177,14 @@ internal sealed partial class WorkspaceViewModel
                 and not AccessViolationException)
         {
             notices.Add(exception.Message);
+            // Core's set_bibliography_sources is ALL-OR-NOTHING: it
+            // returned before replacing anything, so the previous
+            // session's entries and index are still live. Failed says
+            // the leaves must not read them (D-13).
+            return new BibliographySeedOutcome(
+                BibliographySeedStatus.Failed, notices);
         }
-        return (notices, hasSources);
+        return new BibliographySeedOutcome(BibliographySeedStatus.Seeded, notices);
     }
 
     /// <summary>Ctrl+Shift+J (mac ⇧⌘J): the note's citation summary.

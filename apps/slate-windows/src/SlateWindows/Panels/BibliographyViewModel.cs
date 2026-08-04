@@ -55,6 +55,7 @@ internal sealed class BibliographyViewModel : PanelWorkScheduler
     private string? _unresolvedError;
     private int _totalEntryCount;
     private IReadOnlyList<BibEntry> _allEntries = [];
+    private BibliographySeed? _seed;
 
     public BibliographyViewModel(
         VaultSession session,
@@ -281,17 +282,40 @@ internal sealed class BibliographyViewModel : PanelWorkScheduler
 
     internal int EntriesRequestIdForTests => _entriesRequestId;
 
-    /// <summary>Called by the workspace once the vault's sources have
-    /// been seeded. Notices are shown as-is; an empty source list is
-    /// the distinct "no sources configured" state.</summary>
-    public void ApplySeedOutcome(IReadOnlyList<string> notices, bool hasSources)
+    /// <summary>The prerequisite this leaf branches on. Attached once,
+    /// by the workspace, before any load can start.</summary>
+    internal void AttachSeed(BibliographySeed seed)
     {
-        LoadNotices = notices;
-        HasNoSources = !hasSources;
+        _seed = seed;
+        GateWorkOn(seed.Completion);
+    }
+
+    /// <summary>Called by the workspace once the vault's sources have
+    /// settled. Notices are shown as-is; no sources configured is the
+    /// distinct state (contract 5).</summary>
+    public void ApplySeedOutcome(BibliographySeedOutcome outcome)
+    {
+        LoadNotices = outcome.Notices;
+        HasNoSources = !outcome.HasSources;
         OnPropertyChanged(nameof(LoadNotices));
         OnPropertyChanged(nameof(HasNoSources));
         NotifyStateChanged();
     }
+
+    /// <summary>
+    /// Whether core's bibliography tables may be read for this load.
+    ///
+    /// A failed seed leaves the PREVIOUS session's entries and index
+    /// live (see <see cref="BibliographySeedOutcome.MayReadEntries"/>),
+    /// so querying would present stale data as authoritative under a
+    /// notice saying the load failed. Publishing nothing is the honest
+    /// answer: the notice region already says why (contract 5, D-13).
+    ///
+    /// A seed still in flight cannot happen on a gated body — the gate
+    /// is the whole point — but if the gate is ever removed, refusing
+    /// is the fail-closed direction.
+    /// </summary>
+    private bool MayQueryCore => _seed is null || _seed.Outcome?.MayReadEntries == true;
 
     /// <summary>Idempotent lazy load (the rail-reveal hook). Does NOT
     /// re-query once loaded — that is ForceReload's job.</summary>
@@ -309,8 +333,11 @@ internal sealed class BibliographyViewModel : PanelWorkScheduler
         }
     }
 
-    /// <summary>A parked jump and an unconsumed focus request are both
-    /// scoped to the identity that produced them.</summary>
+    /// <summary>
+    /// Teardown drops both: nothing should speak into a closing
+    /// workspace, and an unconsumed focus request points at a grid
+    /// that is going away.
+    /// </summary>
     private void DropKeyFocusState()
     {
         _ = Interlocked.Exchange(ref _pendingKeyFocus, null);
@@ -318,12 +345,34 @@ internal sealed class BibliographyViewModel : PanelWorkScheduler
         _pendingJumpOutcome = null;
     }
 
+    /// <summary>
+    /// A reload mid-jump RE-TARGETS the parked request at the new
+    /// identity instead of discarding it.
+    ///
+    /// Ctrl+J semantics: the latest press wins and exactly one
+    /// announcement is heard — a superseded press is silent only
+    /// because its successor speaks. A press whose answer is discarded
+    /// with no successor is different: the user pressed a key and
+    /// heard NOTHING, which in a screen-reader-first app reads as a
+    /// dead keystroke. So the unconsumed focus request is dropped (the
+    /// rows it named are being cleared) but the parked jump survives
+    /// and resolves against the reloaded set.
+    /// </summary>
+    private void RetargetKeyFocusAfterReload(long generation)
+    {
+        _ = Interlocked.Exchange(ref _pendingKeyFocus, null);
+        if (_pendingJumpKey is not null)
+        {
+            _pendingJumpGeneration = generation;
+        }
+    }
+
     /// <summary>Explicit reload: a new identity for both segments, so
     /// every parked publish is invalidated first (contract 3).</summary>
     public void ForceReload()
     {
-        Interlocked.Increment(ref _generation);
-        DropKeyFocusState();
+        long generation = Interlocked.Increment(ref _generation);
+        RetargetKeyFocusAfterReload(generation);
         _loadStarted = true;
         Entries.Clear();
         Unresolved.Clear();
@@ -359,6 +408,14 @@ internal sealed class BibliographyViewModel : PanelWorkScheduler
         IsLoadingEntries = true;
         StartWork(() =>
         {
+            if (!MayQueryCore)
+            {
+                // Stale-on-failure refusal: publish NOTHING rather than
+                // last session's entries (D-13).
+                InterleaveForTests?.Invoke();
+                Post(() => PublishEntries(generation, requestId, [], null));
+                return;
+            }
             try
             {
                 var entries = _session.GetBibliographyEntries();
@@ -383,6 +440,12 @@ internal sealed class BibliographyViewModel : PanelWorkScheduler
         IsLoadingUnresolved = true;
         StartWork(() =>
         {
+            if (!MayQueryCore)
+            {
+                InterleaveForTests?.Invoke();
+                Post(() => PublishUnresolved(generation, requestId, [], null));
+                return;
+            }
             try
             {
                 var unresolved = _session.ListUnresolvedCitations();

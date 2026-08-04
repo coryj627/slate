@@ -203,4 +203,93 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
 
         Assert.Null(workspace.Bibliography.ConsumeKeyFocusRequest());
     }
+
+    /// <summary>
+    /// Ctrl+J semantics (design decision 5): a parked press must never
+    /// be discarded into SILENCE. The latest press wins and exactly one
+    /// announcement is heard — a superseded press is quiet only because
+    /// its successor speaks. A reload mid-jump has no successor, so it
+    /// RE-TARGETS the parked request at the reloaded set instead of
+    /// dropping it; a keypress that produces no speech at all reads as
+    /// a dead key in a screen-reader-first app.
+    ///
+    /// The seed is the release seam: holding it unsettled keeps the
+    /// entries load parked, so the jump genuinely parks too. The
+    /// synchronous test mode CANNOT express this — it runs the load
+    /// inline, so RequestKeyFocus always resolves immediately and the
+    /// parked path is never entered. (A first version of this test
+    /// lived there and passed against a deliberately broken
+    /// implementation.)
+    /// </summary>
+    [Fact]
+    public async Task AReloadMidJumpRetargetsTheParkedPressInsteadOfSilencingIt()
+    {
+        using VaultSession session = OpenScanned();
+        var leaf = new BibliographyViewModel(
+            session, _ => { }, synchronousForTests: false);
+        var seed = new BibliographySeed();
+        leaf.AttachSeed(seed);
+        var answered = new List<(string Key, bool Present)>();
+
+        // Parked: the gate is unsettled, so the entries load cannot
+        // finish and the key is not yet answerable.
+        leaf.EnsureLoaded();
+        leaf.RequestKeyFocus("knuth1984", (key, present) => answered.Add((key, present)));
+        Assert.Empty(answered);
+
+        // A reload lands while the press is still parked.
+        leaf.ForceReload();
+        // Seed for real before releasing, exactly as the workspace
+        // does — otherwise core answers empty and "present" would be
+        // false for reasons that have nothing to do with the retarget.
+        _ = session.SetBibliographySources(session.CitationsPrefs().Sources);
+        seed.Complete(new BibliographySeedOutcome(BibliographySeedStatus.Seeded, []));
+
+        for (int round = 0; round < 40; round++)
+        {
+            await leaf.DrainForTests();
+            await Task.Delay(2);
+        }
+
+        (string Key, bool Present) only = Assert.Single(answered);
+        Assert.Equal("knuth1984", only.Key);
+        Assert.True(only.Present);
+    }
+
+    /// <summary>
+    /// Teardown must RELEASE parked bodies, and they must not run.
+    ///
+    /// Asserting "nothing published" would prove nothing here — the
+    /// publish paths already check IsShutDown themselves, so that
+    /// assertion passes with the scheduler's post-wait recheck deleted.
+    /// What the recheck actually buys is that the BODY never executes:
+    /// the vault lifecycle disposes the shared session immediately
+    /// after the workspace, so a body waking up post-shutdown would
+    /// call across FFI into a session that is going away.
+    /// </summary>
+    [Fact]
+    public async Task ShutdownReleasesParkedBodiesWithoutRunningThem()
+    {
+        using VaultSession session = OpenScanned();
+        _ = session.SetBibliographySources(session.CitationsPrefs().Sources);
+        var leaf = new BibliographyViewModel(
+            session, _ => { }, synchronousForTests: false);
+        var seed = new BibliographySeed();
+        leaf.AttachSeed(seed);
+        int bodyRuns = 0;
+        // Fires inside the body, after the core query — so a non-zero
+        // count means a body ran against a session already torn down.
+        leaf.InterleaveForTests = () => Interlocked.Increment(ref bodyRuns);
+        leaf.EnsureLoaded();
+
+        leaf.Shutdown();
+        seed.Cancel();
+
+        // The parked work completes rather than hanging forever...
+        Task drained = leaf.DrainForTests();
+        Assert.Same(drained, await Task.WhenAny(drained, Task.Delay(5_000)));
+        await Task.Delay(20);
+        // ...without ever touching the session.
+        Assert.Equal(0, Volatile.Read(ref bodyRuns));
+    }
 }

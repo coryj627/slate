@@ -168,18 +168,30 @@ Two reads of `ListCitationsInFile` for the same note. Unifying them
 would restructure a shipped W2-3 surface for no user-visible gain
 (O6). Both are generation-guarded independently.
 
+**D-13** — Windows ADDITION: after a FAILED seed the bibliography
+publishes NOTHING rather than whatever core's tables still hold.
+Core's `set_bibliography_sources` is all-or-nothing and returns before
+replacing anything, so the previous session's entries and `BibIndex`
+survive a failed load; querying them would serve stale bytes as
+authoritative underneath a notice saying the load failed (contract 5).
+mac has no equivalent refusal and will render them. The notice region
+already carries the reason, so the refusal costs no new copy.
+*(BibliographySeedOutcome.MayReadEntries, BibliographyViewModel
+MayQueryCore)*
+
 **D-12** — `citations`/`bibliography` are the first production
 consumers of `AccessibleDataGrid` outside the bulk-rename preview and
 reading tables. Any §8.7 conformance gap this exposes is a W4-1
 substrate bug to fix in `Grids/`, not a citations workaround.
 
-## Initialization lifecycle — OPEN, design pass pending
+## Initialization lifecycle — SETTLED 2026-08-04
 
-The red-team arc produced blockers in this area two rounds running,
-with round 2's blockers created by round 1's fix. Protocol rule (3)
-fired: no more patching until the model below is written.
+The red-team arc produced blockers here two rounds running, with round
+2's blockers created by round 1's fix, so protocol rule (3) fired and
+patching stopped until this model existed. Author approved 2026-08-04;
+implemented the same day.
 
-### Confirmed defect, PRE-EXISTING (not introduced by the round-1 fix)
+### The defect that drove it, PRE-EXISTING (not introduced by the round-1 fix)
 
 A failed seed leaves the PREVIOUS session's bibliography live, and
 citations resolve against it. Verified end to end:
@@ -195,39 +207,69 @@ citations resolve against it. Verified end to end:
   removed or made unreadable → reopen → key K renders as RESOLVED
   against last session's data, under an error notice.
 
-This violates contract 5 (degradation honesty): stale data is
-presented as authoritative while the notice says loading failed. It is
-reachable without coincidences and predates the gate — before it,
-panels queried the same stale index concurrently.
+This violates contract 5: stale data presented as authoritative while
+the notice says loading failed.
 
-### Decisions the design pass must make
+### The model
 
-1. **Terminal seed outcome.** Replace "gate released" with a typed
-   result (seeded / failed-with-notices / cancelled). Panels branch on
-   it instead of querying blindly. Required by the defect above.
-2. **Teardown.** Who completes the gate on `Dispose`, and gated bodies
-   must recheck `IsShutDown` AFTER the wait. Note the trap: a naive
-   `TrySetCanceled` throws into the `catch (AggregateException)` in
-   `PanelWorkScheduler.StartWork` and the body runs anyway.
-3. **Wait mechanism.** Async continuation instead of blocking a pool
-   thread, plus coalescing superseded requests so opening several tabs
-   during init cannot accumulate stale work.
-4. **Ownership.** Does the prerequisite gate belong on the shared
-   `PanelWorkScheduler` (current, affects every panel) or on a
-   W4-5-owned initialization type? The shared placement was chosen for
-   cost, not fit.
-5. **Ctrl+J completion semantics — AUTHOR DECISION.** Two presses
-   before publication currently overwrite the first callback, so the
-   first press announces NOTHING; a reload mid-jump does the same.
-   Silence after a keypress is wrong in a screen-reader-first app, but
-   which outcome is right (supersede-and-announce vs resolve both) is
-   a product call.
-6. **Test seam.** Build a controllable scheduler seam (manually
-   released tasks + deterministic `SynchronizationContext`) or accept
-   fixture-speed determinism as a recorded risk. Either way it becomes
-   a register entry so it stops recurring every round.
+**1 — The seed is a terminal OUTCOME, not a gate.** `BibliographySeed`
+completes with `BibliographySeedOutcome(Status, Notices)` where status
+is `Seeded` / `NoSources` / `Failed` / `Cancelled`. A gate encoded only
+WHEN seeding finished; the leaves also need to know WHAT HAPPENED,
+because a failed seed must stop them reading core rather than merely
+let them through late. The first settle wins, under a lock, so a
+teardown racing a landing seed cannot overwrite a real outcome.
 
-### Settled
+**2 — Teardown settles the seed; cancellation is a STATUS.** Dispose
+marks both leaves shut down and THEN cancels, so a parked body wakes,
+observes `IsShutDown`, and returns. `TrySetCanceled` is deliberately
+not used: a cancelled task throws out of the awaiting continuation
+into the scheduler's catch, is swallowed, and the body runs anyway —
+the cancellation would be silently ineffective. Gated bodies recheck
+`IsShutDown` AFTER the wait; the check before it cannot see a teardown
+that lands while parked.
+
+**3 — The wait is an async continuation.** `RunGatedAsync` awaits
+rather than calling `gate.Wait()`. The blocking version parked a pool
+thread per gated request while the seed that would release them was
+itself queued on that same pool.
+
+**4 — Ownership is split.** The prerequisite hook stays on the shared
+`PanelWorkScheduler` (it is generic — "hold work until a task
+settles"), and the TYPED outcome is W4-5-owned: only
+`BibliographyViewModel` takes `AttachSeed` and branches on
+`MayReadEntries`. No other panel pays for a citation concern.
+
+**5 — Ctrl+J: the latest press wins, and no press is ever silent.**
+A superseded press is quiet only because its successor speaks. A press
+whose answer is discarded with NO successor is different — the user
+pressed a key and heard nothing, which reads as a dead key. So a
+reload mid-jump RE-TARGETS the parked request at the reloaded set
+instead of dropping it. Only `Shutdown` drops, because nothing should
+speak into a closing workspace.
+
+**6 — The seed IS the test seam.** Holding it unsettled keeps loads
+parked deterministically, with no reliance on fixture size. This
+answers the standing round-2 critique that fixture-speed determinism
+was not a controlled seam.
+
+### Ordering trap worth keeping
+
+The synchronous test mode runs bodies INLINE and ignores the gate, so
+it cannot express any of this: `RequestKeyFocus` always resolves
+immediately there and the parked path is never entered. A first
+version of the reload test lived in the synchronous suite and PASSED
+against a deliberately broken implementation. Interleaving facts
+belong in `CitationAsyncInterleavingTests`, and every one of them was
+mutation-verified by reverting the fix and confirming the test fails.
+
+Same trap, second form: asserting "shutdown published nothing" proves
+nothing, because the publish paths already check `IsShutDown`
+themselves — that assertion passes with the scheduler's post-wait
+recheck deleted. What the recheck buys is that the BODY never runs,
+so the assertion has to be about the core call, not the publish.
+
+### Settled earlier
 
 **The Ctrl+J focus request is an event, not a property** (`df2d6a0`).
 The jump resolves ASYNCHRONOUSLY on first press, so a view cannot
@@ -235,8 +277,8 @@ invoke the command and then read a property — it would see null.
 `KeyFocusRequested` + atomic `ConsumeKeyFocusRequest()`, mirroring
 `EditorInteractions.PopoverFocusRequested` /
 `ConsumePopoverFocusRequest` (consumer pattern:
-`EditorInteractionPopoverHost.cs:69,84`). `Shutdown` and `ForceReload`
-drop unconsumed requests. **The W4-5 XAML must SUBSCRIBE, not poll.**
+`EditorInteractionPopoverHost.cs:69,84`). **The W4-5 XAML SUBSCRIBES,
+never polls.**
 
 ## Substrate gaps the view layer exposed (D-12 in practice)
 
@@ -290,9 +332,15 @@ reported missing whenever the search box had text.
 
 ### Round 2 (2026-08-04, high effort) — 4 highs + 1 low, MOSTLY AGAINST THE ROUND-1 FIX
 
-Open, pending the design pass: see the six decisions above. I1
-(stale-on-failure) is confirmed and documented above as pre-existing.
-The low finding is the test-seam critique, decision 6.
+**RESOLVED 2026-08-04 by the initialization-lifecycle design above.**
+I2 (teardown leaves the gate pending; gated bodies do not recheck
+`IsShutDown`) and the `TrySetCanceled` sibling defect → model items 2.
+I4 (`gate.Wait` blocks a pool thread) → item 3. I3-remainder (a second
+Ctrl+J before publication silences the first; reload mid-jump the
+same) → item 5. I1 (stale-on-failure), confirmed above as pre-existing
+and no longer UNVERIFIED — the core read is cited line by line → items
+1 and 4, recorded as divergence D-13. The low finding, the test-seam
+critique, → item 6: the seed itself is the controlled release point.
 
 **Protocol note:** this round ran at `high`, not the `xhigh` the
 protocol specifies. The findings stand but the round was one tier
