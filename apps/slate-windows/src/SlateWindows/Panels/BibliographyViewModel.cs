@@ -494,7 +494,18 @@ internal sealed class BibliographyViewModel : PanelWorkScheduler
         _unresolvedLoadStarted = false;
         EntriesError = null;
         UnresolvedError = null;
+        _matchedEntryCount = 0;
+        _totalUnresolvedCount = 0;
         NotifyStateChanged();
+        // Publish the CLEAR before starting the new read. Contract 3
+        // requires rows to be cleared synchronously so nothing stale is
+        // actionable while a newer read is in flight; the view rebinds
+        // from these events, so clearing the collections without
+        // raising them left the grid holding the previous rows — live,
+        // activatable, and answering row actions with discarded keys —
+        // for the whole duration of the load.
+        RaiseEntriesPublished();
+        RaiseUnresolvedPublished();
         LoadEntries();
         if (_segment == BibliographySegment.Unresolved)
         {
@@ -645,6 +656,9 @@ internal sealed class BibliographyViewModel : PanelWorkScheduler
     internal void RaiseUnresolvedPublished() =>
         UnresolvedPublished?.Invoke(this, EventArgs.Empty);
 
+    private void RaiseEntriesPublished() =>
+        EntriesPublished?.Invoke(this, EventArgs.Empty);
+
     private void ApplyFilter()
     {
         Entries.Clear();
@@ -661,7 +675,7 @@ internal sealed class BibliographyViewModel : PanelWorkScheduler
         }
         OnPropertyChanged(nameof(EntriesSummary));
         NotifyStateChanged();
-        EntriesPublished?.Invoke(this, EventArgs.Empty);
+        RaiseEntriesPublished();
     }
 
     /// <summary>The mac filter predicate verbatim

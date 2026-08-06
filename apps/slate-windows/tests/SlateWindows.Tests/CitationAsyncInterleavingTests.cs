@@ -298,6 +298,57 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
     }
 
     /// <summary>
+    /// A reload must publish its CLEAR, not just its eventual result.
+    ///
+    /// Contract 3: "clears rows synchronously, so no stale row is ever
+    /// actionable while a newer read is in flight." That held while the
+    /// window rebound from CollectionChanged — `Entries.Clear()` itself
+    /// rebound the grid to empty. Replacing that with an explicit
+    /// publish event moved the rebind to the END of the load, so
+    /// between the clear and the publish the grid keeps the PREVIOUS
+    /// rows bound and live: Enter opens a details sheet for a discarded
+    /// entry, and the row action queries a stale key.
+    ///
+    /// The gate is held so the window between clear and publish is
+    /// observable at all; in synchronous mode the load completes inline
+    /// and there is no gap to see.
+    /// </summary>
+    [Fact]
+    public async Task AReloadPublishesTheClearBeforeTheNewReadLands()
+    {
+        using VaultSession session = OpenScanned();
+        _ = session.SetBibliographySources(session.CitationsPrefs().Sources);
+        var leaf = new BibliographyViewModel(
+            session, _ => { }, synchronousForTests: false);
+        var seed = new BibliographySeed();
+        leaf.AttachSeed(seed);
+        seed.Complete(new BibliographySeedOutcome(BibliographySeedStatus.Seeded, []));
+        leaf.EnsureLoaded();
+        for (int round = 0; round < 40; round++)
+        {
+            await leaf.DrainForTests();
+            await Task.Delay(2);
+        }
+        Assert.NotEmpty(leaf.Entries);
+
+        // Re-gate so the reload's read cannot land immediately.
+        var held = new BibliographySeed();
+        leaf.AttachSeed(held);
+        int entriesPublished = 0;
+        int unresolvedPublished = 0;
+        leaf.EntriesPublished += (_, _) => entriesPublished++;
+        leaf.UnresolvedPublished += (_, _) => unresolvedPublished++;
+
+        leaf.ForceReload();
+
+        // The clear is announced to the view immediately, so nothing
+        // stale stays bound while the new read is in flight.
+        Assert.Empty(leaf.Entries);
+        Assert.Equal(1, entriesPublished);
+        Assert.Equal(1, unresolvedPublished);
+    }
+
+    /// <summary>
     /// Gated bodies must never run on the caller's thread.
     ///
     /// The subtle case is an ALREADY-SETTLED gate: awaiting a completed
