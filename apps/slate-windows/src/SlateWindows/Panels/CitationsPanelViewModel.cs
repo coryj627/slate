@@ -295,6 +295,19 @@ internal sealed class CitationsPanelViewModel : PanelWorkScheduler
     /// real answer instead of reading zero.</summary>
     internal event EventHandler? RowsPublished;
 
+    /// <summary>
+    /// Whether the SETTLED row set still contains this citation key.
+    ///
+    /// Asked after a publish, never during one. `Publish` clears and
+    /// re-adds, so mid-publish the collection is transiently empty —
+    /// a window that says nothing about whether the note still cites
+    /// the key.
+    /// </summary>
+    internal bool ContainsKey(string key) =>
+        key.Length > 0
+        && Rows.Any(row => row.Reference.Citations.Any(
+            cited => string.Equals(cited.Key, key, StringComparison.Ordinal)));
+
     private void NotifyStateChanged()
     {
         OnPropertyChanged(nameof(ShowNoFileState));

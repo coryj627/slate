@@ -285,6 +285,44 @@ public sealed class CitationWorkspaceSeamTests : IDisposable
         Assert.Equal(3, workspace.Citations.Rows.Count);
     }
 
+    /// <summary>
+    /// A republish must not be mistaken for the citation disappearing.
+    ///
+    /// `Publish` clears and re-adds, so a Reset with Count == 0 fires
+    /// on EVERY publish. The window layer closed the details sheet on
+    /// that, which was invisible until the save funnel started
+    /// republishing this leaf — after which every Ctrl+S, property
+    /// write and task toggle slammed an open sheet shut mid-read.
+    ///
+    /// Asserted at the view-model seam because that is where the
+    /// identity question lives: does the settled row set still contain
+    /// the key the sheet is about?
+    /// </summary>
+    [Fact]
+    public void ARepublishThatKeepsTheCitationKeepsItIdentifiable()
+    {
+        var announced = new List<A11yEvent>();
+        using VaultSession session = OpenScanned();
+        using var workspace = MakeWorkspace(session, announced);
+        workspace.OpenPath("cited.md");
+        Assert.True(workspace.Citations.ContainsKey("knuth1984"));
+
+        // The save path the funnel now drives.
+        var tab = Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        tab.Text = "# Cited\n\nA citation [@knuth1984] and a ghost [@ghostkey].\n";
+        workspace.SaveActiveCommand.Execute(null);
+
+        // Still cited, so the sheet describing it is still valid.
+        Assert.True(workspace.Citations.ContainsKey("knuth1984"));
+
+        // Remove it and the answer flips — the sheet SHOULD close then.
+        tab.Text = "# Cited\n\nOnly a ghost [@ghostkey] now.\n";
+        workspace.SaveActiveCommand.Execute(null);
+
+        Assert.False(workspace.Citations.ContainsKey("knuth1984"));
+        Assert.True(workspace.Citations.ContainsKey("ghostkey"));
+    }
+
     [Fact]
     public void TheSuiteAddsExactlyTwoHostComposedTexts()
     {

@@ -135,7 +135,7 @@ public partial class MainWindow
         }
         if (_observedCitations is not null)
         {
-            _observedCitations.Rows.CollectionChanged -= CitationRows_Changed;
+            _observedCitations.RowsPublished -= CitationRows_Published;
             _observedCitations = null;
         }
         if (workspace is null)
@@ -149,22 +149,46 @@ public partial class MainWindow
         _observedBibliography.UnresolvedPublished += BibliographyUnresolved_Changed;
         _observedBibliography.KeyFocusRequested += Bibliography_KeyFocusRequested;
         _observedCitations = workspace.Citations;
-        _observedCitations.Rows.CollectionChanged += CitationRows_Changed;
+        _observedCitations.RowsPublished += CitationRows_Published;
         BindBibliographyEntriesGrid();
         BindBibliographyUnresolvedGrid();
     }
 
-    private void CitationRows_Changed(object? sender, NotifyCollectionChangedEventArgs e)
+    /// <summary>
+    /// Close the details sheet only when the citation it describes is
+    /// genuinely gone from the SETTLED row set.
+    ///
+    /// This ran on `CollectionChanged` and closed whenever the
+    /// collection was empty. `Publish` clears and re-adds, so the Reset
+    /// fires with Count == 0 on EVERY publish — mid-publish emptiness
+    /// says nothing about whether the note still cites the key. That
+    /// was harmless only while nothing re-published under an open
+    /// sheet; wiring the save funnel into this leaf made every Ctrl+S,
+    /// property write and task toggle slam the sheet shut mid-read.
+    ///
+    /// Asking after the publish also fixes the converse the old shape
+    /// could not see: rows republishing NON-empty while that particular
+    /// citation disappeared left the sheet describing a citation the
+    /// note no longer contains.
+    /// </summary>
+    private void CitationRows_Published(object? sender, EventArgs e)
     {
-        // The citations leaf is an ItemsSource-bound ListBox; nothing to
-        // rebind. A row vanishing under an open details sheet would
-        // leave the sheet describing a citation the note no longer has,
-        // so the sheet closes with it.
-        if (_observedWorkspace?.CitationDetails is not null
-            && _observedCitations is { Rows.Count: 0 })
+        if (_observedWorkspace?.CitationDetails is not { } details
+            || _observedCitations is not { } citations)
         {
-            _observedWorkspace.CloseCitationDetailsCommand.Execute(null);
+            return;
         }
+        if (details.EntryKey.Length > 0 && citations.ContainsKey(details.EntryKey))
+        {
+            return;
+        }
+        if (citations.Rows.Count > 0 && details.EntryKey.Length == 0)
+        {
+            // No key to match on (a placeholder expansion): only an
+            // empty set is evidence the citation is gone.
+            return;
+        }
+        _observedWorkspace.CloseCitationDetailsCommand.Execute(null);
     }
 
     private void BibliographyEntries_Changed(object? sender, EventArgs eventArgs) =>
