@@ -2605,6 +2605,39 @@ public sealed class ShellAccessibilityTests
                     TimeSpan.FromSeconds(15)),
                 "Ctrl+J announced a jump but the entry never appeared in the bound grid");
 
+            // ---- Ctrl+J on a MISS must still land somewhere --------
+            // The jump closes the focus-trapped sheet before resolving,
+            // so returning early on a miss left focus on the window
+            // root: the user pressed a key, heard "Searching
+            // bibliography for: X." and was nowhere, with Tab
+            // restarting at the menu bar. Measured before the fix as
+            // FocusedElement = Slate.MainWindow.
+            SelectLeaf("Citations");
+            AutomationElement citationsAgain = WaitForElement(
+                window, "PanelCitationsList", TimeSpan.FromSeconds(15));
+            AutomationElement ghostRow = citationsAgain
+                .FindAllDescendants(
+                    automation.ConditionFactory.ByControlType(ControlType.ListItem))
+                .First(item => (item.Properties.Name.ValueOrDefault ?? "")
+                    .Contains("Unresolved", StringComparison.OrdinalIgnoreCase));
+            ghostRow.Patterns.SelectionItem.Pattern.Select();
+            ghostRow.Focus();
+            PressKey(VirtualKeyShort.RETURN);
+            WaitForElement(window, "CitationDetailsSheet", TimeSpan.FromSeconds(10));
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_J);
+            AssertElementDisappears(window, automation, "CitationDetailsSheet");
+            AutomationElement afterMiss = WaitForElement(
+                window, "BibliographySearch", TimeSpan.FromSeconds(10));
+            AssertEventuallyFocused(
+                afterMiss,
+                "A Ctrl+J miss stranded focus instead of landing in the bibliography.");
+            // The jump filtered the leaf to a key with no entry, which
+            // is correct but leaves the grid empty for what follows.
+            // Clear it the way a user would.
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_A);
+            PressKey(VirtualKeyShort.DELETE);
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(300));
+
             // ---- Ctrl+Shift+J: the summary sheet ------------------
             PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_J);
             WaitForElement(window, "CitationSummarySheet", TimeSpan.FromSeconds(10));

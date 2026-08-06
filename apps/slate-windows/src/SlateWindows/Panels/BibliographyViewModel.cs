@@ -341,10 +341,18 @@ internal sealed class BibliographyViewModel : PanelWorkScheduler
         bool present = _allEntries.Any(
             entry => string.Equals(entry.Key, key, StringComparison.Ordinal));
         announceOutcome(key, present);
-        if (!present || IsShutDown)
+        if (IsShutDown)
         {
             return;
         }
+        // Raised on BOTH outcomes. Ctrl+J closes the focus-trapped
+        // details sheet before resolving, so the element that had focus
+        // is gone by now; returning early on a miss left focus on the
+        // WINDOW ROOT (measured: FocusedElement was Slate.MainWindow).
+        // The user pressed a key, heard "Searching bibliography for:
+        // X.", and was then nowhere — Tab restarts at the menu bar.
+        // The view lands on the row when there is one and on the search
+        // box, which now holds the key, when there is not.
         _ = Interlocked.Exchange(ref _pendingKeyFocus, key);
         KeyFocusRequested?.Invoke(this, EventArgs.Empty);
     }

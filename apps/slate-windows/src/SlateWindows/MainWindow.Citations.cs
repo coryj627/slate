@@ -266,9 +266,21 @@ public partial class MainWindow
         // Deferred past layout: the grid may have been collapsed until
         // the jump revealed the leaf a moment ago.
         _ = Dispatcher.InvokeAsync(
-            () => BibliographyEntriesGrid.FocusRow(
-                row => string.Equals(
-                    ((BibliographyRowViewModel)row).Key, key, StringComparison.Ordinal)),
+            () =>
+            {
+                if (BibliographyEntriesGrid.FocusRow(
+                    row => string.Equals(
+                        ((BibliographyRowViewModel)row).Key, key, StringComparison.Ordinal)))
+                {
+                    return;
+                }
+                // A MISS still has to land somewhere. The jump has
+                // already closed the sheet that held focus and filtered
+                // the leaf to this key, so the search box — which now
+                // contains it — is where the announcement leaves the
+                // user. Without this, focus fell to the window root.
+                _ = BibliographySearchBox.Focus();
+            },
             System.Windows.Threading.DispatcherPriority.Input);
     }
 
