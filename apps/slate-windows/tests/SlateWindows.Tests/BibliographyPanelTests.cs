@@ -45,8 +45,8 @@ public sealed class BibliographyPanelTests : IDisposable
         _fixture.Dispose();
     }
 
-    private BibliographyViewModel MakeLeaf(List<A11yEvent>? announced = null) =>
-        new(_session, (announced ?? []).Add, synchronousForTests: true);
+    private BibliographyViewModel MakeLeaf() =>
+        new(_session, synchronousForTests: true);
 
     private static BibEntry Entry(
         string key, string title, params Author[] authors) =>
@@ -159,11 +159,19 @@ public sealed class BibliographyPanelTests : IDisposable
         Assert.False(leaf.ShowUnresolvedEmptyState);
     }
 
+    /// <summary>
+    /// A segment switch never re-queries.
+    ///
+    /// This used to assert "never announces" too — but the leaf held an
+    /// announce callback it never invoked, so that half could not fail
+    /// for any mutation short of adding a call that did not exist. The
+    /// callback is gone; §2.6 silence is now a property of the type
+    /// rather than something a test claims to check.
+    /// </summary>
     [Fact]
-    public void SegmentSwitchingNeverAnnouncesAndNeverReQueries()
+    public void SegmentSwitchingNeverReQueries()
     {
-        var announced = new List<A11yEvent>();
-        var leaf = MakeLeaf(announced);
+        var leaf = MakeLeaf();
         leaf.EnsureLoaded();
         leaf.Segment = BibliographySegment.Unresolved;
         int entryQueries = leaf.EntriesRequestIdForTests;
@@ -172,7 +180,6 @@ public sealed class BibliographyPanelTests : IDisposable
         leaf.Segment = BibliographySegment.Unresolved;
         leaf.Segment = BibliographySegment.Entries;
 
-        Assert.Empty(announced);
         Assert.Equal(entryQueries, leaf.EntriesRequestIdForTests);
     }
 
@@ -312,7 +319,7 @@ public sealed class BibliographyPanelTests : IDisposable
         {
             session.ScanInitial(cancel);
         }
-        var leaf = new BibliographyViewModel(session, _ => { }, synchronousForTests: true);
+        var leaf = new BibliographyViewModel(session, synchronousForTests: true);
         leaf.ApplySeedOutcome(
             new BibliographySeedOutcome(BibliographySeedStatus.NoSources, []));
 
@@ -328,26 +335,45 @@ public sealed class BibliographyPanelTests : IDisposable
     /// a bibliography entry." used to render above the entries grid on
     /// first reveal — a factual claim about a query that had never run.
     /// </summary>
+    /// <summary>
+    /// The SEGMENT GUARD is what hides the other segment's lines.
+    ///
+    /// The first version of this test asserted every cross-segment flag
+    /// was false in a state where each was ALREADY false for its own
+    /// reasons — no error set, nothing loading, the unresolved query
+    /// never run. Deleting every `ShowEntries &amp;&amp;` / `ShowUnresolved &amp;&amp;`
+    /// from the view model left it green, so the behaviour it was
+    /// written for could have been reverted wholesale without a single
+    /// failure.
+    ///
+    /// Both segments now carry a LIVE error at once, so the guard is
+    /// the only thing that can hide either line.
+    /// </summary>
     [Fact]
-    public void StateLinesDoNotLeakAcrossSegments()
+    public void SegmentScopingIsWhatHidesTheOtherSegmentsLines()
     {
         var leaf = MakeLeaf();
         leaf.ApplySeedOutcome(
             new BibliographySeedOutcome(BibliographySeedStatus.Seeded, []));
         leaf.EnsureLoaded();
-
-        // Entries segment: nothing about unresolved may show.
-        Assert.False(leaf.ShowUnresolvedEmptyState);
-        Assert.False(leaf.ShowUnresolvedLoading);
-        Assert.False(leaf.ShowUnresolvedError);
-
         leaf.Segment = BibliographySegment.Unresolved;
 
-        // Unresolved segment: nothing about entries may show.
-        Assert.False(leaf.ShowNoSourcesState);
-        Assert.False(leaf.ShowNoFilterHitsState);
-        Assert.False(leaf.ShowEntriesLoading);
+        leaf.PublishEntries(
+            leaf.GenerationForTests, leaf.EntriesRequestIdForTests, [], "entries boom");
+        leaf.PublishUnresolved(
+            leaf.GenerationForTests, leaf.UnresolvedRequestIdForTests, [], "unresolved boom");
+
+        // Both errors are live. On the unresolved segment only its own
+        // shows; the entries error is hidden by the guard alone.
+        Assert.NotNull(leaf.UnresolvedError);
+        Assert.NotNull(leaf.EntriesError);
+        Assert.True(leaf.ShowUnresolvedError);
         Assert.False(leaf.ShowEntriesError);
+
+        leaf.Segment = BibliographySegment.Entries;
+
+        Assert.True(leaf.ShowEntriesError);
+        Assert.False(leaf.ShowUnresolvedError);
     }
 
     [Fact]

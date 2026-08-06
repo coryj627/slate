@@ -42,7 +42,6 @@ internal sealed class BibliographyViewModel : PanelWorkScheduler
     internal const int MaxEntryRows = 5000;
 
     private readonly VaultSession _session;
-    private readonly Action<A11yEvent> _announce;
     private long _generation;
     private int _entriesRequestId;
     private int _unresolvedRequestId;
@@ -57,14 +56,23 @@ internal sealed class BibliographyViewModel : PanelWorkScheduler
     private IReadOnlyList<BibEntry> _allEntries = [];
     private BibliographySeed? _seed;
 
+    /// <summary>
+    /// Takes NO announce channel, deliberately.
+    ///
+    /// §2.6 says this leaf never speaks: seeding is silent on success
+    /// and failure, a segment switch announces nothing, and errors are
+    /// surfaced in the notice region rather than spoken. It used to
+    /// hold a callback it never invoked, so "never announces" was a
+    /// test assertion that no mutation could falsify -- and a live
+    /// channel any future edit could pick up without noticing the
+    /// contract. Not having one makes the silence structural.
+    /// </summary>
     public BibliographyViewModel(
         VaultSession session,
-        Action<A11yEvent> announce,
         bool synchronousForTests = false)
         : base(synchronousForTests)
     {
         _session = session;
-        _announce = announce;
     }
 
     /// <summary>The filtered, capped entry rows the grid binds.</summary>
@@ -381,6 +389,8 @@ internal sealed class BibliographyViewModel : PanelWorkScheduler
     internal long GenerationForTests => Interlocked.Read(ref _generation);
 
     internal int EntriesRequestIdForTests => _entriesRequestId;
+
+    internal int UnresolvedRequestIdForTests => _unresolvedRequestId;
 
     /// <summary>The prerequisite this leaf branches on. Attached once,
     /// by the workspace, before any load can start.</summary>

@@ -1283,7 +1283,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         Citations = new Panels.CitationsPanelViewModel(
             session, announce, synchronousForTests: !startInteractionBackgroundWork);
         Bibliography = new Panels.BibliographyViewModel(
-            session, announce, synchronousForTests: !startInteractionBackgroundWork);
+            session, synchronousForTests: !startInteractionBackgroundWork);
         // Both leaves read through the session's bibliography sources,
         // so neither may query before seeding SETTLES — and the
         // bibliography also branches on how it settled.

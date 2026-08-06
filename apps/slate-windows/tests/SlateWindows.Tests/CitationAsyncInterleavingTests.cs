@@ -231,7 +231,7 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
     {
         using VaultSession session = OpenScanned();
         var leaf = new BibliographyViewModel(
-            session, _ => { }, synchronousForTests: false);
+            session, synchronousForTests: false);
         var seed = new BibliographySeed();
         leaf.AttachSeed(seed);
         var answered = new List<(string Key, bool Present)>();
@@ -495,7 +495,7 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
         using VaultSession session = OpenScanned();
         _ = session.SetBibliographySources(session.CitationsPrefs().Sources);
         var leaf = new BibliographyViewModel(
-            session, _ => { }, synchronousForTests: false);
+            session, synchronousForTests: false);
         var seed = new BibliographySeed();
         leaf.AttachSeed(seed);
         seed.Complete(new BibliographySeedOutcome(BibliographySeedStatus.Seeded, []));
@@ -542,7 +542,7 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
         using VaultSession session = OpenScanned();
         _ = session.SetBibliographySources(session.CitationsPrefs().Sources);
         var leaf = new BibliographyViewModel(
-            session, _ => { }, synchronousForTests: false);
+            session, synchronousForTests: false);
         var seed = new BibliographySeed();
         leaf.AttachSeed(seed);
         // Settled BEFORE any work is queued: the gate is complete, so
@@ -583,7 +583,7 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
         using VaultSession session = OpenScanned();
         _ = session.SetBibliographySources(session.CitationsPrefs().Sources);
         var leaf = new BibliographyViewModel(
-            session, _ => { }, synchronousForTests: false);
+            session, synchronousForTests: false);
         var seed = new BibliographySeed();
         leaf.AttachSeed(seed);
         int bodyRuns = 0;

@@ -323,6 +323,31 @@ public sealed class CitationWorkspaceSeamTests : IDisposable
         Assert.True(workspace.Citations.ContainsKey("ghostkey"));
     }
 
+    /// <summary>
+    /// Contract 12's actual claim: the summary is built from the
+    /// leaf's already-published rows, with NO re-read, "so the sheet
+    /// can never disagree with the panel behind it".
+    ///
+    /// The existing test asserted the counts were right, which they
+    /// would also be if the sheet re-queried core — so the property
+    /// that matters was unpinned. Watching the request id is what
+    /// distinguishes them.
+    /// </summary>
+    [Fact]
+    public void TheSummarySheetDoesNotReReadTheNote()
+    {
+        var announced = new List<A11yEvent>();
+        using VaultSession session = OpenScanned();
+        using var workspace = MakeWorkspace(session, announced);
+        workspace.OpenPath("cited.md");
+        int readsBefore = workspace.Citations.RequestIdForTests;
+
+        workspace.OpenCitationSummary();
+
+        Assert.Equal(2, workspace.CitationSummary!.Total);
+        Assert.Equal(readsBefore, workspace.Citations.RequestIdForTests);
+    }
+
     [Fact]
     public void TheSuiteAddsExactlyTwoHostComposedTexts()
     {

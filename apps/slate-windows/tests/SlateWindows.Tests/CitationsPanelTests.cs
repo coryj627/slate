@@ -265,4 +265,31 @@ public sealed class CitationsPanelTests : IDisposable
             Assert.Same(panel.References[i], panel.Rows[i].Reference);
         }
     }
+
+    /// <summary>
+    /// A placeholder row must not advertise an affordance it lacks.
+    ///
+    /// The round-3 fix stopped the sheet opening and stopped the key
+    /// being swallowed, but the HINT — "Activate to expand citation
+    /// fields." — is what a screen reader actually speaks, and nothing
+    /// pinned its suppression. Reverting it to the unconditional
+    /// constant would put the false promise straight back, spoken.
+    /// </summary>
+    [Fact]
+    public void APlaceholderRowOffersNoExpandHint()
+    {
+        var reference = new CitationReference(
+            "[@ghost]",
+            [new CitedItem("ghost", null, null, null, CitationMode.Bracketed)],
+            0,
+            1);
+
+        CitationRowViewModel placeholder = CitationRowViewModel.Placeholder(reference);
+
+        Assert.False(placeholder.CanExpand);
+        Assert.Equal("", placeholder.AutomationHelpText);
+        // A row that CAN expand still promises it.
+        Assert.Equal(
+            "Activate to expand citation fields.", CitationPhrase.CitationRowHelp);
+    }
 }
