@@ -238,17 +238,27 @@ internal sealed partial class WorkspaceViewModel
         {
             // DEFER, never drop: a keypress that produces nothing reads
             // as a dead key, which is the same failure the Ctrl+J
-            // design forbids. One-shot — a second press while parked
-            // replaces nothing because the handler detaches itself.
-            // Safe after teardown: publishes are guarded by IsShutDown,
-            // so a workspace that dies while parked simply never fires.
-            void OpenWhenPublished(object? sender, EventArgs args)
+            // design forbids.
+            //
+            // The parked request carries the NOTE IT WAS ASKED ABOUT.
+            // Without that it fired on the next publish of whatever was
+            // current by then — and since a superseded publish is
+            // discarded before the event is raised, the answer was
+            // GUARANTEED to come from a later, unrelated load. The
+            // sheet then opened describing a different note, and its
+            // name is read on appear, so those counts were spoken as
+            // the answer.
+            //
+            // Fields rather than a captured local on purpose: a closure
+            // over a local makes each subscription a distinct delegate,
+            // so the -= dedupe would silently stop matching and repeat
+            // presses would stack handlers.
+            _parkedSummaryPath = Citations.Path;
+            if (!_summaryParked)
             {
-                Citations.RowsPublished -= OpenWhenPublished;
-                OpenCitationSummary();
+                _summaryParked = true;
+                Citations.RowsPublished += OpenSummaryWhenPublished;
             }
-            Citations.RowsPublished -= OpenWhenPublished;
-            Citations.RowsPublished += OpenWhenPublished;
             return;
         }
         CitationSummary = new CitationSummaryViewModel(
@@ -337,6 +347,25 @@ internal sealed partial class WorkspaceViewModel
             _ => _bibliographySeed.Outcome is not null && !_reloadInFlight);
 
     private bool _reloadInFlight;
+
+    private string? _parkedSummaryPath;
+    private bool _summaryParked;
+
+    /// <summary>The deferred Ctrl+Shift+J landing. Detaches on the
+    /// first publish either way: an answer about a different note is
+    /// not an answer, and re-parking it would leave a request armed
+    /// against a question nobody asked.</summary>
+    private void OpenSummaryWhenPublished(object? sender, EventArgs eventArgs)
+    {
+        Citations.RowsPublished -= OpenSummaryWhenPublished;
+        _summaryParked = false;
+        string? asked = _parkedSummaryPath;
+        _parkedSummaryPath = null;
+        if (string.Equals(Citations.Path, asked, StringComparison.Ordinal))
+        {
+            OpenCitationSummary();
+        }
+    }
 
     internal void ReloadBibliography()
     {

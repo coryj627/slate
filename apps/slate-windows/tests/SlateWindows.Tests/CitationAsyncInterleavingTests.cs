@@ -38,6 +38,11 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
         File.WriteAllText(
             Path.Combine(_fixture.Root, "cited.md"),
             "# Cited\n\nA citation [@knuth1984] and a ghost [@ghostkey].\n");
+        // A SECOND cited note, so "the answer arrived for a different
+        // note" is expressible at all.
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "other.md"),
+            "# Other\n\nOnly one citation [@filler7] here.\n");
         File.Copy(
             Path.Combine(RepoRoot, "demo-vault", "csl", "ieee.csl"),
             Path.Combine(_fixture.Root, "ieee.csl"));
@@ -295,6 +300,68 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
         // one of them claims to have been resolved.
         Assert.Equal(2, citations.Rows.Count);
         Assert.All(citations.Rows, row => Assert.Null(row.Rendered));
+    }
+
+    /// <summary>
+    /// A deferred Ctrl+Shift+J answers the note it was asked about, or
+    /// nothing at all.
+    ///
+    /// The press is parked when the leaf is still loading — an ordinary
+    /// state at startup, because citation loads are gated on the seed.
+    /// The parked handler carried no note identity, so it fired on the
+    /// next publish of WHATEVER note was current by then: the summary
+    /// opened describing note B, having been asked about note A, and
+    /// its dialog name — read on appear — spoke B's counts as the
+    /// answer. Worse, a superseded publish is discarded before the
+    /// event is raised, so the answer is guaranteed to come from a
+    /// LATER, unrelated load.
+    /// </summary>
+    [Fact]
+    public async Task ADeferredSummaryDoesNotAnswerForADifferentNote()
+    {
+        var announced = new List<A11yEvent>();
+        using VaultSession session = OpenScanned();
+        using var workspace = MakeAsyncWorkspace(session, announced);
+
+        workspace.OpenPath("cited.md");
+        // Deterministic: Refresh sets IsLoading synchronously before
+        // queueing the gated body.
+        Assert.True(workspace.Citations.IsLoading);
+
+        workspace.OpenCitationSummary();
+        Assert.Null(workspace.CitationSummary);
+
+        // The user moves on before the answer arrives.
+        workspace.OpenPath("other.md");
+        await QuiesceAsync(workspace);
+
+        // No sheet, because the question was about cited.md and the
+        // only answer available is about other.md.
+        Assert.Null(workspace.CitationSummary);
+        Assert.Equal("other.md", workspace.Citations.Path);
+    }
+
+    /// <summary>The defer must still DELIVER for the note it was asked
+    /// about — a fix that simply stopped opening the sheet would pass
+    /// the wrong-note test and reintroduce the dead keypress the defer
+    /// exists to prevent.</summary>
+    [Fact]
+    public async Task ADeferredSummaryStillAnswersForTheNoteItWasAskedAbout()
+    {
+        var announced = new List<A11yEvent>();
+        using VaultSession session = OpenScanned();
+        using var workspace = MakeAsyncWorkspace(session, announced);
+
+        workspace.OpenPath("cited.md");
+        Assert.True(workspace.Citations.IsLoading);
+        workspace.OpenCitationSummary();
+        Assert.Null(workspace.CitationSummary);
+
+        await QuiesceAsync(workspace);
+
+        Assert.NotNull(workspace.CitationSummary);
+        // cited.md's own counts, not some other note's.
+        Assert.Equal(2, workspace.CitationSummary!.Total);
     }
 
     /// <summary>
