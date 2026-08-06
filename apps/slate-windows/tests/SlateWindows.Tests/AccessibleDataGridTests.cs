@@ -21,6 +21,32 @@ public sealed class AccessibleDataGridTests
 {
     private sealed record Person(string Name, string Role);
 
+    /// <summary>Reference equality, like every production row view
+    /// model — a record would let value equality preserve currency and
+    /// hide what a real re-publish does.</summary>
+    private sealed class Widget(string id)
+    {
+        public string Id { get; } = id;
+    }
+
+    private static IReadOnlyList<AccessibleGridColumn> WidgetColumns() => new[]
+    {
+        new AccessibleGridColumn
+        {
+            Header = "Id",
+            Cell = row => ((Widget)row).Id,
+            IsRowHeader = true,
+        },
+        new AccessibleGridColumn
+        {
+            Header = "Note",
+            Cell = row => $"note for {((Widget)row).Id}",
+        },
+    };
+
+    private static IReadOnlyList<object> FreshWidgets() =>
+        [new Widget("one"), new Widget("two"), new Widget("three")];
+
     private static readonly IReadOnlyList<object> People = new object[]
     {
         new Person("Charlie", "Ops"),
@@ -130,6 +156,62 @@ public sealed class AccessibleDataGridTests
                 System.ComponentModel.ListSortDirection.Ascending,
                 grid.Grid.Columns[0].SortDirection);
             Assert.Null(grid.Grid.Columns[1].SortDirection);
+        });
+    }
+
+    /// <summary>
+    /// A re-publish must not move the reader.
+    ///
+    /// ApplySort documents this hazard and restores currency: "the
+    /// reader's position survives the sort: re-populating destroys the
+    /// focused cell's container, and without a restore keyboard focus
+    /// falls to the window". Bind destroys the same containers and had
+    /// no restore — and consuming surfaces re-Bind on every publish, so
+    /// a background save while the user is arrowing through the grid
+    /// silently lost their row and their column.
+    ///
+    /// Restored by ROW-HEADER TEXT, not object identity: every publish
+    /// builds fresh row view models, so identity is gone by definition.
+    /// The row header is what §8.7 already treats as the row's
+    /// identity.
+    /// </summary>
+    [Fact]
+    public void ARepublishKeepsTheReaderOnTheirRowAndColumn()
+    {
+        RunSta(() =>
+        {
+            var grid = new AccessibleDataGrid { Announce = _ => { } };
+            IReadOnlyList<object> first = FreshWidgets();
+            grid.Bind(WidgetColumns(), first, "3 rows.", "Widgets");
+            grid.Grid.CurrentCell = new DataGridCellInfo(first[1], grid.Grid.Columns[1]);
+
+            // Fresh instances, same identities — a real re-publish.
+            grid.Bind(WidgetColumns(), FreshWidgets(), "3 rows.", "Widgets");
+
+            Assert.Equal("two", Assert.IsType<Widget>(grid.Grid.CurrentCell.Item).Id);
+            Assert.Same(grid.Grid.Columns[1], grid.Grid.CurrentCell.Column);
+        });
+    }
+
+    /// <summary>A row that is GONE after the republish must not be
+    /// restored — the reader is not left pointing at a discarded
+    /// object, and no other row is silently substituted.</summary>
+    [Fact]
+    public void ARepublishThatDropsTheCurrentRowRestoresNothing()
+    {
+        RunSta(() =>
+        {
+            var grid = new AccessibleDataGrid { Announce = _ => { } };
+            IReadOnlyList<object> first = FreshWidgets();
+            grid.Bind(WidgetColumns(), first, "3 rows.", "Widgets");
+            grid.Grid.CurrentCell = new DataGridCellInfo(first[2], grid.Grid.Columns[0]);
+
+            grid.Bind(
+                WidgetColumns(), [new Widget("one")], "1 row.", "Widgets");
+
+            Assert.DoesNotContain(
+                grid.Grid.Items.Cast<object>(),
+                row => ((Widget)row).Id == "three");
         });
     }
 

@@ -331,6 +331,22 @@ internal sealed class AccessibleDataGrid : UserControl
         _exportProducer = exportProducer;
         _rowActivated = rowActivated;
         _lastAnnouncedRow = null;
+        // The reader's position, captured BEFORE the repopulate
+        // destroys every container. ApplySort already does this and
+        // says why: "re-populating destroys the focused cell's
+        // container, and without a restore keyboard focus falls to the
+        // window". Bind destroys the same containers, and consuming
+        // surfaces re-Bind on every publish — so a background save
+        // while someone is arrowing through the grid moved them.
+        //
+        // Keyed on the ROW HEADER, not object identity: every publish
+        // builds fresh row view models, so identity is gone by
+        // definition. The row header is already the row's identity
+        // under §8.7.
+        string? previousRowIdentity = RowIdentityOf(_grid.CurrentCell.Item);
+        int previousColumnIndex = _grid.CurrentCell.Column is { } previousColumn
+            ? _grid.Columns.IndexOf(previousColumn)
+            : -1;
         // The user's sort is a user decision, and a re-publish is not
         // the user changing their mind. Dropping it here meant that
         // typing one character into a consuming surface's filter box
@@ -375,6 +391,8 @@ internal sealed class AccessibleDataGrid : UserControl
         AutomationProperties.SetName(_summary, $"Summary: {summary}");
         AutomationProperties.SetName(_grid, accessibilityLabel);
 
+        RestoreReaderPosition(previousRowIdentity, previousColumnIndex);
+
         // Re-apply silently: ApplySort posts a GridSorted announcement,
         // which is right when the USER sorts and wrong when a
         // background re-publish restores what they already chose.
@@ -383,6 +401,54 @@ internal sealed class AccessibleDataGrid : UserControl
             && _columns[sort.ColumnIndex].Sort is not null)
         {
             ReapplySortWithoutAnnouncing(sort.ColumnIndex, sort.Ascending);
+        }
+    }
+
+    /// <summary>The row's identity for position-restore purposes: the
+    /// row-header cell's text, or null when the surface declares no
+    /// row-header column (nothing stable to key on).</summary>
+    /// <summary>
+    /// Only ever called with a row from the CURRENTLY BOUND set. The
+    /// `Cell` delegates cast to the surface's row type, so handing one
+    /// anything else — most reachably `CollectionView.NewItemPlaceholder`,
+    /// which is what `CurrentCell.Item` holds on an empty grid — throws
+    /// out of Bind and the surface never renders at all. The row-action
+    /// hit-test next door rejects the placeholder for the same reason.
+    /// </summary>
+    private string? RowIdentityOf(object? item) =>
+        item is not null
+        && item != CollectionView.NewItemPlaceholder
+        && _rowHeaderColumn is { } header
+        && _items.Contains(item)
+            ? header.Cell(item)
+            : null;
+
+    /// <summary>
+    /// Put the reader back where they were, or leave them alone.
+    ///
+    /// A row that is GONE after the republish is NOT substituted with a
+    /// neighbour: silently moving someone to a different row is worse
+    /// than leaving currency where the grid put it, because nothing
+    /// announces the move.
+    /// </summary>
+    private void RestoreReaderPosition(string? rowIdentity, int columnIndex)
+    {
+        if (rowIdentity is null
+            || columnIndex < 0
+            || columnIndex >= _grid.Columns.Count)
+        {
+            return;
+        }
+        foreach (object row in _items)
+        {
+            if (!string.Equals(RowIdentityOf(row), rowIdentity, StringComparison.Ordinal))
+            {
+                continue;
+            }
+            _grid.CurrentCell = new DataGridCellInfo(row, _grid.Columns[columnIndex]);
+            _grid.SelectedCells.Clear();
+            _grid.SelectedCells.Add(_grid.CurrentCell);
+            return;
         }
     }
 
