@@ -247,6 +247,58 @@ public sealed class BibliographyPanelTests : IDisposable
             CitationPhrase.BibliographyNoSources);
     }
 
+    /// <summary>
+    /// A FAILED seed must not be dressed up as any other state.
+    ///
+    /// The D-13 refusal publishes an empty set with a NULL error — that
+    /// is the whole point, it did not ask core anything. But the empty
+    /// set then satisfies two sentences that are both false:
+    /// "No bibliography sources configured. Add a "citations" section
+    /// to the vault's slate.json." (sources ARE configured; the path in
+    /// them is broken, so the instruction sends the user to fix
+    /// something already correct) and, on the other segment, "No
+    /// unresolved citations. Every key in your notes has a bibliography
+    /// entry." — a positive factual claim about a query that was
+    /// refused.
+    ///
+    /// Both are asserted here because they are ONE defect: the refusal
+    /// is not a distinct state, so every empty-set sentence adopts it.
+    /// The notices region carries the real reason (contract 5).
+    ///
+    /// NOTE: both segments are exercised WITHOUT switching away, so
+    /// neither assertion can pass merely because its segment is
+    /// inactive — the way the two existing assertions elsewhere in this
+    /// file do.
+    /// </summary>
+    [Fact]
+    public void AFailedSeedIsItsOwnStateAndBorrowsNoOtherSentence()
+    {
+        var leaf = MakeLeaf();
+        var seed = new BibliographySeed();
+        seed.Complete(new BibliographySeedOutcome(
+            BibliographySeedStatus.Failed, ["library.bib: no such file or directory"]));
+        leaf.AttachSeed(seed);
+        leaf.ApplySeedOutcome(seed.Outcome!);
+
+        leaf.EnsureLoaded();
+
+        // Entries segment is active here — the guard cannot mask this.
+        Assert.True(leaf.ShowEntries);
+        Assert.Empty(leaf.Entries);
+        Assert.False(leaf.ShowNoSourcesState);
+
+        leaf.Segment = BibliographySegment.Unresolved;
+
+        Assert.True(leaf.ShowUnresolved);
+        Assert.Empty(leaf.Unresolved);
+        Assert.False(leaf.ShowUnresolvedEmptyState);
+
+        // The reason is still carried, verbatim.
+        Assert.Equal(
+            "library.bib: no such file or directory",
+            Assert.Single(leaf.LoadNotices));
+    }
+
     /// <summary>The other half: an empty entry set DOES surface the
     /// sentence. Without this, a vault whose sources loaded to nothing
     /// showed a silent "0 entries" and no explanation at all.</summary>

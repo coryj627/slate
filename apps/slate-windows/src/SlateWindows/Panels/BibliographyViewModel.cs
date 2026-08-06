@@ -177,7 +177,20 @@ internal sealed class BibliographyViewModel : PanelWorkScheduler
     public bool HasNoSources { get; private set; }
 
     /// <summary>
-    /// Every state line below is SEGMENT-SCOPED. Without that, each one
+    /// A REFUSED read is its own state, and borrows no other sentence.
+    ///
+    /// The D-13 refusal publishes an empty set with a null error —
+    /// it never asked core anything. Every empty-set sentence then
+    /// adopted it: the entries segment claimed "No bibliography
+    /// sources configured" (they are configured; the path is broken,
+    /// so the advice was actively wrong) and the unresolved segment
+    /// claimed "Every key in your notes has a bibliography entry" —
+    /// a positive assertion about a query that was refused. Gating
+    /// both on <see cref="MayQueryCore"/> keeps the refusal silent so
+    /// the notices region, which carries the real reason, is the only
+    /// thing speaking.
+    ///
+    /// Every state line below is also SEGMENT-SCOPED. Without that, each one
     /// rendered on whichever segment happened to be showing: the
     /// entries grid carried "No unresolved citations. Every key in your
     /// notes has a bibliography entry." — a factual claim about data
@@ -200,6 +213,7 @@ internal sealed class BibliographyViewModel : PanelWorkScheduler
     /// </summary>
     public bool ShowNoSourcesState =>
         ShowEntries
+        && MayQueryCore
         && _loadStarted
         && _entriesError is null
         && !_isLoadingEntries
@@ -222,6 +236,7 @@ internal sealed class BibliographyViewModel : PanelWorkScheduler
     /// was never issued.</summary>
     public bool ShowUnresolvedEmptyState =>
         ShowUnresolved
+        && MayQueryCore
         && _unresolvedLoadStarted
         && _unresolvedError is null
         && !_isLoadingUnresolved
