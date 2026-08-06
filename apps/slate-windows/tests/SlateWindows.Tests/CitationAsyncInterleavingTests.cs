@@ -298,6 +298,73 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
     }
 
     /// <summary>
+    /// Reload Bibliography must not run the vault's only write on the
+    /// dispatcher.
+    ///
+    /// ReadAndSeedSources parses every .bib source and rewrites the
+    /// whole bibliography table under core's connection mutex. The
+    /// constructor deliberately schedules that off-thread; the retry
+    /// command called it inline, so one menu click froze the window —
+    /// and a frozen dispatcher cannot service UIA, so the screen reader
+    /// goes silent for the duration too.
+    /// </summary>
+    [Fact]
+    public async Task ReloadBibliographyRunsTheSeedOffTheCallersThread()
+    {
+        var announced = new List<A11yEvent>();
+        using VaultSession session = OpenScanned();
+        using var workspace = MakeAsyncWorkspace(session, announced);
+        await QuiesceAsync(workspace);
+
+        int callerThread = Environment.CurrentManagedThreadId;
+        int seedThread = 0;
+        workspace.SeedInterleaveForTests =
+            () => Volatile.Write(ref seedThread, Environment.CurrentManagedThreadId);
+
+        workspace.ReloadBibliography();
+        for (int round = 0; round < 40; round++)
+        {
+            await workspace.SeedWorkForTests;
+            await Task.Delay(2);
+        }
+
+        Assert.NotEqual(0, Volatile.Read(ref seedThread));
+        Assert.NotEqual(callerThread, Volatile.Read(ref seedThread));
+    }
+
+    /// <summary>
+    /// A reload cannot start while the initial seed is still in flight.
+    /// Two concurrent SetBibliographySources calls commit their DB write
+    /// and their index rebuild under separate locks, so they can land in
+    /// opposite orders — leaving core's table describing one attempt and
+    /// its in-memory index the other, which is the two-surfaces-disagree
+    /// failure in a form no leaf can repair.
+    /// </summary>
+    [Fact]
+    public async Task ASecondReloadIsRefusedWhileTheFirstIsStillRunning()
+    {
+        var announced = new List<A11yEvent>();
+        using VaultSession session = OpenScanned();
+        using var workspace = MakeAsyncWorkspace(session, announced);
+        await QuiesceAsync(workspace);
+        // The seed has settled, so the command is available.
+        Assert.True(workspace.ReloadBibliographyCommand.CanExecute(null));
+
+        workspace.ReloadBibliography();
+
+        // Deterministic: the completion is posted to this thread's
+        // context, which cannot run until we yield.
+        Assert.False(workspace.ReloadBibliographyCommand.CanExecute(null));
+
+        for (int round = 0; round < 40; round++)
+        {
+            await workspace.SeedWorkForTests;
+            await Task.Delay(2);
+        }
+        Assert.True(workspace.ReloadBibliographyCommand.CanExecute(null));
+    }
+
+    /// <summary>
     /// A reload must publish its CLEAR, not just its eventual result.
     ///
     /// Contract 3: "clears rows synchronously, so no stale row is ever

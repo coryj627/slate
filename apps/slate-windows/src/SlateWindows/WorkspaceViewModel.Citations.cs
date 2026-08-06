@@ -182,8 +182,14 @@ internal sealed partial class WorkspaceViewModel
 
     /// <summary>The seed body, shared by the sync and async paths so
     /// the test mode cannot drift from production.</summary>
+    /// <summary>Fires inside the seed body, so a test can observe WHICH
+    /// THREAD the vault's only write ran on. The same shape as the
+    /// panels' InterleaveForTests hook.</summary>
+    internal Action? SeedInterleaveForTests { get; set; }
+
     private BibliographySeedOutcome ReadAndSeedSources()
     {
+        SeedInterleaveForTests?.Invoke();
         var notices = new List<string>();
         try
         {
@@ -318,21 +324,67 @@ internal sealed partial class WorkspaceViewModel
     /// Re-seeding is what makes the retry real — reloading alone would
     /// re-read the same stale index.
     /// </summary>
+    /// <summary>Refused while the initial seed is still in flight, and
+    /// while a previous reload is running. Two concurrent
+    /// SetBibliographySources calls commit their DB write and their
+    /// index rebuild under SEPARATE locks, so they can land in opposite
+    /// orders and leave core's table describing one attempt while its
+    /// in-memory index describes the other — the two citation surfaces
+    /// would then disagree about whether an entry exists.</summary>
     public System.Windows.Input.ICommand ReloadBibliographyCommand =>
         _reloadBibliographyCommand ??= new RelayCommand(
-            _ => ReloadBibliography(), _ => true);
+            _ => ReloadBibliography(),
+            _ => _bibliographySeed.Outcome is not null && !_reloadInFlight);
+
+    private bool _reloadInFlight;
 
     internal void ReloadBibliography()
     {
-        BibliographySeedOutcome outcome = ReadAndSeedSources();
-        _bibliographySeed.Complete(outcome);
-        // Complete() is first-settle-wins, so on a retry the ORIGINAL
-        // outcome is what the gate holds. The leaves need the new one.
-        Bibliography.ApplySeedOutcome(outcome);
-        Bibliography.OverrideSeedOutcome(outcome);
-        Citations.OverrideSeedOutcome(outcome);
-        Bibliography.ForceReload();
-        Citations.Refresh();
+        if (_reloadInFlight)
+        {
+            return;
+        }
+        _reloadInFlight = true;
+
+        void Apply(BibliographySeedOutcome outcome)
+        {
+            // Complete() is first-settle-wins, so on a retry the
+            // ORIGINAL outcome is what the gate holds. The leaves need
+            // the new one, which is what OverrideSeedOutcome carries.
+            _bibliographySeed.Complete(outcome);
+            Bibliography.ApplySeedOutcome(outcome);
+            Bibliography.OverrideSeedOutcome(outcome);
+            Citations.OverrideSeedOutcome(outcome);
+            Bibliography.ForceReload();
+            Citations.Refresh();
+            _reloadInFlight = false;
+        }
+
+        if (!_startInteractionBackgroundWork)
+        {
+            Apply(ReadAndSeedSources());
+            return;
+        }
+        // OFF the dispatcher. ReadAndSeedSources parses every .bib
+        // source and rewrites the whole bibliography table under core's
+        // connection mutex — core sizes that at "<10k entries
+        // typically". Run inline from a menu command it froze the
+        // window for the duration, which also freezes UIA, so the
+        // screen reader goes silent too. Every other call of this in
+        // the suite is deliberately scheduled; this one was not.
+        SynchronizationContext? uiContext = SynchronizationContext.Current;
+        _seedWork = Task.Run(() =>
+        {
+            BibliographySeedOutcome outcome = ReadAndSeedSources();
+            if (uiContext is null)
+            {
+                Apply(outcome);
+            }
+            else
+            {
+                uiContext.Post(_ => Apply(outcome), null);
+            }
+        });
     }
 
     /// <summary>
