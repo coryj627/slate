@@ -257,6 +257,89 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
     }
 
     /// <summary>
+    /// After a FAILED seed the two citation surfaces must AGREE.
+    ///
+    /// Core's set_bibliography_sources is all-or-nothing and returns
+    /// before replacing anything, so the previous session's entries and
+    /// BibIndex survive a failed load. The bibliography leaf refuses to
+    /// show them (D-13). The citations leaf must not turn around and
+    /// render the same keys as resolved from that same stale index —
+    /// two surfaces in one window disagreeing about whether an entry
+    /// exists is the dishonesty contract 5 exists to prevent.
+    ///
+    /// The fixture session IS seeded, so core really would answer:
+    /// without the refusal this publishes a resolved row.
+    /// </summary>
+    [Fact]
+    public async Task AFailedSeedStopsBothLeavesReadingCoreNotJustTheBibliography()
+    {
+        using VaultSession session = OpenScanned();
+        _ = session.SetBibliographySources(session.CitationsPrefs().Sources);
+        Assert.NotEmpty(session.GetBibliographyEntries());
+
+        var seed = new BibliographySeed();
+        var citations = new CitationsPanelViewModel(
+            session, _ => { }, synchronousForTests: false);
+        citations.AttachSeed(seed);
+        seed.Complete(new BibliographySeedOutcome(
+            BibliographySeedStatus.Failed, ["library.bib: permission denied"]));
+
+        citations.NoteChanged("cited.md");
+        for (int round = 0; round < 40; round++)
+        {
+            await citations.DrainForTests();
+            await Task.Delay(2);
+        }
+
+        // The rows exist — the note really does cite two keys — but not
+        // one of them claims to have been resolved.
+        Assert.Equal(2, citations.Rows.Count);
+        Assert.All(citations.Rows, row => Assert.Null(row.Rendered));
+    }
+
+    /// <summary>
+    /// Gated bodies must never run on the caller's thread.
+    ///
+    /// The subtle case is an ALREADY-SETTLED gate: awaiting a completed
+    /// task does not yield, so a naive `await gate; body();` runs the
+    /// body straight through on the caller. In production the caller is
+    /// always the UI thread and the seed is settled for the entire life
+    /// of the workspace after startup, so that one line would put every
+    /// citation FFI call — including the whole-vault unresolved query —
+    /// on the dispatcher. Settle the seed FIRST here, which is exactly
+    /// the steady state the app spends its life in.
+    /// </summary>
+    [Fact]
+    public async Task AGatedBodyRunsOffTheCallersThreadEvenWhenTheSeedAlreadySettled()
+    {
+        using VaultSession session = OpenScanned();
+        _ = session.SetBibliographySources(session.CitationsPrefs().Sources);
+        var leaf = new BibliographyViewModel(
+            session, _ => { }, synchronousForTests: false);
+        var seed = new BibliographySeed();
+        leaf.AttachSeed(seed);
+        // Settled BEFORE any work is queued: the gate is complete, so
+        // the await cannot suspend.
+        seed.Complete(new BibliographySeedOutcome(BibliographySeedStatus.Seeded, []));
+
+        int callerThread = Environment.CurrentManagedThreadId;
+        int bodyThread = 0;
+        leaf.InterleaveForTests =
+            () => Volatile.Write(ref bodyThread, Environment.CurrentManagedThreadId);
+
+        leaf.EnsureLoaded();
+
+        for (int round = 0; round < 40; round++)
+        {
+            await leaf.DrainForTests();
+            await Task.Delay(2);
+        }
+
+        Assert.NotEqual(0, Volatile.Read(ref bodyThread));
+        Assert.NotEqual(callerThread, Volatile.Read(ref bodyThread));
+    }
+
+    /// <summary>
     /// Teardown must RELEASE parked bodies, and they must not run.
     ///
     /// Asserting "nothing published" would prove nothing here — the

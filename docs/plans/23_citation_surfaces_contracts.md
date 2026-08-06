@@ -168,6 +168,14 @@ Two reads of `ListCitationsInFile` for the same note. Unifying them
 would restructure a shipped W2-3 surface for no user-visible gain
 (O6). Both are generation-guarded independently.
 
+**D-14** — Windows ADDITION: `CitationPhrase.DetailsFieldsLabel`
+("Citation fields") names the details sheet's field list. mac renders
+the fields straight into a popover with no list container and so has
+no twin for it; the Windows list is keyboard-focusable, and a
+focusable element with no name is an axe `NameNotNull` failure. Kept
+deliberately plain so it adds nothing the fields themselves already
+say.
+
 **D-13** — Windows ADDITION: after a FAILED seed the bibliography
 publishes NOTHING rather than whatever core's tables still hold.
 Core's `set_bibliography_sources` is all-or-nothing and returns before
@@ -305,6 +313,61 @@ appeared, and both were fixed there:
   focus — those differ off-window, and conflating them made a
   successful jump indistinguishable from a missing key (caught by the
   test, which failed against the first implementation).
+
+## Round 3 (2026-08-05) — five independent reviewers, one per dimension
+
+Correctness, reliability, accessibility, completeness and performance,
+each given the contracts and this register up front, each told the
+register was off-limits. Seven blockers and ~13 highs; all fixed.
+
+**The finding that matters most for future rounds: the view layer was
+never exercised by anything that checks what a screen reader HEARS.**
+The FlaUI journey asserted that elements existed by AutomationId, so
+it passed while the details sheet published no fields at all — the
+item roots were bare `Panel`s (which get no automation peer) wrapping
+presentation-suppressed TextBlocks. Existence assertions are not
+accessibility assertions. The journey now asserts field NAMES, and
+that assertion was mutation-checked by stripping the name setter.
+
+Two fixes were regressions introduced by earlier rounds' fixes, which
+is stopping rule (5) in action both times:
+
+- **Round 2 said `gate.Wait()` blocks a pool thread. The fix was to
+  `await`.** But awaiting an ALREADY-COMPLETED task never yields, and
+  the seed is settled for the whole life of the workspace after
+  startup — so every gated body ran inline on the UI thread, including
+  the whole-vault unresolved query. Fixing the site a finding names
+  rather than the class it belongs to, again.
+- **The typed seed outcome fixed the stale-read for ONE leaf.** This
+  document's own problem statement says "citations resolve against
+  it", and model item 1 says the leaves — plural — must stop reading
+  core. Only `BibliographyViewModel` got the branch, so the two
+  surfaces disagreed about whether an entry existed. Three of the five
+  reviewers found it independently.
+
+Other classes worth keeping:
+
+- **Announcement and action must be answered from the SAME set.**
+  Ctrl+J answered presence from the loaded entries and moved focus
+  within the bound (filtered, segment-scoped, possibly hidden) rows,
+  so it announced arrival three different ways without arriving. mac
+  avoids this by setting the search text to the key.
+- **Independent booleans lose invariants that a branch chain keeps.**
+  mac's per-segment `if/else` cannot show an unresolved sentence over
+  the entries grid; five independent `Show*` flags could, and did.
+- **A view model property that nothing binds is not a delivered
+  contract.** `EntriesErrorSpoken` was computed, tested, and bound
+  nowhere — so a failed read rendered as a silent "0 entries".
+- **A verified number goes stale the moment the thing it counts
+  changes.** The test count was correct when written and wrong when
+  committed. Re-derive at commit time.
+
+Substrate gaps this round added to the D-12 list, all fixed in
+`Grids/`: `Bind` discarded the user's sort on every re-publish (now
+re-applied silently — announcing a restore would be a second lie), and
+the grid had no row-activation mechanism at all, which is why
+bibliography entries could not be expanded despite advertising
+"Activate to expand citation fields."
 
 ## Review resolutions
 

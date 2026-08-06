@@ -254,7 +254,7 @@ internal sealed partial class WorkspaceViewModel
                 }
                 _ = ReconcileTabsAfterPropertyWrite(path, report.NewContentHash);
                 RefreshPropertiesFor(path);
-                Panels.NoteSaved(path);
+                NotePersisted(path);
                 _announce(new A11yEvent.PropertyChanged(key, false));
                 return;
             }
@@ -560,7 +560,7 @@ internal sealed partial class WorkspaceViewModel
                 row.MarkCommitted(dispatched);
                 _ = ReconcileTabsAfterPropertyWrite(path, report.NewContentHash);
                 RefreshPropertiesFor(path);
-                Panels.NoteSaved(path);
+                NotePersisted(path);
                 _announce(new A11yEvent.PropertyChanged(row.Key, deleted));
                 return;
             }
@@ -598,7 +598,7 @@ internal sealed partial class WorkspaceViewModel
         {
             _ = ReconcileTabsAfterPropertyWrite(path, postFailureDiskHash);
             RefreshPropertiesFor(path);
-            Panels.NoteSaved(path);
+            NotePersisted(path);
         }
     }
 
@@ -646,7 +646,7 @@ internal sealed partial class WorkspaceViewModel
                 anyReloadFailed = true;
             }
             RefreshPropertiesFor(affected.Path);
-            Panels.NoteSaved(affected.Path);
+            NotePersisted(affected.Path);
         }
         if (anyReloadFailed)
         {

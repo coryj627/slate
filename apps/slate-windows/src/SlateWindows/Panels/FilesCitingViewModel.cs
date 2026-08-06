@@ -45,7 +45,20 @@ internal sealed class FilesCitingViewModel : PanelWorkScheduler
     public bool IsLoading
     {
         get => _isLoading;
-        private set => SetField(ref _isLoading, value);
+        private set
+        {
+            if (SetField(ref _isLoading, value))
+            {
+                // Neither of these tracked IsLoading, so the sheet
+                // opened claiming "No files in this vault cite this
+                // entry." and named itself "…0 files." — and because a
+                // dialog's name is read on APPEAR, that wrong count was
+                // the only thing ever spoken. The corrected name landed
+                // later with nobody listening.
+                OnPropertyChanged(nameof(ShowEmptyState));
+                OnPropertyChanged(nameof(AutomationName));
+            }
+        }
     }
 
     public string Heading => CitationPhrase.FilesCitingHeading;
@@ -54,7 +67,12 @@ internal sealed class FilesCitingViewModel : PanelWorkScheduler
 
     public bool ShowEmptyState => !_isLoading && Paths.Count == 0;
 
-    public string AutomationName => CitationPhrase.FilesCitingContainerLabel(Paths.Count);
+    /// <summary>The sheet's spoken name. While the lookup is in flight
+    /// it says so rather than asserting a count nothing has counted
+    /// yet.</summary>
+    public string AutomationName => _isLoading
+        ? CitationPhrase.FilesCitingHeading
+        : CitationPhrase.FilesCitingContainerLabel(Paths.Count);
 
     internal int RequestIdForTests => _requestId;
 

@@ -50,6 +50,7 @@ internal sealed class AccessibleDataGrid : UserControl
         Array.Empty<AccessibleGridRowAction>();
     private Func<object, string?>? _rowAudioDescription;
     private Func<ExportFormat, string>? _exportProducer;
+    private Action<object>? _rowActivated;
     private AccessibleGridColumn? _rowHeaderColumn;
     private object? _lastAnnouncedRow;
     private (int ColumnIndex, bool Ascending)? _activeSort;
@@ -120,6 +121,8 @@ internal sealed class AccessibleDataGrid : UserControl
         _grid.CurrentCellChanged += OnCurrentCellChanged;
         _grid.Sorting += OnHeaderSorting;
         _grid.PreviewTextInput += OnTypeAhead;
+        _grid.PreviewKeyDown += OnActivationKey;
+        _grid.MouseDoubleClick += OnActivationDoubleClick;
         _grid.ContextMenuOpening += OnContextMenuOpening;
         _grid.LoadingRow += OnLoadingRow;
         // The menu EXISTS from construction (see OnContextMenuOpening:
@@ -317,7 +320,8 @@ internal sealed class AccessibleDataGrid : UserControl
         string accessibilityLabel,
         Func<object, string?>? rowAudioDescription = null,
         IReadOnlyList<AccessibleGridRowAction>? rowActions = null,
-        Func<ExportFormat, string>? exportProducer = null)
+        Func<ExportFormat, string>? exportProducer = null,
+        Action<object>? rowActivated = null)
     {
         ArgumentNullException.ThrowIfNull(columns);
         ArgumentNullException.ThrowIfNull(rows);
@@ -325,8 +329,16 @@ internal sealed class AccessibleDataGrid : UserControl
         _rowAudioDescription = rowAudioDescription;
         _rowActions = rowActions ?? Array.Empty<AccessibleGridRowAction>();
         _exportProducer = exportProducer;
-        _activeSort = null;
+        _rowActivated = rowActivated;
         _lastAnnouncedRow = null;
+        // The user's sort is a user decision, and a re-publish is not
+        // the user changing their mind. Dropping it here meant that
+        // typing one character into a consuming surface's filter box
+        // silently reverted the ordering, cleared the header indicator,
+        // and reordered rows under the reader with no announcement.
+        // Re-applied below, once the new rows are in.
+        (int ColumnIndex, bool Ascending)? previousSort = _activeSort;
+        _activeSort = null;
 
         _grid.Columns.Clear();
         for (int index = 0; index < columns.Count; index++)
@@ -362,6 +374,30 @@ internal sealed class AccessibleDataGrid : UserControl
         _summary.Text = summary;
         AutomationProperties.SetName(_summary, $"Summary: {summary}");
         AutomationProperties.SetName(_grid, accessibilityLabel);
+
+        // Re-apply silently: ApplySort posts a GridSorted announcement,
+        // which is right when the USER sorts and wrong when a
+        // background re-publish restores what they already chose.
+        if (previousSort is { } sort
+            && sort.ColumnIndex < _columns.Count
+            && _columns[sort.ColumnIndex].Sort is not null)
+        {
+            ReapplySortWithoutAnnouncing(sort.ColumnIndex, sort.Ascending);
+        }
+    }
+
+    private void ReapplySortWithoutAnnouncing(int columnIndex, bool ascending)
+    {
+        Action<A11yEvent> announce = Announce;
+        Announce = _ => { };
+        try
+        {
+            _ = ApplySort(columnIndex, ascending);
+        }
+        finally
+        {
+            Announce = announce;
+        }
     }
 
     /// <summary>
@@ -489,6 +525,45 @@ internal sealed class AccessibleDataGrid : UserControl
             Announce(new A11yEvent.GridCellMoved(
                 _columns[column.ColumnIndex].Header,
                 _columns[column.ColumnIndex].Cell(row)));
+        }
+    }
+
+    /// <summary>
+    /// Enter or double-click on the focused row.
+    ///
+    /// The substrate had no activation mechanism at all, which is why
+    /// W4-5's bibliography entries could not be expanded: mac makes
+    /// every entry row a Button that opens the citation popover, and on
+    /// Windows there was simply no way in — the row even advertised
+    /// "Activate to expand citation fields." Row ACTIONS (the context
+    /// menu) are not a substitute; Enter is the primary affordance a
+    /// keyboard user reaches for. Lives here rather than in the
+    /// citations code because a second implementation of row activation
+    /// is exactly what the grid-conformance contract forbids (D-12).
+    /// </summary>
+    private void OnActivationKey(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter || _rowActivated is null)
+        {
+            return;
+        }
+        if (_grid.CurrentCell.Item is { } item && _items.Contains(item))
+        {
+            _rowActivated(item);
+            e.Handled = true;
+        }
+    }
+
+    private void OnActivationDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (_rowActivated is null)
+        {
+            return;
+        }
+        if (_grid.CurrentCell.Item is { } item && _items.Contains(item))
+        {
+            _rowActivated(item);
+            e.Handled = true;
         }
     }
 

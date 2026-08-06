@@ -36,6 +36,19 @@ internal sealed partial class WorkspaceViewModel
     /// <see cref="BibliographySeedOutcome.MayReadEntries"/>).</summary>
     private readonly BibliographySeed _bibliographySeed = new();
 
+    /// <summary>The seeding task itself, kept rather than discarded so
+    /// teardown and tests can observe it. It was fire-and-forget, which
+    /// left the application's only write with no handle at all.
+    /// </summary>
+    private Task? _seedWork;
+
+    /// <summary>The shell launcher the panels VM already allowlists
+    /// through; shared so citation links cannot drift from link rows.
+    /// </summary>
+    private readonly Func<string, bool> _externalOpener;
+
+    internal Task SeedWorkForTests => _seedWork ?? Task.CompletedTask;
+
     /// <summary>Non-null while the details overlay is open.</summary>
     public CitationDetailsViewModel? CitationDetails
     {
@@ -115,8 +128,19 @@ internal sealed partial class WorkspaceViewModel
         // Marshal the outcome back the way the panel schedulers do —
         // captured on the UI thread here, at construction time.
         SynchronizationContext? uiContext = SynchronizationContext.Current;
-        _ = Task.Run(() =>
+        _seedWork = Task.Run(() =>
         {
+            // Teardown can settle the seed as Cancelled while this body
+            // is still queued. SetBibliographySources is the ONLY write
+            // this application performs (contract 6); starting it into
+            // a vault that is closing leaves a completed write behind a
+            // disposed workspace. The window between this check and the
+            // call is closed by uniffi's call counter, which throws
+            // rather than touching freed memory.
+            if (_bibliographySeed.Outcome is { Status: BibliographySeedStatus.Cancelled })
+            {
+                return;
+            }
             BibliographySeedOutcomeHolder holder = default;
             try
             {
@@ -124,22 +148,26 @@ internal sealed partial class WorkspaceViewModel
             }
             finally
             {
-                // Settle on EVERY path: the sources are as seeded as
-                // they are ever going to get, and an unsettled seed
-                // would hang both leaves for the life of the workspace.
+                // Settle AND publish on EVERY path. Settling alone left
+                // a fatal-exception path where the seed said Failed but
+                // ApplySeedOutcome never ran, because the exception
+                // propagated past the publish below — the leaf then
+                // showed "0 entries" with no notice, no error and no
+                // "no sources" state: contract 5 satisfied on the
+                // ordinary failure path and silently broken on this one.
                 _bibliographySeed.Complete(
                     holder.Outcome
                         ?? new BibliographySeedOutcome(
                             BibliographySeedStatus.Failed, []));
-            }
-            BibliographySeedOutcome settled = _bibliographySeed.Outcome!;
-            if (uiContext is null)
-            {
-                Bibliography.ApplySeedOutcome(settled);
-            }
-            else
-            {
-                uiContext.Post(_ => Bibliography.ApplySeedOutcome(settled), null);
+                BibliographySeedOutcome settled = _bibliographySeed.Outcome!;
+                if (uiContext is null)
+                {
+                    Bibliography.ApplySeedOutcome(settled);
+                }
+                else
+                {
+                    uiContext.Post(_ => Bibliography.ApplySeedOutcome(settled), null);
+                }
             }
         });
     }
@@ -190,9 +218,33 @@ internal sealed partial class WorkspaceViewModel
     /// <summary>Ctrl+Shift+J (mac ⇧⌘J): the note's citation summary.
     /// Counts come from the leaf's already-published rows and
     /// references — no re-read, so the sheet can never disagree with
-    /// the panel behind it (contract 12).</summary>
+    /// the panel behind it (contract 12).
+    ///
+    /// Refused while the leaf is still loading: the sheet's own name is
+    /// read on appear, so opening early announced "Citation Summary.
+    /// This note has no citations." for a note that has eight, with the
+    /// walk-through disabled and no re-read to correct it. Citation
+    /// loads are gated on the seed, so the pre-publish window is a
+    /// perfectly ordinary one at startup.</summary>
     internal void OpenCitationSummary()
     {
+        if (Citations.IsLoading)
+        {
+            // DEFER, never drop: a keypress that produces nothing reads
+            // as a dead key, which is the same failure the Ctrl+J
+            // design forbids. One-shot — a second press while parked
+            // replaces nothing because the handler detaches itself.
+            // Safe after teardown: publishes are guarded by IsShutDown,
+            // so a workspace that dies while parked simply never fires.
+            void OpenWhenPublished(object? sender, EventArgs args)
+            {
+                Citations.RowsPublished -= OpenWhenPublished;
+                OpenCitationSummary();
+            }
+            Citations.RowsPublished -= OpenWhenPublished;
+            Citations.RowsPublished += OpenWhenPublished;
+            return;
+        }
         CitationSummary = new CitationSummaryViewModel(
             Citations.Rows.Count,
             Citations.References,
@@ -220,13 +272,95 @@ internal sealed partial class WorkspaceViewModel
     internal void OpenEntryDetails(BibEntry entry, object? returnFocusToken = null) =>
         CitationDetails = CitationDetailsViewModel.FromEntry(entry, returnFocusToken);
 
+    private System.Windows.Input.ICommand? _openCitationLinkCommand;
+
+    /// <summary>
+    /// Open a citation field's target — the DOI or URL of an expanded
+    /// entry. `CitationField.LinkTarget` was populated for both and
+    /// rendered as inert text, so a DOI could be read but never
+    /// followed; mac renders both as real links
+    /// (CitationPopover.swift:139-152). Routed through the same
+    /// http/https/mailto allowlist the W4-2 panels use, so a hostile
+    /// `.bib` cannot smuggle a `file:` or `javascript:` target in.
+    /// </summary>
+    public System.Windows.Input.ICommand OpenCitationLinkCommand =>
+        _openCitationLinkCommand ??= new RelayCommand(
+            parameter => OpenCitationLink(parameter as string),
+            parameter => parameter is string { Length: > 0 });
+
+    private void OpenCitationLink(string? target)
+    {
+        if (target is not { Length: > 0 })
+        {
+            return;
+        }
+        bool allowed = Uri.TryCreate(target, UriKind.Absolute, out Uri? uri)
+            && uri.Scheme is "http" or "https" or "mailto";
+        if (!allowed)
+        {
+            _announce(new A11yEvent.ExternalLinkUnsupported(target));
+            return;
+        }
+        _announce(_externalOpener(target)
+            ? new A11yEvent.ExternalLinkOpened()
+            : new A11yEvent.ExternalLinkFailed(target));
+    }
+
+    private System.Windows.Input.ICommand? _reloadBibliographyCommand;
+
+    /// <summary>
+    /// Re-seed the sources and reload both segments.
+    ///
+    /// Seeding was once-per-vault-open and <c>ForceReload</c> had no
+    /// caller at all, so the whole recovery story was "close the vault
+    /// and open it again": a user who saw "library.bib: no such file",
+    /// fixed the path in slate.json, and came back had no way to retry.
+    /// Re-seeding is what makes the retry real — reloading alone would
+    /// re-read the same stale index.
+    /// </summary>
+    public System.Windows.Input.ICommand ReloadBibliographyCommand =>
+        _reloadBibliographyCommand ??= new RelayCommand(
+            _ => ReloadBibliography(), _ => true);
+
+    internal void ReloadBibliography()
+    {
+        BibliographySeedOutcome outcome = ReadAndSeedSources();
+        _bibliographySeed.Complete(outcome);
+        // Complete() is first-settle-wins, so on a retry the ORIGINAL
+        // outcome is what the gate holds. The leaves need the new one.
+        Bibliography.ApplySeedOutcome(outcome);
+        Bibliography.OverrideSeedOutcome(outcome);
+        Citations.OverrideSeedOutcome(outcome);
+        Bibliography.ForceReload();
+        Citations.Refresh();
+    }
+
+    /// <summary>
+    /// The ONE post-save funnel every note-scoped surface hangs off.
+    ///
+    /// There were ten call sites, all of them refreshing the link and
+    /// task panels directly, and adding a surface meant remembering all
+    /// ten. Citations was added and not remembered — so a save never
+    /// updated it. Routing them through here means the next surface is
+    /// wired once, not ten times.
+    /// </summary>
+    private void NotePersisted(string path)
+    {
+        Panels.NoteSaved(path);
+        Citations.NoteSaved(path);
+    }
+
     /// <summary>Bibliography row action: which notes cite this key.</summary>
-    internal void OpenFilesCiting(
-        string key, object? returnFocusToken = null, bool synchronousForTests = false)
+    internal void OpenFilesCiting(string key, object? returnFocusToken = null)
     {
         FilesCiting?.Shutdown();
+        // Derived from the workspace's own mode, not passed in. As a
+        // parameter every caller had to remember it, and a test-mode
+        // workspace that forgot got a sheet whose worker mutated an
+        // ObservableCollection off-thread while the test read it.
         var sheet = new FilesCitingViewModel(
-            _session, key, returnFocusToken, synchronousForTests);
+            _session, key, returnFocusToken,
+            synchronousForTests: !_startInteractionBackgroundWork);
         FilesCiting = sheet;
         sheet.Load();
     }
@@ -249,6 +383,24 @@ internal sealed partial class WorkspaceViewModel
         {
             return;
         }
+
+        // Mirror mac (AppState.swift:12307-12322), which does all of
+        // this before announcing. Skipping any of it produced a
+        // CONFIDENT LIE: the announcement said "Jumped to bibliography
+        // entry" while focus never moved, because the leaf was hidden,
+        // or showing the other segment, or filtered so the target was
+        // not in the bound rows FocusRow scans.
+        IsRightPaneVisible = true;
+        Bibliography.Segment = BibliographySegment.Entries;
+        // mac sets the search box to the key. That is not cosmetic: it
+        // guarantees the target survives the filter, so the row the
+        // announcement promises is the row that can be focused.
+        Bibliography.SearchText = key;
+        // mac clears expandedCitation. The sheet is IsDialog and
+        // focus-trapped, so leaving it open would strand the user
+        // typing into a grid behind a modal that still claims focus.
+        details.SuppressFocusReturn();
+        CitationDetails = null;
 
         ActiveLeaf = Leaves.First(
             leaf => string.Equals(leaf.Id, "bibliography", StringComparison.Ordinal));

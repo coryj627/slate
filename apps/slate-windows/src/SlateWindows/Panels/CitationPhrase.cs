@@ -236,6 +236,17 @@ internal static class CitationPhrase
     public static string DetailsUnresolvedSpoken(string key) =>
         $"Unresolved citation: {key}. This key isn't in any bibliography source.";
 
+    /// <summary>
+    /// Windows ADDITION (D-14): the container label for the details
+    /// sheet's field list. mac renders the fields directly into a
+    /// popover with no list container, so it has no twin for this. The
+    /// Windows list is keyboard-focusable, and a focusable element with
+    /// no name is an axe NameNotNull failure — so the container needs
+    /// one. Kept deliberately plain so it adds nothing the fields
+    /// themselves do not already say.
+    /// </summary>
+    public const string DetailsFieldsLabel = "Citation fields";
+
     public const string DetailsClose = "Close";
     public const string DetailsCloseHelp = "Close the expanded citation.";
 

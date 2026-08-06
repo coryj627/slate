@@ -208,6 +208,83 @@ public sealed class CitationWorkspaceSeamTests : IDisposable
             e => e.Text == "Searching bibliography for: ghostkey.");
     }
 
+    /// <summary>
+    /// The announcement must not be able to outrun the focus move.
+    ///
+    /// "Jumped to bibliography entry: X." is answered from the LOADED
+    /// set, but the view focuses a row from the BOUND set — filtered by
+    /// the search box, scoped to the entries segment, and present only
+    /// if the pane is visible at all. Each of those three could be out
+    /// of step, and every one of them turned the announcement into a
+    /// confident lie: the user hears they arrived somewhere they never
+    /// went. mac avoids it by setting the search text and the segment
+    /// and dismissing the popover before announcing
+    /// (AppState.swift:12307-12322).
+    /// </summary>
+    [Fact]
+    public void JumpToBibliographyMakesTheTargetReachableBeforeAnnouncingArrival()
+    {
+        var announced = new List<A11yEvent>();
+        using VaultSession session = OpenScanned();
+        using var workspace = MakeWorkspace(session, announced);
+        workspace.OpenPath("cited.md");
+        workspace.Bibliography.EnsureLoaded();
+
+        // The three states that each broke it, all at once.
+        workspace.IsRightPaneVisible = false;
+        workspace.Bibliography.Segment = BibliographySegment.Unresolved;
+        workspace.Bibliography.SearchText = "zzzz-matches-nothing";
+        Assert.Empty(workspace.Bibliography.Entries);
+
+        workspace.OpenCitationDetails(
+            workspace.Citations.Rows.First(row => !row.IsUnresolved));
+        workspace.JumpToBibliography();
+
+        // The leaf is reachable, on the right segment...
+        Assert.True(workspace.IsRightPaneVisible);
+        Assert.Equal("bibliography", workspace.ActiveLeaf.Id);
+        Assert.True(workspace.Bibliography.ShowEntries);
+        // ...the focus-trapped sheet is out of the way (mac clears
+        // expandedCitation)...
+        Assert.Null(workspace.CitationDetails);
+        // ...and the row the announcement names is actually in the
+        // bound set the grid will search.
+        Assert.Contains(
+            workspace.Bibliography.Entries,
+            row => row.Key == "knuth1984");
+        Assert.Contains(
+            announced.OfType<A11yEvent.HostComposed>(),
+            e => e.Text == "Jumped to bibliography entry: knuth1984.");
+    }
+
+    /// <summary>
+    /// A save must reach the citations leaf.
+    ///
+    /// Every save path called <c>Panels.NoteSaved</c> and none of them
+    /// told this leaf, while <c>Citations.Refresh</c> — whose own doc
+    /// called itself the post-save funnel — had no production caller at
+    /// all. So adding a citation and pressing Ctrl+S left the panel
+    /// showing the old rows indefinitely; only switching notes and
+    /// coming back repaired it. All ten save sites now route through
+    /// one funnel so the next surface cannot be forgotten the same way.
+    /// </summary>
+    [Fact]
+    public void SavingANoteRefreshesTheCitationsLeaf()
+    {
+        var announced = new List<A11yEvent>();
+        using VaultSession session = OpenScanned();
+        using var workspace = MakeWorkspace(session, announced);
+        workspace.OpenPath("cited.md");
+        Assert.Equal(2, workspace.Citations.Rows.Count);
+
+        var tab = Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        tab.Text = "# Cited\n\nA citation [@knuth1984], a ghost [@ghostkey], "
+            + "and a third [@newkey].\n";
+        workspace.SaveActiveCommand.Execute(null);
+
+        Assert.Equal(3, workspace.Citations.Rows.Count);
+    }
+
     [Fact]
     public void TheSuiteAddsExactlyTwoHostComposedTexts()
     {
@@ -223,7 +300,7 @@ public sealed class CitationWorkspaceSeamTests : IDisposable
         workspace.OpenCitationSummary();
         workspace.CitationSummary!.WalkThrough();
         workspace.OpenEntryDetails(workspace.Bibliography.Entries[0].Entry);
-        workspace.OpenFilesCiting("knuth1984", synchronousForTests: true);
+        workspace.OpenFilesCiting("knuth1984");
         workspace.AnnounceInsertCitationUnavailable();
 
         var residue = announced.OfType<A11yEvent.HostComposed>()
@@ -262,7 +339,7 @@ public sealed class CitationWorkspaceSeamTests : IDisposable
         using VaultSession session = OpenScanned();
         using var workspace = MakeWorkspace(session, announced);
 
-        workspace.OpenFilesCiting("knuth1984", synchronousForTests: true);
+        workspace.OpenFilesCiting("knuth1984");
         Assert.Equal("cited.md", Assert.Single(workspace.FilesCiting!.Paths));
         Assert.Equal(
             "Files citing this entry. 1 file.", workspace.FilesCiting.AutomationName);
@@ -314,7 +391,7 @@ public sealed class CitationWorkspaceSeamTests : IDisposable
         workspace.OpenCitationDetails(workspace.Citations.Rows[0]);
         workspace.JumpToBibliography();
         workspace.CloseCitationDetailsCommand.Execute(null);
-        workspace.OpenFilesCiting("knuth1984", synchronousForTests: true);
+        workspace.OpenFilesCiting("knuth1984");
         workspace.CloseFilesCitingCommand.Execute(null);
         workspace.AnnounceInsertCitationUnavailable();
 

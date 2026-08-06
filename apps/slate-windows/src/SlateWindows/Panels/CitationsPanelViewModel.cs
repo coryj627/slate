@@ -131,6 +131,25 @@ internal sealed class CitationsPanelViewModel : PanelWorkScheduler
         Refresh();
     }
 
+    /// <summary>
+    /// A note was written. Re-read only when it is the note on screen.
+    ///
+    /// <see cref="Refresh"/> documented itself as the "post-save
+    /// funnel" entry point and had NO production caller — every save
+    /// path called <c>Panels.NoteSaved</c> and none of them told the
+    /// citations leaf. So adding a citation and saving left the panel
+    /// showing the old rows, the new key never appeared, and the
+    /// summary sheet kept reporting the old count until the user tabbed
+    /// away and back.
+    /// </summary>
+    public void NoteSaved(string path)
+    {
+        if (string.Equals(path, _path, StringComparison.Ordinal))
+        {
+            Refresh();
+        }
+    }
+
     /// <summary>Re-read the CURRENT path (post-save funnel, explicit
     /// reload). Same generation, new requestId.</summary>
     public void Refresh()
@@ -147,7 +166,16 @@ internal sealed class CitationsPanelViewModel : PanelWorkScheduler
             try
             {
                 var references = _session.ListCitationsInFile(path);
-                string styleId = ActiveStyleId();
+                // A FAILED seed leaves the previous session's BibIndex
+                // live (session.rs:2085-2088 / 8491), and RenderCitation
+                // resolves against it — so rendering here would show
+                // last session's title and year as this session's
+                // answer, next to a bibliography leaf that is correctly
+                // refusing to show anything (D-13). Rendering nothing
+                // yields placeholders: the key, and no claim about
+                // whether it resolves. Contract 2's "core never looked
+                // one up" state is the honest one.
+                string styleId = MayResolveKeys ? ActiveStyleId() : "";
                 RenderedCitation[]? rendered = null;
                 if (styleId.Length > 0)
                 {
@@ -170,6 +198,38 @@ internal sealed class CitationsPanelViewModel : PanelWorkScheduler
             }
         });
     }
+
+    private BibliographySeed? _seed;
+
+    /// <summary>The prerequisite this leaf waits on AND branches on.
+    /// Attached once, by the workspace, before any load can start.
+    /// </summary>
+    internal void AttachSeed(BibliographySeed seed)
+    {
+        _seed = seed;
+        GateWorkOn(seed.Completion);
+    }
+
+    /// <summary>
+    /// Whether keys may be resolved against core's bibliography.
+    ///
+    /// The settled lifecycle design says a failed seed must stop the
+    /// LEAVES — plural — reading core. The first implementation gave
+    /// this branch to the bibliography leaf only, so the two surfaces
+    /// disagreed: one refused while the other rendered last session's
+    /// data as authoritative. Three independent reviewers found it.
+    /// </summary>
+    private bool MayResolveKeys =>
+        _retrySeedOutcome is { } retry
+            ? retry.MayReadEntries
+            : _seed is null || _seed.Outcome?.MayReadEntries == true;
+
+    private BibliographySeedOutcome? _retrySeedOutcome;
+
+    /// <summary>Replace the outcome after an explicit re-seed; the seed
+    /// itself is first-settle-wins and cannot be re-settled.</summary>
+    internal void OverrideSeedOutcome(BibliographySeedOutcome outcome) =>
+        _retrySeedOutcome = outcome;
 
     /// <summary>The configured default style's id, or empty when none
     /// is configured. Core matches ids, not paths, so the file stem is
@@ -227,7 +287,13 @@ internal sealed class CitationsPanelViewModel : PanelWorkScheduler
             _announcedPath = path;
             _announce(new A11yEvent.CitationsCount((uint)Rows.Count));
         }
+        RowsPublished?.Invoke(this, EventArgs.Empty);
     }
+
+    /// <summary>Raised once per publish, after the rows and references
+    /// are in place. Lets a caller that arrived mid-load wait for a
+    /// real answer instead of reading zero.</summary>
+    internal event EventHandler? RowsPublished;
 
     private void NotifyStateChanged()
     {
@@ -275,7 +341,21 @@ internal sealed class CitationRowViewModel
 
     public bool IsUnresolved { get; }
 
-    public string AutomationHelpText => CitationPhrase.CitationRowHelp;
+    /// <summary>
+    /// The expand hint is offered ONLY when there is something to
+    /// expand. A placeholder row has no rendered citation — core never
+    /// looked the key up (contract 2) — and the workspace seam refuses
+    /// to open a sheet for it, so advertising "Activate to expand
+    /// citation fields." promised an affordance that silently did
+    /// nothing. That is the whole panel's state whenever no cite_style
+    /// is configured, which is an ordinary vault, not an edge case.
+    /// </summary>
+    public string AutomationHelpText =>
+        Rendered is null ? "" : CitationPhrase.CitationRowHelp;
+
+    /// <summary>Whether activating this row can open the details sheet.
+    /// </summary>
+    public bool CanExpand => Rendered is not null;
 
     public string UnresolvedBadge => CitationPhrase.UnresolvedBadge;
 

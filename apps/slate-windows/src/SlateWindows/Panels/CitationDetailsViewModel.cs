@@ -12,6 +12,10 @@ internal sealed record CitationField(string Label, string Value, string? LinkTar
     /// <summary>The spoken form; the visible caption is
     /// presentation-only.</summary>
     public string AutomationName => CitationPhrase.FieldSpoken(Label, Value);
+
+    /// <summary>DOI and URL are followable; every other field is
+    /// plain text.</summary>
+    public bool IsLink => LinkTarget is { Length: > 0 };
 }
 
 /// <summary>
@@ -81,7 +85,19 @@ internal sealed class CitationDetailsViewModel : BindableBase
 
     /// <summary>Identity of the row that opened this overlay, so
     /// Escape can return focus exactly there (contract 11).</summary>
-    public object? ReturnFocusToken { get; }
+    /// <summary>
+    /// The element Escape must return focus to (contract 11). This is
+    /// PER-SHEET on purpose: the window previously restored from a
+    /// single shared field, so closing an inner sheet put focus behind
+    /// a still-open outer one and cleared the slot, leaving the outer
+    /// sheet with nothing to restore.
+    /// </summary>
+    public object? ReturnFocusToken { get; private set; }
+
+    /// <summary>Give up the focus return — used when the sheet is
+    /// closed as part of a jump that is itself moving focus somewhere
+    /// else, so the two do not fight over it.</summary>
+    internal void SuppressFocusReturn() => ReturnFocusToken = null;
 
     public string UnresolvedHeading => CitationPhrase.DetailsUnresolvedHeading;
 

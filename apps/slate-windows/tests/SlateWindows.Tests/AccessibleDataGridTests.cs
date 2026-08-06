@@ -134,6 +134,68 @@ public sealed class AccessibleDataGridTests
     }
 
     /// <summary>
+    /// A re-publish must not silently undo the user's sort.
+    ///
+    /// Bind is a whole-surface reset, and consuming surfaces re-bind
+    /// whenever their rows change — for the citations bibliography that
+    /// is every keystroke in its filter box. Dropping the sort there
+    /// reordered rows under the reader with no announcement and no
+    /// header indicator, so the ordering they had chosen just
+    /// evaporated. Re-applied silently: announcing on a background
+    /// re-publish would be a second lie in the other direction.
+    /// </summary>
+    [Fact]
+    public void SortSurvivesARebindAndIsNotReannounced()
+    {
+        RunSta(() =>
+        {
+            var announced = new List<A11yEvent>();
+            var grid = MakeGrid(announced);
+            _ = grid.ApplySort(0, ascending: true);
+            Assert.Equal("Alice", Assert.IsType<Person>(grid.Grid.Items[0]).Name);
+            int afterUserSort = announced.Count;
+
+            grid.Bind(Columns(), People, "3 rows, 2 columns.", "People, data grid");
+
+            Assert.Equal("Alice", Assert.IsType<Person>(grid.Grid.Items[0]).Name);
+            Assert.Equal((0, true), grid.ActiveSort);
+            Assert.Equal(
+                System.ComponentModel.ListSortDirection.Ascending,
+                grid.Grid.Columns[0].SortDirection);
+            Assert.Equal(afterUserSort, announced.Count);
+        });
+    }
+
+    /// <summary>A rebind whose columns can no longer support the old
+    /// sort must drop it rather than throw or half-apply it.</summary>
+    [Fact]
+    public void ARebindWhoseColumnsCannotSortDropsTheSort()
+    {
+        RunSta(() =>
+        {
+            var grid = MakeGrid(new List<A11yEvent>());
+            _ = grid.ApplySort(0, ascending: true);
+            Assert.Equal((0, true), grid.ActiveSort);
+
+            // Same position, but this column carries no comparator.
+            grid.Bind(
+                [
+                    new AccessibleGridColumn
+                    {
+                        Header = "Name",
+                        Cell = row => ((Person)row).Name,
+                    },
+                ],
+                People,
+                "3 rows, 1 column.",
+                "People, data grid");
+
+            Assert.Null(grid.ActiveSort);
+            Assert.Equal("Charlie", Assert.IsType<Person>(grid.Grid.Items[0]).Name);
+        });
+    }
+
+    /// <summary>
     /// Two grids in one window must be tellable apart. The default is
     /// unchanged so W4-1's conformance fixture and the bulk-rename
     /// preview keep the ids they already publish.

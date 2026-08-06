@@ -2480,6 +2480,37 @@ public sealed class ShellAccessibilityTests
                 details.Patterns.Window.IsSupported
                     || details.Properties.ControlType.ValueOrDefault == ControlType.Pane,
                 "the details sheet did not surface as a dialog-shaped element");
+            // The fields must REACH assistive technology. Asserting the
+            // sheet exists is what the first version of this test did,
+            // and it passed while every field was absent from the UIA
+            // tree: the item roots were bare Panels (no peer at all)
+            // wrapping presentation-suppressed TextBlocks, so a screen
+            // reader heard the dialog name and then only "Close".
+            AutomationElement fields = WaitForElement(
+                window, "CitationDetailsFields", TimeSpan.FromSeconds(10));
+            string[] fieldNames = [];
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        fieldNames = [.. fields
+                            .FindAllDescendants(
+                                automation.ConditionFactory.ByControlType(
+                                    ControlType.ListItem))
+                            .Select(item => item.Properties.Name.ValueOrDefault ?? "")
+                            .Where(name => name.Length > 0)];
+                        return fieldNames.Length > 0;
+                    },
+                    TimeSpan.FromSeconds(15)),
+                "the details sheet exposed no named field elements at all");
+            // Verbatim "Label: Value" per field, the mac shape.
+            Assert.Contains(
+                fieldNames,
+                name => name.StartsWith("Title:", StringComparison.Ordinal));
+            Assert.Contains(
+                fieldNames,
+                name => name.Contains("Knuth", StringComparison.OrdinalIgnoreCase));
+
             AutomationElement detailsClose = WaitForElement(
                 window, "CitationDetailsClose", TimeSpan.FromSeconds(10));
             AssertEventuallyFocused(
@@ -2490,6 +2521,35 @@ public sealed class ShellAccessibilityTests
             AssertElementDisappears(window, automation, "CitationDetailsSheet");
             AssertEventuallyFocused(
                 resolvedRow, "Escape did not return focus to the citation row.");
+
+            // ---- Ctrl+J: the landing, not just the announcement -----
+            // The docstring claimed this for a version of the test that
+            // never pressed Ctrl+J, so the interaction with three known
+            // false-positive paths had no end-to-end cover at all.
+            resolvedRow.Focus();
+            PressKey(VirtualKeyShort.RETURN);
+            WaitForElement(window, "CitationDetailsSheet", TimeSpan.FromSeconds(10));
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_J);
+            // The focus-trapped sheet must get out of the way (mac
+            // clears expandedCitation) ...
+            AssertElementDisappears(window, automation, "CitationDetailsSheet");
+            // ... and the entries grid must actually hold the key the
+            // announcement names, on the entries segment, in a visible
+            // pane. If any of those is false the user is told they
+            // arrived somewhere they never went.
+            AutomationElement jumped = WaitForElement(
+                window, "BibliographyEntries", TimeSpan.FromSeconds(15));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => jumped
+                        .FindAllDescendants(
+                            automation.ConditionFactory.ByControlType(ControlType.Custom))
+                        .Concat(jumped.FindAllDescendants(
+                            automation.ConditionFactory.ByControlType(ControlType.DataItem)))
+                        .Any(row => (row.Properties.Name.ValueOrDefault ?? "")
+                            .Contains("Knuth", StringComparison.OrdinalIgnoreCase)),
+                    TimeSpan.FromSeconds(15)),
+                "Ctrl+J announced a jump but the entry never appeared in the bound grid");
 
             // ---- Ctrl+Shift+J: the summary sheet ------------------
             PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_J);

@@ -38,6 +38,9 @@ public partial class MainWindow
             Sort = Comparer<object>.Create((x, y) => string.CompareOrdinal(
                 ((BibliographyRowViewModel)x).TitleLine,
                 ((BibliographyRowViewModel)y).TitleLine)),
+            // mac hints the row action on the entry itself; the string
+            // was pinned as RowHelp and then bound nowhere.
+            AccessibilityHint = row => ((BibliographyRowViewModel)row).RowHelp,
             IsRowHeader = true,
         },
         new AccessibleGridColumn
@@ -121,11 +124,14 @@ public partial class MainWindow
     {
         if (_observedBibliography is not null)
         {
-            _observedBibliography.PropertyChanged -= Bibliography_PropertyChanged;
-            _observedBibliography.Entries.CollectionChanged -= BibliographyEntries_Changed;
-            _observedBibliography.Unresolved.CollectionChanged -= BibliographyUnresolved_Changed;
+            _observedBibliography.EntriesPublished -= BibliographyEntries_Changed;
+            _observedBibliography.UnresolvedPublished -= BibliographyUnresolved_Changed;
             _observedBibliography.KeyFocusRequested -= Bibliography_KeyFocusRequested;
             _observedBibliography = null;
+            // Drop the closed vault's rows rather than leaving up to
+            // MaxEntryRows of them alive behind the welcome screen.
+            BibliographyEntriesGrid.Bind([], [], summary: "", accessibilityLabel: "");
+            BibliographyUnresolvedGrid.Bind([], [], summary: "", accessibilityLabel: "");
         }
         if (_observedCitations is not null)
         {
@@ -137,9 +143,10 @@ public partial class MainWindow
             return;
         }
         _observedBibliography = workspace.Bibliography;
-        _observedBibliography.PropertyChanged += Bibliography_PropertyChanged;
-        _observedBibliography.Entries.CollectionChanged += BibliographyEntries_Changed;
-        _observedBibliography.Unresolved.CollectionChanged += BibliographyUnresolved_Changed;
+        // ONE signal per publish. Subscribing to CollectionChanged made
+        // a publish of N rows rebind the grid N+2 times.
+        _observedBibliography.EntriesPublished += BibliographyEntries_Changed;
+        _observedBibliography.UnresolvedPublished += BibliographyUnresolved_Changed;
         _observedBibliography.KeyFocusRequested += Bibliography_KeyFocusRequested;
         _observedCitations = workspace.Citations;
         _observedCitations.Rows.CollectionChanged += CitationRows_Changed;
@@ -160,28 +167,10 @@ public partial class MainWindow
         }
     }
 
-    private void Bibliography_PropertyChanged(
-        object? sender, PropertyChangedEventArgs eventArgs)
-    {
-        switch (eventArgs.PropertyName)
-        {
-            case nameof(BibliographyViewModel.EntriesSummary):
-                BindBibliographyEntriesGrid();
-                break;
-            case nameof(BibliographyViewModel.UnresolvedSummary):
-                BindBibliographyUnresolvedGrid();
-                break;
-            default:
-                break;
-        }
-    }
-
-    private void BibliographyEntries_Changed(
-        object? sender, NotifyCollectionChangedEventArgs eventArgs) =>
+    private void BibliographyEntries_Changed(object? sender, EventArgs eventArgs) =>
         BindBibliographyEntriesGrid();
 
-    private void BibliographyUnresolved_Changed(
-        object? sender, NotifyCollectionChangedEventArgs eventArgs) =>
+    private void BibliographyUnresolved_Changed(object? sender, EventArgs eventArgs) =>
         BindBibliographyUnresolvedGrid();
 
     /// <summary>Row actions mirror mac's context menu. Insert-citation
@@ -216,7 +205,14 @@ public partial class MainWindow
             summary: bibliography.EntriesSummary,
             accessibilityLabel: CitationPhrase.BibliographyHeading,
             rowAudioDescription: row => ((BibliographyRowViewModel)row).RowDescription,
-            rowActions: BibliographyRowActions());
+            rowActions: BibliographyRowActions(),
+            // Enter expands the entry, as mac's entry Button does. The
+            // details overlay was reachable only from the citations
+            // leaf, so half of contract 10's surface had no entrance
+            // and the row's own "Activate to expand citation fields."
+            // hint promised something that could not happen.
+            rowActivated: row => _observedWorkspace?.OpenEntryDetails(
+                ((BibliographyRowViewModel)row).Entry, Keyboard.FocusedElement));
     }
 
     private void BindBibliographyUnresolvedGrid()
@@ -275,20 +271,24 @@ public partial class MainWindow
     {
         if (e.Key is Key.Enter or Key.Space)
         {
-            ExpandSelectedCitation();
-            e.Handled = true;
+            // Only consume the key if something actually opened. It was
+            // marked handled unconditionally, so on a placeholder row
+            // the keystroke vanished with no sheet and no sound.
+            e.Handled = ExpandSelectedCitation();
         }
     }
 
     /// <summary>A placeholder row has nothing to expand — core never
-    /// looked one up (contract 2) — and the workspace seam refuses it,
-    /// so no guard is duplicated here.</summary>
-    private void ExpandSelectedCitation()
+    /// looked one up (contract 2). Returns whether a sheet opened.
+    /// </summary>
+    private bool ExpandSelectedCitation()
     {
-        if (PanelCitationsList.SelectedItem is CitationRowViewModel row)
+        if (PanelCitationsList.SelectedItem is not CitationRowViewModel { CanExpand: true } row)
         {
-            _observedWorkspace?.OpenCitationDetails(row, Keyboard.FocusedElement);
+            return false;
         }
+        _observedWorkspace?.OpenCitationDetails(row, Keyboard.FocusedElement);
+        return true;
     }
 
     /// <summary>Sheet focus choreography. Shares
@@ -296,6 +296,11 @@ public partial class MainWindow
     /// <c>??=</c> capture means a sheet opened from inside another
     /// sheet's flow still returns focus to where the user actually
     /// started (contract 11).</summary>
+    private CitationDetailsViewModel? _openCitationDetails;
+    private CitationSummaryViewModel? _openCitationSummary;
+    private FilesCitingViewModel? _openFilesCiting;
+    private IInputElement? _focusBeforeCitationSummary;
+
     private void Workspace_CitationSheetChanged(
         object? sender, PropertyChangedEventArgs eventArgs)
     {
@@ -306,39 +311,88 @@ public partial class MainWindow
         switch (eventArgs.PropertyName)
         {
             case nameof(WorkspaceViewModel.CitationDetails):
-                OpenOrCloseSheet(
-                    workspace.CitationDetails is not null,
-                    () => CitationDetailsCloseButton.Focus());
+                if (workspace.CitationDetails is { } details)
+                {
+                    _openCitationDetails = details;
+                    FocusWhenReady(() => CitationDetailsCloseButton.Focus());
+                }
+                else
+                {
+                    RestoreFocusTo(_openCitationDetails?.ReturnFocusToken);
+                    _openCitationDetails = null;
+                }
                 break;
             case nameof(WorkspaceViewModel.CitationSummary):
-                OpenOrCloseSheet(
-                    workspace.CitationSummary is not null,
-                    () => (workspace.CitationSummary?.CanWalkThrough == true
+                if (workspace.CitationSummary is { } summary)
+                {
+                    _openCitationSummary = summary;
+                    // The summary sheet has no row identity of its own
+                    // — it is opened by a chord from wherever focus
+                    // happens to be — so it captures at open time.
+                    _focusBeforeCitationSummary = Keyboard.FocusedElement;
+                    FocusWhenReady(() => (summary.CanWalkThrough
                         ? CitationSummaryWalkButton
                         : CitationSummaryDismissButton).Focus());
+                }
+                else
+                {
+                    RestoreFocusTo(_focusBeforeCitationSummary);
+                    _focusBeforeCitationSummary = null;
+                    _openCitationSummary = null;
+                }
                 break;
             case nameof(WorkspaceViewModel.FilesCiting):
-                OpenOrCloseSheet(
-                    workspace.FilesCiting is not null,
-                    () => FilesCitingCloseButton.Focus());
+                if (workspace.FilesCiting is { } filesCiting)
+                {
+                    _openFilesCiting = filesCiting;
+                    FocusWhenReady(() => FilesCitingCloseButton.Focus());
+                }
+                else
+                {
+                    RestoreFocusTo(_openFilesCiting?.ReturnFocusToken);
+                    _openFilesCiting = null;
+                }
                 break;
             default:
                 break;
         }
     }
 
-    private void OpenOrCloseSheet(bool isOpen, Action focusInitial)
+    private void FocusWhenReady(Action focusInitial) =>
+        _ = Dispatcher.InvokeAsync(
+            focusInitial, System.Windows.Threading.DispatcherPriority.Input);
+
+    /// <summary>
+    /// Contract 11, PER SHEET. The W4-4 sheets share one
+    /// <c>_focusBeforeSheet</c> slot with a <c>??=</c> capture, which
+    /// works only while exactly one sheet is ever open. Citation sheets
+    /// stack — Ctrl+Shift+J is enabled over an open details sheet — and
+    /// with a shared slot, closing the inner one restored focus to a
+    /// row BEHIND the still-open outer sheet and then nulled the slot,
+    /// so the outer sheet had nothing left to restore. Each citation
+    /// sheet now carries its own return target.
+    ///
+    /// A container that has been re-generated since the sheet opened
+    /// (the rows republish on every save) cannot take focus; falling
+    /// back to the list keeps the user inside the panel they came from
+    /// instead of stranding them on the window root.
+    /// </summary>
+    private void RestoreFocusTo(object? token)
     {
-        if (isOpen)
+        if (token is not IInputElement target)
         {
-            _focusBeforeSheet ??= Keyboard.FocusedElement;
-            _ = Dispatcher.InvokeAsync(
-                focusInitial, System.Windows.Threading.DispatcherPriority.Input);
+            return;
         }
-        else
-        {
-            RestoreFocusAfterSheet();
-        }
+        _ = Dispatcher.InvokeAsync(
+            () =>
+            {
+                if (target is UIElement { IsVisible: true } && target.Focus())
+                {
+                    return;
+                }
+                _ = PanelCitationsList.Focus();
+            },
+            System.Windows.Threading.DispatcherPriority.Input);
     }
 
     private void CitationDetailsOverlay_PreviewKeyDown(object sender, KeyEventArgs e)

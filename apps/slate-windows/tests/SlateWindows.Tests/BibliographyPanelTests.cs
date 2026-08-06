@@ -214,21 +214,88 @@ public sealed class BibliographyPanelTests : IDisposable
         Assert.False(leaf.ShowNoFilterHitsState);
     }
 
+    /// <summary>
+    /// Contract 5: sources absent stays a DISTINCT state from sources
+    /// present but empty, and from a load error — that distinction
+    /// lives in <c>HasNoSources</c>.
+    ///
+    /// The visible sentence, though, follows mac exactly
+    /// (BibliographyPanel.swift:104-108): it appears when the loaded
+    /// entry set is EMPTY, and mac uses this one sentence for both
+    /// cases. This test previously asserted the sentence showed while
+    /// two entries were on screen, which is the contradiction it now
+    /// pins shut.
+    /// </summary>
     [Fact]
     public void NoConfiguredSourcesIsItsOwnStateWithTheWindowsCopy()
     {
         var leaf = MakeLeaf();
-        // Contract 5: sources absent is distinct from sources present
-        // but empty, and from a load error.
         leaf.ApplySeedOutcome(
             new BibliographySeedOutcome(BibliographySeedStatus.NoSources, []));
         leaf.EnsureLoaded();
 
-        Assert.True(leaf.ShowNoSourcesState);
+        // The distinct state survives...
+        Assert.True(leaf.HasNoSources);
+        // ...but this fixture's session really does hold entries, and a
+        // panel showing two rows must not also claim nothing is
+        // configured.
+        Assert.NotEmpty(leaf.Entries);
+        Assert.False(leaf.ShowNoSourcesState);
         Assert.Equal(
             "No bibliography sources configured. "
                 + "Add a \"citations\" section to the vault's slate.json.",
             CitationPhrase.BibliographyNoSources);
+    }
+
+    /// <summary>The other half: an empty entry set DOES surface the
+    /// sentence. Without this, a vault whose sources loaded to nothing
+    /// showed a silent "0 entries" and no explanation at all.</summary>
+    [Fact]
+    public void AnEmptyEntrySetSurfacesTheNoSourcesSentence()
+    {
+        using var bare = FixtureVault.Create(0, "bibliography-empty");
+        File.WriteAllText(Path.Combine(bare.Root, "note.md"), "# Note\n");
+        using var session = VaultSession.OpenFilesystem(bare.Root);
+        using (var cancel = new CancelToken())
+        {
+            session.ScanInitial(cancel);
+        }
+        var leaf = new BibliographyViewModel(session, _ => { }, synchronousForTests: true);
+        leaf.ApplySeedOutcome(
+            new BibliographySeedOutcome(BibliographySeedStatus.NoSources, []));
+
+        leaf.EnsureLoaded();
+
+        Assert.Empty(leaf.Entries);
+        Assert.True(leaf.ShowNoSourcesState);
+    }
+
+    /// <summary>
+    /// Every state line is segment-scoped. The unresolved segment loads
+    /// LAZILY, so "No unresolved citations. Every key in your notes has
+    /// a bibliography entry." used to render above the entries grid on
+    /// first reveal — a factual claim about a query that had never run.
+    /// </summary>
+    [Fact]
+    public void StateLinesDoNotLeakAcrossSegments()
+    {
+        var leaf = MakeLeaf();
+        leaf.ApplySeedOutcome(
+            new BibliographySeedOutcome(BibliographySeedStatus.Seeded, []));
+        leaf.EnsureLoaded();
+
+        // Entries segment: nothing about unresolved may show.
+        Assert.False(leaf.ShowUnresolvedEmptyState);
+        Assert.False(leaf.ShowUnresolvedLoading);
+        Assert.False(leaf.ShowUnresolvedError);
+
+        leaf.Segment = BibliographySegment.Unresolved;
+
+        // Unresolved segment: nothing about entries may show.
+        Assert.False(leaf.ShowNoSourcesState);
+        Assert.False(leaf.ShowNoFilterHitsState);
+        Assert.False(leaf.ShowEntriesLoading);
+        Assert.False(leaf.ShowEntriesError);
     }
 
     [Fact]

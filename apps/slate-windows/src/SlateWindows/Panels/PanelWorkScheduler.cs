@@ -61,10 +61,26 @@ internal abstract class PanelWorkScheduler : BindableBase
         Task? gate = _prerequisite;
         if (gate is null)
         {
-            TrackWork(Task.Run(body));
+            TrackWork(Task.Run(() => RunIfLive(body)));
             return;
         }
         TrackWork(RunGatedAsync(gate, body));
+    }
+
+    /// <summary>
+    /// The last gate before touching the session. Teardown can land
+    /// between queueing a body and the pool picking it up, and the
+    /// check in <see cref="StartWork"/> cannot see that — without this
+    /// an ungated body (FilesCiting, which has no prerequisite) calls
+    /// into a session the vault lifecycle has already disposed.
+    /// </summary>
+    private void RunIfLive(Action body)
+    {
+        if (_isShutDown)
+        {
+            return;
+        }
+        body();
     }
 
     /// <summary>
@@ -98,7 +114,18 @@ internal abstract class PanelWorkScheduler : BindableBase
         {
             return;
         }
-        body();
+        // ALWAYS hand the body to the pool, never run it inline.
+        //
+        // Awaiting an ALREADY-COMPLETED task does not yield: the state
+        // machine runs straight through on the caller's thread. The
+        // seed settles seconds after vault open and stays settled, so
+        // from that moment every gated body would execute on whichever
+        // thread called StartWork — and every caller is the UI thread
+        // (SyncPanels, the ActiveLeaf reveal). That silently put every
+        // citation FFI call, including the whole-vault unresolved
+        // query, on the dispatcher. `ConfigureAwait(false)` does not
+        // help; it only governs where a SUSPENDED continuation resumes.
+        await Task.Run(() => RunIfLive(body)).ConfigureAwait(false);
     }
 
     private void TrackWork(Task work)

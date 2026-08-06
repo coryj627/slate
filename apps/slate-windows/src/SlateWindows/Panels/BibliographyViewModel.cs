@@ -118,13 +118,25 @@ internal sealed class BibliographyViewModel : PanelWorkScheduler
     public bool IsLoadingEntries
     {
         get => _isLoadingEntries;
-        private set => SetField(ref _isLoadingEntries, value);
+        private set
+        {
+            if (SetField(ref _isLoadingEntries, value))
+            {
+                NotifyStateChanged();
+            }
+        }
     }
 
     public bool IsLoadingUnresolved
     {
         get => _isLoadingUnresolved;
-        private set => SetField(ref _isLoadingUnresolved, value);
+        private set
+        {
+            if (SetField(ref _isLoadingUnresolved, value))
+            {
+                NotifyStateChanged();
+            }
+        }
     }
 
     public string? EntriesError
@@ -164,13 +176,40 @@ internal sealed class BibliographyViewModel : PanelWorkScheduler
     /// entries" (contract 5).</summary>
     public bool HasNoSources { get; private set; }
 
+    /// <summary>
+    /// Every state line below is SEGMENT-SCOPED. Without that, each one
+    /// rendered on whichever segment happened to be showing: the
+    /// entries grid carried "No unresolved citations. Every key in your
+    /// notes has a bibliography entry." — a factual claim about data
+    /// the lazy unresolved segment had never queried — and the
+    /// unresolved grid carried "Loading bibliography…" and the
+    /// entries-filter sentence. mac's per-segment if/else chain has
+    /// this property structurally; independent booleans lost it.
+    ///
+    /// This one is shown whenever the loaded entry set is empty and
+    /// nothing failed
+    /// — mac's branch order exactly (BibliographyPanel.swift:104-108),
+    /// which uses this one sentence for BOTH "no sources configured"
+    /// and "sources configured but empty". Narrowing it to
+    /// <see cref="HasNoSources"/> left the second case with no copy at
+    /// all, so an empty-but-configured bibliography rendered as a
+    /// silent "0 entries". <see cref="HasNoSources"/> still keeps the
+    /// two states distinct internally (contract 5); inventing a second
+    /// user-facing sentence would be a §W-C divergence mac does not
+    /// have.
+    /// </summary>
     public bool ShowNoSourcesState =>
-        HasNoSources && _entriesError is null && !_isLoadingEntries;
+        ShowEntries
+        && _loadStarted
+        && _entriesError is null
+        && !_isLoadingEntries
+        && _allEntries.Count == 0;
 
     /// <summary>Empty-with-a-query is a different sentence from
     /// empty-outright, so the user knows the filter caused it.</summary>
     public bool ShowNoFilterHitsState =>
-        !HasNoSources
+        ShowEntries
+        && !HasNoSources
         && _entriesError is null
         && !_isLoadingEntries
         && Entries.Count == 0
@@ -178,8 +217,27 @@ internal sealed class BibliographyViewModel : PanelWorkScheduler
 
     public string NoFilterHitsText => CitationPhrase.BibliographyNoFilterHits(_searchText);
 
+    /// <summary>Only after the lazy unresolved load has actually run —
+    /// otherwise this asserts "every key resolves" about a query that
+    /// was never issued.</summary>
     public bool ShowUnresolvedEmptyState =>
-        _unresolvedError is null && !_isLoadingUnresolved && Unresolved.Count == 0;
+        ShowUnresolved
+        && _unresolvedLoadStarted
+        && _unresolvedError is null
+        && !_isLoadingUnresolved
+        && Unresolved.Count == 0;
+
+    public bool ShowEntriesLoading => ShowEntries && _isLoadingEntries;
+
+    public bool ShowUnresolvedLoading => ShowUnresolved && _isLoadingUnresolved;
+
+    /// <summary>A read failure needs a SURFACE, not just a property.
+    /// These were computed and never bound, so a failed core read
+    /// rendered as a silent "0 entries" — contract 5 satisfied in the
+    /// view model and broken at the view.</summary>
+    public bool ShowEntriesError => ShowEntries && _entriesError is not null;
+
+    public bool ShowUnresolvedError => ShowUnresolved && _unresolvedError is not null;
 
     /// <summary>The grid summary — carries the truncation sentence
     /// verbatim when the cap bites, so the bound is announced rather
@@ -189,14 +247,33 @@ internal sealed class BibliographyViewModel : PanelWorkScheduler
         get
         {
             string counted = CitationPhrase.Counted(Entries.Count, "entry", "entries");
-            return _totalEntryCount > MaxEntryRows
-                ? $"{counted}. {CitationPhrase.TruncationNotice(MaxEntryRows, _totalEntryCount)}"
+            // The cap is announced against the MATCHED count, not the
+            // loaded one. Comparing the unfiltered total made a 6000-
+            // entry library with 12 search hits read "12 entries.
+            // Showing the first 5000 of 6000 entries." — nothing was
+            // truncated, and the spoken bound became noise.
+            return _matchedEntryCount > MaxEntryRows
+                ? $"{counted}. {CitationPhrase.TruncationNotice(MaxEntryRows, _matchedEntryCount)}"
                 : counted;
         }
     }
 
-    public string UnresolvedSummary =>
-        CitationPhrase.Counted(Unresolved.Count, "unresolved key", "unresolved keys");
+    private int _matchedEntryCount;
+
+    /// <summary>Carries the truncation sentence on the same terms as
+    /// the entries grid, so the unresolved cap is SPOKEN too (contract
+    /// 9 / D-3) rather than silently dropping rows.</summary>
+    public string UnresolvedSummary
+    {
+        get
+        {
+            string counted = CitationPhrase.Counted(
+                Unresolved.Count, "unresolved key", "unresolved keys");
+            return _totalUnresolvedCount > MaxEntryRows
+                ? $"{counted}. {CitationPhrase.TruncationNotice(MaxEntryRows, _totalUnresolvedCount)}"
+                : counted;
+        }
+    }
 
     /// <summary>Raised when Ctrl+J has settled on an entry the grid
     /// should land on. This is an EVENT rather than a bindable
@@ -290,11 +367,29 @@ internal sealed class BibliographyViewModel : PanelWorkScheduler
         GateWorkOn(seed.Completion);
     }
 
+    /// <summary>
+    /// Replace the outcome this leaf branches on, after an explicit
+    /// re-seed. The seed itself is first-settle-wins — that is what
+    /// makes teardown safe — so a retry cannot change it, and without
+    /// this the leaf would keep refusing to read core on the strength
+    /// of a failure the user has since fixed.
+    /// </summary>
+    internal void OverrideSeedOutcome(BibliographySeedOutcome outcome) =>
+        _retrySeedOutcome = outcome;
+
+    private BibliographySeedOutcome? _retrySeedOutcome;
+
     /// <summary>Called by the workspace once the vault's sources have
     /// settled. Notices are shown as-is; no sources configured is the
     /// distinct state (contract 5).</summary>
     public void ApplySeedOutcome(BibliographySeedOutcome outcome)
     {
+        // The one publish into this leaf that had no shutdown guard,
+        // and the only one whose input can be a Cancelled outcome.
+        if (IsShutDown)
+        {
+            return;
+        }
         LoadNotices = outcome.Notices;
         HasNoSources = !outcome.HasSources;
         OnPropertyChanged(nameof(LoadNotices));
@@ -315,7 +410,10 @@ internal sealed class BibliographyViewModel : PanelWorkScheduler
     /// is the whole point — but if the gate is ever removed, refusing
     /// is the fail-closed direction.
     /// </summary>
-    private bool MayQueryCore => _seed is null || _seed.Outcome?.MayReadEntries == true;
+    private bool MayQueryCore =>
+        _retrySeedOutcome is { } retry
+            ? retry.MayReadEntries
+            : _seed is null || _seed.Outcome?.MayReadEntries == true;
 
     /// <summary>Idempotent lazy load (the rail-reveal hook). Does NOT
     /// re-query once loaded — that is ForceReload's job.</summary>
@@ -492,28 +590,63 @@ internal sealed class BibliographyViewModel : PanelWorkScheduler
         Unresolved.Clear();
         if (loadError is null)
         {
-            foreach (var row in rows)
+            // Bounded like the entries grid (D-3). Unresolved is the
+            // MORE likely of the two to be huge: a vault with no
+            // bibliography configured still runs the query, and every
+            // distinct (file, key) pair in the vault comes back.
+            foreach (var row in rows.Take(MaxEntryRows))
             {
                 Unresolved.Add(new UnresolvedRowViewModel(row));
             }
         }
+        _totalUnresolvedCount = loadError is null ? rows.Length : 0;
         IsLoadingUnresolved = false;
         UnresolvedError = loadError;
         OnPropertyChanged(nameof(UnresolvedSummary));
         NotifyStateChanged();
+        RaiseUnresolvedPublished();
     }
+
+    private int _totalUnresolvedCount;
 
     /// <summary>Re-project the loaded set through the mac predicate
     /// and the row cap. Never queries core.</summary>
+    /// <summary>
+    /// Raised ONCE when the entry rows have finished changing.
+    ///
+    /// The window used to rebind the grid from
+    /// <c>Entries.CollectionChanged</c>, and this method clears and
+    /// re-adds row by row — so a publish of N rows triggered N+2 full
+    /// rebinds, each copying every row and rebuilding all five columns.
+    /// That is O(N²) notifications on the UI thread per publish, and
+    /// again on every keystroke in the search box. One signal per
+    /// publish is what the grid actually needs: Bind is a whole-surface
+    /// reset, not an incremental update.
+    /// </summary>
+    internal event EventHandler? EntriesPublished;
+
+    internal event EventHandler? UnresolvedPublished;
+
+    internal void RaiseUnresolvedPublished() =>
+        UnresolvedPublished?.Invoke(this, EventArgs.Empty);
+
     private void ApplyFilter()
     {
         Entries.Clear();
-        foreach (var entry in Matching(_allEntries, _searchText).Take(MaxEntryRows))
+        IEnumerable<BibEntry> matching = Matching(_allEntries, _searchText);
+        // Materialise only when a filter actually ran: an empty query
+        // returns the loaded list itself, and copying it per keystroke
+        // would be pure waste.
+        IReadOnlyList<BibEntry> matched =
+            matching as IReadOnlyList<BibEntry> ?? [.. matching];
+        _matchedEntryCount = matched.Count;
+        for (int i = 0; i < matched.Count && i < MaxEntryRows; i++)
         {
-            Entries.Add(new BibliographyRowViewModel(entry));
+            Entries.Add(new BibliographyRowViewModel(matched[i]));
         }
         OnPropertyChanged(nameof(EntriesSummary));
         NotifyStateChanged();
+        EntriesPublished?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>The mac filter predicate verbatim
@@ -529,13 +662,17 @@ internal sealed class BibliographyViewModel : PanelWorkScheduler
         {
             return entries;
         }
+        // Case-insensitive COMPARISON rather than lowercasing every
+        // field: this runs over the whole loaded set on each keystroke,
+        // and ToLowerInvariant allocated a string per field per entry
+        // per character typed. Same predicate, same results.
         return entries.Where(entry =>
-            entry.Title.ToLowerInvariant().Contains(q, StringComparison.Ordinal)
-            || entry.Key.ToLowerInvariant().Contains(q, StringComparison.Ordinal)
+            entry.Title.Contains(q, StringComparison.OrdinalIgnoreCase)
+            || entry.Key.Contains(q, StringComparison.OrdinalIgnoreCase)
             || entry.Authors.Any(author =>
-                author.Family.ToLowerInvariant().Contains(q, StringComparison.Ordinal)
+                author.Family.Contains(q, StringComparison.OrdinalIgnoreCase)
                 || (author.Given is { } given
-                    && given.ToLowerInvariant().Contains(q, StringComparison.Ordinal))));
+                    && given.Contains(q, StringComparison.OrdinalIgnoreCase))));
     }
 
     private void NotifyStateChanged()
@@ -543,6 +680,10 @@ internal sealed class BibliographyViewModel : PanelWorkScheduler
         OnPropertyChanged(nameof(ShowNoSourcesState));
         OnPropertyChanged(nameof(ShowNoFilterHitsState));
         OnPropertyChanged(nameof(ShowUnresolvedEmptyState));
+        OnPropertyChanged(nameof(ShowEntriesLoading));
+        OnPropertyChanged(nameof(ShowUnresolvedLoading));
+        OnPropertyChanged(nameof(ShowEntriesError));
+        OnPropertyChanged(nameof(ShowUnresolvedError));
         OnPropertyChanged(nameof(NoFilterHitsText));
     }
 
@@ -556,23 +697,31 @@ internal sealed class BibliographyViewModel : PanelWorkScheduler
     }
 }
 
-/// <summary>One bibliography entry row. A plain snapshot — the leaf
-/// rebuilds rows on every publish and filter change.</summary>
+/// <summary>
+/// One bibliography entry row. A plain snapshot — the leaf rebuilds
+/// rows on every publish and filter change.
+///
+/// The display strings are COMPUTED ONCE, not on each access. The grid
+/// sorts through comparators that read them, so an n log n sort over
+/// the 5000-row cap called EntrySubtitle ~122,000 times, each running
+/// a LINQ projection over the author array plus a join — a visible
+/// freeze and tens of MB of garbage for one Ctrl+Alt+S.
+/// </summary>
 internal sealed class BibliographyRowViewModel(BibEntry entry)
 {
     public BibEntry Entry { get; } = entry;
 
-    public string TitleLine => CitationPhrase.EntryTitleLine(Entry);
+    public string TitleLine { get; } = CitationPhrase.EntryTitleLine(entry);
 
-    public string Subtitle => CitationPhrase.EntrySubtitle(Entry);
+    public string Subtitle { get; } = CitationPhrase.EntrySubtitle(entry);
 
-    public string? YearText => CitationPhrase.YearText(Entry.Year);
+    public string? YearText { get; } = CitationPhrase.YearText(entry.Year);
 
-    public string Journal => Entry.Journal ?? "";
+    public string Journal { get; } = entry.Journal ?? "";
 
-    public string Key => Entry.Key;
+    public string Key { get; } = entry.Key;
 
-    public string RowDescription => CitationPhrase.EntryRowDescription(Entry);
+    public string RowDescription { get; } = CitationPhrase.EntryRowDescription(entry);
 
     public string RowHelp => CitationPhrase.CitationRowHelp;
 }
@@ -582,9 +731,10 @@ internal sealed class UnresolvedRowViewModel(UnresolvedCitation row)
 {
     public UnresolvedCitation Row { get; } = row;
 
-    public string Key => Row.Key;
+    public string Key { get; } = row.Key;
 
-    public string Path => Row.Path.Replace('\\', '/');
+    public string Path { get; } = row.Path.Replace('\\', '/');
 
-    public string RowDescription => CitationPhrase.UnresolvedRowLabel(Row.Key, Row.Path);
+    public string RowDescription { get; } =
+        CitationPhrase.UnresolvedRowLabel(row.Key, row.Path);
 }
