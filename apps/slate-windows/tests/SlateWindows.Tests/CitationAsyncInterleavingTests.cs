@@ -303,6 +303,47 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
     }
 
     /// <summary>
+    /// The files-citing sheet appears only once its answer has landed.
+    ///
+    /// A dialog's name is read on APPEAR and never re-read, so showing
+    /// the sheet first and loading after meant the count was never
+    /// spoken: the name carried no number, and the corrected one
+    /// arrived with nobody listening. mac has no loading state here at
+    /// all — the sheet is bound to `filesCitingResult != nil`
+    /// (MainSplitView), so it does not exist until the lookup
+    /// completes and its label already carries the count.
+    /// </summary>
+    [Fact]
+    public async Task TheFilesCitingSheetAppearsWithItsCountAlreadyKnown()
+    {
+        var announced = new List<A11yEvent>();
+        using VaultSession session = OpenScanned();
+        using var workspace = MakeAsyncWorkspace(session, announced);
+        workspace.OpenPath("cited.md");
+        await QuiesceAsync(workspace);
+
+        workspace.OpenFilesCiting("knuth1984");
+
+        // Not yet: the answer is still in flight, and a sheet shown now
+        // would speak a count nothing has counted.
+        Assert.Null(workspace.FilesCiting);
+
+        for (int round = 0; round < 40; round++)
+        {
+            await workspace.Citations.DrainForTests();
+            await Task.Delay(2);
+        }
+
+        Assert.NotNull(workspace.FilesCiting);
+        Assert.False(workspace.FilesCiting!.IsLoading);
+        // The name read on appear carries the real count.
+        Assert.Equal(
+            CitationPhrase.FilesCitingContainerLabel(workspace.FilesCiting.Paths.Count),
+            workspace.FilesCiting.AutomationName);
+        Assert.Contains("1 file", workspace.FilesCiting.AutomationName, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The leaf must not say "no citations" while it is still loading.
     ///
     /// NoteChanged raises the empty state while IsLoading is still

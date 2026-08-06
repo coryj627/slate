@@ -99,6 +99,11 @@ internal sealed class FilesCitingViewModel : PanelWorkScheduler
         });
     }
 
+    /// <summary>Raised once the lookup has landed. The workspace waits
+    /// for this before showing the sheet, so the sheet's name carries
+    /// the real count the first and only time it is read.</summary>
+    internal event EventHandler? Loaded;
+
     internal void Publish(int requestId, string[] paths)
     {
         if (IsShutDown || requestId != _requestId)
@@ -113,5 +118,6 @@ internal sealed class FilesCitingViewModel : PanelWorkScheduler
         IsLoading = false;
         OnPropertyChanged(nameof(ShowEmptyState));
         OnPropertyChanged(nameof(AutomationName));
+        Loaded?.Invoke(this, EventArgs.Empty);
     }
 }

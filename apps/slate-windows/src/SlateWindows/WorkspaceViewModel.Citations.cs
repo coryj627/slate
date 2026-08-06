@@ -432,9 +432,24 @@ internal sealed partial class WorkspaceViewModel
     }
 
     /// <summary>Bibliography row action: which notes cite this key.</summary>
+    private FilesCitingViewModel? _pendingFilesCiting;
+
+    /// <summary>
+    /// Show the sheet only once the lookup has LANDED, as mac does
+    /// (`isPresented: { filesCitingResult != nil }`, MainSplitView).
+    ///
+    /// A dialog's name is read on appear and never re-read, so showing
+    /// the sheet first and loading after meant the count was never
+    /// spoken: the name said "Files citing this entry" with no number,
+    /// and the corrected name arrived with nobody listening. mac has no
+    /// loading state here at all for exactly this reason.
+    /// </summary>
     internal void OpenFilesCiting(string key, object? returnFocusToken = null)
     {
+        _pendingFilesCiting?.Shutdown();
+        _pendingFilesCiting = null;
         FilesCiting?.Shutdown();
+        FilesCiting = null;
         // Derived from the workspace's own mode, not passed in. As a
         // parameter every caller had to remember it, and a test-mode
         // workspace that forgot got a sheet whose worker mutated an
@@ -442,8 +457,26 @@ internal sealed partial class WorkspaceViewModel
         var sheet = new FilesCitingViewModel(
             _session, key, returnFocusToken,
             synchronousForTests: !_startInteractionBackgroundWork);
-        FilesCiting = sheet;
+        _pendingFilesCiting = sheet;
+        sheet.Loaded += OnFilesCitingLoaded;
         sheet.Load();
+    }
+
+    /// <summary>Present the settled sheet, unless a later invocation
+    /// has already superseded this one.</summary>
+    private void OnFilesCitingLoaded(object? sender, EventArgs eventArgs)
+    {
+        if (sender is not FilesCitingViewModel sheet)
+        {
+            return;
+        }
+        sheet.Loaded -= OnFilesCitingLoaded;
+        if (!ReferenceEquals(_pendingFilesCiting, sheet))
+        {
+            return;
+        }
+        _pendingFilesCiting = null;
+        FilesCiting = sheet;
     }
 
     /// <summary>Bibliography row action: insert-citation is not
