@@ -2544,6 +2544,31 @@ public sealed class ShellAccessibilityTests
                     TimeSpan.FromSeconds(10)),
                 "the expanded abstract exposed its text nowhere in the control view");
 
+            // The DOI must be FOLLOWABLE from the keyboard, not just
+            // rendered as a link. Round 4 argued it could not be:
+            // ListBox sets KeyboardNavigation.TabNavigation=Once, so
+            // the reasoning went that Tab leaves the whole list without
+            // ever descending into item content. Measured here instead
+            // — Tab from the DOI row lands on the Hyperlink — because a
+            // Hyperlink is a FrameworkContentElement and does not obey
+            // that rule the way a child control would.
+            AutomationElement doiRow = fields
+                .FindAllDescendants(
+                    automation.ConditionFactory.ByControlType(ControlType.ListItem))
+                .First(item => (item.Properties.Name.ValueOrDefault ?? "")
+                    .StartsWith("DOI", StringComparison.Ordinal));
+            doiRow.Focus();
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(300));
+            PressKey(VirtualKeyShort.TAB);
+            AutomationElement focusedAfterTab = automation.FocusedElement();
+            Assert.Equal(
+                ControlType.Hyperlink,
+                focusedAfterTab.Properties.ControlType.ValueOrDefault);
+            Assert.Contains(
+                "10.1093",
+                focusedAfterTab.Properties.Name.ValueOrDefault ?? "",
+                StringComparison.Ordinal);
+
             AssertAxeClean(process, "citation-details-sheet");
 
             PressKey(VirtualKeyShort.ESCAPE);
