@@ -2358,7 +2358,13 @@ public sealed class ShellAccessibilityTests
             Path.Combine(vaultRoot, "library.bib"),
             "@article{knuth1984,\n  title = {Literate Programming},\n"
                 + "  author = {Knuth, Donald E.},\n  year = {1984},\n"
-                + "  journal = {The Computer Journal}\n}\n");
+                + "  journal = {The Computer Journal},\n"
+                // The abstract and DOI exist so the disclosure and the
+                // link path are EXERCISED. Without them the fixture
+                // never built those elements, so the gate could not see
+                // that neither reached assistive technology.
+                + "  doi = {10.1093/comjnl/27.2.97},\n"
+                + "  abstract = {Programs should be written for people to read.}\n}\n");
         File.WriteAllText(
             Path.Combine(vaultRoot, "cited.md"),
             "# Cited\n\nA citation [@knuth1984] and a ghost [@ghostkey].\n");
@@ -2515,6 +2521,29 @@ public sealed class ShellAccessibilityTests
                 window, "CitationDetailsClose", TimeSpan.FromSeconds(10));
             AssertEventuallyFocused(
                 detailsClose, "The details sheet did not focus its Close button.");
+
+            // The abstract's TEXT must reach the CONTROL VIEW, which is
+            // the tree assistive technology walks. mac keeps the body an
+            // accessible child (`children: .contain`); a
+            // presentation-suppressed TextBlock is still in the RAW
+            // tree, so asserting mere presence proves nothing — that is
+            // the same existence-assertion trap that let the field
+            // blocker ship. IsControlElement is the discriminating
+            // property.
+            AutomationElement abstractGroup = WaitForElement(
+                window, "CitationDetailsAbstract", TimeSpan.FromSeconds(10));
+            abstractGroup.Patterns.ExpandCollapse.Pattern.Expand();
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => abstractGroup
+                        .FindAllDescendants()
+                        .Any(node =>
+                            (node.Properties.Name.ValueOrDefault ?? "")
+                                .Contains("people to read", StringComparison.OrdinalIgnoreCase)
+                            && node.Properties.IsControlElement.ValueOrDefault),
+                    TimeSpan.FromSeconds(10)),
+                "the expanded abstract exposed its text nowhere in the control view");
+
             AssertAxeClean(process, "citation-details-sheet");
 
             PressKey(VirtualKeyShort.ESCAPE);
