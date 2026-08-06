@@ -2741,9 +2741,27 @@ public sealed class ShellAccessibilityTests
                 "the files-citing sheet never named the real count; last name was "
                     + $"\"{filesCiting.Properties.Name.ValueOrDefault}\"");
             AssertAxeClean(process, "files-citing-sheet");
-            WaitForElement(window, "FilesCitingClose", TimeSpan.FromSeconds(10))
-                .Patterns.Invoke.Pattern.Invoke();
+
+            // ESCAPE, not Invoke — and assert where focus goes.
+            // Contract 11 says Escape returns focus exactly to the row
+            // that opened the sheet. Round 4 argued this path could not
+            // satisfy it, on the grounds that the row action captures
+            // Keyboard.FocusedElement while the context menu is open,
+            // so the token would be a MenuItem that is gone by the time
+            // the sheet closes, falling through to a collapsed control.
+            // Measured instead: focus returns to the originating
+            // bibliography CELL. Closing by Invoke, as this journey did
+            // before, asserted nothing about any of it.
+            PressKey(VirtualKeyShort.ESCAPE);
             AssertElementDisappears(window, automation, "FilesCitingSheet");
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => (automation.FocusedElement().Properties.Name.ValueOrDefault ?? "")
+                        .Contains("Knuth", StringComparison.OrdinalIgnoreCase),
+                    TimeSpan.FromSeconds(10)),
+                "Escape from the files-citing sheet did not return focus to the "
+                    + "bibliography row that opened it; focus was on "
+                    + $"\"{automation.FocusedElement().Properties.Name.ValueOrDefault}\"");
         }
         finally
         {

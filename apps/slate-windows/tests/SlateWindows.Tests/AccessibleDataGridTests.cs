@@ -133,6 +133,66 @@ public sealed class AccessibleDataGridTests
         });
     }
 
+    /// <summary>Enter on a bound row activates it — the affordance the
+    /// bibliography rows advertise as "Activate to expand citation
+    /// fields." Row activation shipped with no test at all.</summary>
+    [Fact]
+    public void EnterActivatesTheCurrentRow()
+    {
+        RunSta(() =>
+        {
+            object? activated = null;
+            var grid = new AccessibleDataGrid { Announce = _ => { } };
+            grid.Bind(
+                Columns(), People, "3 rows.", "People",
+                rowActivated: row => activated = row);
+            grid.Grid.CurrentCell = new DataGridCellInfo(People[1], grid.Grid.Columns[0]);
+
+            grid.Grid.RaiseEvent(new KeyEventArgs(
+                Keyboard.PrimaryDevice,
+                System.Windows.PresentationSource.FromVisual(grid.Grid)
+                    ?? new System.Windows.Interop.HwndSource(0, 0, 0, 0, 0, "t", IntPtr.Zero),
+                0,
+                Key.Enter)
+            { RoutedEvent = System.Windows.UIElement.PreviewKeyDownEvent });
+
+            Assert.Same(People[1], activated);
+        });
+    }
+
+    /// <summary>
+    /// A double-click that did not land on a row must not activate one.
+    ///
+    /// The handler read CurrentCell.Item without hit-testing what was
+    /// actually clicked, and MouseDoubleClick fires for the whole
+    /// control — so double-clicking a column HEADER to sort, the
+    /// ordinary mouse idiom, also opened the details sheet for whatever
+    /// row happened to be current, trapping focus in a dialog the user
+    /// never asked for. The context menu next door already hit-tests
+    /// through TargetRowActionsAt for exactly this reason.
+    /// </summary>
+    [Fact]
+    public void ADoubleClickOffAnyRowActivatesNothing()
+    {
+        RunSta(() =>
+        {
+            object? activated = null;
+            var grid = new AccessibleDataGrid { Announce = _ => { } };
+            grid.Bind(
+                Columns(), People, "3 rows.", "People",
+                rowActivated: row => activated = row);
+            grid.Grid.CurrentCell = new DataGridCellInfo(People[0], grid.Grid.Columns[0]);
+
+            // Source is the grid itself: no cell, no row — a header or
+            // the empty chrome below the last row.
+            grid.Grid.RaiseEvent(new MouseButtonEventArgs(
+                Mouse.PrimaryDevice, 0, MouseButton.Left)
+            { RoutedEvent = Control.MouseDoubleClickEvent });
+
+            Assert.Null(activated);
+        });
+    }
+
     /// <summary>
     /// A re-publish must not silently undo the user's sort.
     ///

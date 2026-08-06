@@ -560,6 +560,23 @@ internal sealed class AccessibleDataGrid : UserControl
         {
             return;
         }
+        // HIT-TEST what was actually double-clicked. MouseDoubleClick
+        // fires for the whole control, so acting on CurrentCell.Item
+        // meant a double-click on a column HEADER — the ordinary way to
+        // sort, which OnHeaderSorting also handles — additionally
+        // activated whichever row happened to be current, opening a
+        // focus-trapping dialog the user never asked for. Same for the
+        // empty chrome below the last row and the scrollbar gutter.
+        //
+        // TargetRowActionsAt is the guard the context menu already uses
+        // for exactly this ("a pointer request that resolves to NO row
+        // gets no menu at all"); reusing it rather than writing a
+        // second hit-test is the point.
+        if (e.OriginalSource is not DependencyObject origin
+            || !TargetRowActionsAt(origin))
+        {
+            return;
+        }
         if (_grid.CurrentCell.Item is { } item && _items.Contains(item))
         {
             _rowActivated(item);
