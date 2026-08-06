@@ -2588,6 +2588,28 @@ public sealed class ShellAccessibilityTests
 
             AssertAxeClean(process, "citation-details-sheet");
 
+            // The Jump menu item must be USABLE, not just present.
+            // Round 4 argued it is disabled in every state a user can
+            // reach it, because it requires the details sheet and the
+            // sheet is IsDialog and focus-trapped. Measured: the sheet
+            // is an in-window overlay, not a true modal, so the menu
+            // still opens over it and the item is enabled there.
+            AutomationElement editMenu = WaitForElement(
+                window, "MainMenu", TimeSpan.FromSeconds(10))
+                .FindAllChildren(
+                    automation.ConditionFactory.ByControlType(ControlType.MenuItem))
+                .First(item => (item.Properties.Name.ValueOrDefault ?? "")
+                    .Contains("Edit", StringComparison.OrdinalIgnoreCase));
+            editMenu.Patterns.ExpandCollapse.Pattern.Expand();
+            AutomationElement jumpItem = WaitForElement(
+                window, "JumpToBibliographyMenuItem", TimeSpan.FromSeconds(10));
+            Assert.True(
+                jumpItem.Properties.IsEnabled.ValueOrDefault,
+                "Jump to Bibliography is greyed out in the only state that enables it");
+            editMenu.Patterns.ExpandCollapse.Pattern.Collapse();
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(300));
+            detailsClose.Focus();
+
             PressKey(VirtualKeyShort.ESCAPE);
             AssertElementDisappears(window, automation, "CitationDetailsSheet");
             AssertEventuallyFocused(

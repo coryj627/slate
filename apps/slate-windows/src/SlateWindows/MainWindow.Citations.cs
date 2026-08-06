@@ -171,8 +171,45 @@ public partial class MainWindow
     /// citation disappeared left the sheet describing a citation the
     /// note no longer contains.
     /// </summary>
+    /// <summary>
+    /// The row the reader was on, remembered across a republish.
+    ///
+    /// `Publish` clears and re-adds, which destroys every container and
+    /// drops SelectedItem — so any save while the user was sitting on a
+    /// citation row silently lost their place, with no announcement.
+    /// Keyed on the citation KEY rather than the row object, because
+    /// every publish builds fresh row view models. Same shape as the
+    /// grid substrate's row-header restore.
+    /// </summary>
+    private string? _selectedCitationKey;
+
+    private void PanelCitations_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e) =>
+        _selectedCitationKey = PanelCitationsList.SelectedItem is CitationRowViewModel row
+            ? row.Reference.Citations.FirstOrDefault()?.Key
+            : null;
+
+    private void RestoreCitationSelection()
+    {
+        if (_selectedCitationKey is not { Length: > 0 } key
+            || PanelCitationsList.SelectedItem is not null
+            || _observedCitations is not { } citations)
+        {
+            return;
+        }
+        foreach (CitationRowViewModel row in citations.Rows)
+        {
+            if (row.Reference.Citations.Any(
+                cited => string.Equals(cited.Key, key, StringComparison.Ordinal)))
+            {
+                PanelCitationsList.SelectedItem = row;
+                return;
+            }
+        }
+    }
+
     private void CitationRows_Published(object? sender, EventArgs e)
     {
+        RestoreCitationSelection();
         if (_observedWorkspace?.CitationDetails is not { } details
             || _observedCitations is not { } citations)
         {

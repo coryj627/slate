@@ -1140,6 +1140,7 @@
                                 <ListBox x:Name="PanelCitationsList"
                                          Style="{StaticResource PanelListBox}"
                                          ItemsSource="{Binding Citations.Rows}"
+                                         SelectionChanged="PanelCitations_SelectionChanged"
                                          MouseDoubleClick="PanelCitations_MouseDoubleClick"
                                          PreviewKeyDown="PanelCitations_PreviewKeyDown"
                                          AutomationProperties.AutomationId="PanelCitationsList"
