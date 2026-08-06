@@ -2595,6 +2595,68 @@ public sealed class ShellAccessibilityTests
                     TimeSpan.FromSeconds(15)),
                 "the unresolved grid never exposed its Key/File headers");
             AssertAxeClean(process, "bibliography-leaf");
+
+            // ---- The files-citing sheet ---------------------------
+            // Never opened by any earlier version of this gate, so its
+            // "0 files" naming defect was found by reading rather than
+            // by running. Reached the way a user reaches it: the row
+            // action on a bibliography entry.
+            WaitForElement(window, "BibliographySegmentEntries", TimeSpan.FromSeconds(10))
+                .Patterns.SelectionItem.Pattern.Select();
+            AutomationElement entriesAgain = WaitForElement(
+                window, "BibliographyEntries", TimeSpan.FromSeconds(15));
+            entriesAgain.Focus();
+            AutomationElement entryCell = entriesAgain
+                .FindAllDescendants(
+                    automation.ConditionFactory.ByControlType(ControlType.Custom))
+                .FirstOrDefault(cell => (cell.Properties.Name.ValueOrDefault ?? "")
+                    .Contains("Knuth", StringComparison.OrdinalIgnoreCase))
+                ?? throw new Xunit.Sdk.XunitException(
+                    "no bibliography cell to open the row menu from");
+            entryCell.Focus();
+            PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.F10);
+
+            AutomationElement? action = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        action = window
+                            .FindAllDescendants(
+                                automation.ConditionFactory.ByControlType(
+                                    ControlType.MenuItem))
+                            .FirstOrDefault(item =>
+                                (item.Properties.Name.ValueOrDefault ?? "")
+                                    .StartsWith(
+                                        "Show files citing", StringComparison.Ordinal));
+                        return action is not null;
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the entries grid did not offer the files-citing row action");
+            action!.Patterns.Invoke.Pattern.Invoke();
+
+            AutomationElement filesCiting = WaitForElement(
+                window, "FilesCitingSheet", TimeSpan.FromSeconds(10));
+            // The sheet settles on the real count. NOTE: this does NOT
+            // pin the "0 files at appear" defect — by the time UIA can
+            // poll, the load has landed, and this assertion passes
+            // against the broken version too (verified). The at-appear
+            // naming is pinned in FilesCitingNamingTests, where the
+            // publish can be held. What this covers is that the sheet
+            // opens from the row action at all, reaches a truthful
+            // name, is axe-clean, and closes — none of which had any
+            // end-to-end cover before.
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => (filesCiting.Properties.Name.ValueOrDefault ?? "")
+                        .Contains("1 file", StringComparison.OrdinalIgnoreCase),
+                    TimeSpan.FromSeconds(15)),
+                "the files-citing sheet never named the real count; last name was "
+                    + $"\"{filesCiting.Properties.Name.ValueOrDefault}\"");
+            AssertAxeClean(process, "files-citing-sheet");
+            WaitForElement(window, "FilesCitingClose", TimeSpan.FromSeconds(10))
+                .Patterns.Invoke.Pattern.Invoke();
+            AssertElementDisappears(window, automation, "FilesCitingSheet");
         }
         finally
         {

@@ -25,7 +25,7 @@ public class CitationPhraseTests
         string? publisher = null,
         string? abstractText = null) =>
         new(key, "article", title, authors ?? [new Author("Knuth", "Donald E.")],
-            year, journal, doi, url, publisher, abstractText, "{}");
+            year, journal, doi, url, publisher, abstractText);
 
     private static CitationReference Reference(params CitedItem[] items) =>
         new("[@knuth1984]", items, 0, 1);

@@ -28,8 +28,7 @@ final class BibliographyPanelTests: XCTestCase {
             doi: nil,
             url: nil,
             publisher: nil,
-            abstractText: nil,
-            rawCslJson: "{}"
+            abstractText: nil
         )
     }
 

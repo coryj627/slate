@@ -50,7 +50,7 @@ public sealed class BibliographyPanelTests : IDisposable
 
     private static BibEntry Entry(
         string key, string title, params Author[] authors) =>
-        new(key, "article", title, authors, 2000, null, null, null, null, null, "{}");
+        new(key, "article", title, authors, 2000, null, null, null, null, null);
 
     [Fact]
     public void EntriesLoadLazilyAndOnlyOnceUntilForced()

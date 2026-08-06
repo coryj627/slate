@@ -18,10 +18,10 @@ public class CitationOverlayTests
             "knuth1984", "article", "Literate Programming",
             [new Author("Knuth", "Donald E.")], 1984, "The Computer Journal",
             "10.1093/comjnl/27.2.97", "https://example.org/lp", "ACM",
-            "A method of programming.", "{}");
+            "A method of programming.");
 
     private static BibEntry SparseEntry() =>
-        new("ghost", "misc", "", [], null, null, null, null, null, null, "{}");
+        new("ghost", "misc", "", [], null, null, null, null, null, null);
 
     private static CitationReference Reference(params string[] keys) =>
         new(
