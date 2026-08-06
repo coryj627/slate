@@ -1135,6 +1135,7 @@
                                            Text="{Binding Citations.ErrorSpoken}"
                                            TextWrapping="Wrap"
                                            Visibility="{Binding Citations.ErrorSpoken, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}"
+                                           Focusable="True"
                                            AutomationProperties.AutomationId="PanelCitationsError" />
                                 <ListBox x:Name="PanelCitationsList"
                                          Style="{StaticResource PanelListBox}"
@@ -1249,12 +1250,14 @@
                                            Text="{Binding Bibliography.EntriesErrorSpoken}"
                                            TextWrapping="Wrap"
                                            Visibility="{Binding Bibliography.ShowEntriesError, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                           Focusable="True"
                                            AutomationProperties.AutomationId="BibliographyEntriesError" />
                                 <TextBlock DockPanel.Dock="Top"
                                            Style="{StaticResource PanelEmptyMessage}"
                                            Text="{Binding Bibliography.UnresolvedErrorSpoken}"
                                            TextWrapping="Wrap"
                                            Visibility="{Binding Bibliography.ShowUnresolvedError, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                           Focusable="True"
                                            AutomationProperties.AutomationId="BibliographyUnresolvedError" />
                                 <TextBlock DockPanel.Dock="Top"
                                            Style="{StaticResource PanelEmptyMessage}"
@@ -1296,6 +1299,7 @@
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
                                             <TextBlock Style="{StaticResource PanelEmptyMessage}"
+                                                       Focusable="True"
                                                        Text="{Binding}"
                                                        TextWrapping="Wrap" />
                                         </DataTemplate>

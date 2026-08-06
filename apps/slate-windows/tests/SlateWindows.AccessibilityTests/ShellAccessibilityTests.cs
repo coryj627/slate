@@ -2808,6 +2808,158 @@ public sealed class ShellAccessibilityTests
         return path;
     }
 
+    /// <summary>
+    /// W4-5 (#737): the DEGRADED vault. Contract 5 says the leaf's
+    /// notice region is the surface for a failed load — but every
+    /// fixture in this suite loads cleanly, so the gate had never once
+    /// seen that region populated, never axe-scanned it, and never
+    /// checked that a user could reach it.
+    ///
+    /// §2.6 forbids SPEAKING bibliography copy at vault open, so the
+    /// reason is deliberately not announced. That makes reachability
+    /// the whole contract: if the notice is not in the tab order, a
+    /// screen-reader user is told "0 entries" and has no route to why.
+    /// </summary>
+    [Fact]
+    [Trait("gate", "W-C")]
+    public void CitationSurfaces_ADegradedVaultSurfacesTheReasonReachably()
+    {
+        string testRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"slate-citations-degraded-{Guid.NewGuid():N}");
+        string vaultRoot = Path.Combine(testRoot, "Degraded Vault");
+        string logDirectory = Path.Combine(testRoot, "logs");
+        Directory.CreateDirectory(vaultRoot);
+        File.WriteAllText(
+            Path.Combine(vaultRoot, "cited.md"),
+            "# Cited\n\nA citation [@knuth1984].\n");
+        // Configured, and pointing at a file that is not there. Core's
+        // set_bibliography_sources is all-or-nothing, so the seed fails
+        // and the D-13 refusal takes over.
+        File.WriteAllText(
+            Path.Combine(vaultRoot, "slate.json"),
+            "{\"citations\":{\"bibliography\":\"nowhere.bib\",\"cite_style\":\"ieee\"}}");
+
+        Process? process = null;
+        try
+        {
+            var startInfo = new ProcessStartInfo(SlateWindowsExe())
+            {
+                RedirectStandardError = true,
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+            };
+            startInfo.ArgumentList.Add(vaultRoot);
+            startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
+                $"slate-degraded-{Guid.NewGuid():N}";
+            startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            process = Process.Start(startInfo)
+                ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+
+            if (!Environment.UserInteractive)
+            {
+                Assert.False(
+                    process.WaitForExit(3_000),
+                    "Slate exited during the degraded-vault smoke. "
+                        + $"app log: {ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log"))}");
+                return;
+            }
+
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(
+                process,
+                automation,
+                Path.Combine(logDirectory, "slate-windows.log"),
+                TimeSpan.FromSeconds(30));
+
+            AutomationElement leaves = WaitForElement(
+                window, "RightPaneLeaves", TimeSpan.FromSeconds(30));
+            AutomationElement? bibliographyEntry = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        bibliographyEntry = leaves
+                            .FindAllDescendants(
+                                automation.ConditionFactory.ByControlType(ControlType.ListItem))
+                            .FirstOrDefault(item =>
+                                (item.Properties.Name.ValueOrDefault ?? "") == "Bibliography");
+                        return bibliographyEntry is not null;
+                    },
+                    TimeSpan.FromSeconds(15)),
+                "no Bibliography rail entry.");
+            bibliographyEntry!.Patterns.SelectionItem.Pattern.Select();
+
+            // The reason is on screen, verbatim, naming the source.
+            AutomationElement? notice = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        notice = window
+                            .FindAllDescendants()
+                            .FirstOrDefault(node =>
+                                (node.Properties.Name.ValueOrDefault ?? "")
+                                    .Contains("nowhere.bib", StringComparison.OrdinalIgnoreCase)
+                                && node.Properties.IsControlElement.ValueOrDefault);
+                        return notice is not null;
+                    },
+                    TimeSpan.FromSeconds(20)),
+                "the failed load surfaced no notice naming the source in the control view");
+
+            // And a keyboard user can actually GET to it. Degradation
+            // copy nobody can reach satisfies contract 5 on screen only.
+            //
+            // ANY element carrying the reason will do — the text sits
+            // inside an ItemsControl, so it appears twice: once as the
+            // non-focusable item container and once as the TextBlock
+            // itself. Asking the first match is a coin flip on tree
+            // order, which is how the first version of this assertion
+            // failed against working code.
+            Assert.True(
+                window.FindAllDescendants().Any(node =>
+                    (node.Properties.Name.ValueOrDefault ?? "")
+                        .Contains("nowhere.bib", StringComparison.OrdinalIgnoreCase)
+                    && node.Properties.IsControlElement.ValueOrDefault
+                    && node.Properties.IsKeyboardFocusable.ValueOrDefault),
+                "no element carrying the load-failure reason is reachable from "
+                    + "the keyboard");
+
+            // The refusal must not ALSO claim something false: sources
+            // are configured here, so the no-sources sentence must not
+            // appear beside the failure.
+            Assert.DoesNotContain(
+                window.FindAllDescendants()
+                    .Select(node => node.Properties.Name.ValueOrDefault ?? ""),
+                name => name.Contains(
+                    "No bibliography sources configured", StringComparison.OrdinalIgnoreCase));
+
+            AssertAxeClean(process, "bibliography-degraded");
+        }
+        finally
+        {
+            if (process is not null && !process.HasExited)
+            {
+                process.CloseMainWindow();
+                if (!process.WaitForExit(5_000))
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+
+            try
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
     private static Window WaitForMainWindow(
         Process process,
         UIA3Automation automation,
