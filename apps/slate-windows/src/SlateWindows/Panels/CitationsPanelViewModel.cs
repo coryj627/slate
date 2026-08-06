@@ -63,7 +63,20 @@ internal sealed class CitationsPanelViewModel : PanelWorkScheduler
     public bool IsLoading
     {
         get => _isLoading;
-        private set => SetField(ref _isLoading, value);
+        private set
+        {
+            if (SetField(ref _isLoading, value))
+            {
+                // ShowEmptyState is derived from this. Without the
+                // re-raise, NoteChanged announced the empty state while
+                // IsLoading was still false and Refresh then flipped it
+                // silently — so the view latched "This note has no
+                // citations." and rendered the loading line on top of
+                // it. Two contradictory sentences, both reachable by
+                // AT, for the whole duration of the seed gate.
+                NotifyStateChanged();
+            }
+        }
     }
 
     /// <summary>Non-null after a failed load; rows are cleared so no

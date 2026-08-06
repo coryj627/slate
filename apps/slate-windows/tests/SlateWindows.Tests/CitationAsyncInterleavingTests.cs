@@ -303,6 +303,48 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
     }
 
     /// <summary>
+    /// The leaf must not say "no citations" while it is still loading.
+    ///
+    /// NoteChanged raises the empty state while IsLoading is still
+    /// false, then Refresh flips IsLoading without re-raising it — so
+    /// the binding latches "This note has no citations." and the
+    /// loading line renders on top of it. Both are on screen, both
+    /// reachable by AT, and they contradict each other for the whole
+    /// duration of the seed gate, which at startup is the ordinary
+    /// case.
+    ///
+    /// The property VALUE is already right; it is the notification
+    /// that is missing, so this asserts what the view was TOLD, not
+    /// what the object holds. The sibling class one file over
+    /// (FilesCitingViewModel) had this fixed in round 3 and this one
+    /// was left.
+    /// </summary>
+    [Fact]
+    public void TheCitationsLeafDoesNotClaimEmptinessWhileLoading()
+    {
+        using VaultSession session = OpenScanned();
+        var leaf = new CitationsPanelViewModel(
+            session, _ => { }, synchronousForTests: false);
+
+        bool? lastToldShowEmpty = null;
+        leaf.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(CitationsPanelViewModel.ShowEmptyState))
+            {
+                lastToldShowEmpty = leaf.ShowEmptyState;
+            }
+        };
+
+        leaf.NoteChanged("cited.md");
+
+        // Deterministic: the publish is posted to this thread's
+        // context and cannot run until the test yields.
+        Assert.True(leaf.IsLoading);
+        Assert.False(leaf.ShowEmptyState);
+        Assert.False(lastToldShowEmpty ?? true);
+    }
+
+    /// <summary>
     /// A deferred Ctrl+Shift+J answers the note it was asked about, or
     /// nothing at all.
     ///
