@@ -67,6 +67,59 @@ public sealed class NotePropertiesTests
         return properties;
     }
 
+    /// <summary>
+    /// The header must not say "No properties yet" while it is loading.
+    ///
+    /// ShowEmptyState derives from !IsLoading, but IsLoading was a bare
+    /// SetField that raised nothing derived. RefreshProperties sets it
+    /// true and the binding keeps the stale value, so
+    /// WorkspaceTemplates renders "Loading properties" and
+    /// "No properties yet. Add one to start." at the same time — two
+    /// contradictory lines, both reachable by AT.
+    ///
+    /// ASYNC mode deliberately: synchronous mode runs the load inline,
+    /// so IsLoading goes true and back to false inside the call and the
+    /// window this test is about never exists. A first version of this
+    /// test ran synchronously and passed against the unfixed code —
+    /// the same trap recorded for the citations leaf.
+    ///
+    /// The property VALUE is already right; the notification is what
+    /// was missing, so this asserts what the view was TOLD.
+    /// </summary>
+    [Fact]
+    public async Task ThePropertiesHeaderDoesNotClaimEmptinessWhileLoading()
+    {
+        using FixtureVault fixture = MakeVault("props-loading-state");
+        using VaultSession session = OpenScanned(fixture.Root);
+        using var workspace = new WorkspaceViewModel(
+            session, fixture.Root, () => [], _ => { }, startInteractionBackgroundWork: true);
+        workspace.OpenPath("props.md");
+        NotePropertiesViewModel properties =
+            workspace.EnsureActiveTabProperties(synchronousForTests: false)!;
+        for (int round = 0; round < 40; round++)
+        {
+            await properties.DrainForTests();
+            await Task.Delay(2);
+        }
+
+        bool? lastToldShowEmpty = null;
+        properties.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(NotePropertiesViewModel.ShowEmptyState))
+            {
+                lastToldShowEmpty = properties.ShowEmptyState;
+            }
+        };
+
+        properties.RefreshProperties();
+
+        // Deterministic: the publish is posted to this thread's context
+        // and cannot run until the test yields.
+        Assert.True(properties.IsLoading);
+        Assert.False(properties.ShowEmptyState);
+        Assert.False(lastToldShowEmpty ?? true);
+    }
+
     [Fact]
     public void LoadPublishesRowsInDocumentOrderWithTheSnapshotHash()
     {

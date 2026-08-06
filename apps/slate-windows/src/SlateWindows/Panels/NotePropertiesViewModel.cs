@@ -91,7 +91,19 @@ internal sealed class NotePropertiesViewModel : PanelWorkScheduler
     public bool IsLoading
     {
         get => _isLoading;
-        private set => SetField(ref _isLoading, value);
+        private set
+        {
+            if (SetField(ref _isLoading, value))
+            {
+                // ShowEmptyState is derived from this. Without the
+                // re-raise, RefreshProperties flips IsLoading silently
+                // and the view keeps the stale value — so the header
+                // renders "Loading properties" and "No properties yet.
+                // Add one to start." at the same time, both reachable
+                // by AT (WorkspaceTemplates.xaml:358-368).
+                OnPropertyChanged(nameof(ShowEmptyState));
+            }
+        }
     }
 
     /// <summary>Non-null after a failed load — the honest surface;
