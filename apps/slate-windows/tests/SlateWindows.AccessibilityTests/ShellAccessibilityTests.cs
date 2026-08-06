@@ -2543,6 +2543,23 @@ public sealed class ShellAccessibilityTests
                             && node.Properties.IsControlElement.ValueOrDefault),
                     TimeSpan.FromSeconds(10)),
                 "the expanded abstract exposed its text nowhere in the control view");
+            // A long abstract is clipped and scrolls. If the scroller
+            // is not focusable there is no keyboard route to the rest
+            // of it — mouse wheel and drag only.
+            // Constrained to the BODY, not the disclosure header: the
+            // header's name is "Abstract: <text>", so a Contains match
+            // hits the Button and proves nothing about the scroller.
+            // Three earlier assertions in this suite matched the wrong
+            // node the same way.
+            AutomationElement abstractBody = abstractGroup
+                .FindAllDescendants()
+                .Single(node => string.Equals(
+                    node.Properties.Name.ValueOrDefault ?? "",
+                    "Programs should be written for people to read.",
+                    StringComparison.Ordinal));
+            Assert.True(
+                abstractBody.Properties.IsKeyboardFocusable.ValueOrDefault,
+                "the abstract body has no keyboard route to its clipped remainder");
 
             // The DOI must be FOLLOWABLE from the keyboard, not just
             // rendered as a link. Round 4 argued it could not be:
