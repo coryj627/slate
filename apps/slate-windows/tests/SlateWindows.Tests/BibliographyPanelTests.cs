@@ -143,6 +143,36 @@ public sealed class BibliographyPanelTests : IDisposable
         Assert.Equal(2, BibliographyViewModel.Matching(all, "   ").Count());
     }
 
+    /// <summary>
+    /// The query is lowercased and the fields are compared with
+    /// OrdinalIgnoreCase. That asymmetry is DELIBERATE, and both halves
+    /// are load-bearing.
+    ///
+    /// Two reviews argued it was a latent bug — that a character whose
+    /// case mapping expands would be lowered into something ordinal
+    /// folding can never match back, with U+0130 (İ) as the example.
+    /// Measured, .NET's invariant lowering leaves U+0130 untouched, so
+    /// that case does not arise.
+    ///
+    /// The reverse matters though: U+212A (KELVIN SIGN) DOES lower to
+    /// "k", and OrdinalIgnoreCase does NOT equate U+212A with "k". So
+    /// lowering the query is exactly what lets someone who types the
+    /// Kelvin sign find an ordinary "k" title. Dropping it — the change
+    /// both reviews suggested — would regress that.
+    /// </summary>
+    [Fact]
+    public void FilteringHandlesCharactersWithAsymmetricCaseMappings()
+    {
+        BibEntry istanbul = Entry("ist2020", "İstanbul Üniversitesi Yayınları");
+        Assert.Single(BibliographyViewModel.Matching([istanbul], "İstanbul"));
+        Assert.Single(BibliographyViewModel.Matching([istanbul], "üniversitesi"));
+
+        // Query lowering is what makes this match; ordinal folding alone
+        // would not.
+        BibEntry kelvin = Entry("k1900", "Kelvin and the age of the earth");
+        Assert.Single(BibliographyViewModel.Matching([kelvin], "Kelvin"));
+    }
+
     [Fact]
     public void UnresolvedSegmentLoadsOnDemandAndCarriesTheMacRowLabel()
     {
