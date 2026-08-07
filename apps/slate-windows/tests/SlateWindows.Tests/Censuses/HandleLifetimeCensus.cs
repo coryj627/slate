@@ -121,16 +121,30 @@ public class HandleLifetimeCensus
             GC.Collect();
             GC.WaitForPendingFinalizers();
             var now = SlateUniffiMethods.CensusLiveObjectCounts();
-            return now.Sessions == baseline.Sessions
-                && now.Buffers == baseline.Buffers
-                && now.CancelTokens == baseline.CancelTokens
-                && now.Registries == baseline.Registries
-                && now.LayoutSessions == baseline.LayoutSessions;
+            // A LEAK IS GROWTH. Equality was wrong: these are
+            // process-global counters and this loop forces full
+            // collections, so objects that were merely PENDING
+            // finalization when the baseline was taken get finalized
+            // here and the count legitimately drops BELOW it. The
+            // class doc claims serial execution means the counters
+            // "see only this test's objects" — serial execution
+            // prevents concurrent creation, not another test's
+            // unfinalized garbage from being reaped inside this one.
+            //
+            // Observed on CI: tokens 0 against a baseline of 14, spun
+            // the full 15s, then reported "leaked" for a count that
+            // had gone DOWN.
+            return now.Sessions <= baseline.Sessions
+                && now.Buffers <= baseline.Buffers
+                && now.CancelTokens <= baseline.CancelTokens
+                && now.Registries <= baseline.Registries
+                && now.LayoutSessions <= baseline.LayoutSessions;
         }, 15_000);
         var final = SlateUniffiMethods.CensusLiveObjectCounts();
         Assert.True(
             settled,
-            "native handles leaked through the finalizer path: live " +
+            "native handles leaked through the finalizer path — live counts " +
+            "ROSE above the baseline: " +
             $"sessions {final.Sessions} (baseline {baseline.Sessions}), " +
             $"buffers {final.Buffers} (baseline {baseline.Buffers}), " +
             $"tokens {final.CancelTokens} (baseline {baseline.CancelTokens}), " +
