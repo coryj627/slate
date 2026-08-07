@@ -96,6 +96,13 @@ final class ParityHarnessTests: XCTestCase {
         let cancel = CancelToken()
         _ = try session.scanInitial(cancel: cancel)
 
+        // W4-5: seed the bibliography from the vault's own citation
+        // config BEFORE serializing anything — citation rendering, the
+        // per-file `citations` sections, and the vault artifact all read
+        // the loaded entries. Mirrors Program.cs exactly.
+        let bibWarnings = try session.setBibliographySources(
+            sources: session.citationsPrefs().sources)
+
         var artifacts: [String: Data] = [:]
         for f in files {
             let bytes = try Data(contentsOf: vaultRoot.appendingPathComponent(f))
@@ -108,6 +115,8 @@ final class ParityHarnessTests: XCTestCase {
         artifacts["editor_scale.json"] = Data(editorScaleArtifact().utf8)
         artifacts["tasks.json"] = Data(try tasksArtifact(session: session).utf8)
         artifacts["properties.json"] = Data(try propertiesArtifact(session: session).utf8)
+        artifacts["bibliography.json"] = Data(
+            try bibliographyArtifact(session: session, loadWarnings: bibWarnings).utf8)
         return artifacts
     }
 
@@ -120,15 +129,12 @@ final class ParityHarnessTests: XCTestCase {
     /// tag / citation payloads, per-grammar resolution, and accessible
     /// text are now byte-checked across platforms.
     ///
-    /// **Citation join, deliberately empty.** The fixture vault ships no
-    /// CSL style and no bibliography, so there is nothing deterministic to
-    /// render citations against; both twins therefore pass an EMPTY
-    /// citation list. Core still emits `citation` runs — the kind comes
-    /// from the span classifier, not from the rendered list — with the raw
-    /// text as both display and speech, which is deterministic on every
-    /// platform. Matched-citation rendering is covered by the core unit
-    /// tests instead; committing a style + `.bib` fixture to bring it
-    /// under §W-A is a recorded W8-4 candidate.
+    /// **Citation join, now real (W4-5 #737).** The corpus ships
+    /// `library.bib` + `ieee.csl` + a `slate.json` naming both, and the
+    /// harness seeds the bibliography before serializing, so citation runs
+    /// carry genuinely RENDERED display and speech text instead of the raw
+    /// fallback. A render failure is fatal to the harness rather than
+    /// falling back — a silent fallback would make the golden meaningless.
     private static func fileArtifact(
         relPath: String, text: String, session: VaultSession
     ) throws -> String {
@@ -167,9 +173,18 @@ final class ParityHarnessTests: XCTestCase {
         }
         j.raw("]")
 
+        // W4-5: the rendered citations for THIS file, reused by both the
+        // inline-run join below and the `citations` section further down.
+        let references = try session.listCitationsInFile(path: relPath)
+        let styleId = try citationStyleId(session: session)
+        let rendered = try references.map {
+            try session.renderCitation(reference: $0, styleId: styleId)
+        }
+
         j.raw(",\"inline_runs\":[")
         let inlines = readingInlineSegmentsSource(
-            source: text, citations: [], records: try session.outgoingLinks(path: relPath))
+            source: text, citations: rendered,
+            records: try session.outgoingLinks(path: relPath))
         for (i, inline) in inlines.enumerated() {
             if i > 0 { j.raw(",") }
             appendBlockInlines(j, inline)
@@ -304,6 +319,16 @@ final class ParityHarnessTests: XCTestCase {
         for (i, property) in properties.enumerated() {
             if i > 0 { j.raw(",") }
             appendProperty(j, property)
+        }
+        j.raw("]")
+
+        // W4-5: the per-file citation surface — parsed reference, its
+        // cited items, and the RENDERED output both platforms must agree
+        // on byte for byte. Mirrors SurfaceSerializer.cs.
+        j.raw(",\"citations\":[")
+        for (i, reference) in references.enumerated() {
+            if i > 0 { j.raw(",") }
+            appendCitation(j, reference, rendered[i])
         }
         j.raw("]}")
         return j.output + "\n"
@@ -724,6 +749,168 @@ final class ParityHarnessTests: XCTestCase {
         case .thematicBreak: return "thematic_break"
         case .html: return "html"
         }
+    }
+
+    /// The style id the harness renders with: the configured default
+    /// style's file stem (core matches ids, not paths). Mirrors
+    /// SurfaceSerializer.CitationStyleId.
+    private static func citationStyleId(session: VaultSession) throws -> String {
+        guard let defaultStyle = session.citationsPrefs().defaultStyle,
+              !defaultStyle.isEmpty
+        else { return "" }
+        return (defaultStyle as NSString).deletingPathExtension
+    }
+
+    private static func appendCitation(
+        _ j: CanonicalJson, _ reference: CitationReference, _ rendered: RenderedCitation
+    ) {
+        j.raw("{\"raw\":").str(reference.raw)
+            .raw(",\"line\":").num(UInt64(reference.line))
+            .raw(",\"offset\":").num(UInt64(reference.byteOffset))
+            .raw(",\"items\":[")
+        for (i, item) in reference.citations.enumerated() {
+            if i > 0 { j.raw(",") }
+            j.raw("{\"key\":").str(item.key)
+                .raw(",\"mode\":").str(citationModeToken(item.mode))
+                .raw(",\"locator\":")
+            if let locator = item.locator {
+                j.raw("{\"label\":").str(locator.label)
+                    .raw(",\"value\":").str(locator.value)
+                    .raw("}")
+            } else {
+                _ = j.null()
+            }
+            j.raw(",\"prefix\":")
+            appendOptionalString(j, item.prefix)
+            j.raw(",\"suffix\":")
+            appendOptionalString(j, item.suffix)
+            j.raw("}")
+        }
+        j.raw("]")
+            .raw(",\"rendered\":{\"visual\":").str(rendered.visualText)
+            .raw(",\"speech\":").str(rendered.speechText)
+            .raw(",\"style_id\":").str(rendered.styleId)
+            .raw(",\"bib_key\":")
+        appendOptionalString(j, rendered.bibEntry?.key)
+        j.raw("}}")
+    }
+
+    private static func appendOptionalString(_ j: CanonicalJson, _ value: String?) {
+        if let value {
+            _ = j.str(value)
+        } else {
+            _ = j.null()
+        }
+    }
+
+    /// Stable wire tokens for the citation mode — the enum's Swift
+    /// spelling is a binding detail, the token is the contract.
+    private static func citationModeToken(_ mode: CitationMode) -> String {
+        switch mode {
+        case .bracketed: return "bracketed"
+        case .inText: return "in_text"
+        case .suppressAuthor: return "suppress_author"
+        }
+    }
+
+    private static func bibFormatToken(_ format: BibFormat) -> String {
+        switch format {
+        case .bibTeX: return "bibtex"
+        case .bibLaTeX: return "biblatex"
+        case .cslJson: return "csl_json"
+        }
+    }
+
+    /// W4-5: the vault-wide citation artifact — mirrors
+    /// SurfaceSerializer.BibliographyArtifact. `raw_csl_json` is excluded
+    /// (serde field ordering is a serializer contract, not a citation
+    /// one); `abstract_text` rides as `abstract_present` because the DB
+    /// read path hardcodes it absent while the in-memory path fills it.
+    /// Style PATHS are excluded as machine-dependent; ids and titles are
+    /// not. Entry and unresolved ORDER is core's, emitted as given.
+    private static func bibliographyArtifact(
+        session: VaultSession, loadWarnings: [BibLoadWarning]
+    ) throws -> String {
+        let j = CanonicalJson()
+        let prefs = session.citationsPrefs()
+
+        j.raw("{\"prefs\":{\"sources\":[")
+        for (i, source) in prefs.sources.enumerated() {
+            if i > 0 { j.raw(",") }
+            j.raw("{\"path\":").str(slash(source.path))
+                .raw(",\"format\":").str(bibFormatToken(source.format))
+                .raw(",\"watch\":").bool(source.watch)
+                .raw("}")
+        }
+        j.raw("],\"default_style\":")
+        appendOptionalString(j, prefs.defaultStyle)
+        j.raw(",\"additional_styles\":[")
+        for (i, style) in prefs.additionalStyles.enumerated() {
+            if i > 0 { j.raw(",") }
+            _ = j.str(style)
+        }
+        j.raw("]}")
+
+        j.raw(",\"load_warnings\":[")
+        for (i, warning) in loadWarnings.enumerated() {
+            if i > 0 { j.raw(",") }
+            j.raw("{\"source\":").str(slash(warning.sourcePath))
+                .raw(",\"message\":").str(warning.message)
+                .raw("}")
+        }
+        j.raw("]")
+
+        j.raw(",\"styles\":[")
+        for (i, style) in (try session.listCslStyles()).enumerated() {
+            if i > 0 { j.raw(",") }
+            j.raw("{\"id\":").str(style.id)
+                .raw(",\"title\":").str(style.title)
+                .raw("}")
+        }
+        j.raw("]")
+
+        j.raw(",\"entries\":[")
+        for (i, e) in (try session.getBibliographyEntries()).enumerated() {
+            if i > 0 { j.raw(",") }
+            j.raw("{\"key\":").str(e.key)
+                .raw(",\"item_type\":").str(e.itemType)
+                .raw(",\"title\":").str(e.title)
+                .raw(",\"authors\":[")
+            for (a, author) in e.authors.enumerated() {
+                if a > 0 { j.raw(",") }
+                j.raw("{\"family\":").str(author.family)
+                    .raw(",\"given\":")
+                appendOptionalString(j, author.given)
+                j.raw("}")
+            }
+            j.raw("],\"year\":")
+            if let year = e.year {
+                _ = j.num(Int64(year))
+            } else {
+                _ = j.null()
+            }
+            j.raw(",\"journal\":")
+            appendOptionalString(j, e.journal)
+            j.raw(",\"doi\":")
+            appendOptionalString(j, e.doi)
+            j.raw(",\"url\":")
+            appendOptionalString(j, e.url)
+            j.raw(",\"publisher\":")
+            appendOptionalString(j, e.publisher)
+            j.raw(",\"abstract_present\":").bool(e.abstractText != nil)
+                .raw("}")
+        }
+        j.raw("]")
+
+        j.raw(",\"unresolved\":[")
+        for (i, u) in (try session.listUnresolvedCitations()).enumerated() {
+            if i > 0 { j.raw(",") }
+            j.raw("{\"path\":").str(slash(u.path))
+                .raw(",\"key\":").str(u.key)
+                .raw("}")
+        }
+        j.raw("]}")
+        return j.output + "\n"
     }
 
     private static func slash(_ path: String) -> String {

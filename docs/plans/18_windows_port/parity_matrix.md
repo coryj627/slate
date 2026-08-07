@@ -1,6 +1,6 @@
 # Milestone W parity matrix (§W-F row-level checklist)
 
-Generated 2026-08-03 at `1ab0dd4` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
+Generated 2026-08-05 at `1e2d5d5` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
 
 ## Entry-criteria snapshot (w0_spec §W0-4 item 3)
 
@@ -115,7 +115,7 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 | `slate.editor.actualSize` | Editor: Actual Size | — | — | #725 (W2-3) | implemented; local gates green 2026-07-23; interactive CI + human AT pending |
 | `slate.editor.addProperty` | Add Property… | — | — | #736 (W4-4) | implemented; local gates green 2026-08-03; interactive CI + human AT pending |
 | `slate.editor.bulkRenameProperties` | Bulk Rename Properties… | ⇧⌘R | Shift Command R | #736 (W4-4) | implemented; local gates green 2026-08-03; interactive CI + human AT pending |
-| `slate.editor.citationSummary` | Citation Summary | ⇧⌘J | Shift Command J | #737 (W4-5) | pending |
+| `slate.editor.citationSummary` | Citation Summary | ⇧⌘J | Shift Command J | #737 (W4-5) | implemented; local gates green 2026-08-04; interactive CI + human AT pending |
 | `slate.editor.findInNote` | Find… | ⌘F | Command F | #742 (W5-2) | pending |
 | `slate.editor.save` | Save | ⌘S | Command S | #724 (W2-1) | implemented; local gates green 2026-07-23; interactive CI + human AT pending |
 | `slate.editor.togglePropertiesSource` | Show Properties Source | ⇧⌘D | Shift Command D | #736 (W4-4) | pending |
@@ -150,7 +150,7 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 | `slate.graph.zoomOut` | Graph: Zoom Out | ⌘- | Command Minus | #746 (W6-2) | pending |
 | `slate.help.open` | Help | — | — | #756 (W8-6) | pending |
 | `slate.history.showPanel` | Show History Panel | — | — | #739 (W4-7) | pending |
-| `slate.navigation.jumpToBibliography` | Jump to Bibliography | ⌘J | Command J | #737 (W4-5) | pending |
+| `slate.navigation.jumpToBibliography` | Jump to Bibliography | ⌘J | Command J | #737 (W4-5) | implemented; local gates green 2026-08-04; interactive CI + human AT pending |
 | `slate.settings.open` | Settings… | ⌘, | Command Comma | #751 (W8-1) | pending |
 | `slate.sidebar.addShortcut` | Add to Shortcuts | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
 | `slate.sidebar.addTag` | Add Tag… | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
@@ -230,8 +230,8 @@ The palette surface itself (ranking via the W0.5-1 core engine, sections, recent
 | `tasks` | #735 (W4-3) | implemented 2026-08-01 (#735): `RightPanePanelsViewModel` task sections + MainWindow leaf body; `TasksPanelTests` + FlaUI `TaskPanels_RowsToggleAndReviewCarriesTheMacShapes` |
 | `tasksReview` | #735 (W4-3) | implemented 2026-08-01 (#735): `TasksReviewViewModel` + MainWindow leaf body + Ctrl+R command; `TasksReviewTests` + FlaUI `TaskPanels_RowsToggleAndReviewCarriesTheMacShapes` |
 | `history` | #739 (W4-7) | pending |
-| `citations` | #737 (W4-5) | pending |
-| `bibliography` | #737 (W4-5) | pending |
+| `citations` | #737 (W4-5) | implemented 2026-08-04 (#737): `CitationsPanelViewModel` + MainWindow leaf body + details/summary sheets; `CitationsPanelTests` + FlaUI `CitationSurfaces_GridsSheetsAndChords_AreClean` |
+| `bibliography` | #737 (W4-5) | implemented 2026-08-04 (#737): `BibliographyViewModel` + MainWindow leaf body, BOTH segments on `AccessibleDataGrid`; `BibliographyPanelTests` + FlaUI `CitationSurfaces_GridsSheetsAndChords_AreClean` |
 | `queries` | #738 (W4-6) | pending |
 | `basesDock` | #738 (W4-6) | pending |
 | `syncDiagnostics` | #740 (W4-8) | pending |

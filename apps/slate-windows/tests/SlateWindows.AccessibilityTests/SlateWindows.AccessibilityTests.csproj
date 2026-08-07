@@ -20,6 +20,17 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- W4-5 (#737): the citation gate needs a real CSL style, and this
+         job runs on DOWNLOADED BINARIES with no checkout (windows.yml
+         "no checkout, no compilers"), so nothing outside the output
+         directory exists at run time. Linking the committed demo-vault
+         style copies it into bin, where it travels with the artifact. -->
+    <Content Include="..\..\..\..\demo-vault\csl\ieee.csl"
+             Link="fixtures\ieee.csl"
+             CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\SlateWindows\SlateWindows.csproj"
                       ReferenceOutputAssembly="false" />
   </ItemGroup>

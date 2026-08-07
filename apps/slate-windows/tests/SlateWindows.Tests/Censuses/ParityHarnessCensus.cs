@@ -144,6 +144,12 @@ public class ParityHarnessCensus
             using var cancel = new CancelToken();
             session.ScanInitial(cancel);
 
+            // W4-5: identical to the harness — the bibliography must be
+            // seeded before any artifact, or citation renders degrade and
+            // the census would disagree with the committed goldens.
+            BibLoadWarning[] bibWarnings =
+                session.SetBibliographySources(session.CitationsPrefs().Sources);
+
             foreach (var f in files)
             {
                 string text = System.Text.Encoding.UTF8.GetString(
@@ -168,6 +174,10 @@ public class ParityHarnessCensus
             File.WriteAllBytes(
                 Path.Combine(outDir, "properties.json"),
                 System.Text.Encoding.UTF8.GetBytes(SurfaceSerializer.PropertiesArtifact(session)));
+            File.WriteAllBytes(
+                Path.Combine(outDir, "bibliography.json"),
+                System.Text.Encoding.UTF8.GetBytes(
+                    SurfaceSerializer.BibliographyArtifact(session, bibWarnings)));
         }
         finally
         {

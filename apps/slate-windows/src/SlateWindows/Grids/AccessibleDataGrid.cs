@@ -50,6 +50,7 @@ internal sealed class AccessibleDataGrid : UserControl
         Array.Empty<AccessibleGridRowAction>();
     private Func<object, string?>? _rowAudioDescription;
     private Func<ExportFormat, string>? _exportProducer;
+    private Action<object>? _rowActivated;
     private AccessibleGridColumn? _rowHeaderColumn;
     private object? _lastAnnouncedRow;
     private (int ColumnIndex, bool Ascending)? _activeSort;
@@ -120,6 +121,8 @@ internal sealed class AccessibleDataGrid : UserControl
         _grid.CurrentCellChanged += OnCurrentCellChanged;
         _grid.Sorting += OnHeaderSorting;
         _grid.PreviewTextInput += OnTypeAhead;
+        _grid.PreviewKeyDown += OnActivationKey;
+        _grid.MouseDoubleClick += OnActivationDoubleClick;
         _grid.ContextMenuOpening += OnContextMenuOpening;
         _grid.LoadingRow += OnLoadingRow;
         // The menu EXISTS from construction (see OnContextMenuOpening:
@@ -214,6 +217,43 @@ internal sealed class AccessibleDataGrid : UserControl
     }
 
     /// <summary>
+    /// Put keyboard focus on the first cell of the row matching
+    /// <paramref name="predicate"/>, if the bound set contains one.
+    /// Returns false and moves nothing when it does not — the caller
+    /// decides what to say about a miss.
+    ///
+    /// The bool reports whether the row was IN THE BOUND SET, not
+    /// whether the OS granted keyboard focus. Those differ whenever
+    /// the grid is not in a loaded window, and currency plus selection
+    /// — which is what AT reports — is set either way; conflating them
+    /// would make a successful jump indistinguishable from a missing
+    /// key.
+    ///
+    /// W4-5 (#737) needed this for the Ctrl+J bibliography jump. It
+    /// lives here rather than in the citations code because reaching
+    /// into <see cref="Grid"/> to set currency by hand would be a
+    /// second implementation of cell focus, which the grid-conformance
+    /// contract forbids (W4-5 contract 8 / D-12).
+    /// </summary>
+    public bool FocusRow(Func<object, bool> predicate)
+    {
+        ArgumentNullException.ThrowIfNull(predicate);
+        if (_grid.Columns.Count == 0)
+        {
+            return false;
+        }
+        foreach (object item in _items)
+        {
+            if (predicate(item))
+            {
+                _ = FocusCellElement(item, _grid.Columns[0]);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
     /// Put keyboard focus on the CELL ELEMENT for (item, column):
     /// scroll, realize the container synchronously (under a starved
     /// session the deferred generation leaves Focus() on the grid, and
@@ -240,6 +280,28 @@ internal sealed class AccessibleDataGrid : UserControl
         return _grid.Focus();
     }
 
+    /// <summary>
+    /// The automation id of the inner grid; the summary region takes
+    /// the same id with a "Summary" suffix. Defaults to
+    /// <c>AccessibleDataGrid</c> / <c>AccessibleDataGridSummary</c>.
+    ///
+    /// Hosts must set this when a window shows MORE THAN ONE grid.
+    /// W4-5 (#737) is the first — two bibliography segments plus the
+    /// bulk-rename preview — and with a hardcoded id an AT user, or a
+    /// FlaUI lookup, cannot tell the three apart. Fixing it in the
+    /// substrate rather than working around it in the citations code
+    /// is what D-12 requires.
+    /// </summary>
+    public string GridAutomationId
+    {
+        get => AutomationProperties.GetAutomationId(_grid);
+        set
+        {
+            AutomationProperties.SetAutomationId(_grid, value);
+            AutomationProperties.SetAutomationId(_summary, $"{value}Summary");
+        }
+    }
+
     /// <summary>The separately-focusable summary region.</summary>
     internal TextBlock SummaryRegion => _summary;
 
@@ -258,17 +320,55 @@ internal sealed class AccessibleDataGrid : UserControl
         string accessibilityLabel,
         Func<object, string?>? rowAudioDescription = null,
         IReadOnlyList<AccessibleGridRowAction>? rowActions = null,
-        Func<ExportFormat, string>? exportProducer = null)
+        Func<ExportFormat, string>? exportProducer = null,
+        Action<object>? rowActivated = null)
     {
         ArgumentNullException.ThrowIfNull(columns);
         ArgumentNullException.ThrowIfNull(rows);
+        // The user's sort is a user decision, and a re-publish is not
+        // the user changing their mind. Dropping it here meant that
+        // typing one character into a consuming surface's filter box
+        // silently reverted the ordering, cleared the header indicator,
+        // and reordered rows under the reader with no announcement.
+        //
+        // Carried as the column's HEADER, resolved back to an index
+        // below, and captured HERE because _columns is about to be
+        // replaced. A bare index re-applies the sort to whatever column
+        // now occupies that slot, which is the same column only as long
+        // as every re-bind passes the same list — true of every
+        // consumer today, false the moment one grid instance serves
+        // more than one column set.
+        (string Header, bool Ascending)? previousSort =
+            _activeSort is { } active && active.ColumnIndex < _columns.Count
+                ? (_columns[active.ColumnIndex].Header, active.Ascending)
+                : null;
+        _activeSort = null;
         _columns = columns;
         _rowAudioDescription = rowAudioDescription;
         _rowActions = rowActions ?? Array.Empty<AccessibleGridRowAction>();
         _exportProducer = exportProducer;
-        _activeSort = null;
+        _rowActivated = rowActivated;
         _lastAnnouncedRow = null;
-
+        // The reader's position, captured BEFORE the repopulate
+        // destroys every container. ApplySort already does this and
+        // says why: "re-populating destroys the focused cell's
+        // container, and without a restore keyboard focus falls to the
+        // window". Bind destroys the same containers, and consuming
+        // surfaces re-Bind on every publish — so a background save
+        // while someone is arrowing through the grid moved them.
+        //
+        // Keyed on the ROW HEADER, not object identity: every publish
+        // builds fresh row view models, so identity is gone by
+        // definition. The row header is already the row's identity
+        // under §8.7.
+        string? previousRowIdentity = RowIdentityOf(_grid.CurrentCell.Item);
+        // Row-header text is not guaranteed unique — two notes can both
+        // be "Untitled". Where it repeats, the previous ordinal breaks
+        // the tie so the reader keeps the OCCURRENCE they were on.
+        int previousRowOrdinal = _items.IndexOf(_grid.CurrentCell.Item);
+        int previousColumnIndex = _grid.CurrentCell.Column is { } previousColumn
+            ? _grid.Columns.IndexOf(previousColumn)
+            : -1;
         _grid.Columns.Clear();
         for (int index = 0; index < columns.Count; index++)
         {
@@ -303,6 +403,130 @@ internal sealed class AccessibleDataGrid : UserControl
         _summary.Text = summary;
         AutomationProperties.SetName(_summary, $"Summary: {summary}");
         AutomationProperties.SetName(_grid, accessibilityLabel);
+
+        WithoutAnnouncing(() => RestoreReaderPosition(
+            previousRowIdentity, previousColumnIndex, previousRowOrdinal));
+
+        // Re-apply silently: ApplySort posts a GridSorted announcement,
+        // which is right when the USER sorts and wrong when a
+        // background re-publish restores what they already chose. A
+        // column that is gone, renamed, or no longer sortable drops the
+        // sort rather than moving it somewhere the user did not choose.
+        if (previousSort is { } sort)
+        {
+            for (int index = 0; index < _columns.Count; index++)
+            {
+                if (_columns[index].Sort is not null
+                    && string.Equals(
+                        _columns[index].Header, sort.Header, StringComparison.Ordinal))
+                {
+                    WithoutAnnouncing(() => ApplySort(index, sort.Ascending));
+                    break;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// The row's identity for position-restore purposes: the row-header
+    /// cell's text, or null when the surface declares no row-header
+    /// column (nothing stable to key on).
+    ///
+    /// Only ever called with a row from the CURRENTLY BOUND set. The
+    /// `Cell` delegates cast to the surface's row type, so handing one
+    /// anything else — most reachably `CollectionView.NewItemPlaceholder`,
+    /// which is what `CurrentCell.Item` holds on an empty grid — throws
+    /// out of Bind and the surface never renders at all. The row-action
+    /// hit-test next door rejects the placeholder for the same reason.
+    /// </summary>
+    private string? RowIdentityOf(object? item) =>
+        item is not null
+        && item != CollectionView.NewItemPlaceholder
+        && _items.Contains(item)
+            ? BoundRowIdentityOf(item)
+            : null;
+
+    /// <summary>
+    /// Identity for a row ALREADY KNOWN to be in the bound set.
+    ///
+    /// Split from <see cref="RowIdentityOf"/> because that one's
+    /// `_items.Contains` guard is needed exactly once — at capture,
+    /// where `CurrentCell.Item` may be foreign or the new-item
+    /// placeholder. Calling it from inside a loop that is already
+    /// walking `_items` made every re-publish O(n²): 8,000 rows took
+    /// 708 ms on the UI thread against 33 ms before, and the
+    /// bulk-rename preview has no row cap.
+    /// </summary>
+    private string? BoundRowIdentityOf(object row) =>
+        _rowHeaderColumn is { } header ? header.Cell(row) : null;
+
+    /// <summary>
+    /// Put the reader back where they were, or leave them alone.
+    ///
+    /// A row that is GONE after the republish is NOT substituted with a
+    /// neighbour: silently moving someone to a different row is worse
+    /// than leaving currency where the grid put it, because nothing
+    /// announces the move.
+    /// </summary>
+    private void RestoreReaderPosition(
+        string? rowIdentity, int columnIndex, int previousOrdinal)
+    {
+        if (rowIdentity is null
+            || columnIndex < 0
+            || columnIndex >= _grid.Columns.Count)
+        {
+            return;
+        }
+        // Nearest match to where the reader WAS, not the first match:
+        // with unique row headers these are the same row, and with
+        // repeated ones this is the difference between staying put and
+        // being moved to a namesake without an announcement. A
+        // previousOrdinal of -1 (no prior currency) degrades to the
+        // first match, which is the only sensible answer there.
+        int best = -1;
+        for (int index = 0; index < _items.Count; index++)
+        {
+            if (!string.Equals(
+                BoundRowIdentityOf(_items[index]), rowIdentity, StringComparison.Ordinal))
+            {
+                continue;
+            }
+            if (best < 0
+                || Math.Abs(index - previousOrdinal) < Math.Abs(best - previousOrdinal))
+            {
+                best = index;
+            }
+        }
+        if (best < 0)
+        {
+            return;
+        }
+        _grid.CurrentCell = new DataGridCellInfo(_items[best], _grid.Columns[columnIndex]);
+        _grid.SelectedCells.Clear();
+        _grid.SelectedCells.Add(_grid.CurrentCell);
+    }
+
+    /// <summary>
+    /// Run something that moves currency WITHOUT speaking.
+    ///
+    /// Currency changes announce, which is right when the user moved
+    /// and wrong when a background re-publish restored what they had.
+    /// Both non-user movers — the sort re-apply and the reader-position
+    /// restore — go through here, so neither can be silenced without
+    /// the other.
+    /// </summary>
+    private void WithoutAnnouncing(Action action)
+    {
+        Action<A11yEvent> announce = Announce;
+        Announce = _ => { };
+        try
+        {
+            action();
+        }
+        finally
+        {
+            Announce = announce;
+        }
     }
 
     /// <summary>
@@ -430,6 +654,62 @@ internal sealed class AccessibleDataGrid : UserControl
             Announce(new A11yEvent.GridCellMoved(
                 _columns[column.ColumnIndex].Header,
                 _columns[column.ColumnIndex].Cell(row)));
+        }
+    }
+
+    /// <summary>
+    /// Enter or double-click on the focused row.
+    ///
+    /// The substrate had no activation mechanism at all, which is why
+    /// W4-5's bibliography entries could not be expanded: mac makes
+    /// every entry row a Button that opens the citation popover, and on
+    /// Windows there was simply no way in — the row even advertised
+    /// "Activate to expand citation fields." Row ACTIONS (the context
+    /// menu) are not a substitute; Enter is the primary affordance a
+    /// keyboard user reaches for. Lives here rather than in the
+    /// citations code because a second implementation of row activation
+    /// is exactly what the grid-conformance contract forbids (D-12).
+    /// </summary>
+    private void OnActivationKey(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter || _rowActivated is null)
+        {
+            return;
+        }
+        if (_grid.CurrentCell.Item is { } item && _items.Contains(item))
+        {
+            _rowActivated(item);
+            e.Handled = true;
+        }
+    }
+
+    private void OnActivationDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (_rowActivated is null)
+        {
+            return;
+        }
+        // HIT-TEST what was actually double-clicked. MouseDoubleClick
+        // fires for the whole control, so acting on CurrentCell.Item
+        // meant a double-click on a column HEADER — the ordinary way to
+        // sort, which OnHeaderSorting also handles — additionally
+        // activated whichever row happened to be current, opening a
+        // focus-trapping dialog the user never asked for. Same for the
+        // empty chrome below the last row and the scrollbar gutter.
+        //
+        // TargetRowActionsAt is the guard the context menu already uses
+        // for exactly this ("a pointer request that resolves to NO row
+        // gets no menu at all"); reusing it rather than writing a
+        // second hit-test is the point.
+        if (e.OriginalSource is not DependencyObject origin
+            || !TargetRowActionsAt(origin))
+        {
+            return;
+        }
+        if (_grid.CurrentCell.Item is { } item && _items.Contains(item))
+        {
+            _rowActivated(item);
+            e.Handled = true;
         }
     }
 

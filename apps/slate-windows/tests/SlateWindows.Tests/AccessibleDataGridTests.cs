@@ -21,6 +21,32 @@ public sealed class AccessibleDataGridTests
 {
     private sealed record Person(string Name, string Role);
 
+    /// <summary>Reference equality, like every production row view
+    /// model — a record would let value equality preserve currency and
+    /// hide what a real re-publish does.</summary>
+    private sealed class Widget(string id)
+    {
+        public string Id { get; } = id;
+    }
+
+    private static IReadOnlyList<AccessibleGridColumn> WidgetColumns() => new[]
+    {
+        new AccessibleGridColumn
+        {
+            Header = "Id",
+            Cell = row => ((Widget)row).Id,
+            IsRowHeader = true,
+        },
+        new AccessibleGridColumn
+        {
+            Header = "Note",
+            Cell = row => $"note for {((Widget)row).Id}",
+        },
+    };
+
+    private static IReadOnlyList<object> FreshWidgets() =>
+        [new Widget("one"), new Widget("two"), new Widget("three")];
+
     private static readonly IReadOnlyList<object> People = new object[]
     {
         new Person("Charlie", "Ops"),
@@ -130,6 +156,335 @@ public sealed class AccessibleDataGridTests
                 System.ComponentModel.ListSortDirection.Ascending,
                 grid.Grid.Columns[0].SortDirection);
             Assert.Null(grid.Grid.Columns[1].SortDirection);
+        });
+    }
+
+    /// <summary>
+    /// A re-publish must not move the reader.
+    ///
+    /// ApplySort documents this hazard and restores currency: "the
+    /// reader's position survives the sort: re-populating destroys the
+    /// focused cell's container, and without a restore keyboard focus
+    /// falls to the window". Bind destroys the same containers and had
+    /// no restore — and consuming surfaces re-Bind on every publish, so
+    /// a background save while the user is arrowing through the grid
+    /// silently lost their row and their column.
+    ///
+    /// Restored by ROW-HEADER TEXT, not object identity: every publish
+    /// builds fresh row view models, so identity is gone by definition.
+    /// The row header is what §8.7 already treats as the row's
+    /// identity.
+    /// </summary>
+    [Fact]
+    public void ARepublishKeepsTheReaderOnTheirRowAndColumn()
+    {
+        RunSta(() =>
+        {
+            var grid = new AccessibleDataGrid { Announce = _ => { } };
+            IReadOnlyList<object> first = FreshWidgets();
+            grid.Bind(WidgetColumns(), first, "3 rows.", "Widgets");
+            grid.Grid.CurrentCell = new DataGridCellInfo(first[1], grid.Grid.Columns[1]);
+
+            // Fresh instances, same identities — a real re-publish.
+            grid.Bind(WidgetColumns(), FreshWidgets(), "3 rows.", "Widgets");
+
+            Assert.Equal("two", Assert.IsType<Widget>(grid.Grid.CurrentCell.Item).Id);
+            Assert.Same(grid.Grid.Columns[1], grid.Grid.CurrentCell.Column);
+        });
+    }
+
+    /// <summary>A row that is GONE after the republish must not be
+    /// restored — the reader is not left pointing at a discarded
+    /// object, and no other row is silently substituted.</summary>
+    [Fact]
+    public void ARepublishThatDropsTheCurrentRowRestoresNothing()
+    {
+        RunSta(() =>
+        {
+            var grid = new AccessibleDataGrid { Announce = _ => { } };
+            IReadOnlyList<object> first = FreshWidgets();
+            grid.Bind(WidgetColumns(), first, "3 rows.", "Widgets");
+            grid.Grid.CurrentCell = new DataGridCellInfo(first[2], grid.Grid.Columns[0]);
+
+            grid.Bind(
+                WidgetColumns(), [new Widget("one")], "1 row.", "Widgets");
+
+            Assert.DoesNotContain(
+                grid.Grid.Items.Cast<object>(),
+                row => ((Widget)row).Id == "three");
+        });
+    }
+
+    /// <summary>Counts equality probes, so a quadratic restore scan is
+    /// observable. Production row view models are classes, and
+    /// `_items.Contains` calls Equals on each.</summary>
+    private sealed class CountingRow(string id)
+    {
+        internal static int EqualsCalls;
+
+        public string Id { get; } = id;
+
+        public override bool Equals(object? obj)
+        {
+            EqualsCalls++;
+            return ReferenceEquals(this, obj);
+        }
+
+        public override int GetHashCode() => Id.GetHashCode(StringComparison.Ordinal);
+    }
+
+    private static IReadOnlyList<AccessibleGridColumn> CountingColumns() => new[]
+    {
+        new AccessibleGridColumn
+        {
+            Header = "Id",
+            Cell = row => ((CountingRow)row).Id,
+            IsRowHeader = true,
+        },
+    };
+
+    /// <summary>
+    /// A re-publish must not ANNOUNCE a row move the user did not make.
+    ///
+    /// Bind nulls _lastAnnouncedRow, then the reader-position restore
+    /// assigns CurrentCell — so OnCurrentCellChanged sees a move from
+    /// "nothing" and posts GridRowMoved. ApplySort defuses exactly this
+    /// Every consumer that re-binds inherited a spurious announcement,
+    /// and for bulk-rename it lands AFTER the rename summary the user
+    /// actually asked for.
+    ///
+    /// Seeding _lastAnnouncedRow the way ApplySort does is NOT the fix:
+    /// it only flips OnCurrentCellChanged's branch, trading a spurious
+    /// GridRowMoved for a spurious GridCellMoved. The restore is not a
+    /// user action, so it must not speak at all — hence the assertion
+    /// is on the event count, not on the event kind.
+    /// </summary>
+    [Fact]
+    public void ARepublishRestoresPositionWithoutAnnouncingAMove()
+    {
+        RunSta(() =>
+        {
+            var announced = new List<A11yEvent>();
+            var grid = new AccessibleDataGrid { Announce = announced.Add };
+            IReadOnlyList<object> rows = FreshWidgets();
+            grid.Bind(WidgetColumns(), rows, "3 rows.", "Widgets");
+            grid.Grid.CurrentCell = new DataGridCellInfo(rows[1], grid.Grid.Columns[1]);
+            announced.Clear();
+
+            grid.Bind(WidgetColumns(), FreshWidgets(), "3 rows.", "Widgets");
+
+            Assert.Equal("two", Assert.IsType<Widget>(grid.Grid.CurrentCell.Item).Id);
+            Assert.Empty(announced);
+        });
+    }
+
+    /// <summary>
+    /// The restore scan must be LINEAR in the row count.
+    ///
+    /// RowIdentityOf guards with _items.Contains — necessary at the
+    /// capture call, where the item may be foreign or the new-item
+    /// placeholder, but pure waste inside a loop that is already
+    /// walking _items. That made every re-publish O(n²): measured at
+    /// 708 ms for 8,000 rows against 33 ms before this branch, on the
+    /// UI thread, with the bulk-rename preview uncapped.
+    /// </summary>
+    [Fact]
+    public void ARepublishScansLinearlyNotQuadratically()
+    {
+        RunSta(() =>
+        {
+            const int count = 60;
+            var grid = new AccessibleDataGrid { Announce = _ => { } };
+            object[] First() =>
+                [.. Enumerable.Range(0, count).Select(i => (object)new CountingRow($"r{i}"))];
+
+            IReadOnlyList<object> rows = First();
+            grid.Bind(CountingColumns(), rows, "rows.", "Rows");
+            // Worst case: the reader is on the LAST row, so the restore
+            // scan runs to the end.
+            grid.Grid.CurrentCell =
+                new DataGridCellInfo(rows[count - 1], grid.Grid.Columns[0]);
+
+            CountingRow.EqualsCalls = 0;
+            grid.Bind(CountingColumns(), First(), "rows.", "Rows");
+
+            Assert.Equal($"r{count - 1}", Assert.IsType<CountingRow>(grid.Grid.CurrentCell.Item).Id);
+            // Quadratic would be ~count²/2 ≈ 1,800 here.
+            Assert.True(
+                CountingRow.EqualsCalls < count * 4,
+                $"restore probed equality {CountingRow.EqualsCalls} times for {count} rows");
+        });
+    }
+
+    /// <summary>Enter on a bound row activates it — the affordance the
+    /// bibliography rows advertise as "Activate to expand citation
+    /// fields." Row activation shipped with no test at all.</summary>
+    [Fact]
+    public void EnterActivatesTheCurrentRow()
+    {
+        RunSta(() =>
+        {
+            object? activated = null;
+            var grid = new AccessibleDataGrid { Announce = _ => { } };
+            grid.Bind(
+                Columns(), People, "3 rows.", "People",
+                rowActivated: row => activated = row);
+            grid.Grid.CurrentCell = new DataGridCellInfo(People[1], grid.Grid.Columns[0]);
+
+            grid.Grid.RaiseEvent(new KeyEventArgs(
+                Keyboard.PrimaryDevice,
+                System.Windows.PresentationSource.FromVisual(grid.Grid)
+                    ?? new System.Windows.Interop.HwndSource(0, 0, 0, 0, 0, "t", IntPtr.Zero),
+                0,
+                Key.Enter)
+            { RoutedEvent = System.Windows.UIElement.PreviewKeyDownEvent });
+
+            Assert.Same(People[1], activated);
+        });
+    }
+
+    /// <summary>
+    /// A double-click that did not land on a row must not activate one.
+    ///
+    /// The handler read CurrentCell.Item without hit-testing what was
+    /// actually clicked, and MouseDoubleClick fires for the whole
+    /// control — so double-clicking a column HEADER to sort, the
+    /// ordinary mouse idiom, also opened the details sheet for whatever
+    /// row happened to be current, trapping focus in a dialog the user
+    /// never asked for. The context menu next door already hit-tests
+    /// through TargetRowActionsAt for exactly this reason.
+    /// </summary>
+    [Fact]
+    public void ADoubleClickOffAnyRowActivatesNothing()
+    {
+        RunSta(() =>
+        {
+            object? activated = null;
+            var grid = new AccessibleDataGrid { Announce = _ => { } };
+            grid.Bind(
+                Columns(), People, "3 rows.", "People",
+                rowActivated: row => activated = row);
+            grid.Grid.CurrentCell = new DataGridCellInfo(People[0], grid.Grid.Columns[0]);
+
+            // Source is the grid itself: no cell, no row — a header or
+            // the empty chrome below the last row.
+            grid.Grid.RaiseEvent(new MouseButtonEventArgs(
+                Mouse.PrimaryDevice, 0, MouseButton.Left)
+            { RoutedEvent = Control.MouseDoubleClickEvent });
+
+            Assert.Null(activated);
+        });
+    }
+
+    /// <summary>
+    /// A re-publish must not silently undo the user's sort.
+    ///
+    /// Bind is a whole-surface reset, and consuming surfaces re-bind
+    /// whenever their rows change — for the citations bibliography that
+    /// is every keystroke in its filter box. Dropping the sort there
+    /// reordered rows under the reader with no announcement and no
+    /// header indicator, so the ordering they had chosen just
+    /// evaporated. Re-applied silently: announcing on a background
+    /// re-publish would be a second lie in the other direction.
+    /// </summary>
+    [Fact]
+    public void SortSurvivesARebindAndIsNotReannounced()
+    {
+        RunSta(() =>
+        {
+            var announced = new List<A11yEvent>();
+            var grid = MakeGrid(announced);
+            _ = grid.ApplySort(0, ascending: true);
+            Assert.Equal("Alice", Assert.IsType<Person>(grid.Grid.Items[0]).Name);
+            int afterUserSort = announced.Count;
+
+            grid.Bind(Columns(), People, "3 rows, 2 columns.", "People, data grid");
+
+            Assert.Equal("Alice", Assert.IsType<Person>(grid.Grid.Items[0]).Name);
+            Assert.Equal((0, true), grid.ActiveSort);
+            Assert.Equal(
+                System.ComponentModel.ListSortDirection.Ascending,
+                grid.Grid.Columns[0].SortDirection);
+            Assert.Equal(afterUserSort, announced.Count);
+        });
+    }
+
+    /// <summary>A rebind whose columns can no longer support the old
+    /// sort must drop it rather than throw or half-apply it.</summary>
+    [Fact]
+    public void ARebindWhoseColumnsCannotSortDropsTheSort()
+    {
+        RunSta(() =>
+        {
+            var grid = MakeGrid(new List<A11yEvent>());
+            _ = grid.ApplySort(0, ascending: true);
+            Assert.Equal((0, true), grid.ActiveSort);
+
+            // Same position, but this column carries no comparator.
+            grid.Bind(
+                [
+                    new AccessibleGridColumn
+                    {
+                        Header = "Name",
+                        Cell = row => ((Person)row).Name,
+                    },
+                ],
+                People,
+                "3 rows, 1 column.",
+                "People, data grid");
+
+            Assert.Null(grid.ActiveSort);
+            Assert.Equal("Charlie", Assert.IsType<Person>(grid.Grid.Items[0]).Name);
+        });
+    }
+
+    /// <summary>
+    /// Two grids in one window must be tellable apart. The default is
+    /// unchanged so W4-1's conformance fixture and the bulk-rename
+    /// preview keep the ids they already publish.
+    /// </summary>
+    [Fact]
+    public void GridAutomationIdDefaultsAndRenamesTheSummaryWithIt()
+    {
+        RunSta(() =>
+        {
+            var grid = MakeGrid(new List<A11yEvent>());
+            Assert.Equal("AccessibleDataGrid", grid.GridAutomationId);
+            Assert.Equal(
+                "AccessibleDataGridSummary",
+                AutomationProperties.GetAutomationId(grid.SummaryRegion));
+
+            grid.GridAutomationId = "BibliographyEntries";
+            Assert.Equal(
+                "BibliographyEntries",
+                AutomationProperties.GetAutomationId(grid.Grid));
+            Assert.Equal(
+                "BibliographyEntriesSummary",
+                AutomationProperties.GetAutomationId(grid.SummaryRegion));
+        });
+    }
+
+    /// <summary>
+    /// W4-5 (#737) needs to land Ctrl+J on a named bibliography row.
+    /// A HIT moves currency to that row's first cell; a MISS moves
+    /// nothing at all — landing on row one after a failed jump would
+    /// tell a screen-reader user they had arrived somewhere they had
+    /// not.
+    /// </summary>
+    [Fact]
+    public void FocusRowMovesCurrencyOnAHitAndLeavesItAloneOnAMiss()
+    {
+        RunSta(() =>
+        {
+            var grid = MakeGrid(new List<A11yEvent>());
+            grid.Grid.CurrentCell = new DataGridCellInfo(People[0], grid.Grid.Columns[0]);
+
+            Assert.True(grid.FocusRow(row => ((Person)row).Name == "Bora"));
+            Assert.Equal("Bora", Assert.IsType<Person>(grid.Grid.CurrentCell.Item).Name);
+            Assert.Equal(grid.Grid.Columns[0], grid.Grid.CurrentCell.Column);
+
+            Assert.False(grid.FocusRow(row => ((Person)row).Name == "Nobody"));
+            Assert.Equal("Bora", Assert.IsType<Person>(grid.Grid.CurrentCell.Item).Name);
         });
     }
 
@@ -420,6 +775,181 @@ public sealed class AccessibleDataGridTests
             Assert.True(AccessibleDataGrid.FilterCommand.CanExecute(null, grid.Grid));
             AccessibleDataGrid.FilterCommand.Execute(null, grid.Grid);
             Assert.Equal(1, requests);
+        });
+    }
+
+    /// <summary>
+    /// Row activation listens on the GRID's PreviewKeyDown, and the row
+    /// actions menu is logically parented to that same grid — so if a
+    /// key press inside the open menu tunnelled through it, Enter on
+    /// "Open" would run the menu action AND activate the row, opening
+    /// two things for one keystroke.
+    ///
+    /// It does not: the popup builds its own route. This pins that,
+    /// because the day it stops being true the failure is silent and
+    /// destructive for any consumer whose row actions are not merely
+    /// navigational.
+    /// </summary>
+    [Fact]
+    public void EnterInsideTheRowActionsMenuDoesNotAlsoActivateTheRow()
+    {
+        RunSta(() =>
+        {
+            object? activated = null;
+            object? executed = null;
+            var actions = new[]
+            {
+                new AccessibleGridRowAction { Name = "Open", Execute = row => executed = row },
+            };
+            var grid = new AccessibleDataGrid { Announce = _ => { } };
+            grid.Bind(
+                Columns(), People, "3 rows.", "People",
+                rowActions: actions, rowActivated: row => activated = row);
+            var window = new System.Windows.Window
+            {
+                Content = grid,
+                Width = 400,
+                Height = 300,
+                ShowInTaskbar = false,
+                WindowStyle = System.Windows.WindowStyle.None,
+            };
+            window.Show();
+            try
+            {
+                grid.Grid.CurrentCell = new DataGridCellInfo(People[1], grid.Grid.Columns[0]);
+                ContextMenu menu = grid.Grid.ContextMenu!;
+                ContextMenu built = grid.BuildRowActionsMenu()!;
+                menu.Items.Clear();
+                while (built.Items.Count > 0)
+                {
+                    object item = built.Items[0];
+                    built.Items.RemoveAt(0);
+                    _ = menu.Items.Add(item);
+                }
+                int sawKeyAtGrid = 0;
+                // handledEventsToo: the constructor's own handler runs
+                // first on this element and marks Enter handled, which
+                // would skip a plain += counter and make a zero mean
+                // nothing.
+                grid.Grid.AddHandler(
+                    System.Windows.UIElement.PreviewKeyDownEvent,
+                    new KeyEventHandler((_, _) => sawKeyAtGrid++),
+                    handledEventsToo: true);
+                KeyEventArgs Enter() => new(
+                    Keyboard.PrimaryDevice,
+                    System.Windows.PresentationSource.FromVisual(grid.Grid)!,
+                    0,
+                    Key.Enter)
+                { RoutedEvent = System.Windows.UIElement.PreviewKeyDownEvent };
+
+                // Control FIRST, with the menu closed: this is the path
+                // that must work, and it proves the counter and the
+                // synthesized event are wired before anything is
+                // concluded from a zero.
+                grid.Grid.RaiseEvent(Enter());
+                Assert.Equal(1, sawKeyAtGrid);
+                Assert.Same(People[1], activated);
+                activated = null;
+
+                menu.PlacementTarget = grid.Grid;
+                menu.IsOpen = true;
+                Assert.True(menu.IsOpen, "the menu never opened — the probe would be vacuous");
+                var open = (MenuItem)menu.Items[0];
+                _ = open.Focus();
+
+                open.RaiseEvent(Enter());
+                Assert.Equal(1, sawKeyAtGrid);
+                Assert.Null(activated);
+                Assert.Null(executed);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
+
+    /// <summary>
+    /// The sort is re-applied by COLUMN IDENTITY, not by position.
+    ///
+    /// Bind captured the sort as a bare index and re-applied it to
+    /// whatever column now sits at that index. Every consumer today
+    /// re-binds the same column list, so the index happens to agree —
+    /// but W4-6 swaps column sets per view into one grid instance, and
+    /// there the reader's "sort by Role" silently becomes "sort by
+    /// Name": right indicator, wrong column, no announcement.
+    /// </summary>
+    [Fact]
+    public void ARebindThatReordersColumnsKeepsTheSortOnTheSameColumn()
+    {
+        RunSta(() =>
+        {
+            IReadOnlyList<object> people =
+            [
+                new Person("Charlie", "Alpha"),
+                new Person("Alice", "Zulu"),
+                new Person("Bora", "Mid"),
+            ];
+            var name = new AccessibleGridColumn
+            {
+                Header = "Name",
+                Cell = row => ((Person)row).Name,
+                Sort = Comparer<object>.Create(
+                    (x, y) => string.CompareOrdinal(((Person)x).Name, ((Person)y).Name)),
+            };
+            var role = new AccessibleGridColumn
+            {
+                Header = "Role",
+                Cell = row => ((Person)row).Role,
+                Sort = Comparer<object>.Create(
+                    (x, y) => string.CompareOrdinal(((Person)x).Role, ((Person)y).Role)),
+            };
+            var grid = new AccessibleDataGrid { Announce = _ => { } };
+            grid.Bind([name, role], people, "3 rows.", "People");
+            _ = grid.ApplySort(1, ascending: true);
+            Assert.Equal("Charlie", Assert.IsType<Person>(grid.Grid.Items[0]).Name);
+
+            // Same grid instance, columns swapped.
+            grid.Bind([role, name], people, "3 rows.", "People");
+
+            Assert.Equal((0, true), grid.ActiveSort);
+            Assert.Equal("Charlie", Assert.IsType<Person>(grid.Grid.Items[0]).Name);
+            Assert.Equal(
+                System.ComponentModel.ListSortDirection.Ascending,
+                grid.Grid.Columns[0].SortDirection);
+            Assert.Null(grid.Grid.Columns[1].SortDirection);
+        });
+    }
+
+    /// <summary>
+    /// Two rows can share row-header text, and the restore must not
+    /// quietly pick the first one.
+    ///
+    /// The reader's position is keyed on that text because a re-publish
+    /// builds fresh row view models and object identity is gone by
+    /// definition. Where the key is ambiguous the previous ORDINAL
+    /// breaks the tie, so someone reading the second "Untitled" stays
+    /// on the second one instead of being moved to the first with
+    /// nothing announced. Citation keys are unique; base views and
+    /// task titles are not.
+    /// </summary>
+    [Fact]
+    public void ARepublishWithDuplicateRowHeadersRestoresTheSameOccurrence()
+    {
+        RunSta(() =>
+        {
+            IReadOnlyList<object> first =
+                [new Widget("dup"), new Widget("dup"), new Widget("tail")];
+            var grid = new AccessibleDataGrid { Announce = _ => { } };
+            grid.Bind(WidgetColumns(), first, "3 rows.", "Widgets");
+            grid.Grid.CurrentCell = new DataGridCellInfo(first[1], grid.Grid.Columns[1]);
+            Assert.Same(first[1], grid.Grid.CurrentCell.Item);
+
+            IReadOnlyList<object> second =
+                [new Widget("dup"), new Widget("dup"), new Widget("tail")];
+            grid.Bind(WidgetColumns(), second, "3 rows.", "Widgets");
+
+            Assert.Same(second[1], grid.Grid.CurrentCell.Item);
         });
     }
 

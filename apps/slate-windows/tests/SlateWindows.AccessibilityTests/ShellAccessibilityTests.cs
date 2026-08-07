@@ -2335,6 +2335,670 @@ public sealed class ShellAccessibilityTests
         }
     }
 
+    /// <summary>
+    /// W4-5 (#737): the citation surfaces over the live app. The
+    /// citations leaf carries its rows, activation opens the details
+    /// sheet as an IN-WINDOW dialog (D-1 — a Popup would put the UIA
+    /// subtree in a sibling window), Escape returns focus to the row
+    /// that opened it (contract 11), Ctrl+J lands on the bibliography
+    /// entry, and BOTH bibliography segments expose grid column
+    /// headers because both ride the substrate (contract 8 / D-6).
+    /// </summary>
+    [Fact]
+    [Trait("gate", "W-C")]
+    public void CitationSurfaces_GridsSheetsAndChords_AreClean()
+    {
+        string testRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"slate-citations-{Guid.NewGuid():N}");
+        string vaultRoot = Path.Combine(testRoot, "Citations Vault");
+        string logDirectory = Path.Combine(testRoot, "logs");
+        Directory.CreateDirectory(vaultRoot);
+        File.WriteAllText(
+            Path.Combine(vaultRoot, "library.bib"),
+            "@article{knuth1984,\n  title = {Literate Programming},\n"
+                + "  author = {Knuth, Donald E.},\n  year = {1984},\n"
+                + "  journal = {The Computer Journal},\n"
+                // The abstract and DOI exist so the disclosure and the
+                // link path are EXERCISED. Without them the fixture
+                // never built those elements, so the gate could not see
+                // that neither reached assistive technology.
+                + "  doi = {10.1093/comjnl/27.2.97},\n"
+                + "  abstract = {Programs should be written for people to read.}\n}\n");
+        File.WriteAllText(
+            Path.Combine(vaultRoot, "cited.md"),
+            "# Cited\n\nA citation [@knuth1984] and a ghost [@ghostkey].\n");
+        File.Copy(CitationStyleFixture(), Path.Combine(vaultRoot, "ieee.csl"));
+        // A style is REQUIRED for rows to render; without one every row
+        // is a placeholder and nothing is expandable (contract 2).
+        File.WriteAllText(
+            Path.Combine(vaultRoot, "slate.json"),
+            "{\"citations\":{\"bibliography\":\"library.bib\",\"cite_style\":\"ieee\"}}");
+
+        Process? process = null;
+        try
+        {
+            var startInfo = new ProcessStartInfo(SlateWindowsExe())
+            {
+                RedirectStandardError = true,
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+            };
+            startInfo.ArgumentList.Add(vaultRoot);
+            startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
+                $"slate-citations-{Guid.NewGuid():N}";
+            startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            process = Process.Start(startInfo)
+                ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+
+            if (!Environment.UserInteractive)
+            {
+                // Session-0 fallback, as the shell gate.
+                Assert.False(
+                    process.WaitForExit(3_000),
+                    "Slate exited during the citations startup smoke. " +
+                    $"app log: {ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log"))}");
+                return;
+            }
+
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(
+                process,
+                automation,
+                Path.Combine(logDirectory, "slate-windows.log"),
+                TimeSpan.FromSeconds(30));
+
+            AutomationElement filesTree = WaitForElement(
+                window, "FilesTree", TimeSpan.FromSeconds(30));
+            AutomationElement citedItem = filesTree
+                .FindAllDescendants(
+                    automation.ConditionFactory.ByControlType(ControlType.TreeItem))
+                .FirstOrDefault(item =>
+                    item.Name.StartsWith("cited", StringComparison.OrdinalIgnoreCase))
+                ?? throw new Xunit.Sdk.XunitException("The cited TreeItem is absent.");
+            citedItem.Patterns.SelectionItem.Pattern.Select();
+            WaitForEditor(
+                window, automation, "cited.md editor", TimeSpan.FromSeconds(10));
+
+            AutomationElement leaves = WaitForElement(
+                window, "RightPaneLeaves", TimeSpan.FromSeconds(10));
+            void SelectLeaf(string title)
+            {
+                AutomationElement? entry = null;
+                Assert.True(
+                    SpinWait.SpinUntil(
+                        () =>
+                        {
+                            entry = leaves
+                                .FindAllDescendants(
+                                    automation.ConditionFactory.ByControlType(
+                                        ControlType.ListItem))
+                                .FirstOrDefault(item =>
+                                    (item.Properties.Name.ValueOrDefault ?? "") == title);
+                            return entry is not null;
+                        },
+                        TimeSpan.FromSeconds(15)),
+                    $"No rail entry named {title}.");
+                entry!.Patterns.SelectionItem.Pattern.Select();
+            }
+
+            // ---- The citations leaf ------------------------------
+            SelectLeaf("Citations");
+            AutomationElement citations = WaitForElement(
+                window, "PanelCitationsList", TimeSpan.FromSeconds(15));
+            AutomationElement? resolvedRow = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        resolvedRow = citations
+                            .FindAllDescendants(
+                                automation.ConditionFactory.ByControlType(
+                                    ControlType.ListItem))
+                            .FirstOrDefault(item =>
+                                (item.Properties.Name.ValueOrDefault ?? "")
+                                    .Contains("Knuth", StringComparison.OrdinalIgnoreCase));
+                        return resolvedRow is not null;
+                    },
+                    TimeSpan.FromSeconds(20)),
+                "the citations leaf never rendered the resolved Knuth row");
+
+            // The unresolved key is a real state, not an error
+            // (contract 7): it is a row, and it says so.
+            Assert.Contains(
+                citations
+                    .FindAllDescendants(
+                        automation.ConditionFactory.ByControlType(ControlType.ListItem))
+                    .Select(item => item.Properties.Name.ValueOrDefault ?? ""),
+                name => name.Contains("Unresolved", StringComparison.OrdinalIgnoreCase));
+
+            // ---- Details sheet: in-window, and focus returns -------
+            resolvedRow!.Patterns.SelectionItem.Pattern.Select();
+            resolvedRow.Focus();
+            PressKey(VirtualKeyShort.RETURN);
+            AutomationElement details = WaitForElement(
+                window, "CitationDetailsSheet", TimeSpan.FromSeconds(10));
+            // D-1: the sheet is inside THIS window's subtree. A Popup
+            // would make it a sibling HWND and this lookup would miss.
+            Assert.NotNull(window.FindFirstDescendant(
+                automation.ConditionFactory.ByAutomationId("CitationDetailsSheet")));
+            Assert.True(
+                details.Patterns.Window.IsSupported
+                    || details.Properties.ControlType.ValueOrDefault == ControlType.Pane,
+                "the details sheet did not surface as a dialog-shaped element");
+            // The fields must REACH assistive technology. Asserting the
+            // sheet exists is what the first version of this test did,
+            // and it passed while every field was absent from the UIA
+            // tree: the item roots were bare Panels (no peer at all)
+            // wrapping presentation-suppressed TextBlocks, so a screen
+            // reader heard the dialog name and then only "Close".
+            AutomationElement fields = WaitForElement(
+                window, "CitationDetailsFields", TimeSpan.FromSeconds(10));
+            string[] fieldNames = [];
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        fieldNames = [.. fields
+                            .FindAllDescendants(
+                                automation.ConditionFactory.ByControlType(
+                                    ControlType.ListItem))
+                            .Select(item => item.Properties.Name.ValueOrDefault ?? "")
+                            .Where(name => name.Length > 0)];
+                        return fieldNames.Length > 0;
+                    },
+                    TimeSpan.FromSeconds(15)),
+                "the details sheet exposed no named field elements at all");
+            // Verbatim "Label: Value" per field, the mac shape.
+            Assert.Contains(
+                fieldNames,
+                name => name.StartsWith("Title:", StringComparison.Ordinal));
+            Assert.Contains(
+                fieldNames,
+                name => name.Contains("Knuth", StringComparison.OrdinalIgnoreCase));
+
+            AutomationElement detailsClose = WaitForElement(
+                window, "CitationDetailsClose", TimeSpan.FromSeconds(10));
+            AssertEventuallyFocused(
+                detailsClose, "The details sheet did not focus its Close button.");
+
+            // The abstract's TEXT must reach the CONTROL VIEW, which is
+            // the tree assistive technology walks. mac keeps the body an
+            // accessible child (`children: .contain`); a
+            // presentation-suppressed TextBlock is still in the RAW
+            // tree, so asserting mere presence proves nothing — that is
+            // the same existence-assertion trap that let the field
+            // blocker ship. IsControlElement is the discriminating
+            // property.
+            AutomationElement abstractGroup = WaitForElement(
+                window, "CitationDetailsAbstract", TimeSpan.FromSeconds(10));
+            abstractGroup.Patterns.ExpandCollapse.Pattern.Expand();
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => abstractGroup
+                        .FindAllDescendants()
+                        .Any(node =>
+                            (node.Properties.Name.ValueOrDefault ?? "")
+                                .Contains("people to read", StringComparison.OrdinalIgnoreCase)
+                            && node.Properties.IsControlElement.ValueOrDefault),
+                    TimeSpan.FromSeconds(10)),
+                "the expanded abstract exposed its text nowhere in the control view");
+            // A long abstract is clipped and scrolls. If the scroller
+            // is not focusable there is no keyboard route to the rest
+            // of it — mouse wheel and drag only.
+            // Constrained to the BODY, not the disclosure header: the
+            // header's name is "Abstract: <text>", so a Contains match
+            // hits the Button and proves nothing about the scroller.
+            // Three earlier assertions in this suite matched the wrong
+            // node the same way.
+            AutomationElement abstractBody = abstractGroup
+                .FindAllDescendants()
+                .Single(node => string.Equals(
+                    node.Properties.Name.ValueOrDefault ?? "",
+                    "Programs should be written for people to read.",
+                    StringComparison.Ordinal));
+            Assert.True(
+                abstractBody.Properties.IsKeyboardFocusable.ValueOrDefault,
+                "the abstract body has no keyboard route to its clipped remainder");
+
+            // The DOI must be FOLLOWABLE from the keyboard, not just
+            // rendered as a link. Round 4 argued it could not be:
+            // ListBox sets KeyboardNavigation.TabNavigation=Once, so
+            // the reasoning went that Tab leaves the whole list without
+            // ever descending into item content. Measured here instead
+            // — Tab from the DOI row lands on the Hyperlink — because a
+            // Hyperlink is a FrameworkContentElement and does not obey
+            // that rule the way a child control would.
+            AutomationElement doiRow = fields
+                .FindAllDescendants(
+                    automation.ConditionFactory.ByControlType(ControlType.ListItem))
+                .First(item => (item.Properties.Name.ValueOrDefault ?? "")
+                    .StartsWith("DOI", StringComparison.Ordinal));
+            doiRow.Focus();
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(300));
+            PressKey(VirtualKeyShort.TAB);
+            AutomationElement focusedAfterTab = automation.FocusedElement();
+            Assert.Equal(
+                ControlType.Hyperlink,
+                focusedAfterTab.Properties.ControlType.ValueOrDefault);
+            Assert.Contains(
+                "10.1093",
+                focusedAfterTab.Properties.Name.ValueOrDefault ?? "",
+                StringComparison.Ordinal);
+
+            AssertAxeClean(process, "citation-details-sheet");
+
+            // The Jump menu item must be USABLE, not just present.
+            // Round 4 argued it is disabled in every state a user can
+            // reach it, because it requires the details sheet and the
+            // sheet is IsDialog and focus-trapped. Measured: the sheet
+            // is an in-window overlay, not a true modal, so the menu
+            // still opens over it and the item is enabled there.
+            AutomationElement editMenu = WaitForElement(
+                window, "MainMenu", TimeSpan.FromSeconds(10))
+                .FindAllChildren(
+                    automation.ConditionFactory.ByControlType(ControlType.MenuItem))
+                .First(item => (item.Properties.Name.ValueOrDefault ?? "")
+                    .Contains("Edit", StringComparison.OrdinalIgnoreCase));
+            editMenu.Patterns.ExpandCollapse.Pattern.Expand();
+            AutomationElement jumpItem = WaitForElement(
+                window, "JumpToBibliographyMenuItem", TimeSpan.FromSeconds(10));
+            Assert.True(
+                jumpItem.Properties.IsEnabled.ValueOrDefault,
+                "Jump to Bibliography is greyed out in the only state that enables it");
+            editMenu.Patterns.ExpandCollapse.Pattern.Collapse();
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(300));
+            detailsClose.Focus();
+
+            PressKey(VirtualKeyShort.ESCAPE);
+            AssertElementDisappears(window, automation, "CitationDetailsSheet");
+            AssertEventuallyFocused(
+                resolvedRow, "Escape did not return focus to the citation row.");
+
+            // ---- Ctrl+J: the landing, not just the announcement -----
+            // The docstring claimed this for a version of the test that
+            // never pressed Ctrl+J, so the interaction with three known
+            // false-positive paths had no end-to-end cover at all.
+            resolvedRow.Focus();
+            PressKey(VirtualKeyShort.RETURN);
+            WaitForElement(window, "CitationDetailsSheet", TimeSpan.FromSeconds(10));
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_J);
+            // The focus-trapped sheet must get out of the way (mac
+            // clears expandedCitation) ...
+            AssertElementDisappears(window, automation, "CitationDetailsSheet");
+            // ... and the entries grid must actually hold the key the
+            // announcement names, on the entries segment, in a visible
+            // pane. If any of those is false the user is told they
+            // arrived somewhere they never went.
+            AutomationElement jumped = WaitForElement(
+                window, "BibliographyEntries", TimeSpan.FromSeconds(15));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => jumped
+                        .FindAllDescendants(
+                            automation.ConditionFactory.ByControlType(ControlType.Custom))
+                        .Concat(jumped.FindAllDescendants(
+                            automation.ConditionFactory.ByControlType(ControlType.DataItem)))
+                        .Any(row => (row.Properties.Name.ValueOrDefault ?? "")
+                            .Contains("Knuth", StringComparison.OrdinalIgnoreCase)),
+                    TimeSpan.FromSeconds(15)),
+                "Ctrl+J announced a jump but the entry never appeared in the bound grid");
+
+            // ---- Ctrl+J on a MISS must still land somewhere --------
+            // The jump closes the focus-trapped sheet before resolving,
+            // so returning early on a miss left focus on the window
+            // root: the user pressed a key, heard "Searching
+            // bibliography for: X." and was nowhere, with Tab
+            // restarting at the menu bar. Measured before the fix as
+            // FocusedElement = Slate.MainWindow.
+            SelectLeaf("Citations");
+            AutomationElement citationsAgain = WaitForElement(
+                window, "PanelCitationsList", TimeSpan.FromSeconds(15));
+            AutomationElement ghostRow = citationsAgain
+                .FindAllDescendants(
+                    automation.ConditionFactory.ByControlType(ControlType.ListItem))
+                .First(item => (item.Properties.Name.ValueOrDefault ?? "")
+                    .Contains("Unresolved", StringComparison.OrdinalIgnoreCase));
+            ghostRow.Patterns.SelectionItem.Pattern.Select();
+            ghostRow.Focus();
+            PressKey(VirtualKeyShort.RETURN);
+            WaitForElement(window, "CitationDetailsSheet", TimeSpan.FromSeconds(10));
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_J);
+            AssertElementDisappears(window, automation, "CitationDetailsSheet");
+            AutomationElement afterMiss = WaitForElement(
+                window, "BibliographySearch", TimeSpan.FromSeconds(10));
+            AssertEventuallyFocused(
+                afterMiss,
+                "A Ctrl+J miss stranded focus instead of landing in the bibliography.");
+            // The jump filtered the leaf to a key with no entry, which
+            // is correct but leaves the grid empty for what follows.
+            // Clear it the way a user would.
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_A);
+            PressKey(VirtualKeyShort.DELETE);
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(300));
+
+            // ---- Ctrl+Shift+J: the summary sheet ------------------
+            PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_J);
+            WaitForElement(window, "CitationSummarySheet", TimeSpan.FromSeconds(10));
+            AssertAxeClean(process, "citation-summary-sheet");
+            WaitForElement(window, "CitationSummaryDismiss", TimeSpan.FromSeconds(10))
+                .Patterns.Invoke.Pattern.Invoke();
+            AssertElementDisappears(window, automation, "CitationSummarySheet");
+
+            // ---- The bibliography leaf: BOTH segments are grids ----
+            SelectLeaf("Bibliography");
+            AutomationElement entriesGrid = WaitForElement(
+                window, "BibliographyEntries", TimeSpan.FromSeconds(15));
+            Assert.True(entriesGrid.Patterns.Grid.IsSupported, "Grid pattern missing on entries");
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => entriesGrid
+                        .FindAllDescendants(
+                            automation.ConditionFactory.ByControlType(ControlType.HeaderItem))
+                        .Select(item => item.Properties.Name.ValueOrDefault ?? "")
+                        .Where(name => name.Length > 0)
+                        .ToHashSet()
+                        .IsSupersetOf(["Title", "Authors", "Year", "Journal", "Key"]),
+                    TimeSpan.FromSeconds(15)),
+                "the entries grid never exposed its five column headers");
+
+            WaitForElement(window, "BibliographySegmentUnresolved", TimeSpan.FromSeconds(10))
+                .Patterns.SelectionItem.Pattern.Select();
+            AutomationElement unresolvedGrid = WaitForElement(
+                window, "BibliographyUnresolved", TimeSpan.FromSeconds(15));
+            Assert.True(
+                unresolvedGrid.Patterns.Grid.IsSupported,
+                "the unresolved segment did not render as a grid (D-6)");
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => unresolvedGrid
+                        .FindAllDescendants(
+                            automation.ConditionFactory.ByControlType(ControlType.HeaderItem))
+                        .Select(item => item.Properties.Name.ValueOrDefault ?? "")
+                        .Where(name => name.Length > 0)
+                        .ToHashSet()
+                        .IsSupersetOf(["Key", "File"]),
+                    TimeSpan.FromSeconds(15)),
+                "the unresolved grid never exposed its Key/File headers");
+            AssertAxeClean(process, "bibliography-leaf");
+
+            // ---- The files-citing sheet ---------------------------
+            // Never opened by any earlier version of this gate, so its
+            // "0 files" naming defect was found by reading rather than
+            // by running. Reached the way a user reaches it: the row
+            // action on a bibliography entry.
+            WaitForElement(window, "BibliographySegmentEntries", TimeSpan.FromSeconds(10))
+                .Patterns.SelectionItem.Pattern.Select();
+            AutomationElement entriesAgain = WaitForElement(
+                window, "BibliographyEntries", TimeSpan.FromSeconds(15));
+            entriesAgain.Focus();
+            AutomationElement entryCell = entriesAgain
+                .FindAllDescendants(
+                    automation.ConditionFactory.ByControlType(ControlType.Custom))
+                .FirstOrDefault(cell => (cell.Properties.Name.ValueOrDefault ?? "")
+                    .Contains("Knuth", StringComparison.OrdinalIgnoreCase))
+                ?? throw new Xunit.Sdk.XunitException(
+                    "no bibliography cell to open the row menu from");
+            entryCell.Focus();
+            PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.F10);
+
+            AutomationElement? action = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        action = window
+                            .FindAllDescendants(
+                                automation.ConditionFactory.ByControlType(
+                                    ControlType.MenuItem))
+                            .FirstOrDefault(item =>
+                                (item.Properties.Name.ValueOrDefault ?? "")
+                                    .StartsWith(
+                                        "Show files citing", StringComparison.Ordinal));
+                        return action is not null;
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the entries grid did not offer the files-citing row action");
+            action!.Patterns.Invoke.Pattern.Invoke();
+
+            AutomationElement filesCiting = WaitForElement(
+                window, "FilesCitingSheet", TimeSpan.FromSeconds(10));
+            // The sheet settles on the real count. NOTE: this does NOT
+            // pin the "0 files at appear" defect — by the time UIA can
+            // poll, the load has landed, and this assertion passes
+            // against the broken version too (verified). The at-appear
+            // naming is pinned in FilesCitingNamingTests, where the
+            // publish can be held. What this covers is that the sheet
+            // opens from the row action at all, reaches a truthful
+            // name, is axe-clean, and closes — none of which had any
+            // end-to-end cover before.
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => (filesCiting.Properties.Name.ValueOrDefault ?? "")
+                        .Contains("1 file", StringComparison.OrdinalIgnoreCase),
+                    TimeSpan.FromSeconds(15)),
+                "the files-citing sheet never named the real count; last name was "
+                    + $"\"{filesCiting.Properties.Name.ValueOrDefault}\"");
+            AssertAxeClean(process, "files-citing-sheet");
+
+            // ESCAPE, not Invoke — and assert where focus goes.
+            // Contract 11 says Escape returns focus exactly to the row
+            // that opened the sheet. Round 4 argued this path could not
+            // satisfy it, on the grounds that the row action captures
+            // Keyboard.FocusedElement while the context menu is open,
+            // so the token would be a MenuItem that is gone by the time
+            // the sheet closes, falling through to a collapsed control.
+            // Measured instead: focus returns to the originating
+            // bibliography CELL. Closing by Invoke, as this journey did
+            // before, asserted nothing about any of it.
+            PressKey(VirtualKeyShort.ESCAPE);
+            AssertElementDisappears(window, automation, "FilesCitingSheet");
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => (automation.FocusedElement().Properties.Name.ValueOrDefault ?? "")
+                        .Contains("Knuth", StringComparison.OrdinalIgnoreCase),
+                    TimeSpan.FromSeconds(10)),
+                "Escape from the files-citing sheet did not return focus to the "
+                    + "bibliography row that opened it; focus was on "
+                    + $"\"{automation.FocusedElement().Properties.Name.ValueOrDefault}\"");
+        }
+        finally
+        {
+            if (process is not null && !process.HasExited)
+            {
+                process.CloseMainWindow();
+                if (!process.WaitForExit(5_000))
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+
+            try
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    /// <summary>
+    /// The committed demo-vault CSL style, copied into this project's
+    /// output by a linked Content item.
+    ///
+    /// It is read from the OUTPUT DIRECTORY, never by walking up to a
+    /// repo root: this gate downloads built binaries and runs with no
+    /// checkout, so the repo does not exist at run time. Walking up
+    /// passes locally and fails only on CI, which is how the first
+    /// version of this shipped.
+    /// </summary>
+    private static string CitationStyleFixture()
+    {
+        string path = Path.Combine(AppContext.BaseDirectory, "fixtures", "ieee.csl");
+        Assert.True(
+            File.Exists(path),
+            $"The CSL fixture is missing at {path}. It is a linked Content " +
+            "item in SlateWindows.AccessibilityTests.csproj and must be " +
+            "copied to the output directory.");
+        return path;
+    }
+
+    /// <summary>
+    /// W4-5 (#737): the DEGRADED vault. Contract 5 says the leaf's
+    /// notice region is the surface for a failed load — but every
+    /// fixture in this suite loads cleanly, so the gate had never once
+    /// seen that region populated, never axe-scanned it, and never
+    /// checked that a user could reach it.
+    ///
+    /// §2.6 forbids SPEAKING bibliography copy at vault open, so the
+    /// reason is deliberately not announced. That makes reachability
+    /// the whole contract: if the notice is not in the tab order, a
+    /// screen-reader user is told "0 entries" and has no route to why.
+    /// </summary>
+    [Fact]
+    [Trait("gate", "W-C")]
+    public void CitationSurfaces_ADegradedVaultSurfacesTheReasonReachably()
+    {
+        string testRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"slate-citations-degraded-{Guid.NewGuid():N}");
+        string vaultRoot = Path.Combine(testRoot, "Degraded Vault");
+        string logDirectory = Path.Combine(testRoot, "logs");
+        Directory.CreateDirectory(vaultRoot);
+        File.WriteAllText(
+            Path.Combine(vaultRoot, "cited.md"),
+            "# Cited\n\nA citation [@knuth1984].\n");
+        // Configured, and pointing at a file that is not there. Core's
+        // set_bibliography_sources is all-or-nothing, so the seed fails
+        // and the D-13 refusal takes over.
+        File.WriteAllText(
+            Path.Combine(vaultRoot, "slate.json"),
+            "{\"citations\":{\"bibliography\":\"nowhere.bib\",\"cite_style\":\"ieee\"}}");
+
+        Process? process = null;
+        try
+        {
+            var startInfo = new ProcessStartInfo(SlateWindowsExe())
+            {
+                RedirectStandardError = true,
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+            };
+            startInfo.ArgumentList.Add(vaultRoot);
+            startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
+                $"slate-degraded-{Guid.NewGuid():N}";
+            startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            process = Process.Start(startInfo)
+                ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+
+            if (!Environment.UserInteractive)
+            {
+                Assert.False(
+                    process.WaitForExit(3_000),
+                    "Slate exited during the degraded-vault smoke. "
+                        + $"app log: {ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log"))}");
+                return;
+            }
+
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(
+                process,
+                automation,
+                Path.Combine(logDirectory, "slate-windows.log"),
+                TimeSpan.FromSeconds(30));
+
+            AutomationElement leaves = WaitForElement(
+                window, "RightPaneLeaves", TimeSpan.FromSeconds(30));
+            AutomationElement? bibliographyEntry = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        bibliographyEntry = leaves
+                            .FindAllDescendants(
+                                automation.ConditionFactory.ByControlType(ControlType.ListItem))
+                            .FirstOrDefault(item =>
+                                (item.Properties.Name.ValueOrDefault ?? "") == "Bibliography");
+                        return bibliographyEntry is not null;
+                    },
+                    TimeSpan.FromSeconds(15)),
+                "no Bibliography rail entry.");
+            bibliographyEntry!.Patterns.SelectionItem.Pattern.Select();
+
+            // The reason is on screen, verbatim, naming the source.
+            AutomationElement? notice = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        notice = window
+                            .FindAllDescendants()
+                            .FirstOrDefault(node =>
+                                (node.Properties.Name.ValueOrDefault ?? "")
+                                    .Contains("nowhere.bib", StringComparison.OrdinalIgnoreCase)
+                                && node.Properties.IsControlElement.ValueOrDefault);
+                        return notice is not null;
+                    },
+                    TimeSpan.FromSeconds(20)),
+                "the failed load surfaced no notice naming the source in the control view");
+
+            // And a keyboard user can actually GET to it. Degradation
+            // copy nobody can reach satisfies contract 5 on screen only.
+            //
+            // ANY element carrying the reason will do — the text sits
+            // inside an ItemsControl, so it appears twice: once as the
+            // non-focusable item container and once as the TextBlock
+            // itself. Asking the first match is a coin flip on tree
+            // order, which is how the first version of this assertion
+            // failed against working code.
+            Assert.True(
+                window.FindAllDescendants().Any(node =>
+                    (node.Properties.Name.ValueOrDefault ?? "")
+                        .Contains("nowhere.bib", StringComparison.OrdinalIgnoreCase)
+                    && node.Properties.IsControlElement.ValueOrDefault
+                    && node.Properties.IsKeyboardFocusable.ValueOrDefault),
+                "no element carrying the load-failure reason is reachable from "
+                    + "the keyboard");
+
+            // The refusal must not ALSO claim something false: sources
+            // are configured here, so the no-sources sentence must not
+            // appear beside the failure.
+            Assert.DoesNotContain(
+                window.FindAllDescendants()
+                    .Select(node => node.Properties.Name.ValueOrDefault ?? ""),
+                name => name.Contains(
+                    "No bibliography sources configured", StringComparison.OrdinalIgnoreCase));
+
+            AssertAxeClean(process, "bibliography-degraded");
+        }
+        finally
+        {
+            if (process is not null && !process.HasExited)
+            {
+                process.CloseMainWindow();
+                if (!process.WaitForExit(5_000))
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+
+            try
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
     private static Window WaitForMainWindow(
         Process process,
         UIA3Automation automation,
@@ -2504,6 +3168,20 @@ public sealed class ShellAccessibilityTests
         VirtualKeyShort key)
     {
         using (Keyboard.Pressing(modifier))
+        {
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+            PressKey(key);
+        }
+        Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+    }
+
+    /// <summary>Two-modifier form, for chords like Ctrl+Shift+J.</summary>
+    private static void PressChord(
+        VirtualKeyShort firstModifier,
+        VirtualKeyShort secondModifier,
+        VirtualKeyShort key)
+    {
+        using (Keyboard.Pressing(firstModifier, secondModifier))
         {
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
             PressKey(key);

@@ -1237,7 +1237,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 RunWorkspaceMutation(() => navigated = OpenPathCore(path, target));
                 return navigated;
             },
-            externalOpener ?? DefaultExternalOpener,
+            _externalOpener = externalOpener ?? DefaultExternalOpener,
             (anchor, resolvedText) =>
             {
                 WorkspaceGroupViewModel group = ActiveGroup;
@@ -1271,11 +1271,32 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         TasksReview.DiskWriteLanded = (path, newContentHash) =>
         {
             ReconcileTabsAfterDirectTaskWrite(path, newContentHash);
-            Panels.NoteSaved(path);
+            NotePersisted(path);
         };
         // Round 15: a repair landing inside a review load worker
         // refreshes the note panel too — both surfaces converge.
-        TasksReview.RepairLanded = path => Panels.NoteSaved(path);
+        TasksReview.RepairLanded = path => NotePersisted(path);
+        // W4-5: the citations suite. Citations is note-scoped (fed by
+        // SyncPanels); Bibliography is vault-scoped and loads lazily
+        // on rail reveal. Both must exist before Restore/SyncPanels so
+        // the first note selection can publish into them.
+        Citations = new Panels.CitationsPanelViewModel(
+            session, announce, synchronousForTests: !startInteractionBackgroundWork);
+        Bibliography = new Panels.BibliographyViewModel(
+            session, synchronousForTests: !startInteractionBackgroundWork);
+        // Both leaves read through the session's bibliography sources,
+        // so neither may query before seeding SETTLES — and the
+        // bibliography also branches on how it settled.
+        // BOTH leaves branch on the outcome, not just wait for it: a
+        // failed seed must stop either of them presenting core's
+        // surviving previous-session data as authoritative.
+        Citations.AttachSeed(_bibliographySeed);
+        Bibliography.AttachSeed(_bibliographySeed);
+        // Seed the vault's bibliography ONCE per open, BEFORE the first
+        // note selection can start a citation render. Silent on both
+        // success and failure — the leaf's notice region is the
+        // surface (W4-5 contract 5).
+        SeedBibliographySources(synchronousForTests: !startInteractionBackgroundWork);
         (_root, _activeGroup) = Restore(_persistence.Load());
         SyncPanels();
 
@@ -1359,6 +1380,12 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
 
     public Panels.TasksReviewViewModel TasksReview { get; }
 
+    /// <summary>W4-5: the note-scoped citations leaf.</summary>
+    public Panels.CitationsPanelViewModel Citations { get; }
+
+    /// <summary>W4-5: the vault-scoped bibliography leaf.</summary>
+    public Panels.BibliographyViewModel Bibliography { get; }
+
     /// <summary>Re-derive the panels' active note from the workspace —
     /// called from every activation funnel (tab activation, pane focus,
     /// workspace mutations). Same-path calls are no-ops in the panels
@@ -1367,6 +1394,10 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     {
         Panels.NoteChanged(
             ActiveGroup.ActiveTab is { IsMarkdown: true } tab ? tab.Path : null);
+        // W4-5: the citations leaf follows the same active-note funnel;
+        // same-path calls are no-ops, so over-calling is refetch-free.
+        Citations.NoteChanged(
+            ActiveGroup.ActiveTab is { IsMarkdown: true } citedTab ? citedTab.Path : null);
         // W4-4: the properties header attaches at activation, in the
         // Reading posture — background work in the app, inline in
         // tests (the flag decides the VM's mode at first creation,
@@ -1413,6 +1444,12 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 if (string.Equals(value.Id, "tasksReview", StringComparison.Ordinal))
                 {
                     TasksReview.EnsureLoaded();
+                }
+                // W4-5: same idempotent-reveal posture — revealing the
+                // bibliography must never re-query the whole vault.
+                if (string.Equals(value.Id, "bibliography", StringComparison.Ordinal))
+                {
+                    Bibliography.EnsureLoaded();
                 }
                 Persist();
             }
@@ -1634,6 +1671,23 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         _bulkRenameSheet?.Shutdown();
         _bulkRenameSheet = null;
         _addPropertySheet = null;
+        // W4-5: the citation workers hold the shared session too —
+        // shut them down before it dies, and drop the sheets so a
+        // late publish cannot touch a dying UI.
+        _filesCiting?.Shutdown();
+        _filesCiting = null;
+        _citationDetails = null;
+        _citationSummary = null;
+        Citations.Shutdown();
+        Bibliography.Shutdown();
+        // Settle the seed AFTER marking both leaves shut down. A body
+        // parked on the gate would otherwise wait for a seed that is
+        // never coming; releasing it here lets it wake, observe
+        // IsShutDown, and return without publishing. Cancelled is a
+        // STATUS, not a cancelled Task — a cancelled Task would throw
+        // into the scheduler's catch, be swallowed, and run the body
+        // anyway.
+        _bibliographySeed.Cancel();
         // Panels first: their workers hold the shared session, which
         // the vault lifecycle disposes right after this workspace —
         // invalidate every in-flight load before that happens.
@@ -1655,7 +1709,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             _announce(new A11yEvent.NoteSaved(System.IO.Path.GetFileName(tab.Path)));
             // Headings move under edits — the outline leaf re-reads
             // after a save (link rows deliberately do not; mac parity).
-            Panels.NoteSaved(tab.Path);
+            NotePersisted(tab.Path);
             // W4-4: frontmatter can be hand-edited in the whole-file
             // buffer on Windows — the header re-derives from the
             // just-saved bytes so its rows and CAS tokens are never
@@ -1795,7 +1849,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                     }
                     if (repaired)
                     {
-                        Panels.NoteSaved(path);
+                        NotePersisted(path);
                         TasksReview.NoteRefreshed(path);
                     }
                 }
@@ -1829,7 +1883,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             // NoteRefreshed can't fire from a disposed tab, and
             // same-path tabs that lost their mirror source (or raced
             // open) re-baseline honesty here.
-            Panels.NoteSaved(path);
+            NotePersisted(path);
             TasksReview.NoteRefreshed(path);
             ReconcileTabsAfterDirectTaskWrite(path, report.NewContentHash);
         };
@@ -2037,7 +2091,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         // save command's own funnel covers ordinary saves).
         if (syncEvent is null && !source.IsDirty)
         {
-            Panels.NoteSaved(source.Path);
+            NotePersisted(source.Path);
             TasksReview.NoteRefreshed(source.Path);
         }
     }

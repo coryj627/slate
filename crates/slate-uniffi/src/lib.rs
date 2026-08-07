@@ -5898,6 +5898,22 @@ impl From<Author> for core::Author {
     }
 }
 
+/// A bibliography entry as the HOSTS see it.
+///
+/// Deliberately NOT a mirror of `core::BibEntry`: it omits
+/// `raw_csl_json`, the serialised CSL-JSON blob core keeps so
+/// `render_citation` can hand a complete item to the CSL engine.
+/// Rendering happens entirely inside core, so no host has ever read
+/// that field — verified across both apps, where the only mention was
+/// one Swift test fixture and two comments saying not to parse it.
+///
+/// It is not free to carry. `get_bibliography_entries` returns EVERY
+/// entry, the Windows leaf retains the whole set to run its host-side
+/// search predicate (W4-5 D-4), and core's own guidance is "&lt;10k
+/// entries typically" — so the blob was tens of MB of string decoding
+/// and retention per vault open, entirely for a field nothing could
+/// use. The §W-A parity artifacts already excluded it (W4-5 D-10), so
+/// no golden moves.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct BibEntry {
     pub key: String,
@@ -5910,7 +5926,6 @@ pub struct BibEntry {
     pub url: Option<String>,
     pub publisher: Option<String>,
     pub abstract_text: Option<String>,
-    pub raw_csl_json: String,
 }
 
 impl From<core::BibEntry> for BibEntry {
@@ -5926,7 +5941,6 @@ impl From<core::BibEntry> for BibEntry {
             url: e.url,
             publisher: e.publisher,
             abstract_text: e.abstract_text,
-            raw_csl_json: e.raw_csl_json,
         }
     }
 }
@@ -5944,7 +5958,15 @@ impl From<BibEntry> for core::BibEntry {
             url: e.url,
             publisher: e.publisher,
             abstract_text: e.abstract_text,
-            raw_csl_json: e.raw_csl_json,
+            // EMPTY, and that is correct rather than lossy. This
+            // direction exists only for `reading_inline_segments_source`,
+            // where a host hands back citations core ALREADY rendered so
+            // their runs can be segmented. Nothing on that path consults
+            // the CSL blob — rendering is `render.rs`, which reads it
+            // from core's own BibIndex, never from a host-supplied entry
+            // — and a host could not supply it in any case, because it
+            // no longer crosses the boundary.
+            raw_csl_json: String::new(),
         }
     }
 }

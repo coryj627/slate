@@ -47,6 +47,10 @@
         <KeyBinding Key="OemPlus" Modifiers="Control+Alt" Command="{Binding Workspace.GrowPaneCommand}" />
         <KeyBinding Key="OemMinus" Modifiers="Control+Alt" Command="{Binding Workspace.ShrinkPaneCommand}" />
         <KeyBinding Key="I" Modifiers="Control+Alt" Command="{Binding Workspace.ToggleRightPaneCommand}" />
+        <!-- W4-5 (#737). Ctrl+J is enabled only while a citation is
+             expanded, mirroring mac. -->
+        <KeyBinding Key="J" Modifiers="Control" Command="{Binding Workspace.JumpToBibliographyCommand}" />
+        <KeyBinding Key="J" Modifiers="Control+Shift" Command="{Binding Workspace.OpenCitationSummaryCommand}" />
         <KeyBinding Key="Escape" Command="{Binding Workspace.ActiveGroup.ActiveTab.EditorInteractions.ClosePopoverCommand}" />
     </Window.InputBindings>
 
@@ -131,6 +135,25 @@
                           AutomationProperties.AutomationId="BulkRenamePropertiesMenuItem"
                           InputGestureText="Ctrl+Shift+R"
                           Command="{Binding Workspace.OpenBulkRenameSheetCommand}" />
+                <!-- W4-5 (#737). Both citation commands were bound only
+                     in Window.InputBindings, so they had no menu home,
+                     no InputGestureText and therefore no UIA
+                     AcceleratorKey — a user who did not already know
+                     the chord could not reach either one. Reload is
+                     menu-only: it is the recovery path after fixing a
+                     bad bibliography path, and it has no mac chord. -->
+                <MenuItem Header="Citation S_ummary"
+                          AutomationProperties.AutomationId="CitationSummaryMenuItem"
+                          InputGestureText="Ctrl+Shift+J"
+                          Command="{Binding Workspace.OpenCitationSummaryCommand}" />
+                <MenuItem Header="_Jump to Bibliography"
+                          AutomationProperties.AutomationId="JumpToBibliographyMenuItem"
+                          InputGestureText="Ctrl+J"
+                          Command="{Binding Workspace.JumpToBibliographyCommand}" />
+                <MenuItem Header="Reloa_d Bibliography"
+                          AutomationProperties.AutomationId="ReloadBibliographyMenuItem"
+                          AutomationProperties.HelpText="Re-read the vault's bibliography sources after fixing them."
+                          Command="{Binding Workspace.ReloadBibliographyCommand}" />
                 <Separator />
                 <MenuItem Header="Check _Spelling While Typing"
                           AutomationProperties.AutomationId="EditorToggleSpellCheckMenuItem"
@@ -1070,10 +1093,242 @@
                                     </ListBox.ItemTemplate>
                                 </ListBox>
                             </DockPanel>
+                            <!-- ==========================================
+                                 W4-5 (#737): the citations leaf. Row text
+                                 is the core artifact verbatim (contract
+                                 1) and an unresolved row is a real state,
+                                 not an error (contract 7). Activation
+                                 opens the details overlay, which is an
+                                 in-window sheet rather than an anchored
+                                 popover (D-1).
+                                 ========================================== -->
+                            <DockPanel Grid.Column="0" Margin="12">
+                                <DockPanel.Style>
+                                    <Style TargetType="DockPanel">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding ActiveLeaf.Id}" Value="citations">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </DockPanel.Style>
+                                <TextBlock DockPanel.Dock="Top"
+                                           Style="{StaticResource PanelHeading}"
+                                           Text="{x:Static panels:CitationPhrase.CitationsHeading}" />
+                                <TextBlock DockPanel.Dock="Top"
+                                           Style="{StaticResource PanelEmptyMessage}"
+                                           Text="{Binding Citations.NoFileText}"
+                                           Visibility="{Binding Citations.ShowNoFileState, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                                <TextBlock DockPanel.Dock="Top"
+                                           Style="{StaticResource PanelEmptyMessage}"
+                                           Text="{Binding Citations.LoadingVisibleText}"
+                                           Visibility="{Binding Citations.IsLoading, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                                <TextBlock DockPanel.Dock="Top"
+                                           Style="{StaticResource PanelEmptyMessage}"
+                                           Text="{Binding Citations.EmptyText}"
+                                           Visibility="{Binding Citations.ShowEmptyState, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                                <!-- Load notices are surfaced verbatim and
+                                     never swallowed (contract 5). -->
+                                <TextBlock DockPanel.Dock="Top"
+                                           Style="{StaticResource PanelEmptyMessage}"
+                                           Text="{Binding Citations.ErrorSpoken}"
+                                           TextWrapping="Wrap"
+                                           Visibility="{Binding Citations.ErrorSpoken, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}"
+                                           Focusable="True"
+                                           AutomationProperties.AutomationId="PanelCitationsError" />
+                                <ListBox x:Name="PanelCitationsList"
+                                         Style="{StaticResource PanelListBox}"
+                                         ItemsSource="{Binding Citations.Rows}"
+                                         SelectionChanged="PanelCitations_SelectionChanged"
+                                         MouseDoubleClick="PanelCitations_MouseDoubleClick"
+                                         PreviewKeyDown="PanelCitations_PreviewKeyDown"
+                                         AutomationProperties.AutomationId="PanelCitationsList"
+                                         AutomationProperties.Name="{x:Static panels:CitationPhrase.CitationsHeading}">
+                                    <ListBox.ItemContainerStyle>
+                                        <Style TargetType="ListBoxItem">
+                                            <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
+                                            <Setter Property="AutomationProperties.HelpText" Value="{Binding AutomationHelpText}" />
+                                        </Style>
+                                    </ListBox.ItemContainerStyle>
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Margin="0,2">
+                                                <local:AutomationPresentationTextBlock x:Name="CitationBadge"
+                                                                                       Text="{Binding UnresolvedBadge}"
+                                                                                       FontSize="11"
+                                                                                       Foreground="{DynamicResource Slate.WarningBrush}" />
+                                                <local:AutomationPresentationTextBlock Text="{Binding DisplayText}"
+                                                                                       TextWrapping="Wrap" />
+                                            </StackPanel>
+                                            <DataTemplate.Triggers>
+                                                <DataTrigger Binding="{Binding IsUnresolved}" Value="False">
+                                                    <Setter TargetName="CitationBadge" Property="Visibility" Value="Collapsed" />
+                                                </DataTrigger>
+                                            </DataTemplate.Triggers>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </DockPanel>
+                            <!-- ==========================================
+                                 W4-5 (#737): the bibliography leaf. BOTH
+                                 segments ride AccessibleDataGrid (contract
+                                 8) — including unresolved, which mac
+                                 renders as a grouped list (D-6). The grids
+                                 are bound in code-behind, as the
+                                 bulk-rename preview is; export is null on
+                                 both (D-7 / G29).
+                                 ========================================== -->
+                            <DockPanel Grid.Column="0" Margin="12">
+                                <DockPanel.Style>
+                                    <Style TargetType="DockPanel">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding ActiveLeaf.Id}" Value="bibliography">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </DockPanel.Style>
+                                <TextBlock DockPanel.Dock="Top"
+                                           Style="{StaticResource PanelHeading}"
+                                           Text="{x:Static panels:CitationPhrase.BibliographyHeading}" />
+                                <!-- The group name lives on a
+                                     landmark border, not on the
+                                     StackPanel: a Panel gets no
+                                     automation peer, so the name was
+                                     dropped and the two radio buttons
+                                     were announced with nothing tying
+                                     them to the bibliography. -->
+                                <local:AutomationLandmarkBorder DockPanel.Dock="Top"
+                                        BorderThickness="0"
+                                        Margin="0,0,0,6"
+                                        AutomationProperties.AutomationId="BibliographySegmentGroup"
+                                        AutomationProperties.Name="{x:Static panels:CitationPhrase.BibliographySegmentName}">
+                                <StackPanel Orientation="Horizontal">
+                                    <RadioButton x:Name="BibliographyEntriesSegment"
+                                                 GroupName="BibliographySegment"
+                                                 Margin="0,0,12,0"
+                                                 Content="{x:Static panels:CitationPhrase.SegmentEntries}"
+                                                 IsChecked="{Binding Bibliography.ShowEntries, Mode=OneWay}"
+                                                 Checked="BibliographyEntriesSegment_Checked"
+                                                 AutomationProperties.AutomationId="BibliographySegmentEntries" />
+                                    <RadioButton x:Name="BibliographyUnresolvedSegment"
+                                                 GroupName="BibliographySegment"
+                                                 Content="{x:Static panels:CitationPhrase.SegmentUnresolved}"
+                                                 IsChecked="{Binding Bibliography.ShowUnresolved, Mode=OneWay}"
+                                                 Checked="BibliographyUnresolvedSegment_Checked"
+                                                 AutomationProperties.AutomationId="BibliographySegmentUnresolved" />
+                                </StackPanel>
+                                </local:AutomationLandmarkBorder>
+                                <TextBox x:Name="BibliographySearchBox"
+                                         DockPanel.Dock="Top"
+                                         Margin="0,0,0,6"
+                                         Text="{Binding Bibliography.SearchText, UpdateSourceTrigger=PropertyChanged}"
+                                         Visibility="{Binding Bibliography.ShowEntries, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                         AutomationProperties.AutomationId="BibliographySearch"
+                                         AutomationProperties.Name="{x:Static panels:CitationPhrase.BibliographySearchName}"
+                                         AutomationProperties.HelpText="{x:Static panels:CitationPhrase.BibliographySearchHelp}" />
+                                <!-- Every line below is SEGMENT-SCOPED in
+                                     the view model; binding the raw
+                                     loading/empty flags let each one
+                                     render over the other segment's
+                                     grid. -->
+                                <TextBlock DockPanel.Dock="Top"
+                                           Style="{StaticResource PanelEmptyMessage}"
+                                           Text="{x:Static panels:CitationPhrase.BibliographyLoading}"
+                                           Visibility="{Binding Bibliography.ShowEntriesLoading, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                                <TextBlock DockPanel.Dock="Top"
+                                           Style="{StaticResource PanelEmptyMessage}"
+                                           Text="{x:Static panels:CitationPhrase.UnresolvedLoading}"
+                                           Visibility="{Binding Bibliography.ShowUnresolvedLoading, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                                <!-- The read-failure surface. Without
+                                     these two the grid simply summarised
+                                     "0 entries" and the reason was never
+                                     spoken at all (contract 5). -->
+                                <TextBlock DockPanel.Dock="Top"
+                                           Style="{StaticResource PanelEmptyMessage}"
+                                           Text="{Binding Bibliography.EntriesErrorSpoken}"
+                                           TextWrapping="Wrap"
+                                           Visibility="{Binding Bibliography.ShowEntriesError, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                           Focusable="True"
+                                           AutomationProperties.AutomationId="BibliographyEntriesError" />
+                                <TextBlock DockPanel.Dock="Top"
+                                           Style="{StaticResource PanelEmptyMessage}"
+                                           Text="{Binding Bibliography.UnresolvedErrorSpoken}"
+                                           TextWrapping="Wrap"
+                                           Visibility="{Binding Bibliography.ShowUnresolvedError, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                           Focusable="True"
+                                           AutomationProperties.AutomationId="BibliographyUnresolvedError" />
+                                <TextBlock DockPanel.Dock="Top"
+                                           Style="{StaticResource PanelEmptyMessage}"
+                                           Text="{x:Static panels:CitationPhrase.BibliographyNoSources}"
+                                           TextWrapping="Wrap"
+                                           Visibility="{Binding Bibliography.ShowNoSourcesState, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                           AutomationProperties.AutomationId="BibliographyNoSources" />
+                                <TextBlock DockPanel.Dock="Top"
+                                           Style="{StaticResource PanelEmptyMessage}"
+                                           Text="{Binding Bibliography.NoFilterHitsText}"
+                                           TextWrapping="Wrap"
+                                           Visibility="{Binding Bibliography.ShowNoFilterHitsState, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                                <TextBlock DockPanel.Dock="Top"
+                                           Style="{StaticResource PanelEmptyMessage}"
+                                           Text="{x:Static panels:CitationPhrase.UnresolvedEmpty}"
+                                           TextWrapping="Wrap"
+                                           Visibility="{Binding Bibliography.ShowUnresolvedEmptyState, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                                <!-- Notices verbatim, per segment (contract 5). -->
+                                <ItemsControl DockPanel.Dock="Bottom"
+                                              Focusable="False"
+                                              ItemsSource="{Binding Bibliography.LoadNotices}"
+                                              AutomationProperties.AutomationId="BibliographyNotices">
+                                    <!-- With no notices this renders at
+                                         zero size but stays on-screen in
+                                         the UIA tree, which axe flags as
+                                         a null bounding rectangle. An
+                                         empty notice region should leave
+                                         the tree, as the inactive leaf
+                                         bodies above do. -->
+                                    <ItemsControl.Style>
+                                        <Style TargetType="ItemsControl">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Bibliography.LoadNotices.Count}" Value="0">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </ItemsControl.Style>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Style="{StaticResource PanelEmptyMessage}"
+                                                       Focusable="True"
+                                                       Text="{Binding}"
+                                                       TextWrapping="Wrap" />
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <!-- Both grids share the fill cell; exactly
+                                     one is visible, so the other leaves the
+                                     UIA tree entirely rather than sitting
+                                     behind it. -->
+                                <Grid>
+                                    <grids:AccessibleDataGrid x:Name="BibliographyEntriesGrid"
+                                                              GridAutomationId="BibliographyEntries"
+                                                              Visibility="{Binding Bibliography.ShowEntries, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                                    <grids:AccessibleDataGrid x:Name="BibliographyUnresolvedGrid"
+                                                              GridAutomationId="BibliographyUnresolved"
+                                                              Visibility="{Binding Bibliography.ShowUnresolved, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                                </Grid>
+                            </DockPanel>
                             <StackPanel Grid.Column="0" Margin="12">
                                 <StackPanel.Style>
                                     <Style TargetType="StackPanel">
                                         <Style.Triggers>
+                                            <DataTrigger Binding="{Binding ActiveLeaf.Id}" Value="citations">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding ActiveLeaf.Id}" Value="bibliography">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                            </DataTrigger>
                                             <DataTrigger Binding="{Binding ActiveLeaf.Id}" Value="backlinks">
                                                 <Setter Property="Visibility" Value="Collapsed" />
                                             </DataTrigger>
@@ -1411,6 +1666,259 @@
                                 AutomationProperties.AutomationId="BulkRenameClose" />
                     </StackPanel>
                 </Grid>
+            </local:AutomationLandmarkBorder>
+
+            <!-- ==========================================================
+                 W4-5 (#737): the citation details overlay. D-1 — mac
+                 anchors a popover to the row; a WPF Popup lives in a
+                 separate HWND whose UIA subtree is a sibling window, so
+                 this is the in-window sheet instead. The focus-return
+                 contract (WCAG 2.4.3 / 2.1.2) is preserved verbatim:
+                 Escape returns focus to the row that opened it
+                 (contract 11).
+                 ========================================================== -->
+            <Border Background="Transparent"
+                    Visibility="{Binding Workspace.CitationDetails, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
+            <local:AutomationLandmarkBorder x:Name="CitationDetailsOverlay"
+                    Width="460"
+                    Padding="16"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Background="{DynamicResource Slate.SurfaceBrush}"
+                    BorderBrush="{DynamicResource Slate.BorderBrush}"
+                    BorderThickness="1"
+                    Visibility="{Binding DataContext.Workspace.CitationDetails, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}"
+                    DataContext="{Binding Workspace.CitationDetails}"
+                    FocusManager.IsFocusScope="True"
+                    KeyboardNavigation.TabNavigation="Cycle"
+                    KeyboardNavigation.ControlTabNavigation="Cycle"
+                    PreviewKeyDown="CitationDetailsOverlay_PreviewKeyDown"
+                    AutomationProperties.AutomationId="CitationDetailsSheet"
+                    AutomationProperties.Name="{Binding AutomationName}"
+                    AutomationProperties.IsDialog="True">
+                <local:AutomationLandmarkBorder.Effect>
+                    <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
+                </local:AutomationLandmarkBorder.Effect>
+                <StackPanel>
+                    <!-- An unresolved key is a real state, not an error
+                         (contract 7): the sheet says so plainly rather
+                         than showing empty fields. -->
+                    <StackPanel Visibility="{Binding IsUnresolved, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <TextBlock Text="{Binding UnresolvedHeading}"
+                                   FontWeight="SemiBold"
+                                   AutomationProperties.HeadingLevel="Level2" />
+                        <TextBlock Margin="0,6,0,0"
+                                   Text="{Binding UnresolvedBody}"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+                    <!-- Absent values never produce a row (contract 10):
+                         Fields carries only what is present. -->
+                    <!-- A ListBox, not an ItemsControl.
+                         An ItemsControl's items were bare StackPanels,
+                         and WPF creates NO automation peer for a Panel,
+                         so AutomationProperties.Name on it was dropped
+                         outright; both children are
+                         AutomationPresentationTextBlock, whose peer
+                         returns false from IsControlElement AND
+                         IsContentElement. The net effect was that every
+                         citation field — Title, Authors, Year, Journal,
+                         Publisher, DOI, URL — was absent from the UIA
+                         tree, in the one surface whose entire job is
+                         speaking them. ListBoxItem DOES have a peer, so
+                         each field becomes its own navigable AT element,
+                         which is what mac's per-field rendering means
+                         (CitationPopover.swift:5-10). -->
+                    <ListBox ItemsSource="{Binding Fields}"
+                             BorderThickness="0"
+                             Background="Transparent"
+                             MaxHeight="220"
+                             Visibility="{Binding IsUnresolved, Converter={StaticResource InverseBooleanToVisibilityConverter}}"
+                             AutomationProperties.AutomationId="CitationDetailsFields"
+                             AutomationProperties.Name="{x:Static panels:CitationPhrase.DetailsFieldsLabel}">
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Margin="0,0,0,6">
+                                    <local:AutomationPresentationTextBlock Text="{Binding Label}"
+                                                                           FontSize="11"
+                                                                           Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
+                                    <local:AutomationPresentationTextBlock x:Name="FieldValueText"
+                                                                           Text="{Binding Value}"
+                                                                           TextWrapping="Wrap" />
+                                    <!-- DOI and URL carry a LinkTarget
+                                         and are actually followable;
+                                         every other field is plain
+                                         text. Rendering all of them
+                                         identically left the DOI
+                                         readable but unreachable. -->
+                                    <TextBlock x:Name="FieldValueLink" Visibility="Collapsed">
+                                        <Hyperlink Command="{Binding DataContext.Workspace.OpenCitationLinkCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                   CommandParameter="{Binding LinkTarget}">
+                                            <Run Text="{Binding Value, Mode=OneWay}" />
+                                        </Hyperlink>
+                                    </TextBlock>
+                                </StackPanel>
+                                <DataTemplate.Triggers>
+                                    <DataTrigger Binding="{Binding IsLink}" Value="True">
+                                        <Setter TargetName="FieldValueText" Property="Visibility" Value="Collapsed" />
+                                        <Setter TargetName="FieldValueLink" Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </DataTemplate.Triggers>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                    <!-- A real disclosure, matching mac's
+                         DisclosureGroup. The abstract used to render
+                         unconditionally while its accessible name said
+                         "Abstract, collapsed." forever: AbstractExpanded
+                         had no writer anywhere in production, so a
+                         sighted user read the text and a screen-reader
+                         user heard only that it was collapsed, with no
+                         control to open it. The body also scrolls now —
+                         a long abstract was clipped at MaxHeight with no
+                         keyboard route to the rest. -->
+                    <Expander Margin="0,6,0,0"
+                              IsExpanded="{Binding AbstractExpanded, Mode=TwoWay}"
+                              Visibility="{Binding HasAbstract, Converter={StaticResource BooleanToVisibilityConverter}}"
+                              AutomationProperties.AutomationId="CitationDetailsAbstract"
+                              AutomationProperties.Name="{Binding AbstractAutomationName}">
+                        <Expander.Header>
+                            <TextBlock Text="{x:Static panels:CitationPhrase.FieldAbstract}" />
+                        </Expander.Header>
+                        <ScrollViewer MaxHeight="160" VerticalScrollBarVisibility="Auto">
+                            <local:AutomationPresentationTextBlock Text="{Binding AbstractText}"
+                                                                   TextWrapping="Wrap" />
+                        </ScrollViewer>
+                    </Expander>
+                    <StackPanel Margin="0,12,0,0"
+                                HorizontalAlignment="Right"
+                                Orientation="Horizontal">
+                        <Button x:Name="CitationDetailsCloseButton"
+                                Padding="10,4"
+                                Content="{Binding CloseText}"
+                                Command="{Binding DataContext.Workspace.CloseCitationDetailsCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                AutomationProperties.AutomationId="CitationDetailsClose"
+                                AutomationProperties.HelpText="{Binding CloseHelp}" />
+                    </StackPanel>
+                </StackPanel>
+            </local:AutomationLandmarkBorder>
+
+            <!-- ==========================================================
+                 W4-5 (#737): the citation summary sheet (Ctrl+Shift+J).
+                 Counts come from the leaf's already-published rows, so
+                 the sheet can never disagree with the panel behind it
+                 (contract 12).
+                 ========================================================== -->
+            <Border Background="Transparent"
+                    Visibility="{Binding Workspace.CitationSummary, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
+            <local:AutomationLandmarkBorder x:Name="CitationSummaryOverlay"
+                    Width="420"
+                    Padding="16"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Background="{DynamicResource Slate.SurfaceBrush}"
+                    BorderBrush="{DynamicResource Slate.BorderBrush}"
+                    BorderThickness="1"
+                    Visibility="{Binding DataContext.Workspace.CitationSummary, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}"
+                    DataContext="{Binding Workspace.CitationSummary}"
+                    FocusManager.IsFocusScope="True"
+                    KeyboardNavigation.TabNavigation="Cycle"
+                    KeyboardNavigation.ControlTabNavigation="Cycle"
+                    PreviewKeyDown="CitationSummaryOverlay_PreviewKeyDown"
+                    AutomationProperties.AutomationId="CitationSummarySheet"
+                    AutomationProperties.Name="{Binding AutomationName}"
+                    AutomationProperties.IsDialog="True">
+                <local:AutomationLandmarkBorder.Effect>
+                    <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
+                </local:AutomationLandmarkBorder.Effect>
+                <StackPanel>
+                    <TextBlock Text="{Binding Heading}"
+                               FontWeight="SemiBold"
+                               AutomationProperties.HeadingLevel="Level2" />
+                    <TextBlock Margin="0,6,0,0"
+                               Text="{Binding Body}"
+                               TextWrapping="Wrap" />
+                    <StackPanel Margin="0,12,0,0"
+                                HorizontalAlignment="Right"
+                                Orientation="Horizontal">
+                        <Button x:Name="CitationSummaryWalkButton"
+                                Padding="10,4"
+                                Content="{Binding WalkActionText}"
+                                IsEnabled="{Binding CanWalkThrough}"
+                                Click="CitationSummaryWalk_Click"
+                                AutomationProperties.AutomationId="CitationSummaryWalk"
+                                AutomationProperties.HelpText="{Binding WalkActionHelp}" />
+                        <Button x:Name="CitationSummaryDismissButton"
+                                Margin="8,0,0,0"
+                                Padding="10,4"
+                                Content="{Binding DismissText}"
+                                Command="{Binding DataContext.Workspace.CloseCitationSummaryCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                AutomationProperties.AutomationId="CitationSummaryDismiss"
+                                AutomationProperties.HelpText="{Binding DismissHelp}" />
+                    </StackPanel>
+                </StackPanel>
+            </local:AutomationLandmarkBorder>
+
+            <!-- ==========================================================
+                 W4-5 (#737): files citing this entry, opened from a
+                 bibliography row action.
+                 ========================================================== -->
+            <Border Background="Transparent"
+                    Visibility="{Binding Workspace.FilesCiting, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
+            <local:AutomationLandmarkBorder x:Name="FilesCitingOverlay"
+                    Width="460"
+                    Padding="16"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Background="{DynamicResource Slate.SurfaceBrush}"
+                    BorderBrush="{DynamicResource Slate.BorderBrush}"
+                    BorderThickness="1"
+                    Visibility="{Binding DataContext.Workspace.FilesCiting, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}"
+                    DataContext="{Binding Workspace.FilesCiting}"
+                    FocusManager.IsFocusScope="True"
+                    KeyboardNavigation.TabNavigation="Cycle"
+                    KeyboardNavigation.ControlTabNavigation="Cycle"
+                    PreviewKeyDown="FilesCitingOverlay_PreviewKeyDown"
+                    AutomationProperties.AutomationId="FilesCitingSheet"
+                    AutomationProperties.Name="{Binding AutomationName}"
+                    AutomationProperties.IsDialog="True">
+                <local:AutomationLandmarkBorder.Effect>
+                    <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
+                </local:AutomationLandmarkBorder.Effect>
+                <StackPanel>
+                    <TextBlock Text="{Binding Heading}"
+                               FontWeight="SemiBold"
+                               AutomationProperties.HeadingLevel="Level2" />
+                    <TextBlock Margin="0,6,0,0"
+                               Text="{Binding EmptyText}"
+                               TextWrapping="Wrap"
+                               Visibility="{Binding ShowEmptyState, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                    <ListBox x:Name="FilesCitingList"
+                             Margin="0,6,0,0"
+                             MaxHeight="260"
+                             ItemsSource="{Binding Paths}"
+                             AutomationProperties.AutomationId="FilesCitingList"
+                             AutomationProperties.Name="{Binding Heading}">
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="AutomationProperties.Name" Value="{Binding}" />
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                    </ListBox>
+                    <StackPanel Margin="0,12,0,0"
+                                HorizontalAlignment="Right"
+                                Orientation="Horizontal">
+                        <Button x:Name="FilesCitingCloseButton"
+                                Padding="10,4"
+                                Content="{x:Static panels:CitationPhrase.DetailsClose}"
+                                Command="{Binding DataContext.Workspace.CloseFilesCitingCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                AutomationProperties.AutomationId="FilesCitingClose" />
+                    </StackPanel>
+                </StackPanel>
             </local:AutomationLandmarkBorder>
         </Grid>
     </DockPanel>

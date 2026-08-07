@@ -18,6 +18,7 @@ internal abstract class PanelWorkScheduler : BindableBase
     private readonly SynchronizationContext? _uiContext;
     private readonly bool _synchronous;
     private volatile bool _isShutDown;
+    private Task? _prerequisite;
 
     protected PanelWorkScheduler(bool synchronousForTests)
     {
@@ -30,6 +31,16 @@ internal abstract class PanelWorkScheduler : BindableBase
     /// <summary>Workspace teardown: refuse new work. Subclasses
     /// override to also invalidate their in-flight publishes.</summary>
     internal virtual void Shutdown() => _isShutDown = true;
+
+    /// <summary>Hold every background body until a workspace-level
+    /// prerequisite has landed. W4-5: a citation render issued before
+    /// SetBibliographySources completes sees no sources and publishes
+    /// every key as unresolved, and nothing re-queries afterwards — so
+    /// the ordering has to be a real dependency, not a hope about which
+    /// Task.Run wins. Synchronous mode needs no gate: the workspace
+    /// completes the prerequisite inline before it starts any load.
+    /// </summary>
+    internal void GateWorkOn(Task prerequisite) => _prerequisite = prerequisite;
 
     /// <summary>All load work funnels through here. Synchronous mode
     /// (the ReadingContentViewModel test pattern) runs the body
@@ -47,7 +58,74 @@ internal abstract class PanelWorkScheduler : BindableBase
             body();
             return;
         }
-        TrackWork(Task.Run(body));
+        Task? gate = _prerequisite;
+        if (gate is null)
+        {
+            TrackWork(Task.Run(() => RunIfLive(body)));
+            return;
+        }
+        TrackWork(RunGatedAsync(gate, body));
+    }
+
+    /// <summary>
+    /// The last gate before touching the session. Teardown can land
+    /// between queueing a body and the pool picking it up, and the
+    /// check in <see cref="StartWork"/> cannot see that — without this
+    /// an ungated body (FilesCiting, which has no prerequisite) calls
+    /// into a session the vault lifecycle has already disposed.
+    /// </summary>
+    private void RunIfLive(Action body)
+    {
+        if (_isShutDown)
+        {
+            return;
+        }
+        body();
+    }
+
+    /// <summary>
+    /// Wait for the prerequisite WITHOUT occupying a pool thread.
+    ///
+    /// The first version called <c>gate.Wait()</c> inside a
+    /// <c>Task.Run</c>, so every gated request parked a pool thread
+    /// while the seed it was waiting for was itself queued on that same
+    /// pool — opening several tabs during initialization could starve
+    /// the work that would release them.
+    /// </summary>
+    private async Task RunGatedAsync(Task gate, Action body)
+    {
+        try
+        {
+            await gate.ConfigureAwait(false);
+        }
+        catch (Exception exception) when (
+            exception is not OutOfMemoryException
+                and not StackOverflowException
+                and not AccessViolationException)
+        {
+            // A faulted prerequisite is NOT this body's failure to
+            // report — the seeding path owns that notice. Swallow it so
+            // tracked tasks stay non-faulting, then load anyway.
+        }
+        // Re-checked AFTER the wait. Teardown routinely lands while
+        // bodies are parked here, and the check before the wait cannot
+        // see it — without this, shutdown publishes into a dying UI.
+        if (_isShutDown)
+        {
+            return;
+        }
+        // ALWAYS hand the body to the pool, never run it inline.
+        //
+        // Awaiting an ALREADY-COMPLETED task does not yield: the state
+        // machine runs straight through on the caller's thread. The
+        // seed settles seconds after vault open and stays settled, so
+        // from that moment every gated body would execute on whichever
+        // thread called StartWork — and every caller is the UI thread
+        // (SyncPanels, the ActiveLeaf reveal). That silently put every
+        // citation FFI call, including the whole-vault unresolved
+        // query, on the dispatcher. `ConfigureAwait(false)` does not
+        // help; it only governs where a SUSPENDED continuation resumes.
+        await Task.Run(() => RunIfLive(body)).ConfigureAwait(false);
     }
 
     private void TrackWork(Task work)
