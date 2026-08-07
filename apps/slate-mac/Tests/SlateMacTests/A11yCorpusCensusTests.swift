@@ -198,6 +198,13 @@ final class A11yCorpusCensusTests: XCTestCase {
             .basesViewSelected(name: "Cards"),
             .basesSortSaveFailed(detail: "io error"),
             .baseRefreshed,
+            .baseWhereAmI(base: "Reading", view: nil, quickFilter: nil),
+            .baseWhereAmI(base: "Reading", view: "Table", quickFilter: nil),
+            .baseWhereAmI(base: "Reading", view: "Table", quickFilter: "CAFE"),
+            .baseResultsPopover(audioSummary: "12 results.", whereAmI: nil),
+            .baseResultsPopover(
+                audioSummary: "12 results.",
+                whereAmI: "Base: Reading, quick filter: CAFE"),
             .dataviewConversionFailed(detail: "unsupported query"),
             .citationInsertUnavailable,
             .citationWalkThrough,

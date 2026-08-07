@@ -476,6 +476,22 @@ pub enum A11yEvent {
         detail: String,
     },
     BaseRefreshed,
+    /// The Bases "where am I" readback, composed from PARTS so the
+    /// joining and the optional clauses live here rather than in the
+    /// host: "Base: X", plus ", view: Y" and ", quick filter: Z" when
+    /// those are present.
+    BaseWhereAmI {
+        base: String,
+        view: Option<String>,
+        quick_filter: Option<String>,
+    },
+    /// The results popover. `audio_summary` is core-composed already
+    /// (`bases::engine::audio_summary`) and carried as data; the
+    /// readback is appended only while a quick filter is active.
+    BaseResultsPopover {
+        audio_summary: String,
+        where_am_i: Option<String>,
+    },
     DataviewConversionFailed {
         detail: String,
     },
@@ -896,6 +912,27 @@ impl A11yEvent {
             BasesViewSelected { name } => format!("Base view: {name}."),
             BasesSortSaveFailed { detail } => format!("Base sort could not be saved: {detail}"),
             BaseRefreshed => "Base refreshed.".to_owned(),
+            BaseWhereAmI {
+                base,
+                view,
+                quick_filter,
+            } => {
+                let mut parts = vec![format!("Base: {base}")];
+                if let Some(view) = view {
+                    parts.push(format!("view: {view}"));
+                }
+                if let Some(quick_filter) = quick_filter {
+                    parts.push(format!("quick filter: {quick_filter}"));
+                }
+                parts.join(", ")
+            }
+            BaseResultsPopover {
+                audio_summary,
+                where_am_i,
+            } => match where_am_i {
+                Some(where_am_i) => format!("{audio_summary} {where_am_i}."),
+                None => audio_summary.clone(),
+            },
             DataviewConversionFailed { detail } => {
                 format!("Dataview conversion failed: {detail}")
             }
@@ -1382,6 +1419,29 @@ pub fn corpus() -> Vec<A11yEvent> {
             detail: "io error".into(),
         },
         BaseRefreshed,
+        BaseWhereAmI {
+            base: "Reading".into(),
+            view: None,
+            quick_filter: None,
+        },
+        BaseWhereAmI {
+            base: "Reading".into(),
+            view: Some("Table".into()),
+            quick_filter: None,
+        },
+        BaseWhereAmI {
+            base: "Reading".into(),
+            view: Some("Table".into()),
+            quick_filter: Some("CAFE".into()),
+        },
+        BaseResultsPopover {
+            audio_summary: "12 results.".into(),
+            where_am_i: None,
+        },
+        BaseResultsPopover {
+            audio_summary: "12 results.".into(),
+            where_am_i: Some("Base: Reading, quick filter: CAFE".into()),
+        },
         DataviewConversionFailed {
             detail: "unsupported query".into(),
         },
@@ -1750,6 +1810,11 @@ mod tests {
             (Medium, "Base view: Cards."),
             (Medium, "Base sort could not be saved: io error"),
             (Medium, "Base refreshed."),
+            (Medium, "Base: Reading"),
+            (Medium, "Base: Reading, view: Table"),
+            (Medium, "Base: Reading, view: Table, quick filter: CAFE"),
+            (Medium, "12 results."),
+            (Medium, "12 results. Base: Reading, quick filter: CAFE."),
             (Medium, "Dataview conversion failed: unsupported query"),
             (Medium, "Insert citation lands in V1.x. See Milestone L."),
             (

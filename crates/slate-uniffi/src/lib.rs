@@ -6989,6 +6989,15 @@ pub enum A11yEvent {
         detail: String,
     },
     BaseRefreshed,
+    BaseWhereAmI {
+        base: String,
+        view: Option<String>,
+        quick_filter: Option<String>,
+    },
+    BaseResultsPopover {
+        audio_summary: String,
+        where_am_i: Option<String>,
+    },
     DataviewConversionFailed {
         detail: String,
     },
@@ -7258,6 +7267,22 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::BasesViewSelected { name } => C::BasesViewSelected { name },
             F::BasesSortSaveFailed { detail } => C::BasesSortSaveFailed { detail },
             F::BaseRefreshed => C::BaseRefreshed,
+            F::BaseWhereAmI {
+                base,
+                view,
+                quick_filter,
+            } => C::BaseWhereAmI {
+                base,
+                view,
+                quick_filter,
+            },
+            F::BaseResultsPopover {
+                audio_summary,
+                where_am_i,
+            } => C::BaseResultsPopover {
+                audio_summary,
+                where_am_i,
+            },
             F::DataviewConversionFailed { detail } => C::DataviewConversionFailed { detail },
             F::CitationInsertUnavailable => C::CitationInsertUnavailable,
             F::CitationWalkThrough => C::CitationWalkThrough,
