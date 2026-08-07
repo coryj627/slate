@@ -12217,6 +12217,42 @@ final class AppState: ObservableObject {
         guard let session = currentSession else { return }
         let effective = session.citationsPrefs()
         guard !effective.sources.isEmpty else {
+            // No sources configured — but `bibliography_entries`
+            // outlives the session and the session's in-memory index is
+            // rebuilt from it at open, so returning here left the
+            // PREVIOUS session's entries resolving as current (#1082).
+            // Push the empty list so core clears them: a vault that
+            // configures no bibliography must resolve nothing, not
+            // whatever it resolved last time.
+            //
+            // Deliberately NOT `pushBibliographySources`, which also
+            // re-fetches entries and re-renders the open note. This
+            // path runs on every vault open with no bibliography, and
+            // an unconditional refetch makes the Bibliography leaf load
+            // twice (RightPaneViewTests' load-fire spy). Refetch only
+            // when this AppState is actually holding entries — a vault
+            // SWITCH, where the outgoing vault's rows are still in
+            // memory and would otherwise survive the change.
+            let result: Result<[BibLoadWarning], VaultError> =
+                await Task.detached(priority: .userInitiated) {
+                    do {
+                        return .success(try session.setBibliographySources(sources: []))
+                    } catch let err as VaultError {
+                        return .failure(err)
+                    } catch {
+                        return .failure(.Io(message: error.localizedDescription))
+                    }
+                }
+                .value
+            guard !Task.isCancelled else { return }
+            switch result {
+            case .success:
+                if !bibliographyEntries.isEmpty {
+                    await loadBibliographyEntries()
+                }
+            case .failure(let err):
+                bibliographySettingsError = humanReadable(err)
+            }
             await refreshAvailableCslStyles()
             return
         }

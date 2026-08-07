@@ -62,6 +62,38 @@ public sealed class CitationWorkspaceSeamTests : IDisposable
         return session;
     }
 
+    /// <summary>
+    /// Removing every configured source must not leave the PREVIOUS
+    /// session's entries resolving (#1082, second door).
+    ///
+    /// bibliography_entries outlives the session and core rebuilds its
+    /// in-memory index from that table at open. The seed used to return
+    /// NoSources WITHOUT calling core at all, so a config that no
+    /// longer names a bibliography left last session's keys rendering
+    /// as resolved while the leaf said "No bibliography sources
+    /// configured" — the same contradiction a failed seed produced,
+    /// reached by removing the sources instead of breaking them.
+    /// </summary>
+    [Fact]
+    public void AConfigWithNoSourcesClearsThePreviousSessionsEntries()
+    {
+        // A good seed first, so there IS previous-session data to lie
+        // with — and it must survive being closed.
+        using (VaultSession seeded = OpenScanned())
+        {
+            using var first = MakeWorkspace(seeded, []);
+            Assert.NotEmpty(seeded.GetBibliographyEntries());
+        }
+
+        // The user removes the bibliography from the vault config.
+        WriteConfig("{\"citations\":{\"cite_style\":\"ieee\"}}");
+        using VaultSession session = OpenScanned();
+        using var workspace = MakeWorkspace(session, []);
+
+        Assert.True(workspace.Bibliography.HasNoSources);
+        Assert.Empty(session.GetBibliographyEntries());
+    }
+
     private WorkspaceViewModel MakeWorkspace(
         VaultSession session, List<A11yEvent> announced) =>
         new(session, _fixture.Root, () => [], announced.Add,

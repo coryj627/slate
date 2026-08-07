@@ -224,3 +224,75 @@ fn missing_bibliography_source_returns_bibsource_unreadable() {
         other => panic!("expected BibSourceUnreadable, got {other:?}"),
     }
 }
+
+/// A seed that FAILS must not leave the previous session's entries
+/// resolving as if they were current (#1082).
+///
+/// `bibliography_entries` is derived state — a cache of the configured
+/// sources — and the in-memory `BibIndex` is built from it at open. So
+/// a load error that returned before both were rewritten left the last
+/// good data live: the host shows "bibliography failed to load" while
+/// every key still renders resolved, and a reopen rebuilds the index
+/// straight from the stale table. Contract 5 (degradation honesty),
+/// docs/plans/23_citation_surfaces_contracts.md.
+#[test]
+fn a_failed_seed_does_not_leave_the_previous_entries_resolving() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    fs::write(root.join("library.bib"), bib_fixture()).unwrap();
+    fs::write(
+        root.join("paper.md"),
+        "Cites [@smith2020].
+",
+    )
+    .unwrap();
+
+    let session = VaultSession::from_filesystem(root.to_path_buf()).unwrap();
+    session
+        .scan_initial(&crate::CancelToken::new())
+        .expect("scan succeeds");
+    let source = |path: &str| crate::BibliographySource {
+        path: path.to_string(),
+        format: crate::BibFormat::BibTeX,
+        watch: false,
+    };
+
+    // One good seed, so there IS a previous session's data.
+    session
+        .set_bibliography_sources(vec![source("library.bib")])
+        .expect("first seed succeeds");
+    assert!(session.list_unresolved_citations().unwrap().is_empty());
+
+    // The configured source becomes unreadable, and the next seed fails.
+    fs::remove_file(root.join("library.bib")).unwrap();
+    let err = session
+        .set_bibliography_sources(vec![source("library.bib")])
+        .unwrap_err();
+    assert!(
+        matches!(err, VaultError::BibSourceUnreadable { .. }),
+        "expected BibSourceUnreadable, got {err:?}"
+    );
+
+    // Nothing stale survives the failure, in this session...
+    assert!(
+        session.get_bibliography_entries().unwrap().is_empty(),
+        "a failed seed left the previous entries queryable"
+    );
+    let unresolved = session.list_unresolved_citations().unwrap();
+    assert_eq!(
+        unresolved.len(),
+        1,
+        "smith2020 no longer resolves and must be reported unresolved, got {unresolved:?}"
+    );
+
+    // ...nor across the reopen, which rebuilds the index from the table.
+    drop(session);
+    let reopened = VaultSession::from_filesystem(root.to_path_buf()).unwrap();
+    reopened
+        .scan_initial(&crate::CancelToken::new())
+        .expect("rescan succeeds");
+    assert!(
+        reopened.get_bibliography_entries().unwrap().is_empty(),
+        "the reopened session rebuilt its index from stale persisted entries"
+    );
+}

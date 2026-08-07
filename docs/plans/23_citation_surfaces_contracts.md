@@ -178,12 +178,22 @@ say.
 
 **D-13** — Windows ADDITION: after a FAILED seed the bibliography
 publishes NOTHING rather than whatever core's tables still hold.
-Core's `set_bibliography_sources` is all-or-nothing and returns before
-replacing anything, so the previous session's entries and `BibIndex`
-survive a failed load; querying them would serve stale bytes as
-authoritative underneath a notice saying the load failed (contract 5).
-mac has no equivalent refusal and will render them. The notice region
-already carries the reason, so the refusal costs no new copy.
+
+*Updated (#1082, both platforms):* the premise this divergence was
+written against is fixed. `set_bibliography_sources` is still
+all-or-nothing, but a failure now carries on to the same write with an
+empty entry set, so the table and `BibIndex` are CLEARED instead of
+keeping the previous session's data — and both hosts now push an empty
+source list when the config names none, which closes the same hole
+reached by removing the sources rather than breaking them. Core no
+longer serves stale bytes as authoritative underneath a notice saying
+the load failed (contract 5), and mac no longer renders them.
+
+The Windows refusal is KEPT regardless: "the load failed" and "this
+vault has no bibliography" are different facts, and publishing a
+now-legitimately-empty set would render the first as the second. The
+notice region already carries the reason, so the refusal costs no new
+copy.
 *(BibliographySeedOutcome.MayReadEntries, BibliographyViewModel
 MayQueryCore)*
 
