@@ -340,11 +340,10 @@ struct BaseEmbedView: View {
                 return
             }
             guard !Task.isCancelled, let session else { return }
-            let announcement = document.applyQuickFilter(filterText, session: session)
+            _ = document.applyQuickFilter(filterText, session: session)
             restoreSelection(previous: preferredSelection)
             quickFilterSelection.finishAfterApplying(filterText: filterText)
-            // W0.5-3 residue: BaseEmbedDocument.applyQuickFilter
-            postAccessibilityAnnouncement(.hostComposed(text: announcement, priority: .medium))
+            postAccessibilityAnnouncement(document.quickFilterResultEvent)
         }
     }
 
@@ -354,10 +353,9 @@ struct BaseEmbedView: View {
         quickFilterFocused = false
         let preferredSelection = quickFilterSelection.finish(
             currentRowID: interaction.selectedRowID)
-        if let announcement = document.clearQuickFilter(session: session) {
+        if document.clearQuickFilter(session: session) != nil {
             restoreSelection(previous: preferredSelection)
-            // W0.5-3 residue: BaseEmbedDocument.clearQuickFilter
-            postAccessibilityAnnouncement(.hostComposed(text: announcement, priority: .medium))
+            postAccessibilityAnnouncement(document.quickFilterResultEvent)
         }
         resultFocusToken &+= 1
     }

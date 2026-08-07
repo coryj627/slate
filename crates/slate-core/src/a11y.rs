@@ -492,6 +492,13 @@ pub enum A11yEvent {
         audio_summary: String,
         where_am_i: Option<String>,
     },
+    /// Quick-filter result count, "{shown} of {total} result(s)".
+    /// Both Bases document types built this string identically and
+    /// separately; the counts are the data.
+    BaseQuickFilterResult {
+        shown: u64,
+        total: u64,
+    },
     DataviewConversionFailed {
         detail: String,
     },
@@ -933,6 +940,10 @@ impl A11yEvent {
                 Some(where_am_i) => format!("{audio_summary} {where_am_i}."),
                 None => audio_summary.clone(),
             },
+            BaseQuickFilterResult { shown, total } => format!(
+                "{shown} of {total} {}",
+                crate::sidebar_filter::noun(*total, "result", "results")
+            ),
             DataviewConversionFailed { detail } => {
                 format!("Dataview conversion failed: {detail}")
             }
@@ -1442,6 +1453,9 @@ pub fn corpus() -> Vec<A11yEvent> {
             audio_summary: "12 results.".into(),
             where_am_i: Some("Base: Reading, quick filter: CAFE".into()),
         },
+        BaseQuickFilterResult { shown: 0, total: 0 },
+        BaseQuickFilterResult { shown: 1, total: 1 },
+        BaseQuickFilterResult { shown: 1, total: 2 },
         DataviewConversionFailed {
             detail: "unsupported query".into(),
         },
@@ -1815,6 +1829,9 @@ mod tests {
             (Medium, "Base: Reading, view: Table, quick filter: CAFE"),
             (Medium, "12 results."),
             (Medium, "12 results. Base: Reading, quick filter: CAFE."),
+            (Medium, "0 of 0 results"),
+            (Medium, "1 of 1 result"),
+            (Medium, "1 of 2 results"),
             (Medium, "Dataview conversion failed: unsupported query"),
             (Medium, "Insert citation lands in V1.x. See Milestone L."),
             (
