@@ -115,6 +115,26 @@
     "text": "Open a vault first. Search works inside a vault."
   },
   {
+    "event": "SearchResultsSummary { count: 0 }",
+    "priority": "medium",
+    "text": "Search returned no results."
+  },
+  {
+    "event": "SearchResultsSummary { count: 1 }",
+    "priority": "medium",
+    "text": "Search returned 1 result."
+  },
+  {
+    "event": "SearchResultsSummary { count: 7 }",
+    "priority": "medium",
+    "text": "Search returned 7 results."
+  },
+  {
+    "event": "SearchFailed { message: \"the index is unavailable\" }",
+    "priority": "medium",
+    "text": "Search error: the index is unavailable"
+  },
+  {
     "event": "SearchResultOpened { filename: \"notes.md\", line: 12, snippet: \"the quick brown fox\" }",
     "priority": "medium",
     "text": "Opened notes.md, line 12: the quick brown fox"
