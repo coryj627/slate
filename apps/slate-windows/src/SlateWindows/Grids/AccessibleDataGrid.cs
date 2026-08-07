@@ -404,10 +404,11 @@ internal sealed class AccessibleDataGrid : UserControl
         }
     }
 
-    /// <summary>The row's identity for position-restore purposes: the
-    /// row-header cell's text, or null when the surface declares no
-    /// row-header column (nothing stable to key on).</summary>
     /// <summary>
+    /// The row's identity for position-restore purposes: the row-header
+    /// cell's text, or null when the surface declares no row-header
+    /// column (nothing stable to key on).
+    ///
     /// Only ever called with a row from the CURRENTLY BOUND set. The
     /// `Cell` delegates cast to the surface's row type, so handing one
     /// anything else — most reachably `CollectionView.NewItemPlaceholder`,
@@ -418,10 +419,23 @@ internal sealed class AccessibleDataGrid : UserControl
     private string? RowIdentityOf(object? item) =>
         item is not null
         && item != CollectionView.NewItemPlaceholder
-        && _rowHeaderColumn is { } header
         && _items.Contains(item)
-            ? header.Cell(item)
+            ? BoundRowIdentityOf(item)
             : null;
+
+    /// <summary>
+    /// Identity for a row ALREADY KNOWN to be in the bound set.
+    ///
+    /// Split from <see cref="RowIdentityOf"/> because that one's
+    /// `_items.Contains` guard is needed exactly once — at capture,
+    /// where `CurrentCell.Item` may be foreign or the new-item
+    /// placeholder. Calling it from inside a loop that is already
+    /// walking `_items` made every re-publish O(n²): 8,000 rows took
+    /// 708 ms on the UI thread against 33 ms before, and the
+    /// bulk-rename preview has no row cap.
+    /// </summary>
+    private string? BoundRowIdentityOf(object row) =>
+        _rowHeaderColumn is { } header ? header.Cell(row) : null;
 
     /// <summary>
     /// Put the reader back where they were, or leave them alone.
@@ -441,7 +455,8 @@ internal sealed class AccessibleDataGrid : UserControl
         }
         foreach (object row in _items)
         {
-            if (!string.Equals(RowIdentityOf(row), rowIdentity, StringComparison.Ordinal))
+            if (!string.Equals(
+                BoundRowIdentityOf(row), rowIdentity, StringComparison.Ordinal))
             {
                 continue;
             }

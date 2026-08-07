@@ -215,6 +215,72 @@ public sealed class AccessibleDataGridTests
         });
     }
 
+    /// <summary>Counts equality probes, so a quadratic restore scan is
+    /// observable. Production row view models are classes, and
+    /// `_items.Contains` calls Equals on each.</summary>
+    private sealed class CountingRow(string id)
+    {
+        internal static int EqualsCalls;
+
+        public string Id { get; } = id;
+
+        public override bool Equals(object? obj)
+        {
+            EqualsCalls++;
+            return ReferenceEquals(this, obj);
+        }
+
+        public override int GetHashCode() => Id.GetHashCode(StringComparison.Ordinal);
+    }
+
+    private static IReadOnlyList<AccessibleGridColumn> CountingColumns() => new[]
+    {
+        new AccessibleGridColumn
+        {
+            Header = "Id",
+            Cell = row => ((CountingRow)row).Id,
+            IsRowHeader = true,
+        },
+    };
+
+    /// <summary>
+    /// The restore scan must be LINEAR in the row count.
+    ///
+    /// RowIdentityOf guards with _items.Contains — necessary at the
+    /// capture call, where the item may be foreign or the new-item
+    /// placeholder, but pure waste inside a loop that is already
+    /// walking _items. That made every re-publish O(n²): measured at
+    /// 708 ms for 8,000 rows against 33 ms before this branch, on the
+    /// UI thread, with the bulk-rename preview uncapped.
+    /// </summary>
+    [Fact]
+    public void ARepublishScansLinearlyNotQuadratically()
+    {
+        RunSta(() =>
+        {
+            const int count = 60;
+            var grid = new AccessibleDataGrid { Announce = _ => { } };
+            object[] First() =>
+                [.. Enumerable.Range(0, count).Select(i => (object)new CountingRow($"r{i}"))];
+
+            IReadOnlyList<object> rows = First();
+            grid.Bind(CountingColumns(), rows, "rows.", "Rows");
+            // Worst case: the reader is on the LAST row, so the restore
+            // scan runs to the end.
+            grid.Grid.CurrentCell =
+                new DataGridCellInfo(rows[count - 1], grid.Grid.Columns[0]);
+
+            CountingRow.EqualsCalls = 0;
+            grid.Bind(CountingColumns(), First(), "rows.", "Rows");
+
+            Assert.Equal($"r{count - 1}", Assert.IsType<CountingRow>(grid.Grid.CurrentCell.Item).Id);
+            // Quadratic would be ~count²/2 ≈ 1,800 here.
+            Assert.True(
+                CountingRow.EqualsCalls < count * 4,
+                $"restore probed equality {CountingRow.EqualsCalls} times for {count} rows");
+        });
+    }
+
     /// <summary>Enter on a bound row activates it — the affordance the
     /// bibliography rows advertise as "Activate to expand citation
     /// fields." Row activation shipped with no test at all.</summary>
