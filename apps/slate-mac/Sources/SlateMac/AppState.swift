@@ -7819,6 +7819,13 @@ final class AppState: ObservableObject {
     /// observer can fire a polite announcement.
     @Published private(set) var searchSummary: String = ""
 
+    /// The typed announcement for the current `searchSummary` (#969).
+    /// Set BEFORE `searchSummary`, because assigning that fires the
+    /// `@Published` publisher the overlay announces from — the view
+    /// still dedupes on the STRING (unchanged), it just posts the
+    /// vocabulary event instead of re-wrapping the text.
+    private(set) var searchAnnouncement: A11yEvent?
+
     /// The (trimmed) query that produced the currently-displayed
     /// `.results` rows — captured when the search resolves, NOT read from
     /// the live `searchQuery`. #876 Codex round 1: the 150 ms debounce
@@ -8827,6 +8834,7 @@ final class AppState: ObservableObject {
         cancelInFlightSearch()
         searchScope = .vault
         searchState = .idle
+        searchAnnouncement = nil
         searchSummary = ""
         // No rows are displayed once the panel is idle, so the
         // producing-query snapshot must go too (#876 Codex round 2) —
@@ -8879,6 +8887,7 @@ final class AppState: ObservableObject {
         if trimmed.isEmpty && !scopeListsOnEmpty {
             cancelInFlightSearch()
             searchState = .idle
+            searchAnnouncement = nil
             searchSummary = ""
             lastResultsQuery = nil
             return
@@ -8940,7 +8949,12 @@ final class AppState: ObservableObject {
             }
             switch outcome {
             case .success(let rs):
+                self.searchAnnouncement = .searchResultsSummary(
+                    count: UInt32(clamping: rs.rows.count))
                 self.searchState = .results(rows: rs.rows, summary: rs.summary)
+                // `rs.summary` is rendered by core THROUGH the same
+                // vocabulary event, so the displayed and spoken strings
+                // are one template, not two copies (#969).
                 self.searchSummary = rs.summary
                 // #876 Codex round 1: remember WHICH query produced these
                 // rows, so activating one records/anchors that query — not
@@ -8953,8 +8967,12 @@ final class AppState: ObservableObject {
                     return
                 }
                 let message = self.humanReadable(error)
+                let event = A11yEvent.searchFailed(message: message)
+                self.searchAnnouncement = event
                 self.searchState = .error(message)
-                self.searchSummary = "Search error: \(message)"
+                // Rendered from the event rather than composed here:
+                // the wording is a §W-D anchor now (#969).
+                self.searchSummary = a11yRender(event: event).text
             }
         }
     }

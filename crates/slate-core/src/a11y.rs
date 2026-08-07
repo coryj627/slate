@@ -155,6 +155,18 @@ pub enum A11yEvent {
     SearchNeedsVault,
 
     // --- Links, search, embeds, headings, navigation ---
+    /// The search panel's result-count summary. This is the §W-D
+    /// anchor for `search_db::summary_for`, which renders THROUGH it —
+    /// the count is the data, the wording lives here once, and the
+    /// spoken and displayed strings cannot drift apart.
+    SearchResultsSummary {
+        count: u32,
+    },
+    /// A search that failed, carrying the host's human-readable
+    /// reason (the same shape as the other `{ reason }` failures).
+    SearchFailed {
+        message: String,
+    },
     SearchResultOpened {
         filename: String,
         line: u32,
@@ -604,6 +616,12 @@ impl A11yEvent {
             }
             CommandPaletteNeedsVault => "Open a vault to use the command palette.".to_owned(),
             SearchNeedsVault => "Open a vault first. Search works inside a vault.".to_owned(),
+            SearchResultsSummary { count } => match *count {
+                0 => "Search returned no results.".to_owned(),
+                1 => "Search returned 1 result.".to_owned(),
+                n => format!("Search returned {n} results."),
+            },
+            SearchFailed { message } => format!("Search error: {message}"),
 
             SearchResultOpened {
                 filename,
@@ -1016,6 +1034,12 @@ pub fn corpus() -> Vec<A11yEvent> {
         },
         CommandPaletteNeedsVault,
         SearchNeedsVault,
+        SearchResultsSummary { count: 0 },
+        SearchResultsSummary { count: 1 },
+        SearchResultsSummary { count: 7 },
+        SearchFailed {
+            message: "the index is unavailable".into(),
+        },
         SearchResultOpened {
             filename: "notes.md".into(),
             line: 12,
@@ -1484,6 +1508,10 @@ mod tests {
             ),
             (High, "Open a vault to use the command palette."),
             (Medium, "Open a vault first. Search works inside a vault."),
+            (Medium, "Search returned no results."),
+            (Medium, "Search returned 1 result."),
+            (Medium, "Search returned 7 results."),
+            (Medium, "Search error: the index is unavailable"),
             (Medium, "Opened notes.md, line 12: the quick brown fox"),
             (
                 Medium,
