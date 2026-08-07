@@ -585,6 +585,41 @@
     "text": "Selected: Save. Unavailable: A structural operation is in progress."
   },
   {
+    "event": "PaletteFilterCount { count: 0, query: \"zzz\" }",
+    "priority": "medium",
+    "text": "No commands match \"zzz\""
+  },
+  {
+    "event": "PaletteFilterCount { count: 1, query: \"save\" }",
+    "priority": "medium",
+    "text": "1 command matching \"save\""
+  },
+  {
+    "event": "PaletteFilterCount { count: 4, query: \"e\" }",
+    "priority": "medium",
+    "text": "4 commands matching \"e\""
+  },
+  {
+    "event": "PaletteCommandFailed { label: \"Save\", detail: Some(\"disk full\") }",
+    "priority": "high",
+    "text": "Save failed: disk full"
+  },
+  {
+    "event": "PaletteCommandFailed { label: \"Save\", detail: None }",
+    "priority": "high",
+    "text": "Save failed."
+  },
+  {
+    "event": "PaletteCommandNotFound { id: \"slate.nope\" }",
+    "priority": "high",
+    "text": "Command not found: slate.nope"
+  },
+  {
+    "event": "PaletteCommandUnavailable { reason: \"A structural operation is in progress.\" }",
+    "priority": "high",
+    "text": "A structural operation is in progress."
+  },
+  {
     "event": "RecentSearchFocused { query: \"fox\" }",
     "priority": "medium",
     "text": "Recent search: fox"

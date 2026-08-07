@@ -148,7 +148,7 @@ final class CommandPaletteBusyAnnouncementTests: XCTestCase {
 
         XCTAssertEqual(
             outcome, .actionFailed(label: command.label, message: reason))
-        XCTAssertEqual(model.pendingAnnouncement, reason)
+        XCTAssertEqual(model.pendingAnnouncementText, reason)
         XCTAssertEqual(action.invocationCount, 1)
     }
 

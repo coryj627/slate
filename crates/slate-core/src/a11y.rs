@@ -403,6 +403,28 @@ pub enum A11yEvent {
         label: String,
         disabled_reason: Option<String>,
     },
+    /// Palette filter feedback: how many commands the query matched.
+    /// `count == 0` is the no-match phrasing.
+    PaletteFilterCount {
+        count: u32,
+        query: String,
+    },
+    /// A palette command that ran and failed. `detail == None` is the
+    /// defensive branch where the registry gave no message.
+    PaletteCommandFailed {
+        label: String,
+        detail: Option<String>,
+    },
+    PaletteCommandNotFound {
+        id: String,
+    },
+    /// An availability REJECTION, spoken verbatim: the reason is host
+    /// availability copy carried as data (the `PaletteCommandSelected`
+    /// precedent) and the row already exposes this exact sentence, so
+    /// prefixing it would make VoiceOver say it twice differently.
+    PaletteCommandUnavailable {
+        reason: String,
+    },
     RecentSearchFocused {
         query: String,
     },
@@ -527,6 +549,9 @@ impl A11yEvent {
         use A11yEvent::*;
         match self {
             CommandPaletteNeedsVault
+            | PaletteCommandFailed { .. }
+            | PaletteCommandNotFound { .. }
+            | PaletteCommandUnavailable { .. }
             | InternalNavigated { .. }
             | TaskToggleUnsaved { .. }
             | PropertiesSourceRejected { .. }
@@ -820,6 +845,22 @@ impl A11yEvent {
                 Some(reason) => format!("Selected: {label}. Unavailable: {reason}"),
                 None => format!("Selected: {label}"),
             },
+            PaletteFilterCount { count, query } => {
+                if *count == 0 {
+                    format!("No commands match \"{query}\"")
+                } else {
+                    format!(
+                        "{count} {} matching \"{query}\"",
+                        plural(*count, "command", "commands")
+                    )
+                }
+            }
+            PaletteCommandFailed { label, detail } => match detail {
+                Some(detail) => format!("{label} failed: {detail}"),
+                None => format!("{label} failed."),
+            },
+            PaletteCommandNotFound { id } => format!("Command not found: {id}"),
+            PaletteCommandUnavailable { reason } => reason.clone(),
             RecentSearchFocused { query } => format!("Recent search: {query}"),
             QuickSwitcherCount { count, query } => match query {
                 None => format!("{count} recent {}", plural(*count, "file", "files")),
@@ -1253,6 +1294,32 @@ pub fn corpus() -> Vec<A11yEvent> {
             label: "Save".into(),
             disabled_reason: Some("A structural operation is in progress.".into()),
         },
+        PaletteFilterCount {
+            count: 0,
+            query: "zzz".into(),
+        },
+        PaletteFilterCount {
+            count: 1,
+            query: "save".into(),
+        },
+        PaletteFilterCount {
+            count: 4,
+            query: "e".into(),
+        },
+        PaletteCommandFailed {
+            label: "Save".into(),
+            detail: Some("disk full".into()),
+        },
+        PaletteCommandFailed {
+            label: "Save".into(),
+            detail: None,
+        },
+        PaletteCommandNotFound {
+            id: "slate.nope".into(),
+        },
+        PaletteCommandUnavailable {
+            reason: "A structural operation is in progress.".into(),
+        },
         RecentSearchFocused {
             query: "fox".into(),
         },
@@ -1650,6 +1717,13 @@ mod tests {
                 Medium,
                 "Selected: Save. Unavailable: A structural operation is in progress.",
             ),
+            (Medium, "No commands match \"zzz\""),
+            (Medium, "1 command matching \"save\""),
+            (Medium, "4 commands matching \"e\""),
+            (High, "Save failed: disk full"),
+            (High, "Save failed."),
+            (High, "Command not found: slate.nope"),
+            (High, "A structural operation is in progress."),
             (Medium, "Recent search: fox"),
             (Medium, "2 recent files"),
             (Medium, "1 recent file"),
