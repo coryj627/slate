@@ -8487,10 +8487,35 @@ impl VaultSession {
         let mut all_warnings: Vec<crate::citations::bibliography::BibLoadWarning> = Vec::new();
         let mut per_source: Vec<(String, Vec<crate::citations::bibliography::BibEntry>)> =
             Vec::with_capacity(sources.len());
+        // A load failure must NOT return early (#1082). Both the
+        // `bibliography_entries` table and the in-memory `BibIndex` are
+        // rewritten below, and skipping that left the PREVIOUS
+        // session's entries live: every key still rendered as resolved
+        // underneath the host's "failed to load" notice, and because
+        // the index is rebuilt from that table at open, a reopen
+        // resurrected the stale data outright.
+        //
+        // So the failure carries on to the same write with an EMPTY
+        // entry set and is returned at the end. `set_bibliography_sources`
+        // is all-or-nothing by contract — it returns one Err for any
+        // unreadable source — and the persisted entries now say the
+        // same thing rather than contradicting it. Nothing is lost that
+        // a successful re-seed does not rebuild: the table is derived
+        // state, not the user's library.
+        let mut load_error: Option<VaultError> = None;
         for src in &sources {
-            let result = crate::citations::bibliography::load_source(src, &vault_root)?;
-            all_warnings.extend(result.warnings);
-            per_source.push((src.path.clone(), result.entries));
+            match crate::citations::bibliography::load_source(src, &vault_root) {
+                Ok(result) => {
+                    all_warnings.extend(result.warnings);
+                    per_source.push((src.path.clone(), result.entries));
+                }
+                Err(error) => {
+                    load_error = Some(error);
+                    all_warnings.clear();
+                    per_source.clear();
+                    break;
+                }
+            }
         }
         let (merged, _collisions) = crate::citations::bibliography::merge_sources(&per_source);
 
@@ -8524,7 +8549,11 @@ impl VaultSession {
             merged,
             new_version,
         ));
-        Ok(all_warnings)
+        drop(idx);
+        match load_error {
+            Some(error) => Err(error),
+            None => Ok(all_warnings),
+        }
     }
 
     /// Render `reference` against the style identified by `style_id`.
