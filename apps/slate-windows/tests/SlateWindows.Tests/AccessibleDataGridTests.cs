@@ -778,6 +778,97 @@ public sealed class AccessibleDataGridTests
         });
     }
 
+    /// <summary>
+    /// Row activation listens on the GRID's PreviewKeyDown, and the row
+    /// actions menu is logically parented to that same grid — so if a
+    /// key press inside the open menu tunnelled through it, Enter on
+    /// "Open" would run the menu action AND activate the row, opening
+    /// two things for one keystroke.
+    ///
+    /// It does not: the popup builds its own route. This pins that,
+    /// because the day it stops being true the failure is silent and
+    /// destructive for any consumer whose row actions are not merely
+    /// navigational.
+    /// </summary>
+    [Fact]
+    public void EnterInsideTheRowActionsMenuDoesNotAlsoActivateTheRow()
+    {
+        RunSta(() =>
+        {
+            object? activated = null;
+            object? executed = null;
+            var actions = new[]
+            {
+                new AccessibleGridRowAction { Name = "Open", Execute = row => executed = row },
+            };
+            var grid = new AccessibleDataGrid { Announce = _ => { } };
+            grid.Bind(
+                Columns(), People, "3 rows.", "People",
+                rowActions: actions, rowActivated: row => activated = row);
+            var window = new System.Windows.Window
+            {
+                Content = grid,
+                Width = 400,
+                Height = 300,
+                ShowInTaskbar = false,
+                WindowStyle = System.Windows.WindowStyle.None,
+            };
+            window.Show();
+            try
+            {
+                grid.Grid.CurrentCell = new DataGridCellInfo(People[1], grid.Grid.Columns[0]);
+                ContextMenu menu = grid.Grid.ContextMenu!;
+                ContextMenu built = grid.BuildRowActionsMenu()!;
+                menu.Items.Clear();
+                while (built.Items.Count > 0)
+                {
+                    object item = built.Items[0];
+                    built.Items.RemoveAt(0);
+                    _ = menu.Items.Add(item);
+                }
+                int sawKeyAtGrid = 0;
+                // handledEventsToo: the constructor's own handler runs
+                // first on this element and marks Enter handled, which
+                // would skip a plain += counter and make a zero mean
+                // nothing.
+                grid.Grid.AddHandler(
+                    System.Windows.UIElement.PreviewKeyDownEvent,
+                    new KeyEventHandler((_, _) => sawKeyAtGrid++),
+                    handledEventsToo: true);
+                KeyEventArgs Enter() => new(
+                    Keyboard.PrimaryDevice,
+                    System.Windows.PresentationSource.FromVisual(grid.Grid)!,
+                    0,
+                    Key.Enter)
+                { RoutedEvent = System.Windows.UIElement.PreviewKeyDownEvent };
+
+                // Control FIRST, with the menu closed: this is the path
+                // that must work, and it proves the counter and the
+                // synthesized event are wired before anything is
+                // concluded from a zero.
+                grid.Grid.RaiseEvent(Enter());
+                Assert.Equal(1, sawKeyAtGrid);
+                Assert.Same(People[1], activated);
+                activated = null;
+
+                menu.PlacementTarget = grid.Grid;
+                menu.IsOpen = true;
+                Assert.True(menu.IsOpen, "the menu never opened — the probe would be vacuous");
+                var open = (MenuItem)menu.Items[0];
+                _ = open.Focus();
+
+                open.RaiseEvent(Enter());
+                Assert.Equal(1, sawKeyAtGrid);
+                Assert.Null(activated);
+                Assert.Null(executed);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
+
     private static void RunSta(Action body)
     {
         Exception? failure = null;
