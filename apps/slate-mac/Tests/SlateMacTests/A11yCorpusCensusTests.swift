@@ -168,6 +168,13 @@ final class A11yCorpusCensusTests: XCTestCase {
                 label: "Save",
                 disabledReason: "A structural operation is in progress."
             ),
+            .paletteFilterCount(count: 0, query: "zzz"),
+            .paletteFilterCount(count: 1, query: "save"),
+            .paletteFilterCount(count: 4, query: "e"),
+            .paletteCommandFailed(label: "Save", detail: "disk full"),
+            .paletteCommandFailed(label: "Save", detail: nil),
+            .paletteCommandNotFound(id: "slate.nope"),
+            .paletteCommandUnavailable(reason: "A structural operation is in progress."),
             .recentSearchFocused(query: "fox"),
             .quickSwitcherCount(count: 2, query: nil),
             .quickSwitcherCount(count: 1, query: nil),

@@ -35,14 +35,14 @@ final class CommandPaletteModel: ObservableObject {
     /// view's own posting site so tests can assert on it without a
     /// running NSApp. Used for command-invocation feedback
     /// (ActionFailed / UnknownId).
-    @Published private(set) var pendingAnnouncement: String?
+    @Published private(set) var pendingAnnouncement: A11yEvent?
 
     /// Filter-change announcement string (#316). The view watches
     /// this and posts assertively whenever the user's typing
     /// changes the result count. Separate from `pendingAnnouncement`
     /// so per-keystroke filter feedback doesn't collide with one-
     /// shot invocation outcomes.
-    @Published private(set) var filterAnnouncement: String?
+    @Published private(set) var filterAnnouncement: A11yEvent?
 
     /// Recent command ids in most-recent-first order. Set on
     /// `loadCommands` from `AppState.commandPaletteRecents`. The
@@ -74,11 +74,22 @@ final class CommandPaletteModel: ObservableObject {
         if query.isEmpty {
             filterAnnouncement = nil
         } else {
-            let count = filteredCommands.count
-            filterAnnouncement = count == 0
-                ? "No commands match \"\(query)\""
-                : "\(count) command\(count == 1 ? "" : "s") matching \"\(query)\""
+            filterAnnouncement = .paletteFilterCount(
+                count: UInt32(clamping: filteredCommands.count), query: query)
         }
+    }
+
+    /// The rendered text of `pendingAnnouncement` / `filterAnnouncement`.
+    /// Two jobs: `.onChange(of:)` needs an Equatable trigger, and the
+    /// suite's exact-wording assertions keep asserting exact wording —
+    /// they just read it from the vocabulary now instead of from a
+    /// string this file used to build.
+    var pendingAnnouncementText: String? {
+        pendingAnnouncement.map { a11yRender(event: $0).text }
+    }
+
+    var filterAnnouncementText: String? {
+        filterAnnouncement.map { a11yRender(event: $0).text }
     }
 
     /// Clear the filter-change announcement after the view has
@@ -199,22 +210,19 @@ final class CommandPaletteModel: ObservableObject {
             // Structural busy is an availability rejection, not an operation
             // failure. The row already exposes this exact reason; announce it
             // verbatim so VoiceOver does not hear a misleading second prefix.
-            let announcement =
+            pendingAnnouncement =
                 message == AppState.structuralMutationBusyReason
-                ? message
-                : "\(command.label) failed: \(message)"
-            pendingAnnouncement = announcement
+                ? .paletteCommandUnavailable(reason: message)
+                : .paletteCommandFailed(label: command.label, detail: message)
             return .actionFailed(label: command.label, message: message)
         } catch let CommandError.UnknownId(id) {
-            let announcement = "Command not found: \(id)"
-            pendingAnnouncement = announcement
+            pendingAnnouncement = .paletteCommandNotFound(id: id)
             return .unknownId(id: id)
         } catch {
             // CommandError is the only declared throwing type from
             // the registry; this branch is defensive for future
             // additions to the FFI error surface.
-            let announcement = "\(command.label) failed."
-            pendingAnnouncement = announcement
+            pendingAnnouncement = .paletteCommandFailed(label: command.label, detail: nil)
             return .actionFailed(label: command.label, message: "")
         }
     }

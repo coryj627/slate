@@ -6928,6 +6928,20 @@ pub enum A11yEvent {
         label: String,
         disabled_reason: Option<String>,
     },
+    PaletteFilterCount {
+        count: u32,
+        query: String,
+    },
+    PaletteCommandFailed {
+        label: String,
+        detail: Option<String>,
+    },
+    PaletteCommandNotFound {
+        id: String,
+    },
+    PaletteCommandUnavailable {
+        reason: String,
+    },
     RecentSearchFocused {
         query: String,
     },
@@ -7222,6 +7236,10 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
                 label,
                 disabled_reason,
             },
+            F::PaletteFilterCount { count, query } => C::PaletteFilterCount { count, query },
+            F::PaletteCommandFailed { label, detail } => C::PaletteCommandFailed { label, detail },
+            F::PaletteCommandNotFound { id } => C::PaletteCommandNotFound { id },
+            F::PaletteCommandUnavailable { reason } => C::PaletteCommandUnavailable { reason },
             F::RecentSearchFocused { query } => C::RecentSearchFocused { query },
             F::QuickSwitcherCount { count, query } => C::QuickSwitcherCount { count, query },
             F::BaseViewMode { mode } => C::BaseViewMode { mode },
