@@ -9297,6 +9297,95 @@ mod tests {
         assert_eq!(properties[2].value_json, "[\"one\",\"two\"]");
     }
 
+    /// The mac corpus mirror must stay in lockstep with `corpus()`.
+    ///
+    /// `A11yCorpusCensusTests.swift` hand-lists every corpus event in
+    /// order and compares against the committed artifact. That check is
+    /// real but it only runs in CI, so a vocabulary addition that forgets
+    /// the Swift list costs a full round-trip to discover — which is
+    /// exactly what it cost when this test did not exist. Parsing the
+    /// Swift list here turns it into a local failure.
+    ///
+    /// Order matters: the Swift census compares index by index, so a
+    /// correctly-populated list in the wrong order fails there too.
+    ///
+    /// SCOPE: case names and their order, NOT parameters — two entries
+    /// of the same variant with swapped arguments read identically
+    /// here. The Swift census still catches that (it compares full
+    /// event identity against the artifact); this is the cheap local
+    /// tripwire for the mistake that actually happens, which is
+    /// forgetting the list entirely.
+    #[test]
+    fn the_mac_corpus_mirror_lists_every_event_in_order() {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let swift = std::fs::read_to_string(
+            manifest.join("../../apps/slate-mac/Tests/SlateMacTests/A11yCorpusCensusTests.swift"),
+        )
+        .expect("mac corpus census source");
+
+        // Bounded to the corpus literal: the file's `corpusURL` helper
+        // is a `.deletingLastPathComponent()` chain whose lines are
+        // indistinguishable from entry heads by shape alone.
+        let body = swift
+            .split_once("var corpus: [A11yEvent] {")
+            .expect("corpus declaration")
+            .1;
+        let body = body
+            .split_once(
+                "
+        ]",
+            )
+            .expect("corpus terminator")
+            .0;
+
+        // Every `.someCase` at the head of a list element, in order.
+        let listed: Vec<String> = body
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.starts_with('.'))
+            .map(|line| {
+                line.trim_start_matches('.')
+                    .split(|c: char| !c.is_ascii_alphanumeric())
+                    .next()
+                    .unwrap_or_default()
+                    .to_string()
+            })
+            .filter(|name| !name.is_empty())
+            .collect();
+
+        // `corpus()` in the same shape: the Debug head, lower-camelised
+        // the way uniffi names Swift cases.
+        let expected: Vec<String> = core::a11y::corpus()
+            .iter()
+            .map(|event| {
+                let debug = format!("{event:?}");
+                let head: String = debug
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric())
+                    .collect();
+                let mut chars = head.chars();
+                match chars.next() {
+                    Some(first) => first.to_ascii_lowercase().to_string() + chars.as_str(),
+                    None => head,
+                }
+            })
+            .collect();
+
+        assert_eq!(
+            listed.len(),
+            expected.len(),
+            "the mac corpus mirror lists {} events, the vocabulary has {}",
+            listed.len(),
+            expected.len()
+        );
+        for (index, (got, want)) in listed.iter().zip(expected.iter()).enumerate() {
+            assert_eq!(
+                got, want,
+                "mac corpus mirror diverges at index {index}: listed {got}, vocabulary has {want}"
+            );
+        }
+    }
+
     /// The FFI mirror must carry EVERY core variant.
     ///
     /// `From<A11yEvent> for core::a11y::A11yEvent` is exhaustive, so the
