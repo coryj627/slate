@@ -205,6 +205,9 @@ final class A11yCorpusCensusTests: XCTestCase {
             .baseResultsPopover(
                 audioSummary: "12 results.",
                 whereAmI: "Base: Reading, quick filter: CAFE"),
+            .baseQuickFilterResult(shown: 0, total: 0),
+            .baseQuickFilterResult(shown: 1, total: 1),
+            .baseQuickFilterResult(shown: 1, total: 2),
             .dataviewConversionFailed(detail: "unsupported query"),
             .citationInsertUnavailable,
             .citationWalkThrough,

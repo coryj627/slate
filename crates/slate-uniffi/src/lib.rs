@@ -6998,6 +6998,10 @@ pub enum A11yEvent {
         audio_summary: String,
         where_am_i: Option<String>,
     },
+    BaseQuickFilterResult {
+        shown: u64,
+        total: u64,
+    },
     DataviewConversionFailed {
         detail: String,
     },
@@ -7283,6 +7287,7 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
                 audio_summary,
                 where_am_i,
             },
+            F::BaseQuickFilterResult { shown, total } => C::BaseQuickFilterResult { shown, total },
             F::DataviewConversionFailed { detail } => C::DataviewConversionFailed { detail },
             F::CitationInsertUnavailable => C::CitationInsertUnavailable,
             F::CitationWalkThrough => C::CitationWalkThrough,

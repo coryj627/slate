@@ -994,10 +994,20 @@ final class BaseDocument: ObservableObject {
         return quickFilterText
     }
 
-    var quickFilterResultAnnouncement: String {
-        guard let result else { return "0 of 0 results" }
+    /// The quick-filter count as vocabulary DATA (#969). Both document
+    /// types built this sentence identically and separately; now the
+    /// counts are the data and one template renders it.
+    var quickFilterResultEvent: A11yEvent {
+        guard let result else { return .baseQuickFilterResult(shown: 0, total: 0) }
         let total = quickFilterActive ? result.unfilteredShownCount : result.totalCount
-        return "\(result.shownCount) of \(CountCopy.counted(total, "result", "results"))"
+        return .baseQuickFilterResult(shown: result.shownCount, total: total)
+    }
+
+    /// Rendered text. Kept because `applyQuickFilter` / `clearQuickFilter`
+    /// return it and the suite asserts on it — it renders from the event
+    /// now rather than being composed here.
+    var quickFilterResultAnnouncement: String {
+        a11yRender(event: quickFilterResultEvent).text
     }
 
     /// The readback as vocabulary DATA — core owns the joining and the
