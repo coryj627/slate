@@ -194,15 +194,23 @@ internal sealed partial class WorkspaceViewModel
         try
         {
             BibliographySource[] sources = _session.CitationsPrefs().Sources;
-            if (sources.Length == 0)
-            {
-                return new BibliographySeedOutcome(
-                    BibliographySeedStatus.NoSources, notices);
-            }
+            // An EMPTY source list is still pushed to core (#1082).
+            // bibliography_entries outlives the session and the
+            // in-memory index is rebuilt from it at open, so a config
+            // that no longer names any source would otherwise leave the
+            // PREVIOUS session's entries resolving as current — the
+            // same lie a failed seed used to tell, reached by removing
+            // the sources instead of breaking them. Pushing the empty
+            // list clears the table; skipping the call left it.
             foreach (BibLoadWarning warning in _session.SetBibliographySources(sources))
             {
                 // Verbatim, naming the source — never swallowed.
                 notices.Add($"{warning.SourcePath}: {warning.Message}");
+            }
+            if (sources.Length == 0)
+            {
+                return new BibliographySeedOutcome(
+                    BibliographySeedStatus.NoSources, notices);
             }
         }
         catch (Exception exception) when (
@@ -211,10 +219,13 @@ internal sealed partial class WorkspaceViewModel
                 and not AccessViolationException)
         {
             notices.Add(exception.Message);
-            // Core's set_bibliography_sources is ALL-OR-NOTHING: it
-            // returned before replacing anything, so the previous
-            // session's entries and index are still live. Failed says
-            // the leaves must not read them (D-13).
+            // Core's set_bibliography_sources is ALL-OR-NOTHING, and
+            // since #1082 a failure also CLEARS the table and index
+            // rather than leaving the previous session's entries live.
+            // Failed still says the leaves must not read them (D-13):
+            // core is now honest about having nothing, and the leaf
+            // reports the reason instead of rendering an empty library
+            // as though the vault had none.
             return new BibliographySeedOutcome(
                 BibliographySeedStatus.Failed, notices);
         }

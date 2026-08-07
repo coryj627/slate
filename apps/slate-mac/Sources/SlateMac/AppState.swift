@@ -12217,6 +12217,19 @@ final class AppState: ObservableObject {
         guard let session = currentSession else { return }
         let effective = session.citationsPrefs()
         guard !effective.sources.isEmpty else {
+            // No sources configured — but `bibliography_entries`
+            // outlives the session and the session's in-memory index is
+            // rebuilt from it at open, so returning here left the
+            // PREVIOUS session's entries resolving as current (#1082).
+            // Push the empty list so core clears them: a vault that
+            // configures no bibliography must resolve nothing, not
+            // whatever it resolved last time.
+            //
+            // The style refresh below stays unconditional. The push
+            // does its own on success, but this path guaranteed a
+            // refresh before and a failed push must not silently drop
+            // it.
+            await pushBibliographySources([])
             await refreshAvailableCslStyles()
             return
         }
