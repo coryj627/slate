@@ -921,6 +921,38 @@ public sealed class AccessibleDataGridTests
         });
     }
 
+    /// <summary>
+    /// Two rows can share row-header text, and the restore must not
+    /// quietly pick the first one.
+    ///
+    /// The reader's position is keyed on that text because a re-publish
+    /// builds fresh row view models and object identity is gone by
+    /// definition. Where the key is ambiguous the previous ORDINAL
+    /// breaks the tie, so someone reading the second "Untitled" stays
+    /// on the second one instead of being moved to the first with
+    /// nothing announced. Citation keys are unique; base views and
+    /// task titles are not.
+    /// </summary>
+    [Fact]
+    public void ARepublishWithDuplicateRowHeadersRestoresTheSameOccurrence()
+    {
+        RunSta(() =>
+        {
+            IReadOnlyList<object> first =
+                [new Widget("dup"), new Widget("dup"), new Widget("tail")];
+            var grid = new AccessibleDataGrid { Announce = _ => { } };
+            grid.Bind(WidgetColumns(), first, "3 rows.", "Widgets");
+            grid.Grid.CurrentCell = new DataGridCellInfo(first[1], grid.Grid.Columns[1]);
+            Assert.Same(first[1], grid.Grid.CurrentCell.Item);
+
+            IReadOnlyList<object> second =
+                [new Widget("dup"), new Widget("dup"), new Widget("tail")];
+            grid.Bind(WidgetColumns(), second, "3 rows.", "Widgets");
+
+            Assert.Same(second[1], grid.Grid.CurrentCell.Item);
+        });
+    }
+
     private static void RunSta(Action body)
     {
         Exception? failure = null;

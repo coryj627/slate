@@ -362,6 +362,10 @@ internal sealed class AccessibleDataGrid : UserControl
         // definition. The row header is already the row's identity
         // under §8.7.
         string? previousRowIdentity = RowIdentityOf(_grid.CurrentCell.Item);
+        // Row-header text is not guaranteed unique — two notes can both
+        // be "Untitled". Where it repeats, the previous ordinal breaks
+        // the tie so the reader keeps the OCCURRENCE they were on.
+        int previousRowOrdinal = _items.IndexOf(_grid.CurrentCell.Item);
         int previousColumnIndex = _grid.CurrentCell.Column is { } previousColumn
             ? _grid.Columns.IndexOf(previousColumn)
             : -1;
@@ -400,8 +404,8 @@ internal sealed class AccessibleDataGrid : UserControl
         AutomationProperties.SetName(_summary, $"Summary: {summary}");
         AutomationProperties.SetName(_grid, accessibilityLabel);
 
-        WithoutAnnouncing(
-            () => RestoreReaderPosition(previousRowIdentity, previousColumnIndex));
+        WithoutAnnouncing(() => RestoreReaderPosition(
+            previousRowIdentity, previousColumnIndex, previousRowOrdinal));
 
         // Re-apply silently: ApplySort posts a GridSorted announcement,
         // which is right when the USER sorts and wrong when a
@@ -464,7 +468,8 @@ internal sealed class AccessibleDataGrid : UserControl
     /// than leaving currency where the grid put it, because nothing
     /// announces the move.
     /// </summary>
-    private void RestoreReaderPosition(string? rowIdentity, int columnIndex)
+    private void RestoreReaderPosition(
+        string? rowIdentity, int columnIndex, int previousOrdinal)
     {
         if (rowIdentity is null
             || columnIndex < 0
@@ -472,18 +477,33 @@ internal sealed class AccessibleDataGrid : UserControl
         {
             return;
         }
-        foreach (object row in _items)
+        // Nearest match to where the reader WAS, not the first match:
+        // with unique row headers these are the same row, and with
+        // repeated ones this is the difference between staying put and
+        // being moved to a namesake without an announcement. A
+        // previousOrdinal of -1 (no prior currency) degrades to the
+        // first match, which is the only sensible answer there.
+        int best = -1;
+        for (int index = 0; index < _items.Count; index++)
         {
             if (!string.Equals(
-                BoundRowIdentityOf(row), rowIdentity, StringComparison.Ordinal))
+                BoundRowIdentityOf(_items[index]), rowIdentity, StringComparison.Ordinal))
             {
                 continue;
             }
-            _grid.CurrentCell = new DataGridCellInfo(row, _grid.Columns[columnIndex]);
-            _grid.SelectedCells.Clear();
-            _grid.SelectedCells.Add(_grid.CurrentCell);
+            if (best < 0
+                || Math.Abs(index - previousOrdinal) < Math.Abs(best - previousOrdinal))
+            {
+                best = index;
+            }
+        }
+        if (best < 0)
+        {
             return;
         }
+        _grid.CurrentCell = new DataGridCellInfo(_items[best], _grid.Columns[columnIndex]);
+        _grid.SelectedCells.Clear();
+        _grid.SelectedCells.Add(_grid.CurrentCell);
     }
 
     /// <summary>
