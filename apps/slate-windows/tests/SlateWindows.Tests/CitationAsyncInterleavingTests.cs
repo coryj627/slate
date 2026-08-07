@@ -91,6 +91,14 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
     {
         for (int round = 0; round < 40; round++)
         {
+            // The SEED is not a panel scheduler and the drains below do
+            // not cover it, so without this await the barrier is really
+            // 40 x 2ms of wall clock — enough on a quiet dev box, not
+            // enough on a loaded CI runner, where the very next line's
+            // "the seed has settled" assertion failed intermittently.
+            // Awaiting the seam the suite already exposes makes the
+            // wait an actual wait.
+            await workspace.SeedWorkForTests;
             await Task.WhenAll(
                 workspace.Citations.DrainForTests(),
                 workspace.Bibliography.DrainForTests());
