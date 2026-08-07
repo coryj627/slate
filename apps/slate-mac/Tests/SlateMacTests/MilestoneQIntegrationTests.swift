@@ -172,12 +172,12 @@ final class MilestoneQIntegrationTests: XCTestCase {
 
         // Filter announcement matches the expected template.
         XCTAssertNotNil(
-            model.filterAnnouncement,
+            model.filterAnnouncementText,
             "Phase 3: filter change announces"
         )
         XCTAssertTrue(
-            model.filterAnnouncement!.contains("matching \"save\""),
-            "Phase 3: announcement template; got \(model.filterAnnouncement ?? "nil")"
+            model.filterAnnouncementText!.contains("matching \"save\""),
+            "Phase 3: announcement template; got \(model.filterAnnouncementText ?? "nil")"
         )
 
         // ============================================================
