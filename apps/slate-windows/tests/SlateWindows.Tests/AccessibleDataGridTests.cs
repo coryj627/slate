@@ -869,6 +869,58 @@ public sealed class AccessibleDataGridTests
         });
     }
 
+    /// <summary>
+    /// The sort is re-applied by COLUMN IDENTITY, not by position.
+    ///
+    /// Bind captured the sort as a bare index and re-applied it to
+    /// whatever column now sits at that index. Every consumer today
+    /// re-binds the same column list, so the index happens to agree —
+    /// but W4-6 swaps column sets per view into one grid instance, and
+    /// there the reader's "sort by Role" silently becomes "sort by
+    /// Name": right indicator, wrong column, no announcement.
+    /// </summary>
+    [Fact]
+    public void ARebindThatReordersColumnsKeepsTheSortOnTheSameColumn()
+    {
+        RunSta(() =>
+        {
+            IReadOnlyList<object> people =
+            [
+                new Person("Charlie", "Alpha"),
+                new Person("Alice", "Zulu"),
+                new Person("Bora", "Mid"),
+            ];
+            var name = new AccessibleGridColumn
+            {
+                Header = "Name",
+                Cell = row => ((Person)row).Name,
+                Sort = Comparer<object>.Create(
+                    (x, y) => string.CompareOrdinal(((Person)x).Name, ((Person)y).Name)),
+            };
+            var role = new AccessibleGridColumn
+            {
+                Header = "Role",
+                Cell = row => ((Person)row).Role,
+                Sort = Comparer<object>.Create(
+                    (x, y) => string.CompareOrdinal(((Person)x).Role, ((Person)y).Role)),
+            };
+            var grid = new AccessibleDataGrid { Announce = _ => { } };
+            grid.Bind([name, role], people, "3 rows.", "People");
+            _ = grid.ApplySort(1, ascending: true);
+            Assert.Equal("Charlie", Assert.IsType<Person>(grid.Grid.Items[0]).Name);
+
+            // Same grid instance, columns swapped.
+            grid.Bind([role, name], people, "3 rows.", "People");
+
+            Assert.Equal((0, true), grid.ActiveSort);
+            Assert.Equal("Charlie", Assert.IsType<Person>(grid.Grid.Items[0]).Name);
+            Assert.Equal(
+                System.ComponentModel.ListSortDirection.Ascending,
+                grid.Grid.Columns[0].SortDirection);
+            Assert.Null(grid.Grid.Columns[1].SortDirection);
+        });
+    }
+
     private static void RunSta(Action body)
     {
         Exception? failure = null;

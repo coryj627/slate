@@ -325,6 +325,24 @@ internal sealed class AccessibleDataGrid : UserControl
     {
         ArgumentNullException.ThrowIfNull(columns);
         ArgumentNullException.ThrowIfNull(rows);
+        // The user's sort is a user decision, and a re-publish is not
+        // the user changing their mind. Dropping it here meant that
+        // typing one character into a consuming surface's filter box
+        // silently reverted the ordering, cleared the header indicator,
+        // and reordered rows under the reader with no announcement.
+        //
+        // Carried as the column's HEADER, resolved back to an index
+        // below, and captured HERE because _columns is about to be
+        // replaced. A bare index re-applies the sort to whatever column
+        // now occupies that slot, which is the same column only as long
+        // as every re-bind passes the same list — true of every
+        // consumer today, false the moment one grid instance serves
+        // more than one column set.
+        (string Header, bool Ascending)? previousSort =
+            _activeSort is { } active && active.ColumnIndex < _columns.Count
+                ? (_columns[active.ColumnIndex].Header, active.Ascending)
+                : null;
+        _activeSort = null;
         _columns = columns;
         _rowAudioDescription = rowAudioDescription;
         _rowActions = rowActions ?? Array.Empty<AccessibleGridRowAction>();
@@ -347,15 +365,6 @@ internal sealed class AccessibleDataGrid : UserControl
         int previousColumnIndex = _grid.CurrentCell.Column is { } previousColumn
             ? _grid.Columns.IndexOf(previousColumn)
             : -1;
-        // The user's sort is a user decision, and a re-publish is not
-        // the user changing their mind. Dropping it here meant that
-        // typing one character into a consuming surface's filter box
-        // silently reverted the ordering, cleared the header indicator,
-        // and reordered rows under the reader with no announcement.
-        // Re-applied below, once the new rows are in.
-        (int ColumnIndex, bool Ascending)? previousSort = _activeSort;
-        _activeSort = null;
-
         _grid.Columns.Clear();
         for (int index = 0; index < columns.Count; index++)
         {
@@ -396,12 +405,21 @@ internal sealed class AccessibleDataGrid : UserControl
 
         // Re-apply silently: ApplySort posts a GridSorted announcement,
         // which is right when the USER sorts and wrong when a
-        // background re-publish restores what they already chose.
-        if (previousSort is { } sort
-            && sort.ColumnIndex < _columns.Count
-            && _columns[sort.ColumnIndex].Sort is not null)
+        // background re-publish restores what they already chose. A
+        // column that is gone, renamed, or no longer sortable drops the
+        // sort rather than moving it somewhere the user did not choose.
+        if (previousSort is { } sort)
         {
-            WithoutAnnouncing(() => ApplySort(sort.ColumnIndex, sort.Ascending));
+            for (int index = 0; index < _columns.Count; index++)
+            {
+                if (_columns[index].Sort is not null
+                    && string.Equals(
+                        _columns[index].Header, sort.Header, StringComparison.Ordinal))
+                {
+                    WithoutAnnouncing(() => ApplySort(index, sort.Ascending));
+                    break;
+                }
+            }
         }
     }
 
