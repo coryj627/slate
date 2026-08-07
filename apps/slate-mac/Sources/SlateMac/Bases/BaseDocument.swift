@@ -1000,15 +1000,23 @@ final class BaseDocument: ObservableObject {
         return "\(result.shownCount) of \(CountCopy.counted(total, "result", "results"))"
     }
 
+    /// The readback as vocabulary DATA — core owns the joining and the
+    /// optional clauses now (#969).
+    var whereAmIEvent: A11yEvent {
+        .baseWhereAmI(
+            base: displayName,
+            view: activeViewName,
+            quickFilter: quickFilterActive
+                ? (editedQuickFilterArgument ?? appliedQuickFilterText ?? "")
+                : nil)
+    }
+
+    /// Rendered readback text. Kept because callers legitimately need
+    /// the STRING — `basesWhereAmI()` returns it, and the results
+    /// popover carries it as a field — but it is no longer composed
+    /// here.
     var whereAmIReadback: String {
-        var parts = ["Base: \(displayName)"]
-        if let activeViewName {
-            parts.append("view: \(activeViewName)")
-        }
-        if quickFilterActive {
-            parts.append("quick filter: \(editedQuickFilterArgument ?? appliedQuickFilterText ?? "")")
-        }
-        return parts.joined(separator: ", ")
+        a11yRender(event: whereAmIEvent).text
     }
 
     private func clearQuickFilterState() {

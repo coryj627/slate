@@ -1289,10 +1289,8 @@ extension AppState {
     @discardableResult
     func basesWhereAmI() -> String? {
         guard let doc = activeBaseDocument else { return nil }
-        let text = doc.whereAmIReadback
-        // W0.5-3 residue: BaseDocument.whereAmIReadback
-        postAccessibilityAnnouncement(.hostComposed(text: text, priority: .medium))
-        return text
+        postAccessibilityAnnouncement(doc.whereAmIEvent)
+        return doc.whereAmIReadback
     }
 
     func clearBaseQuickFilterIfLeavingActiveTab(for destination: TabID) {
@@ -2731,10 +2729,13 @@ extension AppState {
 
     func basesResultsPopover() {
         guard let doc = activeBaseDocument, let result = doc.result else { return }
-        let suffix = doc.quickFilterActive ? " \(doc.whereAmIReadback)." : ""
-        // W0.5-3 residue: BasesResultSet.audioSummary + whereAmIReadback suffix
+        // `audioSummary` is core-composed already; the readback is
+        // appended only while a quick filter is active, and core owns
+        // that joining now (#969).
         postAccessibilityAnnouncement(
-            .hostComposed(text: "\(result.audioSummary)\(suffix)", priority: .medium))
+            .baseResultsPopover(
+                audioSummary: result.audioSummary,
+                whereAmI: doc.quickFilterActive ? doc.whereAmIReadback : nil))
     }
 
     @discardableResult

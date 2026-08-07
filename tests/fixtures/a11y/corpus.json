@@ -735,6 +735,31 @@
     "text": "Base refreshed."
   },
   {
+    "event": "BaseWhereAmI { base: \"Reading\", view: None, quick_filter: None }",
+    "priority": "medium",
+    "text": "Base: Reading"
+  },
+  {
+    "event": "BaseWhereAmI { base: \"Reading\", view: Some(\"Table\"), quick_filter: None }",
+    "priority": "medium",
+    "text": "Base: Reading, view: Table"
+  },
+  {
+    "event": "BaseWhereAmI { base: \"Reading\", view: Some(\"Table\"), quick_filter: Some(\"CAFE\") }",
+    "priority": "medium",
+    "text": "Base: Reading, view: Table, quick filter: CAFE"
+  },
+  {
+    "event": "BaseResultsPopover { audio_summary: \"12 results.\", where_am_i: None }",
+    "priority": "medium",
+    "text": "12 results."
+  },
+  {
+    "event": "BaseResultsPopover { audio_summary: \"12 results.\", where_am_i: Some(\"Base: Reading, quick filter: CAFE\") }",
+    "priority": "medium",
+    "text": "12 results. Base: Reading, quick filter: CAFE."
+  },
+  {
     "event": "DataviewConversionFailed { detail: \"unsupported query\" }",
     "priority": "medium",
     "text": "Dataview conversion failed: unsupported query"
