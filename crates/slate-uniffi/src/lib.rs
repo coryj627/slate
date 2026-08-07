@@ -6726,6 +6726,12 @@ pub enum A11yEvent {
     },
     CommandPaletteNeedsVault,
     SearchNeedsVault,
+    SearchResultsSummary {
+        count: u32,
+    },
+    SearchFailed {
+        message: String,
+    },
     SearchResultOpened {
         filename: String,
         line: u32,
@@ -7095,6 +7101,8 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::WelcomeShown { recent_vault_count } => C::WelcomeShown { recent_vault_count },
             F::CommandPaletteNeedsVault => C::CommandPaletteNeedsVault,
             F::SearchNeedsVault => C::SearchNeedsVault,
+            F::SearchResultsSummary { count } => C::SearchResultsSummary { count },
+            F::SearchFailed { message } => C::SearchFailed { message },
             F::SearchResultOpened {
                 filename,
                 line,
@@ -9287,6 +9295,86 @@ mod tests {
         assert_eq!(properties[2].key, "tags");
         assert_eq!(properties[2].kind, "tag_list");
         assert_eq!(properties[2].value_json, "[\"one\",\"two\"]");
+    }
+
+    /// The FFI mirror must carry EVERY core variant.
+    ///
+    /// `From<A11yEvent> for core::a11y::A11yEvent` is exhaustive, so the
+    /// compiler already proves mirror SUBSET-OF core and always has. Nothing
+    /// proved the other direction, and that gap is silent in the worst
+    /// way: a variant added to core alone builds clean here, builds
+    /// clean for the C# host (whose code does not name the new case
+    /// yet), and only fails when a host finally writes
+    /// `.someNewCase` and the generated bindings do not have it. That
+    /// is a full CI round-trip to learn about a one-line omission,
+    /// and #969 has five more families to convert.
+    #[test]
+    fn the_ffi_mirror_covers_every_core_a11y_variant() {
+        fn enum_body(source: &str) -> String {
+            let decl = source
+                .find("pub enum A11yEvent {")
+                .expect("A11yEvent declaration");
+            let open = decl + source[decl..].find('{').expect("opening brace");
+            let mut depth = 0usize;
+            for (offset, ch) in source[open..].char_indices() {
+                match ch {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            return source[open + 1..open + offset].to_string();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            panic!("unterminated A11yEvent declaration");
+        }
+
+        fn variant_names(source: &str) -> std::collections::BTreeSet<String> {
+            let body = enum_body(source);
+            let mut names = std::collections::BTreeSet::new();
+            let mut depth = 0usize;
+            for line in body.lines() {
+                let trimmed = line.trim();
+                if depth == 0 && !trimmed.starts_with("//") && !trimmed.starts_with('#') {
+                    let name = trimmed
+                        .trim_end_matches(',')
+                        .trim_end_matches('{')
+                        .trim_end_matches('(')
+                        .trim();
+                    if !name.is_empty()
+                        && name.starts_with(|c: char| c.is_ascii_uppercase())
+                        && name.chars().all(|c| c.is_ascii_alphanumeric())
+                    {
+                        names.insert(name.to_string());
+                    }
+                }
+                depth += trimmed.matches('{').count();
+                depth -= trimmed.matches('}').count().min(depth);
+            }
+            names
+        }
+
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mirror = std::fs::read_to_string(manifest.join("src/lib.rs")).expect("mirror source");
+        let core_source = std::fs::read_to_string(manifest.join("../slate-core/src/a11y.rs"))
+            .expect("core a11y source");
+
+        let mirror_variants = variant_names(&mirror);
+        let core_variants = variant_names(&core_source);
+        assert!(
+            core_variants.len() > 100,
+            "parsed only {} core variants — the parser broke, not the mirror",
+            core_variants.len()
+        );
+
+        let missing: Vec<&String> = core_variants.difference(&mirror_variants).collect();
+        assert!(
+            missing.is_empty(),
+            "these core A11yEvent variants are missing from the FFI mirror, so no \
+             host can name them: {missing:?}"
+        );
     }
 
     #[test]
