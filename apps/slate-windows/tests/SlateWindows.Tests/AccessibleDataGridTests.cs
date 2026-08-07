@@ -244,6 +244,41 @@ public sealed class AccessibleDataGridTests
     };
 
     /// <summary>
+    /// A re-publish must not ANNOUNCE a row move the user did not make.
+    ///
+    /// Bind nulls _lastAnnouncedRow, then the reader-position restore
+    /// assigns CurrentCell — so OnCurrentCellChanged sees a move from
+    /// "nothing" and posts GridRowMoved. ApplySort defuses exactly this
+    /// Every consumer that re-binds inherited a spurious announcement,
+    /// and for bulk-rename it lands AFTER the rename summary the user
+    /// actually asked for.
+    ///
+    /// Seeding _lastAnnouncedRow the way ApplySort does is NOT the fix:
+    /// it only flips OnCurrentCellChanged's branch, trading a spurious
+    /// GridRowMoved for a spurious GridCellMoved. The restore is not a
+    /// user action, so it must not speak at all — hence the assertion
+    /// is on the event count, not on the event kind.
+    /// </summary>
+    [Fact]
+    public void ARepublishRestoresPositionWithoutAnnouncingAMove()
+    {
+        RunSta(() =>
+        {
+            var announced = new List<A11yEvent>();
+            var grid = new AccessibleDataGrid { Announce = announced.Add };
+            IReadOnlyList<object> rows = FreshWidgets();
+            grid.Bind(WidgetColumns(), rows, "3 rows.", "Widgets");
+            grid.Grid.CurrentCell = new DataGridCellInfo(rows[1], grid.Grid.Columns[1]);
+            announced.Clear();
+
+            grid.Bind(WidgetColumns(), FreshWidgets(), "3 rows.", "Widgets");
+
+            Assert.Equal("two", Assert.IsType<Widget>(grid.Grid.CurrentCell.Item).Id);
+            Assert.Empty(announced);
+        });
+    }
+
+    /// <summary>
     /// The restore scan must be LINEAR in the row count.
     ///
     /// RowIdentityOf guards with _items.Contains — necessary at the

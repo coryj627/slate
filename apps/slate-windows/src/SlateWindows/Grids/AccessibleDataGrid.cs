@@ -391,7 +391,8 @@ internal sealed class AccessibleDataGrid : UserControl
         AutomationProperties.SetName(_summary, $"Summary: {summary}");
         AutomationProperties.SetName(_grid, accessibilityLabel);
 
-        RestoreReaderPosition(previousRowIdentity, previousColumnIndex);
+        WithoutAnnouncing(
+            () => RestoreReaderPosition(previousRowIdentity, previousColumnIndex));
 
         // Re-apply silently: ApplySort posts a GridSorted announcement,
         // which is right when the USER sorts and wrong when a
@@ -400,7 +401,7 @@ internal sealed class AccessibleDataGrid : UserControl
             && sort.ColumnIndex < _columns.Count
             && _columns[sort.ColumnIndex].Sort is not null)
         {
-            ReapplySortWithoutAnnouncing(sort.ColumnIndex, sort.Ascending);
+            WithoutAnnouncing(() => ApplySort(sort.ColumnIndex, sort.Ascending));
         }
     }
 
@@ -467,13 +468,22 @@ internal sealed class AccessibleDataGrid : UserControl
         }
     }
 
-    private void ReapplySortWithoutAnnouncing(int columnIndex, bool ascending)
+    /// <summary>
+    /// Run something that moves currency WITHOUT speaking.
+    ///
+    /// Currency changes announce, which is right when the user moved
+    /// and wrong when a background re-publish restored what they had.
+    /// Both non-user movers — the sort re-apply and the reader-position
+    /// restore — go through here, so neither can be silenced without
+    /// the other.
+    /// </summary>
+    private void WithoutAnnouncing(Action action)
     {
         Action<A11yEvent> announce = Announce;
         Announce = _ => { };
         try
         {
-            _ = ApplySort(columnIndex, ascending);
+            action();
         }
         finally
         {
