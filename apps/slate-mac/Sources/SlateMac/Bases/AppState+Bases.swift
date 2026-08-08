@@ -419,7 +419,7 @@ extension AppState {
             let resolved = BaseEmbedRequest.savedQuerySummary(
                 reference: reference, in: baseQueries.savedQueries)
             guard let resolved else {
-                postBaseActionAnnouncement("Saved query \(reference) is no longer available.")
+                postBaseActionEvent(.basesSavedQueryReferenceMissing(reference: reference))
                 return
             }
             openSavedQuery(resolved, target: .newTab)
@@ -712,7 +712,7 @@ extension AppState {
                 self.retargetOpenDashboards(dashboards)
                 self.refreshSavedQueryCommands(saved)
             case .failure(let message):
-                self.postBaseActionAnnouncement("Queries could not be refreshed: \(message)")
+                self.postBaseActionEvent(.basesQueriesRefreshFailed(detail: message))
             }
         }
         baseQueriesRefreshTask = task
@@ -753,7 +753,7 @@ extension AppState {
 
     func runSavedQuery(id: String) {
         guard let summary = savedQuerySummary(id: id) else {
-            postBaseActionAnnouncement("Saved query is no longer available.")
+            postBaseActionEvent(.basesSavedQueryMissing)
             return
         }
         openSavedQuery(summary)
@@ -770,9 +770,10 @@ extension AppState {
                     id: saved.id,
                     name: saved.name,
                     description: saved.description))
-            postBaseActionAnnouncement("Editing \(saved.name) in builder.")
+            postBaseActionEvent(.basesSavedQueryEditing(name: saved.name))
         } catch {
-            postBaseActionAnnouncement("Saved query could not be edited: \(error.localizedDescription)")
+            postBaseActionEvent(
+                .basesSavedQueryEditFailed(detail: error.localizedDescription))
         }
     }
 
@@ -780,16 +781,17 @@ extension AppState {
         guard let session = currentSession else { return }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            postBaseActionAnnouncement("Enter a saved query name before renaming.")
+            postBaseActionEvent(.basesSavedQueryRenameNameNeeded)
             return
         }
         do {
             try session.renameSavedQuery(id: id, name: trimmed)
             refreshBaseQueries()
             reloadDashboardDocumentsAfterSavedQueryChange()
-            postBaseActionAnnouncement("Renamed saved query to \(trimmed).")
+            postBaseActionEvent(.basesSavedQueryRenamed(name: trimmed))
         } catch {
-            postBaseActionAnnouncement("Saved query could not be renamed: \(error.localizedDescription)")
+            postBaseActionEvent(
+                .basesSavedQueryRenameFailed(detail: error.localizedDescription))
         }
     }
 
@@ -809,9 +811,10 @@ extension AppState {
             }
             refreshBaseQueries()
             reloadDashboardDocumentsAfterSavedQueryChange()
-            postBaseActionAnnouncement("Deleted saved query.")
+            postBaseActionEvent(.basesSavedQueryDeleted)
         } catch {
-            postBaseActionAnnouncement("Saved query could not be deleted: \(error.localizedDescription)")
+            postBaseActionEvent(
+                .basesSavedQueryDeleteFailed(detail: error.localizedDescription))
         }
     }
 
@@ -824,7 +827,7 @@ extension AppState {
         guard let session = currentSession else { return nil }
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            postBaseActionAnnouncement("Choose a .base path before exporting.")
+            postBaseActionEvent(.basesSavedQueryExportPathNeeded)
             return nil
         }
         guard admitStructuralMutationRequest() else { return nil }
@@ -868,10 +871,9 @@ extension AppState {
                     session: session,
                     changedPath: trimmed)?.value
                 guard self.ownsStructuralMutation(token, session: session) else { return }
-                self.postBaseActionAnnouncement("Exported saved query as \(trimmed).")
+                self.postBaseActionEvent(.basesSavedQueryExported(name: trimmed))
             case .failure(let message):
-                self.postBaseActionAnnouncement(
-                    "Saved query could not be exported: \(message)")
+                self.postBaseActionEvent(.basesSavedQueryExportFailed(detail: message))
             }
         }
         recordPendingStructuralTask(task)
@@ -881,7 +883,7 @@ extension AppState {
     func exportSavedQueryUsingSavePanel(id: String) {
         guard let originSession = currentSession else { return }
         guard let summary = savedQuerySummary(id: id) else {
-            postBaseActionAnnouncement("Saved query is no longer available.")
+            postBaseActionEvent(.basesSavedQueryMissing)
             return
         }
         guard admitStructuralMutationRequest() else { return }
@@ -899,7 +901,7 @@ extension AppState {
                     let path = Self.vaultRelativePath(
                         of: url, vaultURL: originVaultURL)
                 else {
-                    self.postBaseActionAnnouncement("Choose a path inside the vault.")
+                    self.postBaseActionEvent(.basesPathOutsideVault)
                     return
                 }
                 _ = self.exportSavedQuery(id: id, path: path)
@@ -1319,7 +1321,7 @@ extension AppState {
 
     func dockSavedQueryToSidebar(id: String, refreshDelayNanoseconds: UInt64 = 500_000_000) {
         guard let summary = savedQuerySummary(id: id) else {
-            postBaseActionAnnouncement("Saved query is no longer available.")
+            postBaseActionEvent(.basesSavedQueryMissing)
             return
         }
         basesDock.setTarget(.savedQuery(id: summary.id, name: summary.name))
