@@ -775,6 +775,31 @@
     "text": "1 of 2 results"
   },
   {
+    "event": "BaseRowReorderRefused { label: \"Sort 1\" }",
+    "priority": "medium",
+    "text": "Sort 1 cannot be moved."
+  },
+  {
+    "event": "BaseRowReorderAtBoundary { label: \"Sort 1\", at_first: true }",
+    "priority": "medium",
+    "text": "Sort 1 is already first."
+  },
+  {
+    "event": "BaseRowReorderAtBoundary { label: \"Sort 2\", at_first: false }",
+    "priority": "medium",
+    "text": "Sort 2 is already last."
+  },
+  {
+    "event": "BaseRowReorderMoved { label: \"Sort 1\", moved_up: false, position: 2, count: 3 }",
+    "priority": "medium",
+    "text": "Sort 1 moved down to position 2 of 3."
+  },
+  {
+    "event": "BaseRowReorderMoved { label: \"Status column\", moved_up: true, position: 1, count: 3 }",
+    "priority": "medium",
+    "text": "Status column moved up to position 1 of 3."
+  },
+  {
     "event": "DataviewConversionFailed { detail: \"unsupported query\" }",
     "priority": "medium",
     "text": "Dataview conversion failed: unsupported query"
