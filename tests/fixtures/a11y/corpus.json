@@ -915,6 +915,66 @@
     "text": "Choose a path inside the vault."
   },
   {
+    "event": "BasesDashboardNameNeeded",
+    "priority": "medium",
+    "text": "Enter a dashboard name before saving."
+  },
+  {
+    "event": "BasesDashboardSaved { name: \"Reading\" }",
+    "priority": "medium",
+    "text": "Saved dashboard Reading."
+  },
+  {
+    "event": "BasesDashboardSaveFailed { detail: \"io error\" }",
+    "priority": "medium",
+    "text": "Dashboard could not be saved: io error"
+  },
+  {
+    "event": "BasesDashboardUpdated { name: \"Reading\" }",
+    "priority": "medium",
+    "text": "Updated dashboard Reading."
+  },
+  {
+    "event": "BasesDashboardUpdateFailed { detail: \"io error\" }",
+    "priority": "medium",
+    "text": "Dashboard could not be updated: io error"
+  },
+  {
+    "event": "BasesDashboardSectionStale",
+    "priority": "medium",
+    "text": "Dashboard section changed; reload and try again."
+  },
+  {
+    "event": "BasesDashboardSectionRemoveFailed { detail: \"io error\" }",
+    "priority": "medium",
+    "text": "Dashboard section could not be removed: io error"
+  },
+  {
+    "event": "BasesDashboardSectionReplaceFailed { detail: \"io error\" }",
+    "priority": "medium",
+    "text": "Dashboard section could not be replaced: io error"
+  },
+  {
+    "event": "BasesDashboardDeleted",
+    "priority": "medium",
+    "text": "Deleted dashboard."
+  },
+  {
+    "event": "BasesDashboardDeleteFailed { detail: \"io error\" }",
+    "priority": "medium",
+    "text": "Dashboard could not be deleted: io error"
+  },
+  {
+    "event": "BasesDashboardEditFailed { detail: \"io error\" }",
+    "priority": "medium",
+    "text": "Dashboard could not be edited: io error"
+  },
+  {
+    "event": "BasesDashboardMissing",
+    "priority": "medium",
+    "text": "Dashboard is no longer available."
+  },
+  {
     "event": "DataviewConversionFailed { detail: \"unsupported query\" }",
     "priority": "medium",
     "text": "Dataview conversion failed: unsupported query"
