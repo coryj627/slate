@@ -3396,6 +3396,91 @@ public sealed class ReadingViewTests
             .SelectMany(paragraph => paragraph.Inlines.OfType<Hyperlink>())
             .Where(link => ReadingSemantics.IsCodeCopy(link));
 
+    /// <summary>
+    /// #1088: no automation peer may be claimed by two parents. WPF
+    /// stores ONE <c>_parent</c>/<c>_index</c> per peer, and its sibling
+    /// navigation is guarded on that index, so a peer reachable from two
+    /// parents has its sibling links overwritten by whichever subtree
+    /// was built last — it becomes a DEAD END in both directions and
+    /// every client walk truncates there.
+    ///
+    /// Measured live (2026-08-07, FlaUI cross-process): the task
+    /// checkbox was child 1 of the surface AND a child of its
+    /// ReadingListItemPeer, and a UIA client saw 2 of 9 children —
+    /// GetLastChild answered the 9th while NextSibling died at index 2.
+    /// A screen reader loses every element past that point silently.
+    ///
+    /// The invariant that prevents it: a structural peer over a
+    /// TextElement never re-exposes embedded controls, because
+    /// RichTextBoxAutomationPeer has ALREADY flattened them into the
+    /// surface's root collection.
+    /// </summary>
+    [Fact]
+    public void StructuralPeersNeverClaimAChildTheRootCollectionOwns()
+    {
+        RunSta(() =>
+        {
+            var surface = new ReadingSurface();
+            System.Windows.Automation.Peers.AutomationPeer surfacePeer =
+                System.Windows.Automation.Peers.UIElementAutomationPeer
+                    .CreatePeerForElement(surface)!;
+            surface.ApplyBuiltDocument(BuildSource(
+                "# Range note\n\n- [ ] open task\n\n```rust\nfn f() {}\n```\n"));
+            _ = surfacePeer.GetChildren();
+
+            var owners = new Dictionary<System.Windows.Automation.Peers.AutomationPeer, List<System.Windows.Automation.Peers.AutomationPeer>>(
+                ReferenceEqualityComparer.Instance);
+            var expanded = new HashSet<System.Windows.Automation.Peers.AutomationPeer>(
+                ReferenceEqualityComparer.Instance);
+            CollectPeerParents(surfacePeer, owners, expanded, depth: 0);
+
+            string[] duplicated = owners
+                .Where(entry => entry.Value.Count > 1)
+                .Select(entry =>
+                    $"{entry.Key.GetType().Name} claimed by "
+                    + string.Join(
+                        " AND ",
+                        entry.Value.Select(parent => parent.GetType().Name)))
+                .ToArray();
+
+            Assert.True(
+                duplicated.Length == 0,
+                "peers claimed by more than one parent:\n"
+                    + string.Join("\n", duplicated));
+        });
+    }
+
+    /// <summary>Record every parent that claims each peer, so a peer
+    /// reached from two subtrees is named rather than merely counted.
+    /// The depth guard and the expanded set keep a cyclic or
+    /// pathologically deep tree from hanging the suite.</summary>
+    private static void CollectPeerParents(
+        System.Windows.Automation.Peers.AutomationPeer parent,
+        Dictionary<System.Windows.Automation.Peers.AutomationPeer, List<System.Windows.Automation.Peers.AutomationPeer>> owners,
+        HashSet<System.Windows.Automation.Peers.AutomationPeer> expanded,
+        int depth)
+    {
+        if (depth > 12 || !expanded.Add(parent))
+        {
+            return;
+        }
+        foreach (System.Windows.Automation.Peers.AutomationPeer child in parent.GetChildren()
+            ?? new List<System.Windows.Automation.Peers.AutomationPeer>())
+        {
+            if (child is null)
+            {
+                continue;
+            }
+            if (!owners.TryGetValue(child, out List<System.Windows.Automation.Peers.AutomationPeer>? parents))
+            {
+                parents = new List<System.Windows.Automation.Peers.AutomationPeer>();
+                owners[child] = parents;
+            }
+            parents.Add(parent);
+            CollectPeerParents(child, owners, expanded, depth + 1);
+        }
+    }
+
     private static void PumpOneBackgroundPass()
     {
         var frame = new System.Windows.Threading.DispatcherFrame();
