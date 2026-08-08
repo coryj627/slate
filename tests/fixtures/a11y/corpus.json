@@ -845,6 +845,76 @@
     "text": "Saved sort by Status, descending."
   },
   {
+    "event": "BasesSavedQueryReferenceMissing { reference: \"Open tasks\" }",
+    "priority": "medium",
+    "text": "Saved query Open tasks is no longer available."
+  },
+  {
+    "event": "BasesSavedQueryMissing",
+    "priority": "medium",
+    "text": "Saved query is no longer available."
+  },
+  {
+    "event": "BasesQueriesRefreshFailed { detail: \"io error\" }",
+    "priority": "medium",
+    "text": "Queries could not be refreshed: io error"
+  },
+  {
+    "event": "BasesSavedQueryEditing { name: \"Open tasks\" }",
+    "priority": "medium",
+    "text": "Editing Open tasks in builder."
+  },
+  {
+    "event": "BasesSavedQueryEditFailed { detail: \"io error\" }",
+    "priority": "medium",
+    "text": "Saved query could not be edited: io error"
+  },
+  {
+    "event": "BasesSavedQueryRenameNameNeeded",
+    "priority": "medium",
+    "text": "Enter a saved query name before renaming."
+  },
+  {
+    "event": "BasesSavedQueryRenamed { name: \"Open tasks\" }",
+    "priority": "medium",
+    "text": "Renamed saved query to Open tasks."
+  },
+  {
+    "event": "BasesSavedQueryRenameFailed { detail: \"io error\" }",
+    "priority": "medium",
+    "text": "Saved query could not be renamed: io error"
+  },
+  {
+    "event": "BasesSavedQueryDeleted",
+    "priority": "medium",
+    "text": "Deleted saved query."
+  },
+  {
+    "event": "BasesSavedQueryDeleteFailed { detail: \"io error\" }",
+    "priority": "medium",
+    "text": "Saved query could not be deleted: io error"
+  },
+  {
+    "event": "BasesSavedQueryExportPathNeeded",
+    "priority": "medium",
+    "text": "Choose a .base path before exporting."
+  },
+  {
+    "event": "BasesSavedQueryExported { name: \"Open tasks.base\" }",
+    "priority": "medium",
+    "text": "Exported saved query as Open tasks.base."
+  },
+  {
+    "event": "BasesSavedQueryExportFailed { detail: \"io error\" }",
+    "priority": "medium",
+    "text": "Saved query could not be exported: io error"
+  },
+  {
+    "event": "BasesPathOutsideVault",
+    "priority": "medium",
+    "text": "Choose a path inside the vault."
+  },
+  {
     "event": "DataviewConversionFailed { detail: \"unsupported query\" }",
     "priority": "medium",
     "text": "Dataview conversion failed: unsupported query"

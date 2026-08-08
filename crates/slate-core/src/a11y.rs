@@ -558,6 +558,46 @@ pub enum A11yEvent {
         column: String,
         ascending: bool,
     },
+    /// The saved-query action family. These all reached AT through the
+    /// host's `postBaseActionAnnouncement(String)` funnel; #969 gives
+    /// each its own case so the Windows twin renders the same sentence
+    /// rather than re-typing it.
+    ///
+    /// Note the near-neighbours that are deliberately NOT reused:
+    /// `BasesSavedQueryNameNeeded` is "…before saving.",
+    /// `BasesSavedQueryRenameNameNeeded` is "…before renaming.".
+    BasesSavedQueryReferenceMissing {
+        reference: String,
+    },
+    BasesSavedQueryMissing,
+    BasesQueriesRefreshFailed {
+        detail: String,
+    },
+    BasesSavedQueryEditing {
+        name: String,
+    },
+    BasesSavedQueryEditFailed {
+        detail: String,
+    },
+    BasesSavedQueryRenameNameNeeded,
+    BasesSavedQueryRenamed {
+        name: String,
+    },
+    BasesSavedQueryRenameFailed {
+        detail: String,
+    },
+    BasesSavedQueryDeleted,
+    BasesSavedQueryDeleteFailed {
+        detail: String,
+    },
+    BasesSavedQueryExportPathNeeded,
+    BasesSavedQueryExported {
+        name: String,
+    },
+    BasesSavedQueryExportFailed {
+        detail: String,
+    },
+    BasesPathOutsideVault,
     DataviewConversionFailed {
         detail: String,
     },
@@ -1045,6 +1085,34 @@ impl A11yEvent {
                     "descending"
                 }
             ),
+            BasesSavedQueryReferenceMissing { reference } => {
+                format!("Saved query {reference} is no longer available.")
+            }
+            BasesSavedQueryMissing => "Saved query is no longer available.".to_owned(),
+            BasesQueriesRefreshFailed { detail } => {
+                format!("Queries could not be refreshed: {detail}")
+            }
+            BasesSavedQueryEditing { name } => format!("Editing {name} in builder."),
+            BasesSavedQueryEditFailed { detail } => {
+                format!("Saved query could not be edited: {detail}")
+            }
+            BasesSavedQueryRenameNameNeeded => {
+                "Enter a saved query name before renaming.".to_owned()
+            }
+            BasesSavedQueryRenamed { name } => format!("Renamed saved query to {name}."),
+            BasesSavedQueryRenameFailed { detail } => {
+                format!("Saved query could not be renamed: {detail}")
+            }
+            BasesSavedQueryDeleted => "Deleted saved query.".to_owned(),
+            BasesSavedQueryDeleteFailed { detail } => {
+                format!("Saved query could not be deleted: {detail}")
+            }
+            BasesSavedQueryExportPathNeeded => "Choose a .base path before exporting.".to_owned(),
+            BasesSavedQueryExported { name } => format!("Exported saved query as {name}."),
+            BasesSavedQueryExportFailed { detail } => {
+                format!("Saved query could not be exported: {detail}")
+            }
+            BasesPathOutsideVault => "Choose a path inside the vault.".to_owned(),
             DataviewConversionFailed { detail } => {
                 format!("Dataview conversion failed: {detail}")
             }
@@ -1609,6 +1677,38 @@ pub fn corpus() -> Vec<A11yEvent> {
             column: "Status".into(),
             ascending: false,
         },
+        BasesSavedQueryReferenceMissing {
+            reference: "Open tasks".into(),
+        },
+        BasesSavedQueryMissing,
+        BasesQueriesRefreshFailed {
+            detail: "io error".into(),
+        },
+        BasesSavedQueryEditing {
+            name: "Open tasks".into(),
+        },
+        BasesSavedQueryEditFailed {
+            detail: "io error".into(),
+        },
+        BasesSavedQueryRenameNameNeeded,
+        BasesSavedQueryRenamed {
+            name: "Open tasks".into(),
+        },
+        BasesSavedQueryRenameFailed {
+            detail: "io error".into(),
+        },
+        BasesSavedQueryDeleted,
+        BasesSavedQueryDeleteFailed {
+            detail: "io error".into(),
+        },
+        BasesSavedQueryExportPathNeeded,
+        BasesSavedQueryExported {
+            name: "Open tasks.base".into(),
+        },
+        BasesSavedQueryExportFailed {
+            detail: "io error".into(),
+        },
+        BasesPathOutsideVault,
         DataviewConversionFailed {
             detail: "unsupported query".into(),
         },
@@ -1999,6 +2099,20 @@ mod tests {
             (Medium, "Sorted by Status, descending"),
             (Medium, "Saved sort by Status, ascending."),
             (Medium, "Saved sort by Status, descending."),
+            (Medium, "Saved query Open tasks is no longer available."),
+            (Medium, "Saved query is no longer available."),
+            (Medium, "Queries could not be refreshed: io error"),
+            (Medium, "Editing Open tasks in builder."),
+            (Medium, "Saved query could not be edited: io error"),
+            (Medium, "Enter a saved query name before renaming."),
+            (Medium, "Renamed saved query to Open tasks."),
+            (Medium, "Saved query could not be renamed: io error"),
+            (Medium, "Deleted saved query."),
+            (Medium, "Saved query could not be deleted: io error"),
+            (Medium, "Choose a .base path before exporting."),
+            (Medium, "Exported saved query as Open tasks.base."),
+            (Medium, "Saved query could not be exported: io error"),
+            (Medium, "Choose a path inside the vault."),
             (Medium, "Dataview conversion failed: unsupported query"),
             (Medium, "Insert citation lands in V1.x. See Milestone L."),
             (

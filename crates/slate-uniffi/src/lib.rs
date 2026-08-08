@@ -7032,6 +7032,38 @@ pub enum A11yEvent {
         column: String,
         ascending: bool,
     },
+    BasesSavedQueryReferenceMissing {
+        reference: String,
+    },
+    BasesSavedQueryMissing,
+    BasesQueriesRefreshFailed {
+        detail: String,
+    },
+    BasesSavedQueryEditing {
+        name: String,
+    },
+    BasesSavedQueryEditFailed {
+        detail: String,
+    },
+    BasesSavedQueryRenameNameNeeded,
+    BasesSavedQueryRenamed {
+        name: String,
+    },
+    BasesSavedQueryRenameFailed {
+        detail: String,
+    },
+    BasesSavedQueryDeleted,
+    BasesSavedQueryDeleteFailed {
+        detail: String,
+    },
+    BasesSavedQueryExportPathNeeded,
+    BasesSavedQueryExported {
+        name: String,
+    },
+    BasesSavedQueryExportFailed {
+        detail: String,
+    },
+    BasesPathOutsideVault,
     DataviewConversionFailed {
         detail: String,
     },
@@ -7349,6 +7381,22 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::BaseSortSavedToView { column, ascending } => {
                 C::BaseSortSavedToView { column, ascending }
             }
+            F::BasesSavedQueryReferenceMissing { reference } => {
+                C::BasesSavedQueryReferenceMissing { reference }
+            }
+            F::BasesSavedQueryMissing => C::BasesSavedQueryMissing,
+            F::BasesQueriesRefreshFailed { detail } => C::BasesQueriesRefreshFailed { detail },
+            F::BasesSavedQueryEditing { name } => C::BasesSavedQueryEditing { name },
+            F::BasesSavedQueryEditFailed { detail } => C::BasesSavedQueryEditFailed { detail },
+            F::BasesSavedQueryRenameNameNeeded => C::BasesSavedQueryRenameNameNeeded,
+            F::BasesSavedQueryRenamed { name } => C::BasesSavedQueryRenamed { name },
+            F::BasesSavedQueryRenameFailed { detail } => C::BasesSavedQueryRenameFailed { detail },
+            F::BasesSavedQueryDeleted => C::BasesSavedQueryDeleted,
+            F::BasesSavedQueryDeleteFailed { detail } => C::BasesSavedQueryDeleteFailed { detail },
+            F::BasesSavedQueryExportPathNeeded => C::BasesSavedQueryExportPathNeeded,
+            F::BasesSavedQueryExported { name } => C::BasesSavedQueryExported { name },
+            F::BasesSavedQueryExportFailed { detail } => C::BasesSavedQueryExportFailed { detail },
+            F::BasesPathOutsideVault => C::BasesPathOutsideVault,
             F::DataviewConversionFailed { detail } => C::DataviewConversionFailed { detail },
             F::CitationInsertUnavailable => C::CitationInsertUnavailable,
             F::CitationWalkThrough => C::CitationWalkThrough,
