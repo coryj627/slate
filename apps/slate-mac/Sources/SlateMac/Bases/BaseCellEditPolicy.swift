@@ -13,11 +13,20 @@ enum BaseCellEditPolicy {
         return column.id.isEmpty ? nil : column.id
     }
 
+    /// Why this column refuses editing (#969). The host used to pick
+    /// between two literals here; now it supplies the discriminator and
+    /// core owns both nouns.
+    static func readOnlyEvent(for column: BasesColumn) -> A11yEvent {
+        .basesCellReadOnly(fileMetadata: column.id.hasPrefix("file."))
+    }
+
+    /// The same wording as a STATIC LABEL, for the grid's
+    /// `accessibilityHint`. Labels are excluded from #969 by design —
+    /// posting one as a notification would speak it unsolicited (the
+    /// TaskStatusPhrase precedent) — but the label and the announcement
+    /// must not drift, so both render the one event.
     static func readOnlyHint(for column: BasesColumn) -> String {
-        if column.id.hasPrefix("file.") {
-            return "read-only: file metadata"
-        }
-        return "read-only: computed"
+        a11yRender(event: readOnlyEvent(for: column)).text
     }
 
     static func draftText(from value: BasesValue) -> String {
@@ -38,17 +47,17 @@ enum BaseCellEditPolicy {
                 return .success(PropertyValue.integer(value: value))
             }
             guard let value = Double(trimmed), value.isFinite else {
-                return .failure(.init(message: "Must be a finite number."))
+                return .failure(.init(event: .basesCellMustBeFiniteNumber))
             }
             return .success(PropertyValue.float(value: value))
         case "integer":
             guard let value = Int64(trimmed) else {
-                return .failure(.init(message: "Must be a whole number."))
+                return .failure(.init(event: .basesCellMustBeWholeNumber))
             }
             return .success(PropertyValue.integer(value: value))
         case "float", "decimal":
             guard let value = Double(trimmed), value.isFinite else {
-                return .failure(.init(message: "Must be a finite decimal number."))
+                return .failure(.init(event: .basesCellMustBeFiniteDecimal))
             }
             return .success(PropertyValue.float(value: value))
         case "boolean", "bool", "checkbox":
@@ -58,11 +67,11 @@ enum BaseCellEditPolicy {
             case "false", "no", "0":
                 return .success(PropertyValue.boolean(value: false))
             default:
-                return .failure(.init(message: "Must be true or false."))
+                return .failure(.init(event: .basesCellMustBeBoolean))
             }
         case "date":
             guard looksLikeDate(trimmed) else {
-                return .failure(.init(message: "Date must be YYYY-MM-DD."))
+                return .failure(.init(event: .basesCellMustBeDate))
             }
             return .success(PropertyValue.date(value: trimmed))
         case "datetime":
@@ -123,7 +132,17 @@ enum BaseCellEditPolicy {
 }
 
 struct BaseCellEditValidationError: Error, Equatable {
-    let message: String
+    /// The canonical refusal (#969). The rendered text stays available
+    /// as `message` so callers and assertions keep their seam; equality
+    /// compares the rendered text so this stays Equatable without
+    /// requiring A11yEvent to be.
+    let event: A11yEvent
+
+    var message: String { a11yRender(event: event).text }
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.message == rhs.message
+    }
 }
 
 private extension String {

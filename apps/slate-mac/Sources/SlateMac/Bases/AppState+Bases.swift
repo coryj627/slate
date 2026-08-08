@@ -1501,7 +1501,7 @@ extension AppState {
         }
         basesDock.setTarget(target)
         if basesDock.publishMembership(membership) {
-            postBaseActionAnnouncement("Base dock updated for active note.")
+            postBaseActionEvent(.basesDockUpdatedForNote)
         }
     }
 
@@ -1884,9 +1884,15 @@ extension AppState {
             else { return [String]() }
 
             var announcements: [String] = []
-            func append(_ message: String) {
+            var events: [A11yEvent] = []
+            // Dedupe stays on the RENDERED text: two events can differ
+            // structurally and still say the same sentence, and the
+            // published list is what the suite asserts on.
+            func append(_ event: A11yEvent) {
+                let message = a11yRender(event: event).text
                 guard !announcements.contains(message) else { return }
                 announcements.append(message)
+                events.append(event)
             }
             func appendMembershipChange(
                 previous: BaseRowMembership,
@@ -1894,7 +1900,7 @@ extension AppState {
             ) {
                 let current = BaseRowMembership(rows: result?.rows ?? [])
                 guard previous != current, let summary = result?.audioSummary else { return }
-                append("Updated: \(summary)")
+                append(.basesRefreshUpdated(audioSummary: summary))
             }
 
             for plan in basePlans where settledIndices.contains(plan.workIndex) {
@@ -1958,7 +1964,7 @@ extension AppState {
                     columnID: selectedColumnID)
             }
             self.lastBaseRefreshAnnouncements = announcements
-            announcements.forEach(self.postBaseActionAnnouncement)
+            events.forEach { _ = self.postBaseActionEvent($0) }
             return announcements
         }
         visibleBasesRefreshTask = task
@@ -2754,7 +2760,8 @@ extension AppState {
         let link = baseWikilink(for: row.filePath)
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(link, forType: .string)
-        postBaseActionAnnouncement("Copied link to \(displayNameWithoutExtension(row.filePath)).")
+        postBaseActionEvent(
+            .basesLinkCopied(name: displayNameWithoutExtension(row.filePath)))
         return link
     }
 
@@ -2763,9 +2770,8 @@ extension AppState {
         openFile(row.filePath, target: .currentTab)
         workspace.activeLeaf = .backlinks
         focusLeafRegionRevealingPane()  // #882: un-hide the pane on reveal
-        let text = "Backlinks for \(displayNameWithoutExtension(row.filePath))."
-        postBaseActionAnnouncement(text)
-        return text
+        return postBaseActionEvent(
+            .basesBacklinksFor(name: displayNameWithoutExtension(row.filePath)))
     }
 
     /// The reserved "show local graph" row action (Bases gap O15 /
@@ -2814,7 +2820,7 @@ extension AppState {
         includeQuickFilter: Bool? = nil
     ) -> Task<String?, Never>? {
         guard let doc = activeBaseDocument else {
-            postBaseActionAnnouncement("Base view could not be copied: No active base.")
+            postBaseActionEvent(.basesViewCopyNoActiveBase)
             return nil
         }
         let shouldIncludeQuickFilter =
@@ -2828,11 +2834,10 @@ extension AppState {
                     includeQuickFilter: shouldIncludeQuickFilter)
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(markdown, forType: .string)
-                self.postBaseActionAnnouncement("Copied base view as Markdown.")
+                self.postBaseActionEvent(.basesViewCopiedAsMarkdown)
                 return markdown
             } catch {
-                self.postBaseActionAnnouncement(
-                    "Base view could not be copied: \(error.localizedDescription)")
+                self.postBaseActionEvent(.basesViewCopyFailed(detail: error.localizedDescription))
                 return nil
             }
         }
@@ -2858,7 +2863,7 @@ extension AppState {
 
     func basesOpenSelectedRow() {
         guard let row = activeBaseSelectedRowForCommand() else {
-            postBaseActionAnnouncement("Select a base row first.")
+            postBaseActionEvent(.basesRowSelectionNeeded)
             return
         }
         basesOpen(row: row)
@@ -2866,7 +2871,7 @@ extension AppState {
 
     func basesCopySelectedLink() {
         guard let row = activeBaseSelectedRowForCommand() else {
-            postBaseActionAnnouncement("Select a base row first.")
+            postBaseActionEvent(.basesRowSelectionNeeded)
             return
         }
         basesCopyLink(for: row)
@@ -2874,7 +2879,7 @@ extension AppState {
 
     func basesShowSelectedBacklinks() {
         guard let row = activeBaseSelectedRowForCommand() else {
-            postBaseActionAnnouncement("Select a base row first.")
+            postBaseActionEvent(.basesRowSelectionNeeded)
             return
         }
         basesShowBacklinks(for: row)
@@ -2882,11 +2887,11 @@ extension AppState {
 
     func basesEditSelectedProperty() {
         guard activeBaseSelectedRowForCommand() != nil else {
-            postBaseActionAnnouncement("Select a base row first.")
+            postBaseActionEvent(.basesRowSelectionNeeded)
             return
         }
         guard activeBaseSelectedColumn != nil else {
-            postBaseActionAnnouncement("No editable property is available for the selected row.")
+            postBaseActionEvent(.basesNoEditableProperty)
             return
         }
         baseEditPropertyRequestToken &+= 1
@@ -3190,9 +3195,7 @@ extension AppState {
         action: BasePropertyAction
     ) async -> String? {
         guard let key = BaseCellEditPolicy.propertyKey(for: column) else {
-            let hint = BaseCellEditPolicy.readOnlyHint(for: column)
-            postBaseActionAnnouncement(hint)
-            return hint
+            return postBaseActionEvent(BaseCellEditPolicy.readOnlyEvent(for: column))
         }
         guard admitBatchTrashWrite(to: [row.filePath]) else { return nil }
         guard let session = currentSession, let doc = activeBaseDocument else { return nil }
@@ -3233,23 +3236,23 @@ extension AppState {
                 BaseExactIdentity.matches($0.filePath, row.filePath)
                     && $0.taskOrdinal == row.taskOrdinal
             } ?? false)
-            let text: String
+            let event: A11yEvent
             if stillPresent {
                 switch action {
                 case .set(let value):
-                    text = "Saved. \(column.label): \(BaseCellEditPolicy.displayValue(value))"
+                    event = .basesCellSaved(
+                        column: column.label,
+                        value: BaseCellEditPolicy.displayValue(value))
                 case .delete:
-                    text = "Saved. \(column.label): empty"
+                    event = .basesCellCleared(column: column.label)
                 }
             } else {
-                text = "Saved. Row no longer matches this view"
+                event = .basesCellRowNoLongerMatches
             }
-            postBaseActionAnnouncement(text)
-            return text
+            return postBaseActionEvent(event)
         case .failure(let error):
-            let text = "Base edit failed: \(error.localizedDescription)"
-            postBaseActionAnnouncement(text)
-            return text
+            return postBaseActionEvent(
+                .basesCellEditFailed(detail: error.localizedDescription))
         }
     }
 
@@ -3263,8 +3266,8 @@ extension AppState {
         text: String,
         to url: URL,
         originSession: VaultSession,
-        successMessage: String,
-        failurePrefix: String,
+        successEvent: A11yEvent,
+        failureEvent: @escaping (String) -> A11yEvent,
         nativeThreadObserver: (@Sendable (Bool) -> Void)? = nil
     ) -> Task<Void, Never>? {
         guard currentSession === originSession else { return nil }
@@ -3322,9 +3325,9 @@ extension AppState {
                     guard self.ownsStructuralMutation(token, session: originSession)
                     else { return }
                 }
-                self.postBaseActionAnnouncement(successMessage)
+                self.postBaseActionEvent(successEvent)
             case .failure(let message):
-                self.postBaseActionAnnouncement("\(failurePrefix): \(message)")
+                self.postBaseActionEvent(failureEvent(message))
             }
         }
         recordPendingStructuralTask(task)
@@ -3354,13 +3357,12 @@ extension AppState {
                             text: text,
                             to: url,
                             originSession: originSession,
-                            successMessage: "Exported base view.",
-                            failurePrefix: "Base view could not be exported")
+                            successEvent: .basesViewExported,
+                            failureEvent: { .basesViewExportFailed(detail: $0) })
                     }
                 }
             } catch {
-                self.postBaseActionAnnouncement(
-                    "Base view could not be exported: \(error.localizedDescription)")
+                self.postBaseActionEvent(.basesViewExportFailed(detail: error.localizedDescription))
             }
         }
     }
@@ -3382,20 +3384,18 @@ extension AppState {
         case .alertSecondButtonReturn:
             return false
         default:
-            postBaseActionAnnouncement("\(verb) canceled.")
+            postBaseActionEvent(.basesQuickFilterChoiceCanceled(verb: verb))
             return nil
         }
     }
 
-    func postBaseActionAnnouncement(_ message: String) {
-        lastBaseActionAnnouncement = message
-        // W0.5-3 residue: Bases action message builders (postBaseActionAnnouncement callers)
-        postAccessibilityAnnouncement(.hostComposed(text: message, priority: .medium))
-    }
-
-    /// Typed sibling of `postBaseActionAnnouncement`: posts the canonical
-    /// event and feeds core's rendered text through the same
-    /// `lastBaseActionAnnouncement` seam the string form records.
+    /// The one Bases action funnel (#969). Posts the canonical event and
+    /// records core's rendered text on `lastBaseActionAnnouncement`,
+    /// which is the seam the views and the suite read.
+    ///
+    /// Its string-taking predecessor is GONE: it was the last
+    /// `.hostComposed` site in Bases, with 51 callers composing ~40
+    /// sentences the Windows twin would have had to re-type.
     @discardableResult
     func postBaseActionEvent(_ event: A11yEvent) -> String {
         let text = a11yRender(event: event).text
