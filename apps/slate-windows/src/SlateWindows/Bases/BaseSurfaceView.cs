@@ -197,6 +197,11 @@ internal sealed class BaseSurfaceView : UserControl
         set => SetValue(ModelProperty, value);
     }
 
+    /// <summary>The dock/read-only posture (the mac
+    /// BaseReadOnlyResultView): no editing seam, no row actions, no
+    /// activation — navigation and the quick filter remain.</summary>
+    public bool IsReadOnlySurface { get; set; }
+
     /// <summary>The transient per-TAB renderer override (mac keys it
     /// by tab, not by document — two tabs on one source may render
     /// differently). Set by the viewAsTable/viewAsList commands.</summary>
@@ -568,6 +573,20 @@ internal sealed class BaseSurfaceView : UserControl
         foreach (BasesRow row in result.Rows)
         {
             rows.Add(new BaseGridRowViewModel(row));
+        }
+        if (IsReadOnlySurface)
+        {
+            _grid.Bind(
+                columns,
+                rows,
+                summary: BaseSummaryFormatter.SummaryText(result, model.QuickFilterActive),
+                accessibilityLabel: result.AudioSummary,
+                rowAudioDescription: static row =>
+                    ((BaseGridRowViewModel)row).AudioDescription);
+            _grid.SetSortIndicator(model.SortState);
+            _grid.CurrentRowChanged -= OnCurrentRowChanged;
+            _grid.CurrentRowChanged += OnCurrentRowChanged;
+            return;
         }
         var rowActions = new List<SlateWindows.Grids.AccessibleGridRowAction>
         {

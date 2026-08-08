@@ -9,6 +9,20 @@ namespace SlateWindows.Bases;
 /// <summary>The document's load posture (the mac LoadState twin).
 /// Degraded is READY WITH A BANNER: content renders under the message
 /// (contract C4); Failed is terminal until Retry.</summary>
+/// <summary>The dock target (the mac BasesDockTarget twin), compared
+/// byte-exact on kind+key.</summary>
+internal enum BasesDockTargetKind
+{
+    File,
+    SavedQuery,
+    Dashboard,
+}
+
+internal sealed record BasesDockTargetState(
+    BasesDockTargetKind Kind,
+    string Key,
+    string Name);
+
 internal enum BaseLoadState
 {
     Loading,
@@ -58,12 +72,47 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         _announce = announce;
     }
 
-    /// <summary>Vault-relative path — the source identity. Compared
+    private BaseDocumentViewModel(
+        VaultSession session,
+        string savedQueryId,
+        string savedQueryName,
+        Action<A11yEvent> announce,
+        bool synchronousForTests)
+        : base(synchronousForTests)
+    {
+        _session = session;
+        Path = string.Empty;
+        _savedQueryId = savedQueryId;
+        _savedQueryName = savedQueryName;
+        _announce = announce;
+    }
+
+    /// <summary>A saved-query document (the mac BaseDocumentSource
+    /// .savedQuery arm): an EPHEMERAL query handle — one view, never
+    /// editable as a file, so SaveSortToView refuses silently and the
+    /// transient sort stays transient.</summary>
+    public static BaseDocumentViewModel ForSavedQuery(
+        VaultSession session,
+        string id,
+        string name,
+        Action<A11yEvent> announce,
+        bool synchronousForTests = false) =>
+        new(session, id, name, announce, synchronousForTests);
+
+    private readonly string? _savedQueryId;
+    private readonly string? _savedQueryName;
+
+    public bool IsSavedQuery => _savedQueryId is not null;
+
+    internal string? SavedQueryId => _savedQueryId;
+
+    /// <summary>Vault-relative path — the source identity for
+    /// file-backed documents (empty for saved queries). Compared
     /// byte-exact (Ordinal) everywhere, never culture-aware.</summary>
     public string Path { get; }
 
-    public string DisplayName =>
-        System.IO.Path.GetFileNameWithoutExtension(Path);
+    public string DisplayName => _savedQueryName
+        ?? System.IO.Path.GetFileNameWithoutExtension(Path);
 
     public BaseLoadState State
     {
@@ -252,6 +301,12 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
     /// on failure; silent when no sort is applied (mac returns nil).</summary>
     public void SaveSortToView()
     {
+        if (IsSavedQuery)
+        {
+            // Ephemeral query handles cannot be edited as .base files
+            // (core's own refusal); mac's save-sort is silent here.
+            return;
+        }
         if (IsShutDown
             || State is BaseLoadState.Failed or BaseLoadState.Loading
             || Result is not { } result
@@ -454,7 +509,9 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                     return;
                 }
                 CloseHandleLocked();
-                handle = _session.OpenBase(Path);
+                handle = _savedQueryId is { } savedQueryId
+                    ? _session.OpenSavedQuery(savedQueryId)
+                    : _session.OpenBase(Path);
                 _handle = handle;
                 views = _session.BaseViews(handle);
             }
@@ -568,7 +625,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                 try
                 {
                     result = _session.BaseExecute(
-                        handle, view, thisPath: null, quickFilter, cancel);
+                        handle, view, ThisPath, quickFilter, cancel);
                 }
                 finally
                 {
@@ -613,6 +670,12 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
             }
         });
     }
+
+    /// <summary>The dock's follow-the-active-note context: threaded
+    /// as base_execute's this_path so `this`-relative queries resolve
+    /// against the note the dock follows (contract C12). Tab documents
+    /// leave it null.</summary>
+    internal string? ThisPath { get; set; }
 
     private string? NormalizedFilter()
     {
@@ -737,7 +800,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                 {
                     using var cancel = new CancelToken();
                     result = _session.BaseExecute(
-                        handle, view, thisPath: null, NormalizedFilter(), cancel);
+                        handle, view, ThisPath, NormalizedFilter(), cancel);
                 }
                 catch (VaultException executeFailure)
                 {

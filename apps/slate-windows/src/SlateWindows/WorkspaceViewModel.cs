@@ -235,6 +235,10 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     }
     public bool IsBase => Item.Kind == WorkspaceItemKind.Base;
 
+    public bool IsSavedQueryTab => Item.Kind == WorkspaceItemKind.SavedQuery;
+
+    public bool IsDashboardTab => Item.Kind == WorkspaceItemKind.Dashboard;
+
     /// <summary>W4-6 (#738): the shared per-source Bases document —
     /// attached by the workspace registry at tab creation (contract
     /// C3). Null on every other tab kind, and on Base tabs only
@@ -247,9 +251,22 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         OnPropertyChanged(nameof(Base));
     }
 
-    public bool IsBaseVisible => IsBase;
+    /// <summary>The dashboard tab's document (contract C12), attached
+    /// by the same registry funnel as Base.</summary>
+    public Bases.DashboardViewModel? Dashboard { get; private set; }
 
-    public bool IsPlaceholder => !IsMarkdown && !IsBase;
+    internal void AttachDashboard(Bases.DashboardViewModel document)
+    {
+        Dashboard = document;
+        OnPropertyChanged(nameof(Dashboard));
+    }
+
+    public bool IsDashboardVisible => IsDashboardTab;
+
+    public bool IsBaseVisible => IsBase || IsSavedQueryTab;
+
+    public bool IsPlaceholder =>
+        !IsMarkdown && !IsBase && !IsSavedQueryTab && !IsDashboardTab;
     public string KindLabel => Item.Kind switch
     {
         WorkspaceItemKind.Canvas => "Canvas",
@@ -1208,14 +1225,33 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
 
     internal Bases.BaseDocumentViewModel BaseDocumentFor(string path)
     {
-        if (!_baseDocuments.TryGetValue(path, out Bases.BaseDocumentViewModel? document))
+        string key = "file:" + path;
+        if (!_baseDocuments.TryGetValue(key, out Bases.BaseDocumentViewModel? document))
         {
             document = new Bases.BaseDocumentViewModel(
                 _session,
                 path,
                 _announce,
                 synchronousForTests: !_startInteractionBackgroundWork);
-            _baseDocuments[path] = document;
+            _baseDocuments[key] = document;
+            InstallBaseDocumentSeams(document);
+            document.Load();
+        }
+        return document;
+    }
+
+    internal Bases.BaseDocumentViewModel BaseDocumentForSavedQuery(string id, string name)
+    {
+        string key = "query:" + id;
+        if (!_baseDocuments.TryGetValue(key, out Bases.BaseDocumentViewModel? document))
+        {
+            document = Bases.BaseDocumentViewModel.ForSavedQuery(
+                _session,
+                id,
+                name,
+                _announce,
+                synchronousForTests: !_startInteractionBackgroundWork);
+            _baseDocuments[key] = document;
             InstallBaseDocumentSeams(document);
             document.Load();
         }
@@ -1233,13 +1269,18 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         {
             if (tab.IsBase)
             {
-                live.Add(tab.Path);
+                live.Add("file:" + tab.Path);
+            }
+            else if (tab.Item.Kind == WorkspaceItemKind.SavedQuery
+                && tab.Item.Id is { Length: > 0 } id)
+            {
+                live.Add("query:" + id);
             }
         }
-        foreach (string path in _baseDocuments.Keys.Where(key => !live.Contains(key)).ToList())
+        foreach (string key in _baseDocuments.Keys.Where(k => !live.Contains(k)).ToList())
         {
-            _baseDocuments[path].Shutdown();
-            _baseDocuments.Remove(path);
+            _baseDocuments[key].Shutdown();
+            _baseDocuments.Remove(key);
         }
     }
 
@@ -1453,6 +1494,8 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     /// VM, so over-calling is safe and refetch-free.</summary>
     internal void SyncPanels()
     {
+        // W4-6: the dock follows the active note (contract C12).
+        BasesDockFollowActiveNote();
         Panels.NoteChanged(
             ActiveGroup.ActiveTab is { IsMarkdown: true } tab ? tab.Path : null);
         // W4-5: the citations leaf follows the same active-note funnel;
@@ -1511,6 +1554,12 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 if (string.Equals(value.Id, "bibliography", StringComparison.Ordinal))
                 {
                     Bibliography.EnsureLoaded();
+                }
+                // W4-6: revealing the queries leaf refreshes its lists
+                // (the mac onAppear refresh) - idempotent reads only.
+                if (string.Equals(value.Id, "queries", StringComparison.Ordinal))
+                {
+                    RefreshBaseQueries();
                 }
                 Persist();
             }
@@ -1762,6 +1811,12 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             document.Shutdown();
         }
         _baseDocuments.Clear();
+        foreach (Bases.DashboardViewModel dashboard in _dashboardDocuments.Values)
+        {
+            dashboard.Shutdown();
+        }
+        _dashboardDocuments.Clear();
+        ClearBasesDock();
         Persist();
         foreach (WorkspaceTabViewModel tab in Groups.SelectMany(group => group.Tabs))
         {

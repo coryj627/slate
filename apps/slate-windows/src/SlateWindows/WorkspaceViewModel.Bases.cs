@@ -306,6 +306,514 @@ internal sealed partial class WorkspaceViewModel
     private int _basesWriteFunnelId;
     private readonly HashSet<string> _basesFunnelAnnouncedSummaries = new(StringComparer.Ordinal);
 
+    private readonly Dictionary<string, DashboardViewModel> _dashboardDocuments =
+        new(StringComparer.Ordinal);
+
+    internal DashboardViewModel DashboardFor(string id, string name)
+    {
+        if (!_dashboardDocuments.TryGetValue(id, out DashboardViewModel? document))
+        {
+            document = new DashboardViewModel(
+                _session, id, name, _announce,
+                synchronousForTests: !_startInteractionBackgroundWork);
+            _dashboardDocuments[id] = document;
+            document.Load();
+        }
+        return document;
+    }
+
+    private void ReleaseUnreferencedDashboards()
+    {
+        if (_dashboardDocuments.Count == 0)
+        {
+            return;
+        }
+        var live = new HashSet<string>(StringComparer.Ordinal);
+        foreach (WorkspaceTabViewModel tab in Groups.SelectMany(group => group.Tabs))
+        {
+            if (tab.IsDashboardTab && tab.Item.Id is { Length: > 0 } id)
+            {
+                live.Add(id);
+            }
+        }
+        if (BasesDockTarget is { Kind: BasesDockTargetKind.Dashboard } dockTarget)
+        {
+            live.Add(dockTarget.Key);
+        }
+        foreach (string id in _dashboardDocuments.Keys.Where(k => !live.Contains(k)).ToList())
+        {
+            _dashboardDocuments[id].Shutdown();
+            _dashboardDocuments.Remove(id);
+        }
+    }
+
+    internal void OpenDashboard(string id, string name) =>
+        OpenItem(
+            new WorkspaceItemState(WorkspaceItemKind.Dashboard, string.Empty, id, name),
+            WorkspaceOpenTarget.NewTab);
+
+    internal void DeleteDashboard(string id)
+    {
+        try
+        {
+            _session.DeleteDashboard(id);
+        }
+        catch (VaultException failure)
+        {
+            _announce(new A11yEvent.BasesDashboardDeleteFailed(failure.Message));
+            return;
+        }
+        foreach (WorkspaceGroupViewModel group in Groups)
+        {
+            foreach (WorkspaceTabViewModel tab in group.Tabs.Where(t =>
+                t.IsDashboardTab
+                && string.Equals(t.Item.Id, id, StringComparison.Ordinal)).ToList())
+            {
+                CloseTab(tab);
+            }
+        }
+        if (BasesDockTarget is { Kind: BasesDockTargetKind.Dashboard } target
+            && string.Equals(target.Key, id, StringComparison.Ordinal))
+        {
+            ClearBasesDock();
+        }
+        _announce(new A11yEvent.BasesDashboardDeleted());
+        RefreshBaseQueries();
+    }
+
+    // --- The dashboard editor overlay (contract C12; W4-5 D-1:
+    // in-window overlay, never a Popup). Missing sections repair
+    // through THIS editor (divergence D-19: mac also has inline
+    // per-section repair actions). ---
+
+    private DashboardEditorViewModel? _dashboardEditor;
+
+    public DashboardEditorViewModel? DashboardEditorSheet
+    {
+        get => _dashboardEditor;
+        private set => SetField(ref _dashboardEditor, value);
+    }
+
+    internal void OpenDashboardEditor(string? dashboardId)
+    {
+        var editor = new DashboardEditorViewModel(
+            dashboardId,
+            dashboardId is null
+                ? string.Empty
+                : Dashboards.FirstOrDefault(d =>
+                    string.Equals(d.Id, dashboardId, StringComparison.Ordinal))?.Name
+                    ?? string.Empty);
+        if (dashboardId is not null)
+        {
+            try
+            {
+                Dashboard dashboard = _session.GetDashboard(dashboardId);
+                foreach (DashboardSectionStatus status in dashboard.Sections)
+                {
+                    editor.Sections.Add(new DashboardEditorSection(
+                        status.SavedQueryId,
+                        status.SavedQueryName
+                            ?? (status.Missing
+                                ? $"Missing: {status.SavedQueryId}"
+                                : status.SavedQueryId))
+                    {
+                        HeadingOverride = status.HeadingOverride ?? string.Empty,
+                        ViewOverride = status.ViewOverride ?? string.Empty,
+                    });
+                }
+            }
+            catch (VaultException failure)
+            {
+                _announce(new A11yEvent.BasesDashboardEditFailed(failure.Message));
+                return;
+            }
+        }
+        DashboardEditorSheet = editor;
+    }
+
+    internal void CloseDashboardEditor() => DashboardEditorSheet = null;
+
+    internal void SaveDashboardEditor()
+    {
+        if (DashboardEditorSheet is not { } editor)
+        {
+            return;
+        }
+        string name = editor.Name.Trim();
+        if (name.Length == 0)
+        {
+            _announce(new A11yEvent.BasesDashboardNameNeeded());
+            return;
+        }
+        DashboardSection[] sections = editor.DraftSections();
+        try
+        {
+            if (editor.DashboardId is { } id)
+            {
+                _session.UpdateDashboard(id, name, sections);
+                _announce(new A11yEvent.BasesDashboardUpdated(name));
+                if (_dashboardDocuments.TryGetValue(id, out DashboardViewModel? open))
+                {
+                    open.Load();
+                }
+            }
+            else
+            {
+                _ = _session.SaveDashboard(name, sections);
+                _announce(new A11yEvent.BasesDashboardSaved(name));
+            }
+        }
+        catch (VaultException failure)
+        {
+            _announce(editor.DashboardId is null
+                ? new A11yEvent.BasesDashboardSaveFailed(failure.Message)
+                : new A11yEvent.BasesDashboardUpdateFailed(failure.Message));
+            return;
+        }
+        DashboardEditorSheet = null;
+        RefreshBaseQueries();
+    }
+
+    // --- The dock (contract C12): one target following the active
+    // note, read-only, 500 ms debounce, identity-guarded. ---
+
+    internal BasesDockTargetState? BasesDockTarget
+    {
+        get => _basesDockTarget;
+        private set => SetField(ref _basesDockTarget, value);
+    }
+
+    private BasesDockTargetState? _basesDockTarget;
+    private BaseDocumentViewModel? _basesDockDocument;
+    private DashboardViewModel? _basesDockDashboard;
+    private System.Windows.Threading.DispatcherTimer? _dockFollowTimer;
+
+    public BaseDocumentViewModel? BasesDockDocument
+    {
+        get => _basesDockDocument;
+        private set => SetField(ref _basesDockDocument, value);
+    }
+
+    public DashboardViewModel? BasesDockDashboard
+    {
+        get => _basesDockDashboard;
+        private set => SetField(ref _basesDockDashboard, value);
+    }
+
+    internal void DockBaseFileToSidebar(string path, string name) =>
+        SetBasesDockTarget(new BasesDockTargetState(
+            BasesDockTargetKind.File, path, name));
+
+    internal void DockSavedQueryToSidebar(string id, string name) =>
+        SetBasesDockTarget(new BasesDockTargetState(
+            BasesDockTargetKind.SavedQuery, id, name));
+
+    internal void DockDashboardToSidebar(string id, string name) =>
+        SetBasesDockTarget(new BasesDockTargetState(
+            BasesDockTargetKind.Dashboard, id, name));
+
+    private void SetBasesDockTarget(BasesDockTargetState target)
+    {
+        ClearBasesDockDocuments();
+        BasesDockTarget = target;
+        switch (target.Kind)
+        {
+            case BasesDockTargetKind.File:
+                var fileDocument = new BaseDocumentViewModel(
+                    _session, target.Key, _announce,
+                    synchronousForTests: !_startInteractionBackgroundWork)
+                {
+                    ThisPath = BasesDockActiveNotePath(),
+                };
+                BasesDockDocument = fileDocument;
+                fileDocument.Load();
+                break;
+            case BasesDockTargetKind.SavedQuery:
+                BaseDocumentViewModel queryDocument =
+                    BaseDocumentViewModel.ForSavedQuery(
+                        _session, target.Key, target.Name, _announce,
+                        synchronousForTests: !_startInteractionBackgroundWork);
+                queryDocument.ThisPath = BasesDockActiveNotePath();
+                BasesDockDocument = queryDocument;
+                queryDocument.Load();
+                break;
+            case BasesDockTargetKind.Dashboard:
+                var dashboard = new DashboardViewModel(
+                    _session, target.Key, target.Name, _announce,
+                    synchronousForTests: !_startInteractionBackgroundWork);
+                BasesDockDashboard = dashboard;
+                dashboard.Load();
+                break;
+        }
+        ActiveLeaf = Leaves.Single(leaf =>
+            string.Equals(leaf.Id, "basesDock", StringComparison.Ordinal));
+        IsRightPaneVisible = true;
+        _announce(new A11yEvent.BasesDockUpdatedForNote());
+    }
+
+    internal void ClearBasesDock()
+    {
+        ClearBasesDockDocuments();
+        BasesDockTarget = null;
+    }
+
+    private void ClearBasesDockDocuments()
+    {
+        _dockFollowTimer?.Stop();
+        BasesDockDocument?.Shutdown();
+        BasesDockDocument = null;
+        BasesDockDashboard?.Shutdown();
+        BasesDockDashboard = null;
+    }
+
+    private string? BasesDockActiveNotePath() =>
+        ActiveGroup.ActiveTab is { IsMarkdown: true } tab ? tab.Path : null;
+
+    /// <summary>Active-note change → 500 ms debounce → re-execute the
+    /// dock with the new this_path (the mac cadence). Synchronous test
+    /// mode follows inline so the facts are deterministic.</summary>
+    internal void BasesDockFollowActiveNote()
+    {
+        if (BasesDockDocument is null)
+        {
+            return;
+        }
+        if (!_startInteractionBackgroundWork)
+        {
+            BasesDockFollowBody();
+            return;
+        }
+        _dockFollowTimer?.Stop();
+        _dockFollowTimer ??= new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(500),
+        };
+        _dockFollowTimer.Tick += DockFollowTick;
+        _dockFollowTimer.Tick -= DockFollowTick;
+        _dockFollowTimer.Tick += DockFollowTick;
+        _dockFollowTimer.Start();
+    }
+
+    private void DockFollowTick(object? sender, EventArgs e)
+    {
+        _dockFollowTimer?.Stop();
+        BasesDockFollowBody();
+    }
+
+    private void BasesDockFollowBody()
+    {
+        if (BasesDockDocument is not { } document)
+        {
+            return;
+        }
+        string? thisPath = BasesDockActiveNotePath();
+        if (string.Equals(document.ThisPath, thisPath, StringComparison.Ordinal))
+        {
+            return;
+        }
+        document.ThisPath = thisPath;
+        document.Refresh();
+        _announce(new A11yEvent.BasesDockUpdatedForNote());
+    }
+
+    /// <summary>ONE attach funnel for every tab construction site
+    /// (AddTab, restore, duplicate — the duplicate site's target-typed
+    /// `new` hid from the first sweep; a helper cannot be skipped).</summary>
+    private void AttachBaseDocumentIfNeeded(WorkspaceTabViewModel tab)
+    {
+        if (tab.IsBase)
+        {
+            tab.AttachBaseDocument(BaseDocumentFor(tab.Path));
+        }
+        else if (tab.IsSavedQueryTab && tab.Item.Id is { Length: > 0 } id)
+        {
+            tab.AttachBaseDocument(
+                BaseDocumentForSavedQuery(id, tab.Item.Name ?? "Saved query"));
+        }
+        else if (tab.IsDashboardTab && tab.Item.Id is { Length: > 0 } dashboardId)
+        {
+            tab.AttachDashboard(
+                DashboardFor(dashboardId, tab.Item.Name ?? "Dashboard"));
+        }
+    }
+
+    /// <summary>The queries-leaf state (the mac BaseQueriesState twin):
+    /// saved queries, base files, dashboards, and the pinned ids
+    /// (app-level, persisted). Refreshed on leaf reveal and after every
+    /// mutating action; failure announces BasesQueriesRefreshFailed and
+    /// keeps the previous lists.</summary>
+    public System.Collections.ObjectModel.ObservableCollection<SavedQuerySummary>
+        SavedQueries
+    { get; } = [];
+
+    public System.Collections.ObjectModel.ObservableCollection<BaseFileSummary>
+        BaseFiles
+    { get; } = [];
+
+    public System.Collections.ObjectModel.ObservableCollection<DashboardSummary>
+        Dashboards
+    { get; } = [];
+
+    private readonly HashSet<string> _pinnedSavedQueryIds = new(StringComparer.Ordinal);
+    private int _queriesRefreshGeneration;
+
+    internal IReadOnlyCollection<string> PinnedSavedQueryIdsForTests => _pinnedSavedQueryIds;
+
+    internal void RefreshBaseQueries()
+    {
+        int generation = Interlocked.Increment(ref _queriesRefreshGeneration);
+        if (!_startInteractionBackgroundWork)
+        {
+            RefreshBaseQueriesBody(generation);
+            return;
+        }
+        _ = Task.Run(() => RefreshBaseQueriesBody(generation));
+    }
+
+    private void RefreshBaseQueriesBody(int generation)
+    {
+        SavedQuerySummary[] savedQueries;
+        BaseFileSummary[] baseFiles;
+        DashboardSummary[] dashboards;
+        try
+        {
+            savedQueries = _session.ListSavedQueries();
+            baseFiles = _session.BasesList();
+            dashboards = _session.ListDashboards();
+        }
+        catch (VaultException failure)
+        {
+            RunOnDispatcher(() =>
+                _announce(new A11yEvent.BasesQueriesRefreshFailed(failure.Message)));
+            return;
+        }
+        RunOnDispatcher(() =>
+        {
+            if (Volatile.Read(ref _queriesRefreshGeneration) != generation)
+            {
+                return;
+            }
+            // Pinned first in pin order, then case-insensitive name
+            // with id tiebreak (the mac ordering).
+            SavedQueries.Clear();
+            foreach (SavedQuerySummary summary in savedQueries
+                .OrderBy(s => _pinnedSavedQueryIds.Contains(s.Id) ? 0 : 1)
+                .ThenBy(s => s.Name, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(s => s.Id, StringComparer.Ordinal))
+            {
+                SavedQueries.Add(summary);
+            }
+            BaseFiles.Clear();
+            foreach (BaseFileSummary file in baseFiles
+                .OrderBy(f => f.Path, StringComparer.OrdinalIgnoreCase))
+            {
+                BaseFiles.Add(file);
+            }
+            Dashboards.Clear();
+            foreach (DashboardSummary dashboard in dashboards
+                .OrderBy(d => d.Name, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(d => d.Id, StringComparer.Ordinal))
+            {
+                Dashboards.Add(dashboard);
+            }
+            // Pins prune to live ids (the mac rule).
+            _pinnedSavedQueryIds.RemoveWhere(id =>
+                !savedQueries.Any(s => string.Equals(s.Id, id, StringComparison.Ordinal)));
+        });
+    }
+
+    internal void ToggleSavedQueryPin(string id)
+    {
+        if (!_pinnedSavedQueryIds.Remove(id))
+        {
+            _pinnedSavedQueryIds.Add(id);
+        }
+        RefreshBaseQueries();
+    }
+
+    internal void RunSavedQuery(string id)
+    {
+        SavedQuerySummary? summary = SavedQueries.FirstOrDefault(s =>
+            string.Equals(s.Id, id, StringComparison.Ordinal));
+        if (summary is null)
+        {
+            _announce(new A11yEvent.BasesSavedQueryMissing());
+            return;
+        }
+        OpenItem(
+            new WorkspaceItemState(
+                WorkspaceItemKind.SavedQuery, string.Empty, summary.Id, summary.Name),
+            WorkspaceOpenTarget.NewTab);
+    }
+
+    internal void RenameSavedQuery(string id, string name)
+    {
+        string trimmed = name.Trim();
+        if (trimmed.Length == 0)
+        {
+            _announce(new A11yEvent.BasesSavedQueryRenameNameNeeded());
+            return;
+        }
+        try
+        {
+            _session.RenameSavedQuery(id, trimmed);
+        }
+        catch (VaultException failure)
+        {
+            _announce(new A11yEvent.BasesSavedQueryRenameFailed(failure.Message));
+            return;
+        }
+        _announce(new A11yEvent.BasesSavedQueryRenamed(trimmed));
+        RefreshBaseQueries();
+    }
+
+    internal void DeleteSavedQuery(string id)
+    {
+        try
+        {
+            _session.DeleteSavedQuery(id);
+        }
+        catch (VaultException failure)
+        {
+            _announce(new A11yEvent.BasesSavedQueryDeleteFailed(failure.Message));
+            return;
+        }
+        _pinnedSavedQueryIds.Remove(id);
+        // Close open tabs on the deleted query (the mac rule).
+        foreach (WorkspaceGroupViewModel group in Groups)
+        {
+            foreach (WorkspaceTabViewModel tab in group.Tabs.Where(t =>
+                t.Item.Kind == WorkspaceItemKind.SavedQuery
+                && string.Equals(t.Item.Id, id, StringComparison.Ordinal)).ToList())
+            {
+                CloseTab(tab);
+            }
+        }
+        _announce(new A11yEvent.BasesSavedQueryDeleted());
+        RefreshBaseQueries();
+    }
+
+    internal void ExportSavedQueryAsBase(string id, string path)
+    {
+        string trimmed = path.Trim();
+        if (trimmed.Length == 0)
+        {
+            _announce(new A11yEvent.BasesSavedQueryExportPathNeeded());
+            return;
+        }
+        try
+        {
+            _session.ExportSavedQueryAsBase(id, trimmed);
+        }
+        catch (VaultException failure)
+        {
+            _announce(new A11yEvent.BasesSavedQueryExportFailed(failure.Message));
+            return;
+        }
+        _announce(new A11yEvent.BasesSavedQueryExported(trimmed));
+        RefreshBaseQueries();
+    }
+
     private void InstallBaseDocumentSeams(BaseDocumentViewModel document)
     {
         document.ApplyPropertyEdit = (row, column, value) =>

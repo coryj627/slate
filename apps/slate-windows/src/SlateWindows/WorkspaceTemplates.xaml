@@ -436,6 +436,9 @@
             <bases:BaseSurfaceView Grid.Row="1"
                                    Model="{Binding Base}"
                                    Visibility="{Binding IsBaseVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
+            <bases:DashboardSurfaceView Grid.Row="1"
+                                        Model="{Binding Dashboard}"
+                                        Visibility="{Binding IsDashboardVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
             <!-- Keep the modal interaction surface in the tab's presentation
                  source so UIA ownership is stable across providers. The
                  transparent layer intentionally makes Close/Escape the only
