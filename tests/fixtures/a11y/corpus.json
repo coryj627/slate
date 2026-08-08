@@ -800,6 +800,51 @@
     "text": "Status column moved up to position 1 of 3."
   },
   {
+    "event": "BaseQueryPreviewIdle",
+    "priority": "medium",
+    "text": "Preview not loaded."
+  },
+  {
+    "event": "BaseQueryPreviewLoading",
+    "priority": "medium",
+    "text": "Preview loading."
+  },
+  {
+    "event": "BaseQueryPreviewReady { audio_summary: \"12 results.\", first_result: None }",
+    "priority": "medium",
+    "text": "12 results."
+  },
+  {
+    "event": "BaseQueryPreviewReady { audio_summary: \"12 results.\", first_result: Some(\"Alpha\") }",
+    "priority": "medium",
+    "text": "12 results.. First result: Alpha"
+  },
+  {
+    "event": "BaseQueryPreviewFailed { detail: \"invalid expression\" }",
+    "priority": "medium",
+    "text": "Preview failed: invalid expression"
+  },
+  {
+    "event": "BaseSortedByColumn { column: \"Status\", ascending: true }",
+    "priority": "medium",
+    "text": "Sorted by Status, ascending"
+  },
+  {
+    "event": "BaseSortedByColumn { column: \"Status\", ascending: false }",
+    "priority": "medium",
+    "text": "Sorted by Status, descending"
+  },
+  {
+    "event": "BaseSortSavedToView { column: \"Status\", ascending: true }",
+    "priority": "medium",
+    "text": "Saved sort by Status, ascending."
+  },
+  {
+    "event": "BaseSortSavedToView { column: \"Status\", ascending: false }",
+    "priority": "medium",
+    "text": "Saved sort by Status, descending."
+  },
+  {
     "event": "DataviewConversionFailed { detail: \"unsupported query\" }",
     "priority": "medium",
     "text": "Dataview conversion failed: unsupported query"

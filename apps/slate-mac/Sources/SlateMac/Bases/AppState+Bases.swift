@@ -2217,11 +2217,7 @@ extension AppState {
         } else {
             model.previewState = .ready(result)
         }
-        // W0.5-3 residue: BaseQueryPreviewState.accessibilityAnnouncement
-        postAccessibilityAnnouncement(
-            .hostComposed(
-                text: model.previewState.accessibilityAnnouncement,
-                priority: .medium))
+        postAccessibilityAnnouncement(model.previewState.accessibilityEvent)
     }
 
     func basesBuilderPublishPreviewFailure(
@@ -2696,10 +2692,9 @@ extension AppState {
         guard let doc = activeBaseDocument,
             admitBaseDocumentInteraction(doc),
             let session = currentSession,
-            let text = doc.sortFocusedColumn(session: session)
+            let event = doc.sortFocusedColumn(session: session)
         else { return }
-        // W0.5-3 residue: BaseDocument.sortFocusedColumn
-        postAccessibilityAnnouncement(.hostComposed(text: text, priority: .medium))
+        postAccessibilityAnnouncement(event)
     }
 
     func basesSaveSortToView() {
@@ -2713,13 +2708,12 @@ extension AppState {
             return
         }
         do {
-            if let text = try doc.saveSortToView(session: session) {
+            if let event = try doc.saveSortToView(session: session) {
                 refreshVisibleBasesAfterInAppWrite(
                     session: session,
                     changedPath: doc.source.filePath ?? doc.selectionKey,
                     alreadyRefreshedDefinitionOwner: doc)
-                // W0.5-3 residue: BaseDocument.saveSortToView
-                postAccessibilityAnnouncement(.hostComposed(text: text, priority: .medium))
+                postAccessibilityAnnouncement(event)
             }
         } catch {
             postAccessibilityAnnouncement(
