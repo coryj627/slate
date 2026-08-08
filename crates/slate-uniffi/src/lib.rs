@@ -7015,6 +7015,23 @@ pub enum A11yEvent {
         position: u64,
         count: u64,
     },
+    BaseQueryPreviewIdle,
+    BaseQueryPreviewLoading,
+    BaseQueryPreviewReady {
+        audio_summary: String,
+        first_result: Option<String>,
+    },
+    BaseQueryPreviewFailed {
+        detail: String,
+    },
+    BaseSortedByColumn {
+        column: String,
+        ascending: bool,
+    },
+    BaseSortSavedToView {
+        column: String,
+        ascending: bool,
+    },
     DataviewConversionFailed {
         detail: String,
     },
@@ -7316,6 +7333,22 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
                 position,
                 count,
             },
+            F::BaseQueryPreviewIdle => C::BaseQueryPreviewIdle,
+            F::BaseQueryPreviewLoading => C::BaseQueryPreviewLoading,
+            F::BaseQueryPreviewReady {
+                audio_summary,
+                first_result,
+            } => C::BaseQueryPreviewReady {
+                audio_summary,
+                first_result,
+            },
+            F::BaseQueryPreviewFailed { detail } => C::BaseQueryPreviewFailed { detail },
+            F::BaseSortedByColumn { column, ascending } => {
+                C::BaseSortedByColumn { column, ascending }
+            }
+            F::BaseSortSavedToView { column, ascending } => {
+                C::BaseSortSavedToView { column, ascending }
+            }
             F::DataviewConversionFailed { detail } => C::DataviewConversionFailed { detail },
             F::CitationInsertUnavailable => C::CitationInsertUnavailable,
             F::CitationWalkThrough => C::CitationWalkThrough,

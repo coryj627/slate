@@ -1301,23 +1301,36 @@ enum BaseQueryPreviewState: Equatable {
     case ready(BasesResultSet)
     case failed(String)
 
-    var accessibilityAnnouncement: String {
+    /// The canonical event for this state (#969). The blank-check on
+    /// the first row stays here because it is a DATA question — whether
+    /// there IS a first result worth naming — while the joining and
+    /// every sentence now live in core.
+    var accessibilityEvent: A11yEvent {
         switch self {
         case .idle:
-            return "Preview not loaded."
+            return .baseQueryPreviewIdle
         case .loading:
-            return "Preview loading."
+            return .baseQueryPreviewLoading
         case .ready(let result):
-            var text = result.audioSummary
+            var named: String?
             if let first = result.rows.first?.audioDescription,
                 !first.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             {
-                text += ". First result: \(first)"
+                named = first
             }
-            return text
+            return .baseQueryPreviewReady(
+                audioSummary: result.audioSummary,
+                firstResult: named)
         case .failed(let message):
-            return "Preview failed: \(message)"
+            return .baseQueryPreviewFailed(detail: message)
         }
+    }
+
+    /// Rendered text for the SwiftUI label and value bindings — and the
+    /// seam the suite's exact-wording assertions keep reading, so they
+    /// now prove core's template rather than a host string.
+    var accessibilityAnnouncement: String {
+        a11yRender(event: accessibilityEvent).text
     }
 }
 

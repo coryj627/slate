@@ -603,7 +603,7 @@ final class BaseDocument: ObservableObject {
     }
 
     @discardableResult
-    func sortFocusedColumn(session: VaultSession) -> String? {
+    func sortFocusedColumn(session: VaultSession) -> A11yEvent? {
         guard let result, result.columns.indices.contains(focusedColumnIndex) else {
             return nil
         }
@@ -617,8 +617,9 @@ final class BaseDocument: ObservableObject {
             DataGridSortState(columnIndex: focusedColumnIndex, ascending: ascending),
             session: session)
         else { return nil }
-        let direction = ascending ? "ascending" : "descending"
-        return "Sorted by \(result.columns[focusedColumnIndex].label), \(direction)"
+        return .baseSortedByColumn(
+            column: result.columns[focusedColumnIndex].label,
+            ascending: ascending)
     }
 
     @discardableResult
@@ -694,7 +695,7 @@ final class BaseDocument: ObservableObject {
     }
 
     @discardableResult
-    func saveSortToView(session: VaultSession) throws -> String? {
+    func saveSortToView(session: VaultSession) throws -> A11yEvent? {
         guard let handle,
             let result,
             let sortState,
@@ -713,8 +714,7 @@ final class BaseDocument: ObservableObject {
             ascending: true)
         views = try session.baseViews(handle: handle)
         executeActiveView(session: session)
-        let direction = sortState.ascending ? "ascending" : "descending"
-        return "Saved sort by \(column.label), \(direction)."
+        return .baseSortSavedToView(column: column.label, ascending: sortState.ascending)
     }
 
     func close(session: VaultSession) {

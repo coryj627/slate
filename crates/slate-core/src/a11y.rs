@@ -521,6 +521,43 @@ pub enum A11yEvent {
         position: u64,
         count: u64,
     },
+    /// The query builder's preview readback — one variant per state the
+    /// host branched on.
+    BaseQueryPreviewIdle,
+    BaseQueryPreviewLoading,
+    /// `first_result` is present only when the top row carries a
+    /// non-blank description; the host decides that (it is a data
+    /// question), the joining lives here.
+    ///
+    /// NOTE the DOUBLE PERIOD in the golden. `bases::engine::
+    /// audio_summary` always terminates with `.`, and the shipped mac
+    /// code appended `". First result: …"` to it, so users have always
+    /// heard "12 notes.. First result: Alpha". #969 moves strings
+    /// verbatim and does not redesign copy, so the defect is preserved
+    /// and now PINNED — fixing it is a deliberate one-line change with
+    /// a visible golden diff, not a silent edit.
+    BaseQueryPreviewReady {
+        audio_summary: String,
+        first_result: Option<String>,
+    },
+    /// Distinct from `BasesPreviewFailed` ("Base preview failed: …"):
+    /// this is the BUILDER's shorter sentence, kept verbatim rather
+    /// than folded into its neighbour.
+    BaseQueryPreviewFailed {
+        detail: String,
+    },
+    /// A transient column sort, and the same sort persisted into the
+    /// view. The two sentences differ deliberately — the transient one
+    /// carries NO terminal period, the saved one does. Preserved as
+    /// shipped; #969 moves strings, it does not redesign copy.
+    BaseSortedByColumn {
+        column: String,
+        ascending: bool,
+    },
+    BaseSortSavedToView {
+        column: String,
+        ascending: bool,
+    },
     DataviewConversionFailed {
         detail: String,
     },
@@ -981,6 +1018,32 @@ impl A11yEvent {
             } => format!(
                 "{label} moved {} to position {position} of {count}.",
                 if *moved_up { "up" } else { "down" }
+            ),
+            BaseQueryPreviewIdle => "Preview not loaded.".to_owned(),
+            BaseQueryPreviewLoading => "Preview loading.".to_owned(),
+            BaseQueryPreviewReady {
+                audio_summary,
+                first_result,
+            } => match first_result {
+                Some(first) => format!("{audio_summary}. First result: {first}"),
+                None => audio_summary.clone(),
+            },
+            BaseQueryPreviewFailed { detail } => format!("Preview failed: {detail}"),
+            BaseSortedByColumn { column, ascending } => format!(
+                "Sorted by {column}, {}",
+                if *ascending {
+                    "ascending"
+                } else {
+                    "descending"
+                }
+            ),
+            BaseSortSavedToView { column, ascending } => format!(
+                "Saved sort by {column}, {}.",
+                if *ascending {
+                    "ascending"
+                } else {
+                    "descending"
+                }
             ),
             DataviewConversionFailed { detail } => {
                 format!("Dataview conversion failed: {detail}")
@@ -1517,6 +1580,35 @@ pub fn corpus() -> Vec<A11yEvent> {
             position: 1,
             count: 3,
         },
+        BaseQueryPreviewIdle,
+        BaseQueryPreviewLoading,
+        BaseQueryPreviewReady {
+            audio_summary: "12 results.".into(),
+            first_result: None,
+        },
+        BaseQueryPreviewReady {
+            audio_summary: "12 results.".into(),
+            first_result: Some("Alpha".into()),
+        },
+        BaseQueryPreviewFailed {
+            detail: "invalid expression".into(),
+        },
+        BaseSortedByColumn {
+            column: "Status".into(),
+            ascending: true,
+        },
+        BaseSortedByColumn {
+            column: "Status".into(),
+            ascending: false,
+        },
+        BaseSortSavedToView {
+            column: "Status".into(),
+            ascending: true,
+        },
+        BaseSortSavedToView {
+            column: "Status".into(),
+            ascending: false,
+        },
         DataviewConversionFailed {
             detail: "unsupported query".into(),
         },
@@ -1898,6 +1990,15 @@ mod tests {
             (Medium, "Sort 2 is already last."),
             (Medium, "Sort 1 moved down to position 2 of 3."),
             (Medium, "Status column moved up to position 1 of 3."),
+            (Medium, "Preview not loaded."),
+            (Medium, "Preview loading."),
+            (Medium, "12 results."),
+            (Medium, "12 results.. First result: Alpha"),
+            (Medium, "Preview failed: invalid expression"),
+            (Medium, "Sorted by Status, ascending"),
+            (Medium, "Sorted by Status, descending"),
+            (Medium, "Saved sort by Status, ascending."),
+            (Medium, "Saved sort by Status, descending."),
             (Medium, "Dataview conversion failed: unsupported query"),
             (Medium, "Insert citation lands in V1.x. See Milestone L."),
             (
