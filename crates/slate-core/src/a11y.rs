@@ -529,13 +529,17 @@ pub enum A11yEvent {
     /// non-blank description; the host decides that (it is a data
     /// question), the joining lives here.
     ///
-    /// NOTE the DOUBLE PERIOD in the golden. `bases::engine::
+    /// The join no longer doubles the period. `bases::engine::
     /// audio_summary` always terminates with `.`, and the shipped mac
-    /// code appended `". First result: …"` to it, so users have always
-    /// heard "12 notes.. First result: Alpha". #969 moves strings
-    /// verbatim and does not redesign copy, so the defect is preserved
-    /// and now PINNED — fixing it is a deliberate one-line change with
-    /// a visible golden diff, not a silent edit.
+    /// code appended `". First result: …"` to it, so users heard
+    /// "12 notes.. First result: Alpha" for as long as the readback has
+    /// existed. #969 moved the string verbatim and pinned the defect in
+    /// a golden; this is the deliberate follow-up that fixes it.
+    ///
+    /// The separator is chosen from the summary rather than assumed:
+    /// terminal punctuation gets a single space, anything else gets
+    /// ". ", so a caller that passes an unterminated summary still
+    /// produces one well-formed sentence.
     BaseQueryPreviewReady {
         audio_summary: String,
         first_result: Option<String>,
@@ -1162,7 +1166,15 @@ impl A11yEvent {
                 audio_summary,
                 first_result,
             } => match first_result {
-                Some(first) => format!("{audio_summary}. First result: {first}"),
+                Some(first) => {
+                    let head = audio_summary.trim_end();
+                    let separator = if head.ends_with(['.', '!', '?']) {
+                        " "
+                    } else {
+                        ". "
+                    };
+                    format!("{head}{separator}First result: {first}")
+                }
                 None => audio_summary.clone(),
             },
             BaseQueryPreviewFailed { detail } => format!("Preview failed: {detail}"),
@@ -1817,6 +1829,12 @@ pub fn corpus() -> Vec<A11yEvent> {
             audio_summary: "12 results.".into(),
             first_result: None,
         },
+        // The unterminated-summary branch: the separator must supply
+        // the period the summary lacks.
+        BaseQueryPreviewReady {
+            audio_summary: "12 results".into(),
+            first_result: Some("Alpha".into()),
+        },
         BaseQueryPreviewReady {
             audio_summary: "12 results.".into(),
             first_result: Some("Alpha".into()),
@@ -2335,7 +2353,8 @@ mod tests {
             (Medium, "Preview not loaded."),
             (Medium, "Preview loading."),
             (Medium, "12 results."),
-            (Medium, "12 results.. First result: Alpha"),
+            (Medium, "12 results. First result: Alpha"),
+            (Medium, "12 results. First result: Alpha"),
             (Medium, "Preview failed: invalid expression"),
             (Medium, "Sorted by Status, ascending"),
             (Medium, "Sorted by Status, descending"),

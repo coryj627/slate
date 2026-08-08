@@ -815,9 +815,14 @@
     "text": "12 results."
   },
   {
+    "event": "BaseQueryPreviewReady { audio_summary: \"12 results\", first_result: Some(\"Alpha\") }",
+    "priority": "medium",
+    "text": "12 results. First result: Alpha"
+  },
+  {
     "event": "BaseQueryPreviewReady { audio_summary: \"12 results.\", first_result: Some(\"Alpha\") }",
     "priority": "medium",
-    "text": "12 results.. First result: Alpha"
+    "text": "12 results. First result: Alpha"
   },
   {
     "event": "BaseQueryPreviewFailed { detail: \"invalid expression\" }",

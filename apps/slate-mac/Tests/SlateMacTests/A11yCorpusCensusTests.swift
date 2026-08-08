@@ -216,6 +216,7 @@ final class A11yCorpusCensusTests: XCTestCase {
             .baseQueryPreviewIdle,
             .baseQueryPreviewLoading,
             .baseQueryPreviewReady(audioSummary: "12 results.", firstResult: nil),
+            .baseQueryPreviewReady(audioSummary: "12 results", firstResult: "Alpha"),
             .baseQueryPreviewReady(audioSummary: "12 results.", firstResult: "Alpha"),
             .baseQueryPreviewFailed(detail: "invalid expression"),
             .baseSortedByColumn(column: "Status", ascending: true),
