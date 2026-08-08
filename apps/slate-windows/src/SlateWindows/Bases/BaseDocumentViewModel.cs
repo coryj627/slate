@@ -364,6 +364,56 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         });
     }
 
+    /// <summary>The active view's EDITABLE query JSON (as-authored,
+    /// no inherited folding) — the builder's edit-context seed.</summary>
+    public string ViewEditQueryJson()
+    {
+        lock (_ffiLock)
+        {
+            if (_handle is not { } handle)
+            {
+                throw new InvalidOperationException(
+                    "The base is not open; the builder cannot seed from it.");
+            }
+            return _session.BaseViewEditQueryJson(handle, (uint)_activeViewIndex);
+        }
+    }
+
+    /// <summary>Apply the builder's minimal edit batch (contract C11):
+    /// one BaseApplyEdits (validated + serialized whole in core, CAS
+    /// guarded), then views reload + re-execute. Returns false after
+    /// announcing BasesViewSaveFailed.</summary>
+    public bool ApplyBuilderEdits(IReadOnlyList<BaseEdit> edits)
+    {
+        if (IsSavedQuery || State is BaseLoadState.Failed or BaseLoadState.Loading)
+        {
+            return false;
+        }
+        int generation = Interlocked.Increment(ref _generation);
+        BaseViewSummary[] views;
+        try
+        {
+            lock (_ffiLock)
+            {
+                if (_handle is not { } handle)
+                {
+                    return false;
+                }
+                _session.BaseApplyEdits(handle, edits.ToArray());
+                views = _session.BaseViews(handle);
+            }
+        }
+        catch (VaultException failure)
+        {
+            _announce(new A11yEvent.BasesViewSaveFailed(failure.Message));
+            return false;
+        }
+        Views = views;
+        SortState = null;
+        StartWork(() => ExecuteBody(generation, (uint)_activeViewIndex));
+        return true;
+    }
+
     /// <summary>Mac's slateSortYAML + quoteYAMLString, byte-for-byte.</summary>
     internal static string SlateSortYaml(string columnId, bool ascending) =>
         "- property: " + QuoteYamlString(columnId) + "\n"

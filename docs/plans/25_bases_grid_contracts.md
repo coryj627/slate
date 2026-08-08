@@ -201,6 +201,20 @@ cancel tokens where the FFI accepts one.
   re-implementing target parsing (decision 4). Fix belongs in core (an
   embed-resolution variant for bases); until then the unanchored form
   carries the full experience.
+- **D-18** The Windows v1 builder is EXPRESSION-FIRST: condition rows
+  are raw expressions validated through `ValidateBaseExpression` (the
+  representation mac itself fails closed into), with one-level groups;
+  structured property/operator/value pickers are follow-up presentation.
+  Column-selection and group-by editing are not in the builder (they are
+  not in the command matrix); they remain authorable in the `.base`
+  file. Existing view filters enter as ONE preserved opaque row
+  (core's Expr JSON has no text-rendering API): it can be kept
+  verbatim or deleted, and save-to-view refuses to combine it with new
+  rows (semantics are never silently rewritten — the C11 rule).
+  Query-JSON provenance: the new-query seed is CORE-produced
+  (`OpenDql` → `BaseViewQueryJson`), edits mutate that document at the
+  JSON-node level, and every filter node is assembled from core-encoded
+  `ExprJson` — the host never synthesizes schema.
 
 ## Accepted risks (off-limits for review re-litigation)
 

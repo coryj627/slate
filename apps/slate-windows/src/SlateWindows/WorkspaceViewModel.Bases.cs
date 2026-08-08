@@ -34,6 +34,8 @@ internal sealed partial class WorkspaceViewModel
     internal BaseDocumentViewModel? ActiveBaseDocument =>
         ActiveGroup.ActiveTab is { IsBase: true } tab ? tab.Base : null;
 
+    private RelayCommand? _basesNewQueryCommand;
+    private RelayCommand? _basesEditViewFiltersCommand;
     private RelayCommand? _basesRefreshCommand;
     private RelayCommand? _basesWhereAmICommand;
     private RelayCommand? _basesResultsCommand;
@@ -52,6 +54,101 @@ internal sealed partial class WorkspaceViewModel
     private RelayCommand? _basesExportCsvCommand;
     private RelayCommand? _basesExportMarkdownCommand;
     private RelayCommand? _basesCopyMarkdownCommand;
+
+    private BaseQueryBuilderViewModel? _queryBuilder;
+
+    /// <summary>The builder overlay's model (contract C11); null =
+    /// closed. Opened by newQuery / editViewFilters / the queries
+    /// leaf's Edit in Builder.</summary>
+    public BaseQueryBuilderViewModel? BaseQueryBuilderSheet
+    {
+        get => _queryBuilder;
+        private set
+        {
+            _queryBuilder?.Shutdown();
+            SetField(ref _queryBuilder, value);
+        }
+    }
+
+    public System.Windows.Input.ICommand BasesNewQueryCommand =>
+        _basesNewQueryCommand ??= new RelayCommand(
+            _ =>
+            {
+                BaseQueryBuilderSheet = BaseQueryBuilderViewModel.NewQuery(
+                    _session, _announce,
+                    synchronousForTests: !_startInteractionBackgroundWork);
+                _announce(new A11yEvent.BasesNewQueryBuilder());
+            },
+            _ => true);
+
+    public System.Windows.Input.ICommand BasesEditViewFiltersCommand =>
+        _basesEditViewFiltersCommand ??= BasesCommand(document =>
+        {
+            try
+            {
+                BaseQueryBuilderSheet = BaseQueryBuilderViewModel.ForView(
+                    _session, document, _announce,
+                    synchronousForTests: !_startInteractionBackgroundWork);
+            }
+            catch (Exception failure) when (failure
+                is VaultException or InvalidOperationException)
+            {
+                _announce(new A11yEvent.BasesFiltersOpenFailed(failure.Message));
+                return;
+            }
+            _announce(new A11yEvent.BasesEditingFilters(
+                document.ActiveViewName ?? document.DisplayName));
+        });
+
+    internal void EditSavedQueryInBuilder(string id)
+    {
+        SavedQuery savedQuery;
+        try
+        {
+            savedQuery = _session.GetSavedQuery(id);
+        }
+        catch (VaultException failure)
+        {
+            _announce(new A11yEvent.BasesSavedQueryEditFailed(failure.Message));
+            return;
+        }
+        BaseQueryBuilderSheet = BaseQueryBuilderViewModel.ForSavedQuery(
+            _session, savedQuery, _announce,
+            synchronousForTests: !_startInteractionBackgroundWork);
+        _announce(new A11yEvent.BasesSavedQueryEditing(savedQuery.Name));
+    }
+
+    internal void CloseQueryBuilder() => BaseQueryBuilderSheet = null;
+
+    internal void BuilderSaveToView()
+    {
+        if (BaseQueryBuilderSheet is not { } builder
+            || builder.Context.ViewPath is not { } viewPath)
+        {
+            return;
+        }
+        BaseDocumentViewModel target = BaseDocumentFor(viewPath);
+        if (builder.SaveToView(target))
+        {
+            RefreshBaseQueries();
+        }
+    }
+
+    internal void BuilderUpdateSavedQuery()
+    {
+        if (BaseQueryBuilderSheet is { } builder && builder.UpdateSavedQuery())
+        {
+            RefreshBaseQueries();
+            foreach (BaseDocumentViewModel document in _baseDocuments.Values
+                .Where(candidate => string.Equals(
+                    candidate.SavedQueryId,
+                    builder.Context.SavedQueryId,
+                    StringComparison.Ordinal)))
+            {
+                document.Load();
+            }
+        }
+    }
 
     public System.Windows.Input.ICommand BasesRefreshCommand =>
         _basesRefreshCommand ??= BasesCommand(document =>
@@ -288,6 +385,7 @@ internal sealed partial class WorkspaceViewModel
     {
         foreach (RelayCommand? command in new[]
         {
+            _basesNewQueryCommand, _basesEditViewFiltersCommand,
             _basesRefreshCommand, _basesWhereAmICommand, _basesResultsCommand,
             _basesNextViewCommand, _basesPreviousViewCommand,
             _basesViewSwitcherCommand, _basesViewAsTableCommand,

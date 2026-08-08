@@ -199,6 +199,101 @@ public partial class MainWindow
         }
     }
 
+    // --- Query builder overlay ---
+
+    private System.Windows.Threading.DispatcherTimer? _builderPreviewDebounce;
+
+    private void QueriesEditInBuilder_Click(object sender, RoutedEventArgs e)
+    {
+        if (SelectedSavedQuery is { } summary)
+        {
+            BasesWorkspace?.EditSavedQueryInBuilder(summary.Id);
+        }
+    }
+
+    private void BuilderExpression_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        // The mac preview cadence: 300 ms after the last keystroke.
+        _builderPreviewDebounce ??= new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(300),
+        };
+        _builderPreviewDebounce.Stop();
+        _builderPreviewDebounce.Tick -= BuilderPreviewTick;
+        _builderPreviewDebounce.Tick += BuilderPreviewTick;
+        _builderPreviewDebounce.Start();
+    }
+
+    private void BuilderPreviewTick(object? sender, EventArgs e)
+    {
+        _builderPreviewDebounce?.Stop();
+        if (BasesWorkspace?.BaseQueryBuilderSheet is { } builder)
+        {
+            builder.PreviewPublished -= BuilderPreviewPublished;
+            builder.PreviewPublished += BuilderPreviewPublished;
+            builder.RunPreview();
+        }
+    }
+
+    private void BuilderPreviewPublished(object? sender, EventArgs e)
+    {
+        if (BasesWorkspace?.BaseQueryBuilderSheet is not { } builder)
+        {
+            return;
+        }
+        BuilderPreviewLine.Text = builder.PreviewState switch
+        {
+            Bases.BuilderPreviewState.Idle => "Preview not loaded.",
+            Bases.BuilderPreviewState.Loading => "Preview loading.",
+            Bases.BuilderPreviewState.Failed =>
+                $"Preview failed: {builder.PreviewMessage}",
+            _ => builder.PreviewResult?.AudioSummary ?? string.Empty,
+        };
+    }
+
+    private void BuilderAddCondition_Click(object sender, RoutedEventArgs e) =>
+        BasesWorkspace?.BaseQueryBuilderSheet?.AddCondition();
+
+    private void BuilderAddGroup_Click(object sender, RoutedEventArgs e) =>
+        BasesWorkspace?.BaseQueryBuilderSheet?.AddGroup();
+
+    private void BuilderRemoveCondition_Click(object sender, RoutedEventArgs e)
+    {
+        if (BasesWorkspace?.BaseQueryBuilderSheet is { } builder
+            && (sender as FrameworkElement)?.DataContext
+                is Bases.BuilderConditionRow row)
+        {
+            builder.RemoveCondition(row);
+        }
+    }
+
+    private void BuilderSaveToView_Click(object sender, RoutedEventArgs e) =>
+        BasesWorkspace?.BuilderSaveToView();
+
+    private void BuilderUpdateSavedQuery_Click(object sender, RoutedEventArgs e) =>
+        BasesWorkspace?.BuilderUpdateSavedQuery();
+
+    private void BuilderSaveAsSavedQuery_Click(object sender, RoutedEventArgs e)
+    {
+        if (BasesWorkspace?.BaseQueryBuilderSheet is { } builder
+            && builder.SaveAsSavedQuery(BuilderSaveNameBox.Text, description: null))
+        {
+            BasesWorkspace?.RefreshBaseQueries();
+        }
+    }
+
+    private void BuilderSaveAsBase_Click(object sender, RoutedEventArgs e)
+    {
+        if (BasesWorkspace?.BaseQueryBuilderSheet is { } builder
+            && builder.SaveAsBase(BuilderSavePathBox.Text))
+        {
+            BasesWorkspace?.RefreshBaseQueries();
+        }
+    }
+
+    private void BuilderDone_Click(object sender, RoutedEventArgs e) =>
+        BasesWorkspace?.CloseQueryBuilder();
+
     // --- Dashboard editor overlay ---
 
     private void DashboardEditorSave_Click(object sender, RoutedEventArgs e) =>

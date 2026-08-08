@@ -1817,6 +1817,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         }
         _dashboardDocuments.Clear();
         ClearBasesDock();
+        BaseQueryBuilderSheet?.Shutdown();
         Persist();
         foreach (WorkspaceTabViewModel tab in Groups.SelectMany(group => group.Tabs))
         {
