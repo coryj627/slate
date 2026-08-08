@@ -173,6 +173,57 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
             generation, (uint)_activeViewIndex, announceQuickFilterCount: true));
     }
 
+    /// <summary>W4-6 phase C (contract C8): the cell-write route,
+    /// installed by the workspace registry — the document VM never
+    /// writes; it hands (row, column, value-or-null-for-delete) to the
+    /// workspace coordinator, which owns the tab/tabless route split
+    /// and the post-write funnel.</summary>
+    internal Action<BasesRow, BasesColumn, PropertyValue?>? ApplyPropertyEdit { get; set; }
+
+    /// <summary>Surface-originated canonical announcements (edit
+    /// canceled, read-only refusals, validation refusals) — one
+    /// announce seam for the whole surface.</summary>
+    internal void AnnounceForSurface(A11yEvent @event) => _announce(@event);
+
+    private string? _membershipSignature;
+    private bool _membershipBaselinePublished;
+    private int _publishFunnelId;
+    private Action? _publishContinuation;
+
+    /// <summary>Raised (funnelId, audioSummary) when a funnel-tagged
+    /// refresh changed the row-membership multiset — the workspace
+    /// dedupes across surfaces and announces BasesRefreshUpdated
+    /// (contract C9). Baseline publishes are silent.</summary>
+    internal event Action<int, string>? MembershipChanged;
+
+    /// <summary>The post-write refresh (contract C9): re-execute with
+    /// the CURRENT filter retained, report membership change under the
+    /// funnel id, then run the continuation (the cell-outcome
+    /// announcement) after the rows landed.</summary>
+    internal void RefreshForFunnel(int funnelId, Action? onPublished = null)
+    {
+        if (IsShutDown || State is BaseLoadState.Failed or BaseLoadState.Loading)
+        {
+            onPublished?.Invoke();
+            return;
+        }
+        int generation = Interlocked.Increment(ref _generation);
+        _publishFunnelId = funnelId;
+        _publishContinuation = onPublished;
+        StartWork(() => ExecuteBody(generation, (uint)_activeViewIndex));
+    }
+
+    private static string MembershipSignatureOf(BasesResultSet result)
+    {
+        var keys = new List<string>(result.Rows.Length);
+        foreach (BasesRow row in result.Rows)
+        {
+            keys.Add(row.FilePath + "|" + (row.TaskOrdinal?.ToString() ?? "-"));
+        }
+        keys.Sort(StringComparer.Ordinal);
+        return string.Join(";", keys);
+    }
+
     /// <summary>The picker/command announcement — "Base view: {name}."
     /// Callers announce AFTER a successful SelectView so the sentence
     /// follows the state it describes.</summary>
@@ -358,6 +409,14 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                 // Previous rows and handle stay in place — a failed
                 // refresh must never blank the pane (contract C9).
                 PublishDegraded(BasePhrase.ExecuteFailed(exception));
+                // The write-outcome continuation still runs: the
+                // outcome describes the WRITE (which landed), and the
+                // retained rows are what the row-presence check reads
+                // — the mac degraded-refresh shape.
+                _publishFunnelId = 0;
+                Action? failedContinuation = _publishContinuation;
+                _publishContinuation = null;
+                failedContinuation?.Invoke();
             });
             return;
         }
@@ -411,7 +470,21 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
             State = BaseLoadState.Ready;
             StateMessage = null;
         }
+        string signature = MembershipSignatureOf(result);
+        int funnelId = _publishFunnelId;
+        _publishFunnelId = 0;
+        if (funnelId != 0
+            && _membershipBaselinePublished
+            && !string.Equals(_membershipSignature, signature, StringComparison.Ordinal))
+        {
+            MembershipChanged?.Invoke(funnelId, result.AudioSummary);
+        }
+        _membershipSignature = signature;
+        _membershipBaselinePublished = true;
         ResultPublished?.Invoke(this, EventArgs.Empty);
+        Action? continuation = _publishContinuation;
+        _publishContinuation = null;
+        continuation?.Invoke();
     }
 
     private void PublishDegraded(string message)

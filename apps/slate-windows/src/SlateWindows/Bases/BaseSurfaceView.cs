@@ -484,12 +484,18 @@ internal sealed class BaseSurfaceView : UserControl
         {
             BasesColumn column = result.Columns[index];
             int columnIndex = index;
+            bool editable = BaseCellEditPolicy.PropertyKey(column) is not null;
             columns.Add(new AccessibleGridColumn
             {
                 Header = column.Label,
                 Cell = row => ((BaseGridRowViewModel)row).DisplayAt(columnIndex),
                 IsRowHeader = column.Role == ColumnRole.Primary,
                 IsExternallySortable = true,
+                // The read-only reason as a STATIC hint (contract C7):
+                // the same event the refusal announces, rendered once.
+                AccessibilityHint = editable
+                    ? null
+                    : _ => BaseCellEditPolicy.ReadOnlyHint(column),
             });
         }
         var rows = new List<object>(result.Rows.Length);
@@ -505,6 +511,69 @@ internal sealed class BaseSurfaceView : UserControl
             rowAudioDescription: static row =>
                 ((BaseGridRowViewModel)row).AudioDescription);
         _grid.SetSortIndicator(model.SortState);
+        // The edit seam re-configures per bind so the closures always
+        // hold THIS publish's columns (a stale closure over replaced
+        // columns is the dangling-reference class INV-3 forbids).
+        _grid.ConfigureEditing(
+            editDraft: (row, columnIndex) =>
+                columnIndex >= 0
+                && columnIndex < result.Columns.Length
+                && BaseCellEditPolicy.PropertyKey(result.Columns[columnIndex]) is not null
+                    ? BaseCellEditPolicy.DraftText(
+                        ((BaseGridRowViewModel)row).Row.Values[columnIndex])
+                    : null,
+            editCommit: (row, columnIndex, text, navigation) =>
+                CommitCellEdit(model, result, row, columnIndex, text, navigation),
+            editCancel: () =>
+                model.AnnounceForSurface(new A11yEvent.BasesCellEditCanceled()),
+            editRefused: (row, columnIndex) =>
+            {
+                if (columnIndex >= 0 && columnIndex < result.Columns.Length)
+                {
+                    model.AnnounceForSurface(
+                        BaseCellEditPolicy.ReadOnlyEvent(result.Columns[columnIndex]));
+                }
+            });
+    }
+
+    /// <summary>The mac commitEdit shape (contract C7): empty draft
+    /// deletes the property; a validation refusal announces core's
+    /// sentence and RE-ARMS the editor with the user's text intact;
+    /// a typed value dispatches through the workspace coordinator
+    /// (contract C8) and moves per the committed navigation.</summary>
+    private void CommitCellEdit(
+        BaseDocumentViewModel model,
+        BasesResultSet result,
+        object row,
+        int columnIndex,
+        string text,
+        GridEditCommitNavigation navigation)
+    {
+        if (columnIndex < 0 || columnIndex >= result.Columns.Length)
+        {
+            return;
+        }
+        BasesColumn column = result.Columns[columnIndex];
+        BasesRow basesRow = ((BaseGridRowViewModel)row).Row;
+        if (text.Trim().Length == 0)
+        {
+            model.ApplyPropertyEdit?.Invoke(basesRow, column, null);
+            _grid.MoveCurrentCell(navigation);
+            return;
+        }
+        PropertyValue? value = BaseCellEditPolicy.PropertyValueFor(
+            text, column.ValueKind, out A11yEvent? refusal);
+        if (value is null)
+        {
+            if (refusal is not null)
+            {
+                model.AnnounceForSurface(refusal);
+            }
+            _ = _grid.BeginEditAt(row, columnIndex, draftOverride: text);
+            return;
+        }
+        model.ApplyPropertyEdit?.Invoke(basesRow, column, value);
+        _grid.MoveCurrentCell(navigation);
     }
 
     /// <summary>Row navigation (the mac list renderer): one item per

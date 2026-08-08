@@ -1216,6 +1216,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 _announce,
                 synchronousForTests: !_startInteractionBackgroundWork);
             _baseDocuments[path] = document;
+            InstallBaseDocumentSeams(document);
             document.Load();
         }
         return document;
