@@ -371,6 +371,43 @@ public sealed class GridConformanceTests
         }
     }
 
+    /// <summary>#1089: the host-window bound must SCALE with the row
+    /// count a probe asked for, and must never hand any probe less than
+    /// the flat 30 s the gate already ran on — a "proportional" bound
+    /// that shrank the small cases would trade a known flake for an
+    /// unknown one. Pure arithmetic, no desktop (the
+    /// MainWindowDiscovery_RetriesTransientComTimeouts precedent).</summary>
+    [Fact]
+    public void HostWindowBound_ScalesWithRowCountAndNeverShrinks()
+    {
+        TimeSpan flatBoundBeforeThisChange = TimeSpan.FromSeconds(30);
+
+        // Never below the proven floor - including the degenerate and
+        // nonsensical row counts, which must not underflow it.
+        Assert.Equal(flatBoundBeforeThisChange, HostWindowTimeout(0));
+        Assert.Equal(flatBoundBeforeThisChange, HostWindowTimeout(-1));
+        foreach (int rowCount in new[] { 0, 5, 200, 10_000 })
+        {
+            Assert.True(
+                HostWindowTimeout(rowCount) >= flatBoundBeforeThisChange,
+                $"{rowCount} rows got less than the flat bound it used to have");
+        }
+
+        // Strictly increasing across the three sizes the suite drives.
+        Assert.True(
+            HostWindowTimeout(5) < HostWindowTimeout(200),
+            "200 rows must outrank 5");
+        Assert.True(
+            HostWindowTimeout(200) < HostWindowTimeout(10_000),
+            "10,000 rows must outrank 200");
+
+        // The case that actually flaked (#1086) gets materially more
+        // than the bound it blew - not a rounding-error improvement.
+        Assert.True(
+            HostWindowTimeout(10_000) >= TimeSpan.FromSeconds(60),
+            $"the 10,000-row bound is only {HostWindowTimeout(10_000).TotalSeconds:0.#} s");
+    }
+
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern IntPtr GetForegroundWindow();
 
@@ -458,6 +495,35 @@ public sealed class GridConformanceTests
         return found!;
     }
 
+    /// <summary>Cold WinExe start on a hosted runner — row-count
+    /// independent, and deliberately the WHOLE flat bound that the 5-
+    /// and 200-row probes already relied on, so no probe ends up with a
+    /// SMALLER budget than the one already proven in the gate.</summary>
+    private static readonly TimeSpan HostWindowStartBudget = TimeSpan.FromSeconds(30);
+
+    /// <summary>Per-row allowance for building and realizing the grid
+    /// before the window is discoverable: 3 ms/row puts the 10,000-row
+    /// probe at 60 s, double the bound that flaked.</summary>
+    private static readonly TimeSpan HostWindowPerRowBudget =
+        TimeSpan.FromMilliseconds(3);
+
+    /// <summary>
+    /// The host-window bound, scaled to the row count the probe asked
+    /// for (#1089). A flat number was the wrong shape: too tight for
+    /// the 10,000-row probe — which flaked the gate on #1086 with "the
+    /// host window never appeared" and passed on a no-change re-run —
+    /// while giving the 5-row probe the same budget for work three
+    /// orders of magnitude smaller.
+    ///
+    /// This is a CEILING, not a cost. SpinUntil returns the moment the
+    /// window appears (the whole 10,000-row probe takes ~1.6 s locally,
+    /// measured 2026-08-07), so the budget is only ever spent on a
+    /// failure — a real hang costs the extra seconds once, a too-tight
+    /// bound costs a re-run of the entire gate. Generous wins.
+    /// </summary>
+    internal static TimeSpan HostWindowTimeout(int rowCount) =>
+        HostWindowStartBudget + (HostWindowPerRowBudget * Math.Max(0, rowCount));
+
     private static void RunHost(
         int rowCount,
         Action<UIA3Automation, Window, Process> body)
@@ -487,6 +553,7 @@ public sealed class GridConformanceTests
 
             using var automation = new UIA3Automation();
             Window? window = null;
+            TimeSpan windowBound = HostWindowTimeout(rowCount);
             Assert.True(
                 SpinWait.SpinUntil(
                     () =>
@@ -495,8 +562,11 @@ public sealed class GridConformanceTests
                             .FindFirstChild(cf => cf.ByProcessId(process.Id))?.AsWindow();
                         return window is not null;
                     },
-                    TimeSpan.FromSeconds(30)),
-                "the host window never appeared");
+                    windowBound),
+                // The bound rides the message: a future timeout must say
+                // WHICH budget it blew, not just that it blew one.
+                "the host window never appeared within "
+                    + $"{windowBound.TotalSeconds:0.#} s ({rowCount} rows)");
             // The body drives real keyboard input; whatever test ran
             // before this one owned the foreground.
             EnsureForeground(window!);
