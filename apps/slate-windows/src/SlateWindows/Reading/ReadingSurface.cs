@@ -808,6 +808,10 @@ internal sealed class ReadingHeadingPeer : TextElementAutomationPeer
     protected override bool IsControlElementCore() => true;
 
     protected override bool IsContentElementCore() => true;
+
+    /// <summary>#1088: see <see cref="ReadingStructuralPeer"/>.</summary>
+    protected override List<AutomationPeer> GetChildrenCore() =>
+        ReadingStructuralPeer.NoChildren();
 }
 
 /// <summary>
@@ -835,6 +839,42 @@ internal sealed class ReadingCodeBlockPeer : TextElementAutomationPeer
     protected override bool IsControlElementCore() => true;
 
     protected override bool IsContentElementCore() => true;
+
+    /// <summary>#1088: see <see cref="ReadingStructuralPeer"/>. A fenced
+    /// block's Copy link is the element at risk here.</summary>
+    protected override List<AutomationPeer> GetChildrenCore() =>
+        ReadingStructuralPeer.NoChildren();
+}
+
+/// <summary>
+/// Why every structural peer over a TextElement refuses children
+/// (#1088).
+///
+/// <see cref="ReadingSurfacePeer"/> returns
+/// <c>RichTextBoxAutomationPeer</c>'s children — which ALREADY contains
+/// every embedded control and link in the document, flattened — and
+/// then appends the structural peers. <c>TextElementAutomationPeer</c>'s
+/// default <c>GetChildrenCore</c> hands back the peers for the
+/// UIElements inside its own element, which are the very same peer
+/// INSTANCES. WPF stores one <c>_parent</c>/<c>_index</c> per peer and
+/// guards sibling navigation on them, so a peer claimed by two parents
+/// has its links overwritten by whichever subtree was built last.
+///
+/// Measured live (2026-08-07, FlaUI cross-process, 9 provider children):
+/// the task CheckBox was child 1 of the surface and a child of its
+/// ReadingListItemPeer. A client saw TWO children — <c>GetLastChild</c>
+/// answered the 9th, <c>NextSibling</c> died at index 2, and
+/// <c>PreviousSibling</c> died at the same peer coming back. A screen
+/// reader loses everything past that point with no error.
+///
+/// Refusing children here costs nothing: the controls stay reachable in
+/// the root collection, and the structural peer's own Name already
+/// carries its text. It also matches the surface's documented design —
+/// "the structural peer walk adds headings and lists but never links".
+/// </summary>
+internal static class ReadingStructuralPeer
+{
+    internal static List<AutomationPeer> NoChildren() => new();
 }
 
 /// <summary>
@@ -906,4 +946,9 @@ internal sealed class ReadingListItemPeer : TextElementAutomationPeer
     /// browse-mode research's verified condition for `l`).
     /// </summary>
     protected override bool IsKeyboardFocusableCore() => false;
+
+    /// <summary>#1088: see <see cref="ReadingStructuralPeer"/>. A task
+    /// item's CheckBox is the element this bug was found on.</summary>
+    protected override List<AutomationPeer> GetChildrenCore() =>
+        ReadingStructuralPeer.NoChildren();
 }
