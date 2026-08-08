@@ -914,16 +914,16 @@ extension AppState {
         guard let session = currentSession else { return nil }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            postBaseActionAnnouncement("Enter a dashboard name before saving.")
+            postBaseActionEvent(.basesDashboardNameNeeded)
             return nil
         }
         do {
             let id = try session.saveDashboard(name: trimmed, sections: sections)
             refreshBaseQueries()
-            postBaseActionAnnouncement("Saved dashboard \(trimmed).")
+            postBaseActionEvent(.basesDashboardSaved(name: trimmed))
             return id
         } catch {
-            postBaseActionAnnouncement("Dashboard could not be saved: \(error.localizedDescription)")
+            postBaseActionEvent(.basesDashboardSaveFailed(detail: error.localizedDescription))
             return nil
         }
     }
@@ -933,7 +933,7 @@ extension AppState {
         guard let session = currentSession else { return false }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            postBaseActionAnnouncement("Enter a dashboard name before saving.")
+            postBaseActionEvent(.basesDashboardNameNeeded)
             return false
         }
         do {
@@ -946,10 +946,11 @@ extension AppState {
                 }
             }
             refreshBaseQueries()
-            postBaseActionAnnouncement("Updated dashboard \(trimmed).")
+            postBaseActionEvent(.basesDashboardUpdated(name: trimmed))
             return true
         } catch {
-            postBaseActionAnnouncement("Dashboard could not be updated: \(error.localizedDescription)")
+            postBaseActionEvent(
+                .basesDashboardUpdateFailed(detail: error.localizedDescription))
             return false
         }
     }
@@ -967,15 +968,15 @@ extension AppState {
                 dashboard.sections.indices.contains(index),
                 dashboard.sections[index].missing
             else {
-                postBaseActionAnnouncement("Dashboard section changed; reload and try again.")
+                postBaseActionEvent(.basesDashboardSectionStale)
                 return
             }
             var sections = freshSections
             sections.remove(at: index)
             updateDashboard(id: dashboardID, name: dashboard.name, sections: sections)
         } catch {
-            postBaseActionAnnouncement(
-                "Dashboard section could not be removed: \(error.localizedDescription)")
+            postBaseActionEvent(
+                .basesDashboardSectionRemoveFailed(detail: error.localizedDescription))
         }
     }
 
@@ -994,7 +995,7 @@ extension AppState {
                 dashboard.sections.indices.contains(index),
                 dashboard.sections[index].missing
             else {
-                postBaseActionAnnouncement("Dashboard section changed; reload and try again.")
+                postBaseActionEvent(.basesDashboardSectionStale)
                 return
             }
             var sections = freshSections
@@ -1005,8 +1006,8 @@ extension AppState {
                 viewOverride: current.viewOverride)
             updateDashboard(id: dashboardID, name: dashboard.name, sections: sections)
         } catch {
-            postBaseActionAnnouncement(
-                "Dashboard section could not be replaced: \(error.localizedDescription)")
+            postBaseActionEvent(
+                .basesDashboardSectionReplaceFailed(detail: error.localizedDescription))
         }
     }
 
@@ -1027,9 +1028,10 @@ extension AppState {
             try session.deleteDashboard(id: id)
             closeOpenDashboardTabs(id: id)
             refreshBaseQueries()
-            postBaseActionAnnouncement("Deleted dashboard.")
+            postBaseActionEvent(.basesDashboardDeleted)
         } catch {
-            postBaseActionAnnouncement("Dashboard could not be deleted: \(error.localizedDescription)")
+            postBaseActionEvent(
+                .basesDashboardDeleteFailed(detail: error.localizedDescription))
         }
     }
 
@@ -1038,7 +1040,7 @@ extension AppState {
         do {
             return try session.getDashboard(id: id)
         } catch {
-            postBaseActionAnnouncement("Dashboard could not be edited: \(error.localizedDescription)")
+            postBaseActionEvent(.basesDashboardEditFailed(detail: error.localizedDescription))
             return nil
         }
     }
@@ -1332,7 +1334,7 @@ extension AppState {
 
     func dockDashboardToSidebar(id: String, refreshDelayNanoseconds: UInt64 = 500_000_000) {
         guard let summary = dashboardSummary(id: id) else {
-            postBaseActionAnnouncement("Dashboard is no longer available.")
+            postBaseActionEvent(.basesDashboardMissing)
             return
         }
         basesDock.setTarget(.dashboard(id: summary.id, name: summary.name))

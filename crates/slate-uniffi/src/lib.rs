@@ -7064,6 +7064,34 @@ pub enum A11yEvent {
         detail: String,
     },
     BasesPathOutsideVault,
+    BasesDashboardNameNeeded,
+    BasesDashboardSaved {
+        name: String,
+    },
+    BasesDashboardSaveFailed {
+        detail: String,
+    },
+    BasesDashboardUpdated {
+        name: String,
+    },
+    BasesDashboardUpdateFailed {
+        detail: String,
+    },
+    BasesDashboardSectionStale,
+    BasesDashboardSectionRemoveFailed {
+        detail: String,
+    },
+    BasesDashboardSectionReplaceFailed {
+        detail: String,
+    },
+    BasesDashboardDeleted,
+    BasesDashboardDeleteFailed {
+        detail: String,
+    },
+    BasesDashboardEditFailed {
+        detail: String,
+    },
+    BasesDashboardMissing,
     DataviewConversionFailed {
         detail: String,
     },
@@ -7397,6 +7425,22 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::BasesSavedQueryExported { name } => C::BasesSavedQueryExported { name },
             F::BasesSavedQueryExportFailed { detail } => C::BasesSavedQueryExportFailed { detail },
             F::BasesPathOutsideVault => C::BasesPathOutsideVault,
+            F::BasesDashboardNameNeeded => C::BasesDashboardNameNeeded,
+            F::BasesDashboardSaved { name } => C::BasesDashboardSaved { name },
+            F::BasesDashboardSaveFailed { detail } => C::BasesDashboardSaveFailed { detail },
+            F::BasesDashboardUpdated { name } => C::BasesDashboardUpdated { name },
+            F::BasesDashboardUpdateFailed { detail } => C::BasesDashboardUpdateFailed { detail },
+            F::BasesDashboardSectionStale => C::BasesDashboardSectionStale,
+            F::BasesDashboardSectionRemoveFailed { detail } => {
+                C::BasesDashboardSectionRemoveFailed { detail }
+            }
+            F::BasesDashboardSectionReplaceFailed { detail } => {
+                C::BasesDashboardSectionReplaceFailed { detail }
+            }
+            F::BasesDashboardDeleted => C::BasesDashboardDeleted,
+            F::BasesDashboardDeleteFailed { detail } => C::BasesDashboardDeleteFailed { detail },
+            F::BasesDashboardEditFailed { detail } => C::BasesDashboardEditFailed { detail },
+            F::BasesDashboardMissing => C::BasesDashboardMissing,
             F::DataviewConversionFailed { detail } => C::DataviewConversionFailed { detail },
             F::CitationInsertUnavailable => C::CitationInsertUnavailable,
             F::CitationWalkThrough => C::CitationWalkThrough,

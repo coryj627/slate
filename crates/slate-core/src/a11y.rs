@@ -598,6 +598,38 @@ pub enum A11yEvent {
         detail: String,
     },
     BasesPathOutsideVault,
+    /// The dashboard action family — the second group behind the same
+    /// `postBaseActionAnnouncement` funnel.
+    BasesDashboardNameNeeded,
+    BasesDashboardSaved {
+        name: String,
+    },
+    BasesDashboardSaveFailed {
+        detail: String,
+    },
+    BasesDashboardUpdated {
+        name: String,
+    },
+    BasesDashboardUpdateFailed {
+        detail: String,
+    },
+    /// The section moved under the editor's feet — a stale-index
+    /// refusal, not a failure with a reason to relay.
+    BasesDashboardSectionStale,
+    BasesDashboardSectionRemoveFailed {
+        detail: String,
+    },
+    BasesDashboardSectionReplaceFailed {
+        detail: String,
+    },
+    BasesDashboardDeleted,
+    BasesDashboardDeleteFailed {
+        detail: String,
+    },
+    BasesDashboardEditFailed {
+        detail: String,
+    },
+    BasesDashboardMissing,
     DataviewConversionFailed {
         detail: String,
     },
@@ -1113,6 +1145,32 @@ impl A11yEvent {
                 format!("Saved query could not be exported: {detail}")
             }
             BasesPathOutsideVault => "Choose a path inside the vault.".to_owned(),
+            BasesDashboardNameNeeded => "Enter a dashboard name before saving.".to_owned(),
+            BasesDashboardSaved { name } => format!("Saved dashboard {name}."),
+            BasesDashboardSaveFailed { detail } => {
+                format!("Dashboard could not be saved: {detail}")
+            }
+            BasesDashboardUpdated { name } => format!("Updated dashboard {name}."),
+            BasesDashboardUpdateFailed { detail } => {
+                format!("Dashboard could not be updated: {detail}")
+            }
+            BasesDashboardSectionStale => {
+                "Dashboard section changed; reload and try again.".to_owned()
+            }
+            BasesDashboardSectionRemoveFailed { detail } => {
+                format!("Dashboard section could not be removed: {detail}")
+            }
+            BasesDashboardSectionReplaceFailed { detail } => {
+                format!("Dashboard section could not be replaced: {detail}")
+            }
+            BasesDashboardDeleted => "Deleted dashboard.".to_owned(),
+            BasesDashboardDeleteFailed { detail } => {
+                format!("Dashboard could not be deleted: {detail}")
+            }
+            BasesDashboardEditFailed { detail } => {
+                format!("Dashboard could not be edited: {detail}")
+            }
+            BasesDashboardMissing => "Dashboard is no longer available.".to_owned(),
             DataviewConversionFailed { detail } => {
                 format!("Dataview conversion failed: {detail}")
             }
@@ -1709,6 +1767,34 @@ pub fn corpus() -> Vec<A11yEvent> {
             detail: "io error".into(),
         },
         BasesPathOutsideVault,
+        BasesDashboardNameNeeded,
+        BasesDashboardSaved {
+            name: "Reading".into(),
+        },
+        BasesDashboardSaveFailed {
+            detail: "io error".into(),
+        },
+        BasesDashboardUpdated {
+            name: "Reading".into(),
+        },
+        BasesDashboardUpdateFailed {
+            detail: "io error".into(),
+        },
+        BasesDashboardSectionStale,
+        BasesDashboardSectionRemoveFailed {
+            detail: "io error".into(),
+        },
+        BasesDashboardSectionReplaceFailed {
+            detail: "io error".into(),
+        },
+        BasesDashboardDeleted,
+        BasesDashboardDeleteFailed {
+            detail: "io error".into(),
+        },
+        BasesDashboardEditFailed {
+            detail: "io error".into(),
+        },
+        BasesDashboardMissing,
         DataviewConversionFailed {
             detail: "unsupported query".into(),
         },
@@ -2113,6 +2199,18 @@ mod tests {
             (Medium, "Exported saved query as Open tasks.base."),
             (Medium, "Saved query could not be exported: io error"),
             (Medium, "Choose a path inside the vault."),
+            (Medium, "Enter a dashboard name before saving."),
+            (Medium, "Saved dashboard Reading."),
+            (Medium, "Dashboard could not be saved: io error"),
+            (Medium, "Updated dashboard Reading."),
+            (Medium, "Dashboard could not be updated: io error"),
+            (Medium, "Dashboard section changed; reload and try again."),
+            (Medium, "Dashboard section could not be removed: io error"),
+            (Medium, "Dashboard section could not be replaced: io error"),
+            (Medium, "Deleted dashboard."),
+            (Medium, "Dashboard could not be deleted: io error"),
+            (Medium, "Dashboard could not be edited: io error"),
+            (Medium, "Dashboard is no longer available."),
             (Medium, "Dataview conversion failed: unsupported query"),
             (Medium, "Insert citation lands in V1.x. See Milestone L."),
             (
