@@ -799,9 +799,65 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             {
                 resolution = null;
             }
-            artifacts.Add(new ReadingEmbedArtifact(key, alt, resolution, imageRefused));
+            // W4-6 (#738, contract C10): a resolved `.base` target gets
+            // ONE ephemeral execute for its summary projection — the
+            // rendering branch is on the RESOLVED path (core's link
+            // resolver already classified the target; this is a
+            // presentation choice, not re-classification).
+            BaseEmbedProjection? baseProjection = null;
+            if (resolution?.Resolution is EmbedResolution.FullNote fullNote
+                && fullNote.TargetPath.EndsWith(
+                    ".base", StringComparison.OrdinalIgnoreCase))
+            {
+                baseProjection = ProjectBaseEmbed(session, fullNote.TargetPath);
+            }
+            artifacts.Add(new ReadingEmbedArtifact(
+                key, alt, resolution, imageRefused, baseProjection));
         }
         return artifacts.ToArray();
+    }
+
+    /// <summary>One ephemeral execute for a `.base` embed card
+    /// (contract C10): open, execute view 0 unfiltered, ALWAYS close
+    /// (INV-2 — the finally owns it). Failures project as an error
+    /// sentence, never a silent empty card.</summary>
+    private static BaseEmbedProjection ProjectBaseEmbed(
+        VaultSession session, string targetPath)
+    {
+        ulong? handle = null;
+        try
+        {
+            handle = session.OpenBase(targetPath);
+            using var cancel = new CancelToken();
+            BasesResultSet result = session.BaseExecute(
+                handle.Value, view: 0, thisPath: null, quickFilter: null, cancel);
+            return new BaseEmbedProjection(
+                targetPath,
+                result.AudioSummary,
+                result.ShownCount,
+                result.TotalCount,
+                result.Warnings,
+                result.ViewError,
+                ExecuteError: null);
+        }
+        catch (VaultException failure)
+        {
+            return new BaseEmbedProjection(
+                targetPath,
+                string.Empty,
+                0,
+                0,
+                [],
+                ViewError: null,
+                ExecuteError: failure.Message);
+        }
+        finally
+        {
+            if (handle is { } opened)
+            {
+                session.CloseBase(opened);
+            }
+        }
     }
 
     /// <summary>

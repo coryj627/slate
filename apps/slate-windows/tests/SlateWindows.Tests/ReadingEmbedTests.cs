@@ -1274,6 +1274,73 @@ public sealed class ReadingEmbedTests
         }
     }
 
+    /// <summary>
+    /// W4-6 (#738, contract C10 / G28): a `.base` embed renders as a
+    /// LAYERED summary card — core's audio summary, the counts line,
+    /// and the read-only hint all in the text range (say-all reads
+    /// them) — never a live grid inside the FlowDocument. The header
+    /// names the real kind and its jump opens the tab surface. This
+    /// closes the transferred W3-5 `.base`-embed rows.
+    /// </summary>
+    [Fact]
+    public void BaseEmbedRendersALayeredSummaryCardInRange()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(2, "reading-embed-base");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "Notes.base"),
+                "filters: 'file.ext == \"md\"'\n" +
+                "views:\n" +
+                "  - type: table\n" +
+                "    name: Main\n" +
+                "    order:\n" +
+                "      - file.name\n");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"), "![[Notes.base]]\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(
+                        WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+
+            string text = new System.Windows.Documents.TextRange(
+                surface.Document.ContentStart,
+                surface.Document.ContentEnd).Text;
+            Assert.Contains(
+                "Embedded base: Notes", text, StringComparison.Ordinal);
+            // Core's audio summary IS in the text range (2 md notes).
+            Assert.Contains("2 notes.", text, StringComparison.Ordinal);
+            Assert.Contains("2 of 2 results.", text, StringComparison.Ordinal);
+            Assert.Contains(
+                "read-only in embeds — open the base file in a tab to edit",
+                text,
+                StringComparison.Ordinal);
+            // G28: the card must NOT expand the raw YAML the FullNote
+            // resolution carries (that is the note-card body, not the
+            // base card).
+            Assert.DoesNotContain(
+                "filters:", text, StringComparison.Ordinal);
+
+            // The embed landmark speaks the base header, and Enter at
+            // the header activates through the existing jump seam
+            // (which opens the .base TAB — the layered surface).
+            ReadingLandmark landmark = Assert.Single(
+                surface.LandmarksForTests,
+                candidate => candidate.Kind == ReadingLandmarkKind.Embed);
+            Assert.StartsWith(
+                "Embedded base: Notes", landmark.Text, StringComparison.Ordinal);
+        });
+    }
+
     private static void RunSta(Action body)
     {
         Exception? failure = null;

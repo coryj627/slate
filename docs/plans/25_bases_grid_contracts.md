@@ -194,6 +194,13 @@ cancel tokens where the FFI accepts one.
 - **D-16** Mac's ⌘F router picks the Bases filter only when the editor
   region owns focus; Windows scopes Ctrl+F by WPF focus within the grid
   (the substrate's existing gesture), the closest native analog.
+- **D-17** `![[x.base#ViewName]]` anchored embeds: mac selects the named
+  view; Windows renders the existing unresolved card. Core's
+  `parse_embed_target` treats `#` as a heading anchor and a `.base` file
+  has no sections, so honoring the view name host-side would mean
+  re-implementing target parsing (decision 4). Fix belongs in core (an
+  embed-resolution variant for bases); until then the unanchored form
+  carries the full experience.
 
 ## Accepted risks (off-limits for review re-litigation)
 
