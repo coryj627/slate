@@ -4,18 +4,30 @@
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Threading;
 using SlateWindows.Grids;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows.Bases;
 
+/// <summary>The per-tab renderer choice (the mac BaseRendererMode
+/// twin): a TRANSIENT override wins, else the view's own type. Never
+/// persisted anywhere (contract C4).</summary>
+internal enum BaseRendererOverride
+{
+    Table,
+    List,
+}
+
 /// <summary>
-/// W4-6 (#738): the `.base` tab body — the mac BaseContainerView twin,
-/// phase A scope: header (name, view, count, Refresh), informational
-/// banners (contract C4), and the table on the one grid substrate
-/// (contract C2). The header controls carry the disabledReason-as-hint
-/// pattern; banners are captions, never dialogs, and the whole banner
-/// region leaves the UIA tree when empty (the W4-5 axe lesson).
+/// W4-6 (#738): the `.base` tab body — the mac BaseContainerView twin.
+/// Header (name, view picker, count, quick filter, Refresh/Retry),
+/// informational banners (contract C4), and the content pair: the
+/// table on the one grid substrate (contract C2) or the row-navigation
+/// list — exactly one of the two is ever in the UIA tree. The quick
+/// filter is transient four ways (contract C5); Ctrl+F reaches it
+/// through the substrate's grid-scoped FilterRequested hook.
 /// </summary>
 internal sealed class BaseSurfaceView : UserControl
 {
@@ -27,13 +39,19 @@ internal sealed class BaseSurfaceView : UserControl
             new PropertyMetadata(null, OnModelChanged));
 
     private readonly TextBlock _title;
+    private readonly ComboBox _viewPicker;
     private readonly TextBlock _countReadout;
+    private readonly TextBox _quickFilter;
     private readonly Button _refresh;
     private readonly StackPanel _banners;
     private readonly TextBlock _stateBanner;
     private readonly ItemsControl _warningBanners;
     private readonly TextBlock _emptyState;
     private readonly AccessibleDataGrid _grid;
+    private readonly ListBox _list;
+    private readonly DispatcherTimer _filterDebounce;
+    private BaseRendererOverride? _rendererOverride;
+    private bool _synchronizingPicker;
 
     public BaseSurfaceView()
     {
@@ -48,6 +66,19 @@ internal sealed class BaseSurfaceView : UserControl
         AutomationProperties.SetHeadingLevel(
             _title, AutomationHeadingLevel.Level2);
 
+        _viewPicker = new ComboBox
+        {
+            Margin = new Thickness(12, 0, 0, 0),
+            MinWidth = 120,
+            VerticalAlignment = VerticalAlignment.Center,
+            DisplayMemberPath = nameof(BaseViewSummary.Name),
+        };
+        AutomationProperties.SetAutomationId(_viewPicker, "BaseViewPicker");
+        AutomationProperties.SetName(_viewPicker, "Base view");
+        AutomationProperties.SetHelpText(
+            _viewPicker, "Switch the active view in this base.");
+        _viewPicker.SelectionChanged += OnViewPicked;
+
         _countReadout = new TextBlock
         {
             Margin = new Thickness(12, 0, 0, 0),
@@ -56,6 +87,35 @@ internal sealed class BaseSurfaceView : UserControl
         _countReadout.SetResourceReference(
             TextBlock.ForegroundProperty, "Slate.SecondaryTextBrush");
         AutomationProperties.SetAutomationId(_countReadout, "BaseCountReadout");
+
+        _quickFilter = new TextBox
+        {
+            Margin = new Thickness(12, 0, 0, 0),
+            MinWidth = 160,
+            VerticalAlignment = VerticalAlignment.Center,
+            Padding = new Thickness(6, 2, 6, 2),
+        };
+        AutomationProperties.SetAutomationId(_quickFilter, "BaseQuickFilter");
+        // The transiency is IN the accessible name (mac verbatim,
+        // contract C5).
+        AutomationProperties.SetName(
+            _quickFilter, "Quick filter — temporary, does not change the base");
+        AutomationProperties.SetHelpText(
+            _quickFilter, "Temporarily filter the visible Base results.");
+        _quickFilter.TextChanged += OnQuickFilterTextChanged;
+        _quickFilter.PreviewKeyDown += OnQuickFilterKeyDown;
+
+        _filterDebounce = new DispatcherTimer
+        {
+            // The mac cadence: 150 ms between last keystroke and the
+            // core re-execute.
+            Interval = TimeSpan.FromMilliseconds(150),
+        };
+        _filterDebounce.Tick += (_, _) =>
+        {
+            _filterDebounce.Stop();
+            Model?.ApplyQuickFilter();
+        };
 
         _refresh = new Button
         {
@@ -73,7 +133,9 @@ internal sealed class BaseSurfaceView : UserControl
         header.Children.Add(_refresh);
         var titleRow = new StackPanel { Orientation = Orientation.Horizontal };
         titleRow.Children.Add(_title);
+        titleRow.Children.Add(_viewPicker);
         titleRow.Children.Add(_countReadout);
+        titleRow.Children.Add(_quickFilter);
         header.Children.Add(titleRow);
 
         _stateBanner = BannerText();
@@ -104,6 +166,16 @@ internal sealed class BaseSurfaceView : UserControl
             GridAutomationId = "BaseTabGrid",
             ExternalSortHandler = OnExternalSort,
         };
+        _grid.FilterRequested += FocusQuickFilter;
+
+        _list = new ListBox
+        {
+            Visibility = Visibility.Collapsed,
+            SelectionMode = SelectionMode.Single,
+        };
+        AutomationProperties.SetAutomationId(_list, "BaseTabList");
+        ScrollViewer.SetHorizontalScrollBarVisibility(
+            _list, ScrollBarVisibility.Disabled);
 
         var layout = new DockPanel();
         DockPanel.SetDock(header, Dock.Top);
@@ -112,7 +184,10 @@ internal sealed class BaseSurfaceView : UserControl
         layout.Children.Add(header);
         layout.Children.Add(_banners);
         layout.Children.Add(_emptyState);
-        layout.Children.Add(_grid);
+        var contentHost = new Grid();
+        contentHost.Children.Add(_grid);
+        contentHost.Children.Add(_list);
+        layout.Children.Add(contentHost);
         Content = layout;
     }
 
@@ -122,8 +197,24 @@ internal sealed class BaseSurfaceView : UserControl
         set => SetValue(ModelProperty, value);
     }
 
-    /// <summary>Substrate probe for facts + FlaUI.</summary>
+    /// <summary>The transient per-TAB renderer override (mac keys it
+    /// by tab, not by document — two tabs on one source may render
+    /// differently). Set by the viewAsTable/viewAsList commands.</summary>
+    internal BaseRendererOverride? RendererOverride
+    {
+        get => _rendererOverride;
+        set
+        {
+            _rendererOverride = value;
+            RenderAll();
+        }
+    }
+
     internal AccessibleDataGrid GridForTests => _grid;
+
+    internal ListBox ListForTests => _list;
+
+    internal TextBox QuickFilterForTests => _quickFilter;
 
     private static void OnModelChanged(
         DependencyObject d, DependencyPropertyChangedEventArgs e)
@@ -148,19 +239,86 @@ internal sealed class BaseSurfaceView : UserControl
         {
             return;
         }
-        if (model.State == BaseLoadState.Failed)
+        // The mac shape: Refresh is a FULL reload (close, reopen,
+        // views, execute) and announces "Base refreshed."; Retry is
+        // the same reload from the failed posture, where the state
+        // banners speak for themselves.
+        bool wasFailed = model.State == BaseLoadState.Failed;
+        model.Load();
+        if (!wasFailed)
         {
-            // The recovery posture (contract C13): a failed document's
-            // header action is a full reopen, not a re-execute on a
-            // handle that no longer exists.
-            model.Load();
-            return;
+            model.AnnounceRefreshed();
         }
-        model.Refresh();
     }
 
     private bool OnExternalSort(int columnIndex, bool ascending) =>
         Model?.ApplySortFromGrid(columnIndex, ascending) ?? false;
+
+    private void OnViewPicked(object sender, SelectionChangedEventArgs e)
+    {
+        if (_synchronizingPicker
+            || Model is not { } model
+            || _viewPicker.SelectedIndex < 0
+            || _viewPicker.SelectedIndex == model.ActiveViewIndex)
+        {
+            return;
+        }
+        model.SelectView(_viewPicker.SelectedIndex);
+        if (model.ActiveViewName is { } name)
+        {
+            model.AnnounceViewSelected(name);
+        }
+    }
+
+    private void OnQuickFilterTextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (Model is not { } model)
+        {
+            return;
+        }
+        model.QuickFilterText = _quickFilter.Text;
+        _filterDebounce.Stop();
+        _filterDebounce.Start();
+    }
+
+    private void OnQuickFilterKeyDown(object sender, KeyEventArgs e)
+    {
+        // Escape clears ONLY when the field is focused or a filter is
+        // active, then returns focus to the content (the mac shape,
+        // contract C5).
+        if (e.Key != Key.Escape || Model is not { } model)
+        {
+            return;
+        }
+        if (_quickFilter.Text.Length == 0 && !model.QuickFilterActive)
+        {
+            return;
+        }
+        e.Handled = true;
+        _filterDebounce.Stop();
+        _quickFilter.Text = string.Empty;
+        model.QuickFilterText = string.Empty;
+        model.ApplyQuickFilter();
+        FocusContent();
+    }
+
+    private void FocusQuickFilter()
+    {
+        _ = _quickFilter.Focus();
+        _quickFilter.SelectAll();
+    }
+
+    private void FocusContent()
+    {
+        if (_grid.Visibility == Visibility.Visible)
+        {
+            _ = _grid.FocusFirstCell();
+        }
+        else if (_list.Visibility == Visibility.Visible)
+        {
+            _ = _list.Focus();
+        }
+    }
 
     private void OnResultPublished(object? sender, EventArgs e) => RenderAll();
 
@@ -168,7 +326,8 @@ internal sealed class BaseSurfaceView : UserControl
         object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
         if (e.PropertyName is nameof(BaseDocumentViewModel.State)
-            or nameof(BaseDocumentViewModel.StateMessage))
+            or nameof(BaseDocumentViewModel.StateMessage)
+            or nameof(BaseDocumentViewModel.QuickFilterActive))
         {
             RenderChrome();
         }
@@ -177,7 +336,7 @@ internal sealed class BaseSurfaceView : UserControl
     private void RenderAll()
     {
         RenderChrome();
-        RenderGrid();
+        RenderContent();
     }
 
     private void RenderChrome()
@@ -188,12 +347,53 @@ internal sealed class BaseSurfaceView : UserControl
         }
         _title.Text = model.DisplayName;
         AutomationProperties.SetName(_title, $"Base {model.DisplayName}");
-        _countReadout.Text = model.Result is { } result
-            ? $"{result.ShownCount} of {result.TotalCount}"
-            : string.Empty;
+
+        _synchronizingPicker = true;
+        try
+        {
+            _viewPicker.ItemsSource = model.Views;
+            _viewPicker.SelectedIndex =
+                model.Views.Count > 0 ? model.ActiveViewIndex : -1;
+            _viewPicker.Visibility = model.Views.Count > 1
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+        }
+        finally
+        {
+            _synchronizingPicker = false;
+        }
+
+        if (model.Result is { } result)
+        {
+            // The filtered denominator is the UNFILTERED shown count
+            // (mac verbatim); unfiltered shows the total.
+            ulong denominator = model.QuickFilterActive
+                ? result.UnfilteredShownCount
+                : result.TotalCount;
+            _countReadout.Text = $"{result.ShownCount} of {denominator}";
+        }
+        else
+        {
+            _countReadout.Text = string.Empty;
+        }
         AutomationProperties.SetName(
             _countReadout,
             _countReadout.Text.Length > 0 ? $"Results: {_countReadout.Text}" : string.Empty);
+
+        bool interactive = model.State is BaseLoadState.Ready or BaseLoadState.Degraded;
+        _quickFilter.IsEnabled = interactive;
+        _viewPicker.IsEnabled = interactive;
+        if (!string.Equals(_quickFilter.Text, model.QuickFilterText, StringComparison.Ordinal))
+        {
+            // Transiency: a Load/SelectView cleared the model's filter;
+            // the field follows without re-triggering the debounce
+            // into a spurious execute.
+            _filterDebounce.Stop();
+            _quickFilter.TextChanged -= OnQuickFilterTextChanged;
+            _quickFilter.Text = model.QuickFilterText;
+            _quickFilter.TextChanged += OnQuickFilterTextChanged;
+        }
+
         _refresh.Content =
             model.State == BaseLoadState.Failed ? "Retry" : "Refresh";
         AutomationProperties.SetHelpText(
@@ -211,28 +411,74 @@ internal sealed class BaseSurfaceView : UserControl
         _warningBanners.ItemsSource = warnings;
         _warningBanners.Visibility =
             warnings.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
-        // The whole banner block leaves the tree when empty — an
-        // on-screen zero-size region is an axe BoundingRectangle
-        // failure (the W4-5 lesson).
         _banners.Visibility =
             _stateBanner.Visibility == Visibility.Visible
             || _warningBanners.Visibility == Visibility.Visible
                 ? Visibility.Visible
                 : Visibility.Collapsed;
-
-        _emptyState.Visibility =
-            model.ShowEmptyState ? Visibility.Visible : Visibility.Collapsed;
-        _grid.Visibility = model.ShowEmptyState || model.Result is null
-            ? Visibility.Collapsed
-            : Visibility.Visible;
     }
 
-    private void RenderGrid()
+    /// <summary>The mac content-shape rules (contract C4): no rows →
+    /// empty placeholder; no columns → row-only list REGARDLESS of
+    /// renderer mode; else the resolved renderer. Exactly one of
+    /// grid/list/empty is in the tree.</summary>
+    private void RenderContent()
     {
-        if (Model is not { Result: { } result } model)
+        if (Model is not { } model)
         {
             return;
         }
+        if (model.Result is not { } result || model.State == BaseLoadState.Failed)
+        {
+            _grid.Visibility = Visibility.Collapsed;
+            _list.Visibility = Visibility.Collapsed;
+            _emptyState.Visibility = model.State == BaseLoadState.Failed
+                ? Visibility.Collapsed
+                : model.State == BaseLoadState.Loading
+                    ? Visibility.Collapsed
+                    : Visibility.Visible;
+            return;
+        }
+        if (result.Rows.Length == 0)
+        {
+            _grid.Visibility = Visibility.Collapsed;
+            _list.Visibility = Visibility.Collapsed;
+            _emptyState.Visibility = Visibility.Visible;
+            return;
+        }
+        _emptyState.Visibility = Visibility.Collapsed;
+        bool asList = result.Columns.Length == 0 || ResolvedRenderer(model) ==
+            BaseRendererOverride.List;
+        if (asList)
+        {
+            _grid.Visibility = Visibility.Collapsed;
+            _list.Visibility = Visibility.Visible;
+            RenderList(result);
+        }
+        else
+        {
+            _list.Visibility = Visibility.Collapsed;
+            _grid.Visibility = Visibility.Visible;
+            RenderGrid(model, result);
+        }
+    }
+
+    private BaseRendererOverride ResolvedRenderer(BaseDocumentViewModel model)
+    {
+        if (_rendererOverride is { } overridden)
+        {
+            return overridden;
+        }
+        string? viewType = model.Views.Count > model.ActiveViewIndex
+            ? model.Views[model.ActiveViewIndex].ViewType
+            : null;
+        return string.Equals(viewType, "list", StringComparison.Ordinal)
+            ? BaseRendererOverride.List
+            : BaseRendererOverride.Table;
+    }
+
+    private void RenderGrid(BaseDocumentViewModel model, BasesResultSet result)
+    {
         var columns = new List<AccessibleGridColumn>(result.Columns.Length);
         for (int index = 0; index < result.Columns.Length; index++)
         {
@@ -243,10 +489,6 @@ internal sealed class BaseSurfaceView : UserControl
                 Header = column.Label,
                 Cell = row => ((BaseGridRowViewModel)row).DisplayAt(columnIndex),
                 IsRowHeader = column.Role == ColumnRole.Primary,
-                // Sorting is core's (contract C1/C6); while the
-                // document is failed there is no sort affordance at
-                // all (contract C13) — Bind is not reached then, the
-                // grid is collapsed.
                 IsExternallySortable = true,
             });
         }
@@ -258,11 +500,76 @@ internal sealed class BaseSurfaceView : UserControl
         _grid.Bind(
             columns,
             rows,
-            summary: BaseSummaryFormatter.SummaryText(result, quickFilterActive: false),
+            summary: BaseSummaryFormatter.SummaryText(result, model.QuickFilterActive),
             accessibilityLabel: result.AudioSummary,
             rowAudioDescription: static row =>
                 ((BaseGridRowViewModel)row).AudioDescription);
         _grid.SetSortIndicator(model.SortState);
+    }
+
+    /// <summary>Row navigation (the mac list renderer): one item per
+    /// row named by core's audio description; groups become header
+    /// items carrying the substrate's canonical group heading.</summary>
+    private void RenderList(BasesResultSet result)
+    {
+        var items = new List<object>();
+        if (result.Groups.Length > 0)
+        {
+            foreach (BasesGroup group in result.Groups)
+            {
+                items.Add(new BaseListHeaderViewModel(
+                    AccessibleDataGrid.ComposeGroupHeading(
+                        group.Label,
+                        (uint)group.RowCount,
+                        GroupSummaryText(result, group))));
+                ulong end = group.RowStart + group.RowCount;
+                for (ulong index = group.RowStart;
+                    index < end && index < (ulong)result.Rows.Length;
+                    index++)
+                {
+                    items.Add(new BaseListItemViewModel(result.Rows[index]));
+                }
+            }
+        }
+        else
+        {
+            foreach (BasesRow row in result.Rows)
+            {
+                items.Add(new BaseListItemViewModel(row));
+            }
+        }
+        _list.ItemsSource = items;
+        AutomationProperties.SetName(_list, result.AudioSummary);
+        _list.ItemContainerStyle ??= BuildListItemStyle();
+    }
+
+    private static string? GroupSummaryText(BasesResultSet result, BasesGroup group) =>
+        group.Summaries.Length == 0
+            ? null
+            : string.Join(
+                ", ",
+                group.Summaries.Select(cell =>
+                    $"{BaseSummaryFormatter.LabelFor(result, cell.ColumnId)} "
+                    + $"{cell.Summary}: "
+                    + (cell.Value.Display.Length > 0 ? cell.Value.Display : "empty")));
+
+    private static Style BuildListItemStyle()
+    {
+        // Group headers are separators, not selectable rows: they stay
+        // readable in the tree but never take selection (mac lists skip
+        // section rows in Home/End the same way).
+        var style = new Style(typeof(ListBoxItem));
+        style.Setters.Add(new Setter(
+            AutomationProperties.NameProperty,
+            new System.Windows.Data.Binding(nameof(BaseListItemViewModel.AccessibleName))));
+        var headerTrigger = new DataTrigger
+        {
+            Binding = new System.Windows.Data.Binding(nameof(BaseListItemViewModel.IsHeader)),
+            Value = true,
+        };
+        headerTrigger.Setters.Add(new Setter(IsEnabledProperty, false));
+        style.Triggers.Add(headerTrigger);
+        return style;
     }
 
     private static TextBlock BannerText()
@@ -290,8 +597,43 @@ internal sealed class BaseSurfaceView : UserControl
     }
 }
 
-/// <summary>One bound row: core's <see cref="BasesRow"/> untransformed
-/// (INV-1) — cells are <c>BasesValue.Display</c> verbatim.</summary>
+/// <summary>A list row: core's audio description IS the accessible
+/// name and the visible text (INV-1).</summary>
+internal class BaseListItemViewModel
+{
+    public BaseListItemViewModel(BasesRow row)
+    {
+        Row = row;
+        AccessibleName = row.AudioDescription;
+    }
+
+    protected BaseListItemViewModel(string headerText)
+    {
+        Row = null;
+        AccessibleName = headerText;
+    }
+
+    public BasesRow? Row { get; }
+
+    public string AccessibleName { get; }
+
+    public bool IsHeader => Row is null;
+
+    public override string ToString() => AccessibleName;
+}
+
+/// <summary>A group heading item — the substrate's canonical
+/// GridGroup render (one grammar across hosts and renderers).</summary>
+internal sealed class BaseListHeaderViewModel : BaseListItemViewModel
+{
+    public BaseListHeaderViewModel(string headingText) : base(headingText)
+    {
+    }
+}
+
+/// <summary>One bound grid row: core's <see cref="BasesRow"/>
+/// untransformed (INV-1) — cells are <c>BasesValue.Display</c>
+/// verbatim.</summary>
 internal sealed class BaseGridRowViewModel
 {
     public BaseGridRowViewModel(BasesRow row) => Row = row;
@@ -308,7 +650,7 @@ internal sealed class BaseGridRowViewModel
 
 /// <summary>The mac BaseSummaryFormatter twin: custom summary cells,
 /// else core's audio summary, else the counted fallback — with the
-/// "filtered" prefix while a quick filter is active (phase B).</summary>
+/// "filtered" prefix while a quick filter is active.</summary>
 internal static class BaseSummaryFormatter
 {
     public static string SummaryText(BasesResultSet result, bool quickFilterActive)
@@ -325,7 +667,7 @@ internal static class BaseSummaryFormatter
         return quickFilterActive ? $"Summaries: filtered — {body}" : body;
     }
 
-    private static string LabelFor(BasesResultSet result, string columnId)
+    internal static string LabelFor(BasesResultSet result, string columnId)
     {
         foreach (BasesColumn column in result.Columns)
         {

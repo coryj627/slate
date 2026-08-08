@@ -128,6 +128,62 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
     /// on this, never on property-change granularity.</summary>
     public event EventHandler? ResultPublished;
 
+    private string _quickFilterText = string.Empty;
+    private bool _quickFilterActive;
+
+    /// <summary>The draft text — bound by the header field. Setting it
+    /// does NOT execute; the view debounces into
+    /// <see cref="ApplyQuickFilter"/> (150 ms, the mac cadence).</summary>
+    public string QuickFilterText
+    {
+        get => _quickFilterText;
+        set => SetField(ref _quickFilterText, value);
+    }
+
+    /// <summary>True when the EXECUTED result was filtered — drives
+    /// the count readout denominator and the summary prefix. Distinct
+    /// from a non-empty draft the user has not applied yet.</summary>
+    public bool QuickFilterActive
+    {
+        get => _quickFilterActive;
+        private set => SetField(ref _quickFilterActive, value);
+    }
+
+    /// <summary>Transiency (contract C5): the filter lives HERE and in
+    /// the execute argument only — never in the file; cleared on load,
+    /// view switch, and tab switch-away.</summary>
+    public void ClearQuickFilterState()
+    {
+        QuickFilterText = string.Empty;
+        QuickFilterActive = false;
+    }
+
+    /// <summary>Execute the active view with the current draft filter
+    /// and announce core's count (BaseQuickFilterResult). An empty
+    /// draft clears: it re-executes unfiltered and announces the
+    /// unfiltered count the same way — the mac shape.</summary>
+    public void ApplyQuickFilter()
+    {
+        if (IsShutDown || State is BaseLoadState.Failed or BaseLoadState.Loading)
+        {
+            return;
+        }
+        int generation = Interlocked.Increment(ref _generation);
+        StartWork(() => ExecuteBody(
+            generation, (uint)_activeViewIndex, announceQuickFilterCount: true));
+    }
+
+    /// <summary>The picker/command announcement — "Base view: {name}."
+    /// Callers announce AFTER a successful SelectView so the sentence
+    /// follows the state it describes.</summary>
+    public void AnnounceViewSelected(string name) =>
+        _announce(new A11yEvent.BasesViewSelected(name));
+
+    /// <summary>"Base refreshed." — the explicit-refresh sentence
+    /// (command + header button), never spoken by Load itself (INV-4).</summary>
+    public void AnnounceRefreshed() =>
+        _announce(new A11yEvent.BaseRefreshed());
+
     public bool ShowEmptyState =>
         State is BaseLoadState.Ready or BaseLoadState.Degraded
         && Result is { Rows.Length: 0 };
@@ -152,6 +208,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         int generation = Interlocked.Increment(ref _generation);
         State = BaseLoadState.Loading;
         StateMessage = null;
+        ClearQuickFilterState();
         StartWork(() => LoadBody(generation));
     }
 
@@ -229,6 +286,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         int previousView = _activeViewIndex;
         ActiveViewIndex = index;
         SortState = null;
+        ClearQuickFilterState();
         OnPropertyChanged(nameof(ActiveViewName));
         int generation = Interlocked.Increment(ref _generation);
         StartWork(() =>
@@ -258,8 +316,12 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         });
     }
 
-    private void ExecuteBody(int generation, uint view)
+    private void ExecuteBody(
+        int generation, uint view, bool announceQuickFilterCount = false)
     {
+        // Captured once per body: the executed filter and the ACTIVE
+        // flag must describe the same run (contract C5).
+        string? quickFilter = NormalizedFilter();
         BasesResultSet result;
         BaseViewSummary? summary;
         try
@@ -277,7 +339,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                 try
                 {
                     result = _session.BaseExecute(
-                        handle, view, thisPath: null, quickFilter: null, cancel);
+                        handle, view, thisPath: null, quickFilter, cancel);
                 }
                 finally
                 {
@@ -305,8 +367,20 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
             {
                 return;
             }
+            QuickFilterActive = quickFilter is not null;
             PublishResult(result, summary);
+            if (announceQuickFilterCount)
+            {
+                _announce(new A11yEvent.BaseQuickFilterResult(
+                    result.ShownCount, result.UnfilteredShownCount));
+            }
         });
+    }
+
+    private string? NormalizedFilter()
+    {
+        string trimmed = _quickFilterText.Trim();
+        return trimmed.Length == 0 ? null : trimmed;
     }
 
     private void PublishResult(BasesResultSet result, BaseViewSummary? summary)
@@ -412,7 +486,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                 {
                     using var cancel = new CancelToken();
                     result = _session.BaseExecute(
-                        handle, view, thisPath: null, quickFilter: null, cancel);
+                        handle, view, thisPath: null, NormalizedFilter(), cancel);
                 }
                 catch (VaultException executeFailure)
                 {

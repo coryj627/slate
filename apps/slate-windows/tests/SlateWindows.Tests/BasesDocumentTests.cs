@@ -50,7 +50,13 @@ public sealed class BasesDocumentTests : IDisposable
             "    order:\n" +
             "      - file.name\n" +
             "  - type: cards\n" +
-            "    name: Gallery\n");
+            "    name: Gallery\n" +
+            "  - type: list\n" +
+            "    name: Rows\n" +
+            "    order:\n" +
+            "      - file.name\n" +
+            "    groupBy:\n" +
+            "      property: file.ext\n");
         File.WriteAllText(
             Path.Combine(_fixture.Root, "Empty.base"),
             "filters: \"file.hasTag('no-such-tag')\"\n" +
@@ -72,7 +78,7 @@ public sealed class BasesDocumentTests : IDisposable
 
         Assert.Equal(BaseLoadState.Ready, document.State);
         Assert.Null(document.StateMessage);
-        Assert.Equal(2, document.Views.Count);
+        Assert.Equal(3, document.Views.Count);
         Assert.Equal("Main", document.ActiveViewName);
         Assert.Equal(1, published);
         BasesResultSet result = Assert.IsType<BasesResultSet>(document.Result);
@@ -150,6 +156,76 @@ public sealed class BasesDocumentTests : IDisposable
     }
 
     [Fact]
+    public void QuickFilterExecutesInCoreAndAnnouncesTheCount()
+    {
+        var document = NewDocument("Notes.base");
+        document.Load();
+
+        document.QuickFilterText = "note0";
+        document.ApplyQuickFilter();
+
+        Assert.True(document.QuickFilterActive);
+        Assert.Equal(1ul, document.Result!.ShownCount);
+        Assert.Equal(3ul, document.Result.UnfilteredShownCount);
+        var counted = Assert.IsType<A11yEvent.BaseQuickFilterResult>(
+            Assert.Single(_announced));
+        Assert.Equal(1ul, counted.Shown);
+        Assert.Equal(3ul, counted.Total);
+
+        // Clearing re-executes unfiltered and announces the same way.
+        document.QuickFilterText = string.Empty;
+        document.ApplyQuickFilter();
+        Assert.False(document.QuickFilterActive);
+        Assert.Equal(3ul, document.Result!.ShownCount);
+        Assert.Equal(2, _announced.Count);
+        document.Shutdown();
+    }
+
+    [Fact]
+    public void QuickFilterIsTransientAcrossViewSwitchAndReload()
+    {
+        var document = NewDocument("Notes.base");
+        document.Load();
+        document.QuickFilterText = "note0";
+        document.ApplyQuickFilter();
+        Assert.True(document.QuickFilterActive);
+
+        // View switch clears (contract C5) — text, flag, and the
+        // executed result all revert to unfiltered.
+        document.SelectView(1);
+        Assert.Equal(string.Empty, document.QuickFilterText);
+        Assert.False(document.QuickFilterActive);
+        Assert.Equal(3ul, document.Result!.ShownCount);
+
+        document.SelectView(0);
+        document.QuickFilterText = "note0";
+        document.ApplyQuickFilter();
+        document.Load();
+        Assert.Equal(string.Empty, document.QuickFilterText);
+        Assert.False(document.QuickFilterActive);
+        document.Shutdown();
+    }
+
+    [Fact]
+    public void SortWithinAFilteredViewKeepsTheFilter()
+    {
+        var document = NewDocument("Notes.base");
+        document.Load();
+        document.QuickFilterText = "note";
+        document.ApplyQuickFilter();
+        Assert.Equal(3ul, document.Result!.ShownCount);
+
+        Assert.True(document.ApplySortFromGrid(0, ascending: false));
+
+        // The sorted re-execute carried the filter (mac sorts within
+        // the filtered view); the filter flag survives.
+        Assert.True(document.QuickFilterActive);
+        Assert.Equal(3ul, document.Result!.ShownCount);
+        Assert.Equal((0, false), document.SortState);
+        document.Shutdown();
+    }
+
+    [Fact]
     public void ShutdownIsIdempotentAndRefusesLateWork()
     {
         var document = NewDocument("Notes.base");
@@ -194,6 +270,119 @@ public sealed class BasesDocumentTests : IDisposable
         ((System.Windows.Input.ICommand)workspace.CloseActiveTabCommand).Execute(null);
         document.Load();
         Assert.Equal(BaseLoadState.Ready, document.State);
+    }
+}
+
+/// <summary>The surface's content-shape rules (contract C4) over a
+/// real model — list renderer, canonical group headings, and the
+/// mutually-exclusive grid/list/empty visibility.</summary>
+public sealed class BaseSurfaceViewTests : IDisposable
+{
+    private readonly FixtureVault _fixture;
+    private readonly VaultSession _session;
+
+    public BaseSurfaceViewTests()
+    {
+        _fixture = FixtureVault.Create(3, "bases-surface");
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "Notes.base"),
+            "filters: 'file.ext == \"md\"'\n" +
+            "views:\n" +
+            "  - type: table\n" +
+            "    name: Main\n" +
+            "    order:\n" +
+            "      - file.name\n" +
+            "  - type: list\n" +
+            "    name: Rows\n" +
+            "    order:\n" +
+            "      - file.name\n" +
+            "    groupBy:\n" +
+            "      property: file.ext\n");
+        _session = VaultSession.OpenFilesystem(_fixture.Root);
+        using var cancel = new CancelToken();
+        _session.ScanInitial(cancel);
+    }
+
+    public void Dispose()
+    {
+        _session.Dispose();
+        _fixture.Dispose();
+    }
+
+    [Fact]
+    public void ListViewNamesRowsFromCoreAndDisablesGroupHeaders() => RunSta(() =>
+    {
+        var document = new SlateWindows.Bases.BaseDocumentViewModel(
+            _session, "Notes.base", _ => { }, synchronousForTests: true);
+        document.Load();
+        document.SelectView(1);
+        var surface = new SlateWindows.Bases.BaseSurfaceView { Model = document };
+
+        Assert.Equal(
+            System.Windows.Visibility.Visible, surface.ListForTests.Visibility);
+        Assert.Equal(
+            System.Windows.Visibility.Collapsed, surface.GridForTests.Visibility);
+        var items = surface.ListForTests.ItemsSource!
+            .Cast<SlateWindows.Bases.BaseListItemViewModel>()
+            .ToList();
+        // One md group over three notes: a header + three rows.
+        Assert.Equal(4, items.Count);
+        var header = Assert.IsType<SlateWindows.Bases.BaseListHeaderViewModel>(items[0]);
+        Assert.True(header.IsHeader);
+        Assert.Equal(
+            SlateWindows.Grids.AccessibleDataGrid.ComposeGroupHeading(
+                document.Result!.Groups[0].Label,
+                (uint)document.Result.Groups[0].RowCount,
+                null),
+            header.AccessibleName);
+        // Rows carry core's audio description verbatim (INV-1).
+        Assert.False(items[1].IsHeader);
+        Assert.Equal(
+            document.Result.Rows[0].AudioDescription, items[1].AccessibleName);
+        document.Shutdown();
+    });
+
+    [Fact]
+    public void TableOverrideOnAListViewRendersTheGrid() => RunSta(() =>
+    {
+        var document = new SlateWindows.Bases.BaseDocumentViewModel(
+            _session, "Notes.base", _ => { }, synchronousForTests: true);
+        document.Load();
+        document.SelectView(1);
+        var surface = new SlateWindows.Bases.BaseSurfaceView
+        {
+            Model = document,
+            RendererOverride = SlateWindows.Bases.BaseRendererOverride.Table,
+        };
+
+        Assert.Equal(
+            System.Windows.Visibility.Visible, surface.GridForTests.Visibility);
+        Assert.Equal(
+            System.Windows.Visibility.Collapsed, surface.ListForTests.Visibility);
+        document.Shutdown();
+    });
+
+    private static void RunSta(Action body)
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                body();
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(60)), "STA test body timed out.");
+        if (failure is not null)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
+        }
     }
 }
 
