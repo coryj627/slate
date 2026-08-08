@@ -295,7 +295,7 @@ struct BaseContainerView: View {
             },
             onCancelEdit: {
                 gridEditRequest = nil
-                appState.postBaseActionAnnouncement("Edit canceled.")
+                appState.postBaseActionEvent(.basesCellEditCanceled)
             },
             rowAccessibilityDescription: { $0.row.audioDescription },
             rowActions: gridRowActions(result: result),
@@ -514,7 +514,7 @@ struct BaseContainerView: View {
         else { return }
         let column = result.columns[columnIndex]
         guard BaseCellEditPolicy.propertyKey(for: column) != nil else {
-            appState.postBaseActionAnnouncement(BaseCellEditPolicy.readOnlyHint(for: column))
+            appState.postBaseActionEvent(BaseCellEditPolicy.readOnlyEvent(for: column))
             return
         }
         let rowID = BaseGridRow.id(for: row)
@@ -557,7 +557,7 @@ struct BaseContainerView: View {
             }
         case .failure(let error):
             gridEditRequest = .init(rowID: rowID, columnIndex: columnIndex, text: draft)
-            appState.postBaseActionAnnouncement(error.message)
+            appState.postBaseActionEvent(error.event)
         }
     }
 

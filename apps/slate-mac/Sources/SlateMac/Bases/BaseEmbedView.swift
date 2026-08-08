@@ -412,8 +412,8 @@ struct BaseEmbedView: View {
                             text: text,
                             to: url,
                             originSession: originSession,
-                            successMessage: "Converted Dataview block to .base.",
-                            failurePrefix: "Dataview conversion could not be saved")
+                            successEvent: .basesDataviewConverted,
+                            failureEvent: { .basesDataviewConversionSaveFailed(detail: $0) })
                     }
                 }
             case .failure(let message):

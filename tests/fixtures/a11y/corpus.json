@@ -975,6 +975,136 @@
     "text": "Dashboard is no longer available."
   },
   {
+    "event": "BasesDockUpdatedForNote",
+    "priority": "medium",
+    "text": "Base dock updated for active note."
+  },
+  {
+    "event": "BasesLinkCopied { name: \"Reading\" }",
+    "priority": "medium",
+    "text": "Copied link to Reading."
+  },
+  {
+    "event": "BasesBacklinksFor { name: \"Reading\" }",
+    "priority": "medium",
+    "text": "Backlinks for Reading."
+  },
+  {
+    "event": "BasesViewCopyNoActiveBase",
+    "priority": "medium",
+    "text": "Base view could not be copied: No active base."
+  },
+  {
+    "event": "BasesViewCopiedAsMarkdown",
+    "priority": "medium",
+    "text": "Copied base view as Markdown."
+  },
+  {
+    "event": "BasesViewCopyFailed { detail: \"io error\" }",
+    "priority": "medium",
+    "text": "Base view could not be copied: io error"
+  },
+  {
+    "event": "BasesRowSelectionNeeded",
+    "priority": "medium",
+    "text": "Select a base row first."
+  },
+  {
+    "event": "BasesNoEditableProperty",
+    "priority": "medium",
+    "text": "No editable property is available for the selected row."
+  },
+  {
+    "event": "BasesCellReadOnly { file_metadata: true }",
+    "priority": "medium",
+    "text": "read-only: file metadata"
+  },
+  {
+    "event": "BasesCellReadOnly { file_metadata: false }",
+    "priority": "medium",
+    "text": "read-only: computed"
+  },
+  {
+    "event": "BasesCellSaved { column: \"Status\", value: \"Done\" }",
+    "priority": "medium",
+    "text": "Saved. Status: Done"
+  },
+  {
+    "event": "BasesCellCleared { column: \"Status\" }",
+    "priority": "medium",
+    "text": "Saved. Status: empty"
+  },
+  {
+    "event": "BasesCellRowNoLongerMatches",
+    "priority": "medium",
+    "text": "Saved. Row no longer matches this view"
+  },
+  {
+    "event": "BasesCellEditFailed { detail: \"io error\" }",
+    "priority": "medium",
+    "text": "Base edit failed: io error"
+  },
+  {
+    "event": "BasesCellEditCanceled",
+    "priority": "medium",
+    "text": "Edit canceled."
+  },
+  {
+    "event": "BasesViewExported",
+    "priority": "medium",
+    "text": "Exported base view."
+  },
+  {
+    "event": "BasesViewExportFailed { detail: \"io error\" }",
+    "priority": "medium",
+    "text": "Base view could not be exported: io error"
+  },
+  {
+    "event": "BasesDataviewConverted",
+    "priority": "medium",
+    "text": "Converted Dataview block to .base."
+  },
+  {
+    "event": "BasesDataviewConversionSaveFailed { detail: \"io error\" }",
+    "priority": "medium",
+    "text": "Dataview conversion could not be saved: io error"
+  },
+  {
+    "event": "BasesQuickFilterChoiceCanceled { verb: \"Export\" }",
+    "priority": "medium",
+    "text": "Export canceled."
+  },
+  {
+    "event": "BasesCellMustBeFiniteNumber",
+    "priority": "medium",
+    "text": "Must be a finite number."
+  },
+  {
+    "event": "BasesCellMustBeWholeNumber",
+    "priority": "medium",
+    "text": "Must be a whole number."
+  },
+  {
+    "event": "BasesCellMustBeFiniteDecimal",
+    "priority": "medium",
+    "text": "Must be a finite decimal number."
+  },
+  {
+    "event": "BasesCellMustBeBoolean",
+    "priority": "medium",
+    "text": "Must be true or false."
+  },
+  {
+    "event": "BasesCellMustBeDate",
+    "priority": "medium",
+    "text": "Date must be YYYY-MM-DD."
+  },
+  {
+    "event": "BasesRefreshUpdated { audio_summary: \"1 note.\" }",
+    "priority": "medium",
+    "text": "Updated: 1 note."
+  },
+  {
     "event": "DataviewConversionFailed { detail: \"unsupported query\" }",
     "priority": "medium",
     "text": "Dataview conversion failed: unsupported query"

@@ -739,8 +739,8 @@ final class StructuralWriterGateTests: XCTestCase {
                 text: "name\nAlpha\n",
                 to: destination,
                 originSession: session,
-                successMessage: "Exported base view.",
-                failurePrefix: "Base view could not be exported"))
+                successEvent: .basesViewExported,
+                failureEvent: { .basesViewExportFailed(detail: $0) }))
         XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
         XCTAssertEqual(
             state.lastMutationAnnouncement,
@@ -768,8 +768,8 @@ final class StructuralWriterGateTests: XCTestCase {
                 text: "name\nAlpha\n",
                 to: vault.appendingPathComponent("Created.csv"),
                 originSession: session,
-                successMessage: "Exported base view.",
-                failurePrefix: "Base view could not be exported"))
+                successEvent: .basesViewExported,
+                failureEvent: { .basesViewExportFailed(detail: $0) }))
         await created.value
         XCTAssertTrue(state.structuralUndoStack.isEmpty)
         let afterCreateRefreshes = await refreshes.count()
@@ -783,8 +783,8 @@ final class StructuralWriterGateTests: XCTestCase {
                 text: "new\n",
                 to: vault.appendingPathComponent("Existing.csv"),
                 originSession: session,
-                successMessage: "Exported base view.",
-                failurePrefix: "Base view could not be exported"))
+                successEvent: .basesViewExported,
+                failureEvent: { .basesViewExportFailed(detail: $0) }))
         await overwritten.value
         XCTAssertEqual(
             state.structuralUndoStack.count, 1,
@@ -799,8 +799,8 @@ final class StructuralWriterGateTests: XCTestCase {
                 text: "external\n",
                 to: outside,
                 originSession: session,
-                successMessage: "Exported base view.",
-                failurePrefix: "Base view could not be exported"))
+                successEvent: .basesViewExported,
+                failureEvent: { .basesViewExportFailed(detail: $0) }))
         await external.value
         XCTAssertEqual(
             state.structuralUndoStack.count, 1,
@@ -837,8 +837,8 @@ final class StructuralWriterGateTests: XCTestCase {
             text: "# Beta\n",
             to: vault.appendingPathComponent("Notes/Beta.md"),
             originSession: session,
-            successMessage: "Exported note.",
-            failurePrefix: "Note could not be exported")?.value
+            successEvent: .basesViewExported,
+            failureEvent: { .basesViewExportFailed(detail: $0) })?.value
 
         XCTAssertNotEqual(document.handle, oldHandle)
         XCTAssertEqual(
@@ -861,8 +861,8 @@ final class StructuralWriterGateTests: XCTestCase {
                 text: "from A\n",
                 to: vaultA.appendingPathComponent("Export.csv"),
                 originSession: sessionA,
-                successMessage: "Exported base view.",
-                failurePrefix: "Base view could not be exported"))
+                successEvent: .basesViewExported,
+                failureEvent: { .basesViewExportFailed(detail: $0) }))
         await oldRefresh.waitUntilEntered()
 
         state.openVault(at: vaultB)
@@ -900,8 +900,8 @@ final class StructuralWriterGateTests: XCTestCase {
                 text: "from stale panel\n",
                 to: destination,
                 originSession: sessionA,
-                successMessage: "Exported base view.",
-                failurePrefix: "Base view could not be exported"))
+                successEvent: .basesViewExported,
+                failureEvent: { .basesViewExportFailed(detail: $0) }))
         XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
         XCTAssertFalse(state.isMutatingStructure)
     }
@@ -941,8 +941,8 @@ final class StructuralWriterGateTests: XCTestCase {
                 text: "name\nAlpha\n",
                 to: vault.appendingPathComponent("Export.csv"),
                 originSession: session,
-                successMessage: "Exported base view.",
-                failurePrefix: "Base view could not be exported",
+                successEvent: .basesViewExported,
+                failureEvent: { .basesViewExportFailed(detail: $0) },
                 nativeThreadObserver: observe)
         ).value
 

@@ -7092,6 +7092,54 @@ pub enum A11yEvent {
         detail: String,
     },
     BasesDashboardMissing,
+    BasesDockUpdatedForNote,
+    BasesLinkCopied {
+        name: String,
+    },
+    BasesBacklinksFor {
+        name: String,
+    },
+    BasesViewCopyNoActiveBase,
+    BasesViewCopiedAsMarkdown,
+    BasesViewCopyFailed {
+        detail: String,
+    },
+    BasesRowSelectionNeeded,
+    BasesNoEditableProperty,
+    BasesCellReadOnly {
+        file_metadata: bool,
+    },
+    BasesCellSaved {
+        column: String,
+        value: String,
+    },
+    BasesCellCleared {
+        column: String,
+    },
+    BasesCellRowNoLongerMatches,
+    BasesCellEditFailed {
+        detail: String,
+    },
+    BasesCellEditCanceled,
+    BasesViewExported,
+    BasesViewExportFailed {
+        detail: String,
+    },
+    BasesDataviewConverted,
+    BasesDataviewConversionSaveFailed {
+        detail: String,
+    },
+    BasesQuickFilterChoiceCanceled {
+        verb: String,
+    },
+    BasesCellMustBeFiniteNumber,
+    BasesCellMustBeWholeNumber,
+    BasesCellMustBeFiniteDecimal,
+    BasesCellMustBeBoolean,
+    BasesCellMustBeDate,
+    BasesRefreshUpdated {
+        audio_summary: String,
+    },
     DataviewConversionFailed {
         detail: String,
     },
@@ -7441,6 +7489,35 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::BasesDashboardDeleteFailed { detail } => C::BasesDashboardDeleteFailed { detail },
             F::BasesDashboardEditFailed { detail } => C::BasesDashboardEditFailed { detail },
             F::BasesDashboardMissing => C::BasesDashboardMissing,
+            F::BasesDockUpdatedForNote => C::BasesDockUpdatedForNote,
+            F::BasesLinkCopied { name } => C::BasesLinkCopied { name },
+            F::BasesBacklinksFor { name } => C::BasesBacklinksFor { name },
+            F::BasesViewCopyNoActiveBase => C::BasesViewCopyNoActiveBase,
+            F::BasesViewCopiedAsMarkdown => C::BasesViewCopiedAsMarkdown,
+            F::BasesViewCopyFailed { detail } => C::BasesViewCopyFailed { detail },
+            F::BasesRowSelectionNeeded => C::BasesRowSelectionNeeded,
+            F::BasesNoEditableProperty => C::BasesNoEditableProperty,
+            F::BasesCellReadOnly { file_metadata } => C::BasesCellReadOnly { file_metadata },
+            F::BasesCellSaved { column, value } => C::BasesCellSaved { column, value },
+            F::BasesCellCleared { column } => C::BasesCellCleared { column },
+            F::BasesCellRowNoLongerMatches => C::BasesCellRowNoLongerMatches,
+            F::BasesCellEditFailed { detail } => C::BasesCellEditFailed { detail },
+            F::BasesCellEditCanceled => C::BasesCellEditCanceled,
+            F::BasesViewExported => C::BasesViewExported,
+            F::BasesViewExportFailed { detail } => C::BasesViewExportFailed { detail },
+            F::BasesDataviewConverted => C::BasesDataviewConverted,
+            F::BasesDataviewConversionSaveFailed { detail } => {
+                C::BasesDataviewConversionSaveFailed { detail }
+            }
+            F::BasesQuickFilterChoiceCanceled { verb } => {
+                C::BasesQuickFilterChoiceCanceled { verb }
+            }
+            F::BasesCellMustBeFiniteNumber => C::BasesCellMustBeFiniteNumber,
+            F::BasesCellMustBeWholeNumber => C::BasesCellMustBeWholeNumber,
+            F::BasesCellMustBeFiniteDecimal => C::BasesCellMustBeFiniteDecimal,
+            F::BasesCellMustBeBoolean => C::BasesCellMustBeBoolean,
+            F::BasesCellMustBeDate => C::BasesCellMustBeDate,
+            F::BasesRefreshUpdated { audio_summary } => C::BasesRefreshUpdated { audio_summary },
             F::DataviewConversionFailed { detail } => C::DataviewConversionFailed { detail },
             F::CitationInsertUnavailable => C::CitationInsertUnavailable,
             F::CitationWalkThrough => C::CitationWalkThrough,

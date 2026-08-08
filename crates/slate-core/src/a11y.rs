@@ -630,6 +630,71 @@ pub enum A11yEvent {
         detail: String,
     },
     BasesDashboardMissing,
+    /// The last group behind the `postBaseActionAnnouncement` funnel:
+    /// row actions, clipboard/export, and cell editing. With these the
+    /// funnel is deleted and the Bases family is fully converted.
+    BasesDockUpdatedForNote,
+    BasesLinkCopied {
+        name: String,
+    },
+    BasesBacklinksFor {
+        name: String,
+    },
+    BasesViewCopyNoActiveBase,
+    BasesViewCopiedAsMarkdown,
+    BasesViewCopyFailed {
+        detail: String,
+    },
+    BasesRowSelectionNeeded,
+    BasesNoEditableProperty,
+    /// Why a cell refuses editing. `file_metadata` picks the noun; the
+    /// host used to choose between two literals.
+    BasesCellReadOnly {
+        file_metadata: bool,
+    },
+    BasesCellSaved {
+        column: String,
+        value: String,
+    },
+    BasesCellCleared {
+        column: String,
+    },
+    /// Deliberately has NO terminal period — preserved as shipped.
+    BasesCellRowNoLongerMatches,
+    BasesCellEditFailed {
+        detail: String,
+    },
+    BasesCellEditCanceled,
+    BasesViewExported,
+    BasesViewExportFailed {
+        detail: String,
+    },
+    BasesDataviewConverted,
+    /// Distinct from `DataviewConversionFailed` ("Dataview conversion
+    /// failed: …"): this one is the SAVE step of the conversion.
+    BasesDataviewConversionSaveFailed {
+        detail: String,
+    },
+    /// The quick-filter scope prompt, dismissed. `verb` is the caller's
+    /// action word ("Copy", "Export") and stays data — the prompt is
+    /// reused by both.
+    BasesQuickFilterChoiceCanceled {
+        verb: String,
+    },
+    /// Cell-edit validation refusals. These reached AT through the same
+    /// funnel via `BaseCellEditValidationError.message`.
+    BasesCellMustBeFiniteNumber,
+    BasesCellMustBeWholeNumber,
+    BasesCellMustBeFiniteDecimal,
+    BasesCellMustBeBoolean,
+    BasesCellMustBeDate,
+    /// A visible base whose row membership changed under a background
+    /// refresh. `audio_summary` is core-composed already
+    /// (`bases::engine::audio_summary`); only the "Updated: " prefix
+    /// was host-side.
+    BasesRefreshUpdated {
+        audio_summary: String,
+    },
     DataviewConversionFailed {
         detail: String,
     },
@@ -1171,6 +1236,46 @@ impl A11yEvent {
                 format!("Dashboard could not be edited: {detail}")
             }
             BasesDashboardMissing => "Dashboard is no longer available.".to_owned(),
+            BasesDockUpdatedForNote => "Base dock updated for active note.".to_owned(),
+            BasesLinkCopied { name } => format!("Copied link to {name}."),
+            BasesBacklinksFor { name } => format!("Backlinks for {name}."),
+            BasesViewCopyNoActiveBase => {
+                "Base view could not be copied: No active base.".to_owned()
+            }
+            BasesViewCopiedAsMarkdown => "Copied base view as Markdown.".to_owned(),
+            BasesViewCopyFailed { detail } => {
+                format!("Base view could not be copied: {detail}")
+            }
+            BasesRowSelectionNeeded => "Select a base row first.".to_owned(),
+            BasesNoEditableProperty => {
+                "No editable property is available for the selected row.".to_owned()
+            }
+            BasesCellReadOnly { file_metadata } => if *file_metadata {
+                "read-only: file metadata"
+            } else {
+                "read-only: computed"
+            }
+            .to_owned(),
+            BasesCellSaved { column, value } => format!("Saved. {column}: {value}"),
+            BasesCellCleared { column } => format!("Saved. {column}: empty"),
+            BasesCellRowNoLongerMatches => "Saved. Row no longer matches this view".to_owned(),
+            BasesCellEditFailed { detail } => format!("Base edit failed: {detail}"),
+            BasesCellEditCanceled => "Edit canceled.".to_owned(),
+            BasesViewExported => "Exported base view.".to_owned(),
+            BasesViewExportFailed { detail } => {
+                format!("Base view could not be exported: {detail}")
+            }
+            BasesDataviewConverted => "Converted Dataview block to .base.".to_owned(),
+            BasesDataviewConversionSaveFailed { detail } => {
+                format!("Dataview conversion could not be saved: {detail}")
+            }
+            BasesQuickFilterChoiceCanceled { verb } => format!("{verb} canceled."),
+            BasesCellMustBeFiniteNumber => "Must be a finite number.".to_owned(),
+            BasesCellMustBeWholeNumber => "Must be a whole number.".to_owned(),
+            BasesCellMustBeFiniteDecimal => "Must be a finite decimal number.".to_owned(),
+            BasesCellMustBeBoolean => "Must be true or false.".to_owned(),
+            BasesCellMustBeDate => "Date must be YYYY-MM-DD.".to_owned(),
+            BasesRefreshUpdated { audio_summary } => format!("Updated: {audio_summary}"),
             DataviewConversionFailed { detail } => {
                 format!("Dataview conversion failed: {detail}")
             }
@@ -1795,6 +1900,57 @@ pub fn corpus() -> Vec<A11yEvent> {
             detail: "io error".into(),
         },
         BasesDashboardMissing,
+        BasesDockUpdatedForNote,
+        BasesLinkCopied {
+            name: "Reading".into(),
+        },
+        BasesBacklinksFor {
+            name: "Reading".into(),
+        },
+        BasesViewCopyNoActiveBase,
+        BasesViewCopiedAsMarkdown,
+        BasesViewCopyFailed {
+            detail: "io error".into(),
+        },
+        BasesRowSelectionNeeded,
+        BasesNoEditableProperty,
+        BasesCellReadOnly {
+            file_metadata: true,
+        },
+        BasesCellReadOnly {
+            file_metadata: false,
+        },
+        BasesCellSaved {
+            column: "Status".into(),
+            value: "Done".into(),
+        },
+        BasesCellCleared {
+            column: "Status".into(),
+        },
+        BasesCellRowNoLongerMatches,
+        BasesCellEditFailed {
+            detail: "io error".into(),
+        },
+        BasesCellEditCanceled,
+        BasesViewExported,
+        BasesViewExportFailed {
+            detail: "io error".into(),
+        },
+        BasesDataviewConverted,
+        BasesDataviewConversionSaveFailed {
+            detail: "io error".into(),
+        },
+        BasesQuickFilterChoiceCanceled {
+            verb: "Export".into(),
+        },
+        BasesCellMustBeFiniteNumber,
+        BasesCellMustBeWholeNumber,
+        BasesCellMustBeFiniteDecimal,
+        BasesCellMustBeBoolean,
+        BasesCellMustBeDate,
+        BasesRefreshUpdated {
+            audio_summary: "1 note.".into(),
+        },
         DataviewConversionFailed {
             detail: "unsupported query".into(),
         },
@@ -2211,6 +2367,35 @@ mod tests {
             (Medium, "Dashboard could not be deleted: io error"),
             (Medium, "Dashboard could not be edited: io error"),
             (Medium, "Dashboard is no longer available."),
+            (Medium, "Base dock updated for active note."),
+            (Medium, "Copied link to Reading."),
+            (Medium, "Backlinks for Reading."),
+            (Medium, "Base view could not be copied: No active base."),
+            (Medium, "Copied base view as Markdown."),
+            (Medium, "Base view could not be copied: io error"),
+            (Medium, "Select a base row first."),
+            (
+                Medium,
+                "No editable property is available for the selected row.",
+            ),
+            (Medium, "read-only: file metadata"),
+            (Medium, "read-only: computed"),
+            (Medium, "Saved. Status: Done"),
+            (Medium, "Saved. Status: empty"),
+            (Medium, "Saved. Row no longer matches this view"),
+            (Medium, "Base edit failed: io error"),
+            (Medium, "Edit canceled."),
+            (Medium, "Exported base view."),
+            (Medium, "Base view could not be exported: io error"),
+            (Medium, "Converted Dataview block to .base."),
+            (Medium, "Dataview conversion could not be saved: io error"),
+            (Medium, "Export canceled."),
+            (Medium, "Must be a finite number."),
+            (Medium, "Must be a whole number."),
+            (Medium, "Must be a finite decimal number."),
+            (Medium, "Must be true or false."),
+            (Medium, "Date must be YYYY-MM-DD."),
+            (Medium, "Updated: 1 note."),
             (Medium, "Dataview conversion failed: unsupported query"),
             (Medium, "Insert citation lands in V1.x. See Milestone L."),
             (
