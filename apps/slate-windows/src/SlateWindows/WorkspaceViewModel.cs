@@ -233,7 +233,23 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         OnPropertyChanged(nameof(IsEditorVisible));
         OnPropertyChanged(nameof(IsReadingVisible));
     }
-    public bool IsPlaceholder => !IsMarkdown;
+    public bool IsBase => Item.Kind == WorkspaceItemKind.Base;
+
+    /// <summary>W4-6 (#738): the shared per-source Bases document —
+    /// attached by the workspace registry at tab creation (contract
+    /// C3). Null on every other tab kind, and on Base tabs only
+    /// between construction and attach.</summary>
+    public Bases.BaseDocumentViewModel? Base { get; private set; }
+
+    internal void AttachBaseDocument(Bases.BaseDocumentViewModel document)
+    {
+        Base = document;
+        OnPropertyChanged(nameof(Base));
+    }
+
+    public bool IsBaseVisible => IsBase;
+
+    public bool IsPlaceholder => !IsMarkdown && !IsBase;
     public string KindLabel => Item.Kind switch
     {
         WorkspaceItemKind.Canvas => "Canvas",
@@ -1182,6 +1198,50 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     private bool _isRightPaneVisible = true;
     private readonly bool _startInteractionBackgroundWork;
 
+    /// <summary>W4-6 (#738): the per-source Bases document registry —
+    /// one document per byte-exact path, shared by every tab on that
+    /// source (contract C3). Documents whose last tab closed are shut
+    /// down by <see cref="ReleaseUnreferencedBaseDocuments"/> at every
+    /// tab-close funnel, and the whole registry at Dispose (INV-2).</summary>
+    private readonly Dictionary<string, Bases.BaseDocumentViewModel> _baseDocuments =
+        new(StringComparer.Ordinal);
+
+    internal Bases.BaseDocumentViewModel BaseDocumentFor(string path)
+    {
+        if (!_baseDocuments.TryGetValue(path, out Bases.BaseDocumentViewModel? document))
+        {
+            document = new Bases.BaseDocumentViewModel(
+                _session,
+                path,
+                _announce,
+                synchronousForTests: !_startInteractionBackgroundWork);
+            _baseDocuments[path] = document;
+            document.Load();
+        }
+        return document;
+    }
+
+    private void ReleaseUnreferencedBaseDocuments()
+    {
+        if (_baseDocuments.Count == 0)
+        {
+            return;
+        }
+        var live = new HashSet<string>(StringComparer.Ordinal);
+        foreach (WorkspaceTabViewModel tab in Groups.SelectMany(group => group.Tabs))
+        {
+            if (tab.IsBase)
+            {
+                live.Add(tab.Path);
+            }
+        }
+        foreach (string path in _baseDocuments.Keys.Where(key => !live.Contains(key)).ToList())
+        {
+            _baseDocuments[path].Shutdown();
+            _baseDocuments.Remove(path);
+        }
+    }
+
     public WorkspaceViewModel(
         VaultSession session,
         string vaultRoot,
@@ -1693,6 +1753,14 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         // invalidate every in-flight load before that happens.
         Panels.Shutdown();
         TasksReview.Shutdown();
+        // W4-6: every Bases document holds the shared session and a
+        // native handle — shut them all down (which closes each handle
+        // exactly once, INV-2) before the session dies.
+        foreach (Bases.BaseDocumentViewModel document in _baseDocuments.Values)
+        {
+            document.Shutdown();
+        }
+        _baseDocuments.Clear();
         Persist();
         foreach (WorkspaceTabViewModel tab in Groups.SelectMany(group => group.Tabs))
         {

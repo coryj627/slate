@@ -197,6 +197,10 @@ internal sealed partial class WorkspaceViewModel
             EditorPreferences,
             startInteractionBackgroundWork: _startInteractionBackgroundWork);
         tab.TaskRepairs = _taskIndexRepairs;
+        if (tab.IsBase)
+        {
+            tab.AttachBaseDocument(BaseDocumentFor(tab.Path));
+        }
         if (peer is not null)
         {
             tab.MirrorDocumentStateFrom(peer);
@@ -304,6 +308,7 @@ internal sealed partial class WorkspaceViewModel
 
         group.Tabs.Remove(tab);
         tab.Dispose();
+        ReleaseUnreferencedBaseDocuments();
         WorkspaceTabViewModel? successor = group.Tabs.Count == 0
             ? null
             : group.Tabs[Math.Min(index, group.Tabs.Count - 1)];
@@ -383,6 +388,7 @@ internal sealed partial class WorkspaceViewModel
         }
 
         group.Tabs.Clear();
+        ReleaseUnreferencedBaseDocuments();
         RemoveEmptyGroup(group);
         AnnounceActivePane();
         RequestActiveEditorFocus();
@@ -420,6 +426,12 @@ internal sealed partial class WorkspaceViewModel
             _announce,
             EditorPreferences,
             startInteractionBackgroundWork: _startInteractionBackgroundWork);
+        if (duplicate.IsBase)
+        {
+            // The registry, not a fresh document: a duplicated Base tab
+            // shares its source's ONE document (contract C3).
+            duplicate.AttachBaseDocument(BaseDocumentFor(duplicate.Path));
+        }
         duplicate.MirrorDocumentStateFrom(tab);
         ActiveGroup.Tabs.Insert(index + 1, duplicate);
         ActiveGroup.ActiveTab = duplicate;

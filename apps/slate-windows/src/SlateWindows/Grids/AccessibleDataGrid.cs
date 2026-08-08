@@ -338,8 +338,14 @@ internal sealed class AccessibleDataGrid : UserControl
         // as every re-bind passes the same list — true of every
         // consumer today, false the moment one grid instance serves
         // more than one column set.
+        // Externally-sorted grids (W4-6): the rows ALREADY arrive in
+        // core's order, so capturing and re-applying a host sort here
+        // would re-dispatch a core execute per publish. The surface
+        // owns its sort state and re-asserts the indicator after Bind.
         (string Header, bool Ascending)? previousSort =
-            _activeSort is { } active && active.ColumnIndex < _columns.Count
+            ExternalSortHandler is null
+            && _activeSort is { } active
+            && active.ColumnIndex < _columns.Count
                 ? (_columns[active.ColumnIndex].Header, active.Ascending)
                 : null;
         _activeSort = null;
@@ -376,7 +382,8 @@ internal sealed class AccessibleDataGrid : UserControl
             var gridColumn = new AccessibleGridTextColumn(column, index)
             {
                 Header = column.Header,
-                CanUserSort = column.Sort is not null,
+                CanUserSort = column.Sort is not null
+                    || (column.IsExternallySortable && ExternalSortHandler is not null),
                 // The comparator sorts; a KVC-style member path never
                 // does (the mac prototype-key precedent).
                 SortMemberPath = index.ToString(System.Globalization.CultureInfo.InvariantCulture),
@@ -530,15 +537,53 @@ internal sealed class AccessibleDataGrid : UserControl
     }
 
     /// <summary>
+    /// W4-6 (#738, contract C1/C6): core-executed sorting. When set,
+    /// a sort request on an <see cref="AccessibleGridColumn.IsExternallySortable"/>
+    /// column is DELEGATED — the handler dispatches the sort in core
+    /// and the reordered rows arrive through a later <see cref="Bind"/>;
+    /// the grid neither reorders nor announces (the surface announces
+    /// its own canonical event when the rows actually land, so the
+    /// spoken order can never diverge from the rendered rows). The
+    /// surface re-asserts the header indicator after each publish via
+    /// <see cref="SetSortIndicator"/>.
+    /// </summary>
+    internal Func<int, bool, bool>? ExternalSortHandler { get; set; }
+
+    /// <summary>Header arrows + toggle state for an externally-sorted
+    /// grid, with NO reorder and NO announcement — the rows already
+    /// arrived in core's order. Pass null to clear.</summary>
+    internal void SetSortIndicator((int ColumnIndex, bool Ascending)? sort)
+    {
+        _activeSort = sort;
+        for (int index = 0; index < _grid.Columns.Count; index++)
+        {
+            _grid.Columns[index].SortDirection =
+                sort is { } active && index == active.ColumnIndex
+                    ? (active.Ascending
+                        ? System.ComponentModel.ListSortDirection.Ascending
+                        : System.ComponentModel.ListSortDirection.Descending)
+                    : null;
+        }
+    }
+
+    /// <summary>
     /// Apply a sort — the unit-testable seam, the mac twin's shape.
     /// Returns the rendered announcement text it posted, or null for
     /// an unsortable column.
     /// </summary>
     internal string? ApplySort(int columnIndex, bool ascending)
     {
-        if (columnIndex < 0
-            || columnIndex >= _columns.Count
-            || _columns[columnIndex].Sort is not { } comparer)
+        if (columnIndex < 0 || columnIndex >= _columns.Count)
+        {
+            return null;
+        }
+        if (ExternalSortHandler is { } externalSort
+            && _columns[columnIndex].IsExternallySortable)
+        {
+            _ = externalSort(columnIndex, ascending);
+            return null;
+        }
+        if (_columns[columnIndex].Sort is not { } comparer)
         {
             return null;
         }
@@ -956,6 +1001,12 @@ internal sealed class AccessibleGridColumn
     /// Table pattern's row identity (§8.7 "headers on entry"). At most
     /// one column should carry it; the first marked one wins.</summary>
     public bool IsRowHeader { get; init; }
+
+    /// <summary>W4-6 (#738, contract C1/C6): the column sorts, but the
+    /// ORDERING lives in core, not in a host comparator. Honored only
+    /// when the grid has an <see cref="AccessibleDataGrid.ExternalSortHandler"/>;
+    /// meaningless (and ignored) alongside <see cref="Sort"/>.</summary>
+    public bool IsExternallySortable { get; init; }
 }
 
 /// <summary>A named row-level action (the mac RowAction twin): context
