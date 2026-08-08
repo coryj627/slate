@@ -344,8 +344,7 @@ struct DashboardEditorSheet: View {
                 draft.moveSection(from: index, to: destination)
             },
             retainFocus: { _ in focusedSectionID = sectionID },
-            // W0.5-3 residue: BaseRowReorderCommand.route
-            announce: { postAccessibilityAnnouncement(.hostComposed(text: $0, priority: .medium)) })
+            announce: { postAccessibilityAnnouncement($0) })
         else { return .ignored }
         return .handled
     }

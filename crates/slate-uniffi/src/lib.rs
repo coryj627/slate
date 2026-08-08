@@ -7002,6 +7002,19 @@ pub enum A11yEvent {
         shown: u64,
         total: u64,
     },
+    BaseRowReorderRefused {
+        label: String,
+    },
+    BaseRowReorderAtBoundary {
+        label: String,
+        at_first: bool,
+    },
+    BaseRowReorderMoved {
+        label: String,
+        moved_up: bool,
+        position: u64,
+        count: u64,
+    },
     DataviewConversionFailed {
         detail: String,
     },
@@ -7288,6 +7301,21 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
                 where_am_i,
             },
             F::BaseQuickFilterResult { shown, total } => C::BaseQuickFilterResult { shown, total },
+            F::BaseRowReorderRefused { label } => C::BaseRowReorderRefused { label },
+            F::BaseRowReorderAtBoundary { label, at_first } => {
+                C::BaseRowReorderAtBoundary { label, at_first }
+            }
+            F::BaseRowReorderMoved {
+                label,
+                moved_up,
+                position,
+                count,
+            } => C::BaseRowReorderMoved {
+                label,
+                moved_up,
+                position,
+                count,
+            },
             F::DataviewConversionFailed { detail } => C::DataviewConversionFailed { detail },
             F::CitationInsertUnavailable => C::CitationInsertUnavailable,
             F::CitationWalkThrough => C::CitationWalkThrough,

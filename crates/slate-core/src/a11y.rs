@@ -499,6 +499,28 @@ pub enum A11yEvent {
         shown: u64,
         total: u64,
     },
+    /// Keyboard row reorder (Option+Arrow) in the Bases query builder
+    /// and the dashboard editor. ONE host builder composed all three
+    /// sentences for three call sites — sort rows, column rows and
+    /// dashboard sections — so the row's label and its position are the
+    /// data and the wording lives here.
+    BaseRowReorderRefused {
+        label: String,
+    },
+    /// The row is already at the end it was asked to move toward.
+    BaseRowReorderAtBoundary {
+        label: String,
+        /// True at the top of the list ("first"), false at the bottom
+        /// ("last"). The host does not get a say in the noun.
+        at_first: bool,
+    },
+    /// A completed move. `position` is 1-BASED, exactly as spoken.
+    BaseRowReorderMoved {
+        label: String,
+        moved_up: bool,
+        position: u64,
+        count: u64,
+    },
     DataviewConversionFailed {
         detail: String,
     },
@@ -943,6 +965,22 @@ impl A11yEvent {
             BaseQuickFilterResult { shown, total } => format!(
                 "{shown} of {total} {}",
                 crate::sidebar_filter::noun(*total, "result", "results")
+            ),
+            BaseRowReorderRefused { label } => format!("{label} cannot be moved."),
+            BaseRowReorderAtBoundary { label, at_first } => {
+                format!(
+                    "{label} is already {}.",
+                    if *at_first { "first" } else { "last" }
+                )
+            }
+            BaseRowReorderMoved {
+                label,
+                moved_up,
+                position,
+                count,
+            } => format!(
+                "{label} moved {} to position {position} of {count}.",
+                if *moved_up { "up" } else { "down" }
             ),
             DataviewConversionFailed { detail } => {
                 format!("Dataview conversion failed: {detail}")
@@ -1456,6 +1494,29 @@ pub fn corpus() -> Vec<A11yEvent> {
         BaseQuickFilterResult { shown: 0, total: 0 },
         BaseQuickFilterResult { shown: 1, total: 1 },
         BaseQuickFilterResult { shown: 1, total: 2 },
+        BaseRowReorderRefused {
+            label: "Sort 1".into(),
+        },
+        BaseRowReorderAtBoundary {
+            label: "Sort 1".into(),
+            at_first: true,
+        },
+        BaseRowReorderAtBoundary {
+            label: "Sort 2".into(),
+            at_first: false,
+        },
+        BaseRowReorderMoved {
+            label: "Sort 1".into(),
+            moved_up: false,
+            position: 2,
+            count: 3,
+        },
+        BaseRowReorderMoved {
+            label: "Status column".into(),
+            moved_up: true,
+            position: 1,
+            count: 3,
+        },
         DataviewConversionFailed {
             detail: "unsupported query".into(),
         },
@@ -1832,6 +1893,11 @@ mod tests {
             (Medium, "0 of 0 results"),
             (Medium, "1 of 1 result"),
             (Medium, "1 of 2 results"),
+            (Medium, "Sort 1 cannot be moved."),
+            (Medium, "Sort 1 is already first."),
+            (Medium, "Sort 2 is already last."),
+            (Medium, "Sort 1 moved down to position 2 of 3."),
+            (Medium, "Status column moved up to position 1 of 3."),
             (Medium, "Dataview conversion failed: unsupported query"),
             (Medium, "Insert citation lands in V1.x. See Milestone L."),
             (

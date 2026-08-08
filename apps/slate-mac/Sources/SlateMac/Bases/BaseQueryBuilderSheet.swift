@@ -39,7 +39,7 @@ struct BaseRowReorderCommand {
         label: String,
         move: (Int) -> Void,
         retainFocus: (Int) -> Void,
-        announce: (String) -> Void
+        announce: (A11yEvent) -> Void
     ) -> Bool {
         guard isFocused,
             let command = BaseRowReorderCommand(
@@ -62,33 +62,47 @@ struct BaseRowReorderCommand {
         label: String,
         move: (Int) -> Void,
         retainFocus: (Int) -> Void,
-        announce: (String) -> Void
+        announce: (A11yEvent) -> Void
     ) -> Outcome {
         guard index >= 0, index < count else {
-            let outcome = Outcome(
+            return emit(
+                .baseRowReorderRefused(label: label),
                 destination: nil,
-                announcement: "\(label) cannot be moved.")
-            announce(outcome.announcement)
-            return outcome
+                announce: announce)
         }
         let destination = index + direction.delta
         guard destination >= 0, destination < count else {
-            let outcome = Outcome(
-                destination: nil,
-                announcement: "\(label) is already \(direction.boundaryName).")
             retainFocus(index)
-            announce(outcome.announcement)
-            return outcome
+            return emit(
+                .baseRowReorderAtBoundary(label: label, atFirst: direction.movesUp),
+                destination: nil,
+                announce: announce)
         }
         move(destination)
         retainFocus(destination)
-        let outcome = Outcome(
+        return emit(
+            .baseRowReorderMoved(
+                label: label,
+                movedUp: direction.movesUp,
+                position: UInt64(destination + 1),
+                count: UInt64(count)),
             destination: destination,
-            announcement:
-                "\(label) moved \(direction.announcementName) to position "
-                + "\(destination + 1) of \(count).")
-        announce(outcome.announcement)
-        return outcome
+            announce: announce)
+    }
+
+    /// Core owns the sentence now (#969). `Outcome.announcement` keeps
+    /// carrying the RENDERED text so the suite's exact-wording
+    /// assertions stay alive as the faithfulness proof rather than
+    /// being deleted along with the composition.
+    private func emit(
+        _ event: A11yEvent,
+        destination: Int?,
+        announce: (A11yEvent) -> Void
+    ) -> Outcome {
+        announce(event)
+        return Outcome(
+            destination: destination,
+            announcement: a11yRender(event: event).text)
     }
 }
 
@@ -100,17 +114,14 @@ private extension BaseRowReorderCommand.Direction {
         }
     }
 
-    var announcementName: String {
+    /// The direction as DATA for the canonical event. The words it used
+    /// to carry — "up"/"down" and "first"/"last" — moved into core's
+    /// render arms with #969, so there is one template per sentence
+    /// rather than one per host.
+    var movesUp: Bool {
         switch self {
-        case .up: "up"
-        case .down: "down"
-        }
-    }
-
-    var boundaryName: String {
-        switch self {
-        case .up: "first"
-        case .down: "last"
+        case .up: true
+        case .down: false
         }
     }
 }
@@ -1362,8 +1373,7 @@ struct BaseQueryBuilderSheet: View {
                 moveSort(index: index, delta: destination - index)
             },
             retainFocus: { focusedSortRow = $0 },
-            // W0.5-3 residue: BaseRowReorderCommand.route
-            announce: { postAccessibilityAnnouncement(.hostComposed(text: $0, priority: .medium)) })
+            announce: { postAccessibilityAnnouncement($0) })
         else { return .ignored }
         return .handled
     }
@@ -1386,8 +1396,7 @@ struct BaseQueryBuilderSheet: View {
                 moveColumn(property: property, delta: destination - index)
             },
             retainFocus: { _ in focusedColumnRowID = property.exactIdentityKey },
-            // W0.5-3 residue: BaseRowReorderCommand.route
-            announce: { postAccessibilityAnnouncement(.hostComposed(text: $0, priority: .medium)) })
+            announce: { postAccessibilityAnnouncement($0) })
         else { return .ignored }
         return .handled
     }

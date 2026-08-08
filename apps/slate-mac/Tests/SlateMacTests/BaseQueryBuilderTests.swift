@@ -1881,7 +1881,7 @@ final class BaseQueryBuilderTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(
             source.components(
                 separatedBy:
-                    "announce: { postAccessibilityAnnouncement(.hostComposed(text: $0, priority: .medium)) }"
+                    "announce: { postAccessibilityAnnouncement($0) }"
             )
             .count - 1,
             2,
@@ -1908,7 +1908,7 @@ final class BaseQueryBuilderTests: XCTestCase {
                 sorts.swapAt(1, destination)
             },
             retainFocus: { focusedSortIndex = $0 },
-            announce: { sortAnnouncements.append($0) })
+            announce: { sortAnnouncements.append(a11yRender(event: $0).text) })
 
         XCTAssertTrue(sortHandled)
         XCTAssertEqual(sorts, ["priority", "status"])
@@ -1937,7 +1937,7 @@ final class BaseQueryBuilderTests: XCTestCase {
                 columns.swapAt(0, destination)
             },
             retainFocus: { _ in retainedColumnID = focusedColumnID },
-            announce: { columnAnnouncements.append($0) })
+            announce: { columnAnnouncements.append(a11yRender(event: $0).text) })
 
         XCTAssertTrue(columnHandled)
         XCTAssertEqual(columns, ["priority", "status"])
@@ -1960,7 +1960,7 @@ final class BaseQueryBuilderTests: XCTestCase {
             label: "Sort 1",
             move: { _ in boundaryMoves += 1 },
             retainFocus: { boundaryFocus = $0 },
-            announce: { boundaryAnnouncements.append($0) })
+            announce: { boundaryAnnouncements.append(a11yRender(event: $0).text) })
 
         XCTAssertTrue(boundaryHandled)
         XCTAssertEqual(boundaryMoves, 0)
