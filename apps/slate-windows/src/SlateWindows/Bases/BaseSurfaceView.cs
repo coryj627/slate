@@ -176,6 +176,13 @@ internal sealed class BaseSurfaceView : UserControl
         AutomationProperties.SetAutomationId(_list, "BaseTabList");
         ScrollViewer.SetHorizontalScrollBarVisibility(
             _list, ScrollBarVisibility.Disabled);
+        // The list renderer participates in selection and activation
+        // like the grid (red team round 1: without these, every row
+        // command in list mode answered "select a row first" — or
+        // worse, acted on a stale grid-era row).
+        _list.SelectionChanged += OnListSelectionChanged;
+        _list.MouseDoubleClick += OnListDoubleClick;
+        _list.KeyDown += OnListKeyDown;
 
         var layout = new DockPanel();
         DockPanel.SetDock(header, Dock.Top);
@@ -199,8 +206,23 @@ internal sealed class BaseSurfaceView : UserControl
 
     /// <summary>The dock/read-only posture (the mac
     /// BaseReadOnlyResultView): no editing seam, no row actions, no
-    /// activation — navigation and the quick filter remain.</summary>
-    public bool IsReadOnlySurface { get; set; }
+    /// activation — navigation and the quick filter remain. The
+    /// read-only surface carries its own automation ids so AT (and
+    /// journeys) can tell it apart from the tab surface (the D-12
+    /// substrate rule).</summary>
+    public bool IsReadOnlySurface
+    {
+        get => _isReadOnlySurface;
+        set
+        {
+            _isReadOnlySurface = value;
+            _grid.GridAutomationId = value ? "BasesDockGrid" : "BaseTabGrid";
+            AutomationProperties.SetAutomationId(
+                _list, value ? "BasesDockList" : "BaseTabList");
+        }
+    }
+
+    private bool _isReadOnlySurface;
 
     /// <summary>The transient per-TAB renderer override (mac keys it
     /// by tab, not by document — two tabs on one source may render
@@ -272,11 +294,15 @@ internal sealed class BaseSurfaceView : UserControl
 
     /// <summary>slate.bases.sortByColumn: toggle from the FOCUSED
     /// column — the substrate's Ctrl+Alt+S seam, invoked from the
-    /// command/menu route so both speak the same sentence.</summary>
-    private void OnSortCurrentColumnRequested() =>
-        _ = _grid.ApplySort(
-            Math.Max(0, _grid.CurrentColumnIndexForTests()),
-            AscendingToggleFor(_grid.CurrentColumnIndexForTests()));
+    /// command/menu route so both speak the same sentence. The clamp
+    /// and the toggle read the SAME index (red team round 1: the raw
+    /// −1 fed the toggle, so a grid with no current cell sorted
+    /// column 0 ascending instead of toggling it).</summary>
+    private void OnSortCurrentColumnRequested()
+    {
+        int column = Math.Max(0, _grid.CurrentColumnIndexForTests());
+        _ = _grid.ApplySort(column, AscendingToggleFor(column));
+    }
 
     private bool AscendingToggleFor(int columnIndex) =>
         Model?.SortState is not { } sort
@@ -301,13 +327,26 @@ internal sealed class BaseSurfaceView : UserControl
         {
             RendererOverride = BaseRendererOverride.Table;
         }
+        // The CURRENT column when it is editable, else the first
+        // editable column (the documented order — red team round 1:
+        // the first cut always took the first).
         int editable = -1;
-        for (int index = 0; index < result.Columns.Length; index++)
+        int current = _grid.CurrentColumnIndexForTests();
+        if (current >= 0
+            && current < result.Columns.Length
+            && BaseCellEditPolicy.PropertyKey(result.Columns[current]) is not null)
         {
-            if (BaseCellEditPolicy.PropertyKey(result.Columns[index]) is not null)
+            editable = current;
+        }
+        else
+        {
+            for (int index = 0; index < result.Columns.Length; index++)
             {
-                editable = index;
-                break;
+                if (BaseCellEditPolicy.PropertyKey(result.Columns[index]) is not null)
+                {
+                    editable = index;
+                    break;
+                }
             }
         }
         if (editable < 0)
@@ -334,10 +373,18 @@ internal sealed class BaseSurfaceView : UserControl
         {
             return;
         }
+        int before = model.ActiveViewIndex;
         model.SelectView(_viewPicker.SelectedIndex);
-        if (model.ActiveViewName is { } name)
+        if (model.ActiveViewIndex != before && model.ActiveViewName is { } name)
         {
             model.AnnounceViewSelected(name);
+        }
+        else if (model.ActiveViewIndex != _viewPicker.SelectedIndex)
+        {
+            // The switch was refused (loading/failed): the picker must
+            // fall back to reality instead of announcing a switch that
+            // did not happen (red team round 1).
+            RenderChrome();
         }
     }
 
@@ -367,7 +414,13 @@ internal sealed class BaseSurfaceView : UserControl
         }
         e.Handled = true;
         _filterDebounce.Stop();
+        // Detached around the programmatic set (the RenderChrome
+        // pattern): the TextChanged handler restarts the debounce, and
+        // Escape would otherwise execute AND announce twice — once
+        // here, once 150 ms later (red team round 1).
+        _quickFilter.TextChanged -= OnQuickFilterTextChanged;
         _quickFilter.Text = string.Empty;
+        _quickFilter.TextChanged += OnQuickFilterTextChanged;
         model.QuickFilterText = string.Empty;
         model.ApplyQuickFilter();
         FocusContent();
@@ -454,6 +507,17 @@ internal sealed class BaseSurfaceView : UserControl
         bool interactive = model.State is BaseLoadState.Ready or BaseLoadState.Degraded;
         _quickFilter.IsEnabled = interactive;
         _viewPicker.IsEnabled = interactive;
+        // C13's disabled reason, delivered as a STATIC HINT (the
+        // TaskStatusPhrase label category — commands gray out through
+        // CanExecute; the hint says why, with no announcement).
+        string unavailableReason = model.State switch
+        {
+            BaseLoadState.Loading => "This Base is still opening.",
+            BaseLoadState.Failed => "This Base failed to open. Retry reloads it.",
+            _ => string.Empty,
+        };
+        AutomationProperties.SetHelpText(_quickFilter, unavailableReason);
+        AutomationProperties.SetHelpText(_viewPicker, unavailableReason);
         if (!string.Equals(_quickFilter.Text, model.QuickFilterText, StringComparison.Ordinal))
         {
             // Transiency: a Load/SelectView cleared the model's filter;
@@ -586,6 +650,7 @@ internal sealed class BaseSurfaceView : UserControl
             _grid.SetSortIndicator(model.SortState);
             _grid.CurrentRowChanged -= OnCurrentRowChanged;
             _grid.CurrentRowChanged += OnCurrentRowChanged;
+            ReconcileGridSelection(model, rows);
             return;
         }
         var rowActions = new List<SlateWindows.Grids.AccessibleGridRowAction>
@@ -621,7 +686,11 @@ internal sealed class BaseSurfaceView : UserControl
             rowAudioDescription: static row =>
                 ((BaseGridRowViewModel)row).AudioDescription,
             rowActions: rowActions,
-            exportProducer: format => model.ExportText(format) ?? string.Empty,
+            // No exportProducer: export/copy route through the menu
+            // commands, which own the C14 scope prompt and compose off
+            // the dispatcher — a synchronous producer here could do
+            // neither (red team round 1), and nothing subscribes the
+            // substrate's ExportProduced in production.
             rowActivated: row => RowCommand(row, (m, r) => m.OpenRowFromSurface?.Invoke(r)));
         _grid.SetSortIndicator(model.SortState);
         _grid.CurrentRowChanged -= OnCurrentRowChanged;
@@ -649,6 +718,37 @@ internal sealed class BaseSurfaceView : UserControl
                         BaseCellEditPolicy.ReadOnlyEvent(result.Columns[columnIndex]));
                 }
             });
+        ReconcileGridSelection(model, rows);
+    }
+
+    /// <summary>C9 selection preservation by IDENTITY (FilePath,
+    /// TaskOrdinal): after a republish the selection follows the same
+    /// note-row (fresh payload), and a vanished row drops it. Focus
+    /// moves only when the grid already held it — a background funnel
+    /// publish must never steal keyboard focus.</summary>
+    private void ReconcileGridSelection(
+        BaseDocumentViewModel model, IReadOnlyList<object> rows)
+    {
+        if (model.SelectedRow is not { } selected)
+        {
+            return;
+        }
+        BaseGridRowViewModel? match = rows
+            .OfType<BaseGridRowViewModel>()
+            .FirstOrDefault(candidate =>
+                string.Equals(
+                    candidate.Row.FilePath, selected.FilePath, StringComparison.Ordinal)
+                && candidate.Row.TaskOrdinal == selected.TaskOrdinal);
+        if (match is null)
+        {
+            model.SelectedRow = null;
+            return;
+        }
+        model.SelectedRow = match.Row;
+        if (_grid.IsKeyboardFocusWithin)
+        {
+            _ = _grid.FocusRow(candidate => ReferenceEquals(candidate, match));
+        }
     }
 
     private void OnCurrentRowChanged(object? row)
@@ -733,6 +833,70 @@ internal sealed class BaseSurfaceView : UserControl
         _list.ItemsSource = items;
         AutomationProperties.SetName(_list, result.AudioSummary);
         _list.ItemContainerStyle ??= BuildListItemStyle();
+        ReconcileListSelection(items);
+    }
+
+    /// <summary>C9 selection preservation by IDENTITY (FilePath,
+    /// TaskOrdinal): a republish keeps the selection on the same
+    /// note-row when it survived and drops it when it did not — a
+    /// retained stale row is the dangling-reference class INV-3
+    /// forbids.</summary>
+    private void ReconcileListSelection(IReadOnlyList<object> items)
+    {
+        if (Model is not { SelectedRow: { } selected } model)
+        {
+            return;
+        }
+        BaseListItemViewModel? match = items
+            .OfType<BaseListItemViewModel>()
+            .FirstOrDefault(item => item.Row is { } row
+                && string.Equals(
+                    row.FilePath, selected.FilePath, StringComparison.Ordinal)
+                && row.TaskOrdinal == selected.TaskOrdinal);
+        if (match is null)
+        {
+            model.SelectedRow = null;
+            _list.SelectedItem = null;
+        }
+        else
+        {
+            // Selecting the fresh item republishes the fresh row
+            // payload through SelectionChanged.
+            _list.SelectedItem = match;
+        }
+    }
+
+    private void OnListSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (Model is { } model
+            && _list.SelectedItem is BaseListItemViewModel { Row: { } row })
+        {
+            model.SelectedRow = row;
+        }
+    }
+
+    private void OnListDoubleClick(object sender, MouseButtonEventArgs e) =>
+        _ = ActivateListRow();
+
+    private void OnListKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter && ActivateListRow())
+        {
+            e.Handled = true;
+        }
+    }
+
+    private bool ActivateListRow()
+    {
+        if (IsReadOnlySurface
+            || Model is not { } model
+            || _list.SelectedItem is not BaseListItemViewModel { Row: { } row })
+        {
+            return false;
+        }
+        model.SelectedRow = row;
+        model.OpenRowFromSurface?.Invoke(row);
+        return true;
     }
 
     private void RowCommand(
@@ -852,7 +1016,10 @@ internal sealed class BaseGridRowViewModel
 
 /// <summary>The mac BaseSummaryFormatter twin: custom summary cells,
 /// else core's audio summary, else the counted fallback — with the
-/// "filtered" prefix while a quick filter is active.</summary>
+/// "filtered" prefix while a quick filter is active. Grouped results
+/// append the canonical group headings (contract C2: table mode has
+/// no interleaved section rows, so grouping surfaces in the summary
+/// region — red team round 1 found it silently dropped).</summary>
 internal static class BaseSummaryFormatter
 {
     public static string SummaryText(BasesResultSet result, bool quickFilterActive)
@@ -866,6 +1033,15 @@ internal static class BaseSummaryFormatter
             : result.AudioSummary.Length > 0
                 ? result.AudioSummary
                 : $"Base table: {result.ShownCount} of {result.TotalCount} rows.";
+        if (result.Groups.Length > 0)
+        {
+            string groups = string.Join(
+                "; ",
+                result.Groups.Select(group =>
+                    AccessibleDataGrid.ComposeGroupHeading(
+                        group.Label, (uint)group.RowCount, summary: null)));
+            body = $"{body} Groups: {groups}";
+        }
         return quickFilterActive ? $"Summaries: filtered — {body}" : body;
     }
 

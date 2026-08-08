@@ -94,12 +94,21 @@ DIVERGENCE D-14 records the tab-gated half (mac does not gate on dirty tabs).
 **C9 — One post-write refresh funnel.** Every in-app write that can change
 Bases results (cell write, sort-to-view, builder save, property/task edits
 from other surfaces) routes through one refresh entry point that re-executes
-visible Bases surfaces (tabs, dock, embeds), preserves selection by
-`(FilePath, TaskOrdinal)` + exact column id, restores the reader's grid
-position via the substrate's re-`Bind` restore, and posts deduped
-`BasesRefreshUpdated` ONLY for surfaces whose row-membership multiset
-changed. Failure leaves previous rows + handle in place and publishes a
-degraded banner — never a blank pane.
+visible Bases surfaces (tabs, dock, dashboards, embeds), preserves selection
+by `(FilePath, TaskOrdinal)` (the surface reconciles the selected row to the
+same note-row after each publish; grid position rides the substrate's
+re-`Bind` restore), and posts deduped `BasesRefreshUpdated` ONLY for
+surfaces whose row-membership multiset changed. Failure leaves previous rows
++ handle in place and publishes a degraded banner — never a blank pane.
+Delivery notes (red-team round 1): the in-app CELL-WRITE funnel reaches the
+tab registry, the dock, and dashboards directly; everything else (property
+panel, task toggles, editor saves, external edits) reaches Bases through the
+VAULT-EVENT arm — a 500 ms-debounced silent re-execute of every visible
+surface on any `.md`/`.base` change (`.base` definition changes reload their
+own document). Reading embed cards re-project on any `.md` change while a
+base card is published (a base's membership cannot be enumerated as a
+dependency list); the artifact digest makes a no-change re-project a memo
+hit. Announcements belong ONLY to the in-app write funnel (INV-4).
 
 **C10 — Embeds are read-only and layered (G28).** A `.base` embed in the
 reading view renders NO live grid inside the FlowDocument (an embedded grid
@@ -110,7 +119,9 @@ file-backed, or the grid window shape proven by
 `ReadingTableWindowFocusesFirstCellAndEscapeReturns`). Read-only hints use
 mac's wording per embed kind verbatim. Recorded divergence D-15 (mac shows a
 live embedded grid; Windows layers, per G28). Inline fences (```base,
-```slate-query, ```dataview) classify through core
+```slate-query, ```dataview) are recorded divergence D-20: v1 renders them
+as readable SOURCE code blocks (the W3-4 pipeline), not executed cards.
+When the fence surface ships it must classify through core
 (`ClassifySlateQueryFence`, `OpenBaseInline`, `OpenDql`) — never string
 sniffing; the paragraph/embed-key detection is core's reading blocks.
 
@@ -137,10 +148,13 @@ edited. Export of saved queries is exclusive-create; out-of-vault targets
 refuse with `BasesPathOutsideVault`.
 
 **C13 — Availability gates fail closed and announce once.** Loading /
-reopening / failed / missing states expose one canonical disabled reason
-used for BOTH the control hint and the command refusal announcement. While
-unavailable: no sort affordance, no edit entry, no filter focus; the header
-shows the recovery action (Retry / Refresh) in place of Refresh. Every
+reopening / failed / missing states expose one canonical disabled reason.
+RESOLVED (was "to verify"): the reasons are LABELS, not announcements —
+mac posts no availability announcement for them post-#969, so Windows
+delivers them as static control hints (`HelpText`, the TaskStatusPhrase
+label category) while commands gray out through the shared CanExecute.
+While unavailable: no sort affordance, no edit entry, no filter focus; the
+header shows the recovery action (Retry) in place of Refresh. Every
 menu/keyboard path that can reach a disabled action re-checks admission at
 dispatch (the backstop), not only at UI-enable time.
 
@@ -178,9 +192,16 @@ unsolicited).
 **INV-5** Background work never publishes into a different vault session
 than the one that started it (session identity re-checked at every
 publication point; the W4-5 lesson).
-**INV-6** The UI thread never blocks on FFI: `base_execute`, `base_export`,
-`base_apply_edit(s)`, saved-query/dashboard CRUD all run off-dispatcher with
-cancel tokens where the FFI accepts one.
+**INV-6** The UI thread never blocks on FFI whose cost scales with vault or
+result size, or that can wait on the per-document FFI lock behind an
+execute: `base_execute`, `base_export`, `base_apply_edit(s)`,
+`base_view_edit_query_json` all run off-dispatcher with cancel tokens where
+the FFI accepts one. SCOPE REFINEMENT (red-team round 1): bounded registry
+metadata CRUD (saved-query/dashboard list/get/save/rename/delete, the
+parse-only DQL seed) runs synchronously on the dispatcher — it takes no
+document lock and its cost is a small registry file, so moving it would buy
+latency only at the cost of announcement-ordering complexity. If any of
+these ever grows data-proportional, it moves behind the scheduler.
 
 ## Recorded divergences (Windows vs mac)
 
@@ -215,6 +236,18 @@ cancel tokens where the FFI accepts one.
   (`OpenDql` → `BaseViewQueryJson`), edits mutate that document at the
   JSON-node level, and every filter node is assembled from core-encoded
   `ExprJson` — the host never synthesizes schema.
+- **D-19** Missing dashboard sections repair through the dashboard EDITOR
+  (mac also offers inline per-section repair actions); the section banner
+  points there.
+- **D-20** Inline query fences (```base, ```slate-query, ```dataview) render
+  as readable source code blocks in v1 — the tab, dock, dashboard, and
+  `![[x.base]]` embed surfaces carry the executed experience. Executing
+  fences in-range is follow-up work and must go through core's
+  `ClassifySlateQueryFence` family (C10). Rationale: nothing is silently
+  absent (the fence text stays fully readable in say-all), and G28 already
+  rules out a live in-range grid, so the marginal v1 value is a summary
+  card; deferred over destabilizing the W3-4 code-block pipeline late in
+  the milestone.
 
 ## Accepted risks (off-limits for review re-litigation)
 
@@ -232,10 +265,11 @@ cancel tokens where the FFI accepts one.
 - **R5** Warnings cross the FFI as flat strings (no structured kinds) and
   render verbatim.
 
-## To verify during implementation (flagged, not assumed)
+## Verified during implementation (both flags resolved)
 
-- How mac posts the four availability reasons post-#969 (they are not in
-  the canonical Bases vocabulary list — likely label/hint only, or the
-  mutation-announcement funnel). Match whatever mac actually does.
-- Whether `SetProperty` on a tabless path triggers the vault-event refresh
-  that makes C9's funnel fire without an explicit call.
+- Mac's four availability reasons post-#969 are LABEL/HINT copy, not
+  announcements — resolution recorded in C13.
+- `SetProperty` did NOT trigger any Bases refresh by itself: no vault-event
+  arm existed until red-team round 1. The funnel is now explicit for cell
+  writes and the vault-event arm (C9 delivery notes) covers every other
+  write path, including tabless `SetProperty` from other surfaces.

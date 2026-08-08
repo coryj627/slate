@@ -1461,6 +1461,18 @@
                                             </ListBox.Style>
                                         </ListBox>
                                         <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                            <StackPanel.Resources>
+                                                <!-- Selection-scoped actions disable without a
+                                                     selection instead of clicking into silence
+                                                     (red team round 1). -->
+                                                <Style TargetType="Button">
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding SelectedItem, ElementName=QueriesSavedList}" Value="{x:Null}">
+                                                            <Setter Property="IsEnabled" Value="False" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </StackPanel.Resources>
                                             <Button Content="Run" AutomationProperties.Name="Run saved query" AutomationProperties.AutomationId="QueriesRun" Click="QueriesRun_Click" />
                                             <Button Content="Pin/Unpin" Margin="4,0,0,0" AutomationProperties.Name="Pin or unpin saved query" AutomationProperties.AutomationId="QueriesPin" Click="QueriesPin_Click" />
                                             <Button Content="Edit in Builder" Margin="4,0,0,0" AutomationProperties.Name="Edit saved query in builder" AutomationProperties.AutomationId="QueriesEditInBuilder" Click="QueriesEditInBuilder_Click" />
@@ -1511,6 +1523,15 @@
                                             </ListBox.Style>
                                         </ListBox>
                                         <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                            <StackPanel.Resources>
+                                                <Style TargetType="Button">
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding SelectedItem, ElementName=QueriesBaseFilesList}" Value="{x:Null}">
+                                                            <Setter Property="IsEnabled" Value="False" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </StackPanel.Resources>
                                             <Button Content="Open" AutomationProperties.Name="Open base file" AutomationProperties.AutomationId="QueriesOpenBaseFile" Click="QueriesOpenBaseFile_Click" />
                                             <Button Content="Dock" Margin="4,0,0,0" AutomationProperties.Name="Dock base file" AutomationProperties.AutomationId="QueriesDockBaseFile" Click="QueriesDockBaseFile_Click" />
                                         </StackPanel>
@@ -1547,6 +1568,15 @@
                                             </ListBox.Style>
                                         </ListBox>
                                         <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                            <StackPanel.Resources>
+                                                <Style TargetType="Button">
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding SelectedItem, ElementName=QueriesDashboardsList}" Value="{x:Null}">
+                                                            <Setter Property="IsEnabled" Value="False" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </StackPanel.Resources>
                                             <Button Content="Open" AutomationProperties.Name="Open dashboard" AutomationProperties.AutomationId="QueriesOpenDashboard" Click="QueriesOpenDashboard_Click" />
                                             <Button Content="Edit…" Margin="4,0,0,0" AutomationProperties.Name="Edit dashboard" AutomationProperties.AutomationId="QueriesEditDashboard" Click="QueriesEditDashboard_Click" />
                                             <Button Content="Dock" Margin="4,0,0,0" AutomationProperties.Name="Dock dashboard" AutomationProperties.AutomationId="QueriesDockDashboard" Click="QueriesDockDashboard_Click" />
@@ -1580,10 +1610,57 @@
                                            Text="Dock a base, saved query, or dashboard to follow the active note."
                                            TextWrapping="Wrap"
                                            Foreground="{DynamicResource Slate.SecondaryTextBrush}"
-                                           AutomationProperties.AutomationId="BasesDockEmptyState" />
+                                           AutomationProperties.AutomationId="BasesDockEmptyState">
+                                    <TextBlock.Style>
+                                        <!-- Visible only while NOTHING is docked
+                                             (red team round 1: it stayed up over
+                                             docked content). -->
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <MultiDataTrigger>
+                                                    <MultiDataTrigger.Conditions>
+                                                        <Condition Binding="{Binding BasesDockDocument}" Value="{x:Null}" />
+                                                        <Condition Binding="{Binding BasesDockDashboard}" Value="{x:Null}" />
+                                                    </MultiDataTrigger.Conditions>
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </MultiDataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                                <!-- A docked DASHBOARD renders its own surface
+                                     (red team round 1 blocker: BasesDockDashboard
+                                     was bound by no view — docking a dashboard
+                                     announced success and showed nothing). -->
+                                <bases:DashboardSurfaceView x:Name="BasesDockDashboardSurface"
+                                                            Model="{Binding BasesDockDashboard}">
+                                    <bases:DashboardSurfaceView.Style>
+                                        <Style TargetType="bases:DashboardSurfaceView">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding BasesDockDashboard}" Value="{x:Null}">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </bases:DashboardSurfaceView.Style>
+                                </bases:DashboardSurfaceView>
                                 <bases:BaseSurfaceView x:Name="BasesDockSurface"
                                                        Model="{Binding BasesDockDocument}"
-                                                       IsReadOnlySurface="True" />
+                                                       IsReadOnlySurface="True">
+                                    <bases:BaseSurfaceView.Style>
+                                        <!-- Hidden with no model: an empty surface
+                                             skeleton exposes dead-but-enabled
+                                             controls to the accessibility tree. -->
+                                        <Style TargetType="bases:BaseSurfaceView">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding BasesDockDocument}" Value="{x:Null}">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </bases:BaseSurfaceView.Style>
+                                </bases:BaseSurfaceView>
                             </DockPanel>
 
                             <StackPanel Grid.Column="0" Margin="12">
@@ -2204,11 +2281,12 @@
                     Background="{DynamicResource Slate.RaisedSurfaceBrush}"
                     BorderBrush="{DynamicResource Slate.BorderBrush}"
                     BorderThickness="1"
-                    Visibility="{Binding Workspace.DashboardEditorSheet, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}"
+                    Visibility="{Binding DataContext.Workspace.DashboardEditorSheet, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}"
                     DataContext="{Binding Workspace.DashboardEditorSheet}"
                     FocusManager.IsFocusScope="True"
                     KeyboardNavigation.TabNavigation="Cycle"
                     KeyboardNavigation.ControlTabNavigation="Cycle"
+                    PreviewKeyDown="DashboardEditorOverlay_PreviewKeyDown"
                     AutomationProperties.AutomationId="DashboardEditorSheet"
                     AutomationProperties.Name="{Binding Title}"
                     AutomationProperties.IsDialog="True">
@@ -2220,7 +2298,8 @@
                                AutomationProperties.HeadingLevel="Level2" />
                     <DockPanel DockPanel.Dock="Top" Margin="0,10,0,0">
                         <TextBlock Text="Name:" VerticalAlignment="Center" />
-                        <TextBox Margin="6,0,0,0"
+                        <TextBox x:Name="DashboardEditorNameBox"
+                                 Margin="6,0,0,0"
                                  Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"
                                  AutomationProperties.AutomationId="DashboardEditorName"
                                  AutomationProperties.Name="Dashboard name" />
@@ -2301,11 +2380,12 @@
                     Background="{DynamicResource Slate.RaisedSurfaceBrush}"
                     BorderBrush="{DynamicResource Slate.BorderBrush}"
                     BorderThickness="1"
-                    Visibility="{Binding Workspace.BaseQueryBuilderSheet, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}"
+                    Visibility="{Binding DataContext.Workspace.BaseQueryBuilderSheet, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}"
                     DataContext="{Binding Workspace.BaseQueryBuilderSheet}"
                     FocusManager.IsFocusScope="True"
                     KeyboardNavigation.TabNavigation="Cycle"
                     KeyboardNavigation.ControlTabNavigation="Cycle"
+                    PreviewKeyDown="BaseQueryBuilderOverlay_PreviewKeyDown"
                     AutomationProperties.AutomationId="BaseQueryBuilderSheet"
                     AutomationProperties.Name="{Binding Title}"
                     AutomationProperties.IsDialog="True">
@@ -2318,11 +2398,34 @@
                     <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
                         <Button Content="Save to View"
                                 AutomationProperties.AutomationId="BuilderSaveToView"
-                                Click="BuilderSaveToView_Click" />
+                                Click="BuilderSaveToView_Click">
+                            <Button.Style>
+                                <!-- Only an edit-view context can save to a view
+                                     (red team round 1: the button sat enabled in
+                                     every context and clicked into silence). -->
+                                <Style TargetType="Button">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Context.ViewPath}" Value="{x:Null}">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
                         <Button Content="Update Saved Query"
                                 Margin="8,0,0,0"
                                 AutomationProperties.AutomationId="BuilderUpdateSavedQuery"
-                                Click="BuilderUpdateSavedQuery_Click" />
+                                Click="BuilderUpdateSavedQuery_Click">
+                            <Button.Style>
+                                <Style TargetType="Button">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Context.SavedQueryId}" Value="{x:Null}">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
                         <Button Content="Save as Saved Query"
                                 Margin="8,0,0,0"
                                 AutomationProperties.AutomationId="BuilderSaveAsSavedQuery"
@@ -2340,7 +2443,8 @@
                         <StackPanel>
                             <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
                                 <TextBlock Text="Match:" VerticalAlignment="Center" />
-                                <ComboBox Margin="6,0,0,0"
+                                <ComboBox x:Name="BuilderCombinatorBox"
+                                          Margin="6,0,0,0"
                                           MinWidth="90"
                                           SelectedValuePath="Tag"
                                           SelectedValue="{Binding Combinator}"
@@ -2361,6 +2465,18 @@
                             <ItemsControl ItemsSource="{Binding ConditionRows}"
                                           Margin="0,6,0,0"
                                           AutomationProperties.AutomationId="BuilderConditions">
+                                <ItemsControl.Style>
+                                    <!-- Empty collections collapse: a zero-size
+                                         list is an axe BoundingRectangle
+                                         violation (the queries-leaf rule). -->
+                                    <Style TargetType="ItemsControl">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding ConditionRows.Count}" Value="0">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </ItemsControl.Style>
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
                                         <StackPanel Margin="0,2">
@@ -2402,12 +2518,41 @@
                                                 </TextBlock.Style>
                                             </TextBlock>
                                             <ItemsControl ItemsSource="{Binding GroupMembers}" Margin="24,0,0,0">
+                                                <ItemsControl.Style>
+                                                    <Style TargetType="ItemsControl">
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding GroupMembers}" Value="{x:Null}">
+                                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </ItemsControl.Style>
                                                 <ItemsControl.ItemTemplate>
                                                     <DataTemplate>
-                                                        <TextBox Margin="0,2"
-                                                                 Text="{Binding Expression, UpdateSourceTrigger=PropertyChanged}"
-                                                                 TextChanged="BuilderExpression_TextChanged"
-                                                                 AutomationProperties.Name="Group member expression" />
+                                                        <StackPanel Margin="0,2">
+                                                            <TextBox Text="{Binding Expression, UpdateSourceTrigger=PropertyChanged}"
+                                                                     TextChanged="BuilderExpression_TextChanged"
+                                                                     AutomationProperties.Name="Group member expression" />
+                                                            <!-- A group member's refusal renders like a
+                                                                 top-level row's (red team round 1: it was
+                                                                 invisible). -->
+                                                            <TextBlock Text="{Binding ValidationMessage}"
+                                                                       Foreground="{DynamicResource Slate.WarningBrush}"
+                                                                       TextWrapping="Wrap">
+                                                                <TextBlock.Style>
+                                                                    <Style TargetType="TextBlock">
+                                                                        <Style.Triggers>
+                                                                            <Trigger Property="Text" Value="">
+                                                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                                            </Trigger>
+                                                                            <Trigger Property="Text" Value="{x:Null}">
+                                                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                                            </Trigger>
+                                                                        </Style.Triggers>
+                                                                    </Style>
+                                                                </TextBlock.Style>
+                                                            </TextBlock>
+                                                        </StackPanel>
                                                     </DataTemplate>
                                                 </ItemsControl.ItemTemplate>
                                             </ItemsControl>
@@ -2419,10 +2564,24 @@
                                        Foreground="{DynamicResource Slate.WarningBrush}"
                                        TextWrapping="Wrap"
                                        Focusable="True"
-                                       AutomationProperties.AutomationId="BuilderSaveError" />
+                                       AutomationProperties.AutomationId="BuilderSaveError">
+                                <TextBlock.Style>
+                                    <!-- An EMPTY focusable text is a tab stop
+                                         announcing nothing — collapsed until
+                                         there is an error to read. -->
+                                    <Style TargetType="TextBlock">
+                                        <Style.Triggers>
+                                            <Trigger Property="Text" Value="">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                            </Trigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
                             <TextBlock Margin="0,10,0,2" Text="PREVIEW" FontSize="11"
                                        Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                             <TextBlock x:Name="BuilderPreviewLine"
+                                       Text="Preview not loaded."
                                        TextWrapping="Wrap"
                                        Focusable="True"
                                        AutomationProperties.AutomationId="BuilderPreviewLine" />

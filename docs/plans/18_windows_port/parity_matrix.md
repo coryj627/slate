@@ -1,6 +1,6 @@
 # Milestone W parity matrix (§W-F row-level checklist)
 
-Generated 2026-08-08 at `d524e7d` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
+Generated 2026-08-08 at `9ad5dea` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
 
 ## Entry-criteria snapshot (w0_spec §W0-4 item 3)
 
@@ -233,7 +233,7 @@ The palette surface itself (ranking via the W0.5-1 core engine, sections, recent
 | `citations` | #737 (W4-5) | implemented 2026-08-04 (#737): `CitationsPanelViewModel` + MainWindow leaf body + details/summary sheets; `CitationsPanelTests` + FlaUI `CitationSurfaces_GridsSheetsAndChords_AreClean` |
 | `bibliography` | #737 (W4-5) | implemented 2026-08-04 (#737): `BibliographyViewModel` + MainWindow leaf body, BOTH segments on `AccessibleDataGrid`; `BibliographyPanelTests` + FlaUI `CitationSurfaces_GridsSheetsAndChords_AreClean` |
 | `queries` | #738 (W4-6) | implemented 2026-08-08 (#738): workspace BaseQueriesState + MainWindow leaf body (saved queries / base files / dashboards, pin + rename + delete + export + dock); `BasesQueriesTests` + FlaUI `BasesSurfaces_GridBuilderAndLeaves_AreClean` |
-| `basesDock` | #738 (W4-6) | implemented 2026-08-08 (#738): workspace dock target following the active note (this_path, 500 ms debounce) over a read-only `BaseSurfaceView`; `BasesQueriesTests` + FlaUI `BasesSurfaces_GridBuilderAndLeaves_AreClean` |
+| `basesDock` | #738 (W4-6) | implemented 2026-08-08 (#738): workspace dock target following the active note (this_path, 500 ms debounce) over read-only `BaseSurfaceView`/`DashboardSurfaceView`; `BasesQueriesTests` + FlaUI `BasesSurfaces_GridBuilderAndLeaves_AreClean` (docks a base from the leaf and axe-scans the revealed BasesDockGrid) |
 | `syncDiagnostics` | #740 (W4-8) | pending |
 
 ## Workspace persisted tab-content kinds (`enum EditorItem`)

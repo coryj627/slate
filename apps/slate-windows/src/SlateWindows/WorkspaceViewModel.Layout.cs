@@ -152,6 +152,15 @@ internal sealed partial class WorkspaceViewModel
 
             WorkspaceTabViewModel? peer = FindSamePathTab(item, excluding: active);
             active.ReplaceItem(item);
+            // The replace arm is a tab MUTATION site, not a construction
+            // site — it needs the same attach funnel as AddTab/restore/
+            // duplicate or a .base opened into the current tab ships a
+            // dead pane (red team round 1 blocker). Attach before the
+            // release sweep so a shared document is never shut down
+            // between the two steps.
+            AttachBaseDocumentIfNeeded(active);
+            ReleaseUnreferencedBaseDocuments();
+            ReleaseUnreferencedDashboards();
             if (peer is not null)
             {
                 active.MirrorDocumentStateFrom(peer);

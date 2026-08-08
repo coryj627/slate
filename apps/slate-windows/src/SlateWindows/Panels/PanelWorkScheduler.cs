@@ -28,6 +28,12 @@ internal abstract class PanelWorkScheduler : BindableBase
 
     protected bool IsShutDown => _isShutDown;
 
+    /// <summary>Whether this scheduler runs bodies inline (test mode)
+    /// — for the rare subclass step that must choose between inline
+    /// and pool execution OUTSIDE StartWork (e.g. a post-shutdown
+    /// handle close that must not block the dispatcher).</summary>
+    protected bool IsSynchronousForTests => _synchronous;
+
     /// <summary>Workspace teardown: refuse new work. Subclasses
     /// override to also invalidate their in-flight publishes.</summary>
     internal virtual void Shutdown() => _isShutDown = true;

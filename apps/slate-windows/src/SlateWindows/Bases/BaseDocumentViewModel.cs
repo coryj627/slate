@@ -6,9 +6,6 @@ using uniffi.slate_uniffi;
 
 namespace SlateWindows.Bases;
 
-/// <summary>The document's load posture (the mac LoadState twin).
-/// Degraded is READY WITH A BANNER: content renders under the message
-/// (contract C4); Failed is terminal until Retry.</summary>
 /// <summary>The dock target (the mac BasesDockTarget twin), compared
 /// byte-exact on kind+key.</summary>
 internal enum BasesDockTargetKind
@@ -23,6 +20,9 @@ internal sealed record BasesDockTargetState(
     string Key,
     string Name);
 
+/// <summary>The document's load posture (the mac LoadState twin).
+/// Degraded is READY WITH A BANNER: content renders under the message
+/// (contract C4); Failed is terminal until Retry.</summary>
 internal enum BaseLoadState
 {
     Loading,
@@ -100,9 +100,21 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         new(session, id, name, announce, synchronousForTests);
 
     private readonly string? _savedQueryId;
-    private readonly string? _savedQueryName;
+    private string? _savedQueryName;
 
     public bool IsSavedQuery => _savedQueryId is not null;
+
+    /// <summary>Registry rename propagation: the display name follows
+    /// the registry while identity (the id) never changes.</summary>
+    internal void UpdateSavedQueryName(string name)
+    {
+        if (_savedQueryId is null)
+        {
+            return;
+        }
+        _savedQueryName = name;
+        OnPropertyChanged(nameof(DisplayName));
+    }
 
     internal string? SavedQueryId => _savedQueryId;
 
@@ -245,8 +257,15 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
 
     private string? _membershipSignature;
     private bool _membershipBaselinePublished;
-    private int _publishFunnelId;
-    private Action? _publishContinuation;
+
+    /// <summary>Funnel outcomes awaiting the next publish — a QUEUE,
+    /// not a slot (red team round 1: a second write before the first
+    /// publish overwrote the slot and the first write's terminal
+    /// outcome was never spoken; a generation-bailed execute orphaned
+    /// it). Every publish path — result, degraded, failed — drains the
+    /// whole queue, so a superseding execute carries its predecessors'
+    /// outcomes. UI-thread only.</summary>
+    private readonly List<(int FunnelId, Action? Continuation)> _pendingFunnelOutcomes = [];
 
     /// <summary>Raised (funnelId, audioSummary) when a funnel-tagged
     /// refresh changed the row-membership multiset — the workspace
@@ -266,9 +285,25 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
             return;
         }
         int generation = Interlocked.Increment(ref _generation);
-        _publishFunnelId = funnelId;
-        _publishContinuation = onPublished;
+        _pendingFunnelOutcomes.Add((funnelId, onPublished));
         StartWork(() => ExecuteBody(generation, (uint)_activeViewIndex));
+    }
+
+    /// <summary>Drain every pending funnel outcome at a publish: the
+    /// LATEST funnel id tags the membership comparison (one deduped
+    /// BasesRefreshUpdated per pass), and every queued continuation
+    /// runs in write order against the rows that just landed.</summary>
+    private (int FunnelId, Action?[] Continuations) DrainFunnelOutcomes()
+    {
+        if (_pendingFunnelOutcomes.Count == 0)
+        {
+            return (0, []);
+        }
+        int funnelId = _pendingFunnelOutcomes[^1].FunnelId;
+        Action?[] continuations =
+            _pendingFunnelOutcomes.Select(outcome => outcome.Continuation).ToArray();
+        _pendingFunnelOutcomes.Clear();
+        return (funnelId, continuations);
     }
 
     private static string MembershipSignatureOf(BasesResultSet result)
@@ -365,78 +400,139 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
     }
 
     /// <summary>The active view's EDITABLE query JSON (as-authored,
-    /// no inherited folding) — the builder's edit-context seed.</summary>
-    public string ViewEditQueryJson()
+    /// no inherited folding) — the builder's edit-context seed. Runs
+    /// on the scheduler: the call shares the FFI lock with executes,
+    /// so a dispatcher caller would freeze behind a slow query
+    /// (INV-6). Continues on the UI context with (json, null) or
+    /// (null, failureMessage).</summary>
+    public void ViewEditQueryJson(Action<string?, string?> continuation)
     {
-        lock (_ffiLock)
+        if (IsShutDown)
         {
-            if (_handle is not { } handle)
-            {
-                throw new InvalidOperationException(
-                    "The base is not open; the builder cannot seed from it.");
-            }
-            return _session.BaseViewEditQueryJson(handle, (uint)_activeViewIndex);
+            continuation(null, "The base is not open.");
+            return;
         }
+        StartWork(() =>
+        {
+            string? json = null;
+            string? failure = null;
+            try
+            {
+                lock (_ffiLock)
+                {
+                    if (_handle is { } handle)
+                    {
+                        json = _session.BaseViewEditQueryJson(
+                            handle, (uint)_activeViewIndex);
+                    }
+                    else
+                    {
+                        failure = "The base is not open.";
+                    }
+                }
+            }
+            catch (VaultException exception)
+            {
+                failure = exception.Message;
+            }
+            Post(() => continuation(json, failure));
+        });
     }
 
     /// <summary>Apply the builder's minimal edit batch (contract C11):
     /// one BaseApplyEdits (validated + serialized whole in core, CAS
-    /// guarded), then views reload + re-execute. Returns false after
-    /// announcing BasesViewSaveFailed.</summary>
-    public bool ApplyBuilderEdits(IReadOnlyList<BaseEdit> edits)
+    /// guarded), then views reload + re-execute. Runs on the scheduler
+    /// (INV-6 — apply-edits shares the FFI lock with executes); every
+    /// refusal path announces BasesViewSaveFailed before the
+    /// UI-context continuation gets false, so a save is never a
+    /// silent no-op (red team round 1).</summary>
+    public void ApplyBuilderEdits(IReadOnlyList<BaseEdit> edits, Action<bool> completed)
     {
-        if (IsSavedQuery || State is BaseLoadState.Failed or BaseLoadState.Loading)
+        if (IsShutDown
+            || IsSavedQuery
+            || State is BaseLoadState.Failed or BaseLoadState.Loading)
         {
-            return false;
+            _announce(new A11yEvent.BasesViewSaveFailed(
+                "the base is not ready to accept edits"));
+            completed(false);
+            return;
         }
         int generation = Interlocked.Increment(ref _generation);
-        BaseViewSummary[] views;
-        try
+        BaseEdit[] batch = edits.ToArray();
+        StartWork(() =>
         {
-            lock (_ffiLock)
+            BaseViewSummary[] views;
+            try
             {
-                if (_handle is not { } handle)
+                lock (_ffiLock)
                 {
-                    return false;
+                    if (_handle is not { } handle)
+                    {
+                        Post(() =>
+                        {
+                            _announce(new A11yEvent.BasesViewSaveFailed(
+                                "the base is not open"));
+                            completed(false);
+                        });
+                        return;
+                    }
+                    _session.BaseApplyEdits(handle, batch);
+                    views = _session.BaseViews(handle);
                 }
-                _session.BaseApplyEdits(handle, edits.ToArray());
-                views = _session.BaseViews(handle);
             }
-        }
-        catch (VaultException failure)
-        {
-            _announce(new A11yEvent.BasesViewSaveFailed(failure.Message));
-            return false;
-        }
-        Views = views;
-        SortState = null;
-        StartWork(() => ExecuteBody(generation, (uint)_activeViewIndex));
-        return true;
+            catch (VaultException failure)
+            {
+                Post(() =>
+                {
+                    _announce(new A11yEvent.BasesViewSaveFailed(failure.Message));
+                    completed(false);
+                });
+                return;
+            }
+            Post(() =>
+            {
+                if (Volatile.Read(ref _generation) == generation)
+                {
+                    Views = views;
+                    SortState = null;
+                }
+                completed(true);
+            });
+            ExecuteBody(generation, (uint)ClampedViewIndex(views.Length), freshViews: views);
+        });
     }
 
-    /// <summary>Mac's slateSortYAML + quoteYAMLString, byte-for-byte.</summary>
+    /// <summary>Mac's slateSortYAML shape.</summary>
     internal static string SlateSortYaml(string columnId, bool ascending) =>
         "- property: " + QuoteYamlString(columnId) + "\n"
         + "  direction: " + (ascending ? "ASC" : "DESC");
 
-    private static string QuoteYamlString(string value)
+    /// <summary>Mac's quoteYAMLString — THE one YAML string quoter for
+    /// the Bases family (the builder shares it). Red team round 1: the
+    /// first port's control-character Replaces were no-ops
+    /// (`.Replace("\n", "\n")`), emitting broken YAML for ids with
+    /// newlines/tabs.</summary>
+    internal static string QuoteYamlString(string value)
     {
         string escaped = value
             .Replace("\\", "\\\\")
-            .Replace("\n", "\n")
-            .Replace("\r", "\r")
-            .Replace("\t", "\t")
-            .Replace("\"", "\\\"");
+            .Replace("\"", "\\\"")
+            .Replace("\n", "\\n")
+            .Replace("\r", "\\r")
+            .Replace("\t", "\\t");
         return "\"" + escaped + "\"";
     }
+
+    /// <summary>The filter the LAST EXECUTE ran with — the where-am-I
+    /// readback describes executed state, never the draft still
+    /// debouncing in the field (red team round 1).</summary>
+    private string? _executedQuickFilter;
 
     /// <summary>slate.bases.whereAmI — core joins the present parts.</summary>
     public A11yEvent WhereAmIEvent() => new A11yEvent.BaseWhereAmI(
         DisplayName,
         ActiveViewName,
-        QuickFilterActive && QuickFilterText.Trim().Length > 0
-            ? QuickFilterText.Trim()
-            : null);
+        QuickFilterActive ? _executedQuickFilter : null);
 
     /// <summary>slate.bases.resultsPopover — the readback rides only
     /// while a filter is active (the mac shape).</summary>
@@ -457,32 +553,56 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
     public void AnnounceEvent(A11yEvent @event) => _announce(@event);
 
     /// <summary>slate.bases.exportCsv/exportMarkdown/copyMarkdown:
-    /// core composes the bytes (contract C14); the CALLER owns
-    /// delivery and its announcement. Returns null after announcing
-    /// the failure.</summary>
-    public string? ExportText(ExportFormat format)
+    /// core composes the bytes (contract C14); the CALLER owns the
+    /// C14 scope choice (includeQuickFilter), delivery, and its
+    /// announcement. Runs on the scheduler — base_export is
+    /// result-proportional and shares the FFI lock with executes, so
+    /// a dispatcher caller would freeze behind a slow query (INV-6;
+    /// red team round 1 blocker). The continuation posts to the UI
+    /// context with null after an announced failure.</summary>
+    public void ExportText(
+        ExportFormat format, bool includeQuickFilter, Action<string?> deliver)
     {
-        if (State is BaseLoadState.Failed or BaseLoadState.Loading)
+        if (IsShutDown || State is BaseLoadState.Failed or BaseLoadState.Loading)
         {
-            return null;
+            deliver(null);
+            return;
         }
-        lock (_ffiLock)
+        StartWork(() =>
         {
-            if (_handle is not { } handle)
-            {
-                return null;
-            }
+            string? text = null;
+            string? failureMessage = null;
             try
             {
-                return _session.BaseExport(
-                    handle, (uint)_activeViewIndex, format, NormalizedFilter());
+                lock (_ffiLock)
+                {
+                    if (_handle is { } handle)
+                    {
+                        text = _session.BaseExport(
+                            handle,
+                            (uint)_activeViewIndex,
+                            format,
+                            includeQuickFilter ? NormalizedFilter() : null);
+                    }
+                }
             }
             catch (VaultException failure)
             {
-                _announce(new A11yEvent.BasesViewExportFailed(failure.Message));
-                return null;
+                failureMessage = failure.Message;
             }
-        }
+            Post(() =>
+            {
+                if (IsShutDown)
+                {
+                    return;
+                }
+                if (failureMessage is { } message)
+                {
+                    _announce(new A11yEvent.BasesViewExportFailed(message));
+                }
+                deliver(text);
+            });
+        });
     }
 
     /// <summary>The surface-request seams (the mac token pattern):
@@ -543,6 +663,11 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         State = BaseLoadState.Loading;
         StateMessage = null;
         ClearQuickFilterState();
+        // The reopen discards the engine's transient sort with the
+        // handle, so the published indicator must fall with it — a
+        // retained tuple would render a sort the rows don't have and
+        // let SaveSortToView persist the fiction (red team round 1).
+        SortState = null;
         StartWork(() => LoadBody(generation));
     }
 
@@ -591,7 +716,12 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                 ActiveViewIndex = 0;
             }
         });
-        ExecuteBody(generation, (uint)ClampedViewIndex(views.Length));
+        // The fresh view list rides as a PARAMETER: the posted Views
+        // assignment above may not have landed yet, and reading the
+        // field here published the wrong "no executable views" banner
+        // on every first asynchronous load (red team round 1 blocker —
+        // masked by synchronous test mode, where Post runs inline).
+        ExecuteBody(generation, (uint)ClampedViewIndex(views.Length), freshViews: views);
     }
 
     private int ClampedViewIndex(int viewCount) =>
@@ -629,23 +759,29 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         {
             lock (_ffiLock)
             {
-                if (Volatile.Read(ref _generation) != generation
-                    || _handle is not { } handle)
+                // The clear runs even when a newer generation has
+                // superseded this switch (red team round 1: gating it
+                // let a rapid double-switch skip the clear, and
+                // returning to the old view resurrected an unannounced
+                // order). Clearing is idempotent, and on a reopened
+                // handle it is a no-op.
+                if (_handle is { } handle)
                 {
-                    return;
-                }
-                try
-                {
-                    // Single-slot engine sort (contract C6): leaving a
-                    // view clears its transient sort so returning to it
-                    // never resurrects an unannounced order.
-                    _session.BaseSetTransientSort(
-                        handle, (uint)previousView, columnId: null, ascending: true);
-                }
-                catch (VaultException)
-                {
-                    // A refused clear on a dying handle is survivable;
-                    // the execute below reports the real condition.
+                    try
+                    {
+                        // Single-slot engine sort (contract C6):
+                        // leaving a view clears its transient sort so
+                        // returning to it never resurrects an
+                        // unannounced order.
+                        _session.BaseSetTransientSort(
+                            handle, (uint)previousView, columnId: null, ascending: true);
+                    }
+                    catch (VaultException)
+                    {
+                        // A refused clear on a dying handle is
+                        // survivable; the execute below reports the
+                        // real condition.
+                    }
                 }
             }
             ExecuteBody(generation, (uint)index);
@@ -653,7 +789,10 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
     }
 
     private void ExecuteBody(
-        int generation, uint view, bool announceQuickFilterCount = false)
+        int generation,
+        uint view,
+        bool announceQuickFilterCount = false,
+        IReadOnlyList<BaseViewSummary>? freshViews = null)
     {
         // Captured once per body: the executed filter and the ACTIVE
         // flag must describe the same run (contract C5).
@@ -669,7 +808,8 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                 {
                     return;
                 }
-                summary = _views.Count > view ? _views[(int)view] : null;
+                IReadOnlyList<BaseViewSummary> viewList = freshViews ?? _views;
+                summary = viewList.Count > view ? viewList[(int)view] : null;
                 using var cancel = new CancelToken();
                 _executeCancel = cancel;
                 try
@@ -694,14 +834,14 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                 // Previous rows and handle stay in place — a failed
                 // refresh must never blank the pane (contract C9).
                 PublishDegraded(BasePhrase.ExecuteFailed(exception));
-                // The write-outcome continuation still runs: the
-                // outcome describes the WRITE (which landed), and the
+                // The write-outcome continuations still run: each
+                // outcome describes its WRITE (which landed), and the
                 // retained rows are what the row-presence check reads
                 // — the mac degraded-refresh shape.
-                _publishFunnelId = 0;
-                Action? failedContinuation = _publishContinuation;
-                _publishContinuation = null;
-                failedContinuation?.Invoke();
+                foreach (Action? continuation in DrainFunnelOutcomes().Continuations)
+                {
+                    continuation?.Invoke();
+                }
             });
             return;
         }
@@ -712,6 +852,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                 return;
             }
             QuickFilterActive = quickFilter is not null;
+            _executedQuickFilter = quickFilter;
             PublishResult(result, summary);
             if (announceQuickFilterCount)
             {
@@ -762,8 +903,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
             StateMessage = null;
         }
         string signature = MembershipSignatureOf(result);
-        int funnelId = _publishFunnelId;
-        _publishFunnelId = 0;
+        (int funnelId, Action?[] continuations) = DrainFunnelOutcomes();
         if (funnelId != 0
             && _membershipBaselinePublished
             && !string.Equals(_membershipSignature, signature, StringComparison.Ordinal))
@@ -773,9 +913,10 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         _membershipSignature = signature;
         _membershipBaselinePublished = true;
         ResultPublished?.Invoke(this, EventArgs.Empty);
-        Action? continuation = _publishContinuation;
-        _publishContinuation = null;
-        continuation?.Invoke();
+        foreach (Action? continuation in continuations)
+        {
+            continuation?.Invoke();
+        }
     }
 
     private void PublishDegraded(string message)
@@ -791,6 +932,12 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         SortState = null;
         Result = null;
         ResultPublished?.Invoke(this, EventArgs.Empty);
+        // Terminal for this load: pending write outcomes still speak
+        // (the writes landed; only the refresh died).
+        foreach (Action? continuation in DrainFunnelOutcomes().Continuations)
+        {
+            continuation?.Invoke();
+        }
     }
 
     /// <summary>
@@ -849,8 +996,18 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                 try
                 {
                     using var cancel = new CancelToken();
-                    result = _session.BaseExecute(
-                        handle, view, ThisPath, NormalizedFilter(), cancel);
+                    // Registered like ExecuteBody's token so Shutdown
+                    // can trip a long sort execute too.
+                    _executeCancel = cancel;
+                    try
+                    {
+                        result = _session.BaseExecute(
+                            handle, view, ThisPath, NormalizedFilter(), cancel);
+                    }
+                    finally
+                    {
+                        _executeCancel = null;
+                    }
                 }
                 catch (VaultException executeFailure)
                 {
@@ -887,6 +1044,14 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                             return;
                         }
                         PublishDegraded(BasePhrase.ExecuteFailed(executeFailure));
+                        // A rolled-back engine with a STALE previous
+                        // tuple (column set shrank underneath it)
+                        // cleared the engine sort — the published
+                        // indicator must fall with it (INV-3).
+                        if (previousSort is not null && previousColumnId is null)
+                        {
+                            SortState = null;
+                        }
                     });
                     return;
                 }
@@ -916,6 +1081,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
     {
         base.Shutdown();
         Interlocked.Increment(ref _generation);
+        _pendingFunnelOutcomes.Clear();
         // An in-flight execute holds the lock; trip its token so
         // shutdown does not wait out a long query.
         try
@@ -926,10 +1092,35 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         {
             // The body's using-block won the race; the execute is over.
         }
-        lock (_ffiLock)
+        if (IsSynchronousForTests)
         {
-            CloseHandleLocked();
+            lock (_ffiLock)
+            {
+                CloseHandleLocked();
+            }
+            return;
         }
+        // The close waits out whatever call still holds the lock, and
+        // some (apply-edits, views, export) carry no cancel token — so
+        // it must not run on the dispatcher (INV-6; red team round 1).
+        // No new handle can appear behind it: every open is inside a
+        // generation check that the bump above already invalidated.
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                lock (_ffiLock)
+                {
+                    CloseHandleLocked();
+                }
+            }
+            catch (Exception exception) when (exception
+                is VaultException or ObjectDisposedException)
+            {
+                // Teardown race: the session died first — the handle
+                // died with it.
+            }
+        });
     }
 
     private void CloseHandleLocked()

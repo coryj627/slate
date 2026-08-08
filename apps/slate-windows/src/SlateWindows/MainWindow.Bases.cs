@@ -30,6 +30,76 @@ public partial class MainWindow
     private WorkspaceViewModel? BasesWorkspace =>
         (DataContext as VaultLifecycleViewModel)?.Workspace;
 
+    // --- Overlay focus lifecycle (the W4-5 citation-sheet pattern:
+    // capture at open, initial focus when ready, Escape closes,
+    // restore on close — red team round 1: both Bases overlays
+    // appeared without moving focus and closed into limbo). ---
+
+    private IInputElement? _focusBeforeBuilder;
+    private IInputElement? _focusBeforeDashboardEditor;
+
+    private void WireWorkspaceBases(WorkspaceViewModel workspace) =>
+        workspace.PropertyChanged += Workspace_BasesSheetChanged;
+
+    private void UnwireWorkspaceBases(WorkspaceViewModel workspace) =>
+        workspace.PropertyChanged -= Workspace_BasesSheetChanged;
+
+    private void Workspace_BasesSheetChanged(
+        object? sender, System.ComponentModel.PropertyChangedEventArgs eventArgs)
+    {
+        if (sender is not WorkspaceViewModel workspace)
+        {
+            return;
+        }
+        switch (eventArgs.PropertyName)
+        {
+            case nameof(WorkspaceViewModel.BaseQueryBuilderSheet):
+                if (workspace.BaseQueryBuilderSheet is not null)
+                {
+                    _focusBeforeBuilder = Keyboard.FocusedElement;
+                    FocusWhenReady(() => BuilderCombinatorBox.Focus());
+                }
+                else
+                {
+                    RestoreFocusTo(_focusBeforeBuilder);
+                    _focusBeforeBuilder = null;
+                }
+                break;
+            case nameof(WorkspaceViewModel.DashboardEditorSheet):
+                if (workspace.DashboardEditorSheet is not null)
+                {
+                    _focusBeforeDashboardEditor = Keyboard.FocusedElement;
+                    FocusWhenReady(() => DashboardEditorNameBox.Focus());
+                }
+                else
+                {
+                    RestoreFocusTo(_focusBeforeDashboardEditor);
+                    _focusBeforeDashboardEditor = null;
+                }
+                break;
+            default:
+                break;
+        }
+    }
+
+    private void BaseQueryBuilderOverlay_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape)
+        {
+            BasesWorkspace?.CloseQueryBuilder();
+            e.Handled = true;
+        }
+    }
+
+    private void DashboardEditorOverlay_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape)
+        {
+            BasesWorkspace?.CloseDashboardEditor();
+            e.Handled = true;
+        }
+    }
+
     private SavedQuerySummary? SelectedSavedQuery =>
         QueriesSavedList.SelectedItem as SavedQuerySummary;
 
@@ -83,6 +153,9 @@ public partial class MainWindow
         {
             QueriesRenameRow.Visibility = Visibility.Collapsed;
             _pendingRenameSavedQueryId = null;
+            // Focus returns to the list the rename came from — the
+            // collapsed row must not strand focus (red team round 1).
+            _ = QueriesSavedList.Focus();
             e.Handled = true;
             return;
         }
@@ -93,6 +166,7 @@ public partial class MainWindow
         BasesWorkspace?.RenameSavedQuery(id, QueriesRenameBox.Text);
         QueriesRenameRow.Visibility = Visibility.Collapsed;
         _pendingRenameSavedQueryId = null;
+        _ = QueriesSavedList.Focus();
         e.Handled = true;
     }
 

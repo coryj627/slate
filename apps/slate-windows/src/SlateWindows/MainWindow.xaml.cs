@@ -246,6 +246,7 @@ public partial class MainWindow : Window
             _observedWorkspace.EditorPaneFocusRequested -= Workspace_EditorPaneFocusRequested;
             UnwireWorkspaceProperties(_observedWorkspace);
             UnwireWorkspaceCitations(_observedWorkspace);
+            UnwireWorkspaceBases(_observedWorkspace);
         }
 
         _observedWorkspace = workspace;
@@ -254,6 +255,7 @@ public partial class MainWindow : Window
             workspace.EditorPaneFocusRequested += Workspace_EditorPaneFocusRequested;
             WireWorkspaceProperties(workspace);
             WireWorkspaceCitations(workspace);
+            WireWorkspaceBases(workspace);
         }
     }
 

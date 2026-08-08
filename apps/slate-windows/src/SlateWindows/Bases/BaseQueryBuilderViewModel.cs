@@ -193,22 +193,22 @@ internal sealed class BaseQueryBuilderViewModel : PanelWorkScheduler
     }
 
     /// <summary>Edit a view's filters (slate.bases.editViewFilters):
-    /// starts from the view's own EDIT query JSON.</summary>
+    /// starts from the view's own EDIT query JSON, fetched by the
+    /// caller off the dispatcher (the document's ViewEditQueryJson
+    /// seam — INV-6).</summary>
     public static BaseQueryBuilderViewModel ForView(
         VaultSession session,
-        BaseDocumentViewModel document,
+        string editQueryJson,
+        string viewPath,
+        int viewIndex,
         Action<A11yEvent> announce,
-        bool synchronousForTests = false)
-    {
-        string json = document.ViewEditQueryJson();
-        return new BaseQueryBuilderViewModel(
+        bool synchronousForTests = false) =>
+        new(
             session,
-            (JsonObject)JsonNode.Parse(json)!,
-            new BuilderEditContext(
-                document.Path, document.ActiveViewIndex, null, null),
+            (JsonObject)JsonNode.Parse(editQueryJson)!,
+            new BuilderEditContext(viewPath, viewIndex, null, null),
             announce,
             synchronousForTests);
-    }
 
     public static BaseQueryBuilderViewModel ForSavedQuery(
         VaultSession session,
@@ -347,8 +347,12 @@ internal sealed class BaseQueryBuilderViewModel : PanelWorkScheduler
 
     /// <summary>Rebuild the document's filters/sort/formulas from the
     /// rows. Returns false (with the reason in SaveError) when the
-    /// preserved row coexists with new conditions — semantics are
-    /// never silently combined (C11/D-18).</summary>
+    /// preserved row coexists with new conditions, and when ANY
+    /// non-blank row fails validation — an invalid row must never be
+    /// silently dropped from what gets saved (C11: semantics are
+    /// never silently rewritten; red team round 1 found the drop
+    /// could erase a view's filters while announcing success). Blank
+    /// rows contribute nothing and block nothing (the mac rule).</summary>
     public bool SyncDocument()
     {
         var stmtNodes = new List<JsonNode>();
@@ -372,6 +376,12 @@ internal sealed class BaseQueryBuilderViewModel : PanelWorkScheduler
                             ["Stmt"] = JsonNode.Parse(memberJson),
                         });
                     }
+                    else if (member.Expression.Trim().Length > 0)
+                    {
+                        SaveError = member.ValidationMessage
+                            ?? "Group condition invalid.";
+                        return false;
+                    }
                 }
                 if (members.Count > 0)
                 {
@@ -388,6 +398,11 @@ internal sealed class BaseQueryBuilderViewModel : PanelWorkScheduler
                 {
                     ["Stmt"] = JsonNode.Parse(exprJson),
                 });
+            }
+            else if (row.Expression.Trim().Length > 0)
+            {
+                SaveError = row.ValidationMessage ?? "Condition invalid.";
+                return false;
             }
         }
         if (preserved is not null && stmtNodes.Count > 0)
@@ -450,7 +465,16 @@ internal sealed class BaseQueryBuilderViewModel : PanelWorkScheduler
             {
                 if (!ValidateFormula(formula))
                 {
-                    continue;
+                    // Fully blank rows contribute nothing; a TYPED
+                    // formula that fails must refuse the save, never
+                    // vanish from it (red team round 1).
+                    if (formula.Expression.Trim().Length == 0
+                        && formula.Name.Trim().Length == 0)
+                    {
+                        continue;
+                    }
+                    SaveError = formula.ValidationMessage ?? "Formula invalid.";
+                    return false;
                 }
                 BaseExpressionValidation validation =
                     _session.ValidateBaseExpression(formula.Expression.Trim());
@@ -529,6 +553,12 @@ internal sealed class BaseQueryBuilderViewModel : PanelWorkScheduler
                 AnnouncePreview();
                 PreviewPublished?.Invoke(this, EventArgs.Empty);
             });
+            return;
+        }
+        catch (ObjectDisposedException)
+        {
+            // The session died under the preview (vault teardown mid
+            // overlay); there is no surface left to tell.
             return;
         }
         Post(() =>
@@ -668,14 +698,19 @@ internal sealed class BaseQueryBuilderViewModel : PanelWorkScheduler
 
     /// <summary>Save to the edited view (contract C11): minimal
     /// BaseEdits over the document's own handle — filters from the
-    /// EXPRESSION rows as the .base and/or YAML lists, sort via the
-    /// slate-sort fragment, formulas via SetFormula. Refuses when the
-    /// preserved row coexists with new conditions.</summary>
-    public bool SaveToView(BaseDocumentViewModel target)
+    /// EXPRESSION rows as the .base and/or YAML lists, formulas via
+    /// SetFormula. Refuses when the preserved row coexists with new
+    /// conditions, and when ANY typed row fails validation — a typo
+    /// must never save less than what the user wrote (red team round
+    /// 1: the silent drop could REMOVE a view's filters while
+    /// announcing success). Every outcome is announced; the
+    /// continuation runs on the UI context.</summary>
+    public void SaveToView(BaseDocumentViewModel target, Action<bool> completed)
     {
         if (Context.ViewPath is null)
         {
-            return false;
+            completed(false);
+            return;
         }
         var edits = new List<BaseEdit>();
         var expressions = new List<(bool IsGroup, List<string> Members)>();
@@ -689,11 +724,21 @@ internal sealed class BaseQueryBuilderViewModel : PanelWorkScheduler
             }
             if (row.IsGroup)
             {
-                var members = row.GroupMembers!
-                    .Where(ValidateRow)
-                    .Select(member => member.Expression.Trim())
-                    .Where(expression => expression.Length > 0)
-                    .ToList();
+                var members = new List<string>();
+                foreach (BuilderConditionRow member in row.GroupMembers!)
+                {
+                    if (ValidateRow(member))
+                    {
+                        members.Add(member.Expression.Trim());
+                    }
+                    else if (member.Expression.Trim().Length > 0)
+                    {
+                        RefuseSaveToView(
+                            member.ValidationMessage ?? "group condition invalid",
+                            completed);
+                        return;
+                    }
+                }
                 if (members.Count > 0)
                 {
                     expressions.Add((true, members));
@@ -704,18 +749,28 @@ internal sealed class BaseQueryBuilderViewModel : PanelWorkScheduler
             {
                 expressions.Add((false, [row.Expression.Trim()]));
             }
+            else if (row.Expression.Trim().Length > 0)
+            {
+                RefuseSaveToView(
+                    row.ValidationMessage ?? "condition invalid", completed);
+                return;
+            }
         }
         if (preserved is not null && expressions.Count > 0)
         {
-            _announce(new A11yEvent.BasesViewSaveFailed(
+            RefuseSaveToView(
                 "existing filters cannot be combined with new conditions; "
-                + "remove the preserved row first"));
-            return false;
+                + "remove the preserved row first",
+                completed);
+            return;
         }
         if (preserved is null)
         {
             if (expressions.Count == 0)
             {
+                // Reached only when every row is deliberately blank or
+                // deleted — an intentional clear-all (typos refuse
+                // above, so a mistake can no longer strip the view).
                 edits.Add(new BaseEdit.RemoveViewKey(
                     (uint)Context.ViewIndex, "filters"));
             }
@@ -732,18 +787,36 @@ internal sealed class BaseQueryBuilderViewModel : PanelWorkScheduler
                 edits.Add(new BaseEdit.SetFormula(
                     formula.Name.Trim(), formula.Expression.Trim()));
             }
+            else if (formula.Expression.Trim().Length > 0
+                || formula.Name.Trim().Length > 0)
+            {
+                RefuseSaveToView(
+                    formula.ValidationMessage ?? "formula invalid", completed);
+                return;
+            }
         }
         if (edits.Count == 0)
         {
             _announce(new A11yEvent.BasesBuilderSaved());
-            return true;
+            completed(true);
+            return;
         }
-        bool applied = target.ApplyBuilderEdits(edits);
-        if (applied)
+        target.ApplyBuilderEdits(edits, applied =>
         {
-            _announce(new A11yEvent.BasesBuilderSaved());
-        }
-        return applied;
+            if (applied)
+            {
+                SaveError = string.Empty;
+                _announce(new A11yEvent.BasesBuilderSaved());
+            }
+            completed(applied);
+        });
+    }
+
+    private void RefuseSaveToView(string detail, Action<bool> completed)
+    {
+        SaveError = char.ToUpperInvariant(detail[0]) + detail[1..];
+        _announce(new A11yEvent.BasesViewSaveFailed(detail));
+        completed(false);
     }
 
     /// <summary>The .base filters YAML — expression strings in an
@@ -779,11 +852,18 @@ internal sealed class BaseQueryBuilderViewModel : PanelWorkScheduler
         return string.Join("\n", lines);
     }
 
+    /// <summary>The ONE shared YAML quoter (red team round 1: two
+    /// hand-rolled copies had diverged, one with no-op escapes).</summary>
     private static string QuoteYaml(string value) =>
-        "\"" + value
-            .Replace("\\", "\\\\")
-            .Replace("\n", "\\n")
-            .Replace("\r", "\\r")
-            .Replace("\t", "\\t")
-            .Replace("\"", "\\\"") + "\"";
+        BaseDocumentViewModel.QuoteYamlString(value);
+
+    /// <summary>A closed overlay must never publish or announce a
+    /// late preview (red team round 1: the generation was not bumped,
+    /// so an in-flight preview spoke into whatever surface came
+    /// next).</summary>
+    internal override void Shutdown()
+    {
+        base.Shutdown();
+        Interlocked.Increment(ref _previewGeneration);
+    }
 }

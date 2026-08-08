@@ -44,6 +44,20 @@ public sealed class BasesBuilderTests : IDisposable
         BaseQueryBuilderViewModel.NewQuery(
             _session, _announced.Add, synchronousForTests: true);
 
+    /// <summary>The command route's shape: fetch the view's edit JSON
+    /// through the document seam (inline in synchronous mode), then
+    /// construct the edit-context builder.</summary>
+    private BaseQueryBuilderViewModel ForViewBuilder(BaseDocumentViewModel document)
+    {
+        string? json = null;
+        string? failure = null;
+        document.ViewEditQueryJson((fetched, error) => (json, failure) = (fetched, error));
+        Assert.True(json is not null, $"ViewEditQueryJson failed: {failure}");
+        return BaseQueryBuilderViewModel.ForView(
+            _session, json!, document.Path, document.ActiveViewIndex,
+            _announced.Add, synchronousForTests: true);
+    }
+
     [Fact]
     public void NewQueryPreviewsFromACoreSeed()
     {
@@ -89,8 +103,7 @@ public sealed class BasesBuilderTests : IDisposable
             _session, _fixture.Root, () => [], _announced.Add,
             startInteractionBackgroundWork: false);
         BaseDocumentViewModel document = workspace.BaseDocumentFor("Filtered.base");
-        var builder = BaseQueryBuilderViewModel.ForView(
-            _session, document, _announced.Add, synchronousForTests: true);
+        BaseQueryBuilderViewModel builder = ForViewBuilder(document);
 
         // The existing filters entered as ONE preserved row.
         BuilderConditionRow preserved = Assert.Single(builder.ConditionRows);
@@ -120,19 +133,19 @@ public sealed class BasesBuilderTests : IDisposable
             _session, _fixture.Root, () => [], _announced.Add,
             startInteractionBackgroundWork: false);
         BaseDocumentViewModel document = workspace.BaseDocumentFor("Filtered.base");
-        var builder = BaseQueryBuilderViewModel.ForView(
-            _session, document, _announced.Add, synchronousForTests: true);
+        BaseQueryBuilderViewModel builder = ForViewBuilder(document);
         builder.RemoveCondition(builder.ConditionRows.Single());
         BuilderConditionRow row = builder.AddCondition();
         row.Expression = "file.hasTag(\"test\")";
         _announced.Clear();
 
-        bool savedToView = builder.SaveToView(document);
+        bool? savedToView = null;
+        builder.SaveToView(document, saved => savedToView = saved);
         string failureDetail = string.Join(
             "; ",
             _announced.OfType<A11yEvent.BasesViewSaveFailed>()
                 .Select(failed => failed.Detail));
-        Assert.True(savedToView, $"SaveToView failed: {failureDetail}");
+        Assert.True(savedToView == true, $"SaveToView failed: {failureDetail}");
 
         Assert.Contains(_announced, e => e is A11yEvent.BasesBuilderSaved);
         string content = File.ReadAllText(

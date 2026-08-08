@@ -223,6 +223,12 @@ internal sealed class DashboardEditorViewModel : BindableBase
     /// <summary>Null for a NEW dashboard.</summary>
     public string? DashboardId { get; }
 
+    /// <summary>The registry timestamp captured at editor open — the
+    /// C12 stale-section guard's baseline: a save re-reads and
+    /// refuses with BasesDashboardSectionStale when the dashboard
+    /// changed underneath the editor.</summary>
+    internal long OpenedModifiedAtMs { get; set; }
+
     public string Name
     {
         get => _name;

@@ -193,9 +193,10 @@ LEAF_DELIVERED = {
         "FlaUI `BasesSurfaces_GridBuilderAndLeaves_AreClean`"),
     "basesDock": (
         "implemented 2026-08-08 (#738): workspace dock target following "
-        "the active note (this_path, 500 ms debounce) over a read-only "
-        "`BaseSurfaceView`; `BasesQueriesTests` + FlaUI "
-        "`BasesSurfaces_GridBuilderAndLeaves_AreClean`"),
+        "the active note (this_path, 500 ms debounce) over read-only "
+        "`BaseSurfaceView`/`DashboardSurfaceView`; `BasesQueriesTests` + "
+        "FlaUI `BasesSurfaces_GridBuilderAndLeaves_AreClean` (docks a "
+        "base from the leaf and axe-scans the revealed BasesDockGrid)"),
 }
 
 # Milestones unshipped at the 2026-07-19 snapshot: their rows drop out

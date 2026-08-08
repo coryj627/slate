@@ -353,6 +353,15 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         Item = item;
         _text = string.Empty;
         _contentHash = null;
+        // Navigation reuses the tab IN PLACE, so the previous item's
+        // Bases/dashboard documents must not survive the replacement
+        // (red team round 1: base B's title over base A's rows). The
+        // caller re-attaches through AttachBaseDocumentIfNeeded and
+        // releases the orphaned documents.
+        Base = null;
+        Dashboard = null;
+        OnPropertyChanged(nameof(Base));
+        OnPropertyChanged(nameof(Dashboard));
         // The staleness verdict belongs to the PREVIOUS note
         // (adversarial round 10): a reused current tab must not make
         // the replacement note inherit it — every identity guard
@@ -407,6 +416,14 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         _editorInteractions?.InvalidateExternalState();
         IsMissingFromDisk = false;
         Status = string.Empty;
+        NotifyItemChanged();
+    }
+
+    /// <summary>Registry-item rename (saved queries, dashboards): the
+    /// tab keeps its identity (Id) and retitles.</summary>
+    public void RetargetName(string name)
+    {
+        Item = Item with { Name = name };
         NotifyItemChanged();
     }
 
@@ -585,7 +602,27 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     // pauses on the true "left the surface" signal instead
     // (ReadingContentViewModel.OnSurfaceDetached, raised by the
     // surface rebind that hides it), and Dispose still tears it down.
-    public void Deactivate() => _editorInteractions?.CloseTransientUi();
+    public void Deactivate()
+    {
+        _editorInteractions?.CloseTransientUi();
+        // C5's fourth transiency leg (red team round 1: unimplemented):
+        // activating a different tab clears the quick filter. The
+        // shared document re-executes unfiltered SILENTLY (INV-4) —
+        // Refresh, never ApplyQuickFilter, which would announce a
+        // count nobody asked for.
+        if (Base is { } baseDocument)
+        {
+            bool executedFilter = baseDocument.QuickFilterActive;
+            if (executedFilter || baseDocument.QuickFilterText.Length > 0)
+            {
+                baseDocument.ClearQuickFilterState();
+                if (executedFilter)
+                {
+                    baseDocument.Refresh();
+                }
+            }
+        }
+    }
 
     /// <summary>Toggle a task through this tab's guarded splice path.
     /// <paramref name="completion"/> (adversarial round 3) fires on
@@ -1124,6 +1161,15 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         OnPropertyChanged(nameof(IsPlaceholder));
         OnPropertyChanged(nameof(KindLabel));
         OnPropertyChanged(nameof(PlaceholderText));
+        // The item's KIND can change on an in-place replacement
+        // (note → base, base → dashboard, …); the surface-visibility
+        // bindings must re-evaluate or the wrong surface stays up
+        // (red team round 1 blocker).
+        OnPropertyChanged(nameof(IsBase));
+        OnPropertyChanged(nameof(IsSavedQueryTab));
+        OnPropertyChanged(nameof(IsDashboardTab));
+        OnPropertyChanged(nameof(IsBaseVisible));
+        OnPropertyChanged(nameof(IsDashboardVisible));
     }
 }
 

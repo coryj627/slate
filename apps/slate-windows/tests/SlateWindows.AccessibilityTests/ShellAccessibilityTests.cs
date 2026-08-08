@@ -3000,12 +3000,15 @@ public sealed class ShellAccessibilityTests
     }
 
     /// <summary>
-    /// W4-6 (#738) §W-C journey: the .base tab (grid identity, headers,
-    /// cells, quick filter via the grid-scoped Ctrl+F, core-executed
-    /// sort via Ctrl+Alt+S) and the Queries leaf, each axe-scanned.
-    /// Every element asserted here is one the contracts name; the
-    /// degraded-vault twin lives with the unit facts (banner wording),
-    /// because a broken .base still opens a healthy shell.
+    /// W4-6 (#738) §W-C journey: the .base tab (grid identity, §8.7
+    /// headers, quick filter via the grid-scoped Ctrl+F with Escape
+    /// clearing), the Queries leaf, the DOCK leaf (dock a base file
+    /// from the leaf, distinct BasesDockGrid id), and the builder
+    /// overlay (dialog focus-on-open, Escape close) — each surface
+    /// axe-scanned. Every element asserted here is one the contracts
+    /// name; the degraded-vault twin lives with the unit facts
+    /// (banner wording), because a broken .base still opens a healthy
+    /// shell.
     /// </summary>
     [Fact]
     [Trait("gate", "W-C")]
@@ -3147,6 +3150,53 @@ public sealed class ShellAccessibilityTests
             // its peered children.
             _ = WaitForElement(window, "QueriesRefresh", TimeSpan.FromSeconds(10));
             AssertAxeClean(process, "bases-queries-leaf");
+
+            // Dock a base file from the leaf: the dock leaf reveals
+            // with its OWN read-only surface (BasesDockGrid — the
+            // D-12 distinct-id rule) and scans clean. This is the
+            // basesDock LEAF_DELIVERED evidence.
+            AutomationElement baseFilesList = WaitForElement(
+                window, "QueriesBaseFilesList", TimeSpan.FromSeconds(10));
+            AutomationElement baseFileItem = baseFilesList
+                .FindAllDescendants(
+                    automation.ConditionFactory.ByControlType(ControlType.ListItem))
+                .FirstOrDefault()
+                ?? throw new Xunit.Sdk.XunitException(
+                    "No base files in the queries leaf.");
+            baseFileItem.Patterns.SelectionItem.Pattern.Select();
+            AutomationElement dockButton = WaitForElement(
+                window, "QueriesDockBaseFile", TimeSpan.FromSeconds(10));
+            dockButton.Patterns.Invoke.Pattern.Invoke();
+            _ = WaitForElement(window, "BasesDockGrid", TimeSpan.FromSeconds(15));
+            AssertAxeClean(process, "bases-dock-leaf");
+
+            // The builder overlay opens as a DIALOG with focus moved
+            // inside, scans clean, and Escape closes it (the W4-5
+            // overlay lifecycle).
+            AutomationElement newQuery = WaitForMenuItem(
+                window, "BaseMenu", "BasesNewQueryMenuItem",
+                TimeSpan.FromSeconds(10));
+            newQuery.Patterns.Invoke.Pattern.Invoke();
+            AutomationElement builderSheet = WaitForElement(
+                window, "BaseQueryBuilderSheet", TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => builderSheet
+                        .FindAllDescendants()
+                        .Any(descendant =>
+                            descendant.Properties.HasKeyboardFocus.ValueOrDefault),
+                    TimeSpan.FromSeconds(10)),
+                "the builder overlay opened without moving focus into the dialog");
+            AssertAxeClean(process, "bases-builder-overlay");
+            Keyboard.Press(VirtualKeyShort.ESCAPE);
+            Keyboard.Release(VirtualKeyShort.ESCAPE);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => window.FindFirstDescendant(
+                        automation.ConditionFactory.ByAutomationId(
+                            "BuilderCombinator")) is null,
+                    TimeSpan.FromSeconds(10)),
+                "Escape did not close the builder overlay");
         }
         finally
         {

@@ -884,7 +884,15 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         }
         bool relevant = _publishedEmbedDependencies.Contains(path)
             || (_publishedHasUnresolvedEmbeds
-                && kind is FileChangeKind.Created or FileChangeKind.Renamed);
+                && kind is FileChangeKind.Created or FileChangeKind.Renamed)
+            // A published BASE card depends on the query's whole
+            // membership, which no dependency list can enumerate — any
+            // markdown change may add/remove rows (red team round 1:
+            // a cell write left the card's counts stale). The digest
+            // memo makes a no-op re-project cheap, and the debounce
+            // coalesces bursts.
+            || (_publishedHasBaseEmbeds
+                && path.EndsWith(".md", StringComparison.OrdinalIgnoreCase));
         if (!relevant)
         {
             return;
@@ -924,12 +932,19 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         }
     }
 
+    private bool _publishedHasBaseEmbeds;
+
     private void CollectEmbedDependencies(ReadingEmbedArtifact[] embeds)
     {
         _publishedEmbedDependencies.Clear();
         _publishedHasUnresolvedEmbeds = false;
+        _publishedHasBaseEmbeds = false;
         foreach (ReadingEmbedArtifact embed in embeds)
         {
+            if (embed.BaseProjection is not null)
+            {
+                _publishedHasBaseEmbeds = true;
+            }
             if (embed.Resolution is null)
             {
                 _publishedHasUnresolvedEmbeds = true;
@@ -1456,6 +1471,25 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             {
                 DigestField(hash, embed.Resolution.Truncated ? "truncated" : "complete");
                 DigestResolution(hash, embed.Resolution.Resolution);
+            }
+            // The base card's projection is identity too (red team
+            // round 1: omitting it meant a membership change with an
+            // otherwise-identical note skipped the rebuild and the
+            // card kept stale counts).
+            if (embed.BaseProjection is { } baseProjection)
+            {
+                DigestField(hash, baseProjection.TargetPath);
+                DigestField(hash, baseProjection.AudioSummary);
+                DigestField(hash, baseProjection.ShownCount.ToString(
+                    System.Globalization.CultureInfo.InvariantCulture));
+                DigestField(hash, baseProjection.TotalCount.ToString(
+                    System.Globalization.CultureInfo.InvariantCulture));
+                foreach (string warning in baseProjection.Warnings)
+                {
+                    DigestField(hash, warning);
+                }
+                DigestField(hash, baseProjection.ViewError ?? string.Empty);
+                DigestField(hash, baseProjection.ExecuteError ?? string.Empty);
             }
             hash.AppendData(BlockSeparator);
         }

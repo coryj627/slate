@@ -30,9 +30,13 @@ internal sealed partial class WorkspaceViewModel
 {
     /// <summary>The active tab's Bases document, or null — every
     /// slate.bases.* command gates on this (contract C15); menu items
-    /// disable through the shared CanExecute.</summary>
+    /// disable through the shared CanExecute. Keyed on the ATTACHED
+    /// document, not the tab kind: saved-query tabs carry a Bases
+    /// document too (the mac activeBaseDocument serves both sources;
+    /// red team round 1 found the IsBase-only gate left every command
+    /// dead on saved-query tabs).</summary>
     internal BaseDocumentViewModel? ActiveBaseDocument =>
-        ActiveGroup.ActiveTab is { IsBase: true } tab ? tab.Base : null;
+        ActiveGroup.ActiveTab?.Base;
 
     private RelayCommand? _basesNewQueryCommand;
     private RelayCommand? _basesEditViewFiltersCommand;
@@ -74,31 +78,54 @@ internal sealed partial class WorkspaceViewModel
         _basesNewQueryCommand ??= new RelayCommand(
             _ =>
             {
-                BaseQueryBuilderSheet = BaseQueryBuilderViewModel.NewQuery(
-                    _session, _announce,
-                    synchronousForTests: !_startInteractionBackgroundWork);
+                try
+                {
+                    BaseQueryBuilderSheet = BaseQueryBuilderViewModel.NewQuery(
+                        _session, _announce,
+                        synchronousForTests: !_startInteractionBackgroundWork);
+                }
+                catch (VaultException failure)
+                {
+                    // The core seed (OpenDql) refused — an unhandled
+                    // dispatcher exception otherwise (red team round 1).
+                    _announce(new A11yEvent.BasesFiltersOpenFailed(failure.Message));
+                    return;
+                }
                 _announce(new A11yEvent.BasesNewQueryBuilder());
             },
             _ => true);
 
     public System.Windows.Input.ICommand BasesEditViewFiltersCommand =>
         _basesEditViewFiltersCommand ??= BasesCommand(document =>
-        {
-            try
+            // The edit-JSON fetch shares the FFI lock with executes,
+            // so it runs off the dispatcher and the overlay opens in
+            // the continuation (INV-6; red team round 1).
+            document.ViewEditQueryJson((json, failure) =>
             {
-                BaseQueryBuilderSheet = BaseQueryBuilderViewModel.ForView(
-                    _session, document, _announce,
-                    synchronousForTests: !_startInteractionBackgroundWork);
-            }
-            catch (Exception failure) when (failure
-                is VaultException or InvalidOperationException)
-            {
-                _announce(new A11yEvent.BasesFiltersOpenFailed(failure.Message));
-                return;
-            }
-            _announce(new A11yEvent.BasesEditingFilters(
-                document.ActiveViewName ?? document.DisplayName));
-        });
+                if (json is null)
+                {
+                    _announce(new A11yEvent.BasesFiltersOpenFailed(
+                        failure ?? "The base is not open."));
+                    return;
+                }
+                try
+                {
+                    BaseQueryBuilderSheet = BaseQueryBuilderViewModel.ForView(
+                        _session, json, document.Path, document.ActiveViewIndex,
+                        _announce,
+                        synchronousForTests: !_startInteractionBackgroundWork);
+                }
+                catch (Exception openFailure) when (openFailure
+                    is VaultException or InvalidOperationException
+                        or InvalidCastException or System.Text.Json.JsonException)
+                {
+                    _announce(new A11yEvent.BasesFiltersOpenFailed(
+                        openFailure.Message));
+                    return;
+                }
+                _announce(new A11yEvent.BasesEditingFilters(
+                    document.ActiveViewName ?? document.DisplayName));
+            }));
 
     internal void EditSavedQueryInBuilder(string id)
     {
@@ -106,15 +133,18 @@ internal sealed partial class WorkspaceViewModel
         try
         {
             savedQuery = _session.GetSavedQuery(id);
+            BaseQueryBuilderSheet = BaseQueryBuilderViewModel.ForSavedQuery(
+                _session, savedQuery, _announce,
+                synchronousForTests: !_startInteractionBackgroundWork);
         }
-        catch (VaultException failure)
+        catch (Exception failure) when (failure
+            is VaultException or InvalidCastException or System.Text.Json.JsonException)
         {
+            // The cast/parse arms: a corrupt stored QueryJson must
+            // refuse, not crash the dispatcher (red team round 1).
             _announce(new A11yEvent.BasesSavedQueryEditFailed(failure.Message));
             return;
         }
-        BaseQueryBuilderSheet = BaseQueryBuilderViewModel.ForSavedQuery(
-            _session, savedQuery, _announce,
-            synchronousForTests: !_startInteractionBackgroundWork);
         _announce(new A11yEvent.BasesSavedQueryEditing(savedQuery.Name));
     }
 
@@ -128,10 +158,13 @@ internal sealed partial class WorkspaceViewModel
             return;
         }
         BaseDocumentViewModel target = BaseDocumentFor(viewPath);
-        if (builder.SaveToView(target))
+        builder.SaveToView(target, saved =>
         {
-            RefreshBaseQueries();
-        }
+            if (saved)
+            {
+                RefreshBaseQueries();
+            }
+        });
     }
 
     internal void BuilderUpdateSavedQuery()
@@ -146,6 +179,17 @@ internal sealed partial class WorkspaceViewModel
                     StringComparison.Ordinal)))
             {
                 document.Load();
+            }
+            // The dock's saved-query document lives outside the tab
+            // registry (red team round 1: it kept executing the
+            // superseded query).
+            if (BasesDockDocument is { } dockDocument
+                && string.Equals(
+                    dockDocument.SavedQueryId,
+                    builder.Context.SavedQueryId,
+                    StringComparison.Ordinal))
+            {
+                dockDocument.Load();
             }
         }
     }
@@ -261,21 +305,28 @@ internal sealed partial class WorkspaceViewModel
     public System.Windows.Input.ICommand BasesCopyMarkdownCommand =>
         _basesCopyMarkdownCommand ??= BasesCommand(document =>
         {
-            if (document.ExportText(ExportFormat.Markdown) is not { } text)
+            if (!BasesResolveExportScope(document, "Copy", out bool includeFilter))
             {
                 return;
             }
-            try
+            document.ExportText(ExportFormat.Markdown, includeFilter, text =>
             {
-                System.Windows.Clipboard.SetText(text);
-            }
-            catch (System.Runtime.InteropServices.ExternalException failure)
-            {
-                document.AnnounceEvent(
-                    new A11yEvent.BasesViewCopyFailed(failure.Message));
-                return;
-            }
-            document.AnnounceEvent(new A11yEvent.BasesViewCopiedAsMarkdown());
+                if (text is null)
+                {
+                    return;
+                }
+                try
+                {
+                    System.Windows.Clipboard.SetText(text);
+                }
+                catch (System.Runtime.InteropServices.ExternalException failure)
+                {
+                    document.AnnounceEvent(
+                        new A11yEvent.BasesViewCopyFailed(failure.Message));
+                    return;
+                }
+                document.AnnounceEvent(new A11yEvent.BasesViewCopiedAsMarkdown());
+            });
         });
 
     private RelayCommand BasesCommand(Action<BaseDocumentViewModel> body) =>
@@ -317,8 +368,13 @@ internal sealed partial class WorkspaceViewModel
         {
             return;
         }
+        int before = document.ActiveViewIndex;
         document.SelectView(target);
-        if (document.ActiveViewName is { } name)
+        // Announce only a switch that actually happened — SelectView
+        // refuses silently while loading/failed (red team round 1:
+        // the command spoke the unchanged view name).
+        if (document.ActiveViewIndex != before
+            && document.ActiveViewName is { } name)
         {
             document.AnnounceViewSelected(name);
         }
@@ -347,12 +403,72 @@ internal sealed partial class WorkspaceViewModel
     private static string DisplayNameWithoutExtension(string path) =>
         System.IO.Path.GetFileNameWithoutExtension(path);
 
-    /// <summary>Export delivery (contract C14): core's bytes to a save
-    /// panel; success/failure announce the canonical events.</summary>
+    /// <summary>The C14 scope choice for export/copy while a quick
+    /// filter is active: filtered rows, all rows, or cancel.</summary>
+    internal enum BasesExportScope
+    {
+        Filtered,
+        All,
+        Cancel,
+    }
+
+    /// <summary>Injectable scope prompt (the W4-4 dialog-seam
+    /// pattern): production shows a modal choice; facts inject. The
+    /// argument is the verb ("Export"/"Copy") for the dialog copy and
+    /// the cancel announcement.</summary>
+    internal Func<string, BasesExportScope> BasesExportScopePrompt { get; set; } =
+        verb =>
+        {
+            System.Windows.MessageBoxResult choice = System.Windows.MessageBox.Show(
+                "A quick filter is active. "
+                + verb + " only the filtered rows?\n\n"
+                + "Yes: the filtered rows shown now.\n"
+                + "No: every row in the view.",
+                "Slate",
+                System.Windows.MessageBoxButton.YesNoCancel,
+                System.Windows.MessageBoxImage.Question);
+            return choice switch
+            {
+                System.Windows.MessageBoxResult.Yes => BasesExportScope.Filtered,
+                System.Windows.MessageBoxResult.No => BasesExportScope.All,
+                _ => BasesExportScope.Cancel,
+            };
+        };
+
+    /// <summary>C14: with an active quick filter, export/copy must ASK
+    /// filtered-vs-all — never silently emit the filtered subset (red
+    /// team round 1: the prompt was absent and a filtered export
+    /// shipped 3 of 500 rows unasked). Cancel announces the canonical
+    /// event. No active filter → no prompt, full view.</summary>
+    private bool BasesResolveExportScope(
+        BaseDocumentViewModel document, string verb, out bool includeFilter)
+    {
+        includeFilter = true;
+        if (!document.QuickFilterActive)
+        {
+            return true;
+        }
+        switch (BasesExportScopePrompt(verb))
+        {
+            case BasesExportScope.Filtered:
+                return true;
+            case BasesExportScope.All:
+                includeFilter = false;
+                return true;
+            default:
+                document.AnnounceEvent(
+                    new A11yEvent.BasesQuickFilterChoiceCanceled(verb));
+                return false;
+        }
+    }
+
+    /// <summary>Export delivery (contract C14): the scope choice, a
+    /// save panel, then core's bytes composed OFF the dispatcher;
+    /// success/failure announce the canonical events.</summary>
     private void BasesDeliverExport(
         BaseDocumentViewModel document, ExportFormat format)
     {
-        if (document.ExportText(format) is not { } text)
+        if (!BasesResolveExportScope(document, "Export", out bool includeFilter))
         {
             return;
         }
@@ -367,18 +483,27 @@ internal sealed partial class WorkspaceViewModel
         {
             return;
         }
-        try
+        string targetPath = dialog.FileName;
+        document.ExportText(format, includeFilter, text =>
         {
-            System.IO.File.WriteAllText(dialog.FileName, text);
-        }
-        catch (Exception failure) when (failure is System.IO.IOException
-            or UnauthorizedAccessException)
-        {
-            document.AnnounceEvent(
-                new A11yEvent.BasesViewExportFailed(failure.Message));
-            return;
-        }
-        document.AnnounceEvent(new A11yEvent.BasesViewExported());
+            if (text is null)
+            {
+                // The compose failure already announced.
+                return;
+            }
+            try
+            {
+                System.IO.File.WriteAllText(targetPath, text);
+            }
+            catch (Exception failure) when (failure is System.IO.IOException
+                or UnauthorizedAccessException)
+            {
+                document.AnnounceEvent(
+                    new A11yEvent.BasesViewExportFailed(failure.Message));
+                return;
+            }
+            document.AnnounceEvent(new A11yEvent.BasesViewExported());
+        });
     }
 
     internal void RaiseBasesCommandStates()
@@ -506,6 +631,10 @@ internal sealed partial class WorkspaceViewModel
             try
             {
                 Dashboard dashboard = _session.GetDashboard(dashboardId);
+                editor.OpenedModifiedAtMs = dashboard.ModifiedAtMs;
+                // The FRESH registry name, not the cached summary list
+                // (the list may predate a rename).
+                editor.Name = dashboard.Name;
                 foreach (DashboardSectionStatus status in dashboard.Sections)
                 {
                     editor.Sections.Add(new DashboardEditorSection(
@@ -548,6 +677,17 @@ internal sealed partial class WorkspaceViewModel
         {
             if (editor.DashboardId is { } id)
             {
+                // The C12 stale guard: the dashboard changed under the
+                // open editor (another surface saved) — refuse with the
+                // canonical sentence and reload the editor's sections
+                // so the user edits what is actually there.
+                Dashboard current = _session.GetDashboard(id);
+                if (current.ModifiedAtMs != editor.OpenedModifiedAtMs)
+                {
+                    _announce(new A11yEvent.BasesDashboardSectionStale());
+                    OpenDashboardEditor(id);
+                    return;
+                }
                 _session.UpdateDashboard(id, name, sections);
                 _announce(new A11yEvent.BasesDashboardUpdated(name));
                 if (_dashboardDocuments.TryGetValue(id, out DashboardViewModel? open))
@@ -623,6 +763,10 @@ internal sealed partial class WorkspaceViewModel
                 {
                     ThisPath = BasesDockActiveNotePath(),
                 };
+                // The dock rides the C9 funnel's membership dedup like
+                // every other surface (red team round 1: unregistered
+                // dock documents never spoke a membership change).
+                fileDocument.MembershipChanged += OnBaseMembershipChanged;
                 BasesDockDocument = fileDocument;
                 fileDocument.Load();
                 break;
@@ -632,6 +776,7 @@ internal sealed partial class WorkspaceViewModel
                         _session, target.Key, target.Name, _announce,
                         synchronousForTests: !_startInteractionBackgroundWork);
                 queryDocument.ThisPath = BasesDockActiveNotePath();
+                queryDocument.MembershipChanged += OnBaseMembershipChanged;
                 BasesDockDocument = queryDocument;
                 queryDocument.Load();
                 break;
@@ -686,7 +831,9 @@ internal sealed partial class WorkspaceViewModel
         {
             Interval = TimeSpan.FromMilliseconds(500),
         };
-        _dockFollowTimer.Tick += DockFollowTick;
+        // Idempotent re-subscribe: detach BEFORE attach (four red-team
+        // reports flagged the previous +=/-=/+= ordering, which netted
+        // one extra handler per call).
         _dockFollowTimer.Tick -= DockFollowTick;
         _dockFollowTimer.Tick += DockFollowTick;
         _dockFollowTimer.Start();
@@ -714,9 +861,11 @@ internal sealed partial class WorkspaceViewModel
         _announce(new A11yEvent.BasesDockUpdatedForNote());
     }
 
-    /// <summary>ONE attach funnel for every tab construction site
-    /// (AddTab, restore, duplicate — the duplicate site's target-typed
-    /// `new` hid from the first sweep; a helper cannot be skipped).</summary>
+    /// <summary>ONE attach funnel for every site that gives a tab its
+    /// item (AddTab, restore, duplicate, and the in-place REPLACE arm —
+    /// the duplicate site's target-typed `new` hid from the first
+    /// sweep, and the replace arm from the second; a helper cannot be
+    /// skipped).</summary>
     private void AttachBaseDocumentIfNeeded(WorkspaceTabViewModel tab)
     {
         if (tab.IsBase)
@@ -782,7 +931,14 @@ internal sealed partial class WorkspaceViewModel
         catch (VaultException failure)
         {
             RunOnDispatcher(() =>
-                _announce(new A11yEvent.BasesQueriesRefreshFailed(failure.Message)));
+            {
+                // Same generation gate as success: a stale failure
+                // must not speak after a newer refresh landed.
+                if (Volatile.Read(ref _queriesRefreshGeneration) == generation)
+                {
+                    _announce(new A11yEvent.BasesQueriesRefreshFailed(failure.Message));
+                }
+            });
             return;
         }
         RunOnDispatcher(() =>
@@ -862,6 +1018,30 @@ internal sealed partial class WorkspaceViewModel
             return;
         }
         _announce(new A11yEvent.BasesSavedQueryRenamed(trimmed));
+        // Live surfaces retitle with the registry (red team round 1):
+        // open saved-query tabs, their shared document, and the dock.
+        foreach (WorkspaceTabViewModel tab in Groups
+            .SelectMany(group => group.Tabs)
+            .Where(candidate => candidate.IsSavedQueryTab
+                && string.Equals(candidate.Item.Id, id, StringComparison.Ordinal)))
+        {
+            tab.RetargetName(trimmed);
+        }
+        if (_baseDocuments.TryGetValue(
+            "query:" + id, out BaseDocumentViewModel? renamedDocument))
+        {
+            renamedDocument.UpdateSavedQueryName(trimmed);
+        }
+        if (BasesDockDocument is { } dockDocument
+            && string.Equals(dockDocument.SavedQueryId, id, StringComparison.Ordinal))
+        {
+            dockDocument.UpdateSavedQueryName(trimmed);
+        }
+        if (BasesDockTarget is { Kind: BasesDockTargetKind.SavedQuery } dockTarget
+            && string.Equals(dockTarget.Key, id, StringComparison.Ordinal))
+        {
+            BasesDockTarget = dockTarget with { Name = trimmed };
+        }
         RefreshBaseQueries();
     }
 
@@ -897,6 +1077,15 @@ internal sealed partial class WorkspaceViewModel
         if (trimmed.Length == 0)
         {
             _announce(new A11yEvent.BasesSavedQueryExportPathNeeded());
+            return;
+        }
+        if (System.IO.Path.IsPathRooted(trimmed)
+            || trimmed.StartsWith("..", StringComparison.Ordinal))
+        {
+            // C12's canonical out-of-vault refusal (red team round 1:
+            // the raw absolute path fell through to core's InvalidPath
+            // and announced the generic export failure instead).
+            _announce(new A11yEvent.BasesPathOutsideVault());
             return;
         }
         try
@@ -978,14 +1167,33 @@ internal sealed partial class WorkspaceViewModel
         }
         if (tab is not null)
         {
-            // The W4-4 seam: lease bracket + CAS + rebaseline live in
-            // the tab; the completion routes into the one funnel.
+            if (tab.IsExternallyStale)
+            {
+                // The W4-4 stale gate (red team round 1: without it a
+                // Bases write raced straight into the CAS and surfaced
+                // a raw conflict message instead of the family's
+                // refusal). The Bases surface has no per-row draft to
+                // retry with — the user refreshes and re-edits.
+                _announce(new A11yEvent.PropertyEditConflict(
+                    System.IO.Path.GetFileName(tab.Path)));
+                return;
+            }
+            if (!TryAcquirePropertyWriteLease(row.FilePath))
+            {
+                AnnounceWriteInFlightRefusal();
+                return;
+            }
+            // The W4-4 seam: CAS + rebaseline live in the tab; the
+            // note-scoped lease brackets the whole write (same
+            // exclusion as the panel rows — one write per path at a
+            // time, any origin); the completion routes into the one
+            // funnel.
             tab.WriteProperty(
                 tab.SavedContentHash,
                 expectedHash => value is null
                     ? _session.DeleteProperty(row.FilePath, key, expectedHash)
                     : _session.SetProperty(row.FilePath, key, value, expectedHash),
-                (report, failure, _postFailureDiskHash) =>
+                WithLeaseRelease(row.FilePath, (report, failure, _postFailureDiskHash) =>
                 {
                     if (failure is not null)
                     {
@@ -998,11 +1206,19 @@ internal sealed partial class WorkspaceViewModel
                             report.NewContentHash, _announce);
                     }
                     CompleteBasesWrite(document, row, column, value);
-                });
+                }));
             return;
         }
-        // Tabless: direct write, no expected hash (mac parity). Off
-        // the dispatcher in production; inline in synchronous tests.
+        // Tabless: direct write, no expected hash (mac parity), but
+        // under the same note-scoped lease — two rapid cell edits on
+        // one note must serialize, not race last-writer-wins (red
+        // team round 1). Off the dispatcher in production; inline in
+        // synchronous tests.
+        if (!TryAcquirePropertyWriteLease(row.FilePath))
+        {
+            AnnounceWriteInFlightRefusal();
+            return;
+        }
         if (!_startInteractionBackgroundWork)
         {
             BasesTablessWriteBody(document, row, column, key, value);
@@ -1032,16 +1248,27 @@ internal sealed partial class WorkspaceViewModel
         catch (VaultException failure)
         {
             RunOnDispatcher(() =>
-                _announce(new A11yEvent.BasesCellEditFailed(failure.Message)));
+            {
+                _ = _propertyWritePaths.Remove(row.FilePath);
+                _announce(new A11yEvent.BasesCellEditFailed(failure.Message));
+            });
             return;
         }
-        RunOnDispatcher(() => CompleteBasesWrite(document, row, column, value));
+        RunOnDispatcher(() =>
+        {
+            // Released on the dispatcher, where it was acquired.
+            _ = _propertyWritePaths.Remove(row.FilePath);
+            CompleteBasesWrite(document, row, column, value);
+        });
     }
 
     /// <summary>The one post-write funnel (contract C9): bump the
-    /// funnel generation, refresh every registered document, and let
-    /// the WRITING document's publish announce the terminal outcome
-    /// from its refreshed rows.</summary>
+    /// funnel generation, refresh every visible Bases surface —
+    /// registered tab documents, the dock, dashboards (red team round
+    /// 1: the first cut reached only the tab registry, so the dock
+    /// kept stale rows forever) — and let the WRITING document's
+    /// publish announce the terminal outcome from its refreshed
+    /// rows.</summary>
     private void CompleteBasesWrite(
         BaseDocumentViewModel document,
         BasesRow row,
@@ -1057,6 +1284,16 @@ internal sealed partial class WorkspaceViewModel
                 other.RefreshForFunnel(funnelId);
             }
         }
+        if (BasesDockDocument is { } dockDocument
+            && !ReferenceEquals(dockDocument, document))
+        {
+            dockDocument.RefreshForFunnel(funnelId);
+        }
+        foreach (DashboardViewModel dashboard in _dashboardDocuments.Values)
+        {
+            dashboard.Load();
+        }
+        BasesDockDashboard?.Load();
         document.RefreshForFunnel(
             funnelId,
             onPublished: () => AnnounceBasesCellOutcome(document, row, column, value));
@@ -1092,5 +1329,81 @@ internal sealed partial class WorkspaceViewModel
             return;
         }
         action();
+    }
+
+    private int _basesVaultRefreshTicket;
+
+    /// <summary>C9's vault-event arm (red team round 1: absent — a
+    /// property-panel write, task toggle, editor save, or external
+    /// edit never reached any Bases surface): any .md/.base change
+    /// re-executes every visible surface after a 500 ms quiet period,
+    /// SILENTLY (INV-4/§2.6 — nothing here was user-initiated on a
+    /// Bases surface; the in-app cell-write funnel owns
+    /// announcements). A changed .base definition reloads its own
+    /// document (the open handle holds the superseded parse); .md
+    /// membership changes re-execute on the current handle.</summary>
+    internal void NotifyBasesOfVaultChange(string path)
+    {
+        bool isBaseFile = path.EndsWith(".base", StringComparison.OrdinalIgnoreCase);
+        if (!isBaseFile && !path.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+        if (_baseDocuments.Count == 0
+            && _dashboardDocuments.Count == 0
+            && BasesDockDocument is null
+            && BasesDockDashboard is null)
+        {
+            return;
+        }
+        int ticket = Interlocked.Increment(ref _basesVaultRefreshTicket);
+        if (!_startInteractionBackgroundWork)
+        {
+            RefreshBasesSurfacesForVaultChange(isBaseFile ? path : null);
+            return;
+        }
+        _ = Task.Delay(500).ContinueWith(
+            _ => RunOnDispatcher(() =>
+            {
+                if (ticket == _basesVaultRefreshTicket)
+                {
+                    RefreshBasesSurfacesForVaultChange(isBaseFile ? path : null);
+                }
+            }),
+            TaskScheduler.Default);
+    }
+
+    private void RefreshBasesSurfacesForVaultChange(string? changedBasePath)
+    {
+        foreach (BaseDocumentViewModel document in _baseDocuments.Values)
+        {
+            if (changedBasePath is not null
+                && string.Equals(document.Path, changedBasePath, StringComparison.Ordinal))
+            {
+                document.Load();
+            }
+            else
+            {
+                document.Refresh();
+            }
+        }
+        if (BasesDockDocument is { } dockDocument)
+        {
+            if (changedBasePath is not null
+                && string.Equals(
+                    dockDocument.Path, changedBasePath, StringComparison.Ordinal))
+            {
+                dockDocument.Load();
+            }
+            else
+            {
+                dockDocument.Refresh();
+            }
+        }
+        foreach (DashboardViewModel dashboard in _dashboardDocuments.Values)
+        {
+            dashboard.Load();
+        }
+        BasesDockDashboard?.Load();
     }
 }

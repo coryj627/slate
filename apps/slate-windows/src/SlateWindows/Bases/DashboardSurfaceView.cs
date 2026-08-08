@@ -11,8 +11,10 @@ namespace SlateWindows.Bases;
 
 /// <summary>
 /// W4-6 (#738, contract C12): the dashboard tab body — the mac
-/// DashboardContainerView twin. H1 title, then per-section header +
-/// read-only grid (no row actions, no editing, no activation);
+/// DashboardContainerView twin. H2 title (the surface-title level the
+/// Base tab header uses — H1 belongs to the note title convention),
+/// then per-section H3 + read-only grid or list per the section's
+/// view override (no row actions, no editing, no activation);
 /// missing/degraded/failed sections banner with the mac wording and
 /// keep their siblings rendering.
 /// </summary>
@@ -39,7 +41,7 @@ internal sealed class DashboardSurfaceView : UserControl
             Margin = new Thickness(12, 8, 12, 4),
         };
         AutomationProperties.SetHeadingLevel(
-            _title, AutomationHeadingLevel.Level1);
+            _title, AutomationHeadingLevel.Level2);
 
         _emptyState = new TextBlock
         {
@@ -118,7 +120,7 @@ internal sealed class DashboardSurfaceView : UserControl
                 Margin = new Thickness(0, 12, 0, 4),
             };
             AutomationProperties.SetHeadingLevel(
-                header, AutomationHeadingLevel.Level2);
+                header, AutomationHeadingLevel.Level3);
             _sections.Children.Add(header);
 
             if (section.Message is { Length: > 0 } message)
@@ -140,7 +142,14 @@ internal sealed class DashboardSurfaceView : UserControl
                 && section.State is DashboardSectionState.Ready
                     or DashboardSectionState.Degraded)
             {
-                _sections.Children.Add(BuildSectionGrid(index, result));
+                // The section's authored renderer choice (red team
+                // round 1: the editor persisted ViewOverride but
+                // nothing consumed it).
+                _sections.Children.Add(
+                    string.Equals(
+                        section.Status.ViewOverride, "list", StringComparison.Ordinal)
+                        ? BuildSectionList(index, result)
+                        : BuildSectionGrid(index, result));
             }
             index++;
         }
@@ -180,5 +189,30 @@ internal sealed class DashboardSurfaceView : UserControl
             rowAudioDescription: static row =>
                 ((BaseGridRowViewModel)row).AudioDescription);
         return grid;
+    }
+
+    /// <summary>The "list" view override: core's row readbacks in a
+    /// keyboard-navigable read-only list (the thin twin of the Base
+    /// tab's list renderer — no actions, no activation).</summary>
+    private static UIElement BuildSectionList(int index, BasesResultSet result)
+    {
+        var list = new ListBox
+        {
+            MaxHeight = 320,
+        };
+        AutomationProperties.SetAutomationId(list, $"DashboardSection{index}List");
+        AutomationProperties.SetName(list, result.AudioSummary);
+        foreach (BasesRow row in result.Rows)
+        {
+            list.Items.Add(new ListBoxItem
+            {
+                Content = new TextBlock
+                {
+                    Text = row.AudioDescription,
+                    TextWrapping = TextWrapping.Wrap,
+                },
+            });
+        }
+        return list;
     }
 }

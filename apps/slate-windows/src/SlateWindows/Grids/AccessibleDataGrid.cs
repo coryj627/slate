@@ -939,13 +939,27 @@ internal sealed class AccessibleDataGrid : UserControl
         _grid.CurrentCell = new DataGridCellInfo(targetRow, targetColumn);
         _grid.SelectedCells.Clear();
         _grid.SelectedCells.Add(_grid.CurrentCell);
+        // Keyboard focus FOLLOWS the moved currency (red team round 1:
+        // EndEditCore had refocused the committed cell, so a Tab
+        // commit left the reader speaking one cell while currency —
+        // and the next edit — sat on another).
+        if (_grid.IsKeyboardFocusWithin)
+        {
+            _ = FocusCellElement(targetRow, targetColumn);
+        }
     }
 
     private void OnCellEditEnding(object? sender, DataGridCellEditEndingEventArgs e)
     {
-        // Only USER cancels (Escape, focus loss) reach the surface —
-        // programmatic commit-cancel is the text handoff above.
-        if (_editing && !_committing && e.EditAction == DataGridEditAction.Cancel)
+        // EVERY native ending that is not our programmatic
+        // commit-cancel handoff ends the session as a cancel. The
+        // draft-based columns bind nothing, so a native COMMIT (click
+        // away) discards the draft exactly like Escape — and the first
+        // cut's Cancel-only guard leaked `_editing=true` +
+        // `IsReadOnly=false` forever after one click-away (red team
+        // round 1: every later F2 refused, and native sessions opened
+        // on ANY cell bypassing the edit policy).
+        if (_editing && !_committing)
         {
             EndEditCore();
             _editCancel?.Invoke();
