@@ -224,11 +224,19 @@ internal sealed class BaseSurfaceView : UserControl
         {
             oldModel.ResultPublished -= view.OnResultPublished;
             oldModel.PropertyChanged -= view.OnModelPropertyChanged;
+            oldModel.QuickFilterFocusRequested -= view.FocusQuickFilter;
+            oldModel.RendererOverrideRequested -= view.OnRendererOverrideRequested;
+            oldModel.SortCurrentColumnRequested -= view.OnSortCurrentColumnRequested;
+            oldModel.EditSelectedPropertyRequested -= view.OnEditSelectedPropertyRequested;
         }
         if (e.NewValue is BaseDocumentViewModel model)
         {
             model.ResultPublished += view.OnResultPublished;
             model.PropertyChanged += view.OnModelPropertyChanged;
+            model.QuickFilterFocusRequested += view.FocusQuickFilter;
+            model.RendererOverrideRequested += view.OnRendererOverrideRequested;
+            model.SortCurrentColumnRequested += view.OnSortCurrentColumnRequested;
+            model.EditSelectedPropertyRequested += view.OnEditSelectedPropertyRequested;
             view.RenderAll();
         }
     }
@@ -253,6 +261,64 @@ internal sealed class BaseSurfaceView : UserControl
 
     private bool OnExternalSort(int columnIndex, bool ascending) =>
         Model?.ApplySortFromGrid(columnIndex, ascending) ?? false;
+
+    private void OnRendererOverrideRequested(BaseRendererOverride mode) =>
+        RendererOverride = mode;
+
+    /// <summary>slate.bases.sortByColumn: toggle from the FOCUSED
+    /// column — the substrate's Ctrl+Alt+S seam, invoked from the
+    /// command/menu route so both speak the same sentence.</summary>
+    private void OnSortCurrentColumnRequested() =>
+        _ = _grid.ApplySort(
+            Math.Max(0, _grid.CurrentColumnIndexForTests()),
+            AscendingToggleFor(_grid.CurrentColumnIndexForTests()));
+
+    private bool AscendingToggleFor(int columnIndex) =>
+        Model?.SortState is not { } sort
+        || sort.ColumnIndex != columnIndex
+        || !sort.Ascending;
+
+    /// <summary>slate.bases.editProperty (the mac shape): a list
+    /// renderer switches to table first, then the selected column or
+    /// the first EDITABLE column begins the edit.</summary>
+    private void OnEditSelectedPropertyRequested()
+    {
+        if (Model is not { Result: { } result } model)
+        {
+            return;
+        }
+        if (model.SelectedRow is null)
+        {
+            model.AnnounceForSurface(new A11yEvent.BasesRowSelectionNeeded());
+            return;
+        }
+        if (_list.Visibility == Visibility.Visible)
+        {
+            RendererOverride = BaseRendererOverride.Table;
+        }
+        int editable = -1;
+        for (int index = 0; index < result.Columns.Length; index++)
+        {
+            if (BaseCellEditPolicy.PropertyKey(result.Columns[index]) is not null)
+            {
+                editable = index;
+                break;
+            }
+        }
+        if (editable < 0)
+        {
+            model.AnnounceForSurface(new A11yEvent.BasesNoEditableProperty());
+            return;
+        }
+        object? row = _grid.CurrentRowForTests()
+            ?? (result.Rows.Length > 0 ? FirstBoundRow() : null);
+        if (row is not null)
+        {
+            _ = _grid.BeginEditAt(row, editable);
+        }
+    }
+
+    private object? FirstBoundRow() => _grid.FirstItemForTests();
 
     private void OnViewPicked(object sender, SelectionChangedEventArgs e)
     {
@@ -503,14 +569,44 @@ internal sealed class BaseSurfaceView : UserControl
         {
             rows.Add(new BaseGridRowViewModel(row));
         }
+        var rowActions = new List<SlateWindows.Grids.AccessibleGridRowAction>
+        {
+            new()
+            {
+                Name = "Open",
+                Execute = row => RowCommand(row, (m, r) => m.OpenRowFromSurface?.Invoke(r)),
+            },
+            new()
+            {
+                Name = "Copy link",
+                Execute = row => RowCommand(row, (m, r) => m.CopyLinkFromSurface?.Invoke(r)),
+            },
+            new()
+            {
+                Name = "Show backlinks",
+                Execute = row => RowCommand(row, (m, r) => m.ShowBacklinksFromSurface?.Invoke(r)),
+            },
+            new()
+            {
+                Name = "Edit property",
+                Execute = _ => OnEditSelectedPropertyRequested(),
+                IsVisible = _ => result.Columns.Any(column =>
+                    BaseCellEditPolicy.PropertyKey(column) is not null),
+            },
+        };
         _grid.Bind(
             columns,
             rows,
             summary: BaseSummaryFormatter.SummaryText(result, model.QuickFilterActive),
             accessibilityLabel: result.AudioSummary,
             rowAudioDescription: static row =>
-                ((BaseGridRowViewModel)row).AudioDescription);
+                ((BaseGridRowViewModel)row).AudioDescription,
+            rowActions: rowActions,
+            exportProducer: format => model.ExportText(format) ?? string.Empty,
+            rowActivated: row => RowCommand(row, (m, r) => m.OpenRowFromSurface?.Invoke(r)));
         _grid.SetSortIndicator(model.SortState);
+        _grid.CurrentRowChanged -= OnCurrentRowChanged;
+        _grid.CurrentRowChanged += OnCurrentRowChanged;
         // The edit seam re-configures per bind so the closures always
         // hold THIS publish's columns (a stale closure over replaced
         // columns is the dangling-reference class INV-3 forbids).
@@ -534,6 +630,14 @@ internal sealed class BaseSurfaceView : UserControl
                         BaseCellEditPolicy.ReadOnlyEvent(result.Columns[columnIndex]));
                 }
             });
+    }
+
+    private void OnCurrentRowChanged(object? row)
+    {
+        if (Model is { } model)
+        {
+            model.SelectedRow = (row as BaseGridRowViewModel)?.Row;
+        }
     }
 
     /// <summary>The mac commitEdit shape (contract C7): empty draft
@@ -610,6 +714,16 @@ internal sealed class BaseSurfaceView : UserControl
         _list.ItemsSource = items;
         AutomationProperties.SetName(_list, result.AudioSummary);
         _list.ItemContainerStyle ??= BuildListItemStyle();
+    }
+
+    private void RowCommand(
+        object row, Action<BaseDocumentViewModel, BasesRow> body)
+    {
+        if (Model is { } model && row is BaseGridRowViewModel bound)
+        {
+            model.SelectedRow = bound.Row;
+            body(model, bound.Row);
+        }
     }
 
     private static string? GroupSummaryText(BasesResultSet result, BasesGroup group) =>

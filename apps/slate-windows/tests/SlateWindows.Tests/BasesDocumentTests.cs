@@ -226,6 +226,65 @@ public sealed class BasesDocumentTests : IDisposable
     }
 
     [Fact]
+    public void CommandEventsCarryTheMacShapes()
+    {
+        var document = NewDocument("Notes.base");
+        document.Load();
+
+        // Where-am-I: base name only while unfiltered.
+        var whereAmI = Assert.IsType<A11yEvent.BaseWhereAmI>(document.WhereAmIEvent());
+        Assert.Equal("Notes", whereAmI.Base);
+        Assert.Equal("Main", whereAmI.View);
+        Assert.Null(whereAmI.QuickFilter);
+
+        // Filtered: the readback carries the filter, and the results
+        // popover appends the rendered readback (the mac rule).
+        document.QuickFilterText = "note0";
+        document.ApplyQuickFilter();
+        whereAmI = Assert.IsType<A11yEvent.BaseWhereAmI>(document.WhereAmIEvent());
+        Assert.Equal("note0", whereAmI.QuickFilter);
+        var popover = Assert.IsType<A11yEvent.BaseResultsPopover>(
+            document.ResultsPopoverEvent());
+        Assert.NotNull(popover.WhereAmI);
+        Assert.Contains("note0", popover.WhereAmI, StringComparison.Ordinal);
+        document.Shutdown();
+    }
+
+    [Fact]
+    public void SaveSortToViewPersistsAndClearsTheTransientSort()
+    {
+        var document = NewDocument("Notes.base");
+        document.Load();
+        Assert.True(document.ApplySortFromGrid(0, ascending: false));
+        _announced.Clear();
+
+        document.SaveSortToView();
+
+        var saved = Assert.IsType<A11yEvent.BaseSortSavedToView>(
+            Assert.Single(_announced, e => e is A11yEvent.BaseSortSavedToView));
+        Assert.False(saved.Ascending);
+        Assert.Null(document.SortState);
+        // The slate sort landed in the FILE (contract C14's cousin:
+        // the YAML fragment is mac's byte-for-byte).
+        string content = File.ReadAllText(Path.Combine(_fixture.Root, "Notes.base"));
+        Assert.Contains("direction: DESC", content, StringComparison.Ordinal);
+        // The mac YAML fragment shape itself.
+        Assert.Equal(
+            "- property: \"file.name\"\n  direction: ASC",
+            BaseDocumentViewModel.SlateSortYaml("file.name", ascending: true));
+        document.Shutdown();
+    }
+
+    [Fact]
+    public void BaseWikilinkMatchesTheMacShape()
+    {
+        Assert.Equal(
+            "[[Notes/Alpha]]", WorkspaceViewModel.BaseWikilink("Notes/Alpha.md"));
+        Assert.Equal(
+            "[[Queries/All]]", WorkspaceViewModel.BaseWikilink("Queries/All.base"));
+    }
+
+    [Fact]
     public void ShutdownIsIdempotentAndRefusesLateWork()
     {
         var document = NewDocument("Notes.base");

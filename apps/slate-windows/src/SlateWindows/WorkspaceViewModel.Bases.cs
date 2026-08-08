@@ -28,6 +28,281 @@ namespace SlateWindows;
 /// </summary>
 internal sealed partial class WorkspaceViewModel
 {
+    /// <summary>The active tab's Bases document, or null — every
+    /// slate.bases.* command gates on this (contract C15); menu items
+    /// disable through the shared CanExecute.</summary>
+    internal BaseDocumentViewModel? ActiveBaseDocument =>
+        ActiveGroup.ActiveTab is { IsBase: true } tab ? tab.Base : null;
+
+    private RelayCommand? _basesRefreshCommand;
+    private RelayCommand? _basesWhereAmICommand;
+    private RelayCommand? _basesResultsCommand;
+    private RelayCommand? _basesNextViewCommand;
+    private RelayCommand? _basesPreviousViewCommand;
+    private RelayCommand? _basesViewSwitcherCommand;
+    private RelayCommand? _basesViewAsTableCommand;
+    private RelayCommand? _basesViewAsListCommand;
+    private RelayCommand? _basesQuickFilterCommand;
+    private RelayCommand? _basesSaveSortToViewCommand;
+    private RelayCommand? _basesSortByColumnCommand;
+    private RelayCommand? _basesOpenRowCommand;
+    private RelayCommand? _basesCopyLinkCommand;
+    private RelayCommand? _basesShowBacklinksCommand;
+    private RelayCommand? _basesEditPropertyCommand;
+    private RelayCommand? _basesExportCsvCommand;
+    private RelayCommand? _basesExportMarkdownCommand;
+    private RelayCommand? _basesCopyMarkdownCommand;
+
+    public System.Windows.Input.ICommand BasesRefreshCommand =>
+        _basesRefreshCommand ??= BasesCommand(document =>
+        {
+            bool wasFailed = document.State == BaseLoadState.Failed;
+            document.Load();
+            if (!wasFailed)
+            {
+                document.AnnounceRefreshed();
+            }
+        });
+
+    public System.Windows.Input.ICommand BasesWhereAmICommand =>
+        _basesWhereAmICommand ??= BasesCommand(document =>
+            document.AnnounceEvent(document.WhereAmIEvent()));
+
+    public System.Windows.Input.ICommand BasesResultsCommand =>
+        _basesResultsCommand ??= BasesCommand(document =>
+        {
+            if (document.ResultsPopoverEvent() is { } popover)
+            {
+                document.AnnounceEvent(popover);
+            }
+        });
+
+    public System.Windows.Input.ICommand BasesNextViewCommand =>
+        _basesNextViewCommand ??= BasesCommand(document =>
+            BasesStepView(document, +1));
+
+    public System.Windows.Input.ICommand BasesPreviousViewCommand =>
+        _basesPreviousViewCommand ??= BasesCommand(document =>
+            BasesStepView(document, -1));
+
+    public System.Windows.Input.ICommand BasesViewSwitcherCommand =>
+        _basesViewSwitcherCommand ??= BasesCommand(document =>
+            document.AnnounceEvent(
+                new A11yEvent.BaseViewSwitcher((uint)document.Views.Count)));
+
+    public System.Windows.Input.ICommand BasesViewAsTableCommand =>
+        _basesViewAsTableCommand ??= BasesCommand(document =>
+        {
+            document.RequestRendererOverride(BaseRendererOverride.Table);
+            document.AnnounceEvent(new A11yEvent.BaseViewMode("table"));
+        });
+
+    public System.Windows.Input.ICommand BasesViewAsListCommand =>
+        _basesViewAsListCommand ??= BasesCommand(document =>
+        {
+            document.RequestRendererOverride(BaseRendererOverride.List);
+            document.AnnounceEvent(new A11yEvent.BaseViewMode("list"));
+        });
+
+    public System.Windows.Input.ICommand BasesQuickFilterCommand =>
+        _basesQuickFilterCommand ??= BasesCommand(document =>
+            document.RequestQuickFilterFocus());
+
+    public System.Windows.Input.ICommand BasesSaveSortToViewCommand =>
+        _basesSaveSortToViewCommand ??= BasesCommand(document =>
+            document.SaveSortToView());
+
+    public System.Windows.Input.ICommand BasesSortByColumnCommand =>
+        _basesSortByColumnCommand ??= BasesCommand(document =>
+            document.RequestSortCurrentColumn());
+
+    public System.Windows.Input.ICommand BasesOpenRowCommand =>
+        _basesOpenRowCommand ??= BasesRowCommand(BasesOpenRow);
+
+    public System.Windows.Input.ICommand BasesCopyLinkCommand =>
+        _basesCopyLinkCommand ??= BasesRowCommand((document, row) =>
+        {
+            string link = BaseWikilink(row.FilePath);
+            try
+            {
+                System.Windows.Clipboard.SetText(link);
+            }
+            catch (System.Runtime.InteropServices.ExternalException)
+            {
+                // The clipboard is a shared OS resource another
+                // process can hold; a failed copy speaks nothing
+                // rather than lying that it copied.
+                return;
+            }
+            document.AnnounceEvent(new A11yEvent.BasesLinkCopied(
+                DisplayNameWithoutExtension(row.FilePath)));
+        });
+
+    public System.Windows.Input.ICommand BasesShowBacklinksCommand =>
+        _basesShowBacklinksCommand ??= BasesRowCommand((document, row) =>
+        {
+            OpenPath(row.FilePath);
+            ActiveLeaf = Leaves.Single(leaf =>
+                string.Equals(leaf.Id, "backlinks", StringComparison.Ordinal));
+            IsRightPaneVisible = true;
+            document.AnnounceEvent(new A11yEvent.BasesBacklinksFor(
+                DisplayNameWithoutExtension(row.FilePath)));
+        });
+
+    public System.Windows.Input.ICommand BasesEditPropertyCommand =>
+        _basesEditPropertyCommand ??= BasesCommand(document =>
+            document.RequestEditSelectedProperty());
+
+    public System.Windows.Input.ICommand BasesExportCsvCommand =>
+        _basesExportCsvCommand ??= BasesCommand(document =>
+            BasesDeliverExport(document, ExportFormat.Csv));
+
+    public System.Windows.Input.ICommand BasesExportMarkdownCommand =>
+        _basesExportMarkdownCommand ??= BasesCommand(document =>
+            BasesDeliverExport(document, ExportFormat.Markdown));
+
+    public System.Windows.Input.ICommand BasesCopyMarkdownCommand =>
+        _basesCopyMarkdownCommand ??= BasesCommand(document =>
+        {
+            if (document.ExportText(ExportFormat.Markdown) is not { } text)
+            {
+                return;
+            }
+            try
+            {
+                System.Windows.Clipboard.SetText(text);
+            }
+            catch (System.Runtime.InteropServices.ExternalException failure)
+            {
+                document.AnnounceEvent(
+                    new A11yEvent.BasesViewCopyFailed(failure.Message));
+                return;
+            }
+            document.AnnounceEvent(new A11yEvent.BasesViewCopiedAsMarkdown());
+        });
+
+    private RelayCommand BasesCommand(Action<BaseDocumentViewModel> body) =>
+        new(
+            _ =>
+            {
+                if (ActiveBaseDocument is { } document)
+                {
+                    body(document);
+                }
+            },
+            _ => ActiveBaseDocument is not null);
+
+    private RelayCommand BasesRowCommand(
+        Action<BaseDocumentViewModel, BasesRow> body) =>
+        new(
+            _ =>
+            {
+                if (ActiveBaseDocument is not { } document)
+                {
+                    return;
+                }
+                if (document.SelectedRow is not { } row)
+                {
+                    document.AnnounceEvent(new A11yEvent.BasesRowSelectionNeeded());
+                    return;
+                }
+                body(document, row);
+            },
+            _ => ActiveBaseDocument is not null);
+
+    private void BasesStepView(BaseDocumentViewModel document, int delta)
+    {
+        int target = Math.Clamp(
+            document.ActiveViewIndex + delta,
+            0,
+            Math.Max(0, document.Views.Count - 1));
+        if (target == document.ActiveViewIndex)
+        {
+            return;
+        }
+        document.SelectView(target);
+        if (document.ActiveViewName is { } name)
+        {
+            document.AnnounceViewSelected(name);
+        }
+    }
+
+    internal void BasesOpenRow(BaseDocumentViewModel document, BasesRow row)
+    {
+        OpenPath(row.FilePath);
+        // Task rows open their FILE here; mac lands on the task's line
+        // via its task artifact. The announcement stays honest about
+        // what happened (OpenedFile, not OpenedAtLine).
+        document.AnnounceEvent(new A11yEvent.OpenedFile(
+            System.IO.Path.GetFileName(row.FilePath)));
+    }
+
+    /// <summary>Mac's baseWikilink verbatim: the path without its
+    /// extension, wrapped.</summary>
+    internal static string BaseWikilink(string path)
+    {
+        int dot = path.LastIndexOf('.');
+        int slash = path.LastIndexOf('/');
+        string target = dot > slash ? path[..dot] : path;
+        return "[[" + target + "]]";
+    }
+
+    private static string DisplayNameWithoutExtension(string path) =>
+        System.IO.Path.GetFileNameWithoutExtension(path);
+
+    /// <summary>Export delivery (contract C14): core's bytes to a save
+    /// panel; success/failure announce the canonical events.</summary>
+    private void BasesDeliverExport(
+        BaseDocumentViewModel document, ExportFormat format)
+    {
+        if (document.ExportText(format) is not { } text)
+        {
+            return;
+        }
+        string extension = format == ExportFormat.Csv ? "csv" : "md";
+        string viewName = document.ActiveViewName ?? "View";
+        var dialog = new Microsoft.Win32.SaveFileDialog
+        {
+            FileName = document.DisplayName + " - " + viewName + "." + extension,
+            DefaultExt = extension,
+        };
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+        try
+        {
+            System.IO.File.WriteAllText(dialog.FileName, text);
+        }
+        catch (Exception failure) when (failure is System.IO.IOException
+            or UnauthorizedAccessException)
+        {
+            document.AnnounceEvent(
+                new A11yEvent.BasesViewExportFailed(failure.Message));
+            return;
+        }
+        document.AnnounceEvent(new A11yEvent.BasesViewExported());
+    }
+
+    internal void RaiseBasesCommandStates()
+    {
+        foreach (RelayCommand? command in new[]
+        {
+            _basesRefreshCommand, _basesWhereAmICommand, _basesResultsCommand,
+            _basesNextViewCommand, _basesPreviousViewCommand,
+            _basesViewSwitcherCommand, _basesViewAsTableCommand,
+            _basesViewAsListCommand, _basesQuickFilterCommand,
+            _basesSaveSortToViewCommand, _basesSortByColumnCommand,
+            _basesOpenRowCommand, _basesCopyLinkCommand,
+            _basesShowBacklinksCommand, _basesEditPropertyCommand,
+            _basesExportCsvCommand, _basesExportMarkdownCommand,
+            _basesCopyMarkdownCommand,
+        })
+        {
+            command?.RaiseCanExecuteChanged();
+        }
+    }
+
     private int _basesWriteFunnelId;
     private readonly HashSet<string> _basesFunnelAnnouncedSummaries = new(StringComparer.Ordinal);
 
@@ -36,6 +311,24 @@ internal sealed partial class WorkspaceViewModel
         document.ApplyPropertyEdit = (row, column, value) =>
             BasesApplyPropertyEdit(document, row, column, value);
         document.MembershipChanged += OnBaseMembershipChanged;
+        document.OpenRowFromSurface = row => BasesOpenRow(document, row);
+        document.CopyLinkFromSurface = row =>
+            ((RelayCommand)BasesCopyLinkCommand).Execute(RowOverride(document, row));
+        document.ShowBacklinksFromSurface = row =>
+        {
+            OpenPath(row.FilePath);
+            ActiveLeaf = Leaves.Single(leaf =>
+                string.Equals(leaf.Id, "backlinks", StringComparison.Ordinal));
+            IsRightPaneVisible = true;
+            document.AnnounceEvent(new A11yEvent.BasesBacklinksFor(
+                DisplayNameWithoutExtension(row.FilePath)));
+        };
+    }
+
+    private static object RowOverride(BaseDocumentViewModel document, BasesRow row)
+    {
+        document.SelectedRow = row;
+        return row;
     }
 
     private void OnBaseMembershipChanged(int funnelId, string audioSummary)

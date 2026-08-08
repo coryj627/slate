@@ -809,5 +809,6 @@ internal sealed partial class WorkspaceViewModel
         {
             ((RelayCommand)command).RaiseCanExecuteChanged();
         }
+        RaiseBasesCommandStates();
     }
 }

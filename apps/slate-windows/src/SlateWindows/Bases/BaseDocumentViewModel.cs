@@ -180,6 +180,15 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
     /// and the post-write funnel.</summary>
     internal Action<BasesRow, BasesColumn, PropertyValue?>? ApplyPropertyEdit { get; set; }
 
+    /// <summary>Row-action routes, installed by the workspace beside
+    /// ApplyPropertyEdit: the surface's context menu and the palette
+    /// commands share ONE implementation per action.</summary>
+    internal Action<BasesRow>? OpenRowFromSurface { get; set; }
+
+    internal Action<BasesRow>? CopyLinkFromSurface { get; set; }
+
+    internal Action<BasesRow>? ShowBacklinksFromSurface { get; set; }
+
     /// <summary>Surface-originated canonical announcements (edit
     /// canceled, read-only refusals, validation refusals) — one
     /// announce seam for the whole surface.</summary>
@@ -234,6 +243,175 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
     /// (command + header button), never spoken by Load itself (INV-4).</summary>
     public void AnnounceRefreshed() =>
         _announce(new A11yEvent.BaseRefreshed());
+
+    /// <summary>slate.bases.saveSortToView (the mac twin verbatim):
+    /// persist the published transient sort into the view's slate
+    /// state, clear the engine sort, reload views, re-execute. The
+    /// YAML fragment is mac's host-composed shape byte-for-byte.
+    /// Announces BaseSortSavedToView on success, BasesSortSaveFailed
+    /// on failure; silent when no sort is applied (mac returns nil).</summary>
+    public void SaveSortToView()
+    {
+        if (IsShutDown
+            || State is BaseLoadState.Failed or BaseLoadState.Loading
+            || Result is not { } result
+            || SortState is not { } sort
+            || sort.ColumnIndex >= result.Columns.Length)
+        {
+            return;
+        }
+        BasesColumn column = result.Columns[sort.ColumnIndex];
+        int generation = Interlocked.Increment(ref _generation);
+        StartWork(() =>
+        {
+            BaseViewSummary[] views;
+            try
+            {
+                lock (_ffiLock)
+                {
+                    if (Volatile.Read(ref _generation) != generation
+                        || _handle is not { } handle)
+                    {
+                        return;
+                    }
+                    _session.BaseApplyEdit(
+                        handle,
+                        new BaseEdit.SetSlateSort(
+                            (uint)_activeViewIndex,
+                            SlateSortYaml(column.Id, sort.Ascending)));
+                    _session.BaseSetTransientSort(
+                        handle, (uint)_activeViewIndex, columnId: null, ascending: true);
+                    views = _session.BaseViews(handle);
+                }
+            }
+            catch (VaultException failure)
+            {
+                Post(() =>
+                {
+                    if (Volatile.Read(ref _generation) == generation)
+                    {
+                        _announce(new A11yEvent.BasesSortSaveFailed(failure.Message));
+                    }
+                });
+                return;
+            }
+            Post(() =>
+            {
+                if (Volatile.Read(ref _generation) != generation)
+                {
+                    return;
+                }
+                Views = views;
+                SortState = null;
+                _announce(new A11yEvent.BaseSortSavedToView(column.Label, sort.Ascending));
+            });
+            ExecuteBody(generation, (uint)_activeViewIndex);
+        });
+    }
+
+    /// <summary>Mac's slateSortYAML + quoteYAMLString, byte-for-byte.</summary>
+    internal static string SlateSortYaml(string columnId, bool ascending) =>
+        "- property: " + QuoteYamlString(columnId) + "\n"
+        + "  direction: " + (ascending ? "ASC" : "DESC");
+
+    private static string QuoteYamlString(string value)
+    {
+        string escaped = value
+            .Replace("\\", "\\\\")
+            .Replace("\n", "\n")
+            .Replace("\r", "\r")
+            .Replace("\t", "\t")
+            .Replace("\"", "\\\"");
+        return "\"" + escaped + "\"";
+    }
+
+    /// <summary>slate.bases.whereAmI — core joins the present parts.</summary>
+    public A11yEvent WhereAmIEvent() => new A11yEvent.BaseWhereAmI(
+        DisplayName,
+        ActiveViewName,
+        QuickFilterActive && QuickFilterText.Trim().Length > 0
+            ? QuickFilterText.Trim()
+            : null);
+
+    /// <summary>slate.bases.resultsPopover — the readback rides only
+    /// while a filter is active (the mac shape).</summary>
+    public A11yEvent? ResultsPopoverEvent()
+    {
+        if (Result is not { } result)
+        {
+            return null;
+        }
+        string? whereAmI = QuickFilterActive
+            ? SlateUniffiMethods.A11yRender(WhereAmIEvent()).Text
+            : null;
+        return new A11yEvent.BaseResultsPopover(result.AudioSummary, whereAmI);
+    }
+
+    /// <summary>Announce the event through the document's channel —
+    /// the workspace command layer's post seam.</summary>
+    public void AnnounceEvent(A11yEvent @event) => _announce(@event);
+
+    /// <summary>slate.bases.exportCsv/exportMarkdown/copyMarkdown:
+    /// core composes the bytes (contract C14); the CALLER owns
+    /// delivery and its announcement. Returns null after announcing
+    /// the failure.</summary>
+    public string? ExportText(ExportFormat format)
+    {
+        if (State is BaseLoadState.Failed or BaseLoadState.Loading)
+        {
+            return null;
+        }
+        lock (_ffiLock)
+        {
+            if (_handle is not { } handle)
+            {
+                return null;
+            }
+            try
+            {
+                return _session.BaseExport(
+                    handle, (uint)_activeViewIndex, format, NormalizedFilter());
+            }
+            catch (VaultException failure)
+            {
+                _announce(new A11yEvent.BasesViewExportFailed(failure.Message));
+                return null;
+            }
+        }
+    }
+
+    /// <summary>The surface-request seams (the mac token pattern):
+    /// the ACTIVE tab's surface consumes these — WPF renders only the
+    /// selected tab's content, so a group's inactive tabs hold no
+    /// live surface.</summary>
+    internal event Action? QuickFilterFocusRequested;
+
+    internal event Action<BaseRendererOverride>? RendererOverrideRequested;
+
+    internal event Action? SortCurrentColumnRequested;
+
+    internal event Action? EditSelectedPropertyRequested;
+
+    internal void RequestQuickFilterFocus() => QuickFilterFocusRequested?.Invoke();
+
+    internal void RequestRendererOverride(BaseRendererOverride mode) =>
+        RendererOverrideRequested?.Invoke(mode);
+
+    internal void RequestSortCurrentColumn() => SortCurrentColumnRequested?.Invoke();
+
+    internal void RequestEditSelectedProperty() =>
+        EditSelectedPropertyRequested?.Invoke();
+
+    private BasesRow? _selectedRow;
+
+    /// <summary>The grid's current row, published by the active
+    /// surface (mac updateActiveBaseSelection) — the row commands'
+    /// target; null announces BasesRowSelectionNeeded.</summary>
+    public BasesRow? SelectedRow
+    {
+        get => _selectedRow;
+        internal set => SetField(ref _selectedRow, value);
+    }
 
     public bool ShowEmptyState =>
         State is BaseLoadState.Ready or BaseLoadState.Degraded

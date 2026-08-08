@@ -110,6 +110,74 @@
                           InputGestureText="Ctrl+R"
                           Command="{Binding Workspace.OpenTasksReviewCommand}" />
             </MenuItem>
+            <!-- W4-6 (#738): every slate.bases.* command reachable and
+                 AT-discoverable. Mac ships these palette-only with no
+                 chords; a menu is the Windows-native chordless surface
+                 (grid-scoped gestures — Ctrl+F, Ctrl+Alt+S — stay on
+                 the substrate). Items disable through ActiveBaseDocument. -->
+            <MenuItem Header="_Base"
+                      AutomationProperties.AutomationId="BaseMenu">
+                <MenuItem Header="_Refresh"
+                          AutomationProperties.AutomationId="BasesRefreshMenuItem"
+                          Command="{Binding Workspace.BasesRefreshCommand}" />
+                <MenuItem Header="_Where Am I?"
+                          AutomationProperties.AutomationId="BasesWhereAmIMenuItem"
+                          Command="{Binding Workspace.BasesWhereAmICommand}" />
+                <MenuItem Header="Res_ults"
+                          AutomationProperties.AutomationId="BasesResultsMenuItem"
+                          Command="{Binding Workspace.BasesResultsCommand}" />
+                <Separator />
+                <MenuItem Header="_Next View"
+                          AutomationProperties.AutomationId="BasesNextViewMenuItem"
+                          Command="{Binding Workspace.BasesNextViewCommand}" />
+                <MenuItem Header="_Previous View"
+                          AutomationProperties.AutomationId="BasesPreviousViewMenuItem"
+                          Command="{Binding Workspace.BasesPreviousViewCommand}" />
+                <MenuItem Header="Open View _Switcher"
+                          AutomationProperties.AutomationId="BasesViewSwitcherMenuItem"
+                          Command="{Binding Workspace.BasesViewSwitcherCommand}" />
+                <MenuItem Header="View as _Table"
+                          AutomationProperties.AutomationId="BasesViewAsTableMenuItem"
+                          Command="{Binding Workspace.BasesViewAsTableCommand}" />
+                <MenuItem Header="View as _List"
+                          AutomationProperties.AutomationId="BasesViewAsListMenuItem"
+                          Command="{Binding Workspace.BasesViewAsListCommand}" />
+                <Separator />
+                <MenuItem Header="Quick _Filter"
+                          AutomationProperties.AutomationId="BasesQuickFilterMenuItem"
+                          InputGestureText="Ctrl+F"
+                          Command="{Binding Workspace.BasesQuickFilterCommand}" />
+                <MenuItem Header="Sort by _Column"
+                          AutomationProperties.AutomationId="BasesSortByColumnMenuItem"
+                          InputGestureText="Ctrl+Alt+S"
+                          Command="{Binding Workspace.BasesSortByColumnCommand}" />
+                <MenuItem Header="Save Sort to _View"
+                          AutomationProperties.AutomationId="BasesSaveSortMenuItem"
+                          Command="{Binding Workspace.BasesSaveSortToViewCommand}" />
+                <Separator />
+                <MenuItem Header="_Open Row"
+                          AutomationProperties.AutomationId="BasesOpenRowMenuItem"
+                          Command="{Binding Workspace.BasesOpenRowCommand}" />
+                <MenuItem Header="Copy Lin_k"
+                          AutomationProperties.AutomationId="BasesCopyLinkMenuItem"
+                          Command="{Binding Workspace.BasesCopyLinkCommand}" />
+                <MenuItem Header="Show _Backlinks"
+                          AutomationProperties.AutomationId="BasesShowBacklinksMenuItem"
+                          Command="{Binding Workspace.BasesShowBacklinksCommand}" />
+                <MenuItem Header="_Edit Property"
+                          AutomationProperties.AutomationId="BasesEditPropertyMenuItem"
+                          Command="{Binding Workspace.BasesEditPropertyCommand}" />
+                <Separator />
+                <MenuItem Header="Export View as _CSV…"
+                          AutomationProperties.AutomationId="BasesExportCsvMenuItem"
+                          Command="{Binding Workspace.BasesExportCsvCommand}" />
+                <MenuItem Header="Export View as _Markdown Table…"
+                          AutomationProperties.AutomationId="BasesExportMarkdownMenuItem"
+                          Command="{Binding Workspace.BasesExportMarkdownCommand}" />
+                <MenuItem Header="Copy View as Mar_kdown"
+                          AutomationProperties.AutomationId="BasesCopyMarkdownMenuItem"
+                          Command="{Binding Workspace.BasesCopyMarkdownCommand}" />
+            </MenuItem>
             <MenuItem Header="_Editor"
                       AutomationProperties.AutomationId="EditorMenu">
                 <MenuItem Header="_Activate at Cursor"

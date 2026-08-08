@@ -676,8 +676,18 @@ internal sealed class AccessibleDataGrid : UserControl
         }
     }
 
+    /// <summary>The current ROW for consuming surfaces (W4-6 row
+    /// commands target it); null when currency leaves the bound set.</summary>
+    internal event Action<object?>? CurrentRowChanged;
+
     private void OnCurrentCellChanged(object? sender, EventArgs e)
     {
+        CurrentRowChanged?.Invoke(
+            _grid.CurrentCell.Item is { } current
+            && current != CollectionView.NewItemPlaceholder
+            && _items.Contains(current)
+                ? current
+                : null);
         if (_grid.CurrentCell.Item is not object row
             || row == CollectionView.NewItemPlaceholder
             || _grid.CurrentCell.Column is not AccessibleGridTextColumn column)
@@ -788,6 +798,17 @@ internal sealed class AccessibleDataGrid : UserControl
     }
 
     internal bool IsEditingForTests => _editing;
+
+    internal int CurrentColumnIndexForTests() => CurrentColumnIndex();
+
+    internal object? CurrentRowForTests() =>
+        _grid.CurrentCell.Item is { } item
+        && item != CollectionView.NewItemPlaceholder
+        && _items.Contains(item)
+            ? item
+            : null;
+
+    internal object? FirstItemForTests() => _items.Count > 0 ? _items[0] : null;
 
     /// <summary>Begin editing a cell (keyboard, row action, or the
     /// editProperty command). Returns false when the cell is
