@@ -446,7 +446,7 @@
             <local:AutomationLandmarkGrid Grid.RowSpan="3"
                                           Panel.ZIndex="100"
                                           Background="Transparent"
-                                          Visibility="{Binding EditorInteractions.IsPopoverOpen, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                          Visibility="{Binding EditorInteractions.IsPopoverOpen, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Collapsed}"
                                           AutomationProperties.IsDialog="True"
                                           AutomationProperties.AutomationId="EditorInteractionPopover"
                                           AutomationProperties.Name="{Binding EditorInteractions.PopoverAutomationName}">

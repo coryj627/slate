@@ -2999,6 +2999,178 @@ public sealed class ShellAccessibilityTests
         }
     }
 
+    /// <summary>
+    /// W4-6 (#738) §W-C journey: the .base tab (grid identity, headers,
+    /// cells, quick filter via the grid-scoped Ctrl+F, core-executed
+    /// sort via Ctrl+Alt+S) and the Queries leaf, each axe-scanned.
+    /// Every element asserted here is one the contracts name; the
+    /// degraded-vault twin lives with the unit facts (banner wording),
+    /// because a broken .base still opens a healthy shell.
+    /// </summary>
+    [Fact]
+    [Trait("gate", "W-C")]
+    public void BasesSurfaces_GridBuilderAndLeaves_AreClean()
+    {
+        string testRoot = Path.Combine(
+            Path.GetTempPath(), $"slate-bases-surfaces-{Guid.NewGuid():N}");
+        string vaultRoot = Path.Combine(testRoot, "Bases Vault");
+        string logDirectory = Path.Combine(testRoot, "logs");
+        Directory.CreateDirectory(vaultRoot);
+        File.WriteAllText(
+            Path.Combine(vaultRoot, "alpha.md"),
+            "---\nstatus: todo\n---\n\n# Alpha\n\nBody.\n");
+        File.WriteAllText(
+            Path.Combine(vaultRoot, "beta.md"),
+            "---\nstatus: done\n---\n\n# Beta\n\nBody.\n");
+        File.WriteAllText(
+            Path.Combine(vaultRoot, "Notes.base"),
+            "filters: 'file.ext == \"md\"'\n" +
+            "views:\n" +
+            "  - type: table\n" +
+            "    name: Main\n" +
+            "    order:\n" +
+            "      - file.name\n" +
+            "      - note.status\n");
+
+        Process? process = null;
+        try
+        {
+            var startInfo = new ProcessStartInfo(SlateWindowsExe())
+            {
+                UseShellExecute = false,
+            };
+            startInfo.ArgumentList.Add(vaultRoot);
+            startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
+                $"slate-bases-surfaces-{Guid.NewGuid():N}";
+            startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            process = Process.Start(startInfo)
+                ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+
+            if (!Environment.UserInteractive)
+            {
+                Assert.False(
+                    process.WaitForExit(3_000),
+                    "Slate exited during the Bases startup smoke.");
+                return;
+            }
+
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(
+                process,
+                automation,
+                Path.Combine(logDirectory, "slate-windows.log"),
+                TimeSpan.FromSeconds(30));
+
+            // Open the base from the files tree.
+            AutomationElement filesTree = WaitForElement(
+                window, "FilesTree", TimeSpan.FromSeconds(30));
+            AutomationElement baseItem = filesTree
+                .FindAllDescendants(
+                    automation.ConditionFactory.ByControlType(ControlType.TreeItem))
+                .FirstOrDefault(item =>
+                    item.Name.StartsWith("Notes", StringComparison.OrdinalIgnoreCase))
+                ?? throw new Xunit.Sdk.XunitException("The Notes.base TreeItem is absent.");
+            baseItem.Patterns.SelectionItem.Pattern.Select();
+
+            // The tab surface: grid identity + §8.7 headers.
+            AutomationElement grid = WaitForElement(
+                window, "BaseTabGrid", TimeSpan.FromSeconds(15));
+            Assert.True(grid.Patterns.Grid.IsSupported, "Grid pattern missing");
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => grid
+                        .FindAllDescendants(automation.ConditionFactory.ByControlType(
+                            ControlType.HeaderItem))
+                        .Select(header => header.Name)
+                        .ToHashSet(StringComparer.Ordinal)
+                        .IsSupersetOf(["file.name", "note.status"]),
+                    TimeSpan.FromSeconds(15)),
+                "the base grid's core-labelled headers never materialized");
+            AssertAxeClean(process, "bases-tab");
+
+            // Quick filter: grid-scoped Ctrl+F focuses the transient
+            // field; typing narrows the count readout.
+            AutomationElement firstCell = grid
+                .FindAllDescendants(
+                    automation.ConditionFactory.ByControlType(ControlType.Custom))
+                .FirstOrDefault(cell =>
+                    cell.Name.Contains("alpha", StringComparison.OrdinalIgnoreCase))
+                ?? throw new Xunit.Sdk.XunitException("No alpha cell in the base grid.");
+            firstCell.Focus();
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_F);
+            AutomationElement quickFilter = WaitForElement(
+                window, "BaseQuickFilter", TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => quickFilter.Properties.HasKeyboardFocus.ValueOrDefault,
+                    TimeSpan.FromSeconds(10)),
+                "Ctrl+F did not focus the quick filter");
+            Keyboard.Type("alpha");
+            AutomationElement countReadout = WaitForElement(
+                window, "BaseCountReadout", TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => countReadout.Name.Contains(
+                        "1 of", StringComparison.Ordinal),
+                    TimeSpan.FromSeconds(10)),
+                $"the filtered count never arrived; readout: {countReadout.Name}");
+            // Escape clears and returns focus to the content.
+            Keyboard.Press(VirtualKeyShort.ESCAPE);
+            Keyboard.Release(VirtualKeyShort.ESCAPE);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => !countReadout.Name.Contains(
+                        "1 of", StringComparison.Ordinal),
+                    TimeSpan.FromSeconds(10)),
+                "Escape did not clear the transient filter");
+
+            // The Queries leaf renders and scans clean.
+            AutomationElement leaves = WaitForElement(
+                window, "RightPaneLeaves", TimeSpan.FromSeconds(10));
+            AutomationElement? queriesLeaf = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        queriesLeaf = leaves
+                            .FindAllDescendants(automation.ConditionFactory
+                                .ByControlType(ControlType.ListItem))
+                            .FirstOrDefault(item => string.Equals(
+                                item.Name, "Queries", StringComparison.Ordinal));
+                        return queriesLeaf is not null;
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the Queries leaf option never appeared");
+            queriesLeaf!.Patterns.SelectionItem.Pattern.Select();
+            // The leaf BODY is a WPF Panel — no automation peer, no id
+            // in the tree (the W4-5 lesson); presence is asserted via
+            // its peered children.
+            _ = WaitForElement(window, "QueriesRefresh", TimeSpan.FromSeconds(10));
+            AssertAxeClean(process, "bases-queries-leaf");
+        }
+        finally
+        {
+            if (process is not null && !process.HasExited)
+            {
+                process.CloseMainWindow();
+                if (!process.WaitForExit(5_000))
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            try
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
     private static Window WaitForMainWindow(
         Process process,
         UIA3Automation automation,

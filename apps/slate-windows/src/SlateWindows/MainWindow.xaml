@@ -1430,21 +1430,44 @@
                                     <StackPanel>
                                         <TextBlock Margin="0,8,0,2" Text="SAVED QUERIES" FontSize="11"
                                                    Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
+                                        <TextBlock Text="No saved queries"
+                                                   Foreground="{DynamicResource Slate.SecondaryTextBrush}">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding SavedQueries.Count}" Value="0">
+                                                            <Setter Property="Visibility" Value="Visible" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
                                         <ListBox x:Name="QueriesSavedList"
                                                  MaxHeight="200"
                                                  ItemsSource="{Binding SavedQueries}"
                                                  DisplayMemberPath="Name"
                                                  MouseDoubleClick="QueriesSavedList_DoubleClick"
                                                  AutomationProperties.AutomationId="QueriesSavedList"
-                                                 AutomationProperties.Name="Saved queries" />
+                                                 AutomationProperties.Name="Saved queries">
+                                            <ListBox.Style>
+                                                <Style TargetType="ListBox">
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding SavedQueries.Count}" Value="0">
+                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </ListBox.Style>
+                                        </ListBox>
                                         <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
-                                            <Button Content="Run" AutomationProperties.AutomationId="QueriesRun" Click="QueriesRun_Click" />
-                                            <Button Content="Pin/Unpin" Margin="4,0,0,0" AutomationProperties.AutomationId="QueriesPin" Click="QueriesPin_Click" />
-                                            <Button Content="Edit in Builder" Margin="4,0,0,0" AutomationProperties.AutomationId="QueriesEditInBuilder" Click="QueriesEditInBuilder_Click" />
-                                            <Button Content="Rename…" Margin="4,0,0,0" AutomationProperties.AutomationId="QueriesRename" Click="QueriesRename_Click" />
-                                            <Button Content="Export as .base…" Margin="4,0,0,0" AutomationProperties.AutomationId="QueriesExport" Click="QueriesExport_Click" />
-                                            <Button Content="Dock" Margin="4,0,0,0" AutomationProperties.AutomationId="QueriesDockQuery" Click="QueriesDockQuery_Click" />
-                                            <Button Content="Delete…" Margin="4,0,0,0" AutomationProperties.AutomationId="QueriesDelete" Click="QueriesDelete_Click" />
+                                            <Button Content="Run" AutomationProperties.Name="Run saved query" AutomationProperties.AutomationId="QueriesRun" Click="QueriesRun_Click" />
+                                            <Button Content="Pin/Unpin" Margin="4,0,0,0" AutomationProperties.Name="Pin or unpin saved query" AutomationProperties.AutomationId="QueriesPin" Click="QueriesPin_Click" />
+                                            <Button Content="Edit in Builder" Margin="4,0,0,0" AutomationProperties.Name="Edit saved query in builder" AutomationProperties.AutomationId="QueriesEditInBuilder" Click="QueriesEditInBuilder_Click" />
+                                            <Button Content="Rename…" Margin="4,0,0,0" AutomationProperties.Name="Rename saved query" AutomationProperties.AutomationId="QueriesRename" Click="QueriesRename_Click" />
+                                            <Button Content="Export as .base…" Margin="4,0,0,0" AutomationProperties.Name="Export saved query as base file" AutomationProperties.AutomationId="QueriesExport" Click="QueriesExport_Click" />
+                                            <Button Content="Dock" Margin="4,0,0,0" AutomationProperties.Name="Dock saved query" AutomationProperties.AutomationId="QueriesDockQuery" Click="QueriesDockQuery_Click" />
+                                            <Button Content="Delete…" Margin="4,0,0,0" AutomationProperties.Name="Delete saved query" AutomationProperties.AutomationId="QueriesDelete" Click="QueriesDelete_Click" />
                                         </StackPanel>
                                         <DockPanel x:Name="QueriesRenameRow" Visibility="Collapsed" Margin="0,4,0,0">
                                             <TextBlock Text="New name:" VerticalAlignment="Center" />
@@ -1457,31 +1480,77 @@
                                         </DockPanel>
                                         <TextBlock Margin="0,12,0,2" Text="BASE FILES" FontSize="11"
                                                    Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
+                                        <TextBlock Text="No base files"
+                                                   Foreground="{DynamicResource Slate.SecondaryTextBrush}">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding BaseFiles.Count}" Value="0">
+                                                            <Setter Property="Visibility" Value="Visible" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
                                         <ListBox x:Name="QueriesBaseFilesList"
                                                  MaxHeight="160"
                                                  ItemsSource="{Binding BaseFiles}"
                                                  DisplayMemberPath="Path"
                                                  MouseDoubleClick="QueriesBaseFilesList_DoubleClick"
                                                  AutomationProperties.AutomationId="QueriesBaseFilesList"
-                                                 AutomationProperties.Name="Base files" />
+                                                 AutomationProperties.Name="Base files">
+                                            <ListBox.Style>
+                                                <Style TargetType="ListBox">
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding BaseFiles.Count}" Value="0">
+                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </ListBox.Style>
+                                        </ListBox>
                                         <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
-                                            <Button Content="Open" AutomationProperties.AutomationId="QueriesOpenBaseFile" Click="QueriesOpenBaseFile_Click" />
-                                            <Button Content="Dock" Margin="4,0,0,0" AutomationProperties.AutomationId="QueriesDockBaseFile" Click="QueriesDockBaseFile_Click" />
+                                            <Button Content="Open" AutomationProperties.Name="Open base file" AutomationProperties.AutomationId="QueriesOpenBaseFile" Click="QueriesOpenBaseFile_Click" />
+                                            <Button Content="Dock" Margin="4,0,0,0" AutomationProperties.Name="Dock base file" AutomationProperties.AutomationId="QueriesDockBaseFile" Click="QueriesDockBaseFile_Click" />
                                         </StackPanel>
                                         <TextBlock Margin="0,12,0,2" Text="DASHBOARDS" FontSize="11"
                                                    Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
+                                        <TextBlock Text="No dashboards"
+                                                   Foreground="{DynamicResource Slate.SecondaryTextBrush}">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Dashboards.Count}" Value="0">
+                                                            <Setter Property="Visibility" Value="Visible" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
                                         <ListBox x:Name="QueriesDashboardsList"
                                                  MaxHeight="160"
                                                  ItemsSource="{Binding Dashboards}"
                                                  DisplayMemberPath="Name"
                                                  MouseDoubleClick="QueriesDashboardsList_DoubleClick"
                                                  AutomationProperties.AutomationId="QueriesDashboardsList"
-                                                 AutomationProperties.Name="Dashboards" />
+                                                 AutomationProperties.Name="Dashboards">
+                                            <ListBox.Style>
+                                                <Style TargetType="ListBox">
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Dashboards.Count}" Value="0">
+                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </ListBox.Style>
+                                        </ListBox>
                                         <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
-                                            <Button Content="Open" AutomationProperties.AutomationId="QueriesOpenDashboard" Click="QueriesOpenDashboard_Click" />
-                                            <Button Content="Edit…" Margin="4,0,0,0" AutomationProperties.AutomationId="QueriesEditDashboard" Click="QueriesEditDashboard_Click" />
-                                            <Button Content="Dock" Margin="4,0,0,0" AutomationProperties.AutomationId="QueriesDockDashboard" Click="QueriesDockDashboard_Click" />
-                                            <Button Content="Delete…" Margin="4,0,0,0" AutomationProperties.AutomationId="QueriesDeleteDashboard" Click="QueriesDeleteDashboard_Click" />
+                                            <Button Content="Open" AutomationProperties.Name="Open dashboard" AutomationProperties.AutomationId="QueriesOpenDashboard" Click="QueriesOpenDashboard_Click" />
+                                            <Button Content="Edit…" Margin="4,0,0,0" AutomationProperties.Name="Edit dashboard" AutomationProperties.AutomationId="QueriesEditDashboard" Click="QueriesEditDashboard_Click" />
+                                            <Button Content="Dock" Margin="4,0,0,0" AutomationProperties.Name="Dock dashboard" AutomationProperties.AutomationId="QueriesDockDashboard" Click="QueriesDockDashboard_Click" />
+                                            <Button Content="Delete…" Margin="4,0,0,0" AutomationProperties.Name="Delete dashboard" AutomationProperties.AutomationId="QueriesDeleteDashboard" Click="QueriesDeleteDashboard_Click" />
                                         </StackPanel>
                                     </StackPanel>
                                 </ScrollViewer>
@@ -1516,6 +1585,7 @@
                                                        Model="{Binding BasesDockDocument}"
                                                        IsReadOnlySurface="True" />
                             </DockPanel>
+
                             <StackPanel Grid.Column="0" Margin="12">
                                 <StackPanel.Style>
                                     <Style TargetType="StackPanel">

@@ -186,6 +186,16 @@ LEAF_DELIVERED = {
         "MainWindow leaf body, BOTH segments on `AccessibleDataGrid`; "
         "`BibliographyPanelTests` + FlaUI "
         "`CitationSurfaces_GridsSheetsAndChords_AreClean`"),
+    "queries": (
+        "implemented 2026-08-08 (#738): workspace BaseQueriesState + "
+        "MainWindow leaf body (saved queries / base files / dashboards, "
+        "pin + rename + delete + export + dock); `BasesQueriesTests` + "
+        "FlaUI `BasesSurfaces_GridBuilderAndLeaves_AreClean`"),
+    "basesDock": (
+        "implemented 2026-08-08 (#738): workspace dock target following "
+        "the active note (this_path, 500 ms debounce) over a read-only "
+        "`BaseSurfaceView`; `BasesQueriesTests` + FlaUI "
+        "`BasesSurfaces_GridBuilderAndLeaves_AreClean`"),
 }
 
 # Milestones unshipped at the 2026-07-19 snapshot: their rows drop out
@@ -486,6 +496,40 @@ W4_STATUS_BY_COMMAND = {
         "interactive CI + human AT pending",
 }
 
+W4_6_STATUS = (
+    "implemented; local gates green 2026-08-08; "
+    "interactive CI + human AT pending"
+)
+
+W4_6_COMMANDS = {
+    "slate.bases.builder.addCondition",
+    "slate.bases.builder.addGroup",
+    "slate.bases.builder.editCondition",
+    "slate.bases.builder.removeCondition",
+    "slate.bases.copyLink",
+    "slate.bases.copyMarkdown",
+    "slate.bases.editProperty",
+    "slate.bases.editViewFilters",
+    "slate.bases.exportCsv",
+    "slate.bases.exportMarkdown",
+    "slate.bases.newQuery",
+    "slate.bases.nextView",
+    "slate.bases.openRow",
+    "slate.bases.openViewSwitcher",
+    "slate.bases.previousView",
+    "slate.bases.quickFilter",
+    "slate.bases.refresh",
+    "slate.bases.resultsPopover",
+    "slate.bases.saveSortToView",
+    "slate.bases.savedQuery.run.<dynamic>",
+    "slate.bases.showBacklinks",
+    "slate.bases.sortByColumn",
+    "slate.bases.viewAsList",
+    "slate.bases.viewAsTable",
+    "slate.bases.whereAmI",
+}
+W4_STATUS_BY_COMMAND.update({command: W4_6_STATUS for command in W4_6_COMMANDS})
+
 # W4 delivery, same per-command shape as W3.
 # slate.editor.togglePropertiesSource stays PENDING: YAML source mode
 # was scoped out of W4-4 (no set_frontmatter_source call site) — the
@@ -498,6 +542,8 @@ W4_DELIVERED_COMMANDS = {
     "slate.navigation.jumpToBibliography",
     "slate.editor.citationSummary",
 }
+# W4-6 (#738)
+W4_DELIVERED_COMMANDS |= W4_6_COMMANDS
 
 # §W-F waivers: status text the generator must preserve across
 # regeneration — a waiver that lives only in the generated file is
@@ -569,7 +615,7 @@ def load_delivery_evidence(
 
     expected_issues = {
         "#381", "#720", "#721", "#722", "#723", "#724", "#725", "#728", "#735", "#736",
-        "#737",
+        "#737", "#738",
     }
     if set(issue_map) != expected_issues:
         fail(
@@ -743,10 +789,10 @@ def main() -> int:
     a("| Math rendering + canonical speech/braille artifact | core `math.rs` consumers | #729 (W3-2) | implemented (PR #1057, merged 2026-07-28; human AT pending) |")
     a("| Diagrams (canonical Rust SVG + description) | core `diagram.rs` consumers | #730 (W3-3) | implemented (PR #1058, merged 2026-07-29; human AT pending) |")
     a("| Code blocks (canonical tokens + AT preamble) | `CodeBlockView.swift` | #731 (W3-4) | implemented (PR #1054, merged 2026-07-27; human AT pending) |")
-    a("| Embeds across contexts | editor/reading embeds | #732 (W3-5; XD rows dropped) | implemented (PR #1059, merged 2026-07-30; human AT pending; `.base` row transfers to W4-6) |")
+    a("| Embeds across contexts | editor/reading embeds | #732 (W3-5; XD rows dropped) | implemented (PR #1059, merged 2026-07-30; human AT pending; `.base` row closed by W4-6's layered embed card, D-15) |")
     a("| Accessible grid substrate | `AccessibleDataGrid.swift` | #733 (W4-1) | pending |")
     a("| Properties (in-note header, panel, typed rows, add-property) | `Properties*` views | #736 (W4-4) | pending |")
-    a("| Bases grid + builder (N shipped) | `Bases/` | #738 (W4-6) | pending |")
+    a("| Bases grid + builder (N shipped) | `Bases/` | #738 (W4-6) | implemented; local gates green 2026-08-08; interactive CI + human AT pending |")
     a("| Command palette | `CommandPaletteModel.swift` (core ranking, W0.5-1) | #741 (W5-1) | pending |")
     a("| Search overlay | search UI over `full_text_search` | #742 (W5-2) | pending |")
     a("| Templates picker + prompt flow | template views | #743 (W5-3) | pending |")

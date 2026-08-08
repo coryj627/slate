@@ -340,6 +340,20 @@
           "apps/slate-windows/tests/SlateWindows.Tests/BibliographyPanelTests.cs#BibliographyPanelTests",
           "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#CitationSurfaces_GridsSheetsAndChords_AreClean"
         ]
+      },
+      "bases": {
+        "implementation": [
+          "apps/slate-windows/src/SlateWindows/Bases/BaseDocumentViewModel.cs#BaseDocumentViewModel",
+          "apps/slate-windows/src/SlateWindows/Bases/BaseSurfaceView.cs#BaseSurfaceView",
+          "apps/slate-windows/src/SlateWindows/Bases/BaseQueryBuilderViewModel.cs#BaseQueryBuilderViewModel",
+          "apps/slate-windows/src/SlateWindows/WorkspaceViewModel.Bases.cs#BasesApplyPropertyEdit"
+        ],
+        "tests": [
+          "apps/slate-windows/tests/SlateWindows.Tests/BasesDocumentTests.cs#BasesDocumentTests",
+          "apps/slate-windows/tests/SlateWindows.Tests/BasesCellEditTests.cs#BasesCellEditTests",
+          "apps/slate-windows/tests/SlateWindows.Tests/BasesQueriesTests.cs#BasesQueriesTests",
+          "apps/slate-windows/tests/SlateWindows.Tests/BasesBuilderTests.cs#BasesBuilderTests"
+        ]
       }
     },
     "commands": {
@@ -413,7 +427,32 @@
       "slate.editor.addProperty": "properties",
       "slate.editor.bulkRenameProperties": "properties",
       "slate.navigation.jumpToBibliography": "citations",
-      "slate.editor.citationSummary": "citations"
+      "slate.editor.citationSummary": "citations",
+      "slate.bases.builder.addCondition": "bases",
+      "slate.bases.builder.addGroup": "bases",
+      "slate.bases.builder.editCondition": "bases",
+      "slate.bases.builder.removeCondition": "bases",
+      "slate.bases.copyLink": "bases",
+      "slate.bases.copyMarkdown": "bases",
+      "slate.bases.editProperty": "bases",
+      "slate.bases.editViewFilters": "bases",
+      "slate.bases.exportCsv": "bases",
+      "slate.bases.exportMarkdown": "bases",
+      "slate.bases.newQuery": "bases",
+      "slate.bases.nextView": "bases",
+      "slate.bases.openRow": "bases",
+      "slate.bases.openViewSwitcher": "bases",
+      "slate.bases.previousView": "bases",
+      "slate.bases.quickFilter": "bases",
+      "slate.bases.refresh": "bases",
+      "slate.bases.resultsPopover": "bases",
+      "slate.bases.saveSortToView": "bases",
+      "slate.bases.savedQuery.run.<dynamic>": "bases",
+      "slate.bases.showBacklinks": "bases",
+      "slate.bases.sortByColumn": "bases",
+      "slate.bases.viewAsList": "bases",
+      "slate.bases.viewAsTable": "bases",
+      "slate.bases.whereAmI": "bases"
     },
     "issues": {
       "#720": "vault",
@@ -426,7 +465,8 @@
       "#728": "reading",
       "#735": "tasksReview",
       "#736": "properties",
-      "#737": "citations"
+      "#737": "citations",
+      "#738": "bases"
     }
   }
 }
