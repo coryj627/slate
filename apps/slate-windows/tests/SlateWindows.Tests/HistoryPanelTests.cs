@@ -386,7 +386,7 @@ public sealed class HistoryPanelTests : IDisposable
         HistoryVersionRow versionOne = rows.Where(row => !row.IsMarker).Last();
         workspace.HistoryRestoreConfirmation = _ => true;
         bool headFocusRequested = false;
-        workspace.HistoryFocusHeadRequested += () => headFocusRequested = true;
+        workspace.History.FocusHeadRequested += () => headFocusRequested = true;
         _announced.Clear();
 
         workspace.RequestRestoreVersion(versionOne);

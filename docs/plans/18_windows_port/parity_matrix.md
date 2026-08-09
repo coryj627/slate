@@ -1,6 +1,6 @@
 # Milestone W parity matrix (§W-F row-level checklist)
 
-Generated 2026-08-08 at `9ad5dea` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
+Generated 2026-08-09 at `ccf9d4e` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
 
 ## Entry-criteria snapshot (w0_spec §W0-4 item 3)
 
@@ -149,7 +149,7 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 | `slate.graph.zoomIn` | Graph: Zoom In | ⌘= | Command Equals | #746 (W6-2) | pending |
 | `slate.graph.zoomOut` | Graph: Zoom Out | ⌘- | Command Minus | #746 (W6-2) | pending |
 | `slate.help.open` | Help | — | — | #756 (W8-6) | pending |
-| `slate.history.showPanel` | Show History Panel | — | — | #739 (W4-7) | pending |
+| `slate.history.showPanel` | Show History Panel | — | — | #739 (W4-7) | implemented; local gates green 2026-08-09; interactive CI + human AT pending |
 | `slate.navigation.jumpToBibliography` | Jump to Bibliography | ⌘J | Command J | #737 (W4-5) | implemented; local gates green 2026-08-04; interactive CI + human AT pending |
 | `slate.settings.open` | Settings… | ⌘, | Command Comma | #751 (W8-1) | pending |
 | `slate.sidebar.addShortcut` | Add to Shortcuts | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
@@ -229,7 +229,7 @@ The palette surface itself (ranking via the W0.5-1 core engine, sections, recent
 | `diagrams` | #730 (W3-3) | pending |
 | `tasks` | #735 (W4-3) | implemented 2026-08-01 (#735): `RightPanePanelsViewModel` task sections + MainWindow leaf body; `TasksPanelTests` + FlaUI `TaskPanels_RowsToggleAndReviewCarriesTheMacShapes` |
 | `tasksReview` | #735 (W4-3) | implemented 2026-08-01 (#735): `TasksReviewViewModel` + MainWindow leaf body + Ctrl+R command; `TasksReviewTests` + FlaUI `TaskPanels_RowsToggleAndReviewCarriesTheMacShapes` |
-| `history` | #739 (W4-7) | pending |
+| `history` | #739 (W4-7) | implemented 2026-08-09 (#739): `HistoryViewModel` + `HistorySurfaceView` MainWindow leaf body (two segments, day-grouped versions, StructuredDiff walkthrough, restore + Restore As + deleted recovery, since-open opt-in, markers toggle); `HistoryPanelTests` + FlaUI `HistorySurfaces_LeafDiffAndRestore_AreClean` |
 | `citations` | #737 (W4-5) | implemented 2026-08-04 (#737): `CitationsPanelViewModel` + MainWindow leaf body + details/summary sheets; `CitationsPanelTests` + FlaUI `CitationSurfaces_GridsSheetsAndChords_AreClean` |
 | `bibliography` | #737 (W4-5) | implemented 2026-08-04 (#737): `BibliographyViewModel` + MainWindow leaf body, BOTH segments on `AccessibleDataGrid`; `BibliographyPanelTests` + FlaUI `CitationSurfaces_GridsSheetsAndChords_AreClean` |
 | `queries` | #738 (W4-6) | implemented 2026-08-08 (#738): workspace BaseQueriesState + MainWindow leaf body (saved queries / base files / dashboards, pin + rename + delete + export + dock); `BasesQueriesTests` + FlaUI `BasesSurfaces_GridBuilderAndLeaves_AreClean` |

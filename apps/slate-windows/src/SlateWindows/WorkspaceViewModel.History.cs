@@ -36,9 +36,16 @@ internal sealed partial class WorkspaceViewModel
             System.Windows.MessageBoxButton.OK,
             System.Windows.MessageBoxImage.Warning);
 
-    /// <summary>Raised after a successful restore so the view moves
-    /// focus to the NEW HEAD row (position 0 — WCAG 2.4.3).</summary>
-    internal event Action? HistoryFocusHeadRequested;
+    /// <summary>The surface's action seams, installed once (the Bases
+    /// InstallBaseDocumentSeams pattern) — called from the workspace
+    /// ctor right after History is constructed.</summary>
+    internal void InstallHistorySeams()
+    {
+        History.RestoreFromSurface = RequestRestoreVersion;
+        History.RestoreAsFromSurface = CommitRestoreAsVersion;
+        History.RecoverFromSurface = RecoverDeletedFile;
+        History.RecoverAsFromSurface = CommitRestoreAsDeleted;
+    }
 
     /// <summary>slate.history.showPanel (contract H11): un-hide the
     /// pane, activate the leaf, announce the canonical event ONLY on
@@ -178,7 +185,7 @@ internal sealed partial class WorkspaceViewModel
                 _announce(new A11yEvent.RestoredVersionFrom(request.FormattedDate));
                 ReloadOpenTabFromDisk(request.Path);
                 History.Reload();
-                HistoryFocusHeadRequested?.Invoke();
+                History.RequestFocusHead();
             });
         });
     }

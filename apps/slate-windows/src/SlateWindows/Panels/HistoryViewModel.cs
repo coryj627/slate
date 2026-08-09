@@ -191,6 +191,27 @@ internal sealed class HistoryViewModel : PanelWorkScheduler
     /// workspace; null = no comparable current state.</summary>
     internal Func<string?>? CurrentContentHashProvider { get; set; }
 
+    /// <summary>Action seams installed by the workspace coordinator
+    /// (the Bases surface pattern): the view calls these; the
+    /// coordinator owns tabs, dialogs, and announcements.</summary>
+    internal Action<HistoryVersionRow>? RestoreFromSurface { get; set; }
+
+    internal Action<HistoryVersionRow, string, Action<bool, string?>>?
+        RestoreAsFromSurface
+    { get; set; }
+
+    internal Action<HistoryDeletedRow, Action<bool, bool>>? RecoverFromSurface
+    { get; set; }
+
+    internal Action<string, string, Action<bool, string?>>? RecoverAsFromSurface
+    { get; set; }
+
+    /// <summary>Raised after a successful restore so the view moves
+    /// focus to the NEW HEAD row (position 0 — WCAG 2.4.3).</summary>
+    internal event Action? FocusHeadRequested;
+
+    internal void RequestFocusHead() => FocusHeadRequested?.Invoke();
+
     // --- Published state (all mutated on the UI context only) ---
 
     public string? Path => _path;

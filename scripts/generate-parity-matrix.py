@@ -197,6 +197,13 @@ LEAF_DELIVERED = {
         "`BaseSurfaceView`/`DashboardSurfaceView`; `BasesQueriesTests` + "
         "FlaUI `BasesSurfaces_GridBuilderAndLeaves_AreClean` (docks a "
         "base from the leaf and axe-scans the revealed BasesDockGrid)"),
+    "history": (
+        "implemented 2026-08-09 (#739): `HistoryViewModel` + "
+        "`HistorySurfaceView` MainWindow leaf body (two segments, "
+        "day-grouped versions, StructuredDiff walkthrough, restore + "
+        "Restore As + deleted recovery, since-open opt-in, markers "
+        "toggle); `HistoryPanelTests` + FlaUI "
+        "`HistorySurfaces_LeafDiffAndRestore_AreClean`"),
 }
 
 # Milestones unshipped at the 2026-07-19 snapshot: their rows drop out
@@ -531,6 +538,19 @@ W4_6_COMMANDS = {
 }
 W4_STATUS_BY_COMMAND.update({command: W4_6_STATUS for command in W4_6_COMMANDS})
 
+W4_7_STATUS = (
+    "implemented; local gates green 2026-08-09; "
+    "interactive CI + human AT pending"
+)
+
+# W4-7 (#739): mac registers exactly ONE history command — the row
+# actions (compare/restore/restore-as/recover) are deliberately not
+# commands (they need row context).
+W4_7_COMMANDS = {
+    "slate.history.showPanel",
+}
+W4_STATUS_BY_COMMAND.update({command: W4_7_STATUS for command in W4_7_COMMANDS})
+
 # W4 delivery, same per-command shape as W3.
 # slate.editor.togglePropertiesSource stays PENDING: YAML source mode
 # was scoped out of W4-4 (no set_frontmatter_source call site) — the
@@ -545,6 +565,8 @@ W4_DELIVERED_COMMANDS = {
 }
 # W4-6 (#738)
 W4_DELIVERED_COMMANDS |= W4_6_COMMANDS
+# W4-7 (#739)
+W4_DELIVERED_COMMANDS |= W4_7_COMMANDS
 
 # §W-F waivers: status text the generator must preserve across
 # regeneration — a waiver that lives only in the generated file is
@@ -616,7 +638,7 @@ def load_delivery_evidence(
 
     expected_issues = {
         "#381", "#720", "#721", "#722", "#723", "#724", "#725", "#728", "#735", "#736",
-        "#737", "#738",
+        "#737", "#738", "#739",
     }
     if set(issue_map) != expected_issues:
         fail(

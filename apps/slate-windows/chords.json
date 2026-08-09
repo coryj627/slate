@@ -354,6 +354,17 @@
           "apps/slate-windows/tests/SlateWindows.Tests/BasesQueriesTests.cs#BasesQueriesTests",
           "apps/slate-windows/tests/SlateWindows.Tests/BasesBuilderTests.cs#BasesBuilderTests"
         ]
+      },
+      "history": {
+        "implementation": [
+          "apps/slate-windows/src/SlateWindows/Panels/HistoryViewModel.cs#HistoryViewModel",
+          "apps/slate-windows/src/SlateWindows/Panels/HistorySurfaceView.cs#HistorySurfaceView",
+          "apps/slate-windows/src/SlateWindows/WorkspaceViewModel.History.cs#ShowHistoryPanel"
+        ],
+        "tests": [
+          "apps/slate-windows/tests/SlateWindows.Tests/HistoryPanelTests.cs#HistoryPanelTests",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#HistorySurfaces_LeafDiffAndRestore_AreClean"
+        ]
       }
     },
     "commands": {
@@ -452,7 +463,8 @@
       "slate.bases.sortByColumn": "bases",
       "slate.bases.viewAsList": "bases",
       "slate.bases.viewAsTable": "bases",
-      "slate.bases.whereAmI": "bases"
+      "slate.bases.whereAmI": "bases",
+      "slate.history.showPanel": "history"
     },
     "issues": {
       "#720": "vault",
@@ -466,7 +478,8 @@
       "#735": "tasksReview",
       "#736": "properties",
       "#737": "citations",
-      "#738": "bases"
+      "#738": "bases",
+      "#739": "history"
     }
   }
 }

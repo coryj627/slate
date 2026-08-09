@@ -3462,6 +3462,237 @@ public sealed class ShellAccessibilityTests
         }
     }
 
+    /// <summary>
+    /// W4-7 (#739) §W-C journey, per-surface: the history leaf via the
+    /// slate.history.showPanel menu route, real in-app saves creating
+    /// version rows, the day-group + markers toggle, a core
+    /// StructuredDiff walkthrough via the per-row Compare, the Deleted
+    /// segment with its standing footer, and a REAL restore through
+    /// the production confirmation dialog landing on disk — each
+    /// surface axe-scanned. Honors the recorded journey traps
+    /// (foreground re-assert, async Invoke settle, panel-no-peer).
+    /// </summary>
+    [Fact]
+    [Trait("gate", "W-C")]
+    public void HistorySurfaces_LeafDiffAndRestore_AreClean()
+    {
+        string testRoot = Path.Combine(
+            Path.GetTempPath(), $"slate-history-surfaces-{Guid.NewGuid():N}");
+        string vaultRoot = Path.Combine(testRoot, "History Vault");
+        string logDirectory = Path.Combine(testRoot, "logs");
+        Directory.CreateDirectory(vaultRoot);
+        File.WriteAllText(
+            Path.Combine(vaultRoot, "alpha.md"),
+            "# Alpha\n\nOriginal body.\n");
+
+        Process? process = null;
+        try
+        {
+            var startInfo = new ProcessStartInfo(SlateWindowsExe())
+            {
+                UseShellExecute = false,
+            };
+            startInfo.ArgumentList.Add(vaultRoot);
+            startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
+                $"slate-history-surfaces-{Guid.NewGuid():N}";
+            startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            process = Process.Start(startInfo)
+                ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+
+            if (!Environment.UserInteractive)
+            {
+                Assert.False(
+                    process.WaitForExit(3_000),
+                    "Slate exited during the history startup smoke.");
+                return;
+            }
+
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(
+                process,
+                automation,
+                Path.Combine(logDirectory, "slate-windows.log"),
+                TimeSpan.FromSeconds(30));
+            window.SetForeground();
+            window.Focus();
+
+            // Open the note and create two REAL versions via in-app
+            // saves (files bind to an op-log on their first Slate
+            // save).
+            AutomationElement filesTree = WaitForElement(
+                window, "FilesTree", TimeSpan.FromSeconds(30));
+            AutomationElement noteItem = filesTree
+                .FindAllDescendants(
+                    automation.ConditionFactory.ByControlType(ControlType.TreeItem))
+                .FirstOrDefault(item =>
+                    item.Name.StartsWith("alpha", StringComparison.OrdinalIgnoreCase))
+                ?? throw new Xunit.Sdk.XunitException("The alpha TreeItem is absent.");
+            noteItem.Patterns.SelectionItem.Pattern.Select();
+            AutomationElement editor = WaitForEditor(
+                window, automation, "alpha.md editor", TimeSpan.FromSeconds(10));
+            Keyboard.Press(VirtualKeyShort.ALT);
+            window.SetForeground();
+            Keyboard.Release(VirtualKeyShort.ALT);
+            editor.Focus();
+            Keyboard.Type("first revision ");
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_S);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => File.ReadAllText(Path.Combine(vaultRoot, "alpha.md"))
+                        .Contains("first revision", StringComparison.Ordinal),
+                    TimeSpan.FromSeconds(10)),
+                "the first in-app save never reached disk");
+            Keyboard.Type("second revision ");
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_S);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => File.ReadAllText(Path.Combine(vaultRoot, "alpha.md"))
+                        .Contains("second revision", StringComparison.Ordinal),
+                    TimeSpan.FromSeconds(10)),
+                "the second in-app save never reached disk");
+
+            // slate.history.showPanel: the chordless menu route
+            // (contract H11) reveals the leaf.
+            AutomationElement showHistory = WaitForMenuItem(
+                window, "WorkspaceMenu", "ShowHistoryPanelMenuItem",
+                TimeSpan.FromSeconds(10));
+            showHistory.Patterns.Invoke.Pattern.Invoke();
+            // The leaf BODY is a WPF Panel — presence via peered
+            // children (the W4-5 lesson).
+            _ = WaitForElement(
+                window, "HistorySegmentThisNote", TimeSpan.FromSeconds(10));
+            AutomationElement versionHeader = WaitForElement(
+                window, "HistoryVersionHeader", TimeSpan.FromSeconds(15));
+            Assert.Contains(
+                "version", versionHeader.Name, StringComparison.OrdinalIgnoreCase);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => window.FindAllDescendants(
+                        automation.ConditionFactory.ByControlType(ControlType.Group))
+                        .Any(candidate =>
+                            (candidate.Properties.AutomationId.ValueOrDefault ?? "")
+                                .StartsWith("HistoryDay", StringComparison.Ordinal)),
+                    TimeSpan.FromSeconds(15)),
+                "no day group appeared after two in-app saves");
+
+            // The markers toggle re-filters without a re-query.
+            AutomationElement markers = WaitForElement(
+                window, "HistoryShowMarkers", TimeSpan.FromSeconds(10));
+            markers.Patterns.Toggle.Pattern.Toggle();
+            markers.Patterns.Toggle.Pattern.Toggle();
+
+            // A per-row Compare publishes core's StructuredDiff
+            // walkthrough (the AudioSummary header proves INV-1
+            // consumption).
+            AutomationElement? compareButton = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        compareButton = window
+                            .FindAllDescendants(automation.ConditionFactory
+                                .ByControlType(ControlType.Button))
+                            .FirstOrDefault(button =>
+                                (button.Name ?? "").StartsWith(
+                                    "Compare,", StringComparison.Ordinal));
+                        return compareButton is not null;
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "no per-row Compare button appeared");
+            compareButton!.Patterns.Invoke.Pattern.Invoke();
+            AutomationElement diffSummary = WaitForElement(
+                window, "HistoryDiffSummary", TimeSpan.FromSeconds(15));
+            Assert.False(
+                string.IsNullOrWhiteSpace(diffSummary.Name),
+                "the diff summary is empty");
+            AssertAxeClean(process, "history-this-note");
+
+            // The Deleted segment: empty state + the standing footer.
+            AutomationElement deletedSegment = WaitForElement(
+                window, "HistorySegmentDeleted", TimeSpan.FromSeconds(10));
+            deletedSegment.Patterns.SelectionItem.Pattern.Select();
+            _ = WaitForElement(window, "HistoryDeletedEmpty", TimeSpan.FromSeconds(15));
+            _ = WaitForElement(window, "HistoryDeletedFooter", TimeSpan.FromSeconds(10));
+            AssertAxeClean(process, "history-deleted");
+            AutomationElement thisNoteSegment = WaitForElement(
+                window, "HistorySegmentThisNote", TimeSpan.FromSeconds(10));
+            thisNoteSegment.Patterns.SelectionItem.Pattern.Select();
+
+            // A REAL restore through the production confirmation
+            // dialog: the oldest version's body lands back on disk and
+            // the restore appends a new head row (history never
+            // rewrites).
+            AutomationElement? restoreButton = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        restoreButton = window
+                            .FindAllDescendants(automation.ConditionFactory
+                                .ByControlType(ControlType.Button))
+                            .LastOrDefault(button =>
+                                (button.Name ?? "").StartsWith(
+                                    "Restore,", StringComparison.Ordinal));
+                        return restoreButton is not null;
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "no per-row Restore button appeared");
+            restoreButton!.Patterns.Invoke.Pattern.Invoke();
+            // The modal is its own top-level window titled
+            // "Restore version?" — confirm via its Yes button.
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        Window[] modals = window.ModalWindows;
+                        Window? confirm = modals.FirstOrDefault(candidate =>
+                            candidate.Title.Contains(
+                                "Restore version?", StringComparison.Ordinal));
+                        if (confirm is null)
+                        {
+                            return false;
+                        }
+                        AutomationElement? yes = confirm
+                            .FindAllDescendants(automation.ConditionFactory
+                                .ByControlType(ControlType.Button))
+                            .FirstOrDefault(button =>
+                                string.Equals(
+                                    button.Name, "Yes", StringComparison.Ordinal));
+                        yes?.Patterns.Invoke.Pattern.Invoke();
+                        return yes is not null;
+                    },
+                    TimeSpan.FromSeconds(15)),
+                "the restore confirmation dialog never appeared");
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => !File.ReadAllText(Path.Combine(vaultRoot, "alpha.md"))
+                        .Contains("second revision", StringComparison.Ordinal),
+                    TimeSpan.FromSeconds(15)),
+                "the restore never landed on disk");
+        }
+        finally
+        {
+            if (process is not null && !process.HasExited)
+            {
+                process.CloseMainWindow();
+                if (!process.WaitForExit(5_000))
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            try
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
     private static Window WaitForMainWindow(
         Process process,
         UIA3Automation automation,

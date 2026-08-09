@@ -1457,6 +1457,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             EditorPreferences.HistoryShowChangesSinceOpen;
         EditorPreferences.HistoryShowChangesSinceOpenChanged +=
             enabled => History.ShowChangesSinceOpen = enabled;
+        InstallHistorySeams();
         // Both leaves read through the session's bibliography sources,
         // so neither may query before seeding SETTLES — and the
         // bibliography also branches on how it settled.
