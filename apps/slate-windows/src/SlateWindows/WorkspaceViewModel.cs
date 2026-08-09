@@ -602,7 +602,14 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     // pauses on the true "left the surface" signal instead
     // (ReadingContentViewModel.OnSurfaceDetached, raised by the
     // surface rebind that hides it), and Dispose still tears it down.
-    public void Deactivate()
+    /// <summary>Tab switch-away housekeeping. clearBaseQuickFilter is
+    /// FALSE when only the active GROUP changed (focus moved to
+    /// another pane): the tab is still mounted and visible, and C5's
+    /// fourth leg names "activating a different tab", not a pane
+    /// focus move — clearing there silently expanded a grid the user
+    /// was reading (red team round 2; the Reading comment above
+    /// documents the same hazard).</summary>
+    public void Deactivate(bool clearBaseQuickFilter = true)
     {
         _editorInteractions?.CloseTransientUi();
         // C5's fourth transiency leg (red team round 1: unimplemented):
@@ -610,7 +617,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         // shared document re-executes unfiltered SILENTLY (INV-4) —
         // Refresh, never ApplyQuickFilter, which would announce a
         // count nobody asked for.
-        if (Base is { } baseDocument)
+        if (clearBaseQuickFilter && Base is { } baseDocument)
         {
             bool executedFilter = baseDocument.QuickFilterActive;
             if (executedFilter || baseDocument.QuickFilterText.Length > 0)
@@ -1776,12 +1783,49 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             }
         }
 
+        // The Bases registry keys documents by byte-exact path, and a
+        // document's Path is immutable — a rename must re-key or the
+        // renamed tab keeps a document whose Retry reopens the OLD
+        // path forever, and whose stale key the next release sweep
+        // shuts down UNDER the live tab (red team round 2 blocker).
+        RetargetBaseDocuments(source, destination);
+
         Persist();
         // A rename that touched the ACTIVE tab changed its Path in
         // place — without a re-derive the panels stay bound to the
         // old path and ignore every save on the new one (adversarial
         // round 2).
         SyncPanels();
+    }
+
+    private void RetargetBaseDocuments(string source, string destination)
+    {
+        foreach (string oldKey in _baseDocuments.Keys
+            .Where(key => key.StartsWith("file:", StringComparison.Ordinal)
+                && TryRetargetPath(key["file:".Length..], source, destination, out _))
+            .ToList())
+        {
+            Bases.BaseDocumentViewModel oldDocument = _baseDocuments[oldKey];
+            _baseDocuments.Remove(oldKey);
+            oldDocument.Shutdown();
+            _ = TryRetargetPath(
+                oldKey["file:".Length..], source, destination, out string newPath);
+            foreach (WorkspaceTabViewModel tab in Groups
+                .SelectMany(group => group.Tabs)
+                .Where(candidate => candidate.IsBase
+                    && string.Equals(candidate.Path, newPath, StringComparison.Ordinal)))
+            {
+                tab.AttachBaseDocument(BaseDocumentFor(newPath));
+            }
+        }
+        if (BasesDockDocument is { } dockDocument
+            && !dockDocument.IsSavedQuery
+            && TryRetargetPath(dockDocument.Path, source, destination, out string dockPath))
+        {
+            // Silent re-dock at the new path: the target moved, the
+            // user did nothing — no announcement (INV-4).
+            RedockBaseFileSilently(dockPath);
+        }
     }
 
     public void InvalidatePath(string path)

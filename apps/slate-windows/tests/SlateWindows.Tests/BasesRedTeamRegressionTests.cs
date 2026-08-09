@@ -282,15 +282,24 @@ public sealed class BasesRedTeamRegressionTests : IDisposable
         document.ApplyQuickFilter();
         Assert.True(document.QuickFilterActive);
         Assert.Single(document.Result!.Rows);
-        workspace.OpenPath("note2.md", WorkspaceOpenTarget.NewTab);
+        // Cleared BEFORE the switch so the silence assertion below
+        // covers the deactivation itself (round 2: a post-switch
+        // clear made it vacuous).
         _announced.Clear();
+        workspace.OpenPath("note2.md", WorkspaceOpenTarget.NewTab);
 
         // Activating the base tab's sibling deactivated the base tab.
         Assert.False(document.QuickFilterActive);
         Assert.Equal(string.Empty, document.QuickFilterText);
         Assert.Equal(2, document.Result!.Rows.Length);
-        // Silent (INV-4): the unfiltered re-execute announces nothing.
-        Assert.Empty(_announced);
+        // Silent (INV-4): the unfiltered re-execute speaks NOTHING of
+        // the Bases family — the tab open's own announcements
+        // (TabFocused etc.) are the switch's, not the clear's.
+        Assert.DoesNotContain(
+            _announced,
+            e => e is A11yEvent.BaseQuickFilterResult
+                or A11yEvent.BaseRefreshed
+                or A11yEvent.BasesRefreshUpdated);
     }
 
     // --- Builder: typed-but-invalid rows refuse, never drop ---
@@ -475,6 +484,83 @@ public sealed class BasesRedTeamRegressionTests : IDisposable
             e => e is A11yEvent.HostComposed composed
                 && composed.Text.StartsWith(
                     "Wait for the current save", StringComparison.Ordinal));
+    }
+
+    // --- Round 2 regressions ---
+
+    [Fact]
+    public void RenamingAnOpenBaseRekeysTheDocumentRegistry()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("Status.base");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        BaseDocumentViewModel before =
+            Assert.IsType<BaseDocumentViewModel>(tab.Base);
+        File.Move(
+            Path.Combine(_root, "Status.base"),
+            Path.Combine(_root, "Renamed.base"));
+
+        workspace.RetargetPath("Status.base", "Renamed.base");
+
+        // The registry re-keyed and the tab re-attached (round 2
+        // blocker: the old-path document survived, its Retry reopened
+        // the old path forever, and the next release sweep shut it
+        // down under the live tab).
+        BaseDocumentViewModel after =
+            Assert.IsType<BaseDocumentViewModel>(tab.Base);
+        Assert.NotSame(before, after);
+        Assert.Equal("Renamed.base", after.Path);
+        Assert.Equal(BaseLoadState.Ready, after.State);
+        Assert.Same(after, workspace.BaseDocumentFor("Renamed.base"));
+        // The superseded document is shut down: it refuses new work.
+        before.Load();
+        Assert.NotEqual(BaseLoadState.Loading, before.State);
+    }
+
+    [Fact]
+    public async Task SortPublishSettlesAPendingFunnelOutcome()
+    {
+        var pump = new PumpSynchronizationContext();
+        BaseDocumentViewModel document = NewAsyncDocument(pump, "Status.base");
+        document.Load();
+        await document.DrainForTests();
+        pump.Drain();
+        Assert.Equal(BaseLoadState.Ready, document.State);
+        var outcomes = new List<string>();
+        document.RefreshForFunnel(7, () => outcomes.Add("write"));
+        await document.DrainForTests();
+        // The sort supersedes the funnel execute BEFORE its publish
+        // pumps — round 2: SortBody's publish bypassed the settlement
+        // and the write outcome was never spoken.
+        Assert.True(document.ApplySortFromGrid(0, ascending: false));
+        await document.DrainForTests();
+
+        pump.Drain();
+
+        Assert.Equal(["write"], outcomes);
+        document.Shutdown();
+    }
+
+    [Fact]
+    public void PaneFocusMoveDoesNotClearTheQuickFilter()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("Status.base");
+        BaseDocumentViewModel document =
+            Assert.IsType<BaseDocumentViewModel>(workspace.ActiveBaseDocument);
+        document.QuickFilterText = "note0";
+        document.ApplyQuickFilter();
+        Assert.True(document.QuickFilterActive);
+
+        // A SPLIT activates the new group; the base tab stays mounted
+        // and visible — C5's fourth leg is "a different TAB", not a
+        // pane focus move (round 2: the grid silently expanded while
+        // the user read it from the other pane).
+        workspace.OpenPath("note2.md", WorkspaceOpenTarget.SplitRight);
+
+        Assert.True(document.QuickFilterActive);
+        Assert.Single(document.Result!.Rows);
     }
 
     private static void WaitForUi(Func<bool> condition)

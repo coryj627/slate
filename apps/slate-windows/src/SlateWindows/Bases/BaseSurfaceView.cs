@@ -167,6 +167,7 @@ internal sealed class BaseSurfaceView : UserControl
             ExternalSortHandler = OnExternalSort,
         };
         _grid.FilterRequested += FocusQuickFilter;
+        _grid.EditSessionEnded += OnGridEditSessionEnded;
 
         _list = new ListBox
         {
@@ -224,9 +225,12 @@ internal sealed class BaseSurfaceView : UserControl
 
     private bool _isReadOnlySurface;
 
-    /// <summary>The transient per-TAB renderer override (mac keys it
-    /// by tab, not by document — two tabs on one source may render
-    /// differently). Set by the viewAsTable/viewAsList commands.</summary>
+    /// <summary>The transient renderer override, keyed per
+    /// (surface, document): it resets whenever the surface rebinds to
+    /// a different document (mac keys it by tab; same-source tabs in
+    /// one group share the surface and therefore the override — the
+    /// closest shape this pane model supports). Set by the
+    /// viewAsTable/viewAsList commands.</summary>
     internal BaseRendererOverride? RendererOverride
     {
         get => _rendererOverride;
@@ -255,6 +259,13 @@ internal sealed class BaseSurfaceView : UserControl
             oldModel.RendererOverrideRequested -= view.OnRendererOverrideRequested;
             oldModel.SortCurrentColumnRequested -= view.OnSortCurrentColumnRequested;
             oldModel.EditSelectedPropertyRequested -= view.OnEditSelectedPropertyRequested;
+            // A rebind to a DIFFERENT document must not inherit the
+            // previous document's transient renderer override or a
+            // still-ticking filter debounce (red team round 2: the
+            // stale tick executed against the new document).
+            view._filterDebounce.Stop();
+            view._rendererOverride = null;
+            view._renderDeferredForEdit = false;
         }
         if (e.NewValue is BaseDocumentViewModel model)
         {
@@ -553,6 +564,23 @@ internal sealed class BaseSurfaceView : UserControl
                 : Visibility.Collapsed;
     }
 
+    private bool _renderDeferredForEdit;
+
+    /// <summary>A publish that lands while a cell edit is OPEN defers
+    /// the content rebuild until the session ends (red team round 2
+    /// blocker: Bind cleared columns/items under the live editor —
+    /// the draft died and a background refresh announced the cancel).
+    /// The deferred render always reads the LATEST model state, so a
+    /// superseding publish simply collapses into it.</summary>
+    private void OnGridEditSessionEnded()
+    {
+        if (_renderDeferredForEdit)
+        {
+            _renderDeferredForEdit = false;
+            RenderContent();
+        }
+    }
+
     /// <summary>The mac content-shape rules (contract C4): no rows →
     /// empty placeholder; no columns → row-only list REGARDLESS of
     /// renderer mode; else the resolved renderer. Exactly one of
@@ -561,6 +589,11 @@ internal sealed class BaseSurfaceView : UserControl
     {
         if (Model is not { } model)
         {
+            return;
+        }
+        if (_grid.IsEditSessionOpen)
+        {
+            _renderDeferredForEdit = true;
             return;
         }
         if (model.Result is not { } result || model.State == BaseLoadState.Failed)
@@ -745,17 +778,21 @@ internal sealed class BaseSurfaceView : UserControl
             return;
         }
         model.SelectedRow = match.Row;
-        if (_grid.IsKeyboardFocusWithin)
-        {
-            _ = _grid.FocusRow(candidate => ReferenceEquals(candidate, match));
-        }
+        // NO focus move here (red team round 2): Bind's own
+        // RestoreReaderPosition already restored (row, column) under
+        // WithoutAnnouncing; FocusRow would snap the reader to column
+        // 0 of the row and speak an unsolicited GridCellMoved on
+        // every background publish.
     }
 
     private void OnCurrentRowChanged(object? row)
     {
-        if (Model is { } model)
+        // Null currency churn during a rebind must not wipe the
+        // selection before the identity reconcile can use it (red
+        // team round 2) — ReconcileGridSelection owns the nulling.
+        if (Model is { } model && row is BaseGridRowViewModel bound)
         {
-            model.SelectedRow = (row as BaseGridRowViewModel)?.Row;
+            model.SelectedRow = bound.Row;
         }
     }
 

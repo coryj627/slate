@@ -31,8 +31,12 @@ sort, never an ICollectionView sort.
 preview, dock, dashboard section) is a configuration of `AccessibleDataGrid`
 (program decision 13). `BasesColumn.Role == Primary` → `IsRowHeader`;
 `BasesRow.AudioDescription` → `rowAudioDescription`; `AudioSummary` →
-`summary`; `Groups` → `ComposeGroupHeading`; `BaseExport` → `exportProducer`
-(the first grids with export enabled — G29 closes for Bases).
+`summary`; `Groups` → `ComposeGroupHeading`. AMENDED (red-team round 1):
+export does NOT ride the substrate's `exportProducer` — a synchronous
+producer can neither run off-dispatcher (INV-6) nor carry the C14 scope
+prompt, so the menu export/copy commands own `BaseExport` end-to-end and
+the substrate's export commands stay disabled on Bases grids (G29 closes
+through the menu route).
 
 **C3 — Tab identity and lifecycle.** `.base` paths route to the Bases arm at
 open (never the markdown loader). One `BaseDocumentViewModel` per source key,
@@ -264,6 +268,10 @@ these ever grows data-proportional, it moves behind the scheduler.
   handled by the existing vault-event refresh triggers, not a cheap probe.
 - **R5** Warnings cross the FFI as flat strings (no structured kinds) and
   render verbatim.
+- **R6** Dashboard sections execute SERIALLY inside one load body and the
+  surface rebuilds wholesale per publish — accepted at dashboard scale
+  (sections are few and bounded by the editor); revisit only if a real
+  dashboard exceeds it.
 
 ## Verified during implementation (both flags resolved)
 

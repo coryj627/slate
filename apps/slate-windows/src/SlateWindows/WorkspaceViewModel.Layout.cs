@@ -42,7 +42,7 @@ internal sealed partial class WorkspaceViewModel
                 return;
             }
 
-            _activeGroup?.ActiveTab?.Deactivate();
+            _activeGroup?.ActiveTab?.Deactivate(clearBaseQuickFilter: false);
             _activeGroup = value;
             OnPropertyChanged();
             RaiseCommandStates();
@@ -667,7 +667,10 @@ internal sealed partial class WorkspaceViewModel
 
     public void AnnounceActivePaneFocus() => AnnounceActivePane();
 
-    private void RequestActiveEditorFocus() =>
+    /// <summary>Internal for the window's overlay-close focus
+    /// fallback (the Bases overlays restore here when their captured
+    /// element died in a republish).</summary>
+    internal void RequestActiveEditorFocus() =>
         EditorPaneFocusRequested?.Invoke(this, ActiveGroup);
 
     private void AnnounceActivePane()

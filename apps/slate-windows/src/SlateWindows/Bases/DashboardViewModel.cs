@@ -176,7 +176,17 @@ internal sealed class DashboardViewModel : PanelWorkScheduler
             {
                 if (handle is { } opened)
                 {
-                    _session.CloseBase(opened);
+                    try
+                    {
+                        _session.CloseBase(opened);
+                    }
+                    catch (Exception closeFailure) when (closeFailure
+                        is VaultException or ObjectDisposedException)
+                    {
+                        // Teardown race: the session died first — a
+                        // tracked task must never fault (the
+                        // scheduler contract).
+                    }
                 }
             }
             projected.Add(section);

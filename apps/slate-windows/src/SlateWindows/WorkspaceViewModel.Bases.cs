@@ -158,12 +158,17 @@ internal sealed partial class WorkspaceViewModel
             return;
         }
         BaseDocumentViewModel target = BaseDocumentFor(viewPath);
+        ExpectSelfBaseWriteEcho(viewPath);
         builder.SaveToView(target, saved =>
         {
             if (saved)
             {
                 RefreshBaseQueries();
             }
+            // A save with NO tab on the source must not leave an
+            // invisible registry document riding every refresh and
+            // announcing membership changes (red team round 2).
+            ReleaseUnreferencedBaseDocuments();
         });
     }
 
@@ -251,7 +256,16 @@ internal sealed partial class WorkspaceViewModel
 
     public System.Windows.Input.ICommand BasesSaveSortToViewCommand =>
         _basesSaveSortToViewCommand ??= BasesCommand(document =>
-            document.SaveSortToView());
+        {
+            if (!document.IsSavedQuery)
+            {
+                // The save writes the .base file; the watcher echo
+                // must not force a second destructive reload (red
+                // team round 2). A failed save's entry expires.
+                ExpectSelfBaseWriteEcho(document.Path);
+            }
+            document.SaveSortToView();
+        });
 
     public System.Windows.Input.ICommand BasesSortByColumnCommand =>
         _basesSortByColumnCommand ??= BasesCommand(document =>
@@ -305,6 +319,14 @@ internal sealed partial class WorkspaceViewModel
     public System.Windows.Input.ICommand BasesCopyMarkdownCommand =>
         _basesCopyMarkdownCommand ??= BasesCommand(document =>
         {
+            if (document.State is BaseLoadState.Failed or BaseLoadState.Loading)
+            {
+                // C13's dispatch backstop (red team round 2: the whole
+                // prompt flow ran and then silently did nothing).
+                document.AnnounceEvent(new A11yEvent.BasesViewCopyFailed(
+                    "the base is not ready"));
+                return;
+            }
             if (!BasesResolveExportScope(document, "Copy", out bool includeFilter))
             {
                 return;
@@ -468,6 +490,14 @@ internal sealed partial class WorkspaceViewModel
     private void BasesDeliverExport(
         BaseDocumentViewModel document, ExportFormat format)
     {
+        if (document.State is BaseLoadState.Failed or BaseLoadState.Loading)
+        {
+            // C13's dispatch backstop (red team round 2: the prompt
+            // and the save dialog both ran before the silent no-op).
+            document.AnnounceEvent(new A11yEvent.BasesViewExportFailed(
+                "the base is not ready"));
+            return;
+        }
         if (!BasesResolveExportScope(document, "Export", out bool includeFilter))
         {
             return;
@@ -800,6 +830,31 @@ internal sealed partial class WorkspaceViewModel
         BasesDockTarget = null;
     }
 
+    /// <summary>Rebuild the dock's FILE document at a renamed path —
+    /// silent (INV-4: the user did nothing; the target moved).</summary>
+    internal void RedockBaseFileSilently(string path)
+    {
+        if (BasesDockTarget is not { Kind: BasesDockTargetKind.File } target)
+        {
+            return;
+        }
+        ClearBasesDockDocuments();
+        BasesDockTarget = target with
+        {
+            Key = path,
+            Name = System.IO.Path.GetFileNameWithoutExtension(path),
+        };
+        var fileDocument = new BaseDocumentViewModel(
+            _session, path, _announce,
+            synchronousForTests: !_startInteractionBackgroundWork)
+        {
+            ThisPath = BasesDockActiveNotePath(),
+        };
+        fileDocument.MembershipChanged += OnBaseMembershipChanged;
+        BasesDockDocument = fileDocument;
+        fileDocument.Load();
+    }
+
     private void ClearBasesDockDocuments()
     {
         _dockFollowTimer?.Stop();
@@ -858,7 +913,14 @@ internal sealed partial class WorkspaceViewModel
         }
         document.ThisPath = thisPath;
         document.Refresh();
-        _announce(new A11yEvent.BasesDockUpdatedForNote());
+        // Spoken only when the dock actually followed to a NOTE and
+        // the pane holding it is visible (red team round 2: switching
+        // note ↔ base tabs announced every time, even with the pane
+        // collapsed — §2.6 unsolicited content on tab switching).
+        if (thisPath is not null && IsRightPaneVisible)
+        {
+            _announce(new A11yEvent.BasesDockUpdatedForNote());
+        }
     }
 
     /// <summary>ONE attach funnel for every site that gives a tab its
@@ -1080,11 +1142,14 @@ internal sealed partial class WorkspaceViewModel
             return;
         }
         if (System.IO.Path.IsPathRooted(trimmed)
-            || trimmed.StartsWith("..", StringComparison.Ordinal))
+            || trimmed.Split('/', '\\').Any(segment =>
+                string.Equals(segment, "..", StringComparison.Ordinal)))
         {
             // C12's canonical out-of-vault refusal (red team round 1:
             // the raw absolute path fell through to core's InvalidPath
-            // and announced the generic export failure instead).
+            // and announced the generic export failure instead). The
+            // SEGMENT test catches mid-path traversal without falsely
+            // refusing names that merely start with dots (round 2).
             _announce(new A11yEvent.BasesPathOutsideVault());
             return;
         }
@@ -1245,8 +1310,16 @@ internal sealed partial class WorkspaceViewModel
                 _ = _session.SetProperty(row.FilePath, key, value, expectedContentHash: null);
             }
         }
-        catch (VaultException failure)
+        catch (Exception failure) when (failure
+            is not OutOfMemoryException
+                and not StackOverflowException
+                and not AccessViolationException)
         {
+            // Catch-ALL (the W4-4 completion-totality precedent, red
+            // team round 2): any worker failure must still release the
+            // note-scoped lease — a stranded entry refuses every later
+            // property write to this note, panel rows included,
+            // forever.
             RunOnDispatcher(() =>
             {
                 _ = _propertyWritePaths.Remove(row.FilePath);
@@ -1333,6 +1406,35 @@ internal sealed partial class WorkspaceViewModel
 
     private int _basesVaultRefreshTicket;
 
+    /// <summary>Changed .base paths ACCUMULATE across a debounce
+    /// burst (red team round 2: the last-ticket-wins pattern dropped
+    /// earlier events' payloads, so a mixed git-pull burst refreshed
+    /// a changed base against its superseded parse). UI-thread only.</summary>
+    private readonly HashSet<string> _pendingChangedBasePaths = new(StringComparer.Ordinal);
+
+    /// <summary>Paths whose next .base change is OUR OWN just-landed
+    /// save (builder save-to-view, save-sort-to-view): the document
+    /// already reloaded its views and re-executed, so the watcher echo
+    /// must not force a second destructive Load — that wiped the
+    /// transient quick filter and flickered Loading (red team round
+    /// 2). Entries expire so a lost event cannot suppress a real
+    /// external change forever.</summary>
+    private readonly Dictionary<string, DateTime> _selfBaseWriteEchoes =
+        new(StringComparer.Ordinal);
+
+    internal void ExpectSelfBaseWriteEcho(string path) =>
+        _selfBaseWriteEchoes[path] = DateTime.UtcNow.AddSeconds(5);
+
+    private bool ConsumeSelfBaseWriteEcho(string path)
+    {
+        if (!_selfBaseWriteEchoes.TryGetValue(path, out DateTime expiry))
+        {
+            return false;
+        }
+        _ = _selfBaseWriteEchoes.Remove(path);
+        return expiry > DateTime.UtcNow;
+    }
+
     /// <summary>C9's vault-event arm (red team round 1: absent — a
     /// property-panel write, task toggle, editor save, or external
     /// edit never reached any Bases surface): any .md/.base change
@@ -1356,10 +1458,14 @@ internal sealed partial class WorkspaceViewModel
         {
             return;
         }
+        if (isBaseFile && !ConsumeSelfBaseWriteEcho(path))
+        {
+            _ = _pendingChangedBasePaths.Add(path);
+        }
         int ticket = Interlocked.Increment(ref _basesVaultRefreshTicket);
         if (!_startInteractionBackgroundWork)
         {
-            RefreshBasesSurfacesForVaultChange(isBaseFile ? path : null);
+            RefreshBasesSurfacesForVaultChange();
             return;
         }
         _ = Task.Delay(500).ContinueWith(
@@ -1367,18 +1473,20 @@ internal sealed partial class WorkspaceViewModel
             {
                 if (ticket == _basesVaultRefreshTicket)
                 {
-                    RefreshBasesSurfacesForVaultChange(isBaseFile ? path : null);
+                    RefreshBasesSurfacesForVaultChange();
                 }
             }),
             TaskScheduler.Default);
     }
 
-    private void RefreshBasesSurfacesForVaultChange(string? changedBasePath)
+    private void RefreshBasesSurfacesForVaultChange()
     {
+        var changedBasePaths = new HashSet<string>(
+            _pendingChangedBasePaths, StringComparer.Ordinal);
+        _pendingChangedBasePaths.Clear();
         foreach (BaseDocumentViewModel document in _baseDocuments.Values)
         {
-            if (changedBasePath is not null
-                && string.Equals(document.Path, changedBasePath, StringComparison.Ordinal))
+            if (changedBasePaths.Contains(document.Path))
             {
                 document.Load();
             }
@@ -1389,9 +1497,7 @@ internal sealed partial class WorkspaceViewModel
         }
         if (BasesDockDocument is { } dockDocument)
         {
-            if (changedBasePath is not null
-                && string.Equals(
-                    dockDocument.Path, changedBasePath, StringComparison.Ordinal))
+            if (changedBasePaths.Contains(dockDocument.Path))
             {
                 dockDocument.Load();
             }

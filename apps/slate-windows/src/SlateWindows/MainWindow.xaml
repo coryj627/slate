@@ -1634,6 +1634,7 @@
                                      was bound by no view — docking a dashboard
                                      announced success and showed nothing). -->
                                 <bases:DashboardSurfaceView x:Name="BasesDockDashboardSurface"
+                                                            AutomationIdRoot="BasesDockDash"
                                                             Model="{Binding BasesDockDashboard}">
                                     <bases:DashboardSurfaceView.Style>
                                         <Style TargetType="bases:DashboardSurfaceView">

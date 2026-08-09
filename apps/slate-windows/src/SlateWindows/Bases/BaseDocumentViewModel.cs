@@ -306,6 +306,34 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         return (funnelId, continuations);
     }
 
+    /// <summary>The ONE settlement for every publish path — result,
+    /// sort, degraded, failed (red team round 2: SortBody's posts
+    /// bypassed PublishResult, so a queued write outcome went
+    /// unspoken). With a result: compare membership under the latest
+    /// funnel id, update the baseline. Always: run every queued
+    /// continuation in write order.</summary>
+    private void SettleFunnelOutcomes(BasesResultSet? result)
+    {
+        (int funnelId, Action?[] continuations) = DrainFunnelOutcomes();
+        if (result is not null)
+        {
+            string signature = MembershipSignatureOf(result);
+            if (funnelId != 0
+                && _membershipBaselinePublished
+                && !string.Equals(
+                    _membershipSignature, signature, StringComparison.Ordinal))
+            {
+                MembershipChanged?.Invoke(funnelId, result.AudioSummary);
+            }
+            _membershipSignature = signature;
+            _membershipBaselinePublished = true;
+        }
+        foreach (Action? continuation in continuations)
+        {
+            continuation?.Invoke();
+        }
+    }
+
     private static string MembershipSignatureOf(BasesResultSet result)
     {
         var keys = new List<string>(result.Rows.Length);
@@ -364,6 +392,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                     {
                         return;
                     }
+                    DrainPendingSortClearsLocked(handle);
                     _session.BaseApplyEdit(
                         handle,
                         new BaseEdit.SetSlateSort(
@@ -381,6 +410,9 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                     if (Volatile.Read(ref _generation) == generation)
                     {
                         _announce(new A11yEvent.BasesSortSaveFailed(failure.Message));
+                        // No publish follows a failed save — queued
+                        // funnel outcomes settle here (round 2).
+                        SettleFunnelOutcomes(null);
                     }
                 });
                 return;
@@ -395,7 +427,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                 SortState = null;
                 _announce(new A11yEvent.BaseSortSavedToView(column.Label, sort.Ascending));
             });
-            ExecuteBody(generation, (uint)_activeViewIndex);
+            ExecuteBody(generation, (uint)_activeViewIndex, freshViews: views);
         });
     }
 
@@ -759,29 +791,15 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         {
             lock (_ffiLock)
             {
-                // The clear runs even when a newer generation has
-                // superseded this switch (red team round 1: gating it
-                // let a rapid double-switch skip the clear, and
-                // returning to the old view resurrected an unannounced
-                // order). Clearing is idempotent, and on a reopened
-                // handle it is a no-op.
+                // Queued + drained (contract C6, see
+                // _pendingSortClears): leaving a view clears its
+                // transient sort so returning to it never resurrects
+                // an unannounced order — and the queue survives this
+                // body being superseded.
+                _pendingSortClears.Add((uint)previousView);
                 if (_handle is { } handle)
                 {
-                    try
-                    {
-                        // Single-slot engine sort (contract C6):
-                        // leaving a view clears its transient sort so
-                        // returning to it never resurrects an
-                        // unannounced order.
-                        _session.BaseSetTransientSort(
-                            handle, (uint)previousView, columnId: null, ascending: true);
-                    }
-                    catch (VaultException)
-                    {
-                        // A refused clear on a dying handle is
-                        // survivable; the execute below reports the
-                        // real condition.
-                    }
+                    DrainPendingSortClearsLocked(handle);
                 }
             }
             ExecuteBody(generation, (uint)index);
@@ -810,6 +828,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                 }
                 IReadOnlyList<BaseViewSummary> viewList = freshViews ?? _views;
                 summary = viewList.Count > view ? viewList[(int)view] : null;
+                DrainPendingSortClearsLocked(handle);
                 using var cancel = new CancelToken();
                 _executeCancel = cancel;
                 try
@@ -838,10 +857,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                 // outcome describes its WRITE (which landed), and the
                 // retained rows are what the row-presence check reads
                 // — the mac degraded-refresh shape.
-                foreach (Action? continuation in DrainFunnelOutcomes().Continuations)
-                {
-                    continuation?.Invoke();
-                }
+                SettleFunnelOutcomes(null);
             });
             return;
         }
@@ -902,21 +918,8 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
             State = BaseLoadState.Ready;
             StateMessage = null;
         }
-        string signature = MembershipSignatureOf(result);
-        (int funnelId, Action?[] continuations) = DrainFunnelOutcomes();
-        if (funnelId != 0
-            && _membershipBaselinePublished
-            && !string.Equals(_membershipSignature, signature, StringComparison.Ordinal))
-        {
-            MembershipChanged?.Invoke(funnelId, result.AudioSummary);
-        }
-        _membershipSignature = signature;
-        _membershipBaselinePublished = true;
         ResultPublished?.Invoke(this, EventArgs.Empty);
-        foreach (Action? continuation in continuations)
-        {
-            continuation?.Invoke();
-        }
+        SettleFunnelOutcomes(result);
     }
 
     private void PublishDegraded(string message)
@@ -934,10 +937,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         ResultPublished?.Invoke(this, EventArgs.Empty);
         // Terminal for this load: pending write outcomes still speak
         // (the writes landed; only the refresh died).
-        foreach (Action? continuation in DrainFunnelOutcomes().Continuations)
-        {
-            continuation?.Invoke();
-        }
+        SettleFunnelOutcomes(null);
     }
 
     /// <summary>
@@ -992,6 +992,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                 {
                     return;
                 }
+                DrainPendingSortClearsLocked(handle);
                 _session.BaseSetTransientSort(handle, view, column.Id, ascending);
                 try
                 {
@@ -1027,14 +1028,13 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                         // rows contradicting the published sort.
                         CloseHandleLocked();
                         Post(() =>
-                        {
-                            if (Volatile.Read(ref _generation) != generation)
-                            {
-                                return;
-                            }
+                            // NOT generation-gated (red team round 2):
+                            // the handle is CLOSED — a superseding
+                            // execute cannot land, and skipping this
+                            // publish stranded a Ready-looking zombie
+                            // with dead affordances.
                             PublishFailed(
-                                BasePhrase.ExecuteFailed(executeFailure));
-                        });
+                                BasePhrase.ExecuteFailed(executeFailure)));
                         return;
                     }
                     Post(() =>
@@ -1052,6 +1052,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                         {
                             SortState = null;
                         }
+                        SettleFunnelOutcomes(null);
                     });
                     return;
                 }
@@ -1061,7 +1062,16 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         {
             // BaseSetTransientSort itself refused (non-displayed
             // column, unknown handle): mac is silent here — the state
-            // did not change, so there is nothing to announce.
+            // did not change, so there is nothing to announce. Queued
+            // funnel outcomes still settle (round 2: they would
+            // otherwise wait for a publish that may never come).
+            Post(() =>
+            {
+                if (Volatile.Read(ref _generation) == generation)
+                {
+                    SettleFunnelOutcomes(null);
+                }
+            });
             return;
         }
         Post(() =>
@@ -1074,6 +1084,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
             SortState = (columnIndex, ascending);
             ResultPublished?.Invoke(this, EventArgs.Empty);
             _announce(new A11yEvent.BaseSortedByColumn(column.Label, ascending));
+            SettleFunnelOutcomes(result);
         });
     }
 
@@ -1125,11 +1136,38 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
 
     private void CloseHandleLocked()
     {
+        _pendingSortClears.Clear();
         if (_handle is { } handle)
         {
             _handle = null;
             _session.CloseBase(handle);
         }
+    }
+
+    /// <summary>View indices whose engine sort must be cleared before
+    /// the next engine mutation (guarded by _ffiLock). Round 1 found
+    /// a generation-gated clear was SKIPPED on rapid double switches
+    /// (sort resurrection); round 2 found an ungated clear could land
+    /// AFTER a newer sort and clobber its slot under out-of-order
+    /// pool scheduling. Queuing the clear and draining it from EVERY
+    /// engine-touching body preserves both orders.</summary>
+    private readonly List<uint> _pendingSortClears = [];
+
+    private void DrainPendingSortClearsLocked(ulong handle)
+    {
+        foreach (uint view in _pendingSortClears)
+        {
+            try
+            {
+                _session.BaseSetTransientSort(
+                    handle, view, columnId: null, ascending: true);
+            }
+            catch (VaultException)
+            {
+                // A refused clear on a dying handle is survivable.
+            }
+        }
+        _pendingSortClears.Clear();
     }
 }
 

@@ -61,7 +61,7 @@ public partial class MainWindow
                 }
                 else
                 {
-                    RestoreFocusTo(_focusBeforeBuilder);
+                    RestoreBasesOverlayFocus(_focusBeforeBuilder);
                     _focusBeforeBuilder = null;
                 }
                 break;
@@ -73,13 +73,32 @@ public partial class MainWindow
                 }
                 else
                 {
-                    RestoreFocusTo(_focusBeforeDashboardEditor);
+                    RestoreBasesOverlayFocus(_focusBeforeDashboardEditor);
                     _focusBeforeDashboardEditor = null;
                 }
                 break;
             default:
                 break;
         }
+    }
+
+    /// <summary>The Bases-overlay restore: the captured element is
+    /// often a DataGridCell that the save-triggered republish
+    /// DESTROYED, and the citations helper's miss-fallback focuses
+    /// the citations list — the wrong panel entirely for Bases (red
+    /// team round 2). Miss here falls back to the active tab's pane.</summary>
+    private void RestoreBasesOverlayFocus(IInputElement? token)
+    {
+        _ = Dispatcher.InvokeAsync(
+            () =>
+            {
+                if (token is UIElement { IsVisible: true } && token.Focus())
+                {
+                    return;
+                }
+                BasesWorkspace?.RequestActiveEditorFocus();
+            },
+            System.Windows.Threading.DispatcherPriority.Input);
     }
 
     private void BaseQueryBuilderOverlay_PreviewKeyDown(object sender, KeyEventArgs e)
@@ -185,13 +204,18 @@ public partial class MainWindow
         {
             return;
         }
-        // The FFI expects a VAULT-RELATIVE path (out-of-vault refuses
-        // with InvalidPath → BasesSavedQueryExportFailed).
+        // The FFI expects a VAULT-RELATIVE path; the prefix test needs
+        // the trailing separator or a SIBLING directory sharing the
+        // prefix (C:\vaults\work vs C:\vaults\work2) mangles into an
+        // in-vault path (red team round 2). Out-of-vault falls through
+        // absolute and refuses with BasesPathOutsideVault.
         string vaultRoot = (DataContext as VaultLifecycleViewModel)?.VaultPath ?? string.Empty;
+        string rootPrefix = vaultRoot.TrimEnd('\\', '/') + "\\";
         string chosen = dialog.FileName;
-        string relative = chosen.StartsWith(vaultRoot, StringComparison.OrdinalIgnoreCase)
-            ? chosen[vaultRoot.Length..].TrimStart('\\', '/').Replace('\\', '/')
-            : chosen;
+        string relative =
+            chosen.Replace('/', '\\').StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase)
+                ? chosen[rootPrefix.Length..].Replace('\\', '/')
+                : chosen;
         workspace.ExportSavedQueryAsBase(summary.Id, relative);
     }
 

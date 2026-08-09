@@ -799,6 +799,18 @@ internal sealed class AccessibleDataGrid : UserControl
 
     internal bool IsEditingForTests => _editing;
 
+    /// <summary>True while a cell edit session is open — surfaces
+    /// DEFER destructive rebinds behind this (red team round 2: a
+    /// background funnel/vault publish mid-edit tore the columns out
+    /// from under the editor, discarded the draft, and let a refresh
+    /// the user never touched announce "Edit canceled").</summary>
+    internal bool IsEditSessionOpen => _editing;
+
+    /// <summary>Raised when the edit session ends by ANY path —
+    /// commit handoff, user cancel, or a native ending — so a
+    /// deferred rebind can run.</summary>
+    internal event Action? EditSessionEnded;
+
     internal int CurrentColumnIndexForTests() => CurrentColumnIndex();
 
     internal object? CurrentRowForTests() =>
@@ -983,6 +995,7 @@ internal sealed class AccessibleDataGrid : UserControl
         {
             _ = FocusCellElement(item, column);
         }
+        EditSessionEnded?.Invoke();
     }
 
     private void OnActivationDoubleClick(object sender, MouseButtonEventArgs e)

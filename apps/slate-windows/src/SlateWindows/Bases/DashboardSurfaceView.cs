@@ -30,6 +30,22 @@ internal sealed class DashboardSurfaceView : UserControl
     private readonly TextBlock _title;
     private readonly StackPanel _sections;
     private readonly TextBlock _emptyState;
+    private string _automationIdRoot = "Dashboard";
+
+    /// <summary>Distinct-id root (the D-12 substrate rule): the DOCK
+    /// instance overrides this so docking a dashboard beside its own
+    /// open tab never puts duplicate AutomationIds in one window
+    /// (red team round 2).</summary>
+    public string AutomationIdRoot
+    {
+        get => _automationIdRoot;
+        set
+        {
+            _automationIdRoot = value;
+            AutomationProperties.SetAutomationId(this, value + "Surface");
+            AutomationProperties.SetAutomationId(_emptyState, value + "EmptyState");
+        }
+    }
 
     public DashboardSurfaceView()
     {
@@ -135,7 +151,7 @@ internal sealed class DashboardSurfaceView : UserControl
                 banner.SetResourceReference(
                     TextBlock.ForegroundProperty, "Slate.WarningBrush");
                 AutomationProperties.SetAutomationId(
-                    banner, $"DashboardSection{index}Banner");
+                    banner, $"{_automationIdRoot}Section{index}Banner");
                 _sections.Children.Add(banner);
             }
             if (section.Result is { } result
@@ -144,12 +160,14 @@ internal sealed class DashboardSurfaceView : UserControl
             {
                 // The section's authored renderer choice (red team
                 // round 1: the editor persisted ViewOverride but
-                // nothing consumed it).
+                // nothing consumed it). Case-insensitive: the value
+                // may be hand-authored.
                 _sections.Children.Add(
                     string.Equals(
-                        section.Status.ViewOverride, "list", StringComparison.Ordinal)
-                        ? BuildSectionList(index, result)
-                        : BuildSectionGrid(index, result));
+                        section.Status.ViewOverride, "list",
+                        StringComparison.OrdinalIgnoreCase)
+                        ? BuildSectionList(_automationIdRoot, index, result)
+                        : BuildSectionGrid(_automationIdRoot, index, result));
             }
             index++;
         }
@@ -158,11 +176,12 @@ internal sealed class DashboardSurfaceView : UserControl
     /// <summary>A READ-ONLY thin grid configuration (contract C2): no
     /// editing seam, no row actions, no activation — the mac
     /// BaseReadOnlyResultView.</summary>
-    private static AccessibleDataGrid BuildSectionGrid(int index, BasesResultSet result)
+    private static AccessibleDataGrid BuildSectionGrid(
+        string idRoot, int index, BasesResultSet result)
     {
         var grid = new AccessibleDataGrid
         {
-            GridAutomationId = $"DashboardSection{index}Grid",
+            GridAutomationId = $"{idRoot}Section{index}Grid",
             MaxHeight = 320,
         };
         var columns = new List<AccessibleGridColumn>(result.Columns.Length);
@@ -194,13 +213,14 @@ internal sealed class DashboardSurfaceView : UserControl
     /// <summary>The "list" view override: core's row readbacks in a
     /// keyboard-navigable read-only list (the thin twin of the Base
     /// tab's list renderer — no actions, no activation).</summary>
-    private static UIElement BuildSectionList(int index, BasesResultSet result)
+    private static UIElement BuildSectionList(
+        string idRoot, int index, BasesResultSet result)
     {
         var list = new ListBox
         {
             MaxHeight = 320,
         };
-        AutomationProperties.SetAutomationId(list, $"DashboardSection{index}List");
+        AutomationProperties.SetAutomationId(list, $"{idRoot}Section{index}List");
         AutomationProperties.SetName(list, result.AudioSummary);
         foreach (BasesRow row in result.Rows)
         {
