@@ -3262,10 +3262,23 @@ public sealed class ShellAccessibilityTests
 
             // Save the query from the overlay — the saved-query TAB
             // surface and the dashboard surfaces ride on it below.
+            // The name is SET via the Value pattern and verified: an
+            // unasserted focus + keyboard race left the box empty on
+            // CI, the save refused (name needed), and the collapsed
+            // empty list downstream read as a missing element. The
+            // keyboard PATH itself is already proven by the F2 and
+            // quick-filter legs.
             AutomationElement saveNameBox = WaitForElement(
                 window, "BuilderSaveNameBox", TimeSpan.FromSeconds(10));
-            saveNameBox.Focus();
-            Keyboard.Type("Journey query");
+            saveNameBox.Patterns.Value.Pattern.SetValue("Journey query");
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => string.Equals(
+                        saveNameBox.Patterns.Value.Pattern.Value.ValueOrDefault,
+                        "Journey query",
+                        StringComparison.Ordinal),
+                    TimeSpan.FromSeconds(5)),
+                "the saved-query name never landed in the box");
             AutomationElement saveAsQuery = WaitForElement(
                 window, "BuilderSaveAsSavedQuery", TimeSpan.FromSeconds(10));
             saveAsQuery.Patterns.Invoke.Pattern.Invoke();
@@ -3327,7 +3340,18 @@ public sealed class ShellAccessibilityTests
                     () => editorName.Properties.HasKeyboardFocus.ValueOrDefault,
                     TimeSpan.FromSeconds(10)),
                 "the dashboard editor opened without focusing the name field");
-            Keyboard.Type("Journey board");
+            // Value pattern for the same determinism as the builder's
+            // save-name entry (the focus assert above still proves the
+            // dialog's focus-on-open contract).
+            editorName.Patterns.Value.Pattern.SetValue("Journey board");
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => string.Equals(
+                        editorName.Patterns.Value.Pattern.Value.ValueOrDefault,
+                        "Journey board",
+                        StringComparison.Ordinal),
+                    TimeSpan.FromSeconds(5)),
+                "the dashboard name never landed in the box");
             AutomationElement queryPicker = WaitForElement(
                 window, "DashboardEditorQueryPicker", TimeSpan.FromSeconds(10));
             queryPicker.Patterns.ExpandCollapse.Pattern.Expand();
