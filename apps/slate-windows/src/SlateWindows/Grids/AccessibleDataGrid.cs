@@ -912,6 +912,13 @@ internal sealed class AccessibleDataGrid : UserControl
         }
         object? item = _grid.CurrentCell.Item;
         int columnIndex = CurrentColumnIndex();
+        // Captured BEFORE EndEditCore: its EditSessionEnded can flush
+        // a deferred rebind that re-runs ConfigureEditing against a
+        // NEW result — invoking the new closure with the old row and
+        // index could write the draft to whichever property now
+        // occupies that index (red team round 3). Old closure + old
+        // row + old result are mutually consistent.
+        Action<object, int, string, GridEditCommitNavigation>? commit = _editCommit;
         _committing = true;
         try
         {
@@ -924,7 +931,7 @@ internal sealed class AccessibleDataGrid : UserControl
         EndEditCore();
         if (item is not null && columnIndex >= 0)
         {
-            _editCommit?.Invoke(item, columnIndex, text, navigation);
+            commit?.Invoke(item, columnIndex, text, navigation);
         }
     }
 

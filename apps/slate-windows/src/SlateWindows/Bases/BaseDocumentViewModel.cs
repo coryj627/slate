@@ -241,6 +241,14 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
     /// and the post-write funnel.</summary>
     internal Action<BasesRow, BasesColumn, PropertyValue?>? ApplyPropertyEdit { get; set; }
 
+    /// <summary>Raised (with the file path) right after THIS document
+    /// wrote its own .base definition (save-sort, builder edits) — the
+    /// workspace registers the watcher-echo suppression here, at the
+    /// WRITE, never at command dispatch (red team round 3: an echo
+    /// registered before validation left a 5 s window where a real
+    /// external change was consumed as self).</summary>
+    internal Action<string>? DefinitionSelfSaved { get; set; }
+
     /// <summary>Row-action routes, installed by the workspace beside
     /// ApplyPropertyEdit: the surface's context menu and the palette
     /// commands share ONE implementation per action.</summary>
@@ -417,6 +425,9 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                 });
                 return;
             }
+            // The write LANDED (even if a newer generation supersedes
+            // the publish below) — the watcher echo is coming.
+            Post(() => DefinitionSelfSaved?.Invoke(Path));
             Post(() =>
             {
                 if (Volatile.Read(ref _generation) != generation)
@@ -521,6 +532,8 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                 });
                 return;
             }
+            // The write LANDED — the watcher echo is coming.
+            Post(() => DefinitionSelfSaved?.Invoke(Path));
             Post(() =>
             {
                 if (Volatile.Read(ref _generation) == generation)

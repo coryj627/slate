@@ -158,7 +158,6 @@ internal sealed partial class WorkspaceViewModel
             return;
         }
         BaseDocumentViewModel target = BaseDocumentFor(viewPath);
-        ExpectSelfBaseWriteEcho(viewPath);
         builder.SaveToView(target, saved =>
         {
             if (saved)
@@ -256,16 +255,7 @@ internal sealed partial class WorkspaceViewModel
 
     public System.Windows.Input.ICommand BasesSaveSortToViewCommand =>
         _basesSaveSortToViewCommand ??= BasesCommand(document =>
-        {
-            if (!document.IsSavedQuery)
-            {
-                // The save writes the .base file; the watcher echo
-                // must not force a second destructive reload (red
-                // team round 2). A failed save's entry expires.
-                ExpectSelfBaseWriteEcho(document.Path);
-            }
-            document.SaveSortToView();
-        });
+            document.SaveSortToView());
 
     public System.Windows.Input.ICommand BasesSortByColumnCommand =>
         _basesSortByColumnCommand ??= BasesCommand(document =>
@@ -1170,6 +1160,7 @@ internal sealed partial class WorkspaceViewModel
     {
         document.ApplyPropertyEdit = (row, column, value) =>
             BasesApplyPropertyEdit(document, row, column, value);
+        document.DefinitionSelfSaved = ExpectSelfBaseWriteEcho;
         document.MembershipChanged += OnBaseMembershipChanged;
         document.OpenRowFromSurface = row => BasesOpenRow(document, row);
         document.CopyLinkFromSurface = row =>
