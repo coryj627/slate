@@ -47,6 +47,39 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
     private readonly Func<
         Func<(ScanReport Report, SwitcherFile[] SwitcherFiles)>,
         Task<(ScanReport Report, SwitcherFile[] SwitcherFiles)>> _runSessionLoad;
+    private readonly Func<Action, Task> _runSyncMarkerArm;
+    private readonly TimeSpan? _syncMarkerDebounce;
+
+    /// <summary>
+    /// W4-8 (SD6/SDR-5): the once-per-vault-PATH announce gate, keyed
+    /// by normalized vault root and deliberately never cleared.
+    ///
+    /// It lives here rather than on the workspace because it has to
+    /// OUTLIVE the workspace: <c>CloseSession</c> disposes and nulls
+    /// the workspace, and every open builds a fresh one, so a
+    /// workspace-scoped gate re-arms on reopen and interrupts the
+    /// reader again with a risk story that has not changed just
+    /// because the vault was closed and reopened mid-session. The mac
+    /// twin (<c>AppState.syncAnnouncedVaultPath</c>, AppState.swift
+    /// :11549) makes the same call in the same words. A different
+    /// vault path re-arms; the same path stays silent.
+    ///
+    /// Comparison follows the vault-root convention this file already
+    /// uses for Recents (<c>RecentVaultsStore.Add/Remove</c> compare
+    /// <c>Path.GetFullPath</c> results with
+    /// <c>StringComparer.OrdinalIgnoreCase</c>), plus the trailing
+    /// separator trim <see cref="SyncMarkerWatcher"/> applies, so
+    /// <c>C:\Vault</c> and <c>c:\vault\</c> are one vault. It is a
+    /// STRING key, not a filesystem identity: a vault reached through
+    /// a substituted drive or a junction reads as a different vault
+    /// and re-announces, which is the safe direction to be wrong in.
+    ///
+    /// Touched only from the announcement path, which runs on the UI
+    /// context, so it needs no lock.
+    /// </summary>
+    private readonly HashSet<string> _announcedSyncVaultPaths =
+        new(StringComparer.OrdinalIgnoreCase);
+
     private readonly Dispatcher? _lifecycleDispatcher;
     private readonly AsyncRelayCommand _openVaultCommand;
     private readonly AsyncRelayCommand _openRecentCommand;
@@ -96,7 +129,9 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
         Func<Action, CancellationToken, Task>? importWorker = null,
         Func<
             Func<(ScanReport Report, SwitcherFile[] SwitcherFiles)>,
-            Task<(ScanReport Report, SwitcherFile[] SwitcherFiles)>>? sessionLoadWorker = null)
+            Task<(ScanReport Report, SwitcherFile[] SwitcherFiles)>>? sessionLoadWorker = null,
+        Func<Action, Task>? syncArmWorker = null,
+        TimeSpan? syncMarkerDebounce = null)
     {
         _pickVault = pickVault;
         _enqueueUi = enqueueUi;
@@ -124,6 +159,11 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
         _filterWorker = filterWorker;
         _importWorker = importWorker;
         _runSessionLoad = sessionLoadWorker ?? (work => Task.Run(work));
+        // W4-8 (SD4/SDR-2): the marker arm is filesystem I/O, so it
+        // rides its own hop off the dispatcher; injectable for the
+        // interleave facts, exactly like the session load above.
+        _runSyncMarkerArm = syncArmWorker ?? (work => Task.Run(work));
+        _syncMarkerDebounce = syncMarkerDebounce;
         _openVaultCommand = new AsyncRelayCommand(PickAndOpenVaultAsync, () => !IsBusy);
         _openRecentCommand = new AsyncRelayCommand(
             OpenRecentAsync,
@@ -625,6 +665,16 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
         // workspace this method is about to dispose. This is the single
         // deepest teardown seam — vault switch (OpenVaultAsync),
         // CloseVault, and DisposeCore all funnel here.
+        //
+        // The ARM moved off the dispatcher (StartSyncMarkerWatch) but
+        // this teardown deliberately did NOT. Two reasons: SDINV-5's
+        // "teardown drains" means a background stop would have to be
+        // JOINED right here anyway — the same block, one hop later —
+        // and the cost is asymmetric, because what stalls on a
+        // virtualized or unreachable root is opening the change
+        // notification handle, not closing it. Stop also has to happen
+        // before the workspace below it is disposed, which is exactly
+        // the ordering a synchronous call gives for free.
         _syncMarkerWatcher?.Dispose();
         _syncMarkerWatcher = null;
 
@@ -750,6 +800,13 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
             _confirmDirtyNavigation,
             _confirmDirtyClose,
             preferencesStore: new AppPreferencesStore());
+        // W4-8 (SD6/SDR-5): hand the workspace an admission gate over
+        // the LIFECYCLE's per-path set instead of letting it keep its
+        // own flag, which would die with it. Installed before the
+        // first probe can run — SD4's arm-then-probe is started by
+        // StartSyncMarkerWatch, strictly after this returns.
+        string announceKey = SyncAnnounceKey(root);
+        workspace.SyncAnnounceAdmission = () => _announcedSyncVaultPaths.Add(announceKey);
         sidebar = new FilesSidebarViewModel(
             session,
             _announce,
@@ -778,36 +835,115 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
         WorkspaceReady?.Invoke(this, EventArgs.Empty);
     }
 
+    /// <summary>W4-8 test seam: the marker watch currently owned by
+    /// this lifecycle, so a fact can prove the arm/teardown race opens
+    /// no directory handles.</summary>
+    internal SyncMarkerWatcher? SyncMarkerWatchForTests => _syncMarkerWatcher;
+
+    /// <summary>The announce-gate key for a vault root. The root is
+    /// already <c>Path.GetFullPath</c>'d by <see cref="OpenVaultAsync"/>
+    /// before it reaches here, so only the trailing separator needs
+    /// normalizing; the OrdinalIgnoreCase comparison lives on the set
+    /// itself (see <see cref="_announcedSyncVaultPaths"/>).</summary>
+    private static string SyncAnnounceKey(string root) =>
+        Path.TrimEndingDirectorySeparator(root);
+
     /// <summary>
     /// W4-8 (SD8 + SD4): arm the bounded marker watch, THEN run the
     /// vault-open detection probe. The order is the contract, not a
     /// preference — a marker landing between a probe and a later arm
     /// emits no event and would stay invisible until the next manual
     /// refresh. <see cref="SyncMarkerWatcher.Start"/> returns with the
-    /// handles open, so there is no window between the two lines.
+    /// handles open, and the probe is chained INSIDE the same hop, so
+    /// there is no window between them.
     ///
-    /// A fire lands on a threadpool thread; this hop marshals it to the
-    /// UI and re-checks the vault generation there
-    /// (<see cref="HandleFileChange"/>'s guard), then routes THROUGH
-    /// <c>RefreshSyncDiagnostics()</c> — the workspace's single refresh
-    /// funnel, where the SD6 announce gate lives.
+    /// Why the arm is not inline: it is synchronous filesystem I/O —
+    /// three <c>Directory.Exists</c> probes plus up to three
+    /// <c>CreateFileW</c> calls against the vault root — and on SDR-2's
+    /// exact scenario (an unresponsive SMB share, a files-on-demand
+    /// OneDrive root) each of those can block for seconds. Run on the
+    /// dispatcher it freezes the window at vault open. One background
+    /// hop keeps the ordering contract and unblocks the UI.
+    ///
+    /// The generation is re-checked TWICE: once here, and once on the
+    /// arming thread immediately before the handles open. A teardown
+    /// can land while <see cref="InitializeWorkspace"/> is still
+    /// running, in which case <see cref="CloseSession"/> reads a
+    /// still-null <c>_syncMarkerWatcher</c> and tears everything down —
+    /// and without these checks this method would then arm three
+    /// <see cref="FileSystemWatcher"/>s with no owner left to stop
+    /// them. They would live for the process lifetime and hold the
+    /// vault directory undeletable (SDINV-5/SDINV-8).
     /// </summary>
     private void StartSyncMarkerWatch(int generation, string root)
     {
         _syncMarkerWatcher?.Dispose();
+        _syncMarkerWatcher = null;
+        if (generation != Volatile.Read(ref _generation))
+        {
+            return;
+        }
+
         SyncMarkerWatcher watcher = new(
             root,
-            () => _enqueueUi(() =>
+            () => OnSyncMarkerFire(generation),
+            _syncMarkerDebounce);
+        // Published BEFORE the hop is queued, so any teardown from here
+        // on finds it and stops it; Start is a no-op after Stop.
+        _syncMarkerWatcher = watcher;
+        _ = _runSyncMarkerArm(() =>
+        {
+            // Defence in depth for the hop that gets parked: a teardown
+            // that already read a null field cannot be relied on to
+            // stop this watcher, so prove liveness again before opening
+            // a single handle.
+            if (generation != Volatile.Read(ref _generation))
             {
-                if (generation == _generation)
+                watcher.Dispose();
+                return;
+            }
+
+            watcher.Start();
+            // SD4 trigger (a): the vault-open probe, strictly after the
+            // arm and back on the UI context, where the workspace's
+            // refresh funnel and the SD6 gate live.
+            _enqueueUi(() =>
+            {
+                if (generation == Volatile.Read(ref _generation))
                 {
                     Workspace?.RefreshSyncDiagnostics();
                 }
-            }));
-        _syncMarkerWatcher = watcher;
-        watcher.Start();
-        // SD4 trigger (a): the vault-open probe, after the arm.
-        Workspace?.RefreshSyncDiagnostics();
+            });
+        });
+    }
+
+    /// <summary>
+    /// A debounced marker fire. <see cref="SyncMarkerWatcher"/> invokes
+    /// this INSIDE its own lock — that is what makes "never fires after
+    /// Stop returns" structural — so this must enqueue and return.
+    ///
+    /// It therefore hands the UI hop to the threadpool instead of
+    /// calling <c>_enqueueUi</c> directly: the enqueue delegate is
+    /// injected, and a blocking one (a dispatcher <c>Invoke</c>, or a
+    /// test's inline <c>action =&gt; action()</c>) would otherwise run
+    /// the whole refresh funnel under the watcher's lock and deadlock
+    /// against <see cref="CloseSession"/>'s watcher stop. Structural,
+    /// not a documented promise the next caller has to remember.
+    ///
+    /// The generation is read with <see cref="Volatile"/> because this
+    /// comparison can run on a pool thread (an inline enqueue delegate
+    /// never reaches the dispatcher), and the liveness re-check on the
+    /// UI context is what SDINV-5 requires.
+    /// </summary>
+    private void OnSyncMarkerFire(int generation)
+    {
+        _ = Task.Run(() => _enqueueUi(() =>
+        {
+            if (generation == Volatile.Read(ref _generation))
+            {
+                Workspace?.RefreshSyncDiagnostics();
+            }
+        }));
     }
 
     private bool TryCloseWorkspace()

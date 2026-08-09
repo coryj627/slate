@@ -3849,7 +3849,15 @@ public sealed class ShellAccessibilityTests
     {
         string testRoot = Path.Combine(
             Path.GetTempPath(), $"slate-sync-diagnostics-{Guid.NewGuid():N}");
-        string vaultRoot = Path.Combine(testRoot, "Sync Vault");
+        // The vault sits under a directory named exactly "OneDrive" so
+        // core's OneDrive path-COMPONENT arm fires. That arm is the one
+        // whose evidence is the CANONICALIZED vault path — on Windows a
+        // `\\?\C:\...` verbatim path — which is what makes the SD9
+        // normalization assertion below a real gate. Git's and
+        // Syncthing's evidence are relative literals (".git",
+        // ".stfolder") that never pass through the boundary at all, so
+        // asserting on them could never fail (red team round 1).
+        string vaultRoot = Path.Combine(testRoot, "OneDrive", "Sync Vault");
         string logDirectory = Path.Combine(testRoot, "logs");
         Directory.CreateDirectory(vaultRoot);
         File.WriteAllText(
@@ -3858,8 +3866,11 @@ public sealed class ShellAccessibilityTests
         // Provider-REAL markers (SD11): core's Git arm fires on
         // `{root}/.git` existing and its Syncthing arm on a
         // `{root}/.stfolder` DIRECTORY. Neither arm reads the
-        // environment, the home directory, or an installed client, so
+        // environment, the home directory, or an installed client, and
+        // the OneDrive arm above reads only the vault's own path — so
         // the count below is a fact about the fixture, not the machine.
+        // Syncthing and OneDrive are both Medium risk, so this fixture
+        // also renders the multi-sync warning row through the axe scan.
         Directory.CreateDirectory(Path.Combine(vaultRoot, ".git"));
         Directory.CreateDirectory(Path.Combine(vaultRoot, ".stfolder"));
 
@@ -3940,9 +3951,9 @@ public sealed class ShellAccessibilityTests
                 SpinWait.SpinUntil(
                     () => HeaderName() is { } name
                         && name.Contains(
-                            "2 systems detected", StringComparison.Ordinal),
+                            "3 systems detected", StringComparison.Ordinal),
                     TimeSpan.FromSeconds(30)),
-                "the sync header never reported the two planted markers; "
+                "the sync header never reported the three planted markers; "
                 + $"last header name: '{HeaderName()}'");
 
             // The COMPOSED row name reaches UIA: one Group per provider
@@ -3966,12 +3977,15 @@ public sealed class ShellAccessibilityTests
             // the row (SD3(3)); each path inside is its own focusable
             // line, verbatim from core and normalized at the SD9
             // boundary — a `\\?\` prefix reaching a reader is the defect
-            // that boundary exists to prevent.
+            // that boundary exists to prevent. ONEDRIVE, not Git: this
+            // arm's evidence IS the canonicalized vault path, so on
+            // Windows it carries the verbatim prefix before
+            // normalization and the assertion below can actually fail.
             AutomationElement evidence = WaitForElement(
-                window, "SyncDiagnosticsEvidenceGit", TimeSpan.FromSeconds(10));
+                window, "SyncDiagnosticsEvidenceOneDrive", TimeSpan.FromSeconds(10));
             Assert.True(
                 evidence.Patterns.ExpandCollapse.IsSupported,
-                "the Git Evidence disclosure does not expose ExpandCollapse");
+                "the OneDrive Evidence disclosure does not expose ExpandCollapse");
             evidence.Patterns.ExpandCollapse.Pattern.Expand();
             AutomationElement? evidenceLine = null;
             Assert.True(
@@ -3986,7 +4000,7 @@ public sealed class ShellAccessibilityTests
                                 .FirstOrDefault(candidate =>
                                     (candidate.Properties.AutomationId
                                         .ValueOrDefault ?? "").StartsWith(
-                                            "SyncDiagnosticsEvidenceGitPath",
+                                            "SyncDiagnosticsEvidenceOneDrivePath",
                                             StringComparison.Ordinal)
                                     && candidate.Properties.IsKeyboardFocusable
                                         .ValueOrDefault
@@ -3999,11 +4013,16 @@ public sealed class ShellAccessibilityTests
                         }
                     },
                     TimeSpan.FromSeconds(10)),
-                "no focusable Git evidence line reached UIA after expanding "
+                "no focusable OneDrive evidence line reached UIA after expanding "
                 + "the disclosure");
+            // The canon-derived path reached the reader with its prefix
+            // stripped — and still names the vault, so normalization
+            // cannot pass by emptying the line.
             Assert.False(
                 evidenceLine!.Name.StartsWith(@"\\?\", StringComparison.Ordinal),
                 $"an evidence path kept its verbatim prefix: '{evidenceLine.Name}'");
+            Assert.Contains(
+                "Sync Vault", evidenceLine.Name, StringComparison.Ordinal);
             AssertAxeClean(process, "sync-diagnostics");
 
             // The chordless slate.diagnostics.refreshSync route (SD7):
@@ -4022,7 +4041,7 @@ public sealed class ShellAccessibilityTests
                     {
                         if (HeaderName() is not { } name
                             || !name.Contains(
-                                "2 systems detected", StringComparison.Ordinal))
+                                "3 systems detected", StringComparison.Ordinal))
                         {
                             return false;
                         }
@@ -4047,7 +4066,7 @@ public sealed class ShellAccessibilityTests
             // manifest.json; creating that chain churns the WATCHED
             // vault root, and the manifest is on disk long before the
             // 2.5 s trailing debounce (10 s ceiling) elapses, so the
-            // re-detection that fires sees all three markers. The
+            // re-detection that fires sees all four markers. The
             // timeout is deliberately generous: debounce + ceiling +
             // two FFI calls, never a tight race.
             string livesyncDirectory = Path.Combine(
@@ -4060,9 +4079,9 @@ public sealed class ShellAccessibilityTests
                 SpinWait.SpinUntil(
                     () => HeaderName() is { } name
                         && name.Contains(
-                            "3 systems detected", StringComparison.Ordinal),
+                            "4 systems detected", StringComparison.Ordinal),
                     TimeSpan.FromSeconds(30)),
-                "the marker watcher never republished after a third marker "
+                "the marker watcher never republished after a fourth marker "
                 + $"landed mid-session; last header name: '{HeaderName()}'");
         }
         finally

@@ -68,12 +68,26 @@ internal sealed partial class WorkspaceViewModel
         _refreshSyncDiagnosticsCommand ??= new RelayCommand(
             _ => RefreshSyncDiagnostics(), _ => true);
 
-    /// <summary>The announce-once gate. A bool, not the compaction
-    /// relay's per-path set: exactly ONE workspace exists per vault
-    /// session, so "once per workspace instance" and "once per vault
-    /// path per session" are the same statement here — and a vault
-    /// switch builds a fresh workspace, which re-arms exactly as
-    /// mac's per-path gate does (SDR-5).</summary>
+    /// <summary>
+    /// SDR-5's admission gate, INSTALLED by the vault lifecycle:
+    /// returns true the first time this vault PATH asks to announce
+    /// and false forever after, for as long as the app session lives.
+    ///
+    /// It cannot live on the workspace. A workspace dies at vault
+    /// close (<c>CloseSession</c> disposes and nulls it) and a fresh
+    /// one is built at every open, so a per-workspace gate re-arms on
+    /// reopen and re-interrupts the reader with a risk story that has
+    /// not changed — the mac deliberately does NOT clear its
+    /// <c>syncAnnouncedVaultPath</c> on close (AppState.swift:11549).
+    /// The set therefore belongs to the object that OUTLIVES
+    /// workspaces and knows the vault root; only the gate's
+    /// bookkeeping moves, the SD6 decision stays here.
+    /// </summary>
+    internal Func<bool>? SyncAnnounceAdmission { get; set; }
+
+    /// <summary>The fallback for a workspace with no lifecycle above
+    /// it (the bare-workspace facts): once per instance, which for a
+    /// standalone workspace IS once per vault.</summary>
     private bool _announcedSyncFindings;
 
     /// <summary>Contract SD6, the ONLY sync announcement: core's
@@ -84,22 +98,41 @@ internal sealed partial class WorkspaceViewModel
     /// neither condition says nothing.</summary>
     internal void AnnounceSyncFindingsIfNeeded(SyncDetectionReport report)
     {
-        if (_announcedSyncFindings)
-        {
-            return;
-        }
         bool hasHighRisk = report.Providers.Any(
             provider => provider.RiskLevel == RiskLevel.High);
         if (report.MultiSyncWarning is null && !hasHighRisk)
         {
             return;
         }
-        _announcedSyncFindings = true;
+        // Risk FIRST, admission second: a Low/Medium-only report must
+        // not consume the vault's one admission and silence the real
+        // finding a later probe turns up.
+        if (!TryAdmitSyncAnnouncement())
+        {
+            return;
+        }
         // W0.5-3 residue: SyncDetectionReport.AudioSummary (the
         // sync-detection engine has no canonical a11y event; the mac
         // pins the same designation at AppState.swift:11702). A
         // canonical conversion is a four-place mirror change and is
         // deliberately out of W4-8.
         _announce(new A11yEvent.HostComposed(report.AudioSummary, A11yPriority.High));
+    }
+
+    /// <summary>Consume this vault's single announcement, if it is
+    /// still available. Runs on the UI context (every publish does), so
+    /// the lifecycle's set needs no lock of its own.</summary>
+    private bool TryAdmitSyncAnnouncement()
+    {
+        if (SyncAnnounceAdmission is { } admit)
+        {
+            return admit();
+        }
+        if (_announcedSyncFindings)
+        {
+            return false;
+        }
+        _announcedSyncFindings = true;
+        return true;
     }
 }

@@ -37,6 +37,24 @@ internal sealed class SyncDiagnosticsSurfaceView : UserControl
 
     private readonly StackPanel _content;
 
+    /// <summary>Which providers' evidence disclosures are OPEN, keyed
+    /// by core's provider kind — the HistorySurfaceView
+    /// <c>_collapsedGroupIds</c> idiom. Every publish rebuilds the leaf
+    /// wholesale, so without this the disclosure a reader just opened
+    /// snaps shut 2.5 s after any entry churn at the vault root. Mac
+    /// gets it for free: <c>ForEach(..., id: \.kind)</c> gives the
+    /// DisclosureGroup a stable identity, so a republish leaves it
+    /// open.</summary>
+    private readonly HashSet<SyncProviderKind> _expandedEvidence = [];
+
+    // The last state actually RENDERED. A watcher fire is entry churn,
+    // not a content change — republishing an identical report must not
+    // rebuild the leaf (see Render).
+    private bool _hasRendered;
+    private SyncDetectionReport? _renderedReport;
+    private LiveSyncConfigStatus? _renderedConfig;
+    private string? _renderedError;
+
     public SyncDiagnosticsSurfaceView()
     {
         AutomationProperties.SetAutomationId(this, "SyncDiagnosticsSurface");
@@ -63,6 +81,13 @@ internal sealed class SyncDiagnosticsSurfaceView : UserControl
         set => SetValue(ModelProperty, value);
     }
 
+    /// <summary>ONE render trigger, deliberately. <c>Published</c> is
+    /// the VM's declared republish signal and it is raised from the
+    /// only place the VM's published state changes, so a second
+    /// <c>PropertyChanged</c> subscription bought nothing and cost two
+    /// extra teardown+rebuild passes per probe — each one a fresh UIA
+    /// focus-changed event that makes a screen reader re-read the whole
+    /// composed row.</summary>
     private static void OnModelChanged(
         DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
@@ -70,33 +95,61 @@ internal sealed class SyncDiagnosticsSurfaceView : UserControl
         if (e.OldValue is SyncDiagnosticsViewModel oldModel)
         {
             oldModel.Published -= view.OnPublished;
-            oldModel.PropertyChanged -= view.OnModelPropertyChanged;
         }
         if (e.NewValue is SyncDiagnosticsViewModel model)
         {
             model.Published += view.OnPublished;
-            model.PropertyChanged += view.OnModelPropertyChanged;
+            // A different document is a different vault: neither the
+            // render snapshot nor the disclosure state carries over.
+            view.ResetRenderState();
             view.Render();
         }
     }
 
     private void OnPublished(object? sender, EventArgs e) => Render();
 
-    private void OnModelPropertyChanged(
-        object? sender, System.ComponentModel.PropertyChangedEventArgs e)
-    {
-        if (e.PropertyName is nameof(SyncDiagnosticsViewModel.Report)
-            or nameof(SyncDiagnosticsViewModel.LoadError)
-            or nameof(SyncDiagnosticsViewModel.LiveSyncConfig))
-        {
-            Render();
-        }
-    }
-
     // --- Rendering ---
+
+    /// <summary>How many times the leaf was actually REBUILT. Test seam
+    /// for the "one publish, one render pass" and "an unchanged
+    /// republish does not rebuild" facts — element identity alone
+    /// cannot tell a skipped render from a rebuilt-identical one.
+    /// </summary>
+    internal int RenderCountForTests { get; private set; }
+
+    private void ResetRenderState()
+    {
+        _hasRendered = false;
+        _renderedReport = null;
+        _renderedConfig = null;
+        _renderedError = null;
+        _expandedEvidence.Clear();
+    }
 
     private void Render()
     {
+        if (Model is not { } model)
+        {
+            _content.Children.Clear();
+            ResetRenderState();
+            return;
+        }
+        if (RendersTheSameLeaf(model))
+        {
+            // Nothing a reader can perceive changed. Ordinary entry
+            // churn at the vault root fires the watcher whether or not
+            // the REPORT changed, and rebuilding here would hand focus
+            // to a fresh element every debounce interval — UIA raises
+            // focus-changed and the reader re-reads the entire composed
+            // row. Mac's republish is a SwiftUI diff and says nothing;
+            // this is the same silence.
+            return;
+        }
+        _renderedReport = model.Report;
+        _renderedConfig = model.LiveSyncConfig;
+        _renderedError = model.LoadError;
+        _hasRendered = true;
+        RenderCountForTests++;
         // The leaf re-renders only on a load publish (SDINV-7's three
         // triggers), never per keystroke — but a watcher fire is
         // EXTERNAL, so a rebuild can land under a user who is reading
@@ -104,10 +157,6 @@ internal sealed class SyncDiagnosticsSurfaceView : UserControl
         // so focus never falls out of the panel.
         string? focusId = CaptureFocusId();
         _content.Children.Clear();
-        if (Model is not { } model)
-        {
-            return;
-        }
         switch (model.State)
         {
             case SyncDiagnosticsState.Unsupported:
@@ -136,6 +185,58 @@ internal sealed class SyncDiagnosticsSurfaceView : UserControl
         }
         RestoreFocusId(focusId);
     }
+
+    /// <summary>Would a rebuild produce a leaf a reader could tell
+    /// apart? Report IDENTITY is not the question: every probe
+    /// allocates a fresh record whose <c>Providers</c>/
+    /// <c>EvidencePaths</c> arrays compare by reference, so an
+    /// unchanged vault yields a brand-new, equal report on every
+    /// watcher fire. This walks the perceivable fields instead — the
+    /// state inputs (supported, error), every rendered sentence
+    /// (summary, warning, recommendation, evidence), and every
+    /// provider's kind, name and risk level.</summary>
+    private bool RendersTheSameLeaf(SyncDiagnosticsViewModel model) =>
+        _hasRendered
+        && string.Equals(_renderedError, model.LoadError, StringComparison.Ordinal)
+        && Equals(_renderedConfig, model.LiveSyncConfig)
+        && SameReport(_renderedReport, model.Report);
+
+    private static bool SameReport(
+        SyncDetectionReport? left, SyncDetectionReport? right)
+    {
+        if (ReferenceEquals(left, right))
+        {
+            return true;
+        }
+        if (left is null
+            || right is null
+            || left.Supported != right.Supported
+            || !string.Equals(
+                left.AudioSummary, right.AudioSummary, StringComparison.Ordinal)
+            || !string.Equals(
+                left.MultiSyncWarning, right.MultiSyncWarning, StringComparison.Ordinal)
+            || left.Providers.Length != right.Providers.Length)
+        {
+            return false;
+        }
+        for (int index = 0; index < left.Providers.Length; index++)
+        {
+            if (!SameProvider(left.Providers[index], right.Providers[index]))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static bool SameProvider(
+        DetectedSyncProvider left, DetectedSyncProvider right) =>
+        left.Kind == right.Kind
+        && left.RiskLevel == right.RiskLevel
+        && string.Equals(left.DisplayName, right.DisplayName, StringComparison.Ordinal)
+        && string.Equals(
+            left.Recommendation, right.Recommendation, StringComparison.Ordinal)
+        && left.EvidencePaths.SequenceEqual(right.EvidencePaths, StringComparer.Ordinal);
 
     private void RenderError(string message)
     {
@@ -307,7 +408,7 @@ internal sealed class SyncDiagnosticsSurfaceView : UserControl
     /// of the provider row (SD3(3)) — never folded into the row's
     /// combined name. Each path is its own focusable line, verbatim
     /// from core (SDINV-6).</summary>
-    private static FrameworkElement BuildEvidence(DetectedSyncProvider provider)
+    private FrameworkElement BuildEvidence(DetectedSyncProvider provider)
     {
         var paths = new StackPanel { Margin = new Thickness(12, 0, 0, 0) };
         int index = 0;
@@ -324,6 +425,11 @@ internal sealed class SyncDiagnosticsSurfaceView : UserControl
         {
             Header = SyncPhrase.Evidence,
             Content = paths,
+            // Expansion SURVIVES the rebuild, keyed by core's provider
+            // kind: a watcher republish must not snap shut the
+            // disclosure a reader is walking (mac's ForEach id: \.kind
+            // makes this free).
+            IsExpanded = _expandedEvidence.Contains(provider.Kind),
             Margin = new Thickness(0, 0, 0, 8),
         };
         // Accessible name binds the disclosure to ITS provider —
@@ -334,6 +440,13 @@ internal sealed class SyncDiagnosticsSurfaceView : UserControl
             expander, SyncPhrase.EvidenceFor(provider.DisplayName));
         AutomationProperties.SetAutomationId(
             expander, "SyncDiagnosticsEvidence" + provider.Kind);
+        // The state rides the EXPANDER's OWN events. A subscription on
+        // a persistent model object would accumulate one handler (and
+        // root one dead visual subtree) per re-render — the recorded
+        // round-2 lesson from the history day groups.
+        SyncProviderKind kind = provider.Kind;
+        expander.Expanded += (_, _) => _ = _expandedEvidence.Add(kind);
+        expander.Collapsed += (_, _) => _ = _expandedEvidence.Remove(kind);
         return expander;
     }
 
@@ -485,19 +598,45 @@ internal sealed class SyncDiagnosticsSurfaceView : UserControl
             () =>
             {
                 FrameworkElement? target = FindDescendant(
-                    this,
-                    candidate => candidate.Focusable
-                        && string.Equals(
-                            AutomationProperties.GetAutomationId(candidate),
-                            focusId,
-                            StringComparison.Ordinal));
-                if (target is not null)
+                    _content, candidate => HasAutomationId(candidate, focusId));
+                // Focus() RETURNING FALSE is the failure that matters:
+                // an element can report Focusable and still refuse
+                // focus — an evidence line inside a collapsed
+                // disclosure is the live example. Discarding the result
+                // left keyboard focus wherever Children.Clear() dropped
+                // it, the window root, and Tab restarted at the top of
+                // the shell.
+                if (target is not null && target.Focus())
                 {
-                    _ = target.Focus();
+                    return;
                 }
+                FocusLeafAnchor();
             },
             System.Windows.Threading.DispatcherPriority.Input);
     }
+
+    /// <summary>The captured element is gone (a provider disappeared, or
+    /// the state changed under the reader) or refused focus: recover to
+    /// a stable control INSIDE the leaf rather than letting focus fall
+    /// out of the panel — the HistorySurfaceView segment-radio rule.
+    /// Refresh anchors the populated states, Retry the error state, and
+    /// the single focusable report line the rest.</summary>
+    private void FocusLeafAnchor()
+    {
+        FrameworkElement? anchor =
+            FindDescendant(
+                _content,
+                candidate => HasAutomationId(candidate, "SyncDiagnosticsRefresh"))
+            ?? FindDescendant(
+                _content,
+                candidate => HasAutomationId(candidate, "SyncDiagnosticsRetry"))
+            ?? FindDescendant(_content, candidate => candidate.Focusable);
+        _ = anchor?.Focus();
+    }
+
+    private static bool HasAutomationId(FrameworkElement element, string id) =>
+        string.Equals(
+            AutomationProperties.GetAutomationId(element), id, StringComparison.Ordinal);
 
     private static FrameworkElement? FindDescendant(
         DependencyObject root, Func<FrameworkElement, bool> match)

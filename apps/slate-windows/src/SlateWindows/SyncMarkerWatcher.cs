@@ -45,7 +45,10 @@ namespace SlateWindows;
 /// re-checks liveness there (SDINV-5). That keeps the watcher's facts
 /// dispatcher-free. The callback contract is therefore narrow: it must
 /// not block and must not re-enter the watcher (see
-/// <see cref="FireIfCurrent"/> for why).
+/// <see cref="FireIfCurrent"/> for why). The contract is not merely
+/// documented — the owner satisfies it STRUCTURALLY by handing the UI
+/// hop to the threadpool rather than trusting whatever enqueue
+/// delegate it was constructed with.
 /// </summary>
 internal sealed class SyncMarkerWatcher : IDisposable
 {
@@ -96,8 +99,13 @@ internal sealed class SyncMarkerWatcher : IDisposable
     /// <param name="vaultRoot">The vault root — the same path core's
     /// detector probes.</param>
     /// <param name="fire">Invoked already-debounced on a THREADPOOL
-    /// thread. Must not block and must not call back into this watcher.
-    /// </param>
+    /// thread and INSIDE this watcher's lock (see
+    /// <see cref="FireIfCurrent"/> for why that is deliberate). The
+    /// contract is therefore hard: enqueue and return. It must not
+    /// block — a blocking hop (a dispatcher <c>Invoke</c>) stalls
+    /// <see cref="Stop"/>, and therefore vault close, for exactly as
+    /// long as it blocks — and it must not call back into this
+    /// watcher.</param>
     /// <param name="debounce">Trailing quiet period; injectable so facts
     /// need not wait production-scale seconds.</param>
     /// <param name="maxLatency">Ceiling on how long continuous churn may
@@ -152,6 +160,64 @@ internal sealed class SyncMarkerWatcher : IDisposable
                 return _armFailure;
             }
         }
+    }
+
+    /// <summary>Test seam: how many watches currently hold an OPEN
+    /// directory handle. Zero before <see cref="Start"/>, zero after
+    /// <see cref="Stop"/>, and — the fact that matters — zero for a
+    /// watcher whose owner lost the arm/teardown race. Three
+    /// permanently armed handles would otherwise outlive the vault
+    /// session and block deleting or renaming the vault directory for
+    /// the rest of the process (SDINV-5/SDINV-8).</summary>
+    internal int ArmedWatchCountForTests
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _watches.Values.Count(watch => !watch.Retired);
+            }
+        }
+    }
+
+    /// <summary>Test seam: the generation stamped on the watch sitting
+    /// at <paramref name="subdir"/>, or -1 when nothing is armed
+    /// there. A CHANGED generation is how a fact proves a watch was
+    /// retired and re-armed rather than merely left alone.</summary>
+    internal long ArmedGenerationForTests(string subdir)
+    {
+        lock (_gate)
+        {
+            return _watches.TryGetValue(subdir, out ArmedWatch? armed) && !armed.Retired
+                ? armed.Generation
+                : -1;
+        }
+    }
+
+    /// <summary>Test seam (SDR-1): drive the OS ERROR channel — the
+    /// <c>InternalBufferOverflow</c> path — without provoking a real
+    /// overflow, which would take thousands of events inside one
+    /// buffer window and could never be made deterministic. The error
+    /// is raised against whatever generation is armed at
+    /// <paramref name="subdir"/> right now, which is exactly what the
+    /// OS does. Returns false when nothing is armed there, so a fact
+    /// cannot silently assert against a watch that never opened.
+    /// </summary>
+    internal bool RaiseWatchErrorForTests(string subdir)
+    {
+        long generation;
+        lock (_gate)
+        {
+            if (!_watches.TryGetValue(subdir, out ArmedWatch? armed) || armed.Retired)
+            {
+                return false;
+            }
+
+            generation = armed.Generation;
+        }
+
+        HandleWatchError(subdir, generation);
+        return true;
     }
 
     /// <summary>
@@ -429,6 +495,12 @@ internal sealed class SyncMarkerWatcher : IDisposable
     /// win most of the time. The price is that <c>fire</c> runs under
     /// the lock, which is why its contract is "enqueue to the UI context
     /// and return": it must not block and must not re-enter the watcher.
+    ///
+    /// That price is paid on BOTH sides rather than only asserted here:
+    /// the owner's callback hands the UI hop to the threadpool instead
+    /// of invoking the injected enqueue delegate directly, so a
+    /// blocking delegate cannot be wired in by accident and turn this
+    /// lock into a vault-close deadlock.
     /// </summary>
     private void FireIfCurrent(long ticket)
     {

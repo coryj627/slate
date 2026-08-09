@@ -192,6 +192,13 @@ with settle, and `AssertAxeClean(process, "sync-diagnostics")`.
 - **SDD-3** Windows joins the panel-scheduler drain discipline
   (`PanelWorkScheduler` + the workspace drain) in place of mac's actor/task model —
   the SD5 guards are the shared contract.
+- **SDD-5** (added 2026-08-09, red team round 1) The risk badge is the risk WORD
+  plus a themed brush; mac renders an SF Symbol beside the word (SD3 says "glyph +
+  word"). There is no AT-observable delta — mac's glyph is decorative, so both
+  platforms speak the identical row name — and the non-color channel SD3 actually
+  requires is satisfied by the word. Windows has no equivalent symbol-font
+  convention in this codebase; a glyph would be invented chrome, not parity.
+  Recorded here because every peer divergence carries a register line.
 - **SDD-4** (added 2026-08-09, from the journey's first live axe run) The evidence
   expander's ACCESSIBLE name is "Evidence, {DisplayName}" on Windows — a bare
   "Evidence" makes every provider's disclosure an identical focusable sibling
@@ -221,3 +228,19 @@ with settle, and `AssertAxeClean(process, "sync-diagnostics")`.
 - **SDR-6** `LivesyncConfig()` cost rides the same off-dispatcher hop as
   `DetectSync()`; if either throws, the pair fails to the error state together
   (mac-identical single-task semantics).
+- **SDR-7** (added 2026-08-09, red team round 1) The SD9 degenerate-root guard
+  (`is_volume_root`) rejects any env/registry prefix carrying no
+  `Component::Normal`. That deliberately includes UNC SHARE roots
+  (`\\server\share`), which are a bounded location rather than a whole volume — so
+  a vault under a UNC-rooted Dropbox registry entry goes undetected. Accepted in
+  the no-false-positive direction: a missed detection degrades honestly, whereas
+  admitting a rootless prefix matched every vault on the drive AND synthesized the
+  multi-sync warning that drives the SD6 High-priority announcement. Revisitable
+  as a `Prefix::UNC` special case if a real user hits it.
+- **SDR-8** (added 2026-08-09, red team round 1) The error state, `SyncPhrase`'s
+  load-error sentence, and the Retry button are DEFENSIVE-ONLY today: core's
+  `detect_sync` and `livesync_config` return `Ok(...)` unconditionally, so no
+  `VaultException` can reach the leaf from a real session. They are gated through
+  a test-only publish seam rather than a real failure, and remain in the surface
+  because the FFI signature admits the exception and a future core change must not
+  land on an unhandled path.

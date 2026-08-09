@@ -4,6 +4,7 @@
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Input;
 using SlateWindows.Panels;
 using uniffi.slate_uniffi;
 
@@ -204,6 +205,46 @@ public sealed class SyncDiagnosticsPanelTests : IDisposable
         panel.Shutdown();
     }
 
+    /// <summary>
+    /// SD5 + SDR-6: the pair fails TOGETHER. The fault seam throws
+    /// where a real failure would land once core's
+    /// <c>livesync_config</c> can fail — after <c>DetectSync()</c> has
+    /// already returned a fresh report — so the half pair genuinely
+    /// exists inside the hop and something has to drop it.
+    ///
+    /// The vault gains a marker while the fault is armed, which is what
+    /// makes the fact falsifiable: without the catch's <c>report =
+    /// null</c> the two-provider snapshot would replace the rendered
+    /// one-provider report and leave it with NO config beside it, while
+    /// the error line claims the load failed.
+    /// </summary>
+    [Fact]
+    public void AFailedConfigReadFailsThePairAndKeepsTheRenderedReport()
+    {
+        PlantGit();
+        SyncDiagnosticsViewModel panel = NewPanel();
+        panel.Reload();
+        SyncDetectionReport rendered = panel.Report!;
+        LiveSyncConfigStatus renderedConfig = panel.LiveSyncConfig!;
+        Assert.Single(rendered.Providers);
+        PlantSyncthing();
+        var thrown = new VaultException.Io("probe exploded");
+        panel.ProbeFaultForTests = () => throw thrown;
+        int publishes = 0;
+        panel.Published += (_, _) => publishes++;
+
+        panel.Reload();
+
+        Assert.Equal(SyncDiagnosticsState.Error, panel.State);
+        Assert.Equal(thrown.Message, panel.LoadError);
+        Assert.Equal(1, publishes);
+        // Neither half of the failed probe reached the published state.
+        Assert.Same(rendered, panel.Report);
+        Assert.Same(renderedConfig, panel.LiveSyncConfig);
+        panel.ProbeFaultForTests = null;
+        panel.Shutdown();
+    }
+
     [Fact]
     public void ALiveSyncDataFileParsesIntoTheCredentialFreeSubset()
     {
@@ -326,7 +367,11 @@ public sealed class SyncDiagnosticsPanelTests : IDisposable
         workspace.SyncDiagnostics.Published += (_, _) => publishes++;
         int announcedBefore = _announced.Count;
 
-        Assert.True(workspace.RefreshSyncDiagnosticsCommand.CanExecute(null));
+        // No CanExecute assertion here: the guard IS `_ => true` (SD7 —
+        // a WorkspaceViewModel only exists while a session is open), so
+        // asserting it pins nothing. The behaviour that MATTERS, that a
+        // disposed workspace refuses the command's work, is
+        // NothingPublishesOrAnnouncesAfterTheWorkspaceIsDisposed.
         workspace.RefreshSyncDiagnosticsCommand.Execute(null);
 
         Assert.Equal(1, publishes);
@@ -472,11 +517,19 @@ public sealed class SyncDiagnosticsPanelTests : IDisposable
 /// SEPARATE evidence disclosure, and the LiveSync section. WPF
 /// controls need an STA thread (the BaseSurfaceViewTests shape).
 ///
-/// The error and unsupported states are covered by the pure selector
-/// in <see cref="SyncDiagnosticsPanelTests"/>: neither is reachable
-/// from a real filesystem session (detection degrades rather than
-/// throwing, SDINV-2, and every Windows session has a root), and the
-/// leaf deliberately exposes no publish seam to fake one.
+/// The error and unsupported states are ALSO rendered here, through
+/// <c>SyncDiagnosticsViewModel.PublishForTests</c>. Neither is
+/// reachable from a real filesystem session today (detection degrades
+/// rather than throwing, SDINV-2, and every Windows session has a
+/// root), so without that seam the whole error arm — the relayed
+/// message, the Retry affordance, its accessible name, its wiring —
+/// had no fact behind it at all.
+///
+/// The republish facts run inside a real <see cref="Window"/> (the
+/// W1 shell-contract shape): WPF grants keyboard focus only to an
+/// element inside a live PresentationSource, and "focus survived the
+/// rebuild" is exactly what a screen-reader user loses when it does
+/// not.
 /// </summary>
 public sealed class SyncDiagnosticsSurfaceViewTests : IDisposable
 {
@@ -722,6 +775,239 @@ public sealed class SyncDiagnosticsSurfaceViewTests : IDisposable
         panel.Shutdown();
     });
 
+    // --- SD5: the states no real session can reach (the publish seam) ---
+
+    [Fact]
+    public void TheErrorStateRelaysCoresMessageBesideAWiredRetry() => RunSta(() =>
+    {
+        var panel = new SyncDiagnosticsViewModel(_session, synchronousForTests: true);
+        int seamCalls = 0;
+        panel.RefreshFromSurface = () => seamCalls++;
+        var surface = new SyncDiagnosticsSurfaceView { Model = panel };
+
+        panel.PublishForTests(null, null, "probe exploded");
+
+        Assert.Equal(SyncDiagnosticsState.Error, panel.State);
+        TextBlock line = Find<TextBlock>(surface, "SyncDiagnosticsError");
+        // SD5/SD10: the host prefix plus core's message, relayed.
+        Assert.Equal(SyncPhrase.LoadError("probe exploded"), line.Text);
+        Assert.True(line.Focusable);
+        Button retry = Find<Button>(surface, "SyncDiagnosticsRetry");
+        Assert.True(retry.Focusable);
+        // The accessible name comes from the button's content, so the
+        // peer is what the fact has to ask.
+        Assert.Equal(
+            SyncPhrase.Retry,
+            System.Windows.Automation.Peers.UIElementAutomationPeer
+                .CreatePeerForElement(retry).GetName());
+        retry.RaiseEvent(new RoutedEventArgs(
+            System.Windows.Controls.Primitives.ButtonBase.ClickEvent, retry));
+
+        // SD7: Retry shares the Refresh funnel — one disposal guard,
+        // one CanExecute, one announce policy for button, menu, and
+        // watcher alike.
+        Assert.Equal(1, seamCalls);
+        panel.Shutdown();
+    });
+
+    [Fact]
+    public void TheUnsupportedStateRendersTheReportsOwnSentence() => RunSta(() =>
+    {
+        var panel = new SyncDiagnosticsViewModel(_session, synchronousForTests: true);
+        var surface = new SyncDiagnosticsSurfaceView { Model = panel };
+        var report = new SyncDetectionReport(
+            [], null, "Sync detection isn't available for this vault type.", false);
+
+        panel.PublishForTests(report, null, null);
+
+        // SDD-2: Windows relays core's pre-rendered sentence instead of
+        // duplicating it in host code — byte-identical to the mac.
+        Assert.Equal(SyncDiagnosticsState.Unsupported, panel.State);
+        TextBlock line = Find<TextBlock>(surface, "SyncDiagnosticsUnsupported");
+        Assert.Equal(report.AudioSummary, line.Text);
+        Assert.True(line.Focusable);
+        // Unsupported wins over everything: no header, no Retry.
+        Assert.Null(FindOrNull(surface, "SyncDiagnosticsHeader"));
+        Assert.Null(FindOrNull(surface, "SyncDiagnosticsRetry"));
+        panel.Shutdown();
+    });
+
+    // --- Republish discipline: expansion, focus, and silence ---
+
+    [Fact]
+    public void TheEvidenceDisclosureStaysOpenAcrossARepublish() => RunSta(() =>
+    {
+        var panel = new SyncDiagnosticsViewModel(_session, synchronousForTests: true);
+        var surface = new SyncDiagnosticsSurfaceView { Model = panel };
+        DetectedSyncProvider git = Fake(SyncProviderKind.Git, "Git", RiskLevel.Low, ".git");
+        panel.PublishForTests(Fabricated(git), null, null);
+
+        Expander opened = Find<Expander>(surface, "SyncDiagnosticsEvidenceGit");
+        Assert.False(opened.IsExpanded);
+        opened.IsExpanded = true;
+
+        // A watcher fire republishes a CHANGED report, so every element
+        // is rebuilt — the disclosure the reader opened must come back
+        // open (mac gets this from ForEach(..., id: \.kind)).
+        panel.PublishForTests(
+            Fabricated(
+                git,
+                Fake(
+                    SyncProviderKind.Syncthing, "Syncthing", RiskLevel.Medium,
+                    ".stfolder")),
+            null,
+            null);
+
+        Expander rebuilt = Find<Expander>(surface, "SyncDiagnosticsEvidenceGit");
+        Assert.NotSame(opened, rebuilt);
+        Assert.True(
+            rebuilt.IsExpanded,
+            "the evidence disclosure must survive a republish, not snap shut.");
+        // Per PROVIDER, not a global flag: the disclosure nobody opened
+        // stays closed.
+        Assert.False(
+            Find<Expander>(surface, "SyncDiagnosticsEvidenceSyncthing").IsExpanded);
+        panel.Shutdown();
+    });
+
+    [Fact]
+    public void OnePublishRebuildsTheLeafExactlyOnce() => RunSta(() =>
+    {
+        Directory.CreateDirectory(Path.Combine(_root, ".git"));
+        var panel = new SyncDiagnosticsViewModel(_session, synchronousForTests: true);
+        var surface = new SyncDiagnosticsSurfaceView { Model = panel };
+        // Binding the document rendered the Loading state once.
+        Assert.Equal(1, surface.RenderCountForTests);
+
+        panel.Reload();
+
+        // ONE publish, ONE teardown+rebuild. Rendering on Published AND
+        // on PropertyChanged for Report/LoadError/LiveSyncConfig drove
+        // three passes per probe, and every extra pass re-fires UIA
+        // focus-changed under a reader parked in the leaf.
+        Assert.Equal(SyncDiagnosticsState.Populated, panel.State);
+        Assert.Equal(2, surface.RenderCountForTests);
+        panel.Shutdown();
+    });
+
+    [Fact]
+    public void AnUnchangedRepublishNeitherRebuildsNorMovesFocus() => RunSta(() =>
+    {
+        var panel = new SyncDiagnosticsViewModel(_session, synchronousForTests: true);
+        var surface = new SyncDiagnosticsSurfaceView { Model = panel };
+        panel.PublishForTests(
+            Fabricated(Fake(SyncProviderKind.Git, "Git", RiskLevel.Low, ".git")),
+            new LiveSyncConfigStatus.NotPresent(),
+            null);
+        InWindow(surface, window =>
+        {
+            var row = Find<AutomationNamedRowBorder>(
+                surface, "SyncDiagnosticsProviderGit");
+            Assert.True(row.Focus(), "the provider row must be able to take focus.");
+            int renders = surface.RenderCountForTests;
+
+            // Entry churn at the vault root fires the watcher whether or
+            // not the report changed: an EQUAL but freshly allocated
+            // report is exactly what the second probe returns.
+            panel.PublishForTests(
+                Fabricated(Fake(SyncProviderKind.Git, "Git", RiskLevel.Low, ".git")),
+                new LiveSyncConfigStatus.NotPresent(),
+                null);
+            window.UpdateLayout();
+            Pump();
+
+            Assert.Equal(renders, surface.RenderCountForTests);
+            Assert.Same(
+                row, Find<AutomationNamedRowBorder>(surface, "SyncDiagnosticsProviderGit"));
+            // Nothing to re-speak: no rebuild, no focus move, no UIA
+            // focus-changed. Mac's republish is a SwiftUI diff and is
+            // equally silent.
+            Assert.Same(row, Keyboard.FocusedElement);
+        });
+        panel.Shutdown();
+    });
+
+    [Fact]
+    public void FocusReturnsToTheSameEvidenceLineAfterARepublish() => RunSta(() =>
+    {
+        var panel = new SyncDiagnosticsViewModel(_session, synchronousForTests: true);
+        var surface = new SyncDiagnosticsSurfaceView { Model = panel };
+        DetectedSyncProvider dropbox = Fake(
+            SyncProviderKind.Dropbox, "Dropbox", RiskLevel.High,
+            @"C:\Users\a\Dropbox", @"C:\Users\a\Dropbox\vault");
+        panel.PublishForTests(Fabricated(dropbox), null, null);
+        InWindow(surface, window =>
+        {
+            Find<Expander>(surface, "SyncDiagnosticsEvidenceDropbox").IsExpanded = true;
+            window.UpdateLayout();
+            TextBlock line = Find<TextBlock>(
+                surface, "SyncDiagnosticsEvidenceDropboxPath1");
+            Assert.True(line.Focus(), "an open evidence line must be able to take focus.");
+
+            // The 2.5 s debounce fires after an unrelated note save and
+            // the report genuinely changed — the reader must not be
+            // thrown back to the top of the shell.
+            panel.PublishForTests(
+                Fabricated(
+                    dropbox,
+                    Fake(SyncProviderKind.Git, "Git", RiskLevel.Low, ".git")),
+                null,
+                null);
+            window.UpdateLayout();
+            Pump();
+
+            TextBlock rebuilt = Find<TextBlock>(
+                surface, "SyncDiagnosticsEvidenceDropboxPath1");
+            Assert.NotSame(line, rebuilt);
+            Assert.Same(rebuilt, Keyboard.FocusedElement);
+        });
+        panel.Shutdown();
+    });
+
+    [Fact]
+    public void AVanishedFocusTargetFallsBackIntoTheLeaf() => RunSta(() =>
+    {
+        var panel = new SyncDiagnosticsViewModel(_session, synchronousForTests: true);
+        var surface = new SyncDiagnosticsSurfaceView { Model = panel };
+        DetectedSyncProvider git = Fake(SyncProviderKind.Git, "Git", RiskLevel.Low, ".git");
+        panel.PublishForTests(
+            Fabricated(
+                git,
+                Fake(SyncProviderKind.Syncthing, "Syncthing", RiskLevel.Medium, ".stfolder")),
+            null,
+            null);
+        InWindow(surface, window =>
+        {
+            var row = Find<AutomationNamedRowBorder>(
+                surface, "SyncDiagnosticsProviderSyncthing");
+            Assert.True(row.Focus(), "the provider row must be able to take focus.");
+
+            // The provider disappeared (the marker was removed): the
+            // captured id has no fresh element to land on.
+            panel.PublishForTests(Fabricated(git), null, null);
+            window.UpdateLayout();
+            Pump();
+
+            Assert.Null(FindOrNull(surface, "SyncDiagnosticsProviderSyncthing"));
+            // Recover INSIDE the leaf rather than letting focus fall to
+            // the window root and Tab restart at the top of the shell
+            // (the HistorySurfaceView segment-radio rule).
+            Assert.Same(
+                Find<Button>(surface, "SyncDiagnosticsRefresh"), Keyboard.FocusedElement);
+        });
+        panel.Shutdown();
+    });
+
+    // --- Fabricated reports (for the states a real session cannot reach) ---
+
+    private static DetectedSyncProvider Fake(
+        SyncProviderKind kind, string displayName, RiskLevel risk, params string[] evidence) =>
+        new(kind, displayName, evidence, risk, displayName + " recommendation.");
+
+    private static SyncDetectionReport Fabricated(
+        params DetectedSyncProvider[] providers) =>
+        new(providers, null, "summary", true);
+
     // --- Tree helpers ---
 
     private static T Find<T>(DependencyObject root, string automationId)
@@ -758,11 +1044,19 @@ public sealed class SyncDiagnosticsSurfaceViewTests : IDisposable
     }
 
     /// <summary>The index of an automation id among the content
-    /// host's children — how the SD3 ORDER facts are stated.</summary>
+    /// host's children — how the SD3 ORDER facts are stated.
+    ///
+    /// It FAILS rather than returning -1 for an element that exists but
+    /// is not a direct child. A sentinel made the order assertions
+    /// asymmetric: "warning &lt; firstProvider" passed vacuously the
+    /// moment the warning row moved one level down (-1 &lt; n), while
+    /// "liveSync &gt; firstProvider" failed loudly for the same
+    /// relocation. Both are meant to be real statements about the
+    /// rendered order.</summary>
     private static int IndexOfId(SyncDiagnosticsSurfaceView surface, string id)
     {
         FrameworkElement? target = FindOrNull(surface, id);
-        Assert.NotNull(target);
+        Assert.True(target is not null, $"No element with automation id {id}.");
         var host = (StackPanel)((ScrollViewer)
             ((DockPanel)surface.Content).Children[0]).Content;
         for (int i = 0; i < host.Children.Count; i++)
@@ -772,7 +1066,52 @@ public sealed class SyncDiagnosticsSurfaceViewTests : IDisposable
                 return i;
             }
         }
+        Assert.Fail(
+            $"{id} is not a direct child of the content host, so its position in "
+            + "the SD3 render order cannot be stated.");
         return -1;
+    }
+
+    /// <summary>Run the body with the surface inside a live, shown,
+    /// off-screen <see cref="Window"/>. WPF grants keyboard focus only
+    /// to elements in a live PresentationSource, so every fact about
+    /// what focus SURVIVED a rebuild needs one.</summary>
+    private static void InWindow(FrameworkElement content, Action<Window> body)
+    {
+        var window = new Window
+        {
+            Content = content,
+            Width = 480,
+            Height = 360,
+            ShowInTaskbar = false,
+            WindowStartupLocation = WindowStartupLocation.Manual,
+            Left = -4000,
+            Top = -4000,
+        };
+        try
+        {
+            window.Show();
+            window.Activate();
+            window.UpdateLayout();
+            body(window);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    /// <summary>Drain the dispatcher down PAST Input priority — where
+    /// the surface queues its focus restoration, deliberately, because
+    /// a freshly added element cannot take focus before the tree it
+    /// joined has been laid out.</summary>
+    private static void Pump()
+    {
+        var frame = new System.Windows.Threading.DispatcherFrame();
+        _ = System.Windows.Threading.Dispatcher.CurrentDispatcher.BeginInvoke(
+            System.Windows.Threading.DispatcherPriority.Background,
+            new Action(() => frame.Continue = false));
+        System.Windows.Threading.Dispatcher.PushFrame(frame);
     }
 
     private static void RunSta(Action body)

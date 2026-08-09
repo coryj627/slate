@@ -58,6 +58,28 @@ internal sealed class SyncDiagnosticsViewModel : PanelWorkScheduler
     /// schedule, never a timing bet.</summary>
     internal Action? LoadInterleaveForTests { get; set; }
 
+    /// <summary>TEST-ONLY fault seam, never set in production: invoked
+    /// INSIDE the probe hop, after <c>DetectSync()</c> has returned and
+    /// before <c>LivesyncConfig()</c> runs. That is the exact SDR-6
+    /// pair-failure shape — one half in hand, the other throwing — and
+    /// it is unreachable from a real session today because
+    /// <c>Session::detect_sync</c>/<c>livesync_config</c> both return
+    /// <c>Ok(...)</c> unconditionally. Without it the whole
+    /// <c>VaultException</c> arm (and the Retry affordance behind it)
+    /// is uncoverable.</summary>
+    internal Action? ProbeFaultForTests { get; set; }
+
+    /// <summary>TEST-ONLY publish seam, never called in production:
+    /// drives <see cref="ApplyPublish"/> — the same applier every real
+    /// probe publish goes through — so the error and unsupported states
+    /// can be rendered and asserted. Production publishes come from
+    /// <see cref="LoadBody"/> and nowhere else.</summary>
+    internal void PublishForTests(
+        SyncDetectionReport? report,
+        LiveSyncConfigStatus? config,
+        string? error) =>
+        ApplyPublish(report, config, error);
+
     /// <summary>The surface's Refresh button routes THROUGH the
     /// workspace command path (installed by
     /// <c>InstallSyncDiagnosticsSeams</c>) so the button, the menu
@@ -170,10 +192,16 @@ internal sealed class SyncDiagnosticsViewModel : PanelWorkScheduler
             // task): if either throws, the pair fails together to the
             // error state with core's message.
             report = _session.DetectSync();
+            ProbeFaultForTests?.Invoke();
             config = _session.LivesyncConfig();
         }
         catch (VaultException exception)
         {
+            // Both halves are dropped TOGETHER (SDR-6): a fresh report
+            // whose config read threw is a HALF pair, and ApplyPublish
+            // moves the pair only when the report survived — so without
+            // this line a failed config read would silently swap the
+            // rendered report for one that has no config beside it.
             report = null;
             config = null;
             failure = exception.Message;
@@ -186,20 +214,31 @@ internal sealed class SyncDiagnosticsViewModel : PanelWorkScheduler
                 return;
             }
             IsLoading = false;
-            if (failure is not null)
-            {
-                // The error REPLACES the state (SD5, mac behavior) but
-                // does not wipe the retained report: SelectState's
-                // precedence is what hides it.
-                LoadError = failure;
-                Published?.Invoke(this, EventArgs.Empty);
-                return;
-            }
-            LoadError = null;
+            ApplyPublish(report, config, failure);
+        });
+    }
+
+    /// <summary>The ONE place published state changes and the ONE place
+    /// <see cref="Published"/> is raised — so the surface can subscribe
+    /// to that single signal and render a publish exactly once.
+    ///
+    /// The pair moves together or not at all (SDR-6): a probe that
+    /// failed hands in no halves, so a previously rendered report and
+    /// its config stay exactly as they were and SelectState's
+    /// precedence is what hides them behind the error (SD5 — the error
+    /// replaces the STATE, it never wipes the data).</summary>
+    private void ApplyPublish(
+        SyncDetectionReport? report,
+        LiveSyncConfigStatus? config,
+        string? error)
+    {
+        LoadError = error;
+        if (report is not null)
+        {
             Report = report;
             LiveSyncConfig = config;
-            Published?.Invoke(this, EventArgs.Empty);
-        });
+        }
+        Published?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>Teardown also invalidates in-flight publishes: the
