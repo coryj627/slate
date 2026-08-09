@@ -1,6 +1,6 @@
 # Milestone W parity matrix (§W-F row-level checklist)
 
-Generated 2026-08-09 at `7496632` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
+Generated 2026-08-09 at `574a84a` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
 
 ## Entry-criteria snapshot (w0_spec §W0-4 item 3)
 
@@ -111,7 +111,7 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 | `slate.canvas.zoomIn` | Canvas: Zoom In | ⌘= | Command Equals | #745 (W6-1) | pending |
 | `slate.canvas.zoomOut` | Canvas: Zoom Out | ⌘- | Command Minus | #745 (W6-1) | pending |
 | `slate.canvas.zoomToSelection` | Canvas: Zoom to Selection | — | — | #745 (W6-1) | pending |
-| `slate.diagnostics.refreshSync` | Refresh Sync Diagnostics | — | — | #740 (W4-8) | pending |
+| `slate.diagnostics.refreshSync` | Refresh Sync Diagnostics | — | — | #740 (W4-8) | implemented; local gates green 2026-08-09; interactive CI + human AT pending |
 | `slate.editor.actualSize` | Editor: Actual Size | — | — | #725 (W2-3) | implemented; local gates green 2026-07-23; interactive CI + human AT pending |
 | `slate.editor.addProperty` | Add Property… | — | — | #736 (W4-4) | implemented; local gates green 2026-08-03; interactive CI + human AT pending |
 | `slate.editor.bulkRenameProperties` | Bulk Rename Properties… | ⇧⌘R | Shift Command R | #736 (W4-4) | implemented; local gates green 2026-08-03; interactive CI + human AT pending |
@@ -234,7 +234,7 @@ The palette surface itself (ranking via the W0.5-1 core engine, sections, recent
 | `bibliography` | #737 (W4-5) | implemented 2026-08-04 (#737): `BibliographyViewModel` + MainWindow leaf body, BOTH segments on `AccessibleDataGrid`; `BibliographyPanelTests` + FlaUI `CitationSurfaces_GridsSheetsAndChords_AreClean` |
 | `queries` | #738 (W4-6) | implemented 2026-08-08 (#738): workspace BaseQueriesState + MainWindow leaf body (saved queries / base files / dashboards, pin + rename + delete + export + dock); `BasesQueriesTests` + FlaUI `BasesSurfaces_GridBuilderAndLeaves_AreClean` |
 | `basesDock` | #738 (W4-6) | implemented 2026-08-08 (#738): workspace dock target following the active note (this_path, 500 ms debounce) over read-only `BaseSurfaceView`/`DashboardSurfaceView`; `BasesQueriesTests` + FlaUI `BasesSurfaces_GridBuilderAndLeaves_AreClean` (docks a base from the leaf and axe-scans the revealed BasesDockGrid) |
-| `syncDiagnostics` | #740 (W4-8) | pending |
+| `syncDiagnostics` | #740 (W4-8) | implemented 2026-08-09 (#740): `SyncDiagnosticsViewModel` + `SyncDiagnosticsSurfaceView` MainWindow leaf body (five-state report, per-provider peered rows + evidence, LiveSync config section, bounded marker watcher); `SyncDiagnosticsPanelTests` + FlaUI `SyncDiagnostics_LeafReportAndRefresh_AreClean` |
 
 ## Workspace persisted tab-content kinds (`enum EditorItem`)
 

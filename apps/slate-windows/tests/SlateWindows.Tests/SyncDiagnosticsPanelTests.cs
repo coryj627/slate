@@ -596,6 +596,13 @@ public sealed class SyncDiagnosticsSurfaceViewTests : IDisposable
             Expander evidence = Find<Expander>(
                 surface, "SyncDiagnosticsEvidence" + provider.Kind);
             Assert.Equal(SyncPhrase.Evidence, (string)evidence.Header);
+            // The ACCESSIBLE name binds each disclosure to its
+            // provider — identical "Evidence" siblings failed axe
+            // (SiblingUniqueAndFocusable; SDD-4). The visible header
+            // stays the WCAG 2.5.3 contiguous prefix.
+            Assert.Equal(
+                SyncPhrase.EvidenceFor(provider.DisplayName),
+                AutomationProperties.GetName(evidence));
             // SDINV-6: every evidence path is its own focusable line,
             // verbatim — the host never edits them.
             for (int i = 0; i < provider.EvidencePaths.Length; i++)
@@ -838,6 +845,10 @@ public sealed class SyncPhraseTests
             "Warning: Multiple sync systems are managing this vault.",
             SyncPhrase.Warning("Multiple sync systems are managing this vault."));
         Assert.Equal("Evidence", SyncPhrase.Evidence);
+        // Windows-only golden until the mac twin sheds the same
+        // identical-siblings defect (SDD-4): visible header + ", " +
+        // core display name; the header stays a contiguous prefix.
+        Assert.Equal("Evidence, Git", SyncPhrase.EvidenceFor("Git"));
     }
 
     [Fact]

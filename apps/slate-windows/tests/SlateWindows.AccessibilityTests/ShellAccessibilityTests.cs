@@ -3829,6 +3829,265 @@ public sealed class ShellAccessibilityTests
         }
     }
 
+    /// <summary>
+    /// W4-8 (#740) §W-C journey: the Sync leaf behind the rail over a
+    /// fixture vault carrying two REAL provider markers (a <c>.git</c>
+    /// directory and a <c>.stfolder</c> — Git and Syncthing detect
+    /// from in-vault entries alone, so the fixture is deterministic on
+    /// every machine with zero environment dependence). Covers the
+    /// populated report, the composed provider-row name reaching UIA,
+    /// the Evidence disclosure with its SD9-normalized paths, the
+    /// chordless slate.diagnostics.refreshSync menu route, and the SD8
+    /// marker watcher end-to-end via a THIRD marker planted
+    /// mid-session — the one link no unit fact covers. Honors the
+    /// recorded journey traps (no Asserts inside SpinUntil,
+    /// re-acquire after every publish, async Invoke settle).
+    /// </summary>
+    [Fact]
+    [Trait("gate", "W-C")]
+    public void SyncDiagnostics_LeafReportAndRefresh_AreClean()
+    {
+        string testRoot = Path.Combine(
+            Path.GetTempPath(), $"slate-sync-diagnostics-{Guid.NewGuid():N}");
+        string vaultRoot = Path.Combine(testRoot, "Sync Vault");
+        string logDirectory = Path.Combine(testRoot, "logs");
+        Directory.CreateDirectory(vaultRoot);
+        File.WriteAllText(
+            Path.Combine(vaultRoot, "alpha.md"),
+            "# Alpha\n\nOriginal body.\n");
+        // Provider-REAL markers (SD11): core's Git arm fires on
+        // `{root}/.git` existing and its Syncthing arm on a
+        // `{root}/.stfolder` DIRECTORY. Neither arm reads the
+        // environment, the home directory, or an installed client, so
+        // the count below is a fact about the fixture, not the machine.
+        Directory.CreateDirectory(Path.Combine(vaultRoot, ".git"));
+        Directory.CreateDirectory(Path.Combine(vaultRoot, ".stfolder"));
+
+        Process? process = null;
+        try
+        {
+            var startInfo = new ProcessStartInfo(SlateWindowsExe())
+            {
+                UseShellExecute = false,
+            };
+            startInfo.ArgumentList.Add(vaultRoot);
+            startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
+                $"slate-sync-diagnostics-{Guid.NewGuid():N}";
+            startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            process = Process.Start(startInfo)
+                ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+
+            if (!Environment.UserInteractive)
+            {
+                Assert.False(
+                    process.WaitForExit(3_000),
+                    "Slate exited during the sync-diagnostics startup smoke.");
+                return;
+            }
+
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(
+                process,
+                automation,
+                Path.Combine(logDirectory, "slate-windows.log"),
+                TimeSpan.FromSeconds(30));
+            window.SetForeground();
+            window.Focus();
+
+            // The RAIL is the reveal route: SD7 registers no showPanel
+            // command for this leaf on either platform, so there is no
+            // menu path to the surface — only the refresh below.
+            AutomationElement leaves = WaitForElement(
+                window, "RightPaneLeaves", TimeSpan.FromSeconds(30));
+            AutomationElement? syncLeaf = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        syncLeaf = leaves
+                            .FindAllDescendants(automation.ConditionFactory
+                                .ByControlType(ControlType.ListItem))
+                            .FirstOrDefault(item => string.Equals(
+                                item.Name, "Sync", StringComparison.Ordinal));
+                        return syncLeaf is not null;
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the Sync leaf option never appeared");
+            syncLeaf!.Patterns.SelectionItem.Pattern.Select();
+
+            // Every publish CLEARS and rebuilds the surface, so every
+            // element handle held across one is dead. Each probe below
+            // re-acquires from the window and reads a COM fault as
+            // "not yet" (the recorded stale-element trap).
+            string? HeaderName()
+            {
+                try
+                {
+                    return window.FindFirstDescendant(automation.ConditionFactory
+                        .ByAutomationId("SyncDiagnosticsHeader"))?.Name;
+                }
+                catch (System.Runtime.InteropServices.COMException)
+                {
+                    return null;
+                }
+            }
+
+            // The leaf BODY is a WPF Panel — no peer, no id in the tree
+            // (the W4-5 lesson); presence rides its peered children. The
+            // vault-open probe is ASYNC (SD4 arm-then-probe), so the
+            // count header is POLLED rather than asserted once.
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => HeaderName() is { } name
+                        && name.Contains(
+                            "2 systems detected", StringComparison.Ordinal),
+                    TimeSpan.FromSeconds(30)),
+                "the sync header never reported the two planted markers; "
+                + $"last header name: '{HeaderName()}'");
+
+            // The COMPOSED row name reaches UIA: one Group per provider
+            // named "{DisplayName}: {risk word}. {Recommendation}" (SD3)
+            // — a name on a bare Border publishes NOTHING, which is why
+            // the row rides AutomationNamedRowBorder.
+            AutomationElement gitRow = WaitForElement(
+                window, "SyncDiagnosticsProviderGit", TimeSpan.FromSeconds(10));
+            Assert.Equal(ControlType.Group, gitRow.ControlType);
+            Assert.Contains("Git", gitRow.Name, StringComparison.Ordinal);
+            // Core's normative recommendation, relayed verbatim (SD1).
+            // A SUBSTRING, not equality: the host does not own this
+            // sentence and a copy edit in core must not break the
+            // journey on wording it only relays.
+            Assert.Contains(
+                "This vault is a Git working tree",
+                gitRow.Name,
+                StringComparison.Ordinal);
+
+            // The Evidence disclosure is a SEPARATE operable sibling of
+            // the row (SD3(3)); each path inside is its own focusable
+            // line, verbatim from core and normalized at the SD9
+            // boundary — a `\\?\` prefix reaching a reader is the defect
+            // that boundary exists to prevent.
+            AutomationElement evidence = WaitForElement(
+                window, "SyncDiagnosticsEvidenceGit", TimeSpan.FromSeconds(10));
+            Assert.True(
+                evidence.Patterns.ExpandCollapse.IsSupported,
+                "the Git Evidence disclosure does not expose ExpandCollapse");
+            evidence.Patterns.ExpandCollapse.Pattern.Expand();
+            AutomationElement? evidenceLine = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            evidenceLine = window
+                                .FindAllDescendants(automation.ConditionFactory
+                                    .ByControlType(ControlType.Text))
+                                .FirstOrDefault(candidate =>
+                                    (candidate.Properties.AutomationId
+                                        .ValueOrDefault ?? "").StartsWith(
+                                            "SyncDiagnosticsEvidenceGitPath",
+                                            StringComparison.Ordinal)
+                                    && candidate.Properties.IsKeyboardFocusable
+                                        .ValueOrDefault
+                                    && !string.IsNullOrWhiteSpace(candidate.Name));
+                            return evidenceLine is not null;
+                        }
+                        catch (System.Runtime.InteropServices.COMException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "no focusable Git evidence line reached UIA after expanding "
+                + "the disclosure");
+            Assert.False(
+                evidenceLine!.Name.StartsWith(@"\\?\", StringComparison.Ordinal),
+                $"an evidence path kept its verbatim prefix: '{evidenceLine.Name}'");
+            AssertAxeClean(process, "sync-diagnostics");
+
+            // The chordless slate.diagnostics.refreshSync route (SD7):
+            // the menu item re-runs detection idempotently and never
+            // reveals the leaf. Invoke is ASYNC, and the publish rebuilds
+            // the whole surface, so the settle poll re-acquires the
+            // header and the row every pass and expects the SAME count —
+            // refresh republishes without wrecking the surface.
+            AutomationElement refreshItem = WaitForMenuItem(
+                window, "WorkspaceMenu", "RefreshSyncDiagnosticsMenuItem",
+                TimeSpan.FromSeconds(10));
+            refreshItem.Patterns.Invoke.Pattern.Invoke();
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        if (HeaderName() is not { } name
+                            || !name.Contains(
+                                "2 systems detected", StringComparison.Ordinal))
+                        {
+                            return false;
+                        }
+                        try
+                        {
+                            return window.FindFirstDescendant(
+                                automation.ConditionFactory.ByAutomationId(
+                                    "SyncDiagnosticsProviderGit")) is not null;
+                        }
+                        catch (System.Runtime.InteropServices.COMException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(15)),
+                "the sync leaf never re-resolved after the refresh command; "
+                + $"last header name: '{HeaderName()}'");
+
+            // THE WATCHER, end to end (SD8) — the link no unit fact
+            // covers. Core's LiveSync arm fires on
+            // `.obsidian/plugins/obsidian-livesync/` holding a
+            // manifest.json; creating that chain churns the WATCHED
+            // vault root, and the manifest is on disk long before the
+            // 2.5 s trailing debounce (10 s ceiling) elapses, so the
+            // re-detection that fires sees all three markers. The
+            // timeout is deliberately generous: debounce + ceiling +
+            // two FFI calls, never a tight race.
+            string livesyncDirectory = Path.Combine(
+                vaultRoot, ".obsidian", "plugins", "obsidian-livesync");
+            Directory.CreateDirectory(livesyncDirectory);
+            File.WriteAllText(
+                Path.Combine(livesyncDirectory, "manifest.json"),
+                "{\"id\":\"obsidian-livesync\"}");
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => HeaderName() is { } name
+                        && name.Contains(
+                            "3 systems detected", StringComparison.Ordinal),
+                    TimeSpan.FromSeconds(30)),
+                "the marker watcher never republished after a third marker "
+                + $"landed mid-session; last header name: '{HeaderName()}'");
+        }
+        finally
+        {
+            if (process is not null && !process.HasExited)
+            {
+                process.CloseMainWindow();
+                if (!process.WaitForExit(5_000))
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            try
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
     private static Window WaitForMainWindow(
         Process process,
         UIA3Automation automation,

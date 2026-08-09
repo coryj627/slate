@@ -192,6 +192,16 @@ with settle, and `AssertAxeClean(process, "sync-diagnostics")`.
 - **SDD-3** Windows joins the panel-scheduler drain discipline
   (`PanelWorkScheduler` + the workspace drain) in place of mac's actor/task model —
   the SD5 guards are the shared contract.
+- **SDD-4** (added 2026-08-09, from the journey's first live axe run) The evidence
+  expander's ACCESSIBLE name is "Evidence, {DisplayName}" on Windows — a bare
+  "Evidence" makes every provider's disclosure an identical focusable sibling
+  (axe SiblingUniqueAndFocusable), indistinguishable to a reader walking the leaf.
+  The visible header stays "Evidence" (a contiguous prefix — WCAG 2.5.3, the
+  Refresh-button shape). Mac's bare `DisclosureGroup("Evidence")`
+  (SyncDiagnosticsPanel.swift:180) carries the SAME defect, so this is a shared
+  flaw fixed on Windows first, not drift; `SyncPhrase.EvidenceFor` is a
+  Windows-only golden until the tracked mac follow-up lands, after which the
+  lock-step rule resumes for it.
 
 ## Risks / accepted
 

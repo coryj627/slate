@@ -64,6 +64,19 @@ internal static class SyncPhrase
 
     public const string Evidence = "Evidence";
 
+    /// <summary>The evidence expander's ACCESSIBLE name: "Evidence"
+    /// alone makes every provider's disclosure an identical focusable
+    /// sibling (axe SiblingUniqueAndFocusable — caught by the W4-8
+    /// journey's first live run). The visible header stays
+    /// <see cref="Evidence"/>, a contiguous prefix of this name
+    /// (WCAG 2.5.3, the Refresh-button shape). WINDOWS-ONLY golden
+    /// for now: mac's bare DisclosureGroup("Evidence")
+    /// (SyncDiagnosticsPanel.swift:180) carries the same defect —
+    /// tracked for the mac twin; SDD-4 records the interim
+    /// divergence.</summary>
+    public static string EvidenceFor(string displayName) =>
+        Evidence + ", " + displayName;
+
     public const string LiveSyncConfiguration = "LiveSync configuration";
 
     // The six config-row labels, in mac's render order.

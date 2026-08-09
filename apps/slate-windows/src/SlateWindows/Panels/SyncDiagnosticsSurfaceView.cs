@@ -326,7 +326,12 @@ internal sealed class SyncDiagnosticsSurfaceView : UserControl
             Content = paths,
             Margin = new Thickness(0, 0, 0, 8),
         };
-        AutomationProperties.SetName(expander, SyncPhrase.Evidence);
+        // Accessible name binds the disclosure to ITS provider —
+        // identical "Evidence" siblings are indistinguishable to a
+        // reader walking the leaf (axe SiblingUniqueAndFocusable;
+        // SDD-4).
+        AutomationProperties.SetName(
+            expander, SyncPhrase.EvidenceFor(provider.DisplayName));
         AutomationProperties.SetAutomationId(
             expander, "SyncDiagnosticsEvidence" + provider.Kind);
         return expander;
