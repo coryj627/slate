@@ -25,6 +25,40 @@ internal sealed class AutomationLandmarkBorder : Border
 }
 
 /// <summary>
+/// A named, focusable row host. A plain Border creates NO automation
+/// peer, so a composed row name set on one is silently dropped from
+/// UIA (the W4-5 lesson that produced AutomationLandmarkBorder). This
+/// variant exposes ONE Group element carrying the composed name and
+/// raises focus events when the row takes keyboard focus; visual text
+/// inside the row rides AutomationPresentationTextBlock so the host
+/// stays the single accessible stop.
+/// </summary>
+internal sealed class AutomationNamedRowBorder : Border
+{
+    protected override AutomationPeer OnCreateAutomationPeer() =>
+        new AutomationNamedRowPeer(this);
+}
+
+internal sealed class AutomationNamedRowPeer : FrameworkElementAutomationPeer
+{
+    internal AutomationNamedRowPeer(FrameworkElement owner)
+        : base(owner)
+    {
+    }
+
+    protected override AutomationControlType GetAutomationControlTypeCore() =>
+        AutomationControlType.Group;
+
+    protected override string GetClassNameCore() => "SlateRow";
+
+    protected override bool IsControlElementCore() =>
+        Owner is UIElement { Visibility: Visibility.Visible };
+
+    protected override bool IsContentElementCore() =>
+        Owner is UIElement { Visibility: Visibility.Visible };
+}
+
+/// <summary>
 /// Keeps a collapsed list out of the UI Automation control tree even when a
 /// provider retains its peer after the surrounding popup has closed.
 /// </summary>

@@ -1441,6 +1441,29 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             session, announce, synchronousForTests: !startInteractionBackgroundWork);
         Bibliography = new Panels.BibliographyViewModel(
             session, synchronousForTests: !startInteractionBackgroundWork);
+        // W4-7: the history document — note-scoped (fed by SyncPanels),
+        // silent on its own (HINV-4); flows live in the History
+        // coordinator partial. The compare-vs-current hash: a markdown
+        // tab supplies its loaded buffer hash (the mac
+        // currentNoteContentHash); every OTHER path-backed kind rides
+        // the loaded list's head hash — H12 forbids extension
+        // special-casing, so per-row Compare works on .canvas/.base
+        // histories too.
+        History = new Panels.HistoryViewModel(
+            session, synchronousForTests: !startInteractionBackgroundWork);
+        History.CurrentContentHashProvider = () =>
+            ActiveGroup.ActiveTab is { } historyTab
+            && IsPathBacked(historyTab.Item)
+            && string.Equals(historyTab.Path, History.Path, StringComparison.Ordinal)
+                ? (historyTab.IsMarkdown
+                    ? historyTab.SavedContentHash
+                    : History.HeadContentHash)
+                : null;
+        History.ShowChangesSinceOpen =
+            EditorPreferences.HistoryShowChangesSinceOpen;
+        EditorPreferences.HistoryShowChangesSinceOpenChanged +=
+            enabled => History.ShowChangesSinceOpen = enabled;
+        InstallHistorySeams();
         // Both leaves read through the session's bibliography sources,
         // so neither may query before seeding SETTLES — and the
         // bibliography also branches on how it settled.
@@ -1557,6 +1580,13 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         // same-path calls are no-ops, so over-calling is refetch-free.
         Citations.NoteChanged(
             ActiveGroup.ActiveTab is { IsMarkdown: true } citedTab ? citedTab.Path : null);
+        // W4-7: history follows ANY path-backed tab (contract H12 — no
+        // extension filtering; .canvas/.base histories are first-class).
+        History.NoteChanged(
+            ActiveGroup.ActiveTab is { } historyTab
+            && IsPathBacked(historyTab.Item)
+                ? historyTab.Path
+                : null);
         // W4-4: the properties header attaches at activation, in the
         // Reading posture — background work in the app, inline in
         // tests (the flag decides the VM's mode at first creation,
@@ -1615,6 +1645,14 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 if (string.Equals(value.Id, "queries", StringComparison.Ordinal))
                 {
                     RefreshBaseQueries();
+                }
+                // W4-7: the reveal refresh (contract H11) — page-one
+                // reload of the active note's list, idempotent; the
+                // ShowHistoryPanel command covers the already-active
+                // re-invoke.
+                if (string.Equals(value.Id, "history", StringComparison.Ordinal))
+                {
+                    History.Reload();
                 }
                 Persist();
             }
@@ -1931,6 +1969,9 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             openBuilder.Shutdown();
             basesDrains.Add(openBuilder.WhenWorkDrained());
         }
+        // W4-7: the history document's workers hold the session too.
+        History.Shutdown();
+        basesDrains.Add(History.WhenWorkDrained());
         // RETIRED-earlier schedulers too (a replaced builder, a
         // released dashboard, a swept document) — their in-flight
         // bodies hold ephemeral handles just the same (codex round 3).

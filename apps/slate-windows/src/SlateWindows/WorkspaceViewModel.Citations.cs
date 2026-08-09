@@ -440,6 +440,9 @@ internal sealed partial class WorkspaceViewModel
     {
         Panels.NoteSaved(path);
         Citations.NoteSaved(path);
+        // W4-7: a save appended a version row (HR-2: the list refreshes
+        // on saves, not on op-log appends).
+        History.NoteSaved(path);
     }
 
     /// <summary>Bibliography row action: which notes cite this key.</summary>

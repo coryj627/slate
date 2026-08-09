@@ -110,6 +110,19 @@
                           AutomationProperties.AutomationId="ShowTasksReviewMenuItem"
                           InputGestureText="Ctrl+R"
                           Command="{Binding Workspace.OpenTasksReviewCommand}" />
+                <!-- W4-7 (#739): slate.history.showPanel — no chord on
+                     mac (matrix row); the menu is the chordless
+                     surface (contract H11). -->
+                <MenuItem Header="Show _History Panel"
+                          AutomationProperties.AutomationId="ShowHistoryPanelMenuItem"
+                          Command="{Binding Workspace.ShowHistoryPanelCommand}" />
+                <!-- Contract H8: the since-open opt-in (mac Settings ▸
+                     History), a HOST preference, default off. -->
+                <MenuItem Header="Show _Changes Since Last Open"
+                          AutomationProperties.AutomationId="HistoryChangesSinceOpenMenuItem"
+                          IsCheckable="True"
+                          IsChecked="{Binding Workspace.EditorPreferences.HistoryShowChangesSinceOpen, Mode=OneWay}"
+                          Command="{Binding Workspace.EditorPreferences.ToggleHistoryChangesSinceOpenCommand}" />
             </MenuItem>
             <!-- W4-6 (#738): every slate.bases.* command reachable and
                  AT-discoverable. Mac ships these palette-only with no
@@ -1664,6 +1677,30 @@
                                 </bases:BaseSurfaceView>
                             </DockPanel>
 
+                            <!-- W4-7 (#739): the history leaf — two
+                                 segments, day-grouped versions, the
+                                 structured diff walkthrough, restore
+                                 flows (contracts H2-H10). -->
+                            <DockPanel Margin="12"
+                                       AutomationProperties.AutomationId="HistoryLeafBody">
+                                <DockPanel.Style>
+                                    <Style TargetType="DockPanel">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding ActiveLeaf.Id}" Value="history">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </DockPanel.Style>
+                                <TextBlock DockPanel.Dock="Top"
+                                           Text="History"
+                                           FontSize="16"
+                                           FontWeight="SemiBold"
+                                           AutomationProperties.HeadingLevel="Level2" />
+                                <panels:HistorySurfaceView Model="{Binding History}" />
+                            </DockPanel>
+
                             <StackPanel Grid.Column="0" Margin="12">
                                 <StackPanel.Style>
                                     <Style TargetType="StackPanel">
@@ -1696,6 +1733,9 @@
                                                 <Setter Property="Visibility" Value="Collapsed" />
                                             </DataTrigger>
                                             <DataTrigger Binding="{Binding ActiveLeaf.Id}" Value="tasksReview">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding ActiveLeaf.Id}" Value="history">
                                                 <Setter Property="Visibility" Value="Collapsed" />
                                             </DataTrigger>
                                         </Style.Triggers>

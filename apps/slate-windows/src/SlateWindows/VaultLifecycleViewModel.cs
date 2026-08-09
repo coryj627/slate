@@ -489,10 +489,20 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
         string message)
     {
         HostLog.Write(HostDiagnosticEvent.VaultEventFailed);
-        if (generation == _generation)
+        if (generation != _generation)
         {
-            ReportTerminalStatus(message, A11yPriority.High);
+            return;
         }
+        if (code == EventErrorCode.CompactionFailed)
+        {
+            // W4-7 (contract H13, divergence HD-4): core's composed
+            // message relayed as a MEDIUM announcement, once per path
+            // per session — a background maintenance failure is not a
+            // High-priority interruption.
+            Workspace?.AnnounceHistoryCompactionFailure(path, message);
+            return;
+        }
+        ReportTerminalStatus(message, A11yPriority.High);
     }
 
     private void HandleFileChange(int generation, FileChangeEvent @event)
@@ -528,6 +538,13 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
             // C9's vault-event arm — property panel, task toggles,
             // editor saves, and external edits all land here).
             Workspace?.NotifyBasesOfVaultChange(@event.Path);
+            // W4-7 (HR-2's vault-event arm): a Modified on the active
+            // path appended a version row the save funnel never saw
+            // (Bases grid edits, sync, external editors).
+            if (@event.Kind == FileChangeKind.Modified)
+            {
+                Workspace?.NotifyHistoryOfVaultChange(@event.Path);
+            }
             if (@event.Kind == FileChangeKind.Renamed
                 && @event.PreviousPath is string basesRenamedFrom)
             {

@@ -23,7 +23,9 @@ internal sealed record AppPreferencesState(
     [property: JsonPropertyName("mathVerbosity")]
     string MathVerbosity = "medium",
     [property: JsonPropertyName("mathBrailleCode")]
-    string MathBrailleCode = "nemeth");
+    string MathBrailleCode = "nemeth",
+    [property: JsonPropertyName("historyShowChangesSinceOpen")]
+    bool HistoryShowChangesSinceOpen = false);
 
 /// <summary>Bounded device-local storage for app-level preferences.</summary>
 internal sealed class AppPreferencesStore
