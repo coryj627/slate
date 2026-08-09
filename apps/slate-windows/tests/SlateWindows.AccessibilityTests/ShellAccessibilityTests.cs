@@ -3282,6 +3282,19 @@ public sealed class ShellAccessibilityTests
             AutomationElement saveAsQuery = WaitForElement(
                 window, "BuilderSaveAsSavedQuery", TimeSpan.FromSeconds(10));
             saveAsQuery.Patterns.Invoke.Pattern.Invoke();
+            // A visible SaveError means the builder REFUSED — surface
+            // the reason now, before Escape destroys the element.
+            AutomationElement? builderError = null;
+            _ = SpinWait.SpinUntil(
+                () => (builderError = window.FindFirstDescendant(
+                    automation.ConditionFactory.ByAutomationId("BuilderSaveError")))
+                    is not null,
+                TimeSpan.FromSeconds(2));
+            if (builderError is not null)
+            {
+                throw new Xunit.Sdk.XunitException(
+                    $"the builder refused the save: '{builderError.Name}'");
+            }
 
             Keyboard.Press(VirtualKeyShort.ESCAPE);
             Keyboard.Release(VirtualKeyShort.ESCAPE);
@@ -3319,10 +3332,13 @@ public sealed class ShellAccessibilityTests
                 bool overlayStillOpen = window.FindFirstDescendant(
                     automation.ConditionFactory.ByAutomationId(
                         "BuilderSaveAsSavedQuery")) is not null;
+                string appLog = ReadSharedLog(
+                    Path.Combine(logDirectory, "slate-windows.log"));
+                string logTail = appLog.Length > 800 ? appLog[^800..] : appLog;
                 throw new Xunit.Sdk.XunitException(
                     "QueriesSavedList did not become available; "
                     + $"leafRevealed={leafRevealed}, emptyState={emptyState}, "
-                    + $"builderStillOpen={overlayStillOpen}");
+                    + $"builderStillOpen={overlayStillOpen}; app log tail: {logTail}");
             }
             AutomationElement? savedItem = null;
             Assert.True(
