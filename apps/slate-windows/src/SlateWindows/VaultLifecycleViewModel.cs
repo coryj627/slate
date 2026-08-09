@@ -538,6 +538,13 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
             // C9's vault-event arm — property panel, task toggles,
             // editor saves, and external edits all land here).
             Workspace?.NotifyBasesOfVaultChange(@event.Path);
+            // W4-7 (HR-2's vault-event arm): a Modified on the active
+            // path appended a version row the save funnel never saw
+            // (Bases grid edits, sync, external editors).
+            if (@event.Kind == FileChangeKind.Modified)
+            {
+                Workspace?.NotifyHistoryOfVaultChange(@event.Path);
+            }
             if (@event.Kind == FileChangeKind.Renamed
                 && @event.PreviousPath is string basesRenamedFrom)
             {

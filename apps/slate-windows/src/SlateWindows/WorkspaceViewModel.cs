@@ -1443,15 +1443,21 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             session, synchronousForTests: !startInteractionBackgroundWork);
         // W4-7: the history document — note-scoped (fed by SyncPanels),
         // silent on its own (HINV-4); flows live in the History
-        // coordinator partial. The compare-vs-current hash is the
-        // active MARKDOWN tab's saved hash (the log tail after any
-        // save); other path-backed kinds degrade honestly (H6).
+        // coordinator partial. The compare-vs-current hash: a markdown
+        // tab supplies its loaded buffer hash (the mac
+        // currentNoteContentHash); every OTHER path-backed kind rides
+        // the loaded list's head hash — H12 forbids extension
+        // special-casing, so per-row Compare works on .canvas/.base
+        // histories too.
         History = new Panels.HistoryViewModel(
             session, synchronousForTests: !startInteractionBackgroundWork);
         History.CurrentContentHashProvider = () =>
-            ActiveGroup.ActiveTab is { IsMarkdown: true } historyTab
+            ActiveGroup.ActiveTab is { } historyTab
+            && IsPathBacked(historyTab.Item)
             && string.Equals(historyTab.Path, History.Path, StringComparison.Ordinal)
-                ? historyTab.SavedContentHash
+                ? (historyTab.IsMarkdown
+                    ? historyTab.SavedContentHash
+                    : History.HeadContentHash)
                 : null;
         History.ShowChangesSinceOpen =
             EditorPreferences.HistoryShowChangesSinceOpen;
@@ -1639,6 +1645,14 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 if (string.Equals(value.Id, "queries", StringComparison.Ordinal))
                 {
                     RefreshBaseQueries();
+                }
+                // W4-7: the reveal refresh (contract H11) — page-one
+                // reload of the active note's list, idempotent; the
+                // ShowHistoryPanel command covers the already-active
+                // re-invoke.
+                if (string.Equals(value.Id, "history", StringComparison.Ordinal))
+                {
+                    History.Reload();
                 }
                 Persist();
             }

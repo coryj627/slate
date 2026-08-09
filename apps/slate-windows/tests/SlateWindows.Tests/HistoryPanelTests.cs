@@ -61,7 +61,8 @@ public sealed class HistoryPanelTests : IDisposable
         var workspace = new WorkspaceViewModel(
             _session, _root, () => [], _announced.Add,
             startInteractionBackgroundWork: false);
-        workspace.HistoryAlert = _alerts.Add;
+        workspace.HistoryAlert =
+            (title, message) => _alerts.Add($"{title}: {message}");
         workspace.HistoryRestoreConfirmation = _ => true;
         return workspace;
     }
@@ -194,6 +195,8 @@ public sealed class HistoryPanelTests : IDisposable
             .SelectMany(group => group.Rows).ToList();
         Assert.DoesNotContain(visibleDefault, row => row.IsMarker);
 
+        string headerBefore = history.HeaderText;
+
         history.ShowMarkers = true;
 
         var visibleWithMarkers = history.DayGroups
@@ -204,6 +207,13 @@ public sealed class HistoryPanelTests : IDisposable
         // The toggle is a pure re-filter over the cached page — the
         // marker rows (the op-log anchor at minimum) appear.
         Assert.Contains(visibleWithMarkers, row => row.IsMarker);
+        // The header count is core's marker-INCLUSIVE TotalFiltered
+        // (H3): identical across the toggle, and equal to the full
+        // row count on a single-page history.
+        Assert.Equal(headerBefore, history.HeaderText);
+        Assert.Equal(
+            $"Version history, {visibleWithMarkers.Count} versions",
+            history.HeaderText);
         history.ShowMarkers = false;
         Assert.DoesNotContain(
             history.DayGroups.SelectMany(group => group.Rows),
@@ -384,7 +394,12 @@ public sealed class HistoryPanelTests : IDisposable
             .SelectMany(group => group.Rows).ToList();
         // Deterministic target: the OLDEST non-marker row is version one.
         HistoryVersionRow versionOne = rows.Where(row => !row.IsMarker).Last();
-        workspace.HistoryRestoreConfirmation = _ => true;
+        string? confirmationMessage = null;
+        workspace.HistoryRestoreConfirmation = message =>
+        {
+            confirmationMessage = message;
+            return true;
+        };
         bool headFocusRequested = false;
         workspace.History.FocusHeadRequested += () => headFocusRequested = true;
         _announced.Clear();
@@ -394,7 +409,16 @@ public sealed class HistoryPanelTests : IDisposable
         Assert.True(
             _alerts.Count == 0,
             $"restore raised an alert: {string.Join("; ", _alerts)}");
-        Assert.Contains(_announced, e => e is A11yEvent.RestoredVersionFrom);
+        // The confirmation is the recorded sentence, carrying the
+        // STAGED host-formatted date (H7).
+        Assert.Contains(
+            $"Restore the version from {versionOne.AbsoluteDate}?",
+            confirmationMessage,
+            StringComparison.Ordinal);
+        // The announcement payload is the staged date too (H1).
+        var restored = Assert.IsType<A11yEvent.RestoredVersionFrom>(
+            Assert.Single(_announced, e => e is A11yEvent.RestoredVersionFrom));
+        Assert.Equal(versionOne.AbsoluteDate, restored.FormattedDate);
         Assert.Contains(
             "Version one body",
             File.ReadAllText(Path.Combine(_root, "note0.md")),
@@ -404,10 +428,16 @@ public sealed class HistoryPanelTests : IDisposable
             Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
         Assert.Contains("Version one body", tab.Text, StringComparison.Ordinal);
         Assert.True(headFocusRequested);
-        // History never rewrites: the restore appended a NEW head row.
+        // History never rewrites: the restore appended EXACTLY ONE new
+        // head row, whose content hash is the restored version's (a
+        // ">= count" gate would also pass an in-place rewrite — red
+        // team round 1).
         var reloaded = workspace.History.DayGroups
             .SelectMany(group => group.Rows).ToList();
-        Assert.True(reloaded.Count >= rows.Count);
+        Assert.Equal(rows.Count + 1, reloaded.Count);
+        HistoryVersionRow head = reloaded.First();
+        Assert.Equal(0u, head.PositionFromTail);
+        Assert.Equal(versionOne.ContentHashAfter, head.ContentHashAfter);
     }
 
     [Fact]
@@ -426,6 +456,7 @@ public sealed class HistoryPanelTests : IDisposable
         workspace.HistoryRestoreConfirmation = _ =>
             throw new InvalidOperationException(
                 "the dirty refusal must precede the confirmation");
+        string diskBefore = File.ReadAllText(Path.Combine(_root, "note0.md"));
         _announced.Clear();
 
         workspace.RequestRestoreVersion(rows[^1]);
@@ -435,11 +466,14 @@ public sealed class HistoryPanelTests : IDisposable
             "Save the note before restoring a version.",
             refusal.Text,
             StringComparison.Ordinal);
-        // Nothing was written.
+        // Nothing was written — neither the buffer NOR the disk (the
+        // refusal precedes ANY disk touch, HD-1).
         Assert.Contains(
             "unsaved",
             tab.Text,
             StringComparison.Ordinal);
+        Assert.Equal(
+            diskBefore, File.ReadAllText(Path.Combine(_root, "note0.md")));
     }
 
     [Fact]
@@ -457,7 +491,8 @@ public sealed class HistoryPanelTests : IDisposable
 
         (bool ok, string? refusal) = (false, null);
         workspace.CommitRestoreAsVersion(
-            oldest, "note0 (restored).md", (result, message) =>
+            oldest.ContentHashAfter, oldest.AbsoluteDate,
+            "note0 (restored).md", (result, message) =>
                 (ok, refusal) = (result, message));
 
         Assert.True(ok, $"restore-as failed: {refusal}");
@@ -470,7 +505,8 @@ public sealed class HistoryPanelTests : IDisposable
         // The same destination now collides: exclusive-create refuses
         // and the completion carries the recorded sentence.
         workspace.CommitRestoreAsVersion(
-            oldest, "note0 (restored).md", (result, message) =>
+            oldest.ContentHashAfter, oldest.AbsoluteDate,
+            "note0 (restored).md", (result, message) =>
                 (ok, refusal) = (result, message));
         Assert.False(ok);
         Assert.StartsWith(
@@ -507,7 +543,7 @@ public sealed class HistoryPanelTests : IDisposable
             scenario.Session, scenario.Root, () => [], _announced.Add,
             startInteractionBackgroundWork: false)
         {
-            HistoryAlert = _alerts.Add,
+            HistoryAlert = (title, message) => _alerts.Add($"{title}: {message}"),
         };
         workspace.History.LoadDeletedFiles();
         Assert.Null(workspace.History.DeletedError);
@@ -535,6 +571,10 @@ public sealed class HistoryPanelTests : IDisposable
         Assert.DoesNotContain(
             workspace.History.DeletedRows,
             row => string.Equals(row.Path, "gone.md", StringComparison.Ordinal));
+        // Recovery does NOT navigate (the mac shape): announce and
+        // refresh only, so recovering several files in a row keeps the
+        // user in the Deleted list.
+        Assert.Null(workspace.ActiveGroup.ActiveTab);
     }
 
     [Fact]
@@ -556,7 +596,7 @@ public sealed class HistoryPanelTests : IDisposable
             scenario.Session, scenario.Root, () => [], _announced.Add,
             startInteractionBackgroundWork: false)
         {
-            HistoryAlert = _alerts.Add,
+            HistoryAlert = (title, message) => _alerts.Add($"{title}: {message}"),
         };
         workspace.History.LoadDeletedFiles();
         HistoryDeletedRow? deleted = workspace.History.DeletedRows
@@ -625,5 +665,262 @@ public sealed class HistoryPanelTests : IDisposable
         var first = Assert.IsType<A11yEvent.HostComposed>(_announced[0]);
         Assert.Equal("core message", first.Text);
         Assert.Equal(A11yPriority.Medium, first.Priority);
+    }
+
+    [Fact]
+    public void RestoreConflictAlertsWithTheRecordedTitleAndReloads()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        _ = SaveVersion("note0.md", "# Note 0\n\nOld body.\n");
+        // The tab opens NOW; a later direct session save makes its
+        // saved hash stale, so the restore CAS must refuse (H7).
+        workspace.OpenPath("note0.md");
+        _ = SaveVersion("note0.md", "# Note 0\n\nExternal newer body.\n");
+        workspace.History.Reload();
+        var rows = workspace.History.DayGroups
+            .SelectMany(group => group.Rows).ToList();
+        HistoryVersionRow oldest = rows.Where(row => !row.IsMarker).Last();
+        _announced.Clear();
+        _alerts.Clear();
+
+        workspace.RequestRestoreVersion(oldest);
+
+        string alert = Assert.Single(_alerts);
+        Assert.StartsWith("Restore failed: ", alert, StringComparison.Ordinal);
+        Assert.Contains(
+            "The file changed after history was loaded",
+            alert,
+            StringComparison.Ordinal);
+        // No success announcement, and the disk kept the newer body.
+        Assert.DoesNotContain(_announced, e => e is A11yEvent.RestoredVersionFrom);
+        Assert.Contains(
+            "External newer body",
+            File.ReadAllText(Path.Combine(_root, "note0.md")),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BaseFileRestoreIsCasGuardedWithoutAnEditorBuffer()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        _ = SaveVersion("Guard.base", "views:\n  - type: table\n    name: One\n");
+        _ = SaveVersion("Guard.base", "views:\n  - type: table\n    name: Two\n");
+        workspace.History.NoteChanged("Guard.base");
+        var rows = workspace.History.DayGroups
+            .SelectMany(group => group.Rows).ToList();
+        HistoryVersionRow oldest = rows.Where(row => !row.IsMarker).Last();
+        // The loaded list is now STALE: an external write lands after
+        // the head hash was captured. H12 + H7: the restore must stay
+        // CAS-guarded even with no markdown buffer — a null expected
+        // hash is an unconditional core save (the clobber this guard
+        // exists to stop).
+        _ = SaveVersion("Guard.base", "views:\n  - type: table\n    name: Three\n");
+        _announced.Clear();
+        _alerts.Clear();
+
+        workspace.RequestRestoreVersion(oldest);
+
+        string alert = Assert.Single(_alerts);
+        Assert.StartsWith("Restore failed: ", alert, StringComparison.Ordinal);
+        Assert.DoesNotContain(_announced, e => e is A11yEvent.RestoredVersionFrom);
+        Assert.Contains(
+            "name: Three",
+            File.ReadAllText(Path.Combine(_root, "Guard.base")),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ShowHistoryPanelAnnouncesOnlyOnAnActualSwitch()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        _announced.Clear();
+
+        workspace.ShowHistoryPanel();
+        workspace.ShowHistoryPanel();
+
+        Assert.Single(_announced, e => e is A11yEvent.HistoryPanelShown);
+        Assert.True(workspace.IsRightPaneVisible);
+        Assert.Equal("history", workspace.ActiveLeaf.Id);
+    }
+
+    [Fact]
+    public void RevealRefreshesAStaleListIdempotently()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        _ = SaveVersion("note0.md", "# Note 0\n\nFirst.\n");
+        workspace.OpenPath("note0.md");
+        workspace.History.Reload();
+        int before = workspace.History.DayGroups
+            .SelectMany(group => group.Rows).Count();
+        // A version lands OUTSIDE the tab save funnel (a session-level
+        // write): the visible list is now stale.
+        _ = SaveVersion("note0.md", "# Note 0\n\nSecond.\n");
+
+        // Contract H11: revealing the leaf refreshes idempotently.
+        workspace.ShowHistoryPanel();
+
+        int after = workspace.History.DayGroups
+            .SelectMany(group => group.Rows).Count();
+        Assert.Equal(before + 1, after);
+    }
+
+    [Fact]
+    public void VaultFileEventsRefreshTheActiveListOnly()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        _ = SaveVersion("note0.md", "# Note 0\n\nFirst.\n");
+        workspace.History.NoteChanged("note0.md");
+        int before = workspace.History.DayGroups
+            .SelectMany(group => group.Rows).Count();
+        _ = SaveVersion("note0.md", "# Note 0\n\nSecond.\n");
+        _ = SaveVersion("note1.md", "# Note 1\n\nUnrelated.\n");
+
+        // HR-2's vault-event arm: a Modified for the ACTIVE path
+        // refreshes; other paths are same-path no-ops.
+        workspace.NotifyHistoryOfVaultChange("note1.md");
+        Assert.Equal(
+            before,
+            workspace.History.DayGroups.SelectMany(group => group.Rows).Count());
+        workspace.NotifyHistoryOfVaultChange("note0.md");
+
+        Assert.Equal(
+            before + 1,
+            workspace.History.DayGroups.SelectMany(group => group.Rows).Count());
+    }
+
+    [Fact]
+    public void CollapsePersistsAcrossReloadAndResetsOnSwitch()
+    {
+        _ = SaveVersion("note0.md", "# Note 0\n\nA.\n");
+        HistoryViewModel history = NewHistory();
+        history.NoteChanged("note0.md");
+        history.DayGroups[0].IsCollapsed = true;
+
+        // A save reload keeps the head group's stable id — collapse
+        // survives (H4).
+        history.NoteSaved("note0.md");
+        Assert.True(history.DayGroups[0].IsCollapsed);
+
+        // A note switch resets collapse (per-session, per-note).
+        history.NoteChanged(null);
+        history.NoteChanged("note0.md");
+        Assert.False(history.DayGroups[0].IsCollapsed);
+        history.Shutdown();
+    }
+
+    [Fact]
+    public void SinceOpenUnchangedVerdictRendersNothing()
+    {
+        _ = SaveVersion("note0.md", "# Note 0\n\nStable.\n");
+        HistoryViewModel history = NewHistory();
+        history.ShowChangesSinceOpen = true;
+        history.NoteChanged("note0.md");
+        // Baseline marked; nothing changes; re-activate.
+        history.NoteChanged(null);
+        history.NoteChanged("note0.md");
+
+        // Unchanged → None: the section stays absent (H8).
+        Assert.Equal(HistorySinceOpenKind.None, history.SinceOpen.Kind);
+        history.Shutdown();
+    }
+
+    [Fact]
+    public void NotRecoverableDeletedRowsCarryTheRecordedLabels()
+    {
+        HistoryDeletedRow row = HistoryViewModel.MakeDeletedRow(
+            new DeletedFileEntry("lost.md", null, false, 900));
+
+        Assert.Equal("Deletion time unknown", row.DeletedText);
+        // Size renders only for recoverable rows.
+        Assert.Null(row.SizeText);
+        Assert.EndsWith(
+            "not restorable", row.AccessibleName, StringComparison.Ordinal);
+
+        // The coordinator refuses without touching core (H10).
+        using WorkspaceViewModel workspace = NewWorkspace();
+        (bool ok, bool collision) = (true, true);
+        workspace.RecoverDeletedFile(row, (result, destinationExists) =>
+            (ok, collision) = (result, destinationExists));
+        Assert.False(ok);
+        Assert.False(collision);
+    }
+
+    [Fact]
+    public void CompareAgainstCurrentWithoutAProviderIsSilent()
+    {
+        _ = SaveVersion("note0.md", "# Note 0\n\nBody.\n");
+        HistoryViewModel history = NewHistory();
+        history.NoteChanged("note0.md");
+        var rows = history.DayGroups.SelectMany(group => group.Rows).ToList();
+
+        // No comparable current state: a silent no-op (the mac guard),
+        // never a host-composed error (HINV-1).
+        history.CompareAgainstCurrent(rows[0]);
+
+        Assert.Null(history.InlineDiff);
+        history.Shutdown();
+    }
+
+    [Fact]
+    public void FormatBytesMirrorsTheMacFileFormatter()
+    {
+        Assert.Equal("Zero KB", HistoryViewModel.FormatBytes(0));
+        Assert.Equal("1 byte", HistoryViewModel.FormatBytes(1));
+        Assert.Equal("512 bytes", HistoryViewModel.FormatBytes(512));
+        Assert.Equal("2 KB", HistoryViewModel.FormatBytes(1_500));
+        Assert.Equal("1.5 MB", HistoryViewModel.FormatBytes(1_500_000));
+        Assert.Equal("1.25 GB", HistoryViewModel.FormatBytes(1_250_000_000));
+    }
+
+    [Fact]
+    public void DestinationNoticesAreTheRecordedSentences()
+    {
+        Assert.Equal(
+            "Save a copy of the version from July 19, 2026 at 9:41 AM "
+            + "to a new file.",
+            HistoryViewModel.RestoreAsNotice("July 19, 2026 at 9:41 AM"));
+        // The pinned H10 collision sentence — the only thing telling
+        // the user why the destination row appeared.
+        Assert.Equal(
+            "A file already exists at gone.md. Restore the deleted file "
+            + "to a different location.",
+            HistoryViewModel.DeletedCollisionNotice("gone.md"));
+    }
+
+    [Fact]
+    public void DestinationStagingCapturesIdentityAtOpenAndDropsOnSwitch()
+    {
+        _ = SaveVersion("note0.md", "# Note 0\n\nA.\n");
+        _ = SaveVersion("note0.md", "# Note 0\n\nB.\n");
+        HistoryViewModel history = NewHistory();
+        history.NoteChanged("note0.md");
+        var rows = history.DayGroups.SelectMany(group => group.Rows).ToList();
+        HistoryVersionRow oldest = rows.Where(row => !row.IsMarker).Last();
+
+        history.OpenRestoreAsStaging(oldest, "note0 (restored).md");
+        HistoryDestinationStaging staging =
+            Assert.IsType<HistoryDestinationStaging>(history.DestinationStaging);
+        Assert.Equal(oldest.ContentHashAfter, staging.VersionHash);
+        Assert.Equal(oldest.AbsoluteDate, staging.FormattedDate);
+
+        // The draft survives a reload that shifts every position — the
+        // staged identity is what commits, never "the row at that
+        // position now" (capture-at-staging).
+        history.UpdateDestinationDraft("elsewhere/copy.md");
+        _ = SaveVersion("note0.md", "# Note 0\n\nC.\n");
+        history.NoteSaved("note0.md");
+        staging =
+            Assert.IsType<HistoryDestinationStaging>(history.DestinationStaging);
+        Assert.Equal(oldest.ContentHashAfter, staging.VersionHash);
+        Assert.Equal("elsewhere/copy.md", staging.Draft);
+
+        // A refusal stages for the render; same-row toggle closes; a
+        // note switch drops the note-scoped staging.
+        history.SetDestinationRefusal("A file already exists at x.");
+        Assert.Equal(
+            "A file already exists at x.", history.DestinationStaging?.Refusal);
+        history.NoteChanged(null);
+        Assert.Null(history.DestinationStaging);
+        history.Shutdown();
     }
 }

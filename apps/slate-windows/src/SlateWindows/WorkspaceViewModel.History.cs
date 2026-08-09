@@ -20,19 +20,21 @@ internal sealed partial class WorkspaceViewModel
     internal HistoryViewModel History { get; }
 
     /// <summary>Injectable confirmation/refusal dialogs (the W4-4/W4-6
-    /// seam pattern): production shows message boxes; facts inject.</summary>
+    /// seam pattern): production shows dialogs; facts inject. The
+    /// confirmation's buttons are the PINNED "Cancel" / "Restore"
+    /// (contract H7 — the mac alert's roles), which MessageBox cannot
+    /// label, hence the dedicated dialog.</summary>
     internal Func<string, bool> HistoryRestoreConfirmation { get; set; } =
-        message => System.Windows.MessageBox.Show(
-            message,
-            "Restore version?",
-            System.Windows.MessageBoxButton.YesNo,
-            System.Windows.MessageBoxImage.Warning)
-            == System.Windows.MessageBoxResult.Yes;
+        message => HistoryConfirmationDialog.Confirm(
+            "Restore version?", message, confirmLabel: "Restore");
 
-    internal Action<string> HistoryAlert { get; set; } =
-        message => System.Windows.MessageBox.Show(
+    /// <summary>(title, message) — the titles are mac's: "Restore
+    /// failed" for the restore flow, "Can't restore" for recovery and
+    /// Restore As… failures.</summary>
+    internal Action<string, string> HistoryAlert { get; set; } =
+        (title, message) => System.Windows.MessageBox.Show(
             message,
-            "History",
+            title,
             System.Windows.MessageBoxButton.OK,
             System.Windows.MessageBoxImage.Warning);
 
@@ -66,6 +68,13 @@ internal sealed partial class WorkspaceViewModel
         if (switching)
         {
             _announce(new A11yEvent.HistoryPanelShown());
+        }
+        else
+        {
+            // The reveal refresh is idempotent (H11): a switch rode
+            // the ActiveLeaf setter's history hook; a re-invoke on the
+            // already-active leaf refreshes here.
+            History.Reload();
         }
         FocusBoundaryRequested?.Invoke(this, WorkspaceFocusBoundary.RightPane);
     }
@@ -112,11 +121,24 @@ internal sealed partial class WorkspaceViewModel
                 A11yPriority.High));
             return;
         }
+        // The CAS basis (H7): a markdown tab stages its loaded buffer
+        // hash (the mac currentNoteContentHash); every other
+        // path-backed kind stages the loaded list's head hash — H12
+        // forbids extension special-casing, and core documents a null
+        // expected hash as an UNCONDITIONAL save, so no restore may
+        // ever go out unguarded (the mac guard refuses instead).
+        string? expectedHash = tab is { IsMarkdown: true }
+            ? tab.SavedContentHash
+            : History.HeadContentHash;
+        if (expectedHash is null)
+        {
+            return;
+        }
         var request = new HistoryRestoreRequest(
             path,
             row.ContentHashAfter,
             row.AbsoluteDate,
-            tab is { IsMarkdown: true } ? tab.SavedContentHash : null);
+            expectedHash);
         string filename = System.IO.Path.GetFileName(path);
         if (!HistoryRestoreConfirmation(
             $"Restore the version from {request.FormattedDate}? This replaces "
@@ -165,6 +187,7 @@ internal sealed partial class WorkspaceViewModel
                 if (conflict)
                 {
                     HistoryAlert(
+                        "Restore failed",
                         "The file changed after history was loaded. The list "
                         + "will reload — try again.");
                     History.Reload();
@@ -173,18 +196,23 @@ internal sealed partial class WorkspaceViewModel
                 if (unavailable)
                 {
                     HistoryAlert(
+                        "Restore failed",
                         "This version can't be restored: its history failed an "
                         + "integrity check.");
                     return;
                 }
                 if (failure is not null)
                 {
-                    HistoryAlert(failure);
+                    HistoryAlert("Restore failed", failure);
                     return;
                 }
                 _announce(new A11yEvent.RestoredVersionFrom(request.FormattedDate));
                 ReloadOpenTabFromDisk(request.Path);
-                History.Reload();
+                // A restore IS a save (core fires Modified): route the
+                // ONE post-save funnel so tasks/links/citations panels
+                // never show the pre-restore snapshot (red team round
+                // 1) — it reloads the history list too.
+                NotePersisted(request.Path);
                 History.RequestFocusHead();
             });
         });
@@ -231,10 +259,15 @@ internal sealed partial class WorkspaceViewModel
 
     /// <summary>Restore a LIVE version to a new path: verified
     /// VersionContent + CreateExclusive (no live restore-as FFI — the
-    /// mac composition). The completion runs on the dispatcher with
+    /// mac composition). The identity arrives STAGED (hash + date
+    /// captured when the row opened — never the row occupying that
+    /// position now). The completion runs on the dispatcher with
     /// (ok, refusalMessage): a refusal keeps the inline row open.</summary>
     internal void CommitRestoreAsVersion(
-        HistoryVersionRow row, string destination, Action<bool, string?> completed)
+        string versionHash,
+        string formattedDate,
+        string destination,
+        Action<bool, string?> completed)
     {
         if (History.Path is not { } path || _workspaceDisposed)
         {
@@ -247,8 +280,6 @@ internal sealed partial class WorkspaceViewModel
             completed(false, "Enter a destination path.");
             return;
         }
-        string formattedDate = row.AbsoluteDate;
-        string versionHash = row.ContentHashAfter;
         RunHistoryWork(() =>
         {
             string? refusal = null;
@@ -281,7 +312,7 @@ internal sealed partial class WorkspaceViewModel
                 }
                 if (failure is not null)
                 {
-                    HistoryAlert(failure);
+                    HistoryAlert("Can't restore", failure);
                     completed(false, null);
                     return;
                 }
@@ -338,15 +369,19 @@ internal sealed partial class WorkspaceViewModel
                 }
                 if (failure is not null)
                 {
-                    HistoryAlert(failure);
+                    HistoryAlert("Can't restore", failure);
                     completed(false, false);
                     return;
                 }
                 _announce(new A11yEvent.RestoredFile(
                     System.IO.Path.GetFileName(path)));
+                // Announce + refresh ONLY (the mac shape): recovery
+                // deliberately does NOT navigate — selection stays in
+                // the Deleted list so recovering several files in a
+                // row is not disruptive (red team round 1). Restore
+                // As… is the flow that opens the new file (H9).
                 History.ReloadDeletedFilesIfLoaded();
                 completed(true, false);
-                OpenPath(path);
             });
         });
     }
@@ -399,7 +434,7 @@ internal sealed partial class WorkspaceViewModel
                 }
                 if (failure is not null)
                 {
-                    HistoryAlert(failure);
+                    HistoryAlert("Can't restore", failure);
                     completed(false, null);
                     return;
                 }
@@ -426,6 +461,15 @@ internal sealed partial class WorkspaceViewModel
         }
         TrackRetiredBasesWork(Task.Run(body));
     }
+
+    /// <summary>HR-2's vault-event arm: an external (or non-editor)
+    /// write to the ACTIVE path appends a version row the NotePersisted
+    /// funnel never sees — Bases dock grid edits, sync landings,
+    /// out-of-app editors. Same-path guarded and generation-guarded in
+    /// the VM; a self-save's Modified echo costs one extra guarded
+    /// reload (accepted — the funnel has no echo discriminator).</summary>
+    internal void NotifyHistoryOfVaultChange(string path) =>
+        History.NoteSaved(path);
 
     // --- Compaction relay (contract H13, divergence HD-4) ---
 

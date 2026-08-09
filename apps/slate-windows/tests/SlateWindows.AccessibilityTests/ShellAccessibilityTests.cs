@@ -3561,6 +3561,11 @@ public sealed class ShellAccessibilityTests
             // children (the W4-5 lesson).
             _ = WaitForElement(
                 window, "HistorySegmentThisNote", TimeSpan.FromSeconds(10));
+            // The scope group name rides a peered landmark (H2) — a
+            // name on the bare panel would be DROPPED from UIA (red
+            // team round 1).
+            Assert.NotNull(window.FindFirstDescendant(
+                automation.ConditionFactory.ByName("History scope")));
             AutomationElement versionHeader = WaitForElement(
                 window, "HistoryVersionHeader", TimeSpan.FromSeconds(15));
             Assert.Contains(
@@ -3574,16 +3579,69 @@ public sealed class ShellAccessibilityTests
                                 .StartsWith("HistoryDay", StringComparison.Ordinal)),
                     TimeSpan.FromSeconds(15)),
                 "no day group appeared after two in-app saves");
+            // The composed row name reaches UIA: one Group per version
+            // row carrying "{date}, {core fragment}" (H3 — red team
+            // round 1: a plain Border host published NOTHING).
+            AutomationElement versionRow = window
+                .FindAllDescendants(
+                    automation.ConditionFactory.ByControlType(ControlType.Group))
+                .FirstOrDefault(candidate =>
+                    (candidate.Properties.AutomationId.ValueOrDefault ?? "")
+                        .StartsWith("HistoryRow", StringComparison.Ordinal))
+                ?? throw new Xunit.Sdk.XunitException(
+                    "no peered version-row Group reached UIA");
+            Assert.Contains(",", versionRow.Name, StringComparison.Ordinal);
 
-            // The markers toggle re-filters without a re-query.
+            // The markers toggle re-filters without a re-query, and the
+            // header count (core's marker-INCLUSIVE TotalFiltered, H3)
+            // never moves. Every toggle rebuilds the panel, so the
+            // probe RE-ACQUIRES the checkbox each poll and treats a
+            // disconnected element as "not yet" (stale-element trap —
+            // red team round 1).
+            string headerBeforeMarkers = versionHeader.Name;
+            bool MarkersToggleReads(ToggleState desired)
+            {
+                try
+                {
+                    AutomationElement? current = window.FindFirstDescendant(
+                        automation.ConditionFactory.ByAutomationId(
+                            "HistoryShowMarkers"));
+                    return current is not null
+                        && current.Patterns.Toggle.Pattern.ToggleState.Value
+                            == desired;
+                }
+                catch (System.Runtime.InteropServices.COMException)
+                {
+                    return false;
+                }
+            }
             AutomationElement markers = WaitForElement(
                 window, "HistoryShowMarkers", TimeSpan.FromSeconds(10));
             markers.Patterns.Toggle.Pattern.Toggle();
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => MarkersToggleReads(ToggleState.On),
+                    TimeSpan.FromSeconds(10)),
+                "the markers toggle never reached the On state");
+            Assert.Equal(
+                headerBeforeMarkers,
+                WaitForElement(
+                    window, "HistoryVersionHeader", TimeSpan.FromSeconds(5)).Name);
+            markers = WaitForElement(
+                window, "HistoryShowMarkers", TimeSpan.FromSeconds(5));
             markers.Patterns.Toggle.Pattern.Toggle();
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => MarkersToggleReads(ToggleState.Off),
+                    TimeSpan.FromSeconds(10)),
+                "the markers toggle never returned to the Off state");
 
-            // A per-row Compare publishes core's StructuredDiff
-            // walkthrough (the AudioSummary header proves INV-1
-            // consumption).
+            // A per-row Compare on the OLDEST row (a real delta —
+            // the newest row would diff against itself and publish
+            // zero operations) publishes core's StructuredDiff
+            // walkthrough: the AudioSummary header AND at least one
+            // single-stop operation element (H5 — red team round 1:
+            // the summary alone gated nothing).
             AutomationElement? compareButton = null;
             Assert.True(
                 SpinWait.SpinUntil(
@@ -3592,7 +3650,7 @@ public sealed class ShellAccessibilityTests
                         compareButton = window
                             .FindAllDescendants(automation.ConditionFactory
                                 .ByControlType(ControlType.Button))
-                            .FirstOrDefault(button =>
+                            .LastOrDefault(button =>
                                 (button.Name ?? "").StartsWith(
                                     "Compare,", StringComparison.Ordinal));
                         return compareButton is not null;
@@ -3605,14 +3663,26 @@ public sealed class ShellAccessibilityTests
             Assert.False(
                 string.IsNullOrWhiteSpace(diffSummary.Name),
                 "the diff summary is empty");
+            AutomationElement diffOperation = WaitForElement(
+                window, "HistoryDiffOp0", TimeSpan.FromSeconds(10));
+            Assert.False(
+                string.IsNullOrWhiteSpace(diffOperation.Name),
+                "the first diff operation carries no accessible sentence");
             AssertAxeClean(process, "history-this-note");
 
-            // The Deleted segment: empty state + the standing footer.
+            // The Deleted segment: the recorded empty state + the
+            // standing footer, both verbatim (H2/H10).
             AutomationElement deletedSegment = WaitForElement(
                 window, "HistorySegmentDeleted", TimeSpan.FromSeconds(10));
             deletedSegment.Patterns.SelectionItem.Pattern.Select();
-            _ = WaitForElement(window, "HistoryDeletedEmpty", TimeSpan.FromSeconds(15));
-            _ = WaitForElement(window, "HistoryDeletedFooter", TimeSpan.FromSeconds(10));
+            AutomationElement deletedEmpty = WaitForElement(
+                window, "HistoryDeletedEmpty", TimeSpan.FromSeconds(15));
+            Assert.Equal("No recently deleted files.", deletedEmpty.Name);
+            AutomationElement deletedFooter = WaitForElement(
+                window, "HistoryDeletedFooter", TimeSpan.FromSeconds(10));
+            Assert.Equal(
+                "Files deleted before Slate saved them go to the system Trash.",
+                deletedFooter.Name);
             AssertAxeClean(process, "history-deleted");
             AutomationElement thisNoteSegment = WaitForElement(
                 window, "HistorySegmentThisNote", TimeSpan.FromSeconds(10));
@@ -3639,7 +3709,8 @@ public sealed class ShellAccessibilityTests
                 "no per-row Restore button appeared");
             restoreButton!.Patterns.Invoke.Pattern.Invoke();
             // The modal is its own top-level window titled
-            // "Restore version?" — confirm via its Yes button.
+            // "Restore version?" with the PINNED Cancel/Restore
+            // buttons (H7) — confirm via Restore.
             Assert.True(
                 SpinWait.SpinUntil(
                     () =>
@@ -3652,14 +3723,20 @@ public sealed class ShellAccessibilityTests
                         {
                             return false;
                         }
-                        AutomationElement? yes = confirm
+                        AutomationElement[] buttons = confirm
                             .FindAllDescendants(automation.ConditionFactory
-                                .ByControlType(ControlType.Button))
+                                .ByControlType(ControlType.Button));
+                        Assert.Contains(buttons, button =>
+                            string.Equals(
+                                button.Name, "Cancel", StringComparison.Ordinal));
+                        AutomationElement? restore = buttons
                             .FirstOrDefault(button =>
                                 string.Equals(
-                                    button.Name, "Yes", StringComparison.Ordinal));
-                        yes?.Patterns.Invoke.Pattern.Invoke();
-                        return yes is not null;
+                                    button.Name,
+                                    "Restore",
+                                    StringComparison.Ordinal));
+                        restore?.Patterns.Invoke.Pattern.Invoke();
+                        return restore is not null;
                     },
                     TimeSpan.FromSeconds(15)),
                 "the restore confirmation dialog never appeared");
@@ -3669,6 +3746,22 @@ public sealed class ShellAccessibilityTests
                         .Contains("second revision", StringComparison.Ordinal),
                     TimeSpan.FromSeconds(15)),
                 "the restore never landed on disk");
+            // Success returns focus to the NEW head row (H7 / WCAG
+            // 2.4.3) — the reload is asynchronous, so the focus
+            // request is consumed only after the publish renders the
+            // fresh rows (red team round 1: four agents found the
+            // pre-publish focus race).
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        AutomationElement? focused = automation.FocusedElement();
+                        return (focused?.Properties.AutomationId.ValueOrDefault
+                                ?? string.Empty)
+                            .StartsWith("HistoryRow", StringComparison.Ordinal);
+                    },
+                    TimeSpan.FromSeconds(15)),
+                "focus never landed on a history row after the restore");
         }
         finally
         {

@@ -113,11 +113,19 @@ announcement, no shortcut — the section is the entire surface.
 `VersionContent` + `CreateExclusive(destination)` (no live-file
 restore-as FFI exists — the mac composition). The destination prompt is
 an INLINE row in the leaf (divergence HD-2): seeded with
-"{stem} (restored).{ext}" (counter-suffixed on collision), Enter
-commits, Escape cancels, focus returns to the list. `DestinationExists`
-refuses with "A file already exists at {path}. Choose a different
-name." and keeps the row open. Success announces `RestoredFileAs`
-("version from {date}", filename), refreshes, and opens the new file.
+"{stem} (restored).{ext}", carrying the mac prompt copy ("Save a copy
+of the version from {date} to a new file."), Enter commits, Escape
+cancels, focus returns to the anchor row. `DestinationExists` refuses
+with "A file already exists at {path}. Choose a different name." and
+keeps the row open. Success announces `RestoredFileAs` ("version from
+{date}", filename), refreshes, and opens the new file. AMENDED (red
+team round 1, verified against mac source): the original "counter-
+suffixed on collision" clause was contract-text drift — mac's
+`restoredCopyPath(existing:)` counter runs only when an `existing` set
+is passed, and BOTH production call sites pass none, so neither
+platform suffixes in production; collisions surface through the
+exclusive-create refusal on both. The Windows seed matches mac's
+actual behavior.
 
 **H10 — Deleted-file recovery.** `ListDeletedFiles` (single page, limit
 200, no pagination UI — mac parity). Rows: path, "Deleted {relative}"
@@ -202,7 +210,13 @@ same activation, and neither call happens with the pref off.
   (the queries-leaf rename-row pattern) instead of mac's text-field
   alert: same seeded suggestion, same exclusive-create semantics, same
   refusal wording; the inline row keeps focus management local and the
-  flow testable headless.
+  flow testable headless. REFINED (red team round 1): the row's whole
+  state (identity hash/source path, notice, draft, refusal) is STAGED
+  in the VM at open — a republish re-renders it rather than orphaning
+  view elements, a reload can never re-target the open row to a
+  different version, a refusal is made perceivable by focusing the
+  named refusal element (no live region exists on this surface by
+  design), and Escape refocuses the anchor row.
 - **HD-3** The retention setting (mac Settings ▸ History picker,
   30/90/180/365 days) ships NO Windows UI in W4-7: retention is not in
   the spec's W4-7 sentence, core's default (90 days) governs, and the

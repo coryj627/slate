@@ -140,6 +140,22 @@ internal sealed record HistorySinceOpenState(
     HistorySinceOpenKind Kind,
     StructuredDiff? Diff);
 
+/// <summary>The open inline destination row's staged state (H9/H10,
+/// divergence HD-2). Identity is captured AT OPEN (version hash /
+/// deleted source path — the capture-at-staging rule), so a reload
+/// that shifts positions can never re-target the row; the draft,
+/// notice, and refusal live here so a republish re-renders them
+/// instead of orphaning the view elements a completion closed
+/// over (red team round 1).</summary>
+internal sealed record HistoryDestinationStaging(
+    bool ForDeletedFile,
+    string NotePath,
+    string VersionHash,
+    string FormattedDate,
+    string Notice,
+    string Draft,
+    string? Refusal);
+
 /// <summary>
 /// W4-7 (#739): the history leaf's document — the mac
 /// AppState+History twin over the O FFI surface. Owns the version
@@ -177,6 +193,8 @@ internal sealed class HistoryViewModel : PanelWorkScheduler
     private bool _deletedLoaded;
     private bool _isDeletedLoading;
     private string? _deletedError;
+    private HistoryDestinationStaging? _destinationStaging;
+    private Task? _pendingMarkOpened;
 
     public HistoryViewModel(
         VaultSession session,
@@ -191,12 +209,32 @@ internal sealed class HistoryViewModel : PanelWorkScheduler
     /// workspace; null = no comparable current state.</summary>
     internal Func<string?>? CurrentContentHashProvider { get; set; }
 
+    /// <summary>The newest loaded ledger row's content hash — the
+    /// conforming CAS source for tab kinds that carry no editor buffer
+    /// hash (H7/H12: .canvas/.base restores stay guarded; the list as
+    /// loaded IS the staging basis).</summary>
+    internal string? HeadContentHash =>
+        _loaded.FirstOrDefault(summary => summary.PositionFromTail == 0)
+            ?.ContentHashAfter;
+
+    /// <summary>Test seams: block a worker between its FFI completion
+    /// and its publish (the citations InterleaveForTests shape) so
+    /// interleaving facts are deterministic, never raced.</summary>
+    internal Action? LoadInterleaveForTests { get; set; }
+
+    internal Action? DiffInterleaveForTests { get; set; }
+
+    internal Action? MarkInterleaveForTests { get; set; }
+
     /// <summary>Action seams installed by the workspace coordinator
     /// (the Bases surface pattern): the view calls these; the
     /// coordinator owns tabs, dialogs, and announcements.</summary>
     internal Action<HistoryVersionRow>? RestoreFromSurface { get; set; }
 
-    internal Action<HistoryVersionRow, string, Action<bool, string?>>?
+    /// <summary>(versionHash, formattedDate, destination, completed) —
+    /// the STAGED identity, never the row occupying a position at
+    /// commit time (capture-at-staging; red team round 1).</summary>
+    internal Action<string, string, string, Action<bool, string?>>?
         RestoreAsFromSurface
     { get; set; }
 
@@ -371,8 +409,6 @@ internal sealed class HistoryViewModel : PanelWorkScheduler
         OnPropertyChanged(nameof(Path));
         if (path is null)
         {
-            _totalFiltered = 0;
-            DayGroups = [];
             Published?.Invoke(this, EventArgs.Empty);
             return;
         }
@@ -409,8 +445,25 @@ internal sealed class HistoryViewModel : PanelWorkScheduler
         LoadError = null;
         _collapsedGroupIds.Clear();
         _compareSelection.Clear();
+        // A switch invalidates any in-flight diff (HINV-5): without
+        // the bump, a worker whose (generation, path) still match
+        // republishes a pre-switch diff into the fresh activation
+        // after an A→B→A round trip (red team round 1).
+        _ = Interlocked.Increment(ref _diffGeneration);
         InlineDiff = null;
         SinceOpen = new HistorySinceOpenState(HistorySinceOpenKind.None, null);
+        // The note-scoped destination staging drops on switch; a
+        // deleted-file staging is vault-scoped and survives.
+        if (_destinationStaging is { ForDeletedFile: false })
+        {
+            DestinationStaging = null;
+        }
+        // The previous note's rows must never render actionable under
+        // the new path (red team round 1): clear the published groups
+        // NOW, not when the new load lands — a page-one load is
+        // log-length-proportional (HR-1) and a load FAILURE never
+        // replaces them at all.
+        DayGroups = [];
     }
 
     private void LoadFirstPage(bool runSinceOpenFunnel)
@@ -420,6 +473,15 @@ internal sealed class HistoryViewModel : PanelWorkScheduler
             return;
         }
         int generation = Interlocked.Increment(ref _generation);
+        // A reload invalidates pagination NOW: core cursors survive
+        // appends (only compaction bumps the cursor generation), so a
+        // concurrent "Show older versions" click with the pre-save
+        // cursor would drop this reload by generation and append an
+        // old page onto the stale snapshot — the just-saved version
+        // would silently never appear (red team round 1). A null
+        // cursor makes that click a no-op instead.
+        _nextCursor = null;
+        OnPropertyChanged(nameof(CanLoadOlder));
         IsLoading = true;
         StartWork(() => LoadFirstPageBody(generation, path, runSinceOpenFunnel));
     }
@@ -434,6 +496,14 @@ internal sealed class HistoryViewModel : PanelWorkScheduler
             page = _session.ListVersions(path, new Paging(null, FirstPageLimit));
             if (runSinceOpenFunnel)
             {
+                // An earlier activation's MarkOpened may still be in
+                // flight (StartWork bodies are unordered): the verdict
+                // must observe the marked baseline, or a rapid A→B→A
+                // re-reports changes the user was already shown
+                // (HINV-8's cross-activation half). Bounded so a
+                // shutdown-skipped mark can never park the drain.
+                Volatile.Read(ref _pendingMarkOpened)
+                    ?.Wait(TimeSpan.FromSeconds(5));
                 // Verdict BEFORE the mark (the pinned core order,
                 // HINV-8); a verdict failure is non-fatal to the list.
                 try
@@ -451,6 +521,7 @@ internal sealed class HistoryViewModel : PanelWorkScheduler
             failure = exception.Message;
             page = new VersionSummaryPage([], null, 0);
         }
+        LoadInterleaveForTests?.Invoke();
         Post(() =>
         {
             if (IsShutDown
@@ -475,21 +546,47 @@ internal sealed class HistoryViewModel : PanelWorkScheduler
             // re-derive by position identity (HINV-2); vanished
             // positions drop.
             PruneCompareSelection();
+            // The published diff resets on every reload (H6) — bump so
+            // an in-flight diff worker cannot resurrect it afterwards.
+            _ = Interlocked.Increment(ref _diffGeneration);
             InlineDiff = null;
             RebuildGroups();
-            if (sinceOpen is not null)
+            // Re-guarded on the preference AT PUBLISH: the View-menu
+            // toggle can land while the funnel is in flight, and the
+            // section must not reappear (nor the baseline be marked)
+            // after the user opted out (H8/HINV-8).
+            if (sinceOpen is not null && _showChangesSinceOpen)
             {
                 PublishSinceOpen(sinceOpen);
                 // Marked only AFTER the publish guards passed
                 // (HINV-8); a failed mark is non-fatal — the next
                 // activation re-reports.
-                StartWork(() => MarkOpenedBody(path));
+                var marked = new TaskCompletionSource();
+                _pendingMarkOpened = marked.Task;
+                StartWork(() =>
+                {
+                    try
+                    {
+                        MarkOpenedBody(path);
+                    }
+                    finally
+                    {
+                        marked.TrySetResult();
+                    }
+                });
+                if (IsShutDown)
+                {
+                    // StartWork refuses work after shutdown — settle
+                    // the pending task so nothing ever waits on it.
+                    marked.TrySetResult();
+                }
             }
         });
     }
 
     private void MarkOpenedBody(string path)
     {
+        MarkInterleaveForTests?.Invoke();
         try
         {
             _session.MarkOpened(path);
@@ -543,7 +640,8 @@ internal sealed class HistoryViewModel : PanelWorkScheduler
             {
                 if (IsShutDown
                     || Volatile.Read(ref _generation) != generation
-                    || !string.Equals(_path, path, StringComparison.Ordinal))
+                    || !string.Equals(_path, path, StringComparison.Ordinal)
+                    || !string.Equals(_nextCursor, cursor, StringComparison.Ordinal))
                 {
                     return;
                 }
@@ -773,8 +871,8 @@ internal sealed class HistoryViewModel : PanelWorkScheduler
         string? currentHash = CurrentContentHashProvider?.Invoke();
         if (currentHash is null || currentHash.Length == 0)
         {
-            InlineDiff = new HistoryInlineDiff(
-                row.PositionFromTail, null, "No current content to compare.");
+            // The mac guard shape: no comparable current state is a
+            // SILENT no-op — never a host-composed error (HINV-1).
             return;
         }
         RunDiff(path, row.ContentHashAfter, currentHash, anchor: row.PositionFromTail);
@@ -803,6 +901,7 @@ internal sealed class HistoryViewModel : PanelWorkScheduler
             {
                 failure = exception.Message;
             }
+            DiffInterleaveForTests?.Invoke();
             Post(() =>
             {
                 if (IsShutDown
@@ -816,7 +915,87 @@ internal sealed class HistoryViewModel : PanelWorkScheduler
         });
     }
 
-    public void CloseInlineDiff() => InlineDiff = null;
+    public void CloseInlineDiff()
+    {
+        // Closing invalidates any in-flight diff too — a late publish
+        // must not resurrect the dismissed surface (HINV-5).
+        _ = Interlocked.Increment(ref _diffGeneration);
+        InlineDiff = null;
+    }
+
+    // --- The inline destination row (contracts H9/H10, HD-2) ---
+
+    /// <summary>See <see cref="HistoryDestinationStaging"/>. Draft
+    /// updates mutate WITHOUT a change notification (a per-keystroke
+    /// re-render would orphan the box the user is typing into);
+    /// open, refusal, and close notify.</summary>
+    public HistoryDestinationStaging? DestinationStaging
+    {
+        get => _destinationStaging;
+        private set => SetField(ref _destinationStaging, value);
+    }
+
+    /// <summary>The mac restore-as prompt copy for a live version.</summary>
+    internal static string RestoreAsNotice(string formattedDate) =>
+        $"Save a copy of the version from {formattedDate} to a new file.";
+
+    /// <summary>The pinned H10 collision sentence — the ONLY thing
+    /// telling the user why the destination row appeared.</summary>
+    internal static string DeletedCollisionNotice(string path) =>
+        $"A file already exists at {path}. Restore the deleted file to "
+        + "a different location.";
+
+    internal void OpenRestoreAsStaging(HistoryVersionRow row, string seededDraft)
+    {
+        if (_path is not { } path)
+        {
+            return;
+        }
+        // Same-row toggle closes (the current affordance).
+        if (_destinationStaging is { ForDeletedFile: false } open
+            && string.Equals(
+                open.VersionHash, row.ContentHashAfter, StringComparison.Ordinal))
+        {
+            CloseDestinationStaging();
+            return;
+        }
+        DestinationStaging = new HistoryDestinationStaging(
+            ForDeletedFile: false,
+            NotePath: path,
+            VersionHash: row.ContentHashAfter,
+            FormattedDate: row.AbsoluteDate,
+            Notice: RestoreAsNotice(row.AbsoluteDate),
+            Draft: seededDraft,
+            Refusal: null);
+    }
+
+    internal void OpenRecoverAsStaging(HistoryDeletedRow row, string seededDraft) =>
+        DestinationStaging = new HistoryDestinationStaging(
+            ForDeletedFile: true,
+            NotePath: row.Path,
+            VersionHash: string.Empty,
+            FormattedDate: string.Empty,
+            Notice: DeletedCollisionNotice(row.Path),
+            Draft: seededDraft,
+            Refusal: null);
+
+    internal void UpdateDestinationDraft(string draft)
+    {
+        if (_destinationStaging is { } staging)
+        {
+            _destinationStaging = staging with { Draft = draft };
+        }
+    }
+
+    internal void SetDestinationRefusal(string message)
+    {
+        if (_destinationStaging is { } staging)
+        {
+            DestinationStaging = staging with { Refusal = message };
+        }
+    }
+
+    public void CloseDestinationStaging() => DestinationStaging = null;
 
     // --- Deleted segment (contract H10) ---
 
@@ -875,7 +1054,7 @@ internal sealed class HistoryViewModel : PanelWorkScheduler
         }
     }
 
-    private static HistoryDeletedRow MakeDeletedRow(DeletedFileEntry entry)
+    internal static HistoryDeletedRow MakeDeletedRow(DeletedFileEntry entry)
     {
         string deletedText = entry.DeletedAtMs is { } deletedAt
             ? "Deleted " + RelativePhrase(
@@ -889,14 +1068,19 @@ internal sealed class HistoryViewModel : PanelWorkScheduler
         return new HistoryDeletedRow(entry, deletedText, sizeText);
     }
 
+    /// <summary>The mac ByteCountFormatter .file mirror (1000-based,
+    /// the "Zero KB" idiom, precision growing with the unit — KB
+    /// integral, MB one place, GB two) so a deleted row reads the same
+    /// size on both platforms (red team round 1).</summary>
     internal static string FormatBytes(ulong bytes) => bytes switch
     {
-        < 1024 => $"{bytes} bytes",
-        < 1024 * 1024 =>
-            $"{bytes / 1024.0:0.#} KB",
-        < 1024UL * 1024 * 1024 =>
-            $"{bytes / (1024.0 * 1024.0):0.#} MB",
-        _ => $"{bytes / (1024.0 * 1024.0 * 1024.0):0.#} GB",
+        0 => "Zero KB",
+        1 => "1 byte",
+        < 1000 => $"{bytes} bytes",
+        < 1_000_000 =>
+            $"{Math.Round(bytes / 1000.0, MidpointRounding.AwayFromZero)} KB",
+        < 1_000_000_000 => $"{bytes / 1_000_000.0:0.#} MB",
+        _ => $"{bytes / 1_000_000_000.0:0.##} GB",
     };
 
     internal override void Shutdown()
