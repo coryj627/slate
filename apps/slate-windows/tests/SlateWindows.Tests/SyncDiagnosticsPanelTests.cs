@@ -388,6 +388,82 @@ public sealed class SyncDiagnosticsPanelTests : IDisposable
         Assert.Same(before, panel.Report);
         Assert.Equal(hostComposedBefore, HostComposedCount());
     }
+
+    // --- SD4: the vault-open trigger (arm-then-probe) ---
+
+    /// <summary>
+    /// SD4 trigger (a): opening a vault runs the initial probe, and it
+    /// comes from the LIFECYCLE — after the marker watcher arms — not
+    /// from the workspace constructor.
+    ///
+    /// <c>Reload()</c> raises <c>IsLoading</c> synchronously on the
+    /// caller's thread and every outcome of a probe clears it into a
+    /// report or an error, so "the vault-open probe happened" is
+    /// deterministic the moment <c>OpenVaultAsync</c> returns — no
+    /// timing bet. The bare-workspace control at the end is what makes
+    /// it falsifiable: nothing else in the closed SDINV-7 trigger set
+    /// could have started it.
+    ///
+    /// The ORDERING half of arm-then-probe is structural (two adjacent
+    /// statements in <c>StartSyncMarkerWatch</c>, with
+    /// <c>SyncMarkerWatcher.Start</c> returning only once the handles
+    /// are open); observing it would need a test-only seam on the
+    /// lifecycle, so the watcher's own suite pins the arm and the W-C
+    /// journey covers the pair end to end.
+    /// </summary>
+    [Fact]
+    public async Task OpeningAVaultRunsTheInitialSyncProbe()
+    {
+        string root = Path.Combine(
+            Path.GetTempPath(), $"slate-windows-test-sync-open-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        File.WriteAllText(Path.Combine(root, "note0.md"), "# Note 0\n\nBody.\n");
+        Directory.CreateDirectory(Path.Combine(root, ".git"));
+        try
+        {
+            using var lifecycle = new VaultLifecycleViewModel(
+                pickVault: () => Task.FromResult<string?>(root),
+                enqueueUi: action => action(),
+                recentVaultsStore: new RecentVaultsStore(
+                    Path.Combine(root, "device-state", "recent-vaults.json")),
+                announce: _announced.Add,
+                sessionLoadWorker: work => Task.FromResult(work()));
+
+            await lifecycle.OpenVaultAsync(root);
+
+            WorkspaceViewModel opened = Assert.IsType<WorkspaceViewModel>(
+                lifecycle.Workspace);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => opened.SyncDiagnostics.IsLoading
+                        || opened.SyncDiagnostics.Report is not null
+                        || opened.SyncDiagnostics.LoadError is not null,
+                    TimeSpan.FromSeconds(15)),
+                "vault open must run the initial detection probe");
+
+            // The control: a workspace built WITHOUT the lifecycle never
+            // probes on its own, so the assertion above can only have
+            // been satisfied by the vault-open trigger.
+            WorkspaceViewModel bare = NewWorkspace();
+            Assert.False(bare.SyncDiagnostics.IsLoading);
+            Assert.Null(bare.SyncDiagnostics.Report);
+            Assert.Null(bare.SyncDiagnostics.LoadError);
+            bare.Dispose();
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(root, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
 }
 
 /// <summary>

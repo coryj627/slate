@@ -71,6 +71,9 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
     private QuickSwitcherViewModel? _quickSwitcher;
     private Task _sessionLoadCompletion = Task.CompletedTask;
     private int _sidebarRefreshTicket;
+    // W4-8 (SD8): the bounded sync-marker watch, owned by the vault
+    // lifecycle for exactly the open-vault state.
+    private SyncMarkerWatcher? _syncMarkerWatcher;
 
     public VaultLifecycleViewModel(
         Func<Task<string?>> pickVault,
@@ -302,6 +305,7 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
                 ProgressValue = ProgressMaximum;
                 IsProgressIndeterminate = false;
                 InitializeWorkspace(_session, root, loaded.SwitcherFiles);
+                StartSyncMarkerWatch(generation, root);
             }
         }
         catch (VaultException exception)
@@ -615,6 +619,15 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
 
     private void CloseSession()
     {
+        // W4-8 (SD8/SDINV-8): the marker watch dies FIRST and
+        // synchronously. Stop is idempotent and a stopped watcher never
+        // invokes its callback, so nothing can enqueue a refresh into the
+        // workspace this method is about to dispose. This is the single
+        // deepest teardown seam — vault switch (OpenVaultAsync),
+        // CloseVault, and DisposeCore all funnel here.
+        _syncMarkerWatcher?.Dispose();
+        _syncMarkerWatcher = null;
+
         if (FileSidebar is FilesSidebarViewModel sidebar)
         {
             SidebarSessionShutdown shutdown = sidebar.BeginSessionShutdownAndCaptureWork();
@@ -763,6 +776,38 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
         FileSidebar = sidebar;
         QuickSwitcher = switcher;
         WorkspaceReady?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>
+    /// W4-8 (SD8 + SD4): arm the bounded marker watch, THEN run the
+    /// vault-open detection probe. The order is the contract, not a
+    /// preference — a marker landing between a probe and a later arm
+    /// emits no event and would stay invisible until the next manual
+    /// refresh. <see cref="SyncMarkerWatcher.Start"/> returns with the
+    /// handles open, so there is no window between the two lines.
+    ///
+    /// A fire lands on a threadpool thread; this hop marshals it to the
+    /// UI and re-checks the vault generation there
+    /// (<see cref="HandleFileChange"/>'s guard), then routes THROUGH
+    /// <c>RefreshSyncDiagnostics()</c> — the workspace's single refresh
+    /// funnel, where the SD6 announce gate lives.
+    /// </summary>
+    private void StartSyncMarkerWatch(int generation, string root)
+    {
+        _syncMarkerWatcher?.Dispose();
+        SyncMarkerWatcher watcher = new(
+            root,
+            () => _enqueueUi(() =>
+            {
+                if (generation == _generation)
+                {
+                    Workspace?.RefreshSyncDiagnostics();
+                }
+            }));
+        _syncMarkerWatcher = watcher;
+        watcher.Start();
+        // SD4 trigger (a): the vault-open probe, after the arm.
+        Workspace?.RefreshSyncDiagnostics();
     }
 
     private bool TryCloseWorkspace()
