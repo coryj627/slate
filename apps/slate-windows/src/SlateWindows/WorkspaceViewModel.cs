@@ -1464,6 +1464,15 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         EditorPreferences.HistoryShowChangesSinceOpenChanged +=
             enabled => History.ShowChangesSinceOpen = enabled;
         InstallHistorySeams();
+        // W4-8: the sync-diagnostics document — VAULT-scoped, so it is
+        // fed by neither SyncPanels nor any note funnel (SDINV-7: the
+        // trigger set is {vault open, explicit refresh, watcher fire}).
+        // The initial probe is deliberately NOT started here: SD4
+        // requires arm-then-probe, so the vault lifecycle fires the
+        // first Reload after the marker watcher is live.
+        SyncDiagnostics = new Panels.SyncDiagnosticsViewModel(
+            session, synchronousForTests: !startInteractionBackgroundWork);
+        InstallSyncDiagnosticsSeams();
         // Both leaves read through the session's bibliography sources,
         // so neither may query before seeding SETTLES — and the
         // bibliography also branches on how it settled.
@@ -1972,6 +1981,10 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         // W4-7: the history document's workers hold the session too.
         History.Shutdown();
         basesDrains.Add(History.WhenWorkDrained());
+        // W4-8: so do the sync probes (SDINV-8 — after Dispose no
+        // publish or announcement lands).
+        SyncDiagnostics.Shutdown();
+        basesDrains.Add(SyncDiagnostics.WhenWorkDrained());
         // RETIRED-earlier schedulers too (a replaced builder, a
         // released dashboard, a swept document) — their in-flight
         // bodies hold ephemeral handles just the same (codex round 3).
