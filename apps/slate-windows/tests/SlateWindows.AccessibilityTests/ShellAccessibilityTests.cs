@@ -3159,11 +3159,14 @@ public sealed class ShellAccessibilityTests
             // editable status cell opens the seeded editor; Enter
             // commits through the coordinator and the write lands in
             // the FILE.
+            // CONTAINS, not equality (the alpha-cell finder's rule):
+            // cell names are decorated beyond the raw value. "todo"
+            // appears only in alpha's status cell in this fixture.
             AutomationElement statusCell = grid
                 .FindAllDescendants(
                     automation.ConditionFactory.ByControlType(ControlType.Custom))
                 .FirstOrDefault(cell =>
-                    string.Equals(cell.Name, "todo", StringComparison.Ordinal))
+                    cell.Name.Contains("todo", StringComparison.OrdinalIgnoreCase))
                 ?? throw new Xunit.Sdk.XunitException(
                     "No editable status cell in the base grid.");
             statusCell.Focus();
