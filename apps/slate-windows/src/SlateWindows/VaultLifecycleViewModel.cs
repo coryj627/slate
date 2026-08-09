@@ -489,10 +489,20 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
         string message)
     {
         HostLog.Write(HostDiagnosticEvent.VaultEventFailed);
-        if (generation == _generation)
+        if (generation != _generation)
         {
-            ReportTerminalStatus(message, A11yPriority.High);
+            return;
         }
+        if (code == EventErrorCode.CompactionFailed)
+        {
+            // W4-7 (contract H13, divergence HD-4): core's composed
+            // message relayed as a MEDIUM announcement, once per path
+            // per session — a background maintenance failure is not a
+            // High-priority interruption.
+            Workspace?.AnnounceHistoryCompactionFailure(path, message);
+            return;
+        }
+        ReportTerminalStatus(message, A11yPriority.High);
     }
 
     private void HandleFileChange(int generation, FileChangeEvent @event)

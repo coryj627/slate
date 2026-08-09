@@ -130,7 +130,11 @@ deleted-file message ("A file already exists at {path}. Restore the
 deleted file to a different location.") and `RecoverDeletedFileAs`.
 Success announces `RestoredFile` and refreshes both the tree and the
 deleted list. Files never saved through Slate are honestly absent (the
-footer sentence covers them).
+footer sentence covers them). DELIVERY NOTE (verified against core):
+the remnant set is built at RECONCILE (scan time) — a file deleted in
+the CURRENT session enters the Deleted list at the next vault open,
+identically on mac; the segment is a recovery surface, not a live
+deletion feed (core-owned semantics, off-limits).
 
 **H11 — Command + reveal.** `slate.history.showPanel` ("Show History
 Panel", View menu, no chord): un-hide the right pane, activate the
@@ -225,6 +229,10 @@ same activation, and neither call happens with the pref off.
 - **HR-5** The since-open baseline degrades honestly (`NoBaseline` /
   `BaselineCompacted`) after cache rebuilds or compaction; the host
   never guesses.
+- **HR-6** `DeleteFile` (outside this surface) routes through the
+  system trash, whose COM init requires an STA thread — the app's UI
+  thread; no HISTORY flow calls it (restore/recover use save-machinery
+  and exclusive-create only), so history work stays pool-schedulable.
 
 ## To verify during implementation (flagged, not assumed)
 

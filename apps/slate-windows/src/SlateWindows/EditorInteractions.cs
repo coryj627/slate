@@ -236,6 +236,20 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
                     A11yPriority.Medium));
             },
             _ => true);
+        _historyShowChangesSinceOpen = loaded?.HistoryShowChangesSinceOpen ?? false;
+        ToggleHistoryChangesSinceOpenCommand = new RelayCommand(
+            _ =>
+            {
+                HistoryShowChangesSinceOpen = !HistoryShowChangesSinceOpen;
+                // W0.5-3 residue: the menu-toggle announce family (the
+                // reading-link precedent).
+                _announce(new A11yEvent.HostComposed(
+                    HistoryShowChangesSinceOpen
+                        ? "Changes since last open shown in History."
+                        : "Changes since last open hidden.",
+                    A11yPriority.Medium));
+            },
+            _ => true);
         ZoomInCommand = new RelayCommand(
             _ => FontSize = Math.Min(MaximumFontSize, FontSize + 1),
             _ => FontSize < MaximumFontSize);
@@ -273,6 +287,43 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
     /// current-tab-with-⌘-click; gap G22). The editor's own navigation
     /// is untouched either way.
     /// </summary>
+    private bool _historyShowChangesSinceOpen;
+
+    /// <summary>W4-7 (#739, contract H8): the changes-since-last-open
+    /// opt-in — a HOST preference (mac Settings ▸ History), default
+    /// off; takes effect at the next note activation. The workspace
+    /// mirrors changes into the history document.</summary>
+    public System.Windows.Input.ICommand ToggleHistoryChangesSinceOpenCommand { get; }
+
+    public bool HistoryShowChangesSinceOpen
+    {
+        get => _historyShowChangesSinceOpen;
+        set
+        {
+            if (!SetField(ref _historyShowChangesSinceOpen, value))
+            {
+                return;
+            }
+            HistoryShowChangesSinceOpenChanged?.Invoke(value);
+            if (_preferencesStore is not { } store)
+            {
+                return;
+            }
+            try
+            {
+                store.Save(store.Load() with { HistoryShowChangesSinceOpen = value });
+            }
+            catch (IOException exception)
+            {
+                HostLog.Write(HostDiagnosticEvent.AppPreferencesPersistFailed, exception);
+            }
+        }
+    }
+
+    /// <summary>The workspace subscribes to mirror the live value into
+    /// the history document (contract H8).</summary>
+    internal event Action<bool>? HistoryShowChangesSinceOpenChanged;
+
     public bool OpenReadingLinksInNewTab
     {
         get => _openReadingLinksInNewTab;
