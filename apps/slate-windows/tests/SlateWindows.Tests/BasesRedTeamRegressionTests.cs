@@ -564,6 +564,52 @@ public sealed class BasesRedTeamRegressionTests : IDisposable
         Assert.Single(document.Result!.Rows);
     }
 
+    [Fact]
+    public void BuilderUpdatePreservesTheSavedQueryDescription()
+    {
+        string id = _session.SaveQuery(
+            "Described", "the description", SeedQueryJson(),
+            SavedQuerySourceSyntax.Builder);
+        SavedQuery saved = _session.GetSavedQuery(id);
+        var editor = BaseQueryBuilderViewModel.ForSavedQuery(
+            _session, saved, _announced.Add, synchronousForTests: true);
+
+        Assert.True(editor.UpdateSavedQuery());
+
+        // Codex round 7: the update passed description: null and core
+        // persisted it — editing filters silently erased the
+        // description while announcing success.
+        Assert.Equal("the description", _session.GetSavedQuery(id).Description);
+        editor.Shutdown();
+    }
+
+    [Fact]
+    public void DashboardUpdateReachesTheDockedInstanceAndTitles()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        string queryId = _session.SaveQuery(
+            "Section query", null, SeedQueryJson(), SavedQuerySourceSyntax.Builder);
+        string dashboardId = _session.SaveDashboard(
+            "Board", [new DashboardSection(queryId, null, null)]);
+        workspace.RefreshBaseQueries();
+        workspace.DockDashboardToSidebar(dashboardId, "Board");
+        workspace.OpenDashboard(dashboardId, "Board");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+
+        workspace.OpenDashboardEditor(dashboardId);
+        DashboardEditorViewModel editor =
+            Assert.IsType<DashboardEditorViewModel>(workspace.DashboardEditorSheet);
+        editor.Name = "Board renamed";
+        workspace.SaveDashboardEditor();
+
+        // Codex round 7: only the registry document reloaded — the
+        // docked copy kept stale sections/name and the tab title kept
+        // the old name until an unrelated event.
+        Assert.Equal("Board renamed", workspace.BasesDockDashboard!.Name);
+        Assert.Equal("Board renamed", tab.Item.Name);
+    }
+
     private static void WaitForUi(Func<bool> condition)
     {
         DateTime deadline = DateTime.UtcNow.AddSeconds(20);

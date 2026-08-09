@@ -790,10 +790,7 @@ internal sealed partial class WorkspaceViewModel
                 }
                 _session.UpdateDashboard(id, name, sections);
                 _announce(new A11yEvent.BasesDashboardUpdated(name));
-                if (_dashboardDocuments.TryGetValue(id, out DashboardViewModel? open))
-                {
-                    open.Load();
-                }
+                RefreshDashboardDependents(id, name);
             }
             else
             {
@@ -810,6 +807,37 @@ internal sealed partial class WorkspaceViewModel
         }
         DashboardEditorSheet = null;
         RefreshBaseQueries();
+    }
+
+    /// <summary>ONE propagation for a dashboard update (codex round
+    /// 7: only the registry-owned document reloaded — a DOCKED copy
+    /// kept stale sections and tab/dock titles kept the old name
+    /// until an unrelated event): reload the registry document AND
+    /// the docked instance, retitle matching dashboard tabs and the
+    /// dock target.</summary>
+    private void RefreshDashboardDependents(string id, string name)
+    {
+        if (_dashboardDocuments.TryGetValue(id, out DashboardViewModel? open))
+        {
+            open.Load();
+        }
+        if (BasesDockDashboard is { } dockDashboard
+            && string.Equals(dockDashboard.Id, id, StringComparison.Ordinal))
+        {
+            dockDashboard.Load();
+        }
+        if (BasesDockTarget is { Kind: BasesDockTargetKind.Dashboard } dockTarget
+            && string.Equals(dockTarget.Key, id, StringComparison.Ordinal))
+        {
+            BasesDockTarget = dockTarget with { Name = name };
+        }
+        foreach (WorkspaceTabViewModel tab in Groups
+            .SelectMany(group => group.Tabs)
+            .Where(candidate => candidate.IsDashboardTab
+                && string.Equals(candidate.Item.Id, id, StringComparison.Ordinal)))
+        {
+            tab.RetargetName(name);
+        }
     }
 
     // --- The dock (contract C12): one target following the active

@@ -111,7 +111,8 @@ internal sealed record BuilderEditContext(
     string? ViewPath,
     int ViewIndex,
     string? SavedQueryId,
-    string? SavedQueryName);
+    string? SavedQueryName,
+    string? SavedQueryDescription = null);
 
 /// <summary>
 /// W4-6 (#738) phase E5: the query builder (contracts C11, D-18) — an
@@ -218,7 +219,8 @@ internal sealed class BaseQueryBuilderViewModel : PanelWorkScheduler
         new(
             session,
             (JsonObject)JsonNode.Parse(savedQuery.QueryJson)!,
-            new BuilderEditContext(null, 0, savedQuery.Id, savedQuery.Name),
+            new BuilderEditContext(
+                null, 0, savedQuery.Id, savedQuery.Name, savedQuery.Description),
             announce,
             synchronousForTests);
 
@@ -682,8 +684,12 @@ internal sealed class BaseQueryBuilderViewModel : PanelWorkScheduler
         }
         try
         {
+            // The ORIGINAL description rides through — core persists
+            // this argument verbatim, and null silently erased an
+            // existing description while announcing success (codex
+            // round 7).
             _session.UpdateSavedQuery(
-                id, description: null, _document.ToJsonString(),
+                id, Context.SavedQueryDescription, _document.ToJsonString(),
                 SavedQuerySourceSyntax.Builder);
         }
         catch (VaultException failure)
