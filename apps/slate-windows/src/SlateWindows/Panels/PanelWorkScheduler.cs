@@ -151,7 +151,13 @@ internal abstract class PanelWorkScheduler : BindableBase
             TaskScheduler.Default);
     }
 
-    internal Task DrainForTests()
+    internal Task DrainForTests() => WhenWorkDrained();
+
+    /// <summary>Every tracked body completed — the test seam, and the
+    /// TEARDOWN drain: a worker mid-FFI holds resources whose
+    /// finally-close must run before the session disposes (INV-2;
+    /// codex round 2 — ephemeral dashboard/preview handles).</summary>
+    internal Task WhenWorkDrained()
     {
         Task[] snapshot;
         lock (_workLock)

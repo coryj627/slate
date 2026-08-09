@@ -1904,15 +1904,43 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             document.ShutdownSynchronously();
         }
         _baseDocuments.Clear();
+        // Dashboards and the builder open EPHEMERAL handles inside
+        // worker bodies (OpenSavedQuery/OpenQuery → execute → finally
+        // CloseBase); Shutdown refuses NEW work but an in-flight body
+        // must finish its finally-close before the session disposes
+        // (INV-2; codex round 2) — drained with a bounded wait.
+        var basesDrains = new List<Task>();
         foreach (Bases.DashboardViewModel dashboard in _dashboardDocuments.Values)
         {
             dashboard.Shutdown();
+            basesDrains.Add(dashboard.WhenWorkDrained());
         }
         _dashboardDocuments.Clear();
         BasesDockDocument?.ShutdownSynchronously();
         BasesDockDocument = null;
+        if (BasesDockDashboard is { } dockDashboard)
+        {
+            dockDashboard.Shutdown();
+            basesDrains.Add(dockDashboard.WhenWorkDrained());
+        }
         ClearBasesDock();
-        BaseQueryBuilderSheet?.Shutdown();
+        if (BaseQueryBuilderSheet is { } openBuilder)
+        {
+            openBuilder.Shutdown();
+            basesDrains.Add(openBuilder.WhenWorkDrained());
+        }
+        if (basesDrains.Count > 0)
+        {
+            try
+            {
+                _ = Task.WaitAll([.. basesDrains], TimeSpan.FromSeconds(5));
+            }
+            catch (AggregateException)
+            {
+                // Tracked bodies never fault by contract; a straggler
+                // past the bound must not wedge app close.
+            }
+        }
         Persist();
         foreach (WorkspaceTabViewModel tab in Groups.SelectMany(group => group.Tabs))
         {

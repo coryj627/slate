@@ -830,17 +830,34 @@ internal sealed class BaseSurfaceView : UserControl
                 model.AnnounceForSurface(refusal);
             }
             // Re-arm by IDENTITY when the commit's session-end flushed
-            // a deferred rebind (codex round 1): the old row object is
-            // no longer bound, and re-arming with it silently dropped
-            // the draft C7 promises to keep.
+            // a deferred rebind (codex rounds 1-2): the old row object
+            // is no longer bound, and the old NUMERIC column index may
+            // now name a different property — both the row (FilePath,
+            // TaskOrdinal) and the COLUMN ID resolve against the fresh
+            // result, failing closed if the column vanished or lost
+            // editability (the refusal was already announced; a wrong-
+            // property re-arm would be worse than the lost draft).
             if (!_grid.BeginEditAt(row, columnIndex, draftOverride: text)
-                && _grid.FindItem(candidate =>
-                    candidate is BaseGridRowViewModel fresh
-                    && string.Equals(
-                        fresh.Row.FilePath, basesRow.FilePath, StringComparison.Ordinal)
-                    && fresh.Row.TaskOrdinal == basesRow.TaskOrdinal) is { } rebound)
+                && model.Result is { } freshResult)
             {
-                _ = _grid.BeginEditAt(rebound, columnIndex, draftOverride: text);
+                int freshColumn = Array.FindIndex(
+                    freshResult.Columns,
+                    candidate => string.Equals(
+                        candidate.Id, column.Id, StringComparison.Ordinal));
+                if (freshColumn >= 0
+                    && BaseCellEditPolicy.PropertyKey(
+                        freshResult.Columns[freshColumn]) is not null
+                    && _grid.FindItem(candidate =>
+                        candidate is BaseGridRowViewModel fresh
+                        && string.Equals(
+                            fresh.Row.FilePath,
+                            basesRow.FilePath,
+                            StringComparison.Ordinal)
+                        && fresh.Row.TaskOrdinal == basesRow.TaskOrdinal)
+                        is { } rebound)
+                {
+                    _ = _grid.BeginEditAt(rebound, freshColumn, draftOverride: text);
+                }
             }
             return;
         }

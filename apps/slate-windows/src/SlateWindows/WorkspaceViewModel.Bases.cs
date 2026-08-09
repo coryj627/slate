@@ -224,15 +224,17 @@ internal sealed partial class WorkspaceViewModel
     }
 
     public System.Windows.Input.ICommand BasesRefreshCommand =>
-        _basesRefreshCommand ??= BasesCommand(document =>
-        {
-            bool wasFailed = document.State == BaseLoadState.Failed;
-            document.Load();
-            if (!wasFailed)
+        _basesRefreshCommand ??= BasesCommand(
+            document =>
             {
-                document.AnnounceRefreshed();
-            }
-        });
+                bool wasFailed = document.State == BaseLoadState.Failed;
+                document.Load();
+                if (!wasFailed)
+                {
+                    document.AnnounceRefreshed();
+                }
+            },
+            requireInteractive: false);
 
     public System.Windows.Input.ICommand BasesWhereAmICommand =>
         _basesWhereAmICommand ??= BasesCommand(document =>
@@ -366,23 +368,37 @@ internal sealed partial class WorkspaceViewModel
             });
         });
 
-    private RelayCommand BasesCommand(Action<BaseDocumentViewModel> body) =>
+    /// <summary>C13 admission, shared: content-scoped commands require
+    /// a READY-OR-DEGRADED document — while loading/failed they gray
+    /// out (labels carry the reason) and the Execute body re-checks at
+    /// dispatch (the backstop; codex round 2: presence-only gating
+    /// left every action enabled on an unavailable surface). Refresh
+    /// alone passes requireInteractive: false — it IS the failed
+    /// state's recovery action (Retry).</summary>
+    private RelayCommand BasesCommand(
+        Action<BaseDocumentViewModel> body, bool requireInteractive = true) =>
         new(
             _ =>
             {
-                if (ActiveBaseDocument is { } document)
+                if (ActiveBaseDocument is { } document
+                    && (!requireInteractive || BasesDocumentInteractive(document)))
                 {
                     body(document);
                 }
             },
-            _ => ActiveBaseDocument is not null);
+            _ => ActiveBaseDocument is { } document
+                && (!requireInteractive || BasesDocumentInteractive(document)));
+
+    private static bool BasesDocumentInteractive(BaseDocumentViewModel document) =>
+        document.State is BaseLoadState.Ready or BaseLoadState.Degraded;
 
     private RelayCommand BasesRowCommand(
         Action<BaseDocumentViewModel, BasesRow> body) =>
         new(
             _ =>
             {
-                if (ActiveBaseDocument is not { } document)
+                if (ActiveBaseDocument is not { } document
+                    || !BasesDocumentInteractive(document))
                 {
                     return;
                 }
@@ -393,7 +409,8 @@ internal sealed partial class WorkspaceViewModel
                 }
                 body(document, row);
             },
-            _ => ActiveBaseDocument is not null);
+            _ => ActiveBaseDocument is { } document
+                && BasesDocumentInteractive(document));
 
     private void BasesStepView(BaseDocumentViewModel document, int delta)
     {
@@ -1194,6 +1211,16 @@ internal sealed partial class WorkspaceViewModel
         document.ApplyPropertyEdit = (row, column, value) =>
             BasesApplyPropertyEdit(document, row, column, value);
         document.DefinitionSelfSaved = ExpectSelfBaseWriteEcho;
+        // Command admission follows document STATE (C13): a load
+        // finishing or failing must re-enable/disable the Base menu
+        // without waiting for a tab switch (codex round 2).
+        document.PropertyChanged += (_, changed) =>
+        {
+            if (changed.PropertyName == nameof(BaseDocumentViewModel.State))
+            {
+                RaiseBasesCommandStates();
+            }
+        };
         document.MembershipChanged += OnBaseMembershipChanged;
         document.OpenRowFromSurface = row => BasesOpenRow(document, row);
         document.CopyLinkFromSurface = row =>
