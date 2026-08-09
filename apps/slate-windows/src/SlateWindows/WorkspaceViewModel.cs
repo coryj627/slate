@@ -1902,30 +1902,28 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         // session disposal that follows this Dispose, silently
         // skipping CloseBase — C3/INV-2 requires close-before-session,
         // exactly once).
+        // Every handle-owning Bases worker shuts down NON-BLOCKINGLY
+        // (codex round 4: a synchronous close waits on the FFI lock,
+        // and a non-cancellable export/apply-edit holding it would
+        // freeze the dispatcher indefinitely — INV-6/R2). The closes
+        // are then awaited as ONE bounded drain before the session
+        // disposes (INV-2's close-before-session, bounded rather than
+        // absolute: a >5 s uncancellable FFI call at the exact moment
+        // of app close forfeits the ordering rather than the UI).
+        var basesDrains = new List<Task>();
         foreach (Bases.BaseDocumentViewModel document in _baseDocuments.Values)
         {
-            document.ShutdownSynchronously();
+            document.Shutdown();
+            basesDrains.Add(document.WhenHandleClosed());
         }
         _baseDocuments.Clear();
-        // Dashboards and the builder open EPHEMERAL handles inside
-        // worker bodies (OpenSavedQuery/OpenQuery → execute → finally
-        // CloseBase); Shutdown refuses NEW work but an in-flight body
-        // must finish its finally-close before the session disposes
-        // (INV-2; codex round 2) — drained with a bounded wait.
-        var basesDrains = new List<Task>();
         foreach (Bases.DashboardViewModel dashboard in _dashboardDocuments.Values)
         {
             dashboard.Shutdown();
             basesDrains.Add(dashboard.WhenWorkDrained());
         }
         _dashboardDocuments.Clear();
-        BasesDockDocument?.ShutdownSynchronously();
-        BasesDockDocument = null;
-        if (BasesDockDashboard is { } dockDashboard)
-        {
-            dockDashboard.Shutdown();
-            basesDrains.Add(dockDashboard.WhenWorkDrained());
-        }
+        // Retires the dock document/dashboard into the tracked set.
         ClearBasesDock();
         if (BaseQueryBuilderSheet is { } openBuilder)
         {
@@ -1936,6 +1934,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         // released dashboard, a swept document) — their in-flight
         // bodies hold ephemeral handles just the same (codex round 3).
         basesDrains.AddRange(RetiredBasesDrains);
+        basesDrains.RemoveAll(task => task.IsCompleted);
         if (basesDrains.Count > 0)
         {
             try

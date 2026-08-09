@@ -1122,15 +1122,12 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         });
     }
 
+    /// <summary>Non-blocking in production: the close runs off the
+    /// dispatcher (a non-cancellable FFI call may hold the lock —
+    /// INV-6) and is exposed as <see cref="WhenHandleClosed"/> for
+    /// the workspace's bounded close-before-session drain (INV-2;
+    /// codex rounds 1 and 4). Synchronous test mode closes inline.</summary>
     internal override void Shutdown() => ShutdownCore(IsSynchronousForTests);
-
-    /// <summary>Teardown-ordered shutdown (workspace Dispose): closes
-    /// the handle SYNCHRONOUSLY so every handle closes before the
-    /// session disposes (C3/INV-2 — codex round 1: the queued
-    /// background close could lose that race and silently skip
-    /// CloseBase). The tab-close path keeps the non-blocking
-    /// Shutdown.</summary>
-    internal void ShutdownSynchronously() => ShutdownCore(synchronousClose: true);
 
     private void ShutdownCore(bool synchronousClose)
     {
