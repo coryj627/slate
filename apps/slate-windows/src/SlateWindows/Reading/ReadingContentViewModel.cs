@@ -799,9 +799,72 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             {
                 resolution = null;
             }
-            artifacts.Add(new ReadingEmbedArtifact(key, alt, resolution, imageRefused));
+            // W4-6 (#738, contract C10): a resolved `.base` target gets
+            // ONE ephemeral execute for its summary projection — the
+            // rendering branch is on the RESOLVED path (core's link
+            // resolver already classified the target; this is a
+            // presentation choice, not re-classification).
+            BaseEmbedProjection? baseProjection = null;
+            if (resolution?.Resolution is EmbedResolution.FullNote fullNote
+                && fullNote.TargetPath.EndsWith(
+                    ".base", StringComparison.OrdinalIgnoreCase))
+            {
+                baseProjection = ProjectBaseEmbed(session, fullNote.TargetPath, path);
+            }
+            artifacts.Add(new ReadingEmbedArtifact(
+                key, alt, resolution, imageRefused, baseProjection));
         }
         return artifacts.ToArray();
+    }
+
+    /// <summary>One ephemeral execute for a `.base` embed card
+    /// (contract C10): open, execute view 0 unfiltered with the
+    /// EMBEDDING note as this_path (the mac BaseEmbedDocument passes
+    /// the reservation's thisPath; codex round 5 — a `this`-relative
+    /// base embedded in two notes must summarize per note), ALWAYS
+    /// close (INV-2 — the finally owns it). Failures project as an
+    /// error sentence, never a silent empty card.</summary>
+    private static BaseEmbedProjection ProjectBaseEmbed(
+        VaultSession session, string targetPath, string embeddingNotePath)
+    {
+        ulong? handle = null;
+        try
+        {
+            handle = session.OpenBase(targetPath);
+            using var cancel = new CancelToken();
+            BasesResultSet result = session.BaseExecute(
+                handle.Value,
+                view: 0,
+                thisPath: embeddingNotePath,
+                quickFilter: null,
+                cancel);
+            return new BaseEmbedProjection(
+                targetPath,
+                result.AudioSummary,
+                result.ShownCount,
+                result.TotalCount,
+                result.Warnings,
+                result.ViewError,
+                ExecuteError: null);
+        }
+        catch (VaultException failure)
+        {
+            return new BaseEmbedProjection(
+                targetPath,
+                string.Empty,
+                0,
+                0,
+                [],
+                ViewError: null,
+                ExecuteError: failure.Message);
+        }
+        finally
+        {
+            if (handle is { } opened)
+            {
+                session.CloseBase(opened);
+            }
+        }
     }
 
     /// <summary>
@@ -828,7 +891,15 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         }
         bool relevant = _publishedEmbedDependencies.Contains(path)
             || (_publishedHasUnresolvedEmbeds
-                && kind is FileChangeKind.Created or FileChangeKind.Renamed);
+                && kind is FileChangeKind.Created or FileChangeKind.Renamed)
+            // A published BASE card depends on the query's whole
+            // membership, which no dependency list can enumerate — any
+            // markdown change may add/remove rows (red team round 1:
+            // a cell write left the card's counts stale). The digest
+            // memo makes a no-op re-project cheap, and the debounce
+            // coalesces bursts.
+            || (_publishedHasBaseEmbeds
+                && path.EndsWith(".md", StringComparison.OrdinalIgnoreCase));
         if (!relevant)
         {
             return;
@@ -868,12 +939,19 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         }
     }
 
+    private bool _publishedHasBaseEmbeds;
+
     private void CollectEmbedDependencies(ReadingEmbedArtifact[] embeds)
     {
         _publishedEmbedDependencies.Clear();
         _publishedHasUnresolvedEmbeds = false;
+        _publishedHasBaseEmbeds = false;
         foreach (ReadingEmbedArtifact embed in embeds)
         {
+            if (embed.BaseProjection is not null)
+            {
+                _publishedHasBaseEmbeds = true;
+            }
             if (embed.Resolution is null)
             {
                 _publishedHasUnresolvedEmbeds = true;
@@ -1400,6 +1478,25 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             {
                 DigestField(hash, embed.Resolution.Truncated ? "truncated" : "complete");
                 DigestResolution(hash, embed.Resolution.Resolution);
+            }
+            // The base card's projection is identity too (red team
+            // round 1: omitting it meant a membership change with an
+            // otherwise-identical note skipped the rebuild and the
+            // card kept stale counts).
+            if (embed.BaseProjection is { } baseProjection)
+            {
+                DigestField(hash, baseProjection.TargetPath);
+                DigestField(hash, baseProjection.AudioSummary);
+                DigestField(hash, baseProjection.ShownCount.ToString(
+                    System.Globalization.CultureInfo.InvariantCulture));
+                DigestField(hash, baseProjection.TotalCount.ToString(
+                    System.Globalization.CultureInfo.InvariantCulture));
+                foreach (string warning in baseProjection.Warnings)
+                {
+                    DigestField(hash, warning);
+                }
+                DigestField(hash, baseProjection.ViewError ?? string.Empty);
+                DigestField(hash, baseProjection.ExecuteError ?? string.Empty);
             }
             hash.AppendData(BlockSeparator);
         }

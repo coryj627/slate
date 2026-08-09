@@ -233,7 +233,40 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         OnPropertyChanged(nameof(IsEditorVisible));
         OnPropertyChanged(nameof(IsReadingVisible));
     }
-    public bool IsPlaceholder => !IsMarkdown;
+    public bool IsBase => Item.Kind == WorkspaceItemKind.Base;
+
+    public bool IsSavedQueryTab => Item.Kind == WorkspaceItemKind.SavedQuery;
+
+    public bool IsDashboardTab => Item.Kind == WorkspaceItemKind.Dashboard;
+
+    /// <summary>W4-6 (#738): the shared per-source Bases document —
+    /// attached by the workspace registry at tab creation (contract
+    /// C3). Null on every other tab kind, and on Base tabs only
+    /// between construction and attach.</summary>
+    public Bases.BaseDocumentViewModel? Base { get; private set; }
+
+    internal void AttachBaseDocument(Bases.BaseDocumentViewModel document)
+    {
+        Base = document;
+        OnPropertyChanged(nameof(Base));
+    }
+
+    /// <summary>The dashboard tab's document (contract C12), attached
+    /// by the same registry funnel as Base.</summary>
+    public Bases.DashboardViewModel? Dashboard { get; private set; }
+
+    internal void AttachDashboard(Bases.DashboardViewModel document)
+    {
+        Dashboard = document;
+        OnPropertyChanged(nameof(Dashboard));
+    }
+
+    public bool IsDashboardVisible => IsDashboardTab;
+
+    public bool IsBaseVisible => IsBase || IsSavedQueryTab;
+
+    public bool IsPlaceholder =>
+        !IsMarkdown && !IsBase && !IsSavedQueryTab && !IsDashboardTab;
     public string KindLabel => Item.Kind switch
     {
         WorkspaceItemKind.Canvas => "Canvas",
@@ -320,6 +353,15 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         Item = item;
         _text = string.Empty;
         _contentHash = null;
+        // Navigation reuses the tab IN PLACE, so the previous item's
+        // Bases/dashboard documents must not survive the replacement
+        // (red team round 1: base B's title over base A's rows). The
+        // caller re-attaches through AttachBaseDocumentIfNeeded and
+        // releases the orphaned documents.
+        Base = null;
+        Dashboard = null;
+        OnPropertyChanged(nameof(Base));
+        OnPropertyChanged(nameof(Dashboard));
         // The staleness verdict belongs to the PREVIOUS note
         // (adversarial round 10): a reused current tab must not make
         // the replacement note inherit it — every identity guard
@@ -374,6 +416,14 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         _editorInteractions?.InvalidateExternalState();
         IsMissingFromDisk = false;
         Status = string.Empty;
+        NotifyItemChanged();
+    }
+
+    /// <summary>Registry-item rename (saved queries, dashboards): the
+    /// tab keeps its identity (Id) and retitles.</summary>
+    public void RetargetName(string name)
+    {
+        Item = Item with { Name = name };
         NotifyItemChanged();
     }
 
@@ -552,7 +602,34 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     // pauses on the true "left the surface" signal instead
     // (ReadingContentViewModel.OnSurfaceDetached, raised by the
     // surface rebind that hides it), and Dispose still tears it down.
-    public void Deactivate() => _editorInteractions?.CloseTransientUi();
+    /// <summary>Tab switch-away housekeeping. clearBaseQuickFilter is
+    /// FALSE when only the active GROUP changed (focus moved to
+    /// another pane): the tab is still mounted and visible, and C5's
+    /// fourth leg names "activating a different tab", not a pane
+    /// focus move — clearing there silently expanded a grid the user
+    /// was reading (red team round 2; the Reading comment above
+    /// documents the same hazard).</summary>
+    public void Deactivate(bool clearBaseQuickFilter = true)
+    {
+        _editorInteractions?.CloseTransientUi();
+        // C5's fourth transiency leg (red team round 1: unimplemented):
+        // activating a different tab clears the quick filter. The
+        // shared document re-executes unfiltered SILENTLY (INV-4) —
+        // Refresh, never ApplyQuickFilter, which would announce a
+        // count nobody asked for.
+        if (clearBaseQuickFilter && Base is { } baseDocument)
+        {
+            bool executedFilter = baseDocument.QuickFilterActive;
+            if (executedFilter || baseDocument.QuickFilterText.Length > 0)
+            {
+                baseDocument.ClearQuickFilterState();
+                if (executedFilter)
+                {
+                    baseDocument.Refresh();
+                }
+            }
+        }
+    }
 
     /// <summary>Toggle a task through this tab's guarded splice path.
     /// <paramref name="completion"/> (adversarial round 3) fires on
@@ -1091,6 +1168,15 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         OnPropertyChanged(nameof(IsPlaceholder));
         OnPropertyChanged(nameof(KindLabel));
         OnPropertyChanged(nameof(PlaceholderText));
+        // The item's KIND can change on an in-place replacement
+        // (note → base, base → dashboard, …); the surface-visibility
+        // bindings must re-evaluate or the wrong surface stays up
+        // (red team round 1 blocker).
+        OnPropertyChanged(nameof(IsBase));
+        OnPropertyChanged(nameof(IsSavedQueryTab));
+        OnPropertyChanged(nameof(IsDashboardTab));
+        OnPropertyChanged(nameof(IsBaseVisible));
+        OnPropertyChanged(nameof(IsDashboardVisible));
     }
 }
 
@@ -1181,6 +1267,77 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     private WorkspaceLeafOption _activeLeaf;
     private bool _isRightPaneVisible = true;
     private readonly bool _startInteractionBackgroundWork;
+
+    /// <summary>W4-6 (#738): the per-source Bases document registry —
+    /// one document per byte-exact path, shared by every tab on that
+    /// source (contract C3). Documents whose last tab closed are shut
+    /// down by <see cref="ReleaseUnreferencedBaseDocuments"/> at every
+    /// tab-close funnel, and the whole registry at Dispose (INV-2).</summary>
+    private readonly Dictionary<string, Bases.BaseDocumentViewModel> _baseDocuments =
+        new(StringComparer.Ordinal);
+
+    internal Bases.BaseDocumentViewModel BaseDocumentFor(string path)
+    {
+        string key = "file:" + path;
+        if (!_baseDocuments.TryGetValue(key, out Bases.BaseDocumentViewModel? document))
+        {
+            document = new Bases.BaseDocumentViewModel(
+                _session,
+                path,
+                _announce,
+                synchronousForTests: !_startInteractionBackgroundWork);
+            _baseDocuments[key] = document;
+            InstallBaseDocumentSeams(document);
+            document.Load();
+        }
+        return document;
+    }
+
+    internal Bases.BaseDocumentViewModel BaseDocumentForSavedQuery(string id, string name)
+    {
+        string key = "query:" + id;
+        if (!_baseDocuments.TryGetValue(key, out Bases.BaseDocumentViewModel? document))
+        {
+            document = Bases.BaseDocumentViewModel.ForSavedQuery(
+                _session,
+                id,
+                name,
+                _announce,
+                synchronousForTests: !_startInteractionBackgroundWork);
+            _baseDocuments[key] = document;
+            InstallBaseDocumentSeams(document);
+            document.Load();
+        }
+        return document;
+    }
+
+    private void ReleaseUnreferencedBaseDocuments()
+    {
+        if (_baseDocuments.Count == 0)
+        {
+            return;
+        }
+        var live = new HashSet<string>(StringComparer.Ordinal);
+        foreach (WorkspaceTabViewModel tab in Groups.SelectMany(group => group.Tabs))
+        {
+            if (tab.IsBase)
+            {
+                live.Add("file:" + tab.Path);
+            }
+            else if (tab.Item.Kind == WorkspaceItemKind.SavedQuery
+                && tab.Item.Id is { Length: > 0 } id)
+            {
+                live.Add("query:" + id);
+            }
+        }
+        foreach (string key in _baseDocuments.Keys.Where(k => !live.Contains(k)).ToList())
+        {
+            Bases.BaseDocumentViewModel retired = _baseDocuments[key];
+            retired.Shutdown();
+            TrackRetiredBasesWork(retired.WhenHandleClosed());
+            _baseDocuments.Remove(key);
+        }
+    }
 
     public WorkspaceViewModel(
         VaultSession session,
@@ -1392,6 +1549,8 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     /// VM, so over-calling is safe and refetch-free.</summary>
     internal void SyncPanels()
     {
+        // W4-6: the dock follows the active note (contract C12).
+        BasesDockFollowActiveNote();
         Panels.NoteChanged(
             ActiveGroup.ActiveTab is { IsMarkdown: true } tab ? tab.Path : null);
         // W4-5: the citations leaf follows the same active-note funnel;
@@ -1450,6 +1609,12 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 if (string.Equals(value.Id, "bibliography", StringComparison.Ordinal))
                 {
                     Bibliography.EnsureLoaded();
+                }
+                // W4-6: revealing the queries leaf refreshes its lists
+                // (the mac onAppear refresh) - idempotent reads only.
+                if (string.Equals(value.Id, "queries", StringComparison.Ordinal))
+                {
+                    RefreshBaseQueries();
                 }
                 Persist();
             }
@@ -1620,12 +1785,50 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             }
         }
 
+        // The Bases registry keys documents by byte-exact path, and a
+        // document's Path is immutable — a rename must re-key or the
+        // renamed tab keeps a document whose Retry reopens the OLD
+        // path forever, and whose stale key the next release sweep
+        // shuts down UNDER the live tab (red team round 2 blocker).
+        RetargetBaseDocuments(source, destination);
+
         Persist();
         // A rename that touched the ACTIVE tab changed its Path in
         // place — without a re-derive the panels stay bound to the
         // old path and ignore every save on the new one (adversarial
         // round 2).
         SyncPanels();
+    }
+
+    private void RetargetBaseDocuments(string source, string destination)
+    {
+        foreach (string oldKey in _baseDocuments.Keys
+            .Where(key => key.StartsWith("file:", StringComparison.Ordinal)
+                && TryRetargetPath(key["file:".Length..], source, destination, out _))
+            .ToList())
+        {
+            Bases.BaseDocumentViewModel oldDocument = _baseDocuments[oldKey];
+            _baseDocuments.Remove(oldKey);
+            oldDocument.Shutdown();
+            TrackRetiredBasesWork(oldDocument.WhenHandleClosed());
+            _ = TryRetargetPath(
+                oldKey["file:".Length..], source, destination, out string newPath);
+            foreach (WorkspaceTabViewModel tab in Groups
+                .SelectMany(group => group.Tabs)
+                .Where(candidate => candidate.IsBase
+                    && string.Equals(candidate.Path, newPath, StringComparison.Ordinal)))
+            {
+                tab.AttachBaseDocument(BaseDocumentFor(newPath));
+            }
+        }
+        if (BasesDockDocument is { } dockDocument
+            && !dockDocument.IsSavedQuery
+            && TryRetargetPath(dockDocument.Path, source, destination, out string dockPath))
+        {
+            // Silent re-dock at the new path: the target moved, the
+            // user did nothing — no announcement (INV-4).
+            RedockBaseFileSilently(dockPath);
+        }
     }
 
     public void InvalidatePath(string path)
@@ -1693,6 +1896,58 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         // invalidate every in-flight load before that happens.
         Panels.Shutdown();
         TasksReview.Shutdown();
+        // W4-6: every Bases document holds the shared session and a
+        // native handle — closed SYNCHRONOUSLY here (codex round 1:
+        // the non-blocking close could lose the race against the
+        // session disposal that follows this Dispose, silently
+        // skipping CloseBase — C3/INV-2 requires close-before-session,
+        // exactly once).
+        _workspaceDisposed = true;
+        // Every handle-owning Bases worker shuts down NON-BLOCKINGLY
+        // (codex round 4: a synchronous close waits on the FFI lock,
+        // and a non-cancellable export/apply-edit holding it would
+        // freeze the dispatcher indefinitely — INV-6/R2). The closes
+        // are then awaited as ONE bounded drain before the session
+        // disposes (INV-2's close-before-session, bounded rather than
+        // absolute: a >5 s uncancellable FFI call at the exact moment
+        // of app close forfeits the ordering rather than the UI).
+        var basesDrains = new List<Task>();
+        foreach (Bases.BaseDocumentViewModel document in _baseDocuments.Values)
+        {
+            document.Shutdown();
+            basesDrains.Add(document.WhenHandleClosed());
+        }
+        _baseDocuments.Clear();
+        foreach (Bases.DashboardViewModel dashboard in _dashboardDocuments.Values)
+        {
+            dashboard.Shutdown();
+            basesDrains.Add(dashboard.WhenWorkDrained());
+        }
+        _dashboardDocuments.Clear();
+        // Retires the dock document/dashboard into the tracked set.
+        ClearBasesDock();
+        if (BaseQueryBuilderSheet is { } openBuilder)
+        {
+            openBuilder.Shutdown();
+            basesDrains.Add(openBuilder.WhenWorkDrained());
+        }
+        // RETIRED-earlier schedulers too (a replaced builder, a
+        // released dashboard, a swept document) — their in-flight
+        // bodies hold ephemeral handles just the same (codex round 3).
+        basesDrains.AddRange(RetiredBasesDrains);
+        basesDrains.RemoveAll(task => task.IsCompleted);
+        if (basesDrains.Count > 0)
+        {
+            try
+            {
+                _ = Task.WaitAll([.. basesDrains], TimeSpan.FromSeconds(5));
+            }
+            catch (AggregateException)
+            {
+                // Tracked bodies never fault by contract; a straggler
+                // past the bound must not wedge app close.
+            }
+        }
         Persist();
         foreach (WorkspaceTabViewModel tab in Groups.SelectMany(group => group.Tabs))
         {
@@ -1731,7 +1986,13 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
 
     private static bool ItemsReferToSameTarget(WorkspaceItemState left, WorkspaceItemState right) =>
         left.Kind == right.Kind
-        && string.Equals(left.Path, right.Path, StringComparison.Ordinal);
+        && (left.Kind is WorkspaceItemKind.SavedQuery or WorkspaceItemKind.Dashboard
+            // Registry-backed kinds have EMPTY paths — identity is the
+            // registry ID (codex round 5: path-only comparison
+            // collapsed every saved query/dashboard to the first open
+            // tab of its kind, so the second one never opened).
+            ? string.Equals(left.Id, right.Id, StringComparison.Ordinal)
+            : string.Equals(left.Path, right.Path, StringComparison.Ordinal));
 
     private WorkspaceTabViewModel? FindSamePathTab(
         WorkspaceItemState item,

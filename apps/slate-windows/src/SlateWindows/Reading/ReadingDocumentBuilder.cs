@@ -1113,6 +1113,37 @@ internal static class ReadingDocumentBuilder
     /// strings. A null artifact (per-key degraded fetch) is a
     /// header-only card that still activates — never a dead block.
     /// </summary>
+    /// <summary>The `.base` embed card body (contract C10): summary,
+    /// counts, warnings, and the read-only hint — mac's embed hint
+    /// wording verbatim. An execute failure says so; it never renders
+    /// as an empty base.</summary>
+    private static void AppendBaseEmbedBody(
+        Section section, BaseEmbedProjection projection)
+    {
+        if (projection.ExecuteError is { Length: > 0 } error)
+        {
+            section.Blocks.Add(EmbedBodyParagraph(
+                $"This base could not be executed: {error}"));
+            return;
+        }
+        if (projection.AudioSummary.Length > 0)
+        {
+            section.Blocks.Add(EmbedBodyParagraph(projection.AudioSummary));
+        }
+        section.Blocks.Add(EmbedBodyParagraph(
+            $"{projection.ShownCount} of {projection.TotalCount} results."));
+        foreach (string warning in projection.Warnings)
+        {
+            section.Blocks.Add(EmbedBodyParagraph(warning));
+        }
+        if (projection.ViewError is { Length: > 0 } viewError)
+        {
+            section.Blocks.Add(EmbedBodyParagraph(viewError));
+        }
+        section.Blocks.Add(EmbedBodyParagraph(
+            "read-only in embeds — open the base file in a tab to edit"));
+    }
+
     private static Block EmbedCard(
         string key,
         ReadingEmbedArtifact? artifact,
@@ -1148,6 +1179,13 @@ internal static class ReadingDocumentBuilder
         string headerName = resolution is null
             ? $"Embed: {key}"
             : EmbedHeaderName(resolution, occurrenceAlt ?? artifact?.Alt);
+        if (artifact is { BaseProjection: { } namedBase })
+        {
+            // The base card names its real kind (contract C10) — the
+            // FullNote resolution would otherwise title it as a note.
+            headerName =
+                $"Embedded base: {System.IO.Path.GetFileNameWithoutExtension(namedBase.TargetPath)}";
+        }
         string headerSuffix = resolution is null
             ? string.Empty
             : EmbedHeaderAccessibilitySuffix(resolution);
@@ -1172,6 +1210,15 @@ internal static class ReadingDocumentBuilder
 
         switch (resolution)
         {
+            case EmbedResolution.FullNote when artifact is { BaseProjection: { } basePreview }:
+                // W4-6 (#738, contract C10 / G28): a `.base` embed is a
+                // LAYERED summary card, never a live grid inside the
+                // FlowDocument (an embedded grid is blank in say-all).
+                // Core's audio summary and counts stay in the text
+                // range; the header's jump opens the real tab surface,
+                // where the full grid lives. Recorded divergence D-15.
+                AppendBaseEmbedBody(section, basePreview);
+                break;
             case EmbedResolution.FullNote fullNote:
                 AppendEmbedText(section, fullNote.Text, fullNote.Nested);
                 break;

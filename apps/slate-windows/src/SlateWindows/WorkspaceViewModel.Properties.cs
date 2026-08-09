@@ -424,6 +424,19 @@ internal sealed partial class WorkspaceViewModel
 
     /// <summary>The shared refusal gates. True = refused (announced
     /// once, nothing written, draft intact).</summary>
+    /// <summary>ONE dirty-tab refusal sentence for every property
+    /// write route — the panel rows (W4-4) and the Bases cells (W4-6
+    /// D-14 shares the same divergence rationale).</summary>
+    internal void AnnounceDirtyTabPropertyRefusal(WorkspaceTabViewModel tab) =>
+        // W0.5-3 residue: dirty-tab refusal is a recorded
+        // divergence — mac's body-only buffer never conflicts
+        // with frontmatter writes; Windows whole-file tabs must
+        // refuse (w_d notes).
+        _announce(new A11yEvent.HostComposed(
+            "Save the note before editing properties. The editor has unsaved "
+                + $"changes in {System.IO.Path.GetFileName(tab.Path)}.",
+            A11yPriority.High));
+
     private bool RefusePropertyWriteGates(
         WorkspaceTabViewModel tab, PropertyRowViewModel row, bool deleted)
     {
@@ -434,14 +447,7 @@ internal sealed partial class WorkspaceViewModel
         }
         if (tab.IsDirty)
         {
-            // W0.5-3 residue: dirty-tab refusal is a recorded
-            // divergence — mac's body-only buffer never conflicts
-            // with frontmatter writes; Windows whole-file tabs must
-            // refuse (w_d notes).
-            _announce(new A11yEvent.HostComposed(
-                "Save the note before editing properties. The editor has unsaved "
-                    + $"changes in {System.IO.Path.GetFileName(tab.Path)}.",
-                A11yPriority.High));
+            AnnounceDirtyTabPropertyRefusal(tab);
             return true;
         }
         if (tab.IsExternallyStale

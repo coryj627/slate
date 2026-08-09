@@ -524,6 +524,15 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
             {
                 Workspace?.NotifyReadingOfVaultChange(@event.Kind, renamedFrom);
             }
+            // Bases surfaces re-execute on vault changes too (contract
+            // C9's vault-event arm — property panel, task toggles,
+            // editor saves, and external edits all land here).
+            Workspace?.NotifyBasesOfVaultChange(@event.Path);
+            if (@event.Kind == FileChangeKind.Renamed
+                && @event.PreviousPath is string basesRenamedFrom)
+            {
+                Workspace?.NotifyBasesOfVaultChange(basesRenamedFrom);
+            }
             QuickSwitcher?.ApplyFileChange(@event);
             int ticket = Interlocked.Increment(ref _sidebarRefreshTicket);
             _ = Task.Delay(150).ContinueWith(

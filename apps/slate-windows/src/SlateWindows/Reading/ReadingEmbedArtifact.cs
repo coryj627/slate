@@ -25,4 +25,24 @@ internal sealed record ReadingEmbedArtifact(
     string Key,
     string? Alt,
     EmbedPreviewResolution? Resolution,
-    bool ImageBudgetRefused = false);
+    bool ImageBudgetRefused = false,
+    BaseEmbedProjection? BaseProjection = null);
+
+/// <summary>
+/// W4-6 (#738, contract C10): the layered `.base` embed card's data —
+/// core's audio summary, counts, and warnings from ONE ephemeral
+/// execute (handle closed before this record exists, INV-2). The
+/// reading view renders these as in-range TEXT: an embedded live grid
+/// is blank in say-all (G28), so the card speaks the summary and the
+/// jump affordance opens the real tab surface. A failed execute
+/// carries its message in <see cref="ExecuteError"/> — the card says
+/// so instead of pretending the base is empty.
+/// </summary>
+internal sealed record BaseEmbedProjection(
+    string TargetPath,
+    string AudioSummary,
+    ulong ShownCount,
+    ulong TotalCount,
+    string[] Warnings,
+    string? ViewError,
+    string? ExecuteError);

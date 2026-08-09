@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:SlateWindows"
         xmlns:panels="clr-namespace:SlateWindows.Panels"
+        xmlns:bases="clr-namespace:SlateWindows.Bases"
         xmlns:grids="clr-namespace:SlateWindows.Grids"
         Title="Slate"
         Height="720" Width="1120"
@@ -109,6 +110,81 @@
                           AutomationProperties.AutomationId="ShowTasksReviewMenuItem"
                           InputGestureText="Ctrl+R"
                           Command="{Binding Workspace.OpenTasksReviewCommand}" />
+            </MenuItem>
+            <!-- W4-6 (#738): every slate.bases.* command reachable and
+                 AT-discoverable. Mac ships these palette-only with no
+                 chords; a menu is the Windows-native chordless surface
+                 (grid-scoped gestures — Ctrl+F, Ctrl+Alt+S — stay on
+                 the substrate). Items disable through ActiveBaseDocument. -->
+            <MenuItem Header="_Base"
+                      AutomationProperties.AutomationId="BaseMenu">
+                <MenuItem Header="_Refresh"
+                          AutomationProperties.AutomationId="BasesRefreshMenuItem"
+                          Command="{Binding Workspace.BasesRefreshCommand}" />
+                <MenuItem Header="_Where Am I?"
+                          AutomationProperties.AutomationId="BasesWhereAmIMenuItem"
+                          Command="{Binding Workspace.BasesWhereAmICommand}" />
+                <MenuItem Header="Res_ults"
+                          AutomationProperties.AutomationId="BasesResultsMenuItem"
+                          Command="{Binding Workspace.BasesResultsCommand}" />
+                <Separator />
+                <MenuItem Header="_Next View"
+                          AutomationProperties.AutomationId="BasesNextViewMenuItem"
+                          Command="{Binding Workspace.BasesNextViewCommand}" />
+                <MenuItem Header="_Previous View"
+                          AutomationProperties.AutomationId="BasesPreviousViewMenuItem"
+                          Command="{Binding Workspace.BasesPreviousViewCommand}" />
+                <MenuItem Header="Open View _Switcher"
+                          AutomationProperties.AutomationId="BasesViewSwitcherMenuItem"
+                          Command="{Binding Workspace.BasesViewSwitcherCommand}" />
+                <MenuItem Header="View as _Table"
+                          AutomationProperties.AutomationId="BasesViewAsTableMenuItem"
+                          Command="{Binding Workspace.BasesViewAsTableCommand}" />
+                <MenuItem Header="View as _List"
+                          AutomationProperties.AutomationId="BasesViewAsListMenuItem"
+                          Command="{Binding Workspace.BasesViewAsListCommand}" />
+                <Separator />
+                <MenuItem Header="Quick _Filter"
+                          AutomationProperties.AutomationId="BasesQuickFilterMenuItem"
+                          InputGestureText="Ctrl+F"
+                          Command="{Binding Workspace.BasesQuickFilterCommand}" />
+                <MenuItem Header="Sort by _Column"
+                          AutomationProperties.AutomationId="BasesSortByColumnMenuItem"
+                          InputGestureText="Ctrl+Alt+S"
+                          Command="{Binding Workspace.BasesSortByColumnCommand}" />
+                <MenuItem Header="Save Sort to _View"
+                          AutomationProperties.AutomationId="BasesSaveSortMenuItem"
+                          Command="{Binding Workspace.BasesSaveSortToViewCommand}" />
+                <Separator />
+                <MenuItem Header="_Open Row"
+                          AutomationProperties.AutomationId="BasesOpenRowMenuItem"
+                          Command="{Binding Workspace.BasesOpenRowCommand}" />
+                <MenuItem Header="Copy Lin_k"
+                          AutomationProperties.AutomationId="BasesCopyLinkMenuItem"
+                          Command="{Binding Workspace.BasesCopyLinkCommand}" />
+                <MenuItem Header="Show _Backlinks"
+                          AutomationProperties.AutomationId="BasesShowBacklinksMenuItem"
+                          Command="{Binding Workspace.BasesShowBacklinksCommand}" />
+                <MenuItem Header="_Edit Property"
+                          AutomationProperties.AutomationId="BasesEditPropertyMenuItem"
+                          Command="{Binding Workspace.BasesEditPropertyCommand}" />
+                <Separator />
+                <MenuItem Header="Export View as _CSV…"
+                          AutomationProperties.AutomationId="BasesExportCsvMenuItem"
+                          Command="{Binding Workspace.BasesExportCsvCommand}" />
+                <MenuItem Header="Export View as _Markdown Table…"
+                          AutomationProperties.AutomationId="BasesExportMarkdownMenuItem"
+                          Command="{Binding Workspace.BasesExportMarkdownCommand}" />
+                <MenuItem Header="Copy View as Mar_kdown"
+                          AutomationProperties.AutomationId="BasesCopyMarkdownMenuItem"
+                          Command="{Binding Workspace.BasesCopyMarkdownCommand}" />
+                <Separator />
+                <MenuItem Header="New _Query…"
+                          AutomationProperties.AutomationId="BasesNewQueryMenuItem"
+                          Command="{Binding Workspace.BasesNewQueryCommand}" />
+                <MenuItem Header="Edit View F_ilters…"
+                          AutomationProperties.AutomationId="BasesEditViewFiltersMenuItem"
+                          Command="{Binding Workspace.BasesEditViewFiltersCommand}" />
             </MenuItem>
             <MenuItem Header="_Editor"
                       AutomationProperties.AutomationId="EditorMenu">
@@ -1319,6 +1395,275 @@
                                                               Visibility="{Binding Bibliography.ShowUnresolved, Converter={StaticResource BooleanToVisibilityConverter}}" />
                                 </Grid>
                             </DockPanel>
+                            <!-- W4-6 (#738): the Queries leaf — the mac
+                                 BaseQueriesPanel twin. Saved queries,
+                                 base files, dashboards; buttons act on
+                                 the selection (AT-reachable, one route
+                                 per action shared with the commands). -->
+                            <DockPanel Margin="12"
+                                       AutomationProperties.AutomationId="QueriesLeafBody">
+                                <DockPanel.Style>
+                                    <Style TargetType="DockPanel">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding ActiveLeaf.Id}" Value="queries">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </DockPanel.Style>
+                                <StackPanel DockPanel.Dock="Top" Orientation="Horizontal">
+                                    <TextBlock Text="Queries"
+                                               FontSize="16"
+                                               FontWeight="SemiBold"
+                                               AutomationProperties.HeadingLevel="Level2" />
+                                    <Button Margin="12,0,0,0"
+                                            Content="New dashboard"
+                                            AutomationProperties.AutomationId="QueriesNewDashboard"
+                                            Click="QueriesNewDashboard_Click" />
+                                    <Button Margin="8,0,0,0"
+                                            Content="Refresh queries"
+                                            AutomationProperties.AutomationId="QueriesRefresh"
+                                            Click="QueriesRefresh_Click" />
+                                </StackPanel>
+                                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                    <StackPanel>
+                                        <TextBlock Margin="0,8,0,2" Text="SAVED QUERIES" FontSize="11"
+                                                   Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
+                                        <TextBlock Text="No saved queries"
+                                                   Foreground="{DynamicResource Slate.SecondaryTextBrush}">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding SavedQueries.Count}" Value="0">
+                                                            <Setter Property="Visibility" Value="Visible" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                        <ListBox x:Name="QueriesSavedList"
+                                                 MaxHeight="200"
+                                                 ItemsSource="{Binding SavedQueries}"
+                                                 DisplayMemberPath="Name"
+                                                 MouseDoubleClick="QueriesSavedList_DoubleClick"
+                                                 AutomationProperties.AutomationId="QueriesSavedList"
+                                                 AutomationProperties.Name="Saved queries">
+                                            <ListBox.Style>
+                                                <Style TargetType="ListBox">
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding SavedQueries.Count}" Value="0">
+                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </ListBox.Style>
+                                        </ListBox>
+                                        <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                            <StackPanel.Resources>
+                                                <!-- Selection-scoped actions disable without a
+                                                     selection instead of clicking into silence
+                                                     (red team round 1). -->
+                                                <Style TargetType="Button">
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding SelectedItem, ElementName=QueriesSavedList}" Value="{x:Null}">
+                                                            <Setter Property="IsEnabled" Value="False" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </StackPanel.Resources>
+                                            <Button Content="Run" AutomationProperties.Name="Run saved query" AutomationProperties.AutomationId="QueriesRun" Click="QueriesRun_Click" />
+                                            <Button Content="Pin/Unpin" Margin="4,0,0,0" AutomationProperties.Name="Pin or unpin saved query" AutomationProperties.AutomationId="QueriesPin" Click="QueriesPin_Click" />
+                                            <Button Content="Edit in Builder" Margin="4,0,0,0" AutomationProperties.Name="Edit saved query in builder" AutomationProperties.AutomationId="QueriesEditInBuilder" Click="QueriesEditInBuilder_Click" />
+                                            <Button Content="Rename…" Margin="4,0,0,0" AutomationProperties.Name="Rename saved query" AutomationProperties.AutomationId="QueriesRename" Click="QueriesRename_Click" />
+                                            <Button Content="Export as .base…" Margin="4,0,0,0" AutomationProperties.Name="Export saved query as base file" AutomationProperties.AutomationId="QueriesExport" Click="QueriesExport_Click" />
+                                            <Button Content="Dock" Margin="4,0,0,0" AutomationProperties.Name="Dock saved query" AutomationProperties.AutomationId="QueriesDockQuery" Click="QueriesDockQuery_Click" />
+                                            <Button Content="Delete…" Margin="4,0,0,0" AutomationProperties.Name="Delete saved query" AutomationProperties.AutomationId="QueriesDelete" Click="QueriesDelete_Click" />
+                                        </StackPanel>
+                                        <DockPanel x:Name="QueriesRenameRow" Visibility="Collapsed" Margin="0,4,0,0">
+                                            <TextBlock Text="New name:" VerticalAlignment="Center" />
+                                            <TextBox x:Name="QueriesRenameBox"
+                                                     Margin="6,0,0,0"
+                                                     MinWidth="180"
+                                                     KeyDown="QueriesRenameBox_KeyDown"
+                                                     AutomationProperties.AutomationId="QueriesRenameBox"
+                                                     AutomationProperties.Name="New saved query name" />
+                                        </DockPanel>
+                                        <TextBlock Margin="0,12,0,2" Text="BASE FILES" FontSize="11"
+                                                   Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
+                                        <TextBlock Text="No base files"
+                                                   Foreground="{DynamicResource Slate.SecondaryTextBrush}">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding BaseFiles.Count}" Value="0">
+                                                            <Setter Property="Visibility" Value="Visible" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                        <ListBox x:Name="QueriesBaseFilesList"
+                                                 MaxHeight="160"
+                                                 ItemsSource="{Binding BaseFiles}"
+                                                 DisplayMemberPath="Path"
+                                                 MouseDoubleClick="QueriesBaseFilesList_DoubleClick"
+                                                 AutomationProperties.AutomationId="QueriesBaseFilesList"
+                                                 AutomationProperties.Name="Base files">
+                                            <ListBox.Style>
+                                                <Style TargetType="ListBox">
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding BaseFiles.Count}" Value="0">
+                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </ListBox.Style>
+                                        </ListBox>
+                                        <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                            <StackPanel.Resources>
+                                                <Style TargetType="Button">
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding SelectedItem, ElementName=QueriesBaseFilesList}" Value="{x:Null}">
+                                                            <Setter Property="IsEnabled" Value="False" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </StackPanel.Resources>
+                                            <Button Content="Open" AutomationProperties.Name="Open base file" AutomationProperties.AutomationId="QueriesOpenBaseFile" Click="QueriesOpenBaseFile_Click" />
+                                            <Button Content="Dock" Margin="4,0,0,0" AutomationProperties.Name="Dock base file" AutomationProperties.AutomationId="QueriesDockBaseFile" Click="QueriesDockBaseFile_Click" />
+                                        </StackPanel>
+                                        <TextBlock Margin="0,12,0,2" Text="DASHBOARDS" FontSize="11"
+                                                   Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
+                                        <TextBlock Text="No dashboards"
+                                                   Foreground="{DynamicResource Slate.SecondaryTextBrush}">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Dashboards.Count}" Value="0">
+                                                            <Setter Property="Visibility" Value="Visible" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                        <ListBox x:Name="QueriesDashboardsList"
+                                                 MaxHeight="160"
+                                                 ItemsSource="{Binding Dashboards}"
+                                                 DisplayMemberPath="Name"
+                                                 MouseDoubleClick="QueriesDashboardsList_DoubleClick"
+                                                 AutomationProperties.AutomationId="QueriesDashboardsList"
+                                                 AutomationProperties.Name="Dashboards">
+                                            <ListBox.Style>
+                                                <Style TargetType="ListBox">
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Dashboards.Count}" Value="0">
+                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </ListBox.Style>
+                                        </ListBox>
+                                        <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                            <StackPanel.Resources>
+                                                <Style TargetType="Button">
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding SelectedItem, ElementName=QueriesDashboardsList}" Value="{x:Null}">
+                                                            <Setter Property="IsEnabled" Value="False" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </StackPanel.Resources>
+                                            <Button Content="Open" AutomationProperties.Name="Open dashboard" AutomationProperties.AutomationId="QueriesOpenDashboard" Click="QueriesOpenDashboard_Click" />
+                                            <Button Content="Edit…" Margin="4,0,0,0" AutomationProperties.Name="Edit dashboard" AutomationProperties.AutomationId="QueriesEditDashboard" Click="QueriesEditDashboard_Click" />
+                                            <Button Content="Dock" Margin="4,0,0,0" AutomationProperties.Name="Dock dashboard" AutomationProperties.AutomationId="QueriesDockDashboard" Click="QueriesDockDashboard_Click" />
+                                            <Button Content="Delete…" Margin="4,0,0,0" AutomationProperties.Name="Delete dashboard" AutomationProperties.AutomationId="QueriesDeleteDashboard" Click="QueriesDeleteDashboard_Click" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                </ScrollViewer>
+                            </DockPanel>
+                            <!-- W4-6 (#738): the Base dock leaf — one
+                                 docked target following the active note,
+                                 read-only. -->
+                            <DockPanel Margin="12"
+                                       AutomationProperties.AutomationId="BasesDockLeafBody">
+                                <DockPanel.Style>
+                                    <Style TargetType="DockPanel">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding ActiveLeaf.Id}" Value="basesDock">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </DockPanel.Style>
+                                <TextBlock DockPanel.Dock="Top"
+                                           Text="Base dock"
+                                           FontSize="16"
+                                           FontWeight="SemiBold"
+                                           AutomationProperties.HeadingLevel="Level2" />
+                                <TextBlock x:Name="BasesDockEmptyState"
+                                           DockPanel.Dock="Top"
+                                           Text="Dock a base, saved query, or dashboard to follow the active note."
+                                           TextWrapping="Wrap"
+                                           Foreground="{DynamicResource Slate.SecondaryTextBrush}"
+                                           AutomationProperties.AutomationId="BasesDockEmptyState">
+                                    <TextBlock.Style>
+                                        <!-- Visible only while NOTHING is docked
+                                             (red team round 1: it stayed up over
+                                             docked content). -->
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <MultiDataTrigger>
+                                                    <MultiDataTrigger.Conditions>
+                                                        <Condition Binding="{Binding BasesDockDocument}" Value="{x:Null}" />
+                                                        <Condition Binding="{Binding BasesDockDashboard}" Value="{x:Null}" />
+                                                    </MultiDataTrigger.Conditions>
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </MultiDataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                                <!-- A docked DASHBOARD renders its own surface
+                                     (red team round 1 blocker: BasesDockDashboard
+                                     was bound by no view — docking a dashboard
+                                     announced success and showed nothing). -->
+                                <bases:DashboardSurfaceView x:Name="BasesDockDashboardSurface"
+                                                            AutomationIdRoot="BasesDockDash"
+                                                            Model="{Binding BasesDockDashboard}">
+                                    <bases:DashboardSurfaceView.Style>
+                                        <Style TargetType="bases:DashboardSurfaceView">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding BasesDockDashboard}" Value="{x:Null}">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </bases:DashboardSurfaceView.Style>
+                                </bases:DashboardSurfaceView>
+                                <bases:BaseSurfaceView x:Name="BasesDockSurface"
+                                                       Model="{Binding BasesDockDocument}"
+                                                       IsReadOnlySurface="True">
+                                    <bases:BaseSurfaceView.Style>
+                                        <!-- Hidden with no model: an empty surface
+                                             skeleton exposes dead-but-enabled
+                                             controls to the accessibility tree. -->
+                                        <Style TargetType="bases:BaseSurfaceView">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding BasesDockDocument}" Value="{x:Null}">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </bases:BaseSurfaceView.Style>
+                                </bases:BaseSurfaceView>
+                            </DockPanel>
+
                             <StackPanel Grid.Column="0" Margin="12">
                                 <StackPanel.Style>
                                     <Style TargetType="StackPanel">
@@ -1327,6 +1672,12 @@
                                                 <Setter Property="Visibility" Value="Collapsed" />
                                             </DataTrigger>
                                             <DataTrigger Binding="{Binding ActiveLeaf.Id}" Value="bibliography">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding ActiveLeaf.Id}" Value="queries">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding ActiveLeaf.Id}" Value="basesDock">
                                                 <Setter Property="Visibility" Value="Collapsed" />
                                             </DataTrigger>
                                             <DataTrigger Binding="{Binding ActiveLeaf.Id}" Value="backlinks">
@@ -1919,6 +2270,336 @@
                                 AutomationProperties.AutomationId="FilesCitingClose" />
                     </StackPanel>
                 </StackPanel>
+            </local:AutomationLandmarkBorder>
+            <Border Background="Transparent"
+                    Visibility="{Binding Workspace.DashboardEditorSheet, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
+            <local:AutomationLandmarkBorder x:Name="DashboardEditorOverlay"
+                    Width="560"
+                    MaxHeight="520"
+                    Padding="16"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Background="{DynamicResource Slate.RaisedSurfaceBrush}"
+                    BorderBrush="{DynamicResource Slate.BorderBrush}"
+                    BorderThickness="1"
+                    Visibility="{Binding DataContext.Workspace.DashboardEditorSheet, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}"
+                    DataContext="{Binding Workspace.DashboardEditorSheet}"
+                    FocusManager.IsFocusScope="True"
+                    KeyboardNavigation.TabNavigation="Cycle"
+                    KeyboardNavigation.ControlTabNavigation="Cycle"
+                    PreviewKeyDown="DashboardEditorOverlay_PreviewKeyDown"
+                    AutomationProperties.AutomationId="DashboardEditorSheet"
+                    AutomationProperties.Name="{Binding Title}"
+                    AutomationProperties.IsDialog="True">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Top"
+                               Text="{Binding Title}"
+                               FontSize="16"
+                               FontWeight="SemiBold"
+                               AutomationProperties.HeadingLevel="Level2" />
+                    <DockPanel DockPanel.Dock="Top" Margin="0,10,0,0">
+                        <TextBlock Text="Name:" VerticalAlignment="Center" />
+                        <TextBox x:Name="DashboardEditorNameBox"
+                                 Margin="6,0,0,0"
+                                 Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"
+                                 AutomationProperties.AutomationId="DashboardEditorName"
+                                 AutomationProperties.Name="Dashboard name" />
+                    </DockPanel>
+                    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,10,0,0">
+                        <ComboBox x:Name="DashboardEditorQueryPicker"
+                                  MinWidth="200"
+                                  ItemsSource="{Binding DataContext.Workspace.SavedQueries, RelativeSource={RelativeSource AncestorType=Window}}"
+                                  DisplayMemberPath="Name"
+                                  AutomationProperties.AutomationId="DashboardEditorQueryPicker"
+                                  AutomationProperties.Name="Saved query to add" />
+                        <Button Content="Add section"
+                                Margin="8,0,0,0"
+                                AutomationProperties.AutomationId="DashboardEditorAddSection"
+                                Click="DashboardEditorAddSection_Click" />
+                    </StackPanel>
+                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+                        <Button Content="Save"
+                                AutomationProperties.AutomationId="DashboardEditorSave"
+                                Click="DashboardEditorSave_Click" />
+                        <Button Content="Cancel"
+                                Margin="8,0,0,0"
+                                AutomationProperties.AutomationId="DashboardEditorCancel"
+                                Click="DashboardEditorCancel_Click" />
+                    </StackPanel>
+                    <ListBox ItemsSource="{Binding Sections}"
+                             Margin="0,10,0,0"
+                             MaxHeight="280"
+                             HorizontalContentAlignment="Stretch"
+                             AutomationProperties.AutomationId="DashboardEditorSections"
+                             AutomationProperties.Name="Dashboard sections">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <DockPanel Margin="0,2">
+                                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                        <Button Content="Up" Click="DashboardEditorMoveUp_Click"
+                                                AutomationProperties.Name="{Binding SavedQueryName, StringFormat=Move {0} up}" />
+                                        <Button Content="Down" Margin="4,0,0,0" Click="DashboardEditorMoveDown_Click"
+                                                AutomationProperties.Name="{Binding SavedQueryName, StringFormat=Move {0} down}" />
+                                        <Button Content="Remove" Margin="4,0,0,0" Click="DashboardEditorRemoveSection_Click"
+                                                AutomationProperties.Name="{Binding SavedQueryName, StringFormat=Remove {0}}" />
+                                    </StackPanel>
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding SavedQueryName}" FontWeight="SemiBold" />
+                                        <DockPanel Margin="0,2,0,0">
+                                            <TextBlock Text="Heading:" VerticalAlignment="Center" />
+                                            <TextBox Margin="6,0,0,0"
+                                                     Text="{Binding HeadingOverride, UpdateSourceTrigger=PropertyChanged}"
+                                                     AutomationProperties.Name="{Binding SavedQueryName, StringFormat=Heading override for {0}}" />
+                                        </DockPanel>
+                                        <DockPanel Margin="0,2,0,0">
+                                            <TextBlock Text="View:" VerticalAlignment="Center" />
+                                            <ComboBox Margin="6,0,0,0"
+                                                      MinWidth="120"
+                                                      SelectedValuePath="Tag"
+                                                      SelectedValue="{Binding ViewOverride}"
+                                                      AutomationProperties.Name="{Binding SavedQueryName, StringFormat=View override for {0}}">
+                                                <ComboBoxItem Content="Default" Tag="" />
+                                                <ComboBoxItem Content="Table" Tag="table" />
+                                                <ComboBoxItem Content="List" Tag="list" />
+                                            </ComboBox>
+                                        </DockPanel>
+                                    </StackPanel>
+                                </DockPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </DockPanel>
+            </local:AutomationLandmarkBorder>
+            <Border Background="Transparent"
+                    Visibility="{Binding Workspace.BaseQueryBuilderSheet, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
+            <local:AutomationLandmarkBorder x:Name="BaseQueryBuilderOverlay"
+                    Width="640"
+                    MaxHeight="560"
+                    Padding="16"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Background="{DynamicResource Slate.RaisedSurfaceBrush}"
+                    BorderBrush="{DynamicResource Slate.BorderBrush}"
+                    BorderThickness="1"
+                    Visibility="{Binding DataContext.Workspace.BaseQueryBuilderSheet, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}"
+                    DataContext="{Binding Workspace.BaseQueryBuilderSheet}"
+                    FocusManager.IsFocusScope="True"
+                    KeyboardNavigation.TabNavigation="Cycle"
+                    KeyboardNavigation.ControlTabNavigation="Cycle"
+                    PreviewKeyDown="BaseQueryBuilderOverlay_PreviewKeyDown"
+                    AutomationProperties.AutomationId="BaseQueryBuilderSheet"
+                    AutomationProperties.Name="{Binding Title}"
+                    AutomationProperties.IsDialog="True">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Top"
+                               Text="{Binding Title}"
+                               FontSize="16"
+                               FontWeight="SemiBold"
+                               AutomationProperties.HeadingLevel="Level2" />
+                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
+                        <Button Content="Save to View"
+                                AutomationProperties.AutomationId="BuilderSaveToView"
+                                Click="BuilderSaveToView_Click">
+                            <Button.Style>
+                                <!-- Only an edit-view context can save to a view
+                                     (red team round 1: the button sat enabled in
+                                     every context and clicked into silence). -->
+                                <Style TargetType="Button">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Context.ViewPath}" Value="{x:Null}">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
+                        <Button Content="Update Saved Query"
+                                Margin="8,0,0,0"
+                                AutomationProperties.AutomationId="BuilderUpdateSavedQuery"
+                                Click="BuilderUpdateSavedQuery_Click">
+                            <Button.Style>
+                                <Style TargetType="Button">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Context.SavedQueryId}" Value="{x:Null}">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
+                        <Button Content="Save as Saved Query"
+                                Margin="8,0,0,0"
+                                AutomationProperties.AutomationId="BuilderSaveAsSavedQuery"
+                                Click="BuilderSaveAsSavedQuery_Click" />
+                        <Button Content="Save as .base"
+                                Margin="8,0,0,0"
+                                AutomationProperties.AutomationId="BuilderSaveAsBase"
+                                Click="BuilderSaveAsBase_Click" />
+                        <Button Content="Done"
+                                Margin="8,0,0,0"
+                                AutomationProperties.AutomationId="BuilderDone"
+                                Click="BuilderDone_Click" />
+                    </StackPanel>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                <TextBlock Text="Match:" VerticalAlignment="Center" />
+                                <ComboBox x:Name="BuilderCombinatorBox"
+                                          Margin="6,0,0,0"
+                                          MinWidth="90"
+                                          SelectedValuePath="Tag"
+                                          SelectedValue="{Binding Combinator}"
+                                          AutomationProperties.AutomationId="BuilderCombinator"
+                                          AutomationProperties.Name="Condition combinator">
+                                    <ComboBoxItem Content="All" Tag="and" />
+                                    <ComboBoxItem Content="Any" Tag="or" />
+                                </ComboBox>
+                                <Button Content="Add condition"
+                                        Margin="12,0,0,0"
+                                        AutomationProperties.AutomationId="BuilderAddCondition"
+                                        Click="BuilderAddCondition_Click" />
+                                <Button Content="Add group"
+                                        Margin="6,0,0,0"
+                                        AutomationProperties.AutomationId="BuilderAddGroup"
+                                        Click="BuilderAddGroup_Click" />
+                            </StackPanel>
+                            <ItemsControl ItemsSource="{Binding ConditionRows}"
+                                          Margin="0,6,0,0"
+                                          AutomationProperties.AutomationId="BuilderConditions">
+                                <ItemsControl.Style>
+                                    <!-- Empty collections collapse: a zero-size
+                                         list is an axe BoundingRectangle
+                                         violation (the queries-leaf rule). -->
+                                    <Style TargetType="ItemsControl">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding ConditionRows.Count}" Value="0">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </ItemsControl.Style>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Margin="0,2">
+                                            <DockPanel>
+                                                <TextBlock Text="{Binding Label}" MinWidth="70" VerticalAlignment="Center" />
+                                                <Button DockPanel.Dock="Right"
+                                                        Content="Remove"
+                                                        Click="BuilderRemoveCondition_Click"
+                                                        AutomationProperties.Name="{Binding Label, StringFormat=Remove {0}}" />
+                                                <TextBox Margin="6,0,6,0"
+                                                         Text="{Binding Expression, UpdateSourceTrigger=PropertyChanged}"
+                                                         TextChanged="BuilderExpression_TextChanged"
+                                                         AutomationProperties.Name="Raw filter expression">
+                                                    <TextBox.Style>
+                                                        <Style TargetType="TextBox">
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsPreserved}" Value="True">
+                                                                    <Setter Property="IsEnabled" Value="False" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBox.Style>
+                                                </TextBox>
+                                            </DockPanel>
+                                            <TextBlock Text="{Binding ValidationMessage}"
+                                                       Foreground="{DynamicResource Slate.WarningBrush}"
+                                                       TextWrapping="Wrap">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Style.Triggers>
+                                                            <Trigger Property="Text" Value="">
+                                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                            </Trigger>
+                                                            <Trigger Property="Text" Value="{x:Null}">
+                                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                            </Trigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                            <ItemsControl ItemsSource="{Binding GroupMembers}" Margin="24,0,0,0">
+                                                <ItemsControl.Style>
+                                                    <Style TargetType="ItemsControl">
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding GroupMembers}" Value="{x:Null}">
+                                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </ItemsControl.Style>
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <StackPanel Margin="0,2">
+                                                            <TextBox Text="{Binding Expression, UpdateSourceTrigger=PropertyChanged}"
+                                                                     TextChanged="BuilderExpression_TextChanged"
+                                                                     AutomationProperties.Name="Group member expression" />
+                                                            <!-- A group member's refusal renders like a
+                                                                 top-level row's (red team round 1: it was
+                                                                 invisible). -->
+                                                            <TextBlock Text="{Binding ValidationMessage}"
+                                                                       Foreground="{DynamicResource Slate.WarningBrush}"
+                                                                       TextWrapping="Wrap">
+                                                                <TextBlock.Style>
+                                                                    <Style TargetType="TextBlock">
+                                                                        <Style.Triggers>
+                                                                            <Trigger Property="Text" Value="">
+                                                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                                            </Trigger>
+                                                                            <Trigger Property="Text" Value="{x:Null}">
+                                                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                                            </Trigger>
+                                                                        </Style.Triggers>
+                                                                    </Style>
+                                                                </TextBlock.Style>
+                                                            </TextBlock>
+                                                        </StackPanel>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <TextBlock Text="{Binding SaveError}"
+                                       Foreground="{DynamicResource Slate.WarningBrush}"
+                                       TextWrapping="Wrap"
+                                       Focusable="True"
+                                       AutomationProperties.AutomationId="BuilderSaveError">
+                                <TextBlock.Style>
+                                    <!-- An EMPTY focusable text is a tab stop
+                                         announcing nothing — collapsed until
+                                         there is an error to read. -->
+                                    <Style TargetType="TextBlock">
+                                        <Style.Triggers>
+                                            <Trigger Property="Text" Value="">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                            </Trigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                            <TextBlock Margin="0,10,0,2" Text="PREVIEW" FontSize="11"
+                                       Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
+                            <TextBlock x:Name="BuilderPreviewLine"
+                                       Text="Preview not loaded."
+                                       TextWrapping="Wrap"
+                                       Focusable="True"
+                                       AutomationProperties.AutomationId="BuilderPreviewLine" />
+                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                <TextBox x:Name="BuilderSavePathBox"
+                                         MinWidth="180"
+                                         AutomationProperties.AutomationId="BuilderSavePathBox"
+                                         AutomationProperties.Name="New .base path" />
+                                <TextBox x:Name="BuilderSaveNameBox"
+                                         MinWidth="140"
+                                         Margin="8,0,0,0"
+                                         AutomationProperties.AutomationId="BuilderSaveNameBox"
+                                         AutomationProperties.Name="Saved query name" />
+                            </StackPanel>
+                        </StackPanel>
+                    </ScrollViewer>
+                </DockPanel>
             </local:AutomationLandmarkBorder>
         </Grid>
     </DockPanel>

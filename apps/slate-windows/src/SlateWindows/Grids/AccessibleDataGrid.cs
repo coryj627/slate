@@ -119,6 +119,7 @@ internal sealed class AccessibleDataGrid : UserControl
         _grid.SetResourceReference(ForegroundProperty, "Slate.TextBrush");
         _grid.SetResourceReference(BackgroundProperty, "Slate.SurfaceBrush");
         _grid.CurrentCellChanged += OnCurrentCellChanged;
+        _grid.CellEditEnding += OnCellEditEnding;
         _grid.Sorting += OnHeaderSorting;
         _grid.PreviewTextInput += OnTypeAhead;
         _grid.PreviewKeyDown += OnActivationKey;
@@ -338,8 +339,14 @@ internal sealed class AccessibleDataGrid : UserControl
         // as every re-bind passes the same list — true of every
         // consumer today, false the moment one grid instance serves
         // more than one column set.
+        // Externally-sorted grids (W4-6): the rows ALREADY arrive in
+        // core's order, so capturing and re-applying a host sort here
+        // would re-dispatch a core execute per publish. The surface
+        // owns its sort state and re-asserts the indicator after Bind.
         (string Header, bool Ascending)? previousSort =
-            _activeSort is { } active && active.ColumnIndex < _columns.Count
+            ExternalSortHandler is null
+            && _activeSort is { } active
+            && active.ColumnIndex < _columns.Count
                 ? (_columns[active.ColumnIndex].Header, active.Ascending)
                 : null;
         _activeSort = null;
@@ -373,10 +380,11 @@ internal sealed class AccessibleDataGrid : UserControl
         for (int index = 0; index < columns.Count; index++)
         {
             AccessibleGridColumn column = columns[index];
-            var gridColumn = new AccessibleGridTextColumn(column, index)
+            var gridColumn = new AccessibleGridTextColumn(column, index, this)
             {
                 Header = column.Header,
-                CanUserSort = column.Sort is not null,
+                CanUserSort = column.Sort is not null
+                    || (column.IsExternallySortable && ExternalSortHandler is not null),
                 // The comparator sorts; a KVC-style member path never
                 // does (the mac prototype-key precedent).
                 SortMemberPath = index.ToString(System.Globalization.CultureInfo.InvariantCulture),
@@ -530,15 +538,53 @@ internal sealed class AccessibleDataGrid : UserControl
     }
 
     /// <summary>
+    /// W4-6 (#738, contract C1/C6): core-executed sorting. When set,
+    /// a sort request on an <see cref="AccessibleGridColumn.IsExternallySortable"/>
+    /// column is DELEGATED — the handler dispatches the sort in core
+    /// and the reordered rows arrive through a later <see cref="Bind"/>;
+    /// the grid neither reorders nor announces (the surface announces
+    /// its own canonical event when the rows actually land, so the
+    /// spoken order can never diverge from the rendered rows). The
+    /// surface re-asserts the header indicator after each publish via
+    /// <see cref="SetSortIndicator"/>.
+    /// </summary>
+    internal Func<int, bool, bool>? ExternalSortHandler { get; set; }
+
+    /// <summary>Header arrows + toggle state for an externally-sorted
+    /// grid, with NO reorder and NO announcement — the rows already
+    /// arrived in core's order. Pass null to clear.</summary>
+    internal void SetSortIndicator((int ColumnIndex, bool Ascending)? sort)
+    {
+        _activeSort = sort;
+        for (int index = 0; index < _grid.Columns.Count; index++)
+        {
+            _grid.Columns[index].SortDirection =
+                sort is { } active && index == active.ColumnIndex
+                    ? (active.Ascending
+                        ? System.ComponentModel.ListSortDirection.Ascending
+                        : System.ComponentModel.ListSortDirection.Descending)
+                    : null;
+        }
+    }
+
+    /// <summary>
     /// Apply a sort — the unit-testable seam, the mac twin's shape.
     /// Returns the rendered announcement text it posted, or null for
     /// an unsortable column.
     /// </summary>
     internal string? ApplySort(int columnIndex, bool ascending)
     {
-        if (columnIndex < 0
-            || columnIndex >= _columns.Count
-            || _columns[columnIndex].Sort is not { } comparer)
+        if (columnIndex < 0 || columnIndex >= _columns.Count)
+        {
+            return null;
+        }
+        if (ExternalSortHandler is { } externalSort
+            && _columns[columnIndex].IsExternallySortable)
+        {
+            _ = externalSort(columnIndex, ascending);
+            return null;
+        }
+        if (_columns[columnIndex].Sort is not { } comparer)
         {
             return null;
         }
@@ -630,8 +676,18 @@ internal sealed class AccessibleDataGrid : UserControl
         }
     }
 
+    /// <summary>The current ROW for consuming surfaces (W4-6 row
+    /// commands target it); null when currency leaves the bound set.</summary>
+    internal event Action<object?>? CurrentRowChanged;
+
     private void OnCurrentCellChanged(object? sender, EventArgs e)
     {
+        CurrentRowChanged?.Invoke(
+            _grid.CurrentCell.Item is { } current
+            && current != CollectionView.NewItemPlaceholder
+            && _items.Contains(current)
+                ? current
+                : null);
         if (_grid.CurrentCell.Item is not object row
             || row == CollectionView.NewItemPlaceholder
             || _grid.CurrentCell.Column is not AccessibleGridTextColumn column)
@@ -672,6 +728,42 @@ internal sealed class AccessibleDataGrid : UserControl
     /// </summary>
     private void OnActivationKey(object sender, KeyEventArgs e)
     {
+        // An OPEN edit session owns the keyboard entirely: this
+        // handler rides the grid's PreviewKeyDown, which tunnels
+        // BEFORE the editor's — without this bail, Enter-to-commit
+        // fell through to the row-activation arm below, opened the
+        // row's note, and the resulting native ending discarded the
+        // draft (caught by the journey's first CI run of the F2 leg).
+        if (_editing)
+        {
+            return;
+        }
+        // W4-6 (#738, contract C7): editing outranks activation on an
+        // EDITABLE cell — Enter or F2 begins the edit; Enter on a
+        // non-editable cell keeps its activation meaning, while F2
+        // (the edit-only key) surfaces the refusal so the reason is
+        // spoken, not swallowed.
+        if (e.Key is Key.Enter or Key.F2 && _editDraft is not null && !_editing)
+        {
+            int editColumn = CurrentColumnIndex();
+            if (_grid.CurrentCell.Item is { } editItem
+                && _items.Contains(editItem)
+                && editColumn >= 0)
+            {
+                if (_editDraft(editItem, editColumn) is not null)
+                {
+                    _ = BeginEditAt(editItem, editColumn);
+                    e.Handled = true;
+                    return;
+                }
+                if (e.Key == Key.F2)
+                {
+                    _editRefused?.Invoke(editItem, editColumn);
+                    e.Handled = true;
+                    return;
+                }
+            }
+        }
         if (e.Key != Key.Enter || _rowActivated is null)
         {
             return;
@@ -681,6 +773,251 @@ internal sealed class AccessibleDataGrid : UserControl
             _rowActivated(item);
             e.Handled = true;
         }
+    }
+
+    // --- W4-6 in-grid editing (contract C7/C8): the substrate owns
+    // the EDITOR LIFECYCLE only — begin, keystroke routing, commit
+    // text handoff, cancel. The surface owns the policy (which cells
+    // edit, what the draft is) and the write. The DataGrid never
+    // writes data itself: commit hands the editor TEXT to the surface
+    // and cancels the native edit, so a binding can never race the
+    // FFI write path. ---
+
+    private Func<object, int, string?>? _editDraft;
+    private Action<object, int, string, GridEditCommitNavigation>? _editCommit;
+    private Action? _editCancel;
+    private Action<object, int>? _editRefused;
+    private bool _editing;
+    private bool _committing;
+    private TextBox? _activeEditor;
+
+    /// <summary>Configure the edit seam. A null return from
+    /// <paramref name="editDraft"/> marks that cell read-only — F2
+    /// routes the refusal to <paramref name="editRefused"/> so the
+    /// surface can announce WHY (contract C7).</summary>
+    internal void ConfigureEditing(
+        Func<object, int, string?> editDraft,
+        Action<object, int, string, GridEditCommitNavigation> editCommit,
+        Action editCancel,
+        Action<object, int> editRefused)
+    {
+        _editDraft = editDraft;
+        _editCommit = editCommit;
+        _editCancel = editCancel;
+        _editRefused = editRefused;
+    }
+
+    internal bool IsEditingForTests => _editing;
+
+    /// <summary>True while a cell edit session is open — surfaces
+    /// DEFER destructive rebinds behind this (red team round 2: a
+    /// background funnel/vault publish mid-edit tore the columns out
+    /// from under the editor, discarded the draft, and let a refresh
+    /// the user never touched announce "Edit canceled").</summary>
+    internal bool IsEditSessionOpen => _editing;
+
+    /// <summary>Raised when the edit session ends by ANY path —
+    /// commit handoff, user cancel, or a native ending — so a
+    /// deferred rebind can run.</summary>
+    internal event Action? EditSessionEnded;
+
+    internal int CurrentColumnIndexForTests() => CurrentColumnIndex();
+
+    internal object? CurrentRowForTests() =>
+        _grid.CurrentCell.Item is { } item
+        && item != CollectionView.NewItemPlaceholder
+        && _items.Contains(item)
+            ? item
+            : null;
+
+    internal object? FirstItemForTests() => _items.Count > 0 ? _items[0] : null;
+
+    /// <summary>Resolve a bound item by predicate — the surface's
+    /// identity re-arm after a rebind replaced the row objects.</summary>
+    internal object? FindItem(Func<object, bool> predicate) =>
+        _items.FirstOrDefault(predicate);
+
+    /// <summary>Begin editing a cell (keyboard, row action, or the
+    /// editProperty command). Returns false when the cell is
+    /// read-only (after routing the refusal) or unreachable.</summary>
+    internal bool BeginEditAt(object row, int columnIndex, string? draftOverride = null)
+    {
+        if (_editDraft is null
+            || _editing
+            || columnIndex < 0
+            || columnIndex >= _grid.Columns.Count
+            || !_items.Contains(row))
+        {
+            return false;
+        }
+        if (_editDraft(row, columnIndex) is not { } draft)
+        {
+            _editRefused?.Invoke(row, columnIndex);
+            return false;
+        }
+        // A validation failure re-arms with the USER'S text, not the
+        // stored value — the draft is never lost (contract C7).
+        _pendingDraft = draftOverride ?? draft;
+        _editing = true;
+        _grid.IsReadOnly = false;
+        _grid.CurrentCell = new DataGridCellInfo(row, _grid.Columns[columnIndex]);
+        _grid.SelectedCells.Clear();
+        _grid.SelectedCells.Add(_grid.CurrentCell);
+        if (!_grid.BeginEdit())
+        {
+            _editing = false;
+            _grid.IsReadOnly = true;
+            _pendingDraft = null;
+            return false;
+        }
+        return true;
+    }
+
+    private string? _pendingDraft;
+
+    /// <summary>Called by the editing column: the editor arrives
+    /// seeded with the surface's draft, wired for the mac keys —
+    /// Return commit-stay, Tab commit-next, Shift+Tab commit-previous,
+    /// Escape cancel.</summary>
+    internal void AttachCellEditor(TextBox editor, string header)
+    {
+        _activeEditor = editor;
+        editor.Text = _pendingDraft ?? string.Empty;
+        _pendingDraft = null;
+        AutomationProperties.SetName(editor, $"{header} edit");
+        editor.Loaded += (_, _) =>
+        {
+            _ = editor.Focus();
+            editor.SelectAll();
+        };
+        editor.PreviewKeyDown += OnEditorKeyDown;
+    }
+
+    private void OnEditorKeyDown(object sender, KeyEventArgs e)
+    {
+        if (sender is not TextBox editor)
+        {
+            return;
+        }
+        switch (e.Key)
+        {
+            case Key.Enter:
+                CommitEdit(editor.Text, GridEditCommitNavigation.Stay);
+                e.Handled = true;
+                break;
+            case Key.Tab:
+                CommitEdit(
+                    editor.Text,
+                    (Keyboard.Modifiers & ModifierKeys.Shift) != 0
+                        ? GridEditCommitNavigation.Previous
+                        : GridEditCommitNavigation.Next);
+                e.Handled = true;
+                break;
+            case Key.Escape:
+                // Native cancel; CellEditEnding routes to _editCancel.
+                break;
+        }
+    }
+
+    private void CommitEdit(string text, GridEditCommitNavigation navigation)
+    {
+        if (!_editing)
+        {
+            return;
+        }
+        object? item = _grid.CurrentCell.Item;
+        int columnIndex = CurrentColumnIndex();
+        // Captured BEFORE EndEditCore: its EditSessionEnded can flush
+        // a deferred rebind that re-runs ConfigureEditing against a
+        // NEW result — invoking the new closure with the old row and
+        // index could write the draft to whichever property now
+        // occupies that index (red team round 3). Old closure + old
+        // row + old result are mutually consistent.
+        Action<object, int, string, GridEditCommitNavigation>? commit = _editCommit;
+        _committing = true;
+        try
+        {
+            _grid.CancelEdit();
+        }
+        finally
+        {
+            _committing = false;
+        }
+        EndEditCore();
+        if (item is not null && columnIndex >= 0)
+        {
+            commit?.Invoke(item, columnIndex, text, navigation);
+        }
+    }
+
+    /// <summary>Post-commit selection movement (the mac
+    /// moveAfterEditCommit twin): the grid is a linear
+    /// row*columnCount+column sequence, clamped at both ends.</summary>
+    internal void MoveCurrentCell(GridEditCommitNavigation navigation)
+    {
+        if (navigation == GridEditCommitNavigation.Stay
+            || _grid.CurrentCell.Item is not { } item
+            || !_items.Contains(item)
+            || _grid.Columns.Count == 0)
+        {
+            return;
+        }
+        int columnCount = _grid.Columns.Count;
+        int rowIndex = _items.IndexOf(item);
+        int columnIndex = Math.Max(0, CurrentColumnIndex());
+        int linear = (rowIndex * columnCount) + columnIndex
+            + (navigation == GridEditCommitNavigation.Next ? 1 : -1);
+        linear = Math.Clamp(linear, 0, (_items.Count * columnCount) - 1);
+        object targetRow = _items[linear / columnCount];
+        DataGridColumn targetColumn = _grid.Columns[linear % columnCount];
+        _grid.CurrentCell = new DataGridCellInfo(targetRow, targetColumn);
+        _grid.SelectedCells.Clear();
+        _grid.SelectedCells.Add(_grid.CurrentCell);
+        // Keyboard focus FOLLOWS the moved currency (red team round 1:
+        // EndEditCore had refocused the committed cell, so a Tab
+        // commit left the reader speaking one cell while currency —
+        // and the next edit — sat on another).
+        if (_grid.IsKeyboardFocusWithin)
+        {
+            _ = FocusCellElement(targetRow, targetColumn);
+        }
+    }
+
+    private void OnCellEditEnding(object? sender, DataGridCellEditEndingEventArgs e)
+    {
+        // EVERY native ending that is not our programmatic
+        // commit-cancel handoff ends the session as a cancel. The
+        // draft-based columns bind nothing, so a native COMMIT (click
+        // away) discards the draft exactly like Escape — and the first
+        // cut's Cancel-only guard leaked `_editing=true` +
+        // `IsReadOnly=false` forever after one click-away (red team
+        // round 1: every later F2 refused, and native sessions opened
+        // on ANY cell bypassing the edit policy).
+        if (_editing && !_committing)
+        {
+            EndEditCore();
+            _editCancel?.Invoke();
+        }
+    }
+
+    private void EndEditCore()
+    {
+        _editing = false;
+        _grid.IsReadOnly = true;
+        if (_activeEditor is { } editor)
+        {
+            editor.PreviewKeyDown -= OnEditorKeyDown;
+            _activeEditor = null;
+        }
+        // Focus returns to the CELL, not the grid (the reader's
+        // position is what must survive an edit — the sort-restore
+        // precedent).
+        if (_grid.CurrentCell.Item is { } item
+            && _grid.CurrentCell.Column is { } column)
+        {
+            _ = FocusCellElement(item, column);
+        }
+        EditSessionEnded?.Invoke();
     }
 
     private void OnActivationDoubleClick(object sender, MouseButtonEventArgs e)
@@ -902,20 +1239,49 @@ internal sealed class AccessibleDataGrid : UserControl
     }
 }
 
+/// <summary>The commit navigation the mac field editor promises:
+/// Return stays, Tab moves right/down, Shift+Tab left/up — the
+/// SURFACE moves selection after a successful write.</summary>
+internal enum GridEditCommitNavigation
+{
+    Stay,
+    Next,
+    Previous,
+}
+
 /// <summary>A substrate column: text cells generated from the column's
 /// accessor, carrying the mac "Header: value" cell-label contract and
 /// the optional accessibility hint as HelpText.</summary>
 internal sealed class AccessibleGridTextColumn : DataGridTextColumn
 {
     private readonly AccessibleGridColumn _column;
+    private readonly AccessibleDataGrid? _owner;
 
-    public AccessibleGridTextColumn(AccessibleGridColumn column, int columnIndex)
+    public AccessibleGridTextColumn(
+        AccessibleGridColumn column, int columnIndex, AccessibleDataGrid? owner = null)
     {
         _column = column;
         ColumnIndex = columnIndex;
+        _owner = owner;
     }
 
     public int ColumnIndex { get; }
+
+    /// <summary>W4-6 in-grid editing: the editor is a plain TextBox
+    /// seeded and wired by the owning grid — the DataGrid's own
+    /// binding pipeline is never engaged (commit is a text handoff,
+    /// not a binding write).</summary>
+    protected override FrameworkElement GenerateEditingElement(
+        DataGridCell cell, object dataItem)
+    {
+        var editor = new TextBox
+        {
+            Margin = new Thickness(4, 0, 4, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        _owner?.AttachCellEditor(editor, _column.Header);
+        return editor;
+    }
 
     /// <summary>Test seam over the protected generator.</summary>
     internal FrameworkElement TestGenerateElement(DataGridCell cell, object dataItem) =>
@@ -956,6 +1322,12 @@ internal sealed class AccessibleGridColumn
     /// Table pattern's row identity (§8.7 "headers on entry"). At most
     /// one column should carry it; the first marked one wins.</summary>
     public bool IsRowHeader { get; init; }
+
+    /// <summary>W4-6 (#738, contract C1/C6): the column sorts, but the
+    /// ORDERING lives in core, not in a host comparator. Honored only
+    /// when the grid has an <see cref="AccessibleDataGrid.ExternalSortHandler"/>;
+    /// meaningless (and ignored) alongside <see cref="Sort"/>.</summary>
+    public bool IsExternallySortable { get; init; }
 }
 
 /// <summary>A named row-level action (the mac RowAction twin): context

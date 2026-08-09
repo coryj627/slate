@@ -2,7 +2,8 @@
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     xmlns:local="clr-namespace:SlateWindows"
                     xmlns:panels="clr-namespace:SlateWindows.Panels"
-                    xmlns:reading="clr-namespace:SlateWindows.Reading">
+                    xmlns:reading="clr-namespace:SlateWindows.Reading"
+                    xmlns:bases="clr-namespace:SlateWindows.Bases">
     <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
     <local:InverseBooleanToVisibilityConverter x:Key="InverseBooleanToVisibilityConverter" />
     <local:AxisToOrientationConverter x:Key="AxisToOrientationConverter" />
@@ -429,6 +430,15 @@
                                     Model="{Binding Reading}"
                                     FontSize="{Binding EditorPreferences.FontSize}"
                                     Visibility="{Binding IsReadingVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
+            <!-- W4-6 (#738): the .base tab body — same shared cell,
+                 collapsed unless this tab IS a base, so UIA only ever
+                 sees the one live document surface. -->
+            <bases:BaseSurfaceView Grid.Row="1"
+                                   Model="{Binding Base}"
+                                   Visibility="{Binding IsBaseVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
+            <bases:DashboardSurfaceView Grid.Row="1"
+                                        Model="{Binding Dashboard}"
+                                        Visibility="{Binding IsDashboardVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
             <!-- Keep the modal interaction surface in the tab's presentation
                  source so UIA ownership is stable across providers. The
                  transparent layer intentionally makes Close/Escape the only
@@ -436,7 +446,7 @@
             <local:AutomationLandmarkGrid Grid.RowSpan="3"
                                           Panel.ZIndex="100"
                                           Background="Transparent"
-                                          Visibility="{Binding EditorInteractions.IsPopoverOpen, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                          Visibility="{Binding EditorInteractions.IsPopoverOpen, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Collapsed}"
                                           AutomationProperties.IsDialog="True"
                                           AutomationProperties.AutomationId="EditorInteractionPopover"
                                           AutomationProperties.Name="{Binding EditorInteractions.PopoverAutomationName}">

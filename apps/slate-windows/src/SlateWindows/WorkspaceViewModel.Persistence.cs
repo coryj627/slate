@@ -67,7 +67,7 @@ internal sealed partial class WorkspaceViewModel
                     graphRestored = true;
                 }
 
-                group.Tabs.Add(new WorkspaceTabViewModel(
+                var restoredTab = new WorkspaceTabViewModel(
                     _session,
                     tabState,
                     MirrorSamePathDocumentState,
@@ -78,7 +78,9 @@ internal sealed partial class WorkspaceViewModel
                     startInteractionBackgroundWork: _startInteractionBackgroundWork)
                 {
                     TaskRepairs = _taskIndexRepairs,
-                });
+                };
+                AttachBaseDocumentIfNeeded(restoredTab);
+                group.Tabs.Add(restoredTab);
             }
 
             WorkspaceTabViewModel? active = group.Tabs.FirstOrDefault(tab => tab.Id == groupState.ActiveTab)

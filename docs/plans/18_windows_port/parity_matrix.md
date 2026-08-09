@@ -1,6 +1,6 @@
 # Milestone W parity matrix (§W-F row-level checklist)
 
-Generated 2026-08-06 at `ca9b9e2` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
+Generated 2026-08-08 at `9ad5dea` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
 
 ## Entry-criteria snapshot (w0_spec §W0-4 item 3)
 
@@ -30,31 +30,31 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 
 | command id | capability (mac label) | mac chord | spoken hotkey | consuming W issue | status |
 |---|---|---|---|---|---|
-| `slate.bases.builder.addCondition` | Bases: Add Condition | — | — | #738 (W4-6) | pending |
-| `slate.bases.builder.addGroup` | Bases: Add Group | — | — | #738 (W4-6) | pending |
-| `slate.bases.builder.editCondition` | Bases: Edit Condition | — | — | #738 (W4-6) | pending |
-| `slate.bases.builder.removeCondition` | Bases: Remove Condition | — | — | #738 (W4-6) | pending |
-| `slate.bases.copyLink` | Bases: Copy Link | — | — | #738 (W4-6) | pending |
-| `slate.bases.copyMarkdown` | Bases: Copy View as Markdown | — | — | #738 (W4-6) | pending |
-| `slate.bases.editProperty` | Bases: Edit Property | — | — | #738 (W4-6) | pending |
-| `slate.bases.editViewFilters` | Bases: Edit View Filters | — | — | #738 (W4-6) | pending |
-| `slate.bases.exportCsv` | Bases: Export View as CSV | — | — | #738 (W4-6) | pending |
-| `slate.bases.exportMarkdown` | Bases: Export View as Markdown Table | — | — | #738 (W4-6) | pending |
-| `slate.bases.newQuery` | Bases: New Query | — | — | #738 (W4-6) | pending |
-| `slate.bases.nextView` | Bases: Next View | — | — | #738 (W4-6) | pending |
-| `slate.bases.openRow` | Bases: Open Row | — | — | #738 (W4-6) | pending |
-| `slate.bases.openViewSwitcher` | Bases: Open View Switcher | — | — | #738 (W4-6) | pending |
-| `slate.bases.previousView` | Bases: Previous View | — | — | #738 (W4-6) | pending |
-| `slate.bases.quickFilter` | Bases: Quick Filter | — | — | #738 (W4-6) | pending |
-| `slate.bases.refresh` | Bases: Refresh | — | — | #738 (W4-6) | pending |
-| `slate.bases.resultsPopover` | Bases: Results | — | — | #738 (W4-6) | pending |
-| `slate.bases.saveSortToView` | Bases: Save Sort to View | — | — | #738 (W4-6) | pending |
-| `slate.bases.savedQuery.run.<dynamic>` | — | — | — | #738 (W4-6) | pending |
-| `slate.bases.showBacklinks` | Bases: Show Backlinks | — | — | #738 (W4-6) | pending |
-| `slate.bases.sortByColumn` | Bases: Sort by Column | — | — | #738 (W4-6) | pending |
-| `slate.bases.viewAsList` | Bases: View as List | — | — | #738 (W4-6) | pending |
-| `slate.bases.viewAsTable` | Bases: View as Table | — | — | #738 (W4-6) | pending |
-| `slate.bases.whereAmI` | Bases: Where Am I? | — | — | #738 (W4-6) | pending |
+| `slate.bases.builder.addCondition` | Bases: Add Condition | — | — | #738 (W4-6) | implemented; local gates green 2026-08-08; interactive CI + human AT pending |
+| `slate.bases.builder.addGroup` | Bases: Add Group | — | — | #738 (W4-6) | implemented; local gates green 2026-08-08; interactive CI + human AT pending |
+| `slate.bases.builder.editCondition` | Bases: Edit Condition | — | — | #738 (W4-6) | implemented; local gates green 2026-08-08; interactive CI + human AT pending |
+| `slate.bases.builder.removeCondition` | Bases: Remove Condition | — | — | #738 (W4-6) | implemented; local gates green 2026-08-08; interactive CI + human AT pending |
+| `slate.bases.copyLink` | Bases: Copy Link | — | — | #738 (W4-6) | implemented; local gates green 2026-08-08; interactive CI + human AT pending |
+| `slate.bases.copyMarkdown` | Bases: Copy View as Markdown | — | — | #738 (W4-6) | implemented; local gates green 2026-08-08; interactive CI + human AT pending |
+| `slate.bases.editProperty` | Bases: Edit Property | — | — | #738 (W4-6) | implemented; local gates green 2026-08-08; interactive CI + human AT pending |
+| `slate.bases.editViewFilters` | Bases: Edit View Filters | — | — | #738 (W4-6) | implemented; local gates green 2026-08-08; interactive CI + human AT pending |
+| `slate.bases.exportCsv` | Bases: Export View as CSV | — | — | #738 (W4-6) | implemented; local gates green 2026-08-08; interactive CI + human AT pending |
+| `slate.bases.exportMarkdown` | Bases: Export View as Markdown Table | — | — | #738 (W4-6) | implemented; local gates green 2026-08-08; interactive CI + human AT pending |
+| `slate.bases.newQuery` | Bases: New Query | — | — | #738 (W4-6) | implemented; local gates green 2026-08-08; interactive CI + human AT pending |
+| `slate.bases.nextView` | Bases: Next View | — | — | #738 (W4-6) | implemented; local gates green 2026-08-08; interactive CI + human AT pending |
+| `slate.bases.openRow` | Bases: Open Row | — | — | #738 (W4-6) | implemented; local gates green 2026-08-08; interactive CI + human AT pending |
+| `slate.bases.openViewSwitcher` | Bases: Open View Switcher | — | — | #738 (W4-6) | implemented; local gates green 2026-08-08; interactive CI + human AT pending |
+| `slate.bases.previousView` | Bases: Previous View | — | — | #738 (W4-6) | implemented; local gates green 2026-08-08; interactive CI + human AT pending |
+| `slate.bases.quickFilter` | Bases: Quick Filter | — | — | #738 (W4-6) | implemented; local gates green 2026-08-08; interactive CI + human AT pending |
+| `slate.bases.refresh` | Bases: Refresh | — | — | #738 (W4-6) | implemented; local gates green 2026-08-08; interactive CI + human AT pending |
+| `slate.bases.resultsPopover` | Bases: Results | — | — | #738 (W4-6) | implemented; local gates green 2026-08-08; interactive CI + human AT pending |
+| `slate.bases.saveSortToView` | Bases: Save Sort to View | — | — | #738 (W4-6) | implemented; local gates green 2026-08-08; interactive CI + human AT pending |
+| `slate.bases.savedQuery.run.<dynamic>` | — | — | — | #738 (W4-6) | implemented; local gates green 2026-08-08; interactive CI + human AT pending |
+| `slate.bases.showBacklinks` | Bases: Show Backlinks | — | — | #738 (W4-6) | implemented; local gates green 2026-08-08; interactive CI + human AT pending |
+| `slate.bases.sortByColumn` | Bases: Sort by Column | — | — | #738 (W4-6) | implemented; local gates green 2026-08-08; interactive CI + human AT pending |
+| `slate.bases.viewAsList` | Bases: View as List | — | — | #738 (W4-6) | implemented; local gates green 2026-08-08; interactive CI + human AT pending |
+| `slate.bases.viewAsTable` | Bases: View as Table | — | — | #738 (W4-6) | implemented; local gates green 2026-08-08; interactive CI + human AT pending |
+| `slate.bases.whereAmI` | Bases: Where Am I? | — | — | #738 (W4-6) | implemented; local gates green 2026-08-08; interactive CI + human AT pending |
 | `slate.canvas.actualSize` | Canvas: Actual Size | ⌘0 | Command 0 | #745 (W6-1) | pending |
 | `slate.canvas.addLink` | Canvas: Add Link Card… | — | — | #745 (W6-1) | pending |
 | `slate.canvas.addMedia` | Canvas: Add Media… | — | — | #745 (W6-1) | pending |
@@ -232,8 +232,8 @@ The palette surface itself (ranking via the W0.5-1 core engine, sections, recent
 | `history` | #739 (W4-7) | pending |
 | `citations` | #737 (W4-5) | implemented 2026-08-04 (#737): `CitationsPanelViewModel` + MainWindow leaf body + details/summary sheets; `CitationsPanelTests` + FlaUI `CitationSurfaces_GridsSheetsAndChords_AreClean` |
 | `bibliography` | #737 (W4-5) | implemented 2026-08-04 (#737): `BibliographyViewModel` + MainWindow leaf body, BOTH segments on `AccessibleDataGrid`; `BibliographyPanelTests` + FlaUI `CitationSurfaces_GridsSheetsAndChords_AreClean` |
-| `queries` | #738 (W4-6) | pending |
-| `basesDock` | #738 (W4-6) | pending |
+| `queries` | #738 (W4-6) | implemented 2026-08-08 (#738): workspace BaseQueriesState + MainWindow leaf body (saved queries / base files / dashboards, pin + rename + delete + export + dock); `BasesQueriesTests` + FlaUI `BasesSurfaces_GridBuilderAndLeaves_AreClean` |
+| `basesDock` | #738 (W4-6) | implemented 2026-08-08 (#738): workspace dock target following the active note (this_path, 500 ms debounce) over read-only `BaseSurfaceView`/`DashboardSurfaceView`; `BasesQueriesTests` + FlaUI `BasesSurfaces_GridBuilderAndLeaves_AreClean` (docks a base from the leaf and axe-scans the revealed BasesDockGrid) |
 | `syncDiagnostics` | #740 (W4-8) | pending |
 
 ## Workspace persisted tab-content kinds (`enum EditorItem`)
@@ -264,10 +264,10 @@ What `WorkspaceStore` round-trips — a **separate** inventory from the right-pa
 | Math rendering + canonical speech/braille artifact | core `math.rs` consumers | #729 (W3-2) | implemented (PR #1057, merged 2026-07-28; human AT pending) |
 | Diagrams (canonical Rust SVG + description) | core `diagram.rs` consumers | #730 (W3-3) | implemented (PR #1058, merged 2026-07-29; human AT pending) |
 | Code blocks (canonical tokens + AT preamble) | `CodeBlockView.swift` | #731 (W3-4) | implemented (PR #1054, merged 2026-07-27; human AT pending) |
-| Embeds across contexts | editor/reading embeds | #732 (W3-5; XD rows dropped) | implemented (PR #1059, merged 2026-07-30; human AT pending; `.base` row transfers to W4-6) |
+| Embeds across contexts | editor/reading embeds | #732 (W3-5; XD rows dropped) | implemented (PR #1059, merged 2026-07-30; human AT pending; `.base` row closed by W4-6's layered embed card, D-15) |
 | Accessible grid substrate | `AccessibleDataGrid.swift` | #733 (W4-1) | pending |
 | Properties (in-note header, panel, typed rows, add-property) | `Properties*` views | #736 (W4-4) | pending |
-| Bases grid + builder (N shipped) | `Bases/` | #738 (W4-6) | pending |
+| Bases grid + builder (N shipped) | `Bases/` | #738 (W4-6) | implemented; local gates green 2026-08-08; interactive CI + human AT pending |
 | Command palette | `CommandPaletteModel.swift` (core ranking, W0.5-1) | #741 (W5-1) | pending |
 | Search overlay | search UI over `full_text_search` | #742 (W5-2) | pending |
 | Templates picker + prompt flow | template views | #743 (W5-3) | pending |

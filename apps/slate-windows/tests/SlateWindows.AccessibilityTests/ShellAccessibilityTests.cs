@@ -2999,6 +2999,469 @@ public sealed class ShellAccessibilityTests
         }
     }
 
+    /// <summary>
+    /// W4-6 (#738) §W-C journey, per-surface: the .base tab (grid
+    /// identity, §8.7 headers, quick filter via the grid-scoped
+    /// Ctrl+F with Escape clearing, and a REAL F2 cell edit committed
+    /// through the coordinator into the file), the Queries leaf, the
+    /// DOCK leaf (dock a base file from the leaf, distinct
+    /// BasesDockGrid id), the builder overlay (dialog focus-on-open,
+    /// save-as-saved-query, Escape close), the saved-query TAB, the
+    /// dashboard EDITOR overlay (focus-on-open, section authoring),
+    /// and the dashboard TAB — each surface axe-scanned. Every
+    /// element asserted here is one the contracts name; the
+    /// degraded-vault twin lives with the unit facts (banner
+    /// wording), because a broken .base still opens a healthy shell.
+    /// </summary>
+    [Fact]
+    [Trait("gate", "W-C")]
+    public void BasesSurfaces_GridBuilderAndLeaves_AreClean()
+    {
+        string testRoot = Path.Combine(
+            Path.GetTempPath(), $"slate-bases-surfaces-{Guid.NewGuid():N}");
+        string vaultRoot = Path.Combine(testRoot, "Bases Vault");
+        string logDirectory = Path.Combine(testRoot, "logs");
+        Directory.CreateDirectory(vaultRoot);
+        File.WriteAllText(
+            Path.Combine(vaultRoot, "alpha.md"),
+            "---\nstatus: todo\n---\n\n# Alpha\n\nBody.\n");
+        File.WriteAllText(
+            Path.Combine(vaultRoot, "beta.md"),
+            "---\nstatus: done\n---\n\n# Beta\n\nBody.\n");
+        File.WriteAllText(
+            Path.Combine(vaultRoot, "Notes.base"),
+            "filters: 'file.ext == \"md\"'\n" +
+            "views:\n" +
+            "  - type: table\n" +
+            "    name: Main\n" +
+            "    order:\n" +
+            "      - file.name\n" +
+            "      - note.status\n");
+
+        Process? process = null;
+        try
+        {
+            var startInfo = new ProcessStartInfo(SlateWindowsExe())
+            {
+                UseShellExecute = false,
+            };
+            startInfo.ArgumentList.Add(vaultRoot);
+            startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
+                $"slate-bases-surfaces-{Guid.NewGuid():N}";
+            startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            process = Process.Start(startInfo)
+                ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+
+            if (!Environment.UserInteractive)
+            {
+                Assert.False(
+                    process.WaitForExit(3_000),
+                    "Slate exited during the Bases startup smoke.");
+                return;
+            }
+
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(
+                process,
+                automation,
+                Path.Combine(logDirectory, "slate-windows.log"),
+                TimeSpan.FromSeconds(30));
+            // Keyboard-driven journey: the launch-time foreground grab
+            // is best-effort under the Windows foreground lock (another
+            // app's recent input denies it), and every chord below
+            // requires the window to actually be foreground.
+            window.SetForeground();
+            window.Focus();
+
+            // Open the base from the files tree.
+            AutomationElement filesTree = WaitForElement(
+                window, "FilesTree", TimeSpan.FromSeconds(30));
+            AutomationElement baseItem = filesTree
+                .FindAllDescendants(
+                    automation.ConditionFactory.ByControlType(ControlType.TreeItem))
+                .FirstOrDefault(item =>
+                    item.Name.StartsWith("Notes", StringComparison.OrdinalIgnoreCase))
+                ?? throw new Xunit.Sdk.XunitException("The Notes.base TreeItem is absent.");
+            baseItem.Patterns.SelectionItem.Pattern.Select();
+
+            // The tab surface: grid identity + §8.7 headers.
+            AutomationElement grid = WaitForElement(
+                window, "BaseTabGrid", TimeSpan.FromSeconds(15));
+            Assert.True(grid.Patterns.Grid.IsSupported, "Grid pattern missing");
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => grid
+                        .FindAllDescendants(automation.ConditionFactory.ByControlType(
+                            ControlType.HeaderItem))
+                        .Select(header => header.Name)
+                        .ToHashSet(StringComparer.Ordinal)
+                        .IsSupersetOf(["file.name", "note.status"]),
+                    TimeSpan.FromSeconds(15)),
+                "the base grid's core-labelled headers never materialized");
+            AssertAxeClean(process, "bases-tab");
+
+            // Quick filter: grid-scoped Ctrl+F focuses the transient
+            // field; typing narrows the count readout.
+            AutomationElement firstCell = grid
+                .FindAllDescendants(
+                    automation.ConditionFactory.ByControlType(ControlType.Custom))
+                .FirstOrDefault(cell =>
+                    cell.Name.Contains("alpha", StringComparison.OrdinalIgnoreCase))
+                ?? throw new Xunit.Sdk.XunitException("No alpha cell in the base grid.");
+            // Foreground re-asserted at the keyboard boundary: another
+            // app can re-take foreground between launch and this point
+            // (measured locally: an unrelated always-on-top window
+            // held focus and every chord went to it). The synthetic
+            // Alt tap satisfies the Windows foreground lock — plain
+            // SetForegroundWindow is DENIED to a background process.
+            Keyboard.Press(VirtualKeyShort.ALT);
+            window.SetForeground();
+            Keyboard.Release(VirtualKeyShort.ALT);
+            window.Focus();
+            firstCell.Focus();
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_F);
+            AutomationElement quickFilter = WaitForElement(
+                window, "BaseQuickFilter", TimeSpan.FromSeconds(10));
+            bool filterFocused = SpinWait.SpinUntil(
+                () => quickFilter.Properties.HasKeyboardFocus.ValueOrDefault,
+                TimeSpan.FromSeconds(10));
+            if (!filterFocused)
+            {
+                AutomationElement? focused = automation.FocusedElement();
+                throw new Xunit.Sdk.XunitException(
+                    "Ctrl+F did not focus the quick filter; focus is on "
+                    + $"'{focused?.Properties.AutomationId.ValueOrDefault}'"
+                    + $"/'{focused?.Properties.Name.ValueOrDefault}'"
+                    + $" ({focused?.Properties.ControlType.ValueOrDefault})"
+                    + $" in '{focused?.Properties.ProcessId.ValueOrDefault}'"
+                    + $" vs app {process.Id}");
+            }
+            Keyboard.Type("alpha");
+            AutomationElement countReadout = WaitForElement(
+                window, "BaseCountReadout", TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => countReadout.Name.Contains(
+                        "1 of", StringComparison.Ordinal),
+                    TimeSpan.FromSeconds(10)),
+                $"the filtered count never arrived; readout: {countReadout.Name}");
+            // Escape clears and returns focus to the content.
+            Keyboard.Press(VirtualKeyShort.ESCAPE);
+            Keyboard.Release(VirtualKeyShort.ESCAPE);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => !countReadout.Name.Contains(
+                        "1 of", StringComparison.Ordinal),
+                    TimeSpan.FromSeconds(10)),
+                "Escape did not clear the transient filter");
+
+            // The EDIT seam under real UIA (contract C7/C8): F2 on the
+            // editable status cell opens the seeded editor; Enter
+            // commits through the coordinator and the write lands in
+            // the FILE.
+            // CONTAINS, not equality (the alpha-cell finder's rule):
+            // cell names are decorated beyond the raw value. "todo"
+            // appears only in alpha's status cell in this fixture.
+            AutomationElement statusCell = grid
+                .FindAllDescendants(
+                    automation.ConditionFactory.ByControlType(ControlType.Custom))
+                .FirstOrDefault(cell =>
+                    cell.Name.Contains("todo", StringComparison.OrdinalIgnoreCase))
+                ?? throw new Xunit.Sdk.XunitException(
+                    "No editable status cell in the base grid.");
+            statusCell.Focus();
+            Keyboard.Press(VirtualKeyShort.F2);
+            Keyboard.Release(VirtualKeyShort.F2);
+            AutomationElement? cellEditor = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        cellEditor = window.FindFirstDescendant(
+                            automation.ConditionFactory.ByName("note.status edit"));
+                        return cellEditor is not null;
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "F2 did not open the cell editor");
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => cellEditor!.Properties.HasKeyboardFocus.ValueOrDefault,
+                    TimeSpan.FromSeconds(10)),
+                "the cell editor did not take focus");
+            Keyboard.Type("todo-edited");
+            Keyboard.Press(VirtualKeyShort.RETURN);
+            Keyboard.Release(VirtualKeyShort.RETURN);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => File.ReadAllText(Path.Combine(vaultRoot, "alpha.md"))
+                        .Contains("status: todo-edited", StringComparison.Ordinal),
+                    TimeSpan.FromSeconds(15)),
+                "the committed cell edit never reached the file");
+
+            // The Queries leaf renders and scans clean.
+            AutomationElement leaves = WaitForElement(
+                window, "RightPaneLeaves", TimeSpan.FromSeconds(10));
+            AutomationElement? queriesLeaf = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        queriesLeaf = leaves
+                            .FindAllDescendants(automation.ConditionFactory
+                                .ByControlType(ControlType.ListItem))
+                            .FirstOrDefault(item => string.Equals(
+                                item.Name, "Queries", StringComparison.Ordinal));
+                        return queriesLeaf is not null;
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the Queries leaf option never appeared");
+            queriesLeaf!.Patterns.SelectionItem.Pattern.Select();
+            // The leaf BODY is a WPF Panel — no automation peer, no id
+            // in the tree (the W4-5 lesson); presence is asserted via
+            // its peered children.
+            _ = WaitForElement(window, "QueriesRefresh", TimeSpan.FromSeconds(10));
+            AssertAxeClean(process, "bases-queries-leaf");
+
+            // Dock a base file from the leaf: the dock leaf reveals
+            // with its OWN read-only surface (BasesDockGrid — the
+            // D-12 distinct-id rule) and scans clean. This is the
+            // basesDock LEAF_DELIVERED evidence.
+            AutomationElement baseFilesList = WaitForElement(
+                window, "QueriesBaseFilesList", TimeSpan.FromSeconds(10));
+            AutomationElement baseFileItem = baseFilesList
+                .FindAllDescendants(
+                    automation.ConditionFactory.ByControlType(ControlType.ListItem))
+                .FirstOrDefault()
+                ?? throw new Xunit.Sdk.XunitException(
+                    "No base files in the queries leaf.");
+            baseFileItem.Patterns.SelectionItem.Pattern.Select();
+            AutomationElement dockButton = WaitForElement(
+                window, "QueriesDockBaseFile", TimeSpan.FromSeconds(10));
+            dockButton.Patterns.Invoke.Pattern.Invoke();
+            _ = WaitForElement(window, "BasesDockGrid", TimeSpan.FromSeconds(15));
+            AssertAxeClean(process, "bases-dock-leaf");
+
+            // The builder overlay opens as a DIALOG with focus moved
+            // inside, scans clean, and Escape closes it (the W4-5
+            // overlay lifecycle).
+            AutomationElement newQuery = WaitForMenuItem(
+                window, "BaseMenu", "BasesNewQueryMenuItem",
+                TimeSpan.FromSeconds(10));
+            newQuery.Patterns.Invoke.Pattern.Invoke();
+            AutomationElement builderSheet = WaitForElement(
+                window, "BaseQueryBuilderSheet", TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => builderSheet
+                        .FindAllDescendants()
+                        .Any(descendant =>
+                            descendant.Properties.HasKeyboardFocus.ValueOrDefault),
+                    TimeSpan.FromSeconds(10)),
+                "the builder overlay opened without moving focus into the dialog");
+            AssertAxeClean(process, "bases-builder-overlay");
+
+            // Save the query from the overlay — the saved-query TAB
+            // surface and the dashboard surfaces ride on it below.
+            // The name is SET via the Value pattern and verified: an
+            // unasserted focus + keyboard race left the box empty on
+            // CI, the save refused (name needed), and the collapsed
+            // empty list downstream read as a missing element. The
+            // keyboard PATH itself is already proven by the F2 and
+            // quick-filter legs.
+            AutomationElement saveNameBox = WaitForElement(
+                window, "BuilderSaveNameBox", TimeSpan.FromSeconds(10));
+            saveNameBox.Patterns.Value.Pattern.SetValue("Journey query");
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => string.Equals(
+                        saveNameBox.Patterns.Value.Pattern.Value.ValueOrDefault,
+                        "Journey query",
+                        StringComparison.Ordinal),
+                    TimeSpan.FromSeconds(5)),
+                "the saved-query name never landed in the box");
+            AutomationElement saveAsQuery = WaitForElement(
+                window, "BuilderSaveAsSavedQuery", TimeSpan.FromSeconds(10));
+            saveAsQuery.Patterns.Invoke.Pattern.Invoke();
+            // A visible SaveError means the builder REFUSED — surface
+            // the reason now, before Escape destroys the element.
+            AutomationElement? builderError = null;
+            _ = SpinWait.SpinUntil(
+                () => (builderError = window.FindFirstDescendant(
+                    automation.ConditionFactory.ByAutomationId("BuilderSaveError")))
+                    is not null,
+                TimeSpan.FromSeconds(2));
+            if (builderError is not null)
+            {
+                throw new Xunit.Sdk.XunitException(
+                    $"the builder refused the save: '{builderError.Name}'");
+            }
+
+            Keyboard.Press(VirtualKeyShort.ESCAPE);
+            Keyboard.Release(VirtualKeyShort.ESCAPE);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => window.FindFirstDescendant(
+                        automation.ConditionFactory.ByAutomationId(
+                            "BuilderCombinator")) is null,
+                    TimeSpan.FromSeconds(10)),
+                "Escape did not close the builder overlay");
+
+            // Run the saved query from the leaf: the saved-query TAB
+            // carries the full Bases surface (contract C12) and scans
+            // clean. The list collapses when EMPTY, so its absence is
+            // ambiguous — the failure message distinguishes "leaf
+            // never revealed" from "save never landed".
+            queriesLeaf!.Patterns.SelectionItem.Pattern.Select();
+            AutomationElement? savedList = null;
+            if (!SpinWait.SpinUntil(
+                () =>
+                {
+                    savedList = window.FindFirstDescendant(
+                        automation.ConditionFactory.ByAutomationId(
+                            "QueriesSavedList"));
+                    return savedList is not null;
+                },
+                TimeSpan.FromSeconds(10)))
+            {
+                bool leafRevealed = window.FindFirstDescendant(
+                    automation.ConditionFactory.ByAutomationId("QueriesRefresh"))
+                    is not null;
+                bool emptyState = window.FindFirstDescendant(
+                    automation.ConditionFactory.ByName("No saved queries"))
+                    is not null;
+                bool overlayStillOpen = window.FindFirstDescendant(
+                    automation.ConditionFactory.ByAutomationId(
+                        "BuilderSaveAsSavedQuery")) is not null;
+                string appLog = ReadSharedLog(
+                    Path.Combine(logDirectory, "slate-windows.log"));
+                string logTail = appLog.Length > 800 ? appLog[^800..] : appLog;
+                throw new Xunit.Sdk.XunitException(
+                    "QueriesSavedList did not become available; "
+                    + $"leafRevealed={leafRevealed}, emptyState={emptyState}, "
+                    + $"builderStillOpen={overlayStillOpen}; app log tail: {logTail}");
+            }
+            AutomationElement? savedItem = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        savedItem = savedList!
+                            .FindAllDescendants(automation.ConditionFactory
+                                .ByControlType(ControlType.ListItem))
+                            .FirstOrDefault(item => item.Name.Contains(
+                                "Journey query", StringComparison.Ordinal));
+                        return savedItem is not null;
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the saved query never appeared in the queries leaf");
+            savedItem!.Patterns.SelectionItem.Pattern.Select();
+            AutomationElement runButton = WaitForElement(
+                window, "QueriesRun", TimeSpan.FromSeconds(10));
+            runButton.Patterns.Invoke.Pattern.Invoke();
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => window.FindFirstDescendant(
+                        automation.ConditionFactory.ByName("Base Journey query"))
+                        is not null,
+                    TimeSpan.FromSeconds(15)),
+                "the saved-query tab surface never appeared");
+            AssertAxeClean(process, "bases-saved-query-tab");
+
+            // The dashboard editor overlay and the dashboard TAB
+            // (contract C12): create one section over the saved query,
+            // save, open, and scan both surfaces.
+            queriesLeaf!.Patterns.SelectionItem.Pattern.Select();
+            AutomationElement newDashboard = WaitForElement(
+                window, "QueriesNewDashboard", TimeSpan.FromSeconds(10));
+            newDashboard.Patterns.Invoke.Pattern.Invoke();
+            AutomationElement editorName = WaitForElement(
+                window, "DashboardEditorName", TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => editorName.Properties.HasKeyboardFocus.ValueOrDefault,
+                    TimeSpan.FromSeconds(10)),
+                "the dashboard editor opened without focusing the name field");
+            // Value pattern for the same determinism as the builder's
+            // save-name entry (the focus assert above still proves the
+            // dialog's focus-on-open contract).
+            editorName.Patterns.Value.Pattern.SetValue("Journey board");
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => string.Equals(
+                        editorName.Patterns.Value.Pattern.Value.ValueOrDefault,
+                        "Journey board",
+                        StringComparison.Ordinal),
+                    TimeSpan.FromSeconds(5)),
+                "the dashboard name never landed in the box");
+            AutomationElement queryPicker = WaitForElement(
+                window, "DashboardEditorQueryPicker", TimeSpan.FromSeconds(10));
+            queryPicker.Patterns.ExpandCollapse.Pattern.Expand();
+            AutomationElement? pickerItem = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        pickerItem = queryPicker
+                            .FindAllDescendants(automation.ConditionFactory
+                                .ByControlType(ControlType.ListItem))
+                            .FirstOrDefault(item => item.Name.Contains(
+                                "Journey query", StringComparison.Ordinal));
+                        return pickerItem is not null;
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the saved query never appeared in the section picker");
+            pickerItem!.Patterns.SelectionItem.Pattern.Select();
+            WaitForElement(window, "DashboardEditorAddSection", TimeSpan.FromSeconds(10))
+                .Patterns.Invoke.Pattern.Invoke();
+            AssertAxeClean(process, "bases-dashboard-editor");
+            WaitForElement(window, "DashboardEditorSave", TimeSpan.FromSeconds(10))
+                .Patterns.Invoke.Pattern.Invoke();
+            AutomationElement? dashboardItem = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        dashboardItem = window
+                            .FindFirstDescendant(automation.ConditionFactory
+                                .ByAutomationId("QueriesDashboardsList"))
+                            ?.FindAllDescendants(automation.ConditionFactory
+                                .ByControlType(ControlType.ListItem))
+                            .FirstOrDefault(item => item.Name.Contains(
+                                "Journey board", StringComparison.Ordinal));
+                        return dashboardItem is not null;
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the dashboard never appeared in the queries leaf");
+            dashboardItem!.Patterns.SelectionItem.Pattern.Select();
+            WaitForElement(window, "QueriesOpenDashboard", TimeSpan.FromSeconds(10))
+                .Patterns.Invoke.Pattern.Invoke();
+            _ = WaitForElement(window, "DashboardSurface", TimeSpan.FromSeconds(15));
+            _ = WaitForElement(window, "DashboardSection0Grid", TimeSpan.FromSeconds(15));
+            AssertAxeClean(process, "bases-dashboard-tab");
+        }
+        finally
+        {
+            if (process is not null && !process.HasExited)
+            {
+                process.CloseMainWindow();
+                if (!process.WaitForExit(5_000))
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            try
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
     private static Window WaitForMainWindow(
         Process process,
         UIA3Automation automation,
