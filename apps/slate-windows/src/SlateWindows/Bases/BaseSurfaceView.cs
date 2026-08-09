@@ -813,14 +813,45 @@ internal sealed class BaseSurfaceView : UserControl
         {
             return;
         }
-        BasesColumn column = result.Columns[columnIndex];
-        BasesRow basesRow = ((BaseGridRowViewModel)row).Row;
+        BasesColumn capturedColumn = result.Columns[columnIndex];
+        BasesRow capturedRow = ((BaseGridRowViewModel)row).Row;
+        // EVERY commit path — delete, refusal re-arm, and the write —
+        // resolves identity against the CURRENT result first (codex
+        // rounds 2-3: the deferred rebind can replace the result while
+        // the editor is open, and a write through the captured column
+        // could set or delete a property whose column vanished,
+        // changed kind, or went read-only). Fail closed with the
+        // canceled sentence: the draft cannot be honored safely.
+        BasesResultSet? current = model.Result;
+        int freshColumnIndex = current is null
+            ? -1
+            : Array.FindIndex(
+                current.Columns,
+                candidate => string.Equals(
+                    candidate.Id, capturedColumn.Id, StringComparison.Ordinal));
+        BasesRow? freshRow = current?.Rows.FirstOrDefault(candidate =>
+            string.Equals(
+                candidate.FilePath, capturedRow.FilePath, StringComparison.Ordinal)
+            && candidate.TaskOrdinal == capturedRow.TaskOrdinal);
+        if (current is null || freshColumnIndex < 0 || freshRow is null)
+        {
+            model.AnnounceForSurface(new A11yEvent.BasesCellEditCanceled());
+            return;
+        }
+        BasesColumn column = current.Columns[freshColumnIndex];
+        if (BaseCellEditPolicy.PropertyKey(column) is null)
+        {
+            model.AnnounceForSurface(BaseCellEditPolicy.ReadOnlyEvent(column));
+            return;
+        }
         if (text.Trim().Length == 0)
         {
-            model.ApplyPropertyEdit?.Invoke(basesRow, column, null);
+            model.ApplyPropertyEdit?.Invoke(freshRow, column, null);
             _grid.MoveCurrentCell(navigation);
             return;
         }
+        // Validation uses the FRESH ValueKind — the kind the write
+        // will actually be parsed against.
         PropertyValue? value = BaseCellEditPolicy.PropertyValueFor(
             text, column.ValueKind, out A11yEvent? refusal);
         if (value is null)
@@ -829,39 +860,24 @@ internal sealed class BaseSurfaceView : UserControl
             {
                 model.AnnounceForSurface(refusal);
             }
-            // Re-arm by IDENTITY when the commit's session-end flushed
-            // a deferred rebind (codex rounds 1-2): the old row object
-            // is no longer bound, and the old NUMERIC column index may
-            // now name a different property — both the row (FilePath,
-            // TaskOrdinal) and the COLUMN ID resolve against the fresh
-            // result, failing closed if the column vanished or lost
-            // editability (the refusal was already announced; a wrong-
-            // property re-arm would be worse than the lost draft).
-            if (!_grid.BeginEditAt(row, columnIndex, draftOverride: text)
-                && model.Result is { } freshResult)
+            // Re-arm on the FRESH identity: the old row object may no
+            // longer be bound after the deferred rebind, and the old
+            // numeric index may name a different property.
+            if (!_grid.BeginEditAt(row, freshColumnIndex, draftOverride: text)
+                && _grid.FindItem(candidate =>
+                    candidate is BaseGridRowViewModel fresh
+                    && string.Equals(
+                        fresh.Row.FilePath,
+                        capturedRow.FilePath,
+                        StringComparison.Ordinal)
+                    && fresh.Row.TaskOrdinal == capturedRow.TaskOrdinal)
+                    is { } rebound)
             {
-                int freshColumn = Array.FindIndex(
-                    freshResult.Columns,
-                    candidate => string.Equals(
-                        candidate.Id, column.Id, StringComparison.Ordinal));
-                if (freshColumn >= 0
-                    && BaseCellEditPolicy.PropertyKey(
-                        freshResult.Columns[freshColumn]) is not null
-                    && _grid.FindItem(candidate =>
-                        candidate is BaseGridRowViewModel fresh
-                        && string.Equals(
-                            fresh.Row.FilePath,
-                            basesRow.FilePath,
-                            StringComparison.Ordinal)
-                        && fresh.Row.TaskOrdinal == basesRow.TaskOrdinal)
-                        is { } rebound)
-                {
-                    _ = _grid.BeginEditAt(rebound, freshColumn, draftOverride: text);
-                }
+                _ = _grid.BeginEditAt(rebound, freshColumnIndex, draftOverride: text);
             }
             return;
         }
-        model.ApplyPropertyEdit?.Invoke(basesRow, column, value);
+        model.ApplyPropertyEdit?.Invoke(freshRow, column, value);
         _grid.MoveCurrentCell(navigation);
     }
 

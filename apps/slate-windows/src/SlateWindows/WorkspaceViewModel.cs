@@ -1332,7 +1332,9 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         }
         foreach (string key in _baseDocuments.Keys.Where(k => !live.Contains(k)).ToList())
         {
-            _baseDocuments[key].Shutdown();
+            Bases.BaseDocumentViewModel retired = _baseDocuments[key];
+            retired.Shutdown();
+            TrackRetiredBasesWork(retired.WhenHandleClosed());
             _baseDocuments.Remove(key);
         }
     }
@@ -1808,6 +1810,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             Bases.BaseDocumentViewModel oldDocument = _baseDocuments[oldKey];
             _baseDocuments.Remove(oldKey);
             oldDocument.Shutdown();
+            TrackRetiredBasesWork(oldDocument.WhenHandleClosed());
             _ = TryRetargetPath(
                 oldKey["file:".Length..], source, destination, out string newPath);
             foreach (WorkspaceTabViewModel tab in Groups
@@ -1929,6 +1932,10 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             openBuilder.Shutdown();
             basesDrains.Add(openBuilder.WhenWorkDrained());
         }
+        // RETIRED-earlier schedulers too (a replaced builder, a
+        // released dashboard, a swept document) — their in-flight
+        // bodies hold ephemeral handles just the same (codex round 3).
+        basesDrains.AddRange(RetiredBasesDrains);
         if (basesDrains.Count > 0)
         {
             try

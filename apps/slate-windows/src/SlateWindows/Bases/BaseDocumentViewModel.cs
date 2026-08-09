@@ -1049,7 +1049,18 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                         // The rollback itself failed: detach (C6) —
                         // close the handle so no later execute renders
                         // rows contradicting the published sort.
-                        CloseHandleLocked();
+                        try
+                        {
+                            CloseHandleLocked();
+                        }
+                        catch (Exception closeFailure) when (closeFailure
+                            is VaultException or ObjectDisposedException)
+                        {
+                            // The handle field is already nulled — a
+                            // throwing CloseBase must not skip the
+                            // Failed publication below (codex round
+                            // 3) nor fault the tracked task.
+                        }
                         Post(() =>
                             // NOT generation-gated (red team round 2):
                             // the handle is CLOSED — a superseding
@@ -1138,9 +1149,17 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         }
         if (synchronousClose)
         {
-            lock (_ffiLock)
+            try
             {
-                CloseHandleLocked();
+                lock (_ffiLock)
+                {
+                    CloseHandleLocked();
+                }
+            }
+            catch (Exception exception) when (exception
+                is VaultException or ObjectDisposedException)
+            {
+                // Teardown race: the session died first.
             }
             return;
         }
@@ -1149,7 +1168,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         // it must not run on the dispatcher (INV-6; red team round 1).
         // No new handle can appear behind it: every open is inside a
         // generation check that the bump above already invalidated.
-        _ = Task.Run(() =>
+        _asyncClose = Task.Run(() =>
         {
             try
             {
@@ -1166,6 +1185,13 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
             }
         });
     }
+
+    private Task? _asyncClose;
+
+    /// <summary>The non-blocking shutdown's close task — workspace
+    /// teardown awaits every retired document's close before the
+    /// session disposes (INV-2; codex round 3).</summary>
+    internal Task WhenHandleClosed() => _asyncClose ?? Task.CompletedTask;
 
     private void CloseHandleLocked()
     {

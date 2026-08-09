@@ -69,10 +69,33 @@ internal sealed partial class WorkspaceViewModel
         get => _queryBuilder;
         private set
         {
-            _queryBuilder?.Shutdown();
+            if (_queryBuilder is { } retired)
+            {
+                retired.Shutdown();
+                TrackRetiredBasesWork(retired.WhenWorkDrained());
+            }
             SetField(ref _queryBuilder, value);
         }
     }
+
+    /// <summary>Drains of RETIRED Bases schedulers — a replaced
+    /// builder, a released dashboard, a cleared dock, a swept
+    /// document — awaited (bounded) at workspace Dispose so no
+    /// in-flight ephemeral handle outlives the session (INV-2; codex
+    /// round 3: only the still-referenced instances were drained).
+    /// Completed entries prune on every add.</summary>
+    private readonly List<Task> _retiredBasesDrains = [];
+
+    private void TrackRetiredBasesWork(Task drain)
+    {
+        _ = _retiredBasesDrains.RemoveAll(task => task.IsCompleted);
+        if (!drain.IsCompleted)
+        {
+            _retiredBasesDrains.Add(drain);
+        }
+    }
+
+    internal IReadOnlyList<Task> RetiredBasesDrains => _retiredBasesDrains;
 
     public System.Windows.Input.ICommand BasesNewQueryCommand =>
         _basesNewQueryCommand ??= new RelayCommand(
@@ -627,7 +650,9 @@ internal sealed partial class WorkspaceViewModel
         }
         foreach (string id in _dashboardDocuments.Keys.Where(k => !live.Contains(k)).ToList())
         {
-            _dashboardDocuments[id].Shutdown();
+            DashboardViewModel retired = _dashboardDocuments[id];
+            retired.Shutdown();
+            TrackRetiredBasesWork(retired.WhenWorkDrained());
             _dashboardDocuments.Remove(id);
         }
     }
@@ -890,10 +915,18 @@ internal sealed partial class WorkspaceViewModel
     private void ClearBasesDockDocuments()
     {
         _dockFollowTimer?.Stop();
-        BasesDockDocument?.Shutdown();
-        BasesDockDocument = null;
-        BasesDockDashboard?.Shutdown();
-        BasesDockDashboard = null;
+        if (BasesDockDocument is { } retiredDocument)
+        {
+            retiredDocument.Shutdown();
+            TrackRetiredBasesWork(retiredDocument.WhenHandleClosed());
+            BasesDockDocument = null;
+        }
+        if (BasesDockDashboard is { } retiredDashboard)
+        {
+            retiredDashboard.Shutdown();
+            TrackRetiredBasesWork(retiredDashboard.WhenWorkDrained());
+            BasesDockDashboard = null;
+        }
     }
 
     private string? BasesDockActiveNotePath() =>
