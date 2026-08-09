@@ -28,14 +28,12 @@ internal static class HistoryConfirmationDialog
             ShowInTaskbar = false,
             MaxWidth = 460,
         };
-        // Owned whenever the main window HAS a handle (shown at least
-        // once — Owner assignment throws on a never-shown window):
-        // an unowned modal loses modality and vanishes from
-        // window.ModalWindows when the main window is minimized or
-        // hidden (codoki).
-        if (Application.Current?.MainWindow is { } owner
-            && new System.Windows.Interop.WindowInteropHelper(owner).Handle
-                != IntPtr.Zero)
+        // Owned whenever the main window has been SHOWN (Owner
+        // assignment throws on a never-shown window; a minimized or
+        // hidden one must still own the modal, or it loses modality
+        // and vanishes from window.ModalWindows — codoki). IsLoaded
+        // is the shown-at-least-once signal without touching interop.
+        if (Application.Current?.MainWindow is { IsLoaded: true } owner)
         {
             dialog.Owner = owner;
         }
