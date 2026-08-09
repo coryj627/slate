@@ -728,6 +728,16 @@ internal sealed class AccessibleDataGrid : UserControl
     /// </summary>
     private void OnActivationKey(object sender, KeyEventArgs e)
     {
+        // An OPEN edit session owns the keyboard entirely: this
+        // handler rides the grid's PreviewKeyDown, which tunnels
+        // BEFORE the editor's — without this bail, Enter-to-commit
+        // fell through to the row-activation arm below, opened the
+        // row's note, and the resulting native ending discarded the
+        // draft (caught by the journey's first CI run of the F2 leg).
+        if (_editing)
+        {
+            return;
+        }
         // W4-6 (#738, contract C7): editing outranks activation on an
         // EDITABLE cell — Enter or F2 begins the edit; Enter on a
         // non-editable cell keeps its activation meaning, while F2
