@@ -1902,6 +1902,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         // session disposal that follows this Dispose, silently
         // skipping CloseBase — C3/INV-2 requires close-before-session,
         // exactly once).
+        _workspaceDisposed = true;
         // Every handle-owning Bases worker shuts down NON-BLOCKINGLY
         // (codex round 4: a synchronous close waits on the FFI lock,
         // and a non-cancellable export/apply-edit holding it would
@@ -1985,7 +1986,13 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
 
     private static bool ItemsReferToSameTarget(WorkspaceItemState left, WorkspaceItemState right) =>
         left.Kind == right.Kind
-        && string.Equals(left.Path, right.Path, StringComparison.Ordinal);
+        && (left.Kind is WorkspaceItemKind.SavedQuery or WorkspaceItemKind.Dashboard
+            // Registry-backed kinds have EMPTY paths — identity is the
+            // registry ID (codex round 5: path-only comparison
+            // collapsed every saved query/dashboard to the first open
+            // tab of its kind, so the second one never opened).
+            ? string.Equals(left.Id, right.Id, StringComparison.Ordinal)
+            : string.Equals(left.Path, right.Path, StringComparison.Ordinal));
 
     private WorkspaceTabViewModel? FindSamePathTab(
         WorkspaceItemState item,

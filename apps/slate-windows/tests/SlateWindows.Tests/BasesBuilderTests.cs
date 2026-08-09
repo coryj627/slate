@@ -51,7 +51,9 @@ public sealed class BasesBuilderTests : IDisposable
     {
         string? json = null;
         string? failure = null;
-        document.ViewEditQueryJson((fetched, error) => (json, failure) = (fetched, error));
+        document.ViewEditQueryJson(
+            document.ActiveViewIndex,
+            (fetched, error) => (json, failure) = (fetched, error));
         Assert.True(json is not null, $"ViewEditQueryJson failed: {failure}");
         return BaseQueryBuilderViewModel.ForView(
             _session, json!, document.Path, document.ActiveViewIndex,

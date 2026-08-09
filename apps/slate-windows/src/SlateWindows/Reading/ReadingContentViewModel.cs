@@ -809,7 +809,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                 && fullNote.TargetPath.EndsWith(
                     ".base", StringComparison.OrdinalIgnoreCase))
             {
-                baseProjection = ProjectBaseEmbed(session, fullNote.TargetPath);
+                baseProjection = ProjectBaseEmbed(session, fullNote.TargetPath, path);
             }
             artifacts.Add(new ReadingEmbedArtifact(
                 key, alt, resolution, imageRefused, baseProjection));
@@ -818,11 +818,14 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     }
 
     /// <summary>One ephemeral execute for a `.base` embed card
-    /// (contract C10): open, execute view 0 unfiltered, ALWAYS close
-    /// (INV-2 — the finally owns it). Failures project as an error
-    /// sentence, never a silent empty card.</summary>
+    /// (contract C10): open, execute view 0 unfiltered with the
+    /// EMBEDDING note as this_path (the mac BaseEmbedDocument passes
+    /// the reservation's thisPath; codex round 5 — a `this`-relative
+    /// base embedded in two notes must summarize per note), ALWAYS
+    /// close (INV-2 — the finally owns it). Failures project as an
+    /// error sentence, never a silent empty card.</summary>
     private static BaseEmbedProjection ProjectBaseEmbed(
-        VaultSession session, string targetPath)
+        VaultSession session, string targetPath, string embeddingNotePath)
     {
         ulong? handle = null;
         try
@@ -830,7 +833,11 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             handle = session.OpenBase(targetPath);
             using var cancel = new CancelToken();
             BasesResultSet result = session.BaseExecute(
-                handle.Value, view: 0, thisPath: null, quickFilter: null, cancel);
+                handle.Value,
+                view: 0,
+                thisPath: embeddingNotePath,
+                quickFilter: null,
+                cancel);
             return new BaseEmbedProjection(
                 targetPath,
                 result.AudioSummary,

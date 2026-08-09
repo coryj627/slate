@@ -310,7 +310,8 @@ public sealed class BasesRedTeamRegressionTests : IDisposable
         using WorkspaceViewModel workspace = NewWorkspace();
         BaseDocumentViewModel document = workspace.BaseDocumentFor("ViewFiltered.base");
         string? json = null;
-        document.ViewEditQueryJson((fetched, _) => json = fetched);
+        document.ViewEditQueryJson(
+            document.ActiveViewIndex, (fetched, _) => json = fetched);
         var builder = BaseQueryBuilderViewModel.ForView(
             _session, json!, document.Path, document.ActiveViewIndex,
             _announced.Add, synchronousForTests: true);

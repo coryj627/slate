@@ -97,6 +97,12 @@ internal sealed partial class WorkspaceViewModel
 
     internal IReadOnlyList<Task> RetiredBasesDrains => _retiredBasesDrains;
 
+    /// <summary>Set at the top of Dispose: refuses new Bases writes
+    /// and gates every write completion — a tabless write finishing
+    /// after teardown must not refresh or announce into a dead
+    /// workspace, possibly under a NEWER vault (codex round 5).</summary>
+    private bool _workspaceDisposed;
+
     public System.Windows.Input.ICommand BasesNewQueryCommand =>
         _basesNewQueryCommand ??= new RelayCommand(
             _ =>
@@ -120,10 +126,17 @@ internal sealed partial class WorkspaceViewModel
 
     public System.Windows.Input.ICommand BasesEditViewFiltersCommand =>
         _basesEditViewFiltersCommand ??= BasesCommand(document =>
+        {
+            // ONE dispatch-time view capture feeds both the fetch and
+            // the builder's save context (codex round 5: re-reading
+            // the active index in the continuation could seed from
+            // one view and save to another).
+            int viewIndex = document.ActiveViewIndex;
+            string viewName = document.ActiveViewName ?? document.DisplayName;
             // The edit-JSON fetch shares the FFI lock with executes,
             // so it runs off the dispatcher and the overlay opens in
             // the continuation (INV-6; red team round 1).
-            document.ViewEditQueryJson((json, failure) =>
+            document.ViewEditQueryJson(viewIndex, (json, failure) =>
             {
                 if (json is null)
                 {
@@ -134,7 +147,7 @@ internal sealed partial class WorkspaceViewModel
                 try
                 {
                     BaseQueryBuilderSheet = BaseQueryBuilderViewModel.ForView(
-                        _session, json, document.Path, document.ActiveViewIndex,
+                        _session, json, document.Path, viewIndex,
                         _announce,
                         synchronousForTests: !_startInteractionBackgroundWork);
                 }
@@ -146,9 +159,9 @@ internal sealed partial class WorkspaceViewModel
                         openFailure.Message));
                     return;
                 }
-                _announce(new A11yEvent.BasesEditingFilters(
-                    document.ActiveViewName ?? document.DisplayName));
-            }));
+                _announce(new A11yEvent.BasesEditingFilters(viewName));
+            });
+        });
 
     internal void EditSavedQueryInBuilder(string id)
     {
@@ -870,7 +883,10 @@ internal sealed partial class WorkspaceViewModel
             case BasesDockTargetKind.Dashboard:
                 var dashboard = new DashboardViewModel(
                     _session, target.Key, target.Name, _announce,
-                    synchronousForTests: !_startInteractionBackgroundWork);
+                    synchronousForTests: !_startInteractionBackgroundWork)
+                {
+                    ThisPath = BasesDockActiveNotePath(),
+                };
                 BasesDockDashboard = dashboard;
                 dashboard.Load();
                 break;
@@ -937,7 +953,7 @@ internal sealed partial class WorkspaceViewModel
     /// mode follows inline so the facts are deterministic.</summary>
     internal void BasesDockFollowActiveNote()
     {
-        if (BasesDockDocument is null)
+        if (BasesDockDocument is null && BasesDockDashboard is null)
         {
             return;
         }
@@ -967,22 +983,29 @@ internal sealed partial class WorkspaceViewModel
 
     private void BasesDockFollowBody()
     {
-        if (BasesDockDocument is not { } document)
-        {
-            return;
-        }
         string? thisPath = BasesDockActiveNotePath();
-        if (string.Equals(document.ThisPath, thisPath, StringComparison.Ordinal))
+        bool followed = false;
+        if (BasesDockDocument is { } document
+            && !string.Equals(document.ThisPath, thisPath, StringComparison.Ordinal))
         {
-            return;
+            document.ThisPath = thisPath;
+            document.Refresh();
+            followed = true;
         }
-        document.ThisPath = thisPath;
-        document.Refresh();
+        // The docked DASHBOARD follows too (contract C12; codex round
+        // 5): its sections execute `this`-relative saved queries.
+        if (BasesDockDashboard is { } dashboard
+            && !string.Equals(dashboard.ThisPath, thisPath, StringComparison.Ordinal))
+        {
+            dashboard.ThisPath = thisPath;
+            dashboard.Load();
+            followed = true;
+        }
         // Spoken only when the dock actually followed to a NOTE and
         // the pane holding it is visible (red team round 2: switching
         // note ↔ base tabs announced every time, even with the pane
         // collapsed — §2.6 unsolicited content on tab switching).
-        if (thisPath is not null && IsRightPaneVisible)
+        if (followed && thisPath is not null && IsRightPaneVisible)
         {
             _announce(new A11yEvent.BasesDockUpdatedForNote());
         }
@@ -1297,6 +1320,10 @@ internal sealed partial class WorkspaceViewModel
         // Defence in depth (the mac funnel re-checks too): the surface
         // already refused read-only cells, but every route into a
         // write re-verifies at dispatch (contract C13's backstop).
+        if (_workspaceDisposed)
+        {
+            return;
+        }
         if (BaseCellEditPolicy.PropertyKey(column) is not { } key)
         {
             _announce(BaseCellEditPolicy.ReadOnlyEvent(column));
@@ -1373,7 +1400,10 @@ internal sealed partial class WorkspaceViewModel
             BasesTablessWriteBody(document, row, column, key, value);
             return;
         }
-        _ = Task.Run(() => BasesTablessWriteBody(document, row, column, key, value));
+        // TRACKED: the bounded teardown drain must wait this write's
+        // session touch out before disposal (codex round 5).
+        TrackRetiredBasesWork(
+            Task.Run(() => BasesTablessWriteBody(document, row, column, key, value)));
     }
 
     private void BasesTablessWriteBody(
@@ -1407,15 +1437,23 @@ internal sealed partial class WorkspaceViewModel
             RunOnDispatcher(() =>
             {
                 _ = _propertyWritePaths.Remove(row.FilePath);
-                _announce(new A11yEvent.BasesCellEditFailed(failure.Message));
+                if (!_workspaceDisposed)
+                {
+                    _announce(new A11yEvent.BasesCellEditFailed(failure.Message));
+                }
             });
             return;
         }
         RunOnDispatcher(() =>
         {
-            // Released on the dispatcher, where it was acquired.
+            // Released on the dispatcher, where it was acquired; a
+            // completion landing after teardown must not refresh or
+            // announce into a dead workspace (codex round 5).
             _ = _propertyWritePaths.Remove(row.FilePath);
-            CompleteBasesWrite(document, row, column, value);
+            if (!_workspaceDisposed)
+            {
+                CompleteBasesWrite(document, row, column, value);
+            }
         });
     }
 

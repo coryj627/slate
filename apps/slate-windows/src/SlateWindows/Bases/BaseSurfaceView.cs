@@ -733,7 +733,12 @@ internal sealed class BaseSurfaceView : UserControl
         // columns is the dangling-reference class INV-3 forbids).
         _grid.ConfigureEditing(
             editDraft: (row, columnIndex) =>
-                columnIndex >= 0
+                // A LOADING/FAILED document keeps its stale rows as
+                // readable content only (codex round 5): the grid
+                // gestures must not bypass the C13 admission the
+                // commands already respect.
+                model.State is (BaseLoadState.Ready or BaseLoadState.Degraded)
+                && columnIndex >= 0
                 && columnIndex < result.Columns.Length
                 && BaseCellEditPolicy.PropertyKey(result.Columns[columnIndex]) is not null
                     ? BaseCellEditPolicy.DraftText(
@@ -822,7 +827,10 @@ internal sealed class BaseSurfaceView : UserControl
         // could set or delete a property whose column vanished,
         // changed kind, or went read-only). Fail closed with the
         // canceled sentence: the draft cannot be honored safely.
-        BasesResultSet? current = model.Result;
+        BasesResultSet? current =
+            model.State is BaseLoadState.Ready or BaseLoadState.Degraded
+                ? model.Result
+                : null;
         int freshColumnIndex = current is null
             ? -1
             : Array.FindIndex(
@@ -984,7 +992,11 @@ internal sealed class BaseSurfaceView : UserControl
     private void RowCommand(
         object row, Action<BaseDocumentViewModel, BasesRow> body)
     {
-        if (Model is { } model && row is BaseGridRowViewModel bound)
+        // The C13 admission the menu commands already respect (codex
+        // round 5: context-menu row actions reached the coordinator
+        // from a Loading surface's stale rows).
+        if (Model is { State: BaseLoadState.Ready or BaseLoadState.Degraded } model
+            && row is BaseGridRowViewModel bound)
         {
             model.SelectedRow = bound.Row;
             body(model, bound.Row);

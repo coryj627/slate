@@ -88,6 +88,13 @@ internal sealed class DashboardViewModel : PanelWorkScheduler
 
     public string Id { get; }
 
+    /// <summary>The dock's follow-the-active-note context, threaded as
+    /// every section execute's this_path so `this`-relative saved
+    /// queries resolve against the followed note (contract C12; codex
+    /// round 5: the docked dashboard executed contextless and never
+    /// followed). Tab dashboards leave it null.</summary>
+    internal string? ThisPath { get; set; }
+
     public string Name
     {
         get => _name;
@@ -155,7 +162,7 @@ internal sealed class DashboardViewModel : PanelWorkScheduler
                 handle = _session.OpenSavedQuery(status.SavedQueryId);
                 using var cancel = new CancelToken();
                 BasesResultSet result = _session.BaseExecute(
-                    handle.Value, view: 0, thisPath: null, quickFilter: null, cancel);
+                    handle.Value, view: 0, thisPath: ThisPath, quickFilter: null, cancel);
                 section.Result = result;
                 if (result.ViewError is { Length: > 0 } viewError)
                 {

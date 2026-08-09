@@ -448,13 +448,18 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
     /// so a dispatcher caller would freeze behind a slow query
     /// (INV-6). Continues on the UI context with (json, null) or
     /// (null, failureMessage).</summary>
-    public void ViewEditQueryJson(Action<string?, string?> continuation)
+    public void ViewEditQueryJson(int viewIndex, Action<string?, string?> continuation)
     {
         if (IsShutDown)
         {
             continuation(null, "The base is not open.");
             return;
         }
+        // The view identity is the CALLER'S dispatch-time capture
+        // (codex round 5): reading the mutable active index on the
+        // worker could seed the builder from a view the user had
+        // already switched away from — and its save would then write
+        // the wrong view's filters.
         StartWork(() =>
         {
             string? json = null;
@@ -466,7 +471,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                     if (_handle is { } handle)
                     {
                         json = _session.BaseViewEditQueryJson(
-                            handle, (uint)_activeViewIndex);
+                            handle, (uint)viewIndex);
                     }
                     else
                     {
@@ -613,6 +618,13 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
             deliver(null);
             return;
         }
+        // View and filter are captured at DISPATCH (codex round 5):
+        // the worker may queue behind a slow execute, and reading the
+        // mutable fields there could export a different view or an
+        // unapplied filter than the save dialog and scope prompt just
+        // described.
+        uint view = (uint)_activeViewIndex;
+        string? capturedFilter = includeQuickFilter ? NormalizedFilter() : null;
         StartWork(() =>
         {
             string? text = null;
@@ -624,10 +636,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                     if (_handle is { } handle)
                     {
                         text = _session.BaseExport(
-                            handle,
-                            (uint)_activeViewIndex,
-                            format,
-                            includeQuickFilter ? NormalizedFilter() : null);
+                            handle, view, format, capturedFilter);
                     }
                 }
             }
