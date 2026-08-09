@@ -3295,16 +3295,41 @@ public sealed class ShellAccessibilityTests
 
             // Run the saved query from the leaf: the saved-query TAB
             // carries the full Bases surface (contract C12) and scans
-            // clean.
+            // clean. The list collapses when EMPTY, so its absence is
+            // ambiguous — the failure message distinguishes "leaf
+            // never revealed" from "save never landed".
             queriesLeaf!.Patterns.SelectionItem.Pattern.Select();
-            AutomationElement savedList = WaitForElement(
-                window, "QueriesSavedList", TimeSpan.FromSeconds(10));
+            AutomationElement? savedList = null;
+            if (!SpinWait.SpinUntil(
+                () =>
+                {
+                    savedList = window.FindFirstDescendant(
+                        automation.ConditionFactory.ByAutomationId(
+                            "QueriesSavedList"));
+                    return savedList is not null;
+                },
+                TimeSpan.FromSeconds(10)))
+            {
+                bool leafRevealed = window.FindFirstDescendant(
+                    automation.ConditionFactory.ByAutomationId("QueriesRefresh"))
+                    is not null;
+                bool emptyState = window.FindFirstDescendant(
+                    automation.ConditionFactory.ByName("No saved queries"))
+                    is not null;
+                bool overlayStillOpen = window.FindFirstDescendant(
+                    automation.ConditionFactory.ByAutomationId(
+                        "BuilderSaveAsSavedQuery")) is not null;
+                throw new Xunit.Sdk.XunitException(
+                    "QueriesSavedList did not become available; "
+                    + $"leafRevealed={leafRevealed}, emptyState={emptyState}, "
+                    + $"builderStillOpen={overlayStillOpen}");
+            }
             AutomationElement? savedItem = null;
             Assert.True(
                 SpinWait.SpinUntil(
                     () =>
                     {
-                        savedItem = savedList
+                        savedItem = savedList!
                             .FindAllDescendants(automation.ConditionFactory
                                 .ByControlType(ControlType.ListItem))
                             .FirstOrDefault(item => item.Name.Contains(
