@@ -173,29 +173,54 @@ internal sealed partial class WorkspaceViewModel
 
     internal void BuilderUpdateSavedQuery()
     {
-        if (BaseQueryBuilderSheet is { } builder && builder.UpdateSavedQuery())
+        if (BaseQueryBuilderSheet is { } builder
+            && builder.Context.SavedQueryId is { } savedQueryId
+            && builder.UpdateSavedQuery())
         {
             RefreshBaseQueries();
+            RefreshSavedQueryDependents(
+                savedQueryId, deleted: false, reloadQueryDocuments: true);
+        }
+    }
+
+    /// <summary>ONE propagation funnel for saved-query registry
+    /// mutations (codex round 1: update/rename/delete each reached a
+    /// different subset — dashboards, which execute saved queries BY
+    /// ID in their sections, were reached by none, and a deleted
+    /// query stayed docked and executable). Direct query documents
+    /// reload when the QUERY BODY changed; dashboards and the docked
+    /// dashboard always reload; a deleted query's direct dock
+    /// clears.</summary>
+    private void RefreshSavedQueryDependents(
+        string id, bool deleted, bool reloadQueryDocuments)
+    {
+        if (deleted
+            && BasesDockTarget is { Kind: BasesDockTargetKind.SavedQuery } dockTarget
+            && string.Equals(dockTarget.Key, id, StringComparison.Ordinal))
+        {
+            ClearBasesDock();
+        }
+        else if (reloadQueryDocuments
+            && BasesDockDocument is { } dockDocument
+            && string.Equals(dockDocument.SavedQueryId, id, StringComparison.Ordinal))
+        {
+            dockDocument.Load();
+        }
+        if (reloadQueryDocuments)
+        {
             foreach (BaseDocumentViewModel document in _baseDocuments.Values
                 .Where(candidate => string.Equals(
-                    candidate.SavedQueryId,
-                    builder.Context.SavedQueryId,
-                    StringComparison.Ordinal)))
+                    candidate.SavedQueryId, id, StringComparison.Ordinal))
+                .ToList())
             {
                 document.Load();
             }
-            // The dock's saved-query document lives outside the tab
-            // registry (red team round 1: it kept executing the
-            // superseded query).
-            if (BasesDockDocument is { } dockDocument
-                && string.Equals(
-                    dockDocument.SavedQueryId,
-                    builder.Context.SavedQueryId,
-                    StringComparison.Ordinal))
-            {
-                dockDocument.Load();
-            }
         }
+        foreach (DashboardViewModel dashboard in _dashboardDocuments.Values)
+        {
+            dashboard.Load();
+        }
+        BasesDockDashboard?.Load();
     }
 
     public System.Windows.Input.ICommand BasesRefreshCommand =>
@@ -1094,6 +1119,10 @@ internal sealed partial class WorkspaceViewModel
         {
             BasesDockTarget = dockTarget with { Name = trimmed };
         }
+        // Dashboard sections carry the query's NAME (codex round 1) —
+        // only the reload shows the new one. The query body did not
+        // change, so direct documents keep their handles.
+        RefreshSavedQueryDependents(id, deleted: false, reloadQueryDocuments: false);
         RefreshBaseQueries();
     }
 
@@ -1119,6 +1148,10 @@ internal sealed partial class WorkspaceViewModel
                 CloseTab(tab);
             }
         }
+        // A deleted query must not stay docked-and-executing, and its
+        // dashboard sections must show the Missing posture now, not
+        // at the next unrelated event (codex round 1).
+        RefreshSavedQueryDependents(id, deleted: true, reloadQueryDocuments: false);
         _announce(new A11yEvent.BasesSavedQueryDeleted());
         RefreshBaseQueries();
     }

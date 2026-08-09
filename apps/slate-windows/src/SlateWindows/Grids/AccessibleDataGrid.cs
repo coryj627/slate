@@ -822,6 +822,11 @@ internal sealed class AccessibleDataGrid : UserControl
 
     internal object? FirstItemForTests() => _items.Count > 0 ? _items[0] : null;
 
+    /// <summary>Resolve a bound item by predicate — the surface's
+    /// identity re-arm after a rebind replaced the row objects.</summary>
+    internal object? FindItem(Func<object, bool> predicate) =>
+        _items.FirstOrDefault(predicate);
+
     /// <summary>Begin editing a cell (keyboard, row action, or the
     /// editProperty command). Returns false when the cell is
     /// read-only (after routing the refusal) or unreachable.</summary>

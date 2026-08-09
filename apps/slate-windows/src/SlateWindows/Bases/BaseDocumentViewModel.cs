@@ -774,9 +774,19 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
 
     /// <summary>Re-run the active view on the CURRENT handle — the
     /// post-write refresh entry (contract C9). Keeps previous rows on
-    /// failure.</summary>
+    /// failure. Refused while LOADING (codex round 1): scheduler
+    /// bodies are unordered, so a refresh generation-bump could
+    /// overtake a queued LoadBody — the load then bailed before
+    /// opening a handle while the execute bailed on the null handle,
+    /// stranding the document in Loading forever. The in-flight load
+    /// executes against current data anyway, so the refresh is
+    /// redundant there (the RefreshForFunnel guard's precedent).</summary>
     public void Refresh()
     {
+        if (IsShutDown || State == BaseLoadState.Loading)
+        {
+            return;
+        }
         int generation = Interlocked.Increment(ref _generation);
         StartWork(() => ExecuteBody(generation, (uint)_activeViewIndex));
     }
@@ -1101,7 +1111,17 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         });
     }
 
-    internal override void Shutdown()
+    internal override void Shutdown() => ShutdownCore(IsSynchronousForTests);
+
+    /// <summary>Teardown-ordered shutdown (workspace Dispose): closes
+    /// the handle SYNCHRONOUSLY so every handle closes before the
+    /// session disposes (C3/INV-2 — codex round 1: the queued
+    /// background close could lose that race and silently skip
+    /// CloseBase). The tab-close path keeps the non-blocking
+    /// Shutdown.</summary>
+    internal void ShutdownSynchronously() => ShutdownCore(synchronousClose: true);
+
+    private void ShutdownCore(bool synchronousClose)
     {
         base.Shutdown();
         Interlocked.Increment(ref _generation);
@@ -1116,7 +1136,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         {
             // The body's using-block won the race; the execute is over.
         }
-        if (IsSynchronousForTests)
+        if (synchronousClose)
         {
             lock (_ffiLock)
             {

@@ -829,7 +829,19 @@ internal sealed class BaseSurfaceView : UserControl
             {
                 model.AnnounceForSurface(refusal);
             }
-            _ = _grid.BeginEditAt(row, columnIndex, draftOverride: text);
+            // Re-arm by IDENTITY when the commit's session-end flushed
+            // a deferred rebind (codex round 1): the old row object is
+            // no longer bound, and re-arming with it silently dropped
+            // the draft C7 promises to keep.
+            if (!_grid.BeginEditAt(row, columnIndex, draftOverride: text)
+                && _grid.FindItem(candidate =>
+                    candidate is BaseGridRowViewModel fresh
+                    && string.Equals(
+                        fresh.Row.FilePath, basesRow.FilePath, StringComparison.Ordinal)
+                    && fresh.Row.TaskOrdinal == basesRow.TaskOrdinal) is { } rebound)
+            {
+                _ = _grid.BeginEditAt(rebound, columnIndex, draftOverride: text);
+            }
             return;
         }
         model.ApplyPropertyEdit?.Invoke(basesRow, column, value);

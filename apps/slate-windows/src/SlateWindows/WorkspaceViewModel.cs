@@ -1894,11 +1894,14 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         Panels.Shutdown();
         TasksReview.Shutdown();
         // W4-6: every Bases document holds the shared session and a
-        // native handle — shut them all down (which closes each handle
-        // exactly once, INV-2) before the session dies.
+        // native handle — closed SYNCHRONOUSLY here (codex round 1:
+        // the non-blocking close could lose the race against the
+        // session disposal that follows this Dispose, silently
+        // skipping CloseBase — C3/INV-2 requires close-before-session,
+        // exactly once).
         foreach (Bases.BaseDocumentViewModel document in _baseDocuments.Values)
         {
-            document.Shutdown();
+            document.ShutdownSynchronously();
         }
         _baseDocuments.Clear();
         foreach (Bases.DashboardViewModel dashboard in _dashboardDocuments.Values)
@@ -1906,6 +1909,8 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             dashboard.Shutdown();
         }
         _dashboardDocuments.Clear();
+        BasesDockDocument?.ShutdownSynchronously();
+        BasesDockDocument = null;
         ClearBasesDock();
         BaseQueryBuilderSheet?.Shutdown();
         Persist();
