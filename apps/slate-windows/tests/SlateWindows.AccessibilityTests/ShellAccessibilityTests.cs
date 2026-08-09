@@ -3197,6 +3197,35 @@ public sealed class ShellAccessibilityTests
                         .Contains("status: todo-edited", StringComparison.Ordinal),
                     TimeSpan.FromSeconds(15)),
                 "the committed cell edit never reached the file");
+            // The committed edit's vault event re-executes every Bases
+            // surface (C9): the tab grid re-binds BEHIND the right
+            // pane while the journey moves on, and an axe snapshot
+            // mid-bind catches ON-SCREEN DataGridRows whose peers
+            // still report null bounding rectangles (the axe rule the
+            // CI runner tripped; 2-core timing — the rebind settles
+            // long before this point locally). Wait the transient out
+            // before the next scan; steady state converges instantly.
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            return window
+                                .FindAllDescendants(automation.ConditionFactory
+                                    .ByControlType(ControlType.DataItem))
+                                .All(item =>
+                                    item.Properties.IsOffscreen.ValueOrDefault
+                                    || !item.Properties.BoundingRectangle
+                                        .ValueOrDefault.IsEmpty);
+                        }
+                        catch (System.Runtime.InteropServices.COMException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(15)),
+                "the base grids never settled after the committed cell edit");
 
             // The Queries leaf renders and scans clean.
             AutomationElement leaves = WaitForElement(
