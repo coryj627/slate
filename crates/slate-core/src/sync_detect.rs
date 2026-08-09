@@ -21,15 +21,30 @@
 //!
 //! Three Windows-shaped additions ride the same seam, all core-side and
 //! all private — no report struct, no FFI shape, and no existing probe
-//! rule changes (SDINV-1). `RealFs::home` falls back to `USERPROFILE`
-//! (a Windows process sets only that, so every `$HOME`-prefix arm
-//! silently no-opped there); OneDrive gains an arm over the
-//! `%OneDrive%` / `%OneDriveConsumer%` / `%OneDriveCommercial%` sync
-//! roots the client exports; Dropbox gains a bounded, tolerant read of
-//! `Dropbox\info.json` under `%LOCALAPPDATA%` / `%APPDATA%`. Both new
-//! arms reach the environment and file contents through `FsProbe`, so
-//! fixtures never touch the real process environment (SDR-4), and both
-//! are silently absent on any anomaly rather than erroring (SDR-3).
+//! rule changes (SDINV-1). `RealFs::home` falls back to `USERPROFILE`;
+//! OneDrive gains an arm over the `%OneDrive%` / `%OneDriveConsumer%` /
+//! `%OneDriveCommercial%` sync roots the client exports; Dropbox gains a
+//! bounded, tolerant read of `Dropbox\info.json` under `%LOCALAPPDATA%`
+//! / `%APPDATA%`. Both new arms reach the environment and file contents
+//! through `FsProbe`, so fixtures never touch the real process
+//! environment (SDR-4), and both are silently absent on any anomaly
+//! rather than erroring (SDR-3).
+//!
+//! **What the `USERPROFILE` fallback does and does not reach.** A
+//! Windows process sets only `USERPROFILE`, so `home()` used to be
+//! `None` there and the three `$HOME`-prefix arms were skipped outright.
+//! The fallback repairs the LOOKUP — and nothing further. It does not by
+//! itself make those arms fire on Windows, for two independent reasons:
+//! each compares the raw canonical path with bare `Path::starts_with`,
+//! and `std::fs::canonicalize` returns `\\?\C:\…`, which that comparison
+//! reads as a different first component from a plain `C:\…` root
+//! (measured by `bare_starts_with_does_not_bridge_verbatim_and_plain_roots`);
+//! and all three target macOS-only `Library/…` layouts, which no Windows
+//! machine has. Practical impact today is therefore nil, and SD9 freezes
+//! the existing arms, so they are left exactly as they are — but a
+//! maintainer adding a Windows-relevant `$HOME`-relative arm must
+//! compare through `path_starts_with`, not `Path::starts_with`. Each of
+//! the three sites carries that note.
 //!
 //! Evidence is user-visible and hosts render it verbatim (SDINV-6), so
 //! every path pushed into `evidence_paths` is formatted by
@@ -263,9 +278,13 @@ impl FsProbe for RealFs {
 
 /// `$HOME`, then `%USERPROFILE%` (SD9).
 ///
-/// A Windows process sets only `USERPROFILE`, so before this every
-/// `$HOME`-prefix arm was dead there — the pinned degradation SD9
-/// repairs. Split out as a pure function over the two lookups so the
+/// A Windows process sets only `USERPROFILE`, so before this `home()`
+/// was `None` there and every `$HOME`-prefix arm was skipped before it
+/// compared anything. The fallback repairs that LOOKUP; it does not make
+/// those arms reachable on Windows, because each compares a verbatim
+/// canonical path with bare `Path::starts_with` and each targets a
+/// macOS-only `Library/…` layout (module doc; the three sites carry the
+/// same note). Split out as a pure function over the two lookups so the
 /// ORDER is unit-testable without mutating the process environment
 /// (which would race every other test in the binary) and without any
 /// fixture reading the real environment (SDR-4).
@@ -438,6 +457,11 @@ fn detect_icloud(
 ) -> Option<DetectedSyncProvider> {
     let mut evidence = Vec::new();
 
+    // SD9 note: both `$HOME`-relative comparisons below are macOS-shaped
+    // (`Library/Mobile Documents`, plus macOS-only xattrs) and use BARE
+    // `Path::starts_with`, which does not bridge a verbatim canonical
+    // path (`\\?\C:\…`) to a plain `$HOME`. Frozen as-is by SD9; a
+    // Windows-relevant arm here would have to use `path_starts_with`.
     if let Some(home) = home {
         // (a) location prefix.
         if canon.starts_with(home.join("Library/Mobile Documents")) {
@@ -521,6 +545,12 @@ fn detect_dropbox(
     // `DropboxBackups` (or a hypothetical `Dropbox-Acme`) are outside
     // the contract and must not fire a false Medium-risk Dropbox
     // detection that could spuriously trip the multi-sync warning.
+    //
+    // SD9 note: macOS-shaped, and the comparison is BARE
+    // `Path::starts_with` — it does not bridge a verbatim canonical path
+    // to a plain `$HOME`, so the `USERPROFILE` fallback does not reach
+    // it. Frozen as-is by SD9; a Windows-relevant arm here would have to
+    // use `path_starts_with`.
     if let Some(home) = home
         && canon.starts_with(home.join("Library/CloudStorage/Dropbox"))
     {
@@ -686,6 +716,13 @@ fn detect_syncthing(root: &Path, fs: &dyn FsProbe) -> Option<DetectedSyncProvide
 
 /// True when `canon` is under `$HOME/Library/CloudStorage/<component>`
 /// with `<component>` starting with `component_prefix`.
+///
+/// SD9 note: macOS-shaped, and `strip_prefix` (like bare
+/// `Path::starts_with`) compares components without bridging a verbatim
+/// canonical path to a plain `$HOME`, so the `USERPROFILE` fallback does
+/// not reach this arm either. Frozen as-is by SD9; a Windows-relevant
+/// caller would have to strip verbatim prefixes first, the way
+/// `path_starts_with` does.
 fn cloud_storage_component_starts_with(canon: &Path, home: &Path, component_prefix: &str) -> bool {
     let Ok(under_cloud_storage) = canon.strip_prefix(home.join("Library/CloudStorage")) else {
         return false;
@@ -766,19 +803,57 @@ fn path_starts_with(path: &Path, prefix: &Path) -> bool {
     path.starts_with(&*prefix)
 }
 
-/// An environment-provided directory root, or `None` when the variable
-/// is unset, empty, or blank (SD9).
+/// True when `path` names a whole volume or filesystem root rather than
+/// a directory inside one: `C:`, `C:\`, `\\?\C:\`, `/`, `\`.
 ///
-/// The blank guard is a false-positive defence, not hygiene:
-/// `Path::new("")` has NO components, so *every* path "starts with" it.
-/// A blank `%OneDrive%` — a real Windows possibility — would otherwise
-/// make every vault on the machine a OneDrive vault.
+/// **The other half of the blank guard.** A blank value is only the
+/// degenerate prefix that is easiest to spot; a bare root is a perfectly
+/// valid path that ALSO has no `Component::Normal`, so
+/// `path_starts_with` reports every vault on that volume as living under
+/// it. `%OneDrive%=C:\` (a stale or scripted profile value) would make
+/// OneDrive fire for every vault on C:, and an `info.json` listing
+/// `"path": "C:\\"` would do the same for Dropbox. Two Medium providers
+/// is exactly the quorum that synthesizes `multi_sync_warning`, which is
+/// the SD6 announcement gate — a factually wrong High-priority
+/// announcement, not merely a wrong row.
+///
+/// Verbatim prefixes are stripped first, so `\\?\C:\` is judged as the
+/// `C:\` the comparison will actually perform.
+///
+/// Recorded consequence: a bare UNC share root (`\\server\share`)
+/// carries its server and share INSIDE the prefix component, so it has
+/// no `Component::Normal` either and is refused by the same rule. Unlike
+/// a drive root, a share root really is a bounded location, so refusing
+/// it is a deliberate false negative — taken because the rule stays one
+/// line, and because a whole-share sync root is a shape neither provider
+/// is known to export. Revisit here if one ever does.
+fn is_volume_root(path: &Path) -> bool {
+    !strip_verbatim_prefix(path)
+        .components()
+        .any(|c| matches!(c, Component::Normal(_)))
+}
+
+/// An environment-provided directory root, or `None` when the variable
+/// is unset, empty, blank, or a bare volume root (SD9).
+///
+/// Both guards are false-positive defences, not hygiene: `Path::new("")`
+/// has NO components, so *every* path "starts with" it, and a bare root
+/// like `C:\` has no `Component::Normal`, so every path on that volume
+/// does. A blank or degenerate `%OneDrive%` — both real Windows
+/// possibilities — would otherwise make every vault on the machine a
+/// OneDrive vault. The two are separate checks because neither implies
+/// the other: `"   "` is blank but is one `Normal` component, `"C:\"` is
+/// non-blank but has none.
 fn env_dir(fs: &dyn FsProbe, name: &str) -> Option<PathBuf> {
     let value = fs.env_var(name)?;
     if value.trim().is_empty() {
         return None;
     }
-    Some(PathBuf::from(value))
+    let dir = PathBuf::from(value);
+    if is_volume_root(&dir) {
+        return None;
+    }
+    Some(dir)
 }
 
 /// Sync roots listed in Dropbox's `info.json` (SD9).
@@ -787,8 +862,10 @@ fn env_dir(fs: &dyn FsProbe, name: &str) -> Option<PathBuf> {
 /// objects (`personal`, `business`, …) each carrying a `"path"` string.
 /// Tolerant by construction — a non-object document, a non-object
 /// account, a missing or wrong-typed `path`, and unknown sibling keys
-/// all yield fewer roots instead of an error (SDR-3). A blank `path` is
-/// dropped for the same reason `env_dir` drops a blank variable.
+/// all yield fewer roots instead of an error (SDR-3). A blank `path` and
+/// a bare volume root (`"C:\\"`) are both dropped, for exactly the
+/// reasons `env_dir` drops them: as a prefix each one matches every
+/// vault on the machine (see [`is_volume_root`]).
 ///
 /// Order is the file's own key order (`serde_json` is built with
 /// `preserve_order`), so "the first matching root" is deterministic for
@@ -803,6 +880,7 @@ fn dropbox_info_roots(text: &str) -> Vec<PathBuf> {
         .filter_map(|account| account.as_object()?.get("path")?.as_str())
         .filter(|path| !path.trim().is_empty())
         .map(PathBuf::from)
+        .filter(|path| !is_volume_root(path))
         .collect()
 }
 
@@ -1613,6 +1691,17 @@ mod tests {
         }
     }
 
+    /// Path spellings that name a whole volume or filesystem root rather
+    /// than a folder inside one — the degenerate prefixes that "contain"
+    /// every vault on the machine.
+    ///
+    /// Every entry is exercised on every platform: `/` is the live trap
+    /// on POSIX (it really is a prefix of the fixture root there), the
+    /// `C:`-shaped spellings are the live trap on Windows, and each is
+    /// inert on the other platform. Asserting the whole list on both
+    /// keeps one test body honest about both machines.
+    const DEGENERATE_ROOTS: [&str; 5] = ["/", r"\", "C:", r"C:\", r"\\?\C:\"];
+
     /// Dropbox's documented `info.json` shape: one object per account,
     /// each carrying a `path` (plus the unrelated keys the real file
     /// has, so the tolerant parse is exercised on realistic input).
@@ -1901,6 +1990,43 @@ mod tests {
         );
     }
 
+    /// The candidate loop takes the first registry that READS **and**
+    /// MATCHES, not the first that reads. `%LOCALAPPDATA%` here holds a
+    /// real, well-formed registry that simply lists no root containing
+    /// the vault — a Dropbox account whose folder is elsewhere, or a
+    /// stale copy — and the search must continue to the legacy
+    /// `%APPDATA%` location rather than stop at the successful read. The
+    /// `%APPDATA%` registry is the one cited.
+    #[test]
+    fn dropbox_info_json_non_matching_localappdata_falls_through_to_appdata() {
+        let sync_root = win_shaped("/Users/u/Dropbox");
+        let root = win_shaped("/Users/u/Dropbox/vault");
+        let local_app_data = win_shaped("/Users/u/AppData/Local");
+        let app_data = win_shaped("/Users/u/AppData/Roaming");
+        let local_info = Path::new(&local_app_data).join("Dropbox").join("info.json");
+        let roaming_info = Path::new(&app_data).join("Dropbox").join("info.json");
+        let fs = FakeFs::with_home(&win_shaped("/Users/u"))
+            .dir(&root)
+            .env("LOCALAPPDATA", &local_app_data)
+            .env("APPDATA", &app_data)
+            .file_with_contents(
+                local_info.to_str().unwrap(),
+                &dropbox_info_json(&[("personal", &win_shaped("/Users/u/Work"))]),
+            )
+            .file_with_contents(
+                roaming_info.to_str().unwrap(),
+                &dropbox_info_json(&[("personal", &sync_root)]),
+            );
+        let p = single(
+            &detect_with_probe(Path::new(&root), &fs),
+            SyncProviderKind::Dropbox,
+        );
+        assert_eq!(
+            p.evidence_paths,
+            vec![roaming_info.display().to_string(), sync_root]
+        );
+    }
+
     #[test]
     fn dropbox_info_json_env_unset_skips_the_arm() {
         // The registry exists on disk but no variable points at it —
@@ -1984,6 +2110,47 @@ mod tests {
                 "info.json {text:?} must not detect"
             );
         }
+    }
+
+    /// A listed root that is a bare volume root is dropped — the same
+    /// hole as a degenerate `%OneDrive%`, reached through the registry
+    /// instead of the environment. `"path": "C:\\"` is well-formed JSON
+    /// and a valid path, so only the component check refuses it; without
+    /// that, one line in an undocumented third-party file (SDR-3) would
+    /// make every vault on the volume a Dropbox vault. The positive
+    /// control pins that ordinary listed roots still detect.
+    #[test]
+    fn dropbox_info_json_volume_root_is_silently_negative() {
+        let root = win_shaped("/Users/u/Dropbox/vault");
+        let local_app_data = win_shaped("/Users/u/AppData/Local");
+        let info_json = Path::new(&local_app_data).join("Dropbox").join("info.json");
+        let fixture = |listed: &str| {
+            FakeFs::with_home(&win_shaped("/Users/u"))
+                .dir(&root)
+                .env("LOCALAPPDATA", &local_app_data)
+                .file_with_contents(
+                    info_json.to_str().unwrap(),
+                    &dropbox_info_json(&[("personal", listed)]),
+                )
+        };
+        for degenerate in DEGENERATE_ROOTS {
+            assert!(
+                detect_with_probe(Path::new(&root), &fixture(degenerate))
+                    .providers
+                    .is_empty(),
+                "info.json listing {degenerate:?} must not detect"
+            );
+        }
+        // Regression guard: an ordinary listed root still detects.
+        let sync_root = win_shaped("/Users/u/Dropbox");
+        let p = single(
+            &detect_with_probe(Path::new(&root), &fixture(&sync_root)),
+            SyncProviderKind::Dropbox,
+        );
+        assert_eq!(
+            p.evidence_paths,
+            vec![info_json.display().to_string(), sync_root]
+        );
     }
 
     /// The 64 KiB bound is inclusive: a registry of exactly `MAX` bytes
@@ -2174,6 +2341,43 @@ mod tests {
                 "blank %OneDrive% ({blank:?}) must not detect"
             );
         }
+    }
+
+    /// A variable holding a bare volume root must read as unset — the
+    /// half of the guard the blank check cannot cover.
+    ///
+    /// `C:\` is a perfectly valid, non-blank path with no
+    /// `Component::Normal`, so `path_starts_with` puts EVERY vault on the
+    /// volume under it. A stale or scripted `%OneDrive%=C:\` would then
+    /// detect OneDrive for every vault on the machine; paired with any
+    /// other Medium provider that is the `multi_sync_warning` quorum and
+    /// hence the SD6 High-priority announcement, asserting something
+    /// false. The positive control in the same body pins that the guard
+    /// refuses degenerate roots only, not roots in general.
+    #[test]
+    fn onedrive_env_volume_root_never_fires() {
+        let root = win_shaped("/Users/u/Work Files/vault");
+        for degenerate in DEGENERATE_ROOTS {
+            let fs = FakeFs::with_home(&win_shaped("/Users/u"))
+                .dir(&root)
+                .env("OneDrive", degenerate);
+            assert!(
+                detect_with_probe(Path::new(&root), &fs)
+                    .providers
+                    .is_empty(),
+                "degenerate %OneDrive% ({degenerate:?}) must not detect"
+            );
+        }
+        // Regression guard: an ordinary sync root still detects.
+        let sync_root = win_shaped("/Users/u/Work Files");
+        let fs = FakeFs::with_home(&win_shaped("/Users/u"))
+            .dir(&root)
+            .env("OneDrive", &sync_root);
+        let p = single(
+            &detect_with_probe(Path::new(&root), &fs),
+            SyncProviderKind::OneDrive,
+        );
+        assert_eq!(p.evidence_paths, vec![sync_root]);
     }
 
     /// All three variables point at the same folder — the common real
@@ -2470,6 +2674,34 @@ mod tests {
         ));
     }
 
+    /// **The measured asymmetry behind the SD9 `$HOME` notes.** The
+    /// helper bridges a verbatim canonical path and a plain root; the
+    /// bare `Path::starts_with` the three `$HOME`-prefix arms use does
+    /// not (`VerbatimDisk` and `Disk` are different prefix components).
+    /// That is why the `USERPROFILE` fallback repairs the lookup and
+    /// nothing more: with `canonicalize` succeeding, those arms would
+    /// still compare false on Windows even if their `Library/…` layout
+    /// existed. Constructed exactly as the arms construct it
+    /// (`home.join("Library/…")`) so the fact measures the real
+    /// comparison, not a hand-spelled approximation. Windows-only: these
+    /// spellings are single opaque components on POSIX.
+    #[cfg(windows)]
+    #[test]
+    fn bare_starts_with_does_not_bridge_verbatim_and_plain_roots() {
+        let canon = Path::new(r"\\?\C:\Users\u\Library\Mobile Documents\vault");
+        let home = Path::new(r"C:\Users\u");
+        let prefix = home.join("Library/Mobile Documents");
+        assert!(
+            !canon.starts_with(&prefix),
+            "bare starts_with must not bridge the verbatim prefix — if this \
+             ever becomes true, the SD9 $HOME-arm notes are stale"
+        );
+        assert!(
+            path_starts_with(canon, &prefix),
+            "path_starts_with is the comparison that does bridge it"
+        );
+    }
+
     // --- Real-filesystem integration (marker-file arms only; the
     // xattr/$HOME-prefix arms are seam-tested above — CI runners can't
     // plant xattrs reliably) -------------------------------------------
@@ -2551,6 +2783,69 @@ mod tests {
                 "evidence path leaked the verbatim prefix: {path}"
             );
         }
+    }
+
+    /// **The REAL bounded reader, not the fixture's.** Every `info.json`
+    /// size fact above rides `FakeFs`'s three-line reimplementation, so
+    /// without this the defensive logic in `RealFs::read_to_string_bounded`
+    /// — the only version that ever runs in production — has no gate at
+    /// all.
+    ///
+    /// The bound is pinned BEHAVIORALLY: a file longer than `max_bytes`
+    /// yields `None`, whichever of the two guards catches it (the
+    /// `metadata.len()` refusal, or the `take(max_bytes + 1)` cap plus
+    /// the post-read length check). The cap exists for the case where the
+    /// stat is already stale — the file grows or is replaced between the
+    /// `metadata` call and the read — which cannot be staged
+    /// deterministically from a test, so it is not separately observable
+    /// here. Recorded residue: this fact proves the contract "over the
+    /// bound is refused", not which guard enforced it.
+    #[test]
+    fn real_fs_read_to_string_bounded_refuses_over_the_bound() {
+        let tmp = tempfile::tempdir().unwrap();
+        let at_bound = tmp.path().join("at-bound.json");
+        let over_bound = tmp.path().join("over-bound.json");
+        std::fs::write(&at_bound, "x".repeat(64)).unwrap();
+        std::fs::write(&over_bound, "x".repeat(65)).unwrap();
+
+        assert_eq!(
+            RealFs.read_to_string_bounded(&at_bound, 64),
+            Some("x".repeat(64)),
+            "a file of exactly max_bytes is under the bound and must read"
+        );
+        assert_eq!(
+            RealFs.read_to_string_bounded(&over_bound, 64),
+            None,
+            "a file one byte over the bound must be refused, not truncated"
+        );
+    }
+
+    /// A directory and a missing path both read as `None`: the calling
+    /// arm is silently absent (SDR-3), never an error and never a read.
+    /// A directory at `Dropbox\info.json` is the shape a hostile or
+    /// merely confused vault can plant.
+    ///
+    /// Measured residue, same shape as the bound fact above: this pins
+    /// the CONTRACT, not the `is_file()` line. Deleting that check keeps
+    /// this green, because the OS refuses the read anyway (Windows fails
+    /// the directory `File::open`; Unix fails the `read_to_string` with
+    /// `EISDIR`). The check is the explicit, platform-independent
+    /// statement of the same refusal, and is kept for that reason.
+    #[test]
+    fn real_fs_read_to_string_bounded_refuses_non_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("info.json");
+        std::fs::create_dir(&dir).unwrap();
+        assert_eq!(
+            RealFs.read_to_string_bounded(&dir, DROPBOX_INFO_MAX_BYTES),
+            None,
+            "a directory at the registry path must not read"
+        );
+        assert_eq!(
+            RealFs.read_to_string_bounded(&tmp.path().join("absent.json"), DROPBOX_INFO_MAX_BYTES),
+            None,
+            "a missing registry must not read"
+        );
     }
 
     #[test]
