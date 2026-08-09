@@ -17,7 +17,12 @@ namespace SlateWindows;
 /// </summary>
 internal sealed partial class WorkspaceViewModel
 {
-    internal HistoryViewModel History { get; }
+    /// <summary>PUBLIC, not internal: the leaf body's
+    /// Model="{Binding History}" resolves through WPF reflection,
+    /// which only sees public properties — an internal property
+    /// fails SILENTLY and the surface renders nothing (the recorded
+    /// W4-4 lesson; caught by the journey's first live run).</summary>
+    public HistoryViewModel History { get; }
 
     /// <summary>Injectable confirmation/refusal dialogs (the W4-4/W4-6
     /// seam pattern): production shows dialogs; facts inject. The
