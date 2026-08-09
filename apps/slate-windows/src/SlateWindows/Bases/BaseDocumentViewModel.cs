@@ -387,6 +387,12 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
             return;
         }
         BasesColumn column = result.Columns[sort.ColumnIndex];
+        // The TARGET VIEW is a dispatch-time capture (codex round 6):
+        // the worker's generation check passes BEFORE a view switch
+        // lands on the UI thread, and a field read after it would
+        // persist this view's sort into the OTHER view — silent .base
+        // corruption no publication guard can undo.
+        uint view = (uint)_activeViewIndex;
         int generation = Interlocked.Increment(ref _generation);
         StartWork(() =>
         {
@@ -404,10 +410,10 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                     _session.BaseApplyEdit(
                         handle,
                         new BaseEdit.SetSlateSort(
-                            (uint)_activeViewIndex,
+                            view,
                             SlateSortYaml(column.Id, sort.Ascending)));
                     _session.BaseSetTransientSort(
-                        handle, (uint)_activeViewIndex, columnId: null, ascending: true);
+                        handle, view, columnId: null, ascending: true);
                     views = _session.BaseViews(handle);
                 }
             }
@@ -438,7 +444,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                 SortState = null;
                 _announce(new A11yEvent.BaseSortSavedToView(column.Label, sort.Ascending));
             });
-            ExecuteBody(generation, (uint)_activeViewIndex, freshViews: views);
+            ExecuteBody(generation, view, freshViews: views);
         });
     }
 

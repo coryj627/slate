@@ -978,8 +978,12 @@ internal sealed class BaseSurfaceView : UserControl
 
     private bool ActivateListRow()
     {
+        // The C13 admission the grid's row actions respect (codex
+        // round 6: Enter on a Loading surface's stale list row still
+        // navigated).
         if (IsReadOnlySurface
-            || Model is not { } model
+            || Model is not
+            { State: BaseLoadState.Ready or BaseLoadState.Degraded } model
             || _list.SelectedItem is not BaseListItemViewModel { Row: { } row })
         {
             return false;

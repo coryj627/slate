@@ -1058,13 +1058,19 @@ internal sealed partial class WorkspaceViewModel
 
     internal void RefreshBaseQueries()
     {
+        if (_workspaceDisposed)
+        {
+            return;
+        }
         int generation = Interlocked.Increment(ref _queriesRefreshGeneration);
         if (!_startInteractionBackgroundWork)
         {
             RefreshBaseQueriesBody(generation);
             return;
         }
-        _ = Task.Run(() => RefreshBaseQueriesBody(generation));
+        // TRACKED into the bounded teardown drain (codex round 6): the
+        // three registry reads must not race the session disposal.
+        TrackRetiredBasesWork(Task.Run(() => RefreshBaseQueriesBody(generation)));
     }
 
     private void RefreshBaseQueriesBody(int generation)
@@ -1078,22 +1084,28 @@ internal sealed partial class WorkspaceViewModel
             baseFiles = _session.BasesList();
             dashboards = _session.ListDashboards();
         }
-        catch (VaultException failure)
+        catch (Exception failure) when (failure
+            is VaultException or ObjectDisposedException)
         {
             RunOnDispatcher(() =>
             {
                 // Same generation gate as success: a stale failure
-                // must not speak after a newer refresh landed.
-                if (Volatile.Read(ref _queriesRefreshGeneration) == generation)
+                // must not speak after a newer refresh landed — nor
+                // into a disposed workspace (codex round 6).
+                if (!_workspaceDisposed
+                    && failure is VaultException vaultFailure
+                    && Volatile.Read(ref _queriesRefreshGeneration) == generation)
                 {
-                    _announce(new A11yEvent.BasesQueriesRefreshFailed(failure.Message));
+                    _announce(new A11yEvent.BasesQueriesRefreshFailed(
+                        vaultFailure.Message));
                 }
             });
             return;
         }
         RunOnDispatcher(() =>
         {
-            if (Volatile.Read(ref _queriesRefreshGeneration) != generation)
+            if (_workspaceDisposed
+                || Volatile.Read(ref _queriesRefreshGeneration) != generation)
             {
                 return;
             }
