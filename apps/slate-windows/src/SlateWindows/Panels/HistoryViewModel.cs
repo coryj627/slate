@@ -416,9 +416,12 @@ internal sealed class HistoryViewModel : PanelWorkScheduler
     }
 
     /// <summary>The post-save funnel: the note gained a version row —
-    /// reload page one (collapse state survives; group ids are
-    /// stable). Never touches the since-open baseline (H8: marking
-    /// happens only on activation).</summary>
+    /// reload page one. The HEAD group's id stays stable (its first
+    /// visible row is still position 0), so its collapse state
+    /// survives; older groups' ids shift with their positions and
+    /// their collapse state honestly drops (the position-identity
+    /// model, HINV-2). Never touches the since-open baseline (H8:
+    /// marking happens only on activation).</summary>
     public void NoteSaved(string path)
     {
         if (!string.Equals(_path, path, StringComparison.Ordinal))

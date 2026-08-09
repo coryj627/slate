@@ -846,6 +846,35 @@ public sealed class HistoryPanelTests : IDisposable
     }
 
     [Fact]
+    public void ShowOlderVersionsAppendsTheNextPageWithTheSameTotal()
+    {
+        for (int i = 1; i <= 56; i++)
+        {
+            _ = SaveVersion("pager.md", $"# Pager\n\nBody {i}.\n");
+        }
+        HistoryViewModel history = NewHistory();
+        history.NoteChanged("pager.md");
+        history.ShowMarkers = true;
+        var firstPage = history.DayGroups.SelectMany(group => group.Rows).ToList();
+        Assert.Equal(50, firstPage.Count);
+        Assert.True(history.CanLoadOlder);
+        string headerBefore = history.HeaderText;
+
+        history.LoadOlder();
+
+        Assert.Null(history.LoadError);
+        var all = history.DayGroups.SelectMany(group => group.Rows).ToList();
+        Assert.True(all.Count > firstPage.Count, "no older rows appended");
+        // The append extends the SAME list: positions stay unique and
+        // the header total (core's TotalFiltered) never moves (H3).
+        Assert.Equal(
+            all.Count, all.Select(row => row.PositionFromTail).Distinct().Count());
+        Assert.Equal(headerBefore, history.HeaderText);
+        Assert.False(history.CanLoadOlder);
+        history.Shutdown();
+    }
+
+    [Fact]
     public void CompareAgainstCurrentWithoutAProviderIsSilent()
     {
         _ = SaveVersion("note0.md", "# Note 0\n\nBody.\n");
