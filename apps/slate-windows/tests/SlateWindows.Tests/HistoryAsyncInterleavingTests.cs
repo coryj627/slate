@@ -222,6 +222,44 @@ public sealed class HistoryAsyncInterleavingTests : IDisposable
     }
 
     [Fact]
+    public async Task AReplacedFunnelLoadStillDeliversTheVerdict()
+    {
+        _ = SaveVersion("rv.md", "# Rv\n\nFirst.\n");
+        HistoryViewModel history = NewAsyncHistory();
+        history.ShowChangesSinceOpen = true;
+        // Activation one establishes a marked baseline.
+        history.NoteChanged("rv.md");
+        await QuiesceAsync(history);
+        _ = SaveVersion("rv.md", "# Rv\n\nSecond.\n");
+        history.NoteChanged(null);
+        await QuiesceAsync(history);
+        using var gate = new ManualResetEventSlim(false);
+        history.LoadInterleaveForTests = () => gate.Wait(TimeSpan.FromSeconds(10));
+
+        // The activation's funnel load is in flight when a reveal
+        // reload (or a quick save / vault-event refresh) REPLACES it:
+        // the replaced load's publish drops by generation, so without
+        // the carry-over the verdict — and the mark — are silently
+        // cancelled for exactly the activation the opt-in section
+        // exists for (H8, round 2).
+        history.NoteChanged("rv.md");
+        history.Reload();
+        gate.Set();
+        history.LoadInterleaveForTests = null;
+        await QuiesceAsync(history);
+
+        Assert.Equal(HistorySinceOpenKind.Diff, history.SinceOpen.Kind);
+        // The mark rode the surviving load exactly once: a fresh
+        // activation owes nothing.
+        history.NoteChanged(null);
+        await QuiesceAsync(history);
+        history.NoteChanged("rv.md");
+        await QuiesceAsync(history);
+        Assert.Equal(HistorySinceOpenKind.None, history.SinceOpen.Kind);
+        history.Shutdown();
+    }
+
+    [Fact]
     public async Task APendingMarksChangesAreNeverReReported()
     {
         _ = SaveVersion("mk.md", "# Mk\n\nFirst.\n");

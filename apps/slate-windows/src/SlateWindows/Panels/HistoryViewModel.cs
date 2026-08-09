@@ -141,15 +141,20 @@ internal sealed record HistorySinceOpenState(
     StructuredDiff? Diff);
 
 /// <summary>The open inline destination row's staged state (H9/H10,
-/// divergence HD-2). Identity is captured AT OPEN (version hash /
-/// deleted source path — the capture-at-staging rule), so a reload
-/// that shifts positions can never re-target the row; the draft,
-/// notice, and refusal live here so a republish re-renders them
-/// instead of orphaning the view elements a completion closed
+/// divergence HD-2). COMMIT identity is captured AT OPEN (version
+/// hash / deleted source path — the capture-at-staging rule), so a
+/// reload that shifts positions can never re-target what a commit
+/// writes; the ROW anchor is the clicked position (HINV-2: rows are
+/// identified by position, never hash — duplicate hashes are a
+/// guaranteed post-restore state, round 2), so the row renders once,
+/// toggles once, and refocuses to the row the user came from. The
+/// draft, notice, and refusal live here so a republish re-renders
+/// them instead of orphaning the view elements a completion closed
 /// over (red team round 1).</summary>
 internal sealed record HistoryDestinationStaging(
     bool ForDeletedFile,
     string NotePath,
+    uint AnchorPosition,
     string VersionHash,
     string FormattedDate,
     string Notice,
@@ -195,6 +200,7 @@ internal sealed class HistoryViewModel : PanelWorkScheduler
     private string? _deletedError;
     private HistoryDestinationStaging? _destinationStaging;
     private Task? _pendingMarkOpened;
+    private bool _sinceOpenFunnelPending;
 
     public HistoryViewModel(
         VaultSession session,
@@ -448,6 +454,7 @@ internal sealed class HistoryViewModel : PanelWorkScheduler
         LoadError = null;
         _collapsedGroupIds.Clear();
         _compareSelection.Clear();
+        _sinceOpenFunnelPending = false;
         // A switch invalidates any in-flight diff (HINV-5): without
         // the bump, a worker whose (generation, path) still match
         // republishes a pre-switch diff into the fresh activation
@@ -475,6 +482,16 @@ internal sealed class HistoryViewModel : PanelWorkScheduler
         {
             return;
         }
+        // An activation's funnel survives being REPLACED: a reveal
+        // reload, a quick save, or a vault-event refresh landing while
+        // the funnel load is in flight drops that load by generation —
+        // without the carry-over, the verdict (and the mark) would be
+        // silently cancelled for exactly the activation the opt-in
+        // section exists for (H8 — round 2). The pending flag clears
+        // when a funnel-carrying publish lands.
+        runSinceOpenFunnel =
+            (runSinceOpenFunnel || _sinceOpenFunnelPending) && ShowChangesSinceOpen;
+        _sinceOpenFunnelPending = runSinceOpenFunnel;
         int generation = Interlocked.Increment(ref _generation);
         // A reload invalidates pagination NOW: core cursors survive
         // appends (only compaction bumps the cursor generation), so a
@@ -503,8 +520,10 @@ internal sealed class HistoryViewModel : PanelWorkScheduler
                 // flight (StartWork bodies are unordered): the verdict
                 // must observe the marked baseline, or a rapid A→B→A
                 // re-reports changes the user was already shown
-                // (HINV-8's cross-activation half). Bounded so a
-                // shutdown-skipped mark can never park the drain.
+                // (HINV-8's cross-activation half). Bounded: a
+                // shutdown-skipped mark can stall a waiter (and thus
+                // the Dispose drain) for at most these five seconds,
+                // never indefinitely.
                 Volatile.Read(ref _pendingMarkOpened)
                     ?.Wait(TimeSpan.FromSeconds(5));
                 // Verdict BEFORE the mark (the pinned core order,
@@ -541,6 +560,12 @@ internal sealed class HistoryViewModel : PanelWorkScheduler
                 return;
             }
             LoadError = null;
+            if (runSinceOpenFunnel)
+            {
+                // The funnel landed (verdict below, mark after) — the
+                // carry-over is discharged for this activation.
+                _sinceOpenFunnelPending = false;
+            }
             _loaded.Clear();
             _loaded.AddRange(page.Items);
             _nextCursor = page.NextCursor;
@@ -954,10 +979,12 @@ internal sealed class HistoryViewModel : PanelWorkScheduler
         {
             return;
         }
-        // Same-row toggle closes (the current affordance).
+        // Same-ROW toggle closes — keyed by position, never hash
+        // (HINV-2: two rows legitimately share a hash after a
+        // restore, and the other row's click must OPEN for that row,
+        // not close this one — round 2).
         if (_destinationStaging is { ForDeletedFile: false } open
-            && string.Equals(
-                open.VersionHash, row.ContentHashAfter, StringComparison.Ordinal))
+            && open.AnchorPosition == row.PositionFromTail)
         {
             CloseDestinationStaging();
             return;
@@ -965,6 +992,7 @@ internal sealed class HistoryViewModel : PanelWorkScheduler
         DestinationStaging = new HistoryDestinationStaging(
             ForDeletedFile: false,
             NotePath: path,
+            AnchorPosition: row.PositionFromTail,
             VersionHash: row.ContentHashAfter,
             FormattedDate: row.AbsoluteDate,
             Notice: RestoreAsNotice(row.AbsoluteDate),
@@ -976,6 +1004,7 @@ internal sealed class HistoryViewModel : PanelWorkScheduler
         DestinationStaging = new HistoryDestinationStaging(
             ForDeletedFile: true,
             NotePath: row.Path,
+            AnchorPosition: 0,
             VersionHash: string.Empty,
             FormattedDate: string.Empty,
             Notice: DeletedCollisionNotice(row.Path),

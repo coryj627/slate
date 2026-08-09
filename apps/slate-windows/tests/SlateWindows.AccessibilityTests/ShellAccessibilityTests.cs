@@ -3723,45 +3723,59 @@ public sealed class ShellAccessibilityTests
                         {
                             return false;
                         }
+                        // No Asserts inside the poll: a modal that
+                        // enumerates before its buttons materialize is
+                        // "not yet", never a failure.
                         AutomationElement[] buttons = confirm
                             .FindAllDescendants(automation.ConditionFactory
                                 .ByControlType(ControlType.Button));
-                        Assert.Contains(buttons, button =>
-                            string.Equals(
-                                button.Name, "Cancel", StringComparison.Ordinal));
+                        AutomationElement? cancel = buttons
+                            .FirstOrDefault(button =>
+                                string.Equals(
+                                    button.Name,
+                                    "Cancel",
+                                    StringComparison.Ordinal));
                         AutomationElement? restore = buttons
                             .FirstOrDefault(button =>
                                 string.Equals(
                                     button.Name,
                                     "Restore",
                                     StringComparison.Ordinal));
-                        restore?.Patterns.Invoke.Pattern.Invoke();
-                        return restore is not null;
+                        if (cancel is null || restore is null)
+                        {
+                            return false;
+                        }
+                        restore.Patterns.Invoke.Pattern.Invoke();
+                        return true;
                     },
                     TimeSpan.FromSeconds(15)),
-                "the restore confirmation dialog never appeared");
+                "the restore confirmation dialog with its pinned "
+                + "Cancel/Restore buttons never appeared");
             Assert.True(
                 SpinWait.SpinUntil(
                     () => !File.ReadAllText(Path.Combine(vaultRoot, "alpha.md"))
                         .Contains("second revision", StringComparison.Ordinal),
                     TimeSpan.FromSeconds(15)),
                 "the restore never landed on disk");
-            // Success returns focus to the NEW head row (H7 / WCAG
-            // 2.4.3) — the reload is asynchronous, so the focus
-            // request is consumed only after the publish renders the
-            // fresh rows (red team round 1: four agents found the
-            // pre-publish focus race).
+            // Success returns focus to the NEW HEAD row — exactly
+            // HistoryRow0, not the anchor row or its buttons, whose
+            // ids also start with "HistoryRow" (H7 / WCAG 2.4.3;
+            // round 2 tightened the gate). The reload is
+            // asynchronous, so the focus request is consumed only
+            // after the publish renders the fresh rows (round 1:
+            // four agents found the pre-publish focus race).
             Assert.True(
                 SpinWait.SpinUntil(
                     () =>
                     {
                         AutomationElement? focused = automation.FocusedElement();
-                        return (focused?.Properties.AutomationId.ValueOrDefault
-                                ?? string.Empty)
-                            .StartsWith("HistoryRow", StringComparison.Ordinal);
+                        return string.Equals(
+                            focused?.Properties.AutomationId.ValueOrDefault,
+                            "HistoryRow0",
+                            StringComparison.Ordinal);
                     },
                     TimeSpan.FromSeconds(15)),
-                "focus never landed on a history row after the restore");
+                "focus never landed on the new head row after the restore");
         }
         finally
         {

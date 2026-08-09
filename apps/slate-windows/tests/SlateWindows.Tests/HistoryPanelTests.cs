@@ -931,6 +931,7 @@ public sealed class HistoryPanelTests : IDisposable
             Assert.IsType<HistoryDestinationStaging>(history.DestinationStaging);
         Assert.Equal(oldest.ContentHashAfter, staging.VersionHash);
         Assert.Equal(oldest.AbsoluteDate, staging.FormattedDate);
+        Assert.Equal(oldest.PositionFromTail, staging.AnchorPosition);
 
         // The draft survives a reload that shifts every position — the
         // staged identity is what commits, never "the row at that
@@ -949,6 +950,40 @@ public sealed class HistoryPanelTests : IDisposable
         Assert.Equal(
             "A file already exists at x.", history.DestinationStaging?.Refusal);
         history.NoteChanged(null);
+        Assert.Null(history.DestinationStaging);
+        history.Shutdown();
+    }
+
+    [Fact]
+    public void StagingTogglesByRowPositionNeverByHash()
+    {
+        // Duplicate content hashes are a GUARANTEED state (restoring
+        // reproduces a hash; so does saving identical content) —
+        // HINV-2: row identity is position, never hash (round 2).
+        _ = SaveVersion("note0.md", "# Note 0\n\nAlpha.\n");
+        _ = SaveVersion("note0.md", "# Note 0\n\nBeta.\n");
+        _ = SaveVersion("note0.md", "# Note 0\n\nAlpha.\n");
+        HistoryViewModel history = NewHistory();
+        history.NoteChanged("note0.md");
+        var rows = history.DayGroups
+            .SelectMany(group => group.Rows)
+            .Where(row => !row.IsMarker)
+            .ToList();
+        HistoryVersionRow head = rows.First();
+        HistoryVersionRow twin = rows.Last();
+        Assert.Equal(head.ContentHashAfter, twin.ContentHashAfter);
+        Assert.NotEqual(head.PositionFromTail, twin.PositionFromTail);
+
+        // Opening on the TWIN, then clicking the HEAD, must stage the
+        // head — a hash-keyed toggle would CLOSE instead.
+        history.OpenRestoreAsStaging(twin, "note0 (restored).md");
+        history.OpenRestoreAsStaging(head, "note0 (restored).md");
+        HistoryDestinationStaging staging =
+            Assert.IsType<HistoryDestinationStaging>(history.DestinationStaging);
+        Assert.Equal(head.PositionFromTail, staging.AnchorPosition);
+
+        // The SAME row's second click is the toggle-close.
+        history.OpenRestoreAsStaging(head, "note0 (restored).md");
         Assert.Null(history.DestinationStaging);
         history.Shutdown();
     }

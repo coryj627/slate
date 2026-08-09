@@ -45,6 +45,7 @@ internal sealed class HistorySurfaceView : UserControl
     private bool _deletedSegmentActive;
     private bool _pendingFocusHead;
     private bool _stagingFocusPending;
+    private bool _suppressSegmentFallbackOnce;
     private string? _renderedRefusal;
 
     public HistorySurfaceView()
@@ -355,10 +356,16 @@ internal sealed class HistorySurfaceView : UserControl
                 rows.Children.Add(BuildInlineDiff(inline));
             }
             if (model.DestinationStaging is { ForDeletedFile: false } staging
+                && staging.AnchorPosition == row.PositionFromTail
                 && string.Equals(
                     staging.VersionHash, row.ContentHashAfter,
                     StringComparison.Ordinal))
             {
+                // Anchored by POSITION (unique — HINV-2; a hash match
+                // alone renders the row under EVERY duplicate after a
+                // restore, round 2), with the hash as a staleness
+                // check: a reload that shifted positions falls back to
+                // the orphan slot rather than a wrong row.
                 stagingAnchored = true;
                 rows.Children.Add(BuildVersionDestinationRow(model, staging));
             }
@@ -373,18 +380,21 @@ internal sealed class HistorySurfaceView : UserControl
         AutomationProperties.SetAutomationId(
             expander, $"HistoryDay{group.Id}");
         AutomationProperties.SetName(expander, group.AccessibleName);
-        expander.Expanded += (_, _) => group.IsCollapsed = false;
-        expander.Collapsed += (_, _) => group.IsCollapsed = true;
-        group.PropertyChanged += (_, changed) =>
+        // The name carries the expanded/collapsed state (H4); WPF
+        // never re-reads it on its own, so each toggle re-sets it or
+        // the name contradicts the pattern state (red team round 1).
+        // The re-set rides the expander's OWN events — a subscription
+        // on the persistent group would accumulate one handler (and
+        // root one dead visual subtree) per re-render (round 2).
+        expander.Expanded += (_, _) =>
         {
-            if (changed.PropertyName == nameof(HistoryDayGroup.AccessibleName))
-            {
-                // The name carries the expanded/collapsed state (H4);
-                // WPF never re-reads it on its own, so a toggle must
-                // re-set it or the name contradicts the pattern state
-                // (red team round 1).
-                AutomationProperties.SetName(expander, group.AccessibleName);
-            }
+            group.IsCollapsed = false;
+            AutomationProperties.SetName(expander, group.AccessibleName);
+        };
+        expander.Collapsed += (_, _) =>
+        {
+            group.IsCollapsed = true;
+            AutomationProperties.SetName(expander, group.AccessibleName);
         };
         return expander;
     }
@@ -504,8 +514,12 @@ internal sealed class HistorySurfaceView : UserControl
                     staging.VersionHash, staging.FormattedDate, destination, done),
             closeAndRefocus: () =>
             {
+                // The close's own re-render must not bounce focus off
+                // the segment radio before the anchor focus lands
+                // (round 2): suppress that one fallback.
+                _suppressSegmentFallbackOnce = true;
                 model.CloseDestinationStaging();
-                FocusVersionRowByHash(staging.VersionHash);
+                FocusVersionRowByPosition(staging.AnchorPosition);
             });
 
     /// <summary>The inline destination row (divergence HD-2): notice,
@@ -746,6 +760,7 @@ internal sealed class HistorySurfaceView : UserControl
                     staging.NotePath, destination, done),
             closeAndRefocus: () =>
             {
+                _suppressSegmentFallbackOnce = true;
                 model.CloseDestinationStaging();
                 FocusDeletedRowByPath(staging.NotePath);
             });
@@ -962,7 +977,17 @@ internal sealed class HistorySurfaceView : UserControl
         }
         if (target is not null)
         {
+            _suppressSegmentFallbackOnce = false;
             FocusElementOrFirstChild(target);
+            return;
+        }
+        if (_suppressSegmentFallbackOnce)
+        {
+            // A closeAndRefocus path owns the next focus move (its
+            // anchor focus is already queued behind this callback) —
+            // bouncing through the segment radio first would announce
+            // a spurious hop (round 2).
+            _suppressSegmentFallbackOnce = false;
             return;
         }
         // The focused element's identity vanished with the rebuild
@@ -982,24 +1007,20 @@ internal sealed class HistorySurfaceView : UserControl
             new TraversalRequest(FocusNavigationDirection.First));
     }
 
-    private void FocusVersionRowByHash(string versionHash)
+    private void FocusVersionRowByPosition(uint anchorPosition)
     {
-        uint? position = Model?.DayGroups
-            .SelectMany(group => group.Rows)
-            .FirstOrDefault(row => string.Equals(
-                row.ContentHashAfter, versionHash, StringComparison.Ordinal))
-            ?.PositionFromTail;
+        // The anchor row by its POSITION identity (HINV-2 — a hash
+        // lookup lands on the newest duplicate after a restore,
+        // round 2).
         _ = Dispatcher.InvokeAsync(
             () =>
             {
-                FrameworkElement? target = position is { } anchor
-                    ? FindDescendant(
-                        this,
-                        candidate => string.Equals(
-                            AutomationProperties.GetAutomationId(candidate),
-                            $"HistoryRow{anchor}",
-                            StringComparison.Ordinal))
-                    : null;
+                FrameworkElement? target = FindDescendant(
+                    this,
+                    candidate => string.Equals(
+                        AutomationProperties.GetAutomationId(candidate),
+                        $"HistoryRow{anchorPosition}",
+                        StringComparison.Ordinal));
                 if (target is not null)
                 {
                     _ = target.Focus();
