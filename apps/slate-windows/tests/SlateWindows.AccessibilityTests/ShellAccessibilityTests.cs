@@ -3831,17 +3831,25 @@ public sealed class ShellAccessibilityTests
 
     /// <summary>
     /// W4-8 (#740) §W-C journey: the Sync leaf behind the rail over a
-    /// fixture vault carrying two REAL provider markers (a <c>.git</c>
-    /// directory and a <c>.stfolder</c> — Git and Syncthing detect
-    /// from in-vault entries alone, so the fixture is deterministic on
-    /// every machine with zero environment dependence). Covers the
-    /// populated report, the composed provider-row name reaching UIA,
-    /// the Evidence disclosure with its SD9-normalized paths, the
-    /// chordless slate.diagnostics.refreshSync menu route, and the SD8
-    /// marker watcher end-to-end via a THIRD marker planted
-    /// mid-session — the one link no unit fact covers. Honors the
-    /// recorded journey traps (no Asserts inside SpinUntil,
-    /// re-acquire after every publish, async Invoke settle).
+    /// fixture vault carrying three REAL provider markers — a
+    /// <c>.git</c> directory, a <c>.stfolder</c>, and the vault's own
+    /// path nested under a directory named <c>OneDrive</c>. All three
+    /// arms read only in-vault entries or the vault's own path, so the
+    /// fixture stays deterministic on every machine with zero
+    /// environment dependence, and Syncthing + OneDrive (both Medium)
+    /// also render the multi-sync warning row through the axe scan.
+    /// The OneDrive nesting is load-bearing, not decoration: that arm
+    /// alone yields CANONICALIZED evidence, so it is the only one whose
+    /// path carries a <c>\\?\</c> prefix before SD9 normalization —
+    /// asserting on Git's relative <c>.git</c> literal could never
+    /// fail (red team round 1). Covers the populated report, the
+    /// composed provider-row name reaching UIA, the Evidence
+    /// disclosure with its SD9-normalized paths, the chordless
+    /// slate.diagnostics.refreshSync menu route, and the SD8 marker
+    /// watcher end-to-end via a FOURTH marker planted mid-session —
+    /// the one link no unit fact covers. Honors the recorded journey
+    /// traps (no Asserts inside SpinUntil, re-acquire after every
+    /// publish, async Invoke settle).
     /// </summary>
     [Fact]
     [Trait("gate", "W-C")]
