@@ -107,9 +107,86 @@ public sealed class SyncDiagnosticsLifecycleTests : IDisposable
 
         await SettleSidebarAsync(lifecycle);
         _ = await OpenAndProbeAsync(lifecycle, first);
-        // Back to a vault that already spoke: still silent. A latch
-        // would have re-armed on the switch away.
+        // Back to a vault that already spoke: still silent. This is
+        // where the SET parts company with mac's single-slot latch,
+        // which would have re-armed on the switch away — divergence
+        // SDD-6, recorded deliberately as the quieter reading.
         Assert.Equal(2, SummaryAnnouncements().Count);
+    }
+
+    /// <summary>
+    /// The gate's KEY, not its scope. The comment on
+    /// <c>_announcedSyncVaultPaths</c> promises that "C:\Vault" and
+    /// "c:\vault\" are one vault, which is exactly the case a real
+    /// user hits: a CLI/ArgumentList spelling versus the picker's
+    /// canonical casing, or a trailing separator from a shell
+    /// completion. Without BOTH the case-insensitive comparer and the
+    /// trailing-separator trim the round-1 HIGH defect comes straight
+    /// back — a second High-priority interruption on what is really
+    /// the same reopen. Round 2 caught that neither half was gated:
+    /// swapping to Ordinal and dropping the trim left all 80 sync
+    /// facts green.
+    /// </summary>
+    [Fact]
+    public async Task TheAnnounceGateTreatsCasingAndATrailingSeparatorAsOneVault()
+    {
+        string root = NewVault("announce-key");
+        PlantLiveSyncPlugin(root);
+        using VaultLifecycleViewModel lifecycle = NewLifecycle(root);
+
+        _ = await OpenAndProbeAsync(lifecycle, root);
+        Assert.Single(SummaryAnnouncements());
+
+        // The same directory, spelled two ways a caller legitimately
+        // produces. Neither is a new vault, so neither may re-announce.
+        await SettleSidebarAsync(lifecycle);
+        lifecycle.CloseVault();
+        _ = await OpenAndProbeAsync(lifecycle, root.ToUpperInvariant());
+        Assert.Single(SummaryAnnouncements());
+
+        await SettleSidebarAsync(lifecycle);
+        lifecycle.CloseVault();
+        _ = await OpenAndProbeAsync(
+            lifecycle, root + Path.DirectorySeparatorChar);
+        Assert.Single(SummaryAnnouncements());
+    }
+
+    /// <summary>
+    /// The gate's ORDER. A Low/Medium-only report must not consume the
+    /// vault's one admission: the code checks risk FIRST and admits
+    /// second, and round 2 found that inverting those two — the exact
+    /// ordering the comment says must not happen — left every sync
+    /// fact green. The scenario is reachable and silences a real
+    /// finding: open a vault whose only marker is Low risk, then a
+    /// sync client starts mid-session and the watcher republishes a
+    /// High-risk report that must still be announced.
+    /// </summary>
+    [Fact]
+    public async Task ALowRiskFirstProbeDoesNotConsumeTheVaultsAnnouncement()
+    {
+        string root = NewVault("announce-order");
+        // Git alone is Low risk: no warning, no High provider, so the
+        // SD6 gate refuses — WITHOUT spending the admission.
+        Directory.CreateDirectory(Path.Combine(root, ".git"));
+        using VaultLifecycleViewModel lifecycle = NewLifecycle(root);
+
+        SyncDetectionReport low = await OpenAndProbeAsync(lifecycle, root);
+        Assert.Contains(low.Providers, provider => provider.Kind == SyncProviderKind.Git);
+        Assert.DoesNotContain(
+            low.Providers, provider => provider.RiskLevel == RiskLevel.High);
+        Assert.Empty(SummaryAnnouncements());
+
+        // The risk story changes mid-session — the case the watcher
+        // exists for. The admission must still be available.
+        PlantLiveSyncPlugin(root);
+        WorkspaceViewModel workspace =
+            Assert.IsType<WorkspaceViewModel>(lifecycle.Workspace);
+        workspace.RefreshSyncDiagnostics();
+        Assert.True(
+            await SpinAsync(
+                () => SummaryAnnouncements().Count == 1, Bound),
+            "a High-risk report that arrived after a Low-risk probe was "
+            + "never announced — the Low probe consumed the admission");
     }
 
     // --- SD4 / SDINV-5 / SDINV-8: the arm ---

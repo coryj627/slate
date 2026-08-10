@@ -61,8 +61,12 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
     /// reader again with a risk story that has not changed just
     /// because the vault was closed and reopened mid-session. The mac
     /// twin (<c>AppState.syncAnnouncedVaultPath</c>, AppState.swift
-    /// :11549) makes the same call in the same words. A different
-    /// vault path re-arms; the same path stays silent.
+    /// :11549) makes the same call for the same reason, in the same
+    /// words — but it is a single-slot LATCH, so switching away and
+    /// back re-announces there and stays silent here (divergence
+    /// SDD-6; a SET is the strictly quieter reading of "at most once
+    /// per vault"). A different vault path re-arms; the same path
+    /// stays silent, for the life of the process.
     ///
     /// Comparison follows the vault-root convention this file already
     /// uses for Recents (<c>RecentVaultsStore.Add/Remove</c> compare

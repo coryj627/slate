@@ -192,6 +192,16 @@ with settle, and `AssertAxeClean(process, "sync-diagnostics")`.
 - **SDD-3** Windows joins the panel-scheduler drain discipline
   (`PanelWorkScheduler` + the workspace drain) in place of mac's actor/task model —
   the SD5 guards are the shared contract.
+- **SDD-6** (added 2026-08-09, red team round 2) The announce-once gate is a SET of
+  vault paths; mac's `syncAnnouncedVaultPath` (AppState.swift:11549) is a
+  single-slot LATCH. Identical for the case both were written for — close and
+  reopen the same vault stays silent — but they part on switch-away-and-back
+  (A → B → A): mac re-announces because the latch now holds B, Windows stays
+  silent because A is still in the set. Windows is the quieter reading of "at most
+  once per vault" and the one this register's SD6 wording actually describes, so
+  Windows keeps it; the divergence is recorded rather than "fixed" toward the
+  noisier behavior. Not filed against mac: re-announcing on a deliberate return to
+  a known-risky vault is defensible, not a defect.
 - **SDD-5** (added 2026-08-09, red team round 1) The risk badge is the risk WORD
   plus a themed brush; mac renders an SF Symbol beside the word (SD3 says "glyph +
   word"). There is no AT-observable delta — mac's glyph is decorative, so both
@@ -224,7 +234,9 @@ with settle, and `AssertAxeClean(process, "sync-diagnostics")`.
 - **SDR-4** Env-var probes read the real process environment only in `RealFs`;
   every test goes through `FakeFs`'s env map (the census must stay hermetic).
 - **SDR-5** The once-per-vault announce gate is an in-session set keyed by vault
-  path (the compaction-relay pattern); a vault switch re-admits — mac-identical.
+  path (the compaction-relay pattern), owned by the vault lifecycle so it outlives
+  the per-open workspace. A DIFFERENT vault path re-admits; the same path never
+  does. See SDD-6 for where that parts company with mac.
 - **SDR-6** `LivesyncConfig()` cost rides the same off-dispatcher hop as
   `DetectSync()`; if either throws, the pair fails to the error state together
   (mac-identical single-task semantics).
