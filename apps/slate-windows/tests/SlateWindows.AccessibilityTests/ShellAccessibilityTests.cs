@@ -4306,6 +4306,62 @@ public sealed class ShellAccessibilityTests
                 results.FindAllDescendants(),
                 element => string.Equals(element.Name, "View", StringComparison.Ordinal));
 
+            // --- text editing survives the modal swallow ---------------
+            // The overlay swallows shell chords so they cannot fire
+            // underneath it, and the first version swallowed EVERY
+            // modified key — which killed Ctrl+A, Ctrl+C, Ctrl+V and
+            // Shift-selection inside the palette's own search box, because
+            // TextBox reaches those through InputBindings and WPF runs
+            // InputBindings only for UNHANDLED key events. Ctrl+A then
+            // Delete discriminates: with Ctrl+A swallowed the caret sits
+            // at the end and Delete removes nothing.
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_A);
+            PressKey(VirtualKeyShort.DELETE);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            return string.IsNullOrEmpty(
+                                search.Patterns.Value.Pattern.Value.ValueOrDefault);
+                        }
+                        catch (System.Runtime.InteropServices.COMException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(5)),
+                "Ctrl+A did not reach the palette's search box — the modal "
+                + "swallow is eating text-editing chords. Query is still: "
+                + $"'{search.Patterns.Value.Pattern.Value.ValueOrDefault}'");
+
+            // Put the filter back for the invocation leg.
+            search.Patterns.Value.Pattern.SetValue("right pane");
+            togglePaneRow = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            togglePaneRow = results
+                                .FindAllDescendants(automation.ConditionFactory
+                                    .ByControlType(ControlType.ListItem))
+                                .FirstOrDefault(item => string.Equals(
+                                    item.Name,
+                                    "Toggle Right Pane, Control Alt I",
+                                    StringComparison.Ordinal));
+                            return togglePaneRow is not null;
+                        }
+                        catch (System.Runtime.InteropServices.COMException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the filtered row did not come back after retyping");
+
             // --- invoke, and assert the command actually ran -----------
             // Selection is view-model-authoritative, so drive it the way a
             // user does rather than by setting SelectedItem.

@@ -365,15 +365,31 @@ public partial class MainWindow : Window
         if (_viewModel.Palette.IsOpen)
         {
             HandleCommandPaletteKey(e, modifiers);
-            if (!e.Handled)
+            if (e.Handled)
             {
-                // Everything the palette does not consume is swallowed
-                // rather than routed on, except plain typing, which has to
-                // reach the search box.
-                e.Handled = modifiers is not ModifierKeys.None
-                    || IsUnderlyingShellShortcut(e.Key, modifiers);
+                return;
             }
 
+            // PD-2: the chord does not toggle, so pressing it while open
+            // re-opens. Handled here because the blanket swallow below
+            // would otherwise eat it and make PD-2 unreachable.
+            if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.P)
+            {
+                _viewModel.Palette.Open();
+                e.Handled = true;
+                return;
+            }
+
+            // Swallow anything that would otherwise fire a shell command
+            // underneath the open overlay — but NOT plain typing, and NOT
+            // the chords that edit the search text. Marking every modified
+            // key handled here kills Ctrl+V, Ctrl+A, Ctrl+C and
+            // Shift-selection inside the palette's own box, because
+            // TextBox reaches those through InputBindings, which WPF runs
+            // only for UNHANDLED key events.
+            e.Handled = IsUnderlyingShellShortcut(e.Key, modifiers)
+                || (modifiers is not ModifierKeys.None
+                    && !IsTextEditingChord(e.Key, modifiers));
             return;
         }
 
@@ -590,6 +606,43 @@ public partial class MainWindow : Window
         {
             e.Handled = true;
         }
+    }
+
+    /// <summary>
+    /// Chords that must reach a focused <see cref="TextBox"/> while a modal
+    /// overlay owns the keyboard.
+    /// </summary>
+    /// <remarks>
+    /// An allow-list rather than a shell-chord deny-list on purpose: the
+    /// deny-list (<see cref="IsUnderlyingShellShortcut"/>) was written for
+    /// W1 and has not tracked every chord added since — Ctrl+J,
+    /// Ctrl+Shift+E and Ctrl+R are all missing from it — so inverting the
+    /// test would let those fire underneath the overlay. Naming what text
+    /// editing needs is both smaller and stable.
+    /// </remarks>
+    private static bool IsTextEditingChord(Key key, ModifierKeys modifiers)
+    {
+        // Shift alone: capitals, and Shift+arrow/Home/End selection.
+        if (modifiers == ModifierKeys.Shift)
+        {
+            return true;
+        }
+
+        if (modifiers == ModifierKeys.Control)
+        {
+            return key is Key.A or Key.C or Key.V or Key.X or Key.Z or Key.Y
+                or Key.Left or Key.Right or Key.Home or Key.End
+                or Key.Back or Key.Delete;
+        }
+
+        if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift))
+        {
+            // Ctrl+Shift+Z is redo; the rest are word-wise selection.
+            return key is Key.Z
+                or Key.Left or Key.Right or Key.Home or Key.End;
+        }
+
+        return false;
     }
 
     private static bool IsUnderlyingShellShortcut(Key key, ModifierKeys modifiers)
