@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Threading;
 
 namespace SlateWindows;
@@ -216,15 +217,64 @@ public partial class MainWindow
         _ = Dispatcher.InvokeAsync(
             () =>
             {
-                // An invoked command usually moves focus itself, and the
-                // element that had focus before may no longer be alive, so
-                // a failed restore falls back to the editor rather than
-                // stranding focus on the window root.
+                // An invoked command often opens its own surface and
+                // focuses it deliberately — the Add Property sheet's Key
+                // field, Quick Open's search box. Those focus operations
+                // are queued at the same priority and run BEFORE this one,
+                // so restoring unconditionally steals focus straight back
+                // out of the surface the user just asked for. Quick Open
+                // solves the same problem with a commit flag; the live
+                // focus is the more direct signal, and it also covers a
+                // command that moved focus without opening anything.
+                if (FocusClaimedOutsideThePalette())
+                {
+                    return;
+                }
+
+                // Otherwise the element that had focus before may no
+                // longer be alive, so a failed restore falls back to the
+                // editor rather than stranding focus on the window root.
                 if (focusBefore is null || !TryFocus(focusBefore))
                 {
                     FocusActiveEditorPane();
                 }
             },
             DispatcherPriority.Input);
+    }
+
+    /// <summary>
+    /// Whether something outside the palette has taken keyboard focus by
+    /// the time the restore runs — the signal that an invoked command
+    /// placed focus on purpose.
+    /// </summary>
+    private bool FocusClaimedOutsideThePalette()
+    {
+        if (Keyboard.FocusedElement is not DependencyObject focused)
+        {
+            return false;
+        }
+
+        // The window root is "focus nowhere", not a deliberate claim.
+        if (ReferenceEquals(focused, this))
+        {
+            return false;
+        }
+
+        // Focus still inside the (now collapsed) overlay means nothing
+        // claimed it — this is the ordinary Escape and success path.
+        return !IsDescendantOfPaletteOverlay(focused);
+    }
+
+    private bool IsDescendantOfPaletteOverlay(DependencyObject? node)
+    {
+        for (; node is not null; node = VisualTreeHelper.GetParent(node))
+        {
+            if (ReferenceEquals(node, CommandPaletteOverlay))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

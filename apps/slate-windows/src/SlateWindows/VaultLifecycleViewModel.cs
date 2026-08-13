@@ -313,6 +313,11 @@ internal sealed class VaultLifecycleViewModel
             return;
         }
 
+        // P14: the palette must never be open with no vault, or the
+        // next vault open auto-presents it. Dismissed BEFORE the session
+        // goes away, so the overlay cannot survive the gap.
+        _palette?.Dismiss();
+
         string root;
         try
         {
@@ -435,6 +440,11 @@ internal sealed class VaultLifecycleViewModel
         {
             return;
         }
+
+        // P14: the palette must never be open with no vault, or the
+        // next vault open auto-presents it. Dismissed BEFORE the session
+        // goes away, so the overlay cannot survive the gap.
+        _palette?.Dismiss();
 
         ++_generation;
         CloseSession();
