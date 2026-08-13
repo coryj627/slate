@@ -315,24 +315,51 @@ auto-presents an empty palette.
   palette, which is a real discoverability improvement, but adding menu
   items for them is a menu-design change beyond this issue.
 
-## Open questions to close during implementation
+## Resolved before implementation
 
-1. **`CommandAction` thread affinity.** `InvokeById` is a synchronous FFI
-   call into a `Send + Sync` registry; the C# action runs on the calling
-   thread. There is no precedent for a uniffi callback that must run on the
-   dispatcher — the closest analogues (`UiProgressListener`,
-   `UiVaultEventListener`) both take an explicit `enqueueUi` delegate. The
-   bridge needs the same, and the choice must be a contract line before the
-   red team, not after.
-2. **`sidebar_pinned_order` source.** `FilesSidebarViewModel` maintains
-   pinned and recent collections but exposes neither as an ordered
-   `string[]`.
-3. **Registry lifetime owner** — `App`, `MainWindow`, or
-   `VaultLifecycleViewModel`. `CommandPaletteNeedsVault` implies some
-   commands are vault-scoped while the registry may not be.
-4. **Whether the palette memoizes `PaletteSections`** per
-   `(snapshot, query, recents)`. Mac calls the FFI several times per render
-   through computed properties. Memoization must not change results.
+These four were open when the contracts landed and are now decided; each
+becomes a binding contract line rather than an implementation choice.
+
+**P15 — Invocation is dispatcher-affine.** `InvokeById` is a synchronous
+FFI call and `ForeignActionAdapter` invokes the foreign action on the
+calling thread, so a `CommandAction` invoked from the UI thread runs on the
+UI thread with no marshalling. The registry is therefore **only ever
+invoked from the dispatcher thread**; the action adapter asserts
+`CheckAccess()` and throws otherwise. This is deliberately stricter than the
+`enqueueUi` pattern the scan and vault listeners use — those receive events
+from Rust-owned background threads, whereas command invocation is always
+user-initiated from a UI surface. If a future caller needs background
+invocation it marshals to the dispatcher first; the registry does not
+acquire an `enqueueUi` seam speculatively.
+
+**P16 — `sidebar_pinned_order` is the action-catalog order, declared by the
+bridge.** The question's premise was wrong: `FilesSidebarViewModel._pinned`
+and `._recents` hold **file paths**, not command ids, and are unrelated to
+this parameter. Core wants the sidebar *action catalog's* id order, which
+mac supplies from `SidebarActionCatalog.actions.map(\.id)`. It matters
+because `Registry.List()` sorts by `(section, id)`, so passing an empty
+list renders the Sidebar section alphabetically rather than in catalog
+order. The bridge declares an explicit ordered id list mirroring mac's
+catalog order and passes it — data, not policy, exactly as the FFI doc
+specifies.
+
+**P17 — One app-lifetime registry, registered once at shell
+construction.** Commands are registered a single time; their actions
+resolve live state through a provider rather than capturing a workspace
+instance, so vault open and close never mutate the registry. This keeps
+P2's "a `true` return is a fatal conflict" rule meaningful (re-registering
+per vault would make replacement the normal case) and makes the
+registration-forward drift test deterministic. Vault-scoped commands refuse
+through the availability gate; the palette itself refuses to open without a
+vault via `CommandPaletteNeedsVault`, so a registry holding vault-scoped
+commands with no vault open is a reachable but harmless state.
+
+**P18 — `PaletteSections` is computed once per query change**, stored on
+the view model, and read from that field by rendering, navigation, and the
+filter count. Mac re-enters the FFI several times per render through
+computed properties; the Windows host does not, and the stored value is
+keyed to the open snapshot, so no cache-invalidation question arises
+(P4 makes the snapshot immutable for the palette's lifetime).
 
 ## Round record
 
