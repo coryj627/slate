@@ -48,6 +48,7 @@ public partial class MainWindow : Window
         _viewModel.WorkspaceFocusBoundaryRequested += ViewModel_WorkspaceFocusBoundaryRequested;
         _viewModel.PropertyChanged += ViewModel_PropertyChanged;
         DataContext = _viewModel;
+        ObservePalette();
         RecentVaultJumpList.Apply(_viewModel.RecentVaults);
     }
 
@@ -356,6 +357,37 @@ public partial class MainWindow : Window
     private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         ModifierKeys modifiers = Keyboard.Modifiers;
+
+        // The palette is modal: while it is open it owns the keyboard, so
+        // no shell chord fires underneath it. Placed ahead of Quick Open
+        // because the two overlays are mutually exclusive and the palette
+        // is the outer surface.
+        if (_viewModel.Palette.IsOpen)
+        {
+            HandleCommandPaletteKey(e, modifiers);
+            if (!e.Handled)
+            {
+                // Everything the palette does not consume is swallowed
+                // rather than routed on, except plain typing, which has to
+                // reach the search box.
+                e.Handled = modifiers is not ModifierKeys.None
+                    || IsUnderlyingShellShortcut(e.Key, modifiers);
+            }
+
+            return;
+        }
+
+        if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.P)
+        {
+            // PD-2: Ctrl+Shift+P, the direct map of mac's Shift-Command-P
+            // and the Windows convention. Handled here rather than as a
+            // KeyBinding because the palette exposes methods, not
+            // ICommands (PR-4).
+            _viewModel.Palette.Open();
+            e.Handled = true;
+            return;
+        }
+
         if (_viewModel.QuickSwitcher?.IsOpen == true)
         {
             HandleQuickSwitcherKey(e, modifiers);

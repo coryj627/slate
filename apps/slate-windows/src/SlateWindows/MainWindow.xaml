@@ -66,6 +66,9 @@
                         <DataTrigger Binding="{Binding QuickSwitcher.IsOpen}" Value="True">
                             <Setter Property="IsEnabled" Value="False" />
                         </DataTrigger>
+                        <DataTrigger Binding="{Binding Palette.IsOpen}" Value="True">
+                            <Setter Property="IsEnabled" Value="False" />
+                        </DataTrigger>
                     </Style.Triggers>
                 </Style>
             </Menu.Style>
@@ -400,6 +403,9 @@
                             <DataTrigger Binding="{Binding QuickSwitcher.IsOpen}" Value="True">
                                 <Setter Property="IsEnabled" Value="False" />
                             </DataTrigger>
+                            <DataTrigger Binding="{Binding Palette.IsOpen}" Value="True">
+                                <Setter Property="IsEnabled" Value="False" />
+                            </DataTrigger>
                         </Style.Triggers>
                     </Style>
                 </local:AutomationLandmarkGrid.Style>
@@ -453,6 +459,9 @@
                         <Setter Property="IsEnabled" Value="True" />
                         <Style.Triggers>
                             <DataTrigger Binding="{Binding QuickSwitcher.IsOpen}" Value="True">
+                                <Setter Property="IsEnabled" Value="False" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding Palette.IsOpen}" Value="True">
                                 <Setter Property="IsEnabled" Value="False" />
                             </DataTrigger>
                         </Style.Triggers>
@@ -1907,6 +1916,173 @@
                                                                Visibility="{Binding IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}"
                                                                Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                     </DockPanel>
+                </Grid>
+            </local:AutomationLandmarkBorder>
+            <!-- ==========================================================
+                 W5-1 (#741): the command palette. Built on the Quick Open
+                 shape above — an in-window overlay, never a WPF Popup,
+                 whose UIA subtree would be a sibling HWND (contract P5).
+
+                 Two bindings here are load-bearing and easy to get wrong.
+                 Visibility resolves through the WINDOW, because this
+                 element overrides its own DataContext: binding the short
+                 path would resolve against CommandPaletteViewModel, fail,
+                 and stick at FallbackValue=Collapsed forever — shipped
+                 twice before, in W4-5 and W4-6. And the results list gets
+                 its ItemsSource from code-behind, not from a binding,
+                 because the rows are grouped by the section core PLACED
+                 them in; see RefreshPaletteGrouping.
+                 ========================================================== -->
+            <Border Background="Transparent"
+                    Visibility="{Binding Palette.IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}" />
+            <local:AutomationLandmarkBorder x:Name="CommandPaletteOverlay"
+                    Width="640"
+                    MaxHeight="470"
+                    Padding="16"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Top"
+                    Margin="0,72,0,0"
+                    Background="{DynamicResource Slate.SurfaceBrush}"
+                    BorderBrush="{DynamicResource Slate.BorderBrush}"
+                    BorderThickness="1"
+                    Visibility="{Binding DataContext.Palette.IsOpen, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Collapsed}"
+                    DataContext="{Binding Palette}"
+                    FocusManager.IsFocusScope="True"
+                    KeyboardNavigation.TabNavigation="Cycle"
+                    KeyboardNavigation.ControlTabNavigation="Cycle"
+                    AutomationProperties.AutomationId="CommandPalette"
+                    AutomationProperties.Name="Command Palette"
+                    AutomationProperties.IsDialog="True">
+                <local:AutomationLandmarkBorder.Effect>
+                    <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
+                </local:AutomationLandmarkBorder.Effect>
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <TextBox x:Name="CommandPaletteSearchTextBox"
+                             Grid.Row="0"
+                             Padding="10,8"
+                             FontSize="18"
+                             Text="{Binding Query, UpdateSourceTrigger=PropertyChanged}"
+                             PreviewKeyDown="CommandPaletteSearch_PreviewKeyDown"
+                             AutomationProperties.AutomationId="CommandPaletteSearch"
+                             AutomationProperties.Name="Search commands"
+                             AutomationProperties.HelpText="Up and Down move selection. Home, End, Page Up and Page Down jump. Enter runs the selected command. Escape closes the palette." />
+                    <local:AutomationVisibilityListBox x:Name="CommandPaletteResultsList"
+                             Grid.Row="1"
+                             Margin="0,8"
+                             SelectionChanged="CommandPaletteResults_SelectionChanged"
+                             MouseDoubleClick="CommandPaletteResults_MouseDoubleClick"
+                             AutomationProperties.AutomationId="CommandPaletteResults"
+                             AutomationProperties.Name="Command results">
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <!-- ONE name per row (contract P6): label plus the
+                                     spoken chord. The visible chord and the bolded
+                                     runs below are presentation-only, so they never
+                                     become separate stops. -->
+                                <Setter Property="AutomationProperties.Name" Value="{Binding AccessibleName}" />
+                                <Setter Property="AutomationProperties.HelpText" Value="{Binding AccessibilityHint}" />
+                                <Style.Triggers>
+                                    <!-- Unavailable rows stay visible, selectable and
+                                         in the arrow cycle — only activation is
+                                         refused (contract P8). IsEnabled="False" here
+                                         would drop them from keyboard navigation AND
+                                         from the UIA tree, which is the opposite of
+                                         what the contract asks for. -->
+                                    <DataTrigger Binding="{Binding IsUnavailable}" Value="True">
+                                        <Setter Property="Opacity" Value="0.65" />
+                                        <Setter Property="AutomationProperties.HelpText" Value="{Binding DisabledReason}" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                        <ListBox.GroupStyle>
+                            <GroupStyle>
+                                <GroupStyle.HeaderTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding Name}"
+                                                   Margin="4,8,4,2"
+                                                   FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource Slate.SecondaryTextBrush}"
+                                                   AutomationProperties.Name="{Binding Name}"
+                                                   AutomationProperties.HeadingLevel="Level3" />
+                                    </DataTemplate>
+                                </GroupStyle.HeaderTemplate>
+                            </GroupStyle>
+                        </ListBox.GroupStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="4,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <!-- Match bolding. Segments always concatenate
+                                             back to the whole label, so a hint-only
+                                             match renders as one unbolded segment
+                                             rather than bold-everything. -->
+                                        <ItemsControl ItemsSource="{Binding LabelSegments}"
+                                                      Focusable="False">
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate>
+                                                    <StackPanel Orientation="Horizontal" />
+                                                </ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <local:AutomationPresentationTextBlock Text="{Binding Text}">
+                                                        <local:AutomationPresentationTextBlock.Style>
+                                                            <Style TargetType="local:AutomationPresentationTextBlock">
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding IsMatch}" Value="True">
+                                                                        <Setter Property="FontWeight" Value="Bold" />
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </local:AutomationPresentationTextBlock.Style>
+                                                    </local:AutomationPresentationTextBlock>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                        <local:AutomationPresentationTextBlock
+                                                Text="{Binding DisabledReason}"
+                                                Visibility="{Binding IsUnavailable, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                                Foreground="{DynamicResource Slate.SecondaryTextBrush}"
+                                                TextWrapping="Wrap"
+                                                MaxHeight="34" />
+                                    </StackPanel>
+                                    <local:AutomationPresentationTextBlock Grid.Column="1"
+                                            Margin="12,0,0,0"
+                                            Text="{Binding HotkeyHint}"
+                                            Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </local:AutomationVisibilityListBox>
+                    <!-- Empty states. Collapsed when unused: an empty
+                         ItemsControl left on-screen at zero size fails the
+                         axe BoundingRectangleNotNull check (the W4-5/W4-6
+                         lesson). -->
+                    <StackPanel Grid.Row="2"
+                                Margin="4,4,4,0"
+                                Visibility="{Binding ShowsEmptyState, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                AutomationProperties.Name="{Binding EmptyStateAccessibleName}">
+                        <local:AutomationPresentationTextBlock Text="{Binding EmptyStateTitle}"
+                                                               FontWeight="SemiBold" />
+                        <local:AutomationPresentationTextBlock Text="{Binding EmptyStateDetail}"
+                                                               Foreground="{DynamicResource Slate.SecondaryTextBrush}"
+                                                               TextWrapping="Wrap" />
+                    </StackPanel>
+                    <local:AutomationPresentationTextBlock Grid.Row="3"
+                            Margin="4,8,4,0"
+                            Text="Enter run · Esc close"
+                            Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                 </Grid>
             </local:AutomationLandmarkBorder>
             <!-- ==========================================================

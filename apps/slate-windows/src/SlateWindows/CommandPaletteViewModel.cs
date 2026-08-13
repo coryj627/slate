@@ -33,6 +33,7 @@ internal sealed class CommandPaletteRowViewModel
 {
     internal CommandPaletteRowViewModel(
         Command command,
+        string sectionTitle,
         IReadOnlyList<CommandPaletteMatchRun> labelMatchRuns,
         IReadOnlyList<CommandPaletteLabelSegment> labelSegments,
         int score,
@@ -43,6 +44,7 @@ internal sealed class CommandPaletteRowViewModel
         AccessibilityHint = command.AccessibilityHint;
         HotkeyHint = command.HotkeyHint;
         Section = command.Section;
+        SectionTitle = sectionTitle;
         LabelMatchRuns = labelMatchRuns;
         LabelSegments = labelSegments;
         Score = score;
@@ -65,6 +67,32 @@ internal sealed class CommandPaletteRowViewModel
     public string? HotkeyHint { get; }
 
     public CommandSection Section { get; }
+
+    /// <summary>
+    /// The title of the section core actually placed this row in — the
+    /// view groups on this, never on <see cref="Section"/>.
+    /// </summary>
+    /// <remarks>
+    /// A Recent row keeps its native <see cref="Section"/> while core has
+    /// excluded it from that section, so grouping by the enum would file
+    /// it under the section it was deliberately lifted out of.
+    /// </remarks>
+    public string SectionTitle { get; }
+
+    /// <summary>
+    /// The row's whole accessible name: the label, plus the spoken chord
+    /// when one exists. ONE name per row (contract P6) — the bolded runs
+    /// and the visible chord are presentation-only.
+    /// </summary>
+    /// <remarks>
+    /// The spoken form is walked over the chord table's producer
+    /// (PINV-5), so composing here consumes that single authority rather
+    /// than restating it — and XAML cannot compose it at all.
+    /// </remarks>
+    public string AccessibleName =>
+        string.IsNullOrEmpty(HotkeyHint)
+            ? Label
+            : $"{Label}, {WindowsHotkeySpoken.Spoken(HotkeyHint)}";
 
     /// <summary>Converted match ranges, UTF-16 code units.</summary>
     public IReadOnlyList<CommandPaletteMatchRun> LabelMatchRuns { get; }
@@ -290,6 +318,37 @@ internal sealed class CommandPaletteViewModel : BindableBase
     /// </summary>
     public string NoMatchesAccessibleName =>
         $"No command matches {Query}. Try fewer letters or a different word.";
+
+    /// <summary>
+    /// Whether either empty state is showing. The view collapses the
+    /// block when this is false — an empty container left on-screen at
+    /// zero size fails the axe <c>BoundingRectangleNotNull</c> check.
+    /// </summary>
+    public bool ShowsEmptyState => ShowsEmptyRegistry || ShowsNoMatches;
+
+    /// <summary>The showing empty state's headline.</summary>
+    /// <remarks>
+    /// The two states are mutually exclusive by construction —
+    /// <see cref="ShowsNoMatches"/> requires a non-empty snapshot — so an
+    /// empty registry reports "no commands" even with a query typed,
+    /// which is the more accurate diagnosis of the two.
+    /// </remarks>
+    public string EmptyStateTitle =>
+        ShowsEmptyRegistry ? EmptyRegistryTitle : NoMatchesTitle;
+
+    /// <summary>The showing empty state's visible detail line.</summary>
+    public string EmptyStateDetail =>
+        ShowsEmptyRegistry ? EmptyRegistryDetail : NoMatchesDetail;
+
+    /// <summary>
+    /// The showing empty state's accessible name — the whole block reads
+    /// as one stop, and the no-matches variant drops the quotation marks
+    /// (contract P14).
+    /// </summary>
+    public string EmptyStateAccessibleName =>
+        ShowsEmptyRegistry
+            ? $"{EmptyRegistryTitle}. {EmptyRegistryDetail}"
+            : NoMatchesAccessibleName;
 
     /// <summary>
     /// Open the palette. Refuses without a vault: announces
@@ -643,6 +702,7 @@ internal sealed class CommandPaletteViewModel : BindableBase
                     ToMatchRuns(row.Command.Label, row.LabelMatchSpans);
                 var built = new CommandPaletteRowViewModel(
                     row.Command,
+                    section.Title,
                     matchRuns,
                     ToLabelSegments(row.Command.Label, matchRuns),
                     row.Score,
@@ -738,5 +798,12 @@ internal sealed class CommandPaletteViewModel : BindableBase
         OnPropertyChanged(nameof(ShowsNoMatches));
         OnPropertyChanged(nameof(NoMatchesDetail));
         OnPropertyChanged(nameof(NoMatchesAccessibleName));
+        // The unified accessors the view binds are derived from the four
+        // above; a bare setter that forgets them leaves the empty-state
+        // block stale on screen (the recorded bare-setter class).
+        OnPropertyChanged(nameof(ShowsEmptyState));
+        OnPropertyChanged(nameof(EmptyStateTitle));
+        OnPropertyChanged(nameof(EmptyStateDetail));
+        OnPropertyChanged(nameof(EmptyStateAccessibleName));
     }
 }
