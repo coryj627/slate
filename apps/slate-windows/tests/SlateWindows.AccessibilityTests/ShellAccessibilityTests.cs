@@ -4115,6 +4115,301 @@ public sealed class ShellAccessibilityTests
         }
     }
 
+
+    /// <summary>
+    /// W5-1 (#741): the command palette end to end — open by chord, filter,
+    /// the composed row name, invoke, and focus restore, with an axe scan
+    /// over the open overlay.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The unit facts rank against the real core engine but never render,
+    /// so everything UIA-visible is unproven until here: whether the
+    /// overlay's window-relative Visibility binding actually resolves (the
+    /// FallbackValue=Collapsed trap that shipped twice), whether the
+    /// composed row name reaches a client, and whether the grouped list
+    /// publishes headers rather than swallowing them.
+    /// </para>
+    /// <para>
+    /// Text goes in through the ValuePattern rather than synthetic
+    /// keystrokes, and the foreground is re-asserted before input — both
+    /// recorded journey traps.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void CommandPalette_OpensFiltersInvokesAndRestoresFocus_IsClean()
+    {
+        string testRoot = Path.Combine(
+            Path.GetTempPath(), $"slate-command-palette-{Guid.NewGuid():N}");
+        string vaultRoot = Path.Combine(testRoot, "Palette Vault");
+        string logDirectory = Path.Combine(testRoot, "logs");
+        Directory.CreateDirectory(vaultRoot);
+        File.WriteAllText(
+            Path.Combine(vaultRoot, "alpha.md"),
+            "# Alpha\n\nOriginal body.\n");
+
+        Process? process = null;
+        try
+        {
+            var startInfo = new ProcessStartInfo(SlateWindowsExe())
+            {
+                UseShellExecute = false,
+            };
+            startInfo.ArgumentList.Add(vaultRoot);
+            startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
+                $"slate-command-palette-{Guid.NewGuid():N}";
+            startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            process = Process.Start(startInfo)
+                ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+
+            if (!Environment.UserInteractive)
+            {
+                Assert.False(
+                    process.WaitForExit(3_000),
+                    "Slate exited during the command-palette startup smoke.");
+                return;
+            }
+
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(
+                process,
+                automation,
+                Path.Combine(logDirectory, "slate-windows.log"),
+                TimeSpan.FromSeconds(30));
+            window.SetForeground();
+            window.Focus();
+
+            // The right pane is the observable the invocation leg asserts
+            // on, so read its starting state before anything opens.
+            bool RightPaneVisible()
+            {
+                try
+                {
+                    return window.FindFirstDescendant(automation.ConditionFactory
+                        .ByAutomationId("RightPaneLeaves")) is not null;
+                }
+                catch (System.Runtime.InteropServices.COMException)
+                {
+                    return false;
+                }
+            }
+
+            // WAIT FOR THE VAULT, not merely for the window. The palette
+            // refuses to open with no vault and deliberately leaves its
+            // flag false (contract P14), so a chord sent between window
+            // and vault is correctly swallowed — the app is right and the
+            // journey would be racing it. The rail only exists once a
+            // vault is open, so it is the readiness signal.
+            _ = WaitForElement(window, "RightPaneLeaves", TimeSpan.FromSeconds(30));
+
+            bool rightPaneAtStart = RightPaneVisible();
+
+            // --- open by chord (PD-2) ---------------------------------
+            // Put keyboard focus on a real element first. A freshly shown
+            // window can have NO WPF keyboard focus at all, and the chord
+            // rides Window.PreviewKeyDown, which needs focus inside the
+            // window to see the key — measured, after a run where the
+            // focused element reported neither id nor name and the chord
+            // vanished.
+            WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(10)).Focus();
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+            window.SetForeground();
+            PressChord(
+                VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_P);
+
+            AutomationElement overlay = WaitForElement(
+                window, "CommandPalette", TimeSpan.FromSeconds(10));
+            Assert.Equal("Command Palette", overlay.Name);
+
+            // Focus lands in the search field, not on the overlay root:
+            // a palette that opens without a caret is a palette you have
+            // to click into.
+            AutomationElement search = WaitForElement(
+                window, "CommandPaletteSearch", TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            return search.Properties.HasKeyboardFocus.ValueOrDefault;
+                        }
+                        catch (System.Runtime.InteropServices.COMException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the palette opened without focusing its search field");
+
+            // Axe over the OPEN palette, before typing. This covers the
+            // overlay, the grouped result list, every row name, and the
+            // headers — the whole surface W5-1 owns.
+            //
+            // It is deliberately taken with an EMPTY query. The Fluent
+            // TextBox template adds a clear button once the box is
+            // non-empty whose accessible name is a private-use icon glyph,
+            // which fails NameExcludesPrivateUnicodeCharacters. That is a
+            // pre-existing framework defect shared by every TextBox in the
+            // app, not something the palette introduced — this journey is
+            // simply the first axe scan anywhere that types before
+            // scanning, which is why it went unseen until now. Tracked in
+            // #1106 with the measured element and three approaches that do
+            // NOT fix it; the scan moves after the filter when that lands.
+            AssertAxeClean(process, "command-palette");
+
+            // --- filter ------------------------------------------------
+            search.Patterns.Value.Pattern.SetValue("right pane");
+
+            // The COMPOSED row name is the P6 contract: one accessible
+            // name per row carrying the label AND the spoken chord. The
+            // bolded runs, the visible chord, and any unavailability
+            // caption are presentation-only and must contribute no stops
+            // — so this exact string is what a screen reader hears.
+            AutomationElement results = WaitForElement(
+                window, "CommandPaletteResults", TimeSpan.FromSeconds(10));
+            AutomationElement? togglePaneRow = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            togglePaneRow = results
+                                .FindAllDescendants(automation.ConditionFactory
+                                    .ByControlType(ControlType.ListItem))
+                                .FirstOrDefault(item => string.Equals(
+                                    item.Name,
+                                    "Toggle Right Pane, Control Alt I",
+                                    StringComparison.Ordinal));
+                            return togglePaneRow is not null;
+                        }
+                        catch (System.Runtime.InteropServices.COMException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "no palette row published the composed name "
+                + "'Toggle Right Pane, Control Alt I'; names seen: "
+                + string.Join(
+                    " | ",
+                    results
+                        .FindAllDescendants(automation.ConditionFactory
+                            .ByControlType(ControlType.ListItem))
+                        .Select(item => item.Name)));
+
+            // Section headers reach the tree as their own elements — the
+            // palette groups by the section core PLACED each row in, and
+            // a header swallowed into a bare Panel would publish nothing.
+            Assert.Contains(
+                results.FindAllDescendants(),
+                element => string.Equals(element.Name, "View", StringComparison.Ordinal));
+
+            // --- invoke, and assert the command actually ran -----------
+            // Selection is view-model-authoritative, so drive it the way a
+            // user does rather than by setting SelectedItem.
+            togglePaneRow!.Patterns.SelectionItem.Pattern.Select();
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+            PressKey(VirtualKeyShort.ENTER);
+
+            // The palette closes on success only, and the right pane flips.
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => RightPaneVisible() != rightPaneAtStart,
+                    TimeSpan.FromSeconds(10)),
+                "invoking Toggle Right Pane from the palette did not change "
+                + "the right pane's visibility — the registry round-trip "
+                + "reached no live command.");
+
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            return window.FindFirstDescendant(automation.ConditionFactory
+                                .ByAutomationId("CommandPalette")) is null;
+                        }
+                        catch (System.Runtime.InteropServices.COMException)
+                        {
+                            return true;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the palette stayed open after a successful invocation");
+
+            // --- Escape closes and restores focus ----------------------
+            window.SetForeground();
+            PressChord(
+                VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_P);
+            _ = WaitForElement(window, "CommandPalette", TimeSpan.FromSeconds(10));
+            Keyboard.Press(VirtualKeyShort.ESCAPE);
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            return window.FindFirstDescendant(automation.ConditionFactory
+                                .ByAutomationId("CommandPalette")) is null;
+                        }
+                        catch (System.Runtime.InteropServices.COMException)
+                        {
+                            return true;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "Escape did not close the palette");
+
+            // Focus must land somewhere real. A dismissed overlay that
+            // leaves focus on the window root strands a keyboard user.
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            AutomationElement focused = automation.FocusedElement();
+                            return focused is not null
+                                && !string.Equals(
+                                    focused.Properties.AutomationId.ValueOrDefault,
+                                    "Slate.MainWindow",
+                                    StringComparison.Ordinal);
+                        }
+                        catch (System.Runtime.InteropServices.COMException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "closing the palette left focus on the window root");
+        }
+        finally
+        {
+            if (process is not null && !process.HasExited)
+            {
+                process.CloseMainWindow();
+                if (!process.WaitForExit(5_000))
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            try
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
     private static Window WaitForMainWindow(
         Process process,
         UIA3Automation automation,
