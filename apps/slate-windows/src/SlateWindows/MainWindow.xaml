@@ -123,6 +123,14 @@
                           IsCheckable="True"
                           IsChecked="{Binding Workspace.EditorPreferences.HistoryShowChangesSinceOpen, Mode=OneWay}"
                           Command="{Binding Workspace.EditorPreferences.ToggleHistoryChangesSinceOpenCommand}" />
+                <!-- W4-8 (#740): slate.diagnostics.refreshSync —
+                     CHORDLESS on both platforms (mac: "refresh is a
+                     rare, deliberate action"); the menu is the
+                     Windows-native chordless surface. It refreshes
+                     ONLY — it never reveals the leaf (contract SD7). -->
+                <MenuItem Header="Refresh _Sync Diagnostics"
+                          AutomationProperties.AutomationId="RefreshSyncDiagnosticsMenuItem"
+                          Command="{Binding Workspace.RefreshSyncDiagnosticsCommand}" />
             </MenuItem>
             <!-- W4-6 (#738): every slate.bases.* command reachable and
                  AT-discoverable. Mac ships these palette-only with no
@@ -1701,6 +1709,30 @@
                                 <panels:HistorySurfaceView Model="{Binding History}" />
                             </DockPanel>
 
+                            <!-- W4-8 (#740): the sync-diagnostics leaf —
+                                 five states, per-provider risk rows with
+                                 evidence disclosures, and the LiveSync
+                                 config section (contracts SD2/SD3). -->
+                            <DockPanel Margin="12"
+                                       AutomationProperties.AutomationId="SyncDiagnosticsLeafBody">
+                                <DockPanel.Style>
+                                    <Style TargetType="DockPanel">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding ActiveLeaf.Id}" Value="syncDiagnostics">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </DockPanel.Style>
+                                <TextBlock DockPanel.Dock="Top"
+                                           Text="Sync"
+                                           FontSize="16"
+                                           FontWeight="SemiBold"
+                                           AutomationProperties.HeadingLevel="Level2" />
+                                <panels:SyncDiagnosticsSurfaceView Model="{Binding SyncDiagnostics}" />
+                            </DockPanel>
+
                             <StackPanel Grid.Column="0" Margin="12">
                                 <StackPanel.Style>
                                     <Style TargetType="StackPanel">
@@ -1736,6 +1768,9 @@
                                                 <Setter Property="Visibility" Value="Collapsed" />
                                             </DataTrigger>
                                             <DataTrigger Binding="{Binding ActiveLeaf.Id}" Value="history">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding ActiveLeaf.Id}" Value="syncDiagnostics">
                                                 <Setter Property="Visibility" Value="Collapsed" />
                                             </DataTrigger>
                                         </Style.Triggers>

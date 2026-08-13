@@ -365,6 +365,17 @@
           "apps/slate-windows/tests/SlateWindows.Tests/HistoryPanelTests.cs#HistoryPanelTests",
           "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#HistorySurfaces_LeafDiffAndRestore_AreClean"
         ]
+      },
+      "syncDiagnostics": {
+        "implementation": [
+          "apps/slate-windows/src/SlateWindows/Panels/SyncDiagnosticsViewModel.cs#SyncDiagnosticsViewModel",
+          "apps/slate-windows/src/SlateWindows/Panels/SyncDiagnosticsSurfaceView.cs#SyncDiagnosticsSurfaceView",
+          "apps/slate-windows/src/SlateWindows/WorkspaceViewModel.SyncDiagnostics.cs#RefreshSyncDiagnostics"
+        ],
+        "tests": [
+          "apps/slate-windows/tests/SlateWindows.Tests/SyncDiagnosticsPanelTests.cs#SyncDiagnosticsPanelTests",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#SyncDiagnostics_LeafReportAndRefresh_AreClean"
+        ]
       }
     },
     "commands": {
@@ -464,7 +475,8 @@
       "slate.bases.viewAsList": "bases",
       "slate.bases.viewAsTable": "bases",
       "slate.bases.whereAmI": "bases",
-      "slate.history.showPanel": "history"
+      "slate.history.showPanel": "history",
+      "slate.diagnostics.refreshSync": "syncDiagnostics"
     },
     "issues": {
       "#720": "vault",
@@ -479,7 +491,8 @@
       "#736": "properties",
       "#737": "citations",
       "#738": "bases",
-      "#739": "history"
+      "#739": "history",
+      "#740": "syncDiagnostics"
     }
   }
 }

@@ -204,6 +204,12 @@ LEAF_DELIVERED = {
         "Restore As + deleted recovery, since-open opt-in, markers "
         "toggle); `HistoryPanelTests` + FlaUI "
         "`HistorySurfaces_LeafDiffAndRestore_AreClean`"),
+    "syncDiagnostics": (
+        "implemented 2026-08-09 (#740): `SyncDiagnosticsViewModel` + "
+        "`SyncDiagnosticsSurfaceView` MainWindow leaf body (five-state "
+        "report, per-provider peered rows + evidence, LiveSync config "
+        "section, bounded marker watcher); `SyncDiagnosticsPanelTests` "
+        "+ FlaUI `SyncDiagnostics_LeafReportAndRefresh_AreClean`"),
 }
 
 # Milestones unshipped at the 2026-07-19 snapshot: their rows drop out
@@ -551,6 +557,19 @@ W4_7_COMMANDS = {
 }
 W4_STATUS_BY_COMMAND.update({command: W4_7_STATUS for command in W4_7_COMMANDS})
 
+W4_8_STATUS = (
+    "implemented; local gates green 2026-08-09; "
+    "interactive CI + human AT pending"
+)
+
+# W4-8 (#740): mac registers exactly ONE sync command, and it is
+# CHORDLESS on both platforms ("refresh is a rare, deliberate action");
+# it refreshes only and never reveals the leaf (contract SD7).
+W4_8_COMMANDS = {
+    "slate.diagnostics.refreshSync",
+}
+W4_STATUS_BY_COMMAND.update({command: W4_8_STATUS for command in W4_8_COMMANDS})
+
 # W4 delivery, same per-command shape as W3.
 # slate.editor.togglePropertiesSource stays PENDING: YAML source mode
 # was scoped out of W4-4 (no set_frontmatter_source call site) — the
@@ -567,6 +586,8 @@ W4_DELIVERED_COMMANDS = {
 W4_DELIVERED_COMMANDS |= W4_6_COMMANDS
 # W4-7 (#739)
 W4_DELIVERED_COMMANDS |= W4_7_COMMANDS
+# W4-8 (#740)
+W4_DELIVERED_COMMANDS |= W4_8_COMMANDS
 
 # §W-F waivers: status text the generator must preserve across
 # regeneration — a waiver that lives only in the generated file is
@@ -638,7 +659,7 @@ def load_delivery_evidence(
 
     expected_issues = {
         "#381", "#720", "#721", "#722", "#723", "#724", "#725", "#728", "#735", "#736",
-        "#737", "#738", "#739",
+        "#737", "#738", "#739", "#740",
     }
     if set(issue_map) != expected_issues:
         fail(
