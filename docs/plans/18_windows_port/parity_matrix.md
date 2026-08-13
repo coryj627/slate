@@ -1,6 +1,6 @@
 # Milestone W parity matrix (§W-F row-level checklist)
 
-Generated 2026-08-09 at `343bab6` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
+Generated 2026-08-13 at `b456dc0` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
 
 ## Entry-criteria snapshot (w0_spec §W0-4 item 3)
 
@@ -268,7 +268,7 @@ What `WorkspaceStore` round-trips — a **separate** inventory from the right-pa
 | Accessible grid substrate | `AccessibleDataGrid.swift` | #733 (W4-1) | pending |
 | Properties (in-note header, panel, typed rows, add-property) | `Properties*` views | #736 (W4-4) | pending |
 | Bases grid + builder (N shipped) | `Bases/` | #738 (W4-6) | implemented; local gates green 2026-08-08; interactive CI + human AT pending |
-| Command palette | `CommandPaletteModel.swift` (core ranking, W0.5-1) | #741 (W5-1) | pending |
+| Command palette | `CommandPaletteModel.swift` (core ranking, W0.5-1) | #741 (W5-1) | implemented; local gates green 2026-08-13; interactive CI + human AT pending |
 | Search overlay | search UI over `full_text_search` | #742 (W5-2) | pending |
 | Templates picker + prompt flow | template views | #743 (W5-3) | pending |
 | File management + bulk rename | sidebar/file commands | #744 (W5-4) | pending |

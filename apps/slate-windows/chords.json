@@ -1533,6 +1533,22 @@
           "apps/slate-windows/tests/SlateWindows.Tests/SyncDiagnosticsPanelTests.cs#SyncDiagnosticsPanelTests",
           "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#SyncDiagnostics_LeafReportAndRefresh_AreClean"
         ]
+      },
+      "commandPalette": {
+        "implementation": [
+          "apps/slate-windows/src/SlateWindows/Commands/ChordTable.cs#ChordTable",
+          "apps/slate-windows/src/SlateWindows/Commands/SlateCommandRegistrar.cs#SlateCommandRegistrar",
+          "apps/slate-windows/src/SlateWindows/Commands/PaletteCommandSource.cs#PaletteCommandSource",
+          "apps/slate-windows/src/SlateWindows/CommandPaletteViewModel.cs#CommandPaletteViewModel",
+          "apps/slate-windows/src/SlateWindows/MainWindow.Palette.cs#ObservePalette"
+        ],
+        "tests": [
+          "apps/slate-windows/tests/SlateWindows.Tests/CommandPaletteTests.cs#CommandPaletteTests",
+          "apps/slate-windows/tests/SlateWindows.Tests/CommandRegistrationTests.cs#CommandRegistrationTests",
+          "apps/slate-windows/tests/SlateWindows.Tests/ChordTableTests.cs#ChordTableTests",
+          "apps/slate-windows/tests/SlateWindows.Tests/CommandDriftTests.cs#CommandDriftTests",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#CommandPalette_OpensFiltersInvokesAndRestoresFocus_IsClean"
+        ]
       }
     },
     "commands": {
@@ -1649,7 +1665,8 @@
       "#737": "citations",
       "#738": "bases",
       "#739": "history",
-      "#740": "syncDiagnostics"
+      "#740": "syncDiagnostics",
+      "#741": "commandPalette"
     }
   },
   "chordSurface": [
