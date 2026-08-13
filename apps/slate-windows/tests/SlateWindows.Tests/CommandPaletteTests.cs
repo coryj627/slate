@@ -1,0 +1,792 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+using SlateWindows.Commands;
+using uniffi.slate_uniffi;
+
+namespace SlateWindows.Tests;
+
+/// <summary>
+/// W5-1 (#741) command-palette view-model facts. Ranking, section order,
+/// section titles, and match spans come from the real
+/// <c>palette_sections</c> through the binding — a fake ranker would let
+/// the host's layout drift from core's, which is the exact failure
+/// contract P1 exists to prevent.
+/// </summary>
+public sealed class CommandPaletteTests
+{
+    // --- P1: core ranks, the host renders --------------------------------
+
+    [Fact]
+    public void SectionsRenderInCoreOrderNotCommandSectionEnumOrder()
+    {
+        // SECTION_ORDER puts Canvas / Bases / Graph / Sidebar between
+        // Editor and Tasks; the generated enum declares them after
+        // Plugins. Sorting by enum value would yield
+        // Editor, Tasks, Canvas, Sidebar.
+        var harness = new PaletteHarness(
+            Cmd("slate.tasks.review", "Tasks Review", CommandSection.Tasks),
+            Cmd("slate.canvas.addCard", "Add Card", CommandSection.Canvas),
+            Cmd("slate.sidebar.open", "Open Sidebar", CommandSection.Sidebar),
+            Cmd("slate.editor.bold", "Toggle Bold", CommandSection.Editor));
+
+        harness.Palette.Open();
+
+        Assert.Equal(
+            ["Editor", "Canvas", "Sidebar", "Tasks"],
+            harness.SectionTitles);
+        Assert.Equal(
+            ["slate.editor.bold", "slate.canvas.addCard", "slate.sidebar.open", "slate.tasks.review"],
+            harness.RowIds);
+    }
+
+    [Fact]
+    public void RecentSectionIsSnapshotFirstAndItsRowsLeaveTheirNativeSections()
+    {
+        PaletteHarness harness = StandardHarness();
+        harness.Source.Recents.Add("slate.editor.bold");
+
+        harness.Palette.Open();
+
+        Assert.Equal(["Recent", "File", "Navigation", "Tasks"], harness.SectionTitles);
+        Assert.Null(harness.Palette.Sections[0].Kind);
+        Assert.Equal("slate.editor.bold", Assert.Single(harness.Palette.Sections[0].Rows).Id);
+        Assert.DoesNotContain("Editor", harness.SectionTitles);
+    }
+
+    [Fact]
+    public void SidebarPinnedOrderIsForwardedToCoreSoTheCatalogOrderSurvives()
+    {
+        // Registry.List() sorts by (section, id), so forwarding an empty
+        // list would render Sidebar alphabetically instead of in catalog
+        // order (contract P16).
+        var harness = new PaletteHarness(
+            Cmd("slate.sidebar.aaa", "Alpha", CommandSection.Sidebar),
+            Cmd("slate.sidebar.zzz", "Zulu", CommandSection.Sidebar));
+        harness.Source.SidebarPinnedOrder = ["slate.sidebar.zzz", "slate.sidebar.aaa"];
+
+        harness.Palette.Open();
+
+        Assert.Equal(["slate.sidebar.zzz", "slate.sidebar.aaa"], harness.RowIds);
+    }
+
+    [Fact]
+    public void ScoreIdentifiesTheStrongestMatchWithoutReorderingTheDisplay()
+    {
+        var harness = new PaletteHarness(
+            Cmd("a.file.print", "Print Note", CommandSection.File, "Print or save the note"),
+            Cmd("z.editor.save", "Save", CommandSection.Editor));
+
+        harness.Palette.Open();
+        harness.Palette.Query = "save";
+
+        // Display order stays section-grouped: File before Editor.
+        Assert.Equal(["a.file.print", "z.editor.save"], harness.RowIds);
+        CommandPaletteRowViewModel strongest = harness.Palette.Rows
+            .OrderByDescending(row => row.Score)
+            .ThenBy(row => row.Id, StringComparer.Ordinal)
+            .First();
+        Assert.Equal("z.editor.save", strongest.Id);
+    }
+
+    // --- P18: one computation per query change ---------------------------
+
+    [Fact]
+    public void SectionsAreComputedOncePerQueryChangeAndStored()
+    {
+        PaletteHarness harness = StandardHarness();
+        harness.Palette.Open();
+
+        IReadOnlyList<CommandPaletteSectionViewModel> first = harness.Palette.Sections;
+        Assert.Same(first, harness.Palette.Sections);
+        Assert.Same(harness.Palette.Rows[0], harness.Palette.Sections[0].Rows[0]);
+
+        harness.Palette.Query = "save";
+        Assert.NotSame(first, harness.Palette.Sections);
+    }
+
+    // --- P4: the snapshot rule -------------------------------------------
+
+    [Fact]
+    public void CommandsAndRecentsAreSnapshotOncePerOpenNeverPerKeystroke()
+    {
+        PaletteHarness harness = StandardHarness();
+
+        harness.Palette.Open();
+        harness.Palette.Query = "s";
+        harness.Palette.Query = "sa";
+        harness.Palette.Query = "sav";
+        harness.Palette.Query = string.Empty;
+
+        Assert.Equal(1, harness.Source.ListCommandsCalls);
+        Assert.Equal(1, harness.Source.LoadRecentsCalls);
+
+        // A command registered after the palette opened stays invisible
+        // until the next open.
+        harness.Source.Commands.Add(Cmd("slate.file.late", "Late Arrival", CommandSection.File));
+        harness.Palette.Query = "late";
+        Assert.Empty(harness.Palette.Rows);
+
+        harness.Palette.Dismiss();
+        harness.Palette.Open();
+        harness.Palette.Query = "late";
+        Assert.Equal("slate.file.late", Assert.Single(harness.Palette.Rows).Id);
+        Assert.Equal(2, harness.Source.ListCommandsCalls);
+    }
+
+    // --- P6 / PINV-6: byte -> UTF-16 conversion ---------------------------
+
+    [Fact]
+    public void MatchRunsConvertUtf8ByteOffsetsToUtf16CodeUnits()
+    {
+        // U+1F5C2 is 4 UTF-8 bytes and 2 UTF-16 code units, so every
+        // offset after it differs between the two indexings. Core
+        // reports "Open" at bytes [5, 9).
+        const string label = "\U0001F5C2 Open Vault…";
+
+        IReadOnlyList<CommandPaletteMatchRun> runs =
+            CommandPaletteViewModel.ToMatchRuns(label, [new MatchSpan(5, 9)]);
+
+        CommandPaletteMatchRun run = Assert.Single(runs);
+        Assert.Equal(new CommandPaletteMatchRun(3, 4), run);
+        Assert.Equal("Open", label.Substring(run.Start, run.Length));
+    }
+
+    [Fact]
+    public void MatchRunsNeverSplitASurrogatePairOrDropOutOfRangeSpans()
+    {
+        const string label = "\U0001F5C2ab";
+
+        // A span interior to the emoji clamps to its boundary rather
+        // than cutting the surrogate pair in half.
+        Assert.Equal(
+            [new CommandPaletteMatchRun(0, 2)],
+            CommandPaletteViewModel.ToMatchRuns(label, [new MatchSpan(1, 4)]));
+        // Degenerate and past-the-end spans drop rather than throw.
+        Assert.Empty(CommandPaletteViewModel.ToMatchRuns(label, [new MatchSpan(2, 2)]));
+        Assert.Empty(CommandPaletteViewModel.ToMatchRuns(label, [new MatchSpan(90, 99)]));
+        Assert.Equal(
+            [new CommandPaletteMatchRun(2, 2)],
+            CommandPaletteViewModel.ToMatchRuns(label, [new MatchSpan(4, 99)]));
+    }
+
+    [Fact]
+    public void EllipsisLabelBoldsCharactersNotBytesThroughTheRealRanker()
+    {
+        // 28+ shipped labels end in a 3-byte, 1-char ellipsis. Reading
+        // core's byte offsets as UTF-16 indexes here walks past the end
+        // of the string.
+        var harness = new PaletteHarness(
+            Cmd("slate.file.rename", "Rename…", CommandSection.File));
+
+        harness.Palette.Open();
+        harness.Palette.Query = "e…";
+
+        CommandPaletteRowViewModel row = Assert.Single(harness.Palette.Rows);
+        Assert.Equal(
+            [new CommandPaletteMatchRun(1, 1), new CommandPaletteMatchRun(6, 1)],
+            row.LabelMatchRuns);
+        Assert.Equal(
+            ["R", "e", "name", "…"],
+            row.LabelSegments.Select(segment => segment.Text));
+        Assert.Equal(
+            [false, true, false, true],
+            row.LabelSegments.Select(segment => segment.IsMatch));
+        Assert.Equal(row.Label, string.Concat(row.LabelSegments.Select(segment => segment.Text)));
+    }
+
+    [Fact]
+    public void HintOnlyMatchKeepsTheRowAndRendersTheLabelFullyUnbolded()
+    {
+        var harness = new PaletteHarness(
+            Cmd(
+                "slate.vault.rescan",
+                "Rescan Vault",
+                CommandSection.Vault,
+                "Walk the vault and refresh the index"),
+            Cmd("slate.file.save", "Save", CommandSection.File));
+
+        harness.Palette.Open();
+        harness.Palette.Query = "walk";
+
+        CommandPaletteRowViewModel row = Assert.Single(harness.Palette.Rows);
+        Assert.Equal("slate.vault.rescan", row.Id);
+        Assert.Empty(row.LabelMatchRuns);
+        CommandPaletteLabelSegment segment = Assert.Single(row.LabelSegments);
+        Assert.Equal("Rescan Vault", segment.Text);
+        Assert.False(segment.IsMatch);
+    }
+
+    // --- P7 / PD-1: the keyboard model ------------------------------------
+
+    [Fact]
+    public void ArrowNavigationIsOneFlatCycleThatWrapsAcrossSections()
+    {
+        PaletteHarness harness = StandardHarness();
+        harness.Palette.Open();
+
+        Assert.Equal(
+            [
+                "slate.file.newNote",
+                "slate.file.save",
+                "slate.nav.quickOpen",
+                "slate.editor.bold",
+                "slate.tasks.review",
+            ],
+            harness.RowIds);
+        Assert.Equal("slate.file.newNote", harness.Palette.SelectedId);
+
+        harness.Palette.MoveSelection(1);
+        Assert.Equal("slate.file.save", harness.Palette.SelectedId);
+        // Crosses the File -> Navigation section boundary without
+        // stopping on the header.
+        harness.Palette.MoveSelection(1);
+        Assert.Equal("slate.nav.quickOpen", harness.Palette.SelectedId);
+
+        harness.Palette.SelectLast();
+        harness.Palette.MoveSelection(1);
+        Assert.Equal("slate.file.newNote", harness.Palette.SelectedId);
+        harness.Palette.MoveSelection(-1);
+        Assert.Equal("slate.tasks.review", harness.Palette.SelectedId);
+    }
+
+    [Fact]
+    public void FromNoSelectionDownLandsOnTheFirstRowAndUpOnTheLast()
+    {
+        PaletteHarness harness = StandardHarness();
+        harness.Palette.Open();
+        CommandPaletteRowViewModel stale = harness.Palette.Rows[1];
+        Assert.Equal("slate.file.save", stale.Id);
+
+        // "Save" has no 'o', so the stale row leaves the result set —
+        // activating it is how a host reaches the no-selection state
+        // with rows still on screen.
+        harness.Palette.Query = "o";
+        Assert.Equal(
+            ["slate.file.newNote", "slate.nav.quickOpen", "slate.editor.bold"],
+            harness.RowIds);
+
+        harness.Palette.Select(stale);
+        Assert.Null(harness.Palette.SelectedId);
+        Assert.Null(harness.Palette.SelectedRow);
+
+        harness.Palette.MoveSelection(1);
+        Assert.Equal("slate.file.newNote", harness.Palette.SelectedId);
+
+        harness.Palette.Select(stale);
+        harness.Palette.MoveSelection(-1);
+        Assert.Equal("slate.editor.bold", harness.Palette.SelectedId);
+    }
+
+    [Fact]
+    public void HomeEndAndPageKeysNavigateTheFlatCycleAndClampAtTheEnds()
+    {
+        PaletteHarness harness = StandardHarness();
+        harness.Palette.Open();
+        harness.Palette.PageSize = 2;
+
+        harness.Palette.SelectLast();
+        Assert.Equal("slate.tasks.review", harness.Palette.SelectedId);
+        harness.Palette.SelectFirst();
+        Assert.Equal("slate.file.newNote", harness.Palette.SelectedId);
+
+        harness.Palette.MovePage(1);
+        Assert.Equal("slate.nav.quickOpen", harness.Palette.SelectedId);
+        harness.Palette.MovePage(1);
+        Assert.Equal("slate.tasks.review", harness.Palette.SelectedId);
+        // Page keys clamp; they do not wrap the way the arrows do.
+        harness.Palette.MovePage(1);
+        Assert.Equal("slate.tasks.review", harness.Palette.SelectedId);
+        harness.Palette.MovePage(-1);
+        Assert.Equal("slate.nav.quickOpen", harness.Palette.SelectedId);
+        harness.Palette.MovePage(-1);
+        Assert.Equal("slate.file.newNote", harness.Palette.SelectedId);
+        harness.Palette.MovePage(-1);
+        Assert.Equal("slate.file.newNote", harness.Palette.SelectedId);
+    }
+
+    [Fact]
+    public void SelectionIsPreservedWhenTheSelectedIdSurvivesAQueryChange()
+    {
+        PaletteHarness harness = StandardHarness();
+        harness.Palette.Open();
+        harness.Palette.Select(harness.Palette.Rows[3]);
+        Assert.Equal("slate.editor.bold", harness.Palette.SelectedId);
+        harness.Announcements.Clear();
+
+        harness.Palette.Query = "o";
+
+        // The survivor is deliberately the LAST row: if it were the
+        // first, "preserved" and "snapped to the first row" would be
+        // indistinguishable and this fact would pass vacuously.
+        Assert.Equal(
+            ["slate.file.newNote", "slate.nav.quickOpen", "slate.editor.bold"],
+            harness.RowIds);
+        Assert.Equal("slate.editor.bold", harness.Palette.SelectedId);
+        // Preserved selection is not a selection change, so the AT hears
+        // only the filter count.
+        Assert.IsType<A11yEvent.PaletteFilterCount>(Assert.Single(harness.Announcements));
+    }
+
+    [Fact]
+    public void SelectionSnapsToTheFirstRowWhenTheSelectedIdVanishes()
+    {
+        PaletteHarness harness = StandardHarness();
+        harness.Palette.Open();
+        harness.Palette.SelectLast();
+        Assert.Equal("slate.tasks.review", harness.Palette.SelectedId);
+
+        // "Tasks Review" has no 'o', so the selection vanishes into a
+        // three-row result — first and last are distinguishable.
+        harness.Palette.Query = "o";
+
+        Assert.Equal(
+            ["slate.file.newNote", "slate.nav.quickOpen", "slate.editor.bold"],
+            harness.RowIds);
+        Assert.Equal("slate.file.newNote", harness.Palette.SelectedId);
+    }
+
+    [Fact]
+    public void SelectionBecomesNullOnZeroMatchesAndRecoversOnTheNextQuery()
+    {
+        PaletteHarness harness = StandardHarness();
+        harness.Palette.Open();
+
+        harness.Palette.Query = "zzzzzz";
+
+        Assert.Empty(harness.Palette.Rows);
+        Assert.Null(harness.Palette.SelectedId);
+        Assert.Null(harness.Palette.SelectedRow);
+        Assert.True(harness.Palette.ShowsNoMatches);
+
+        harness.Palette.Query = "save";
+        Assert.Equal("slate.file.save", harness.Palette.SelectedId);
+        Assert.False(harness.Palette.ShowsNoMatches);
+    }
+
+    // --- P8: unavailable commands are shown and selectable ---------------
+
+    [Fact]
+    public void UnavailableRowsKeepTheirPlaceInTheCycleAndCarryTheirReason()
+    {
+        PaletteHarness harness = StandardHarness();
+        harness.Source.DisabledReasons["slate.file.save"] =
+            CommandPaletteViewModel.StructuralMutationBusyReason;
+        harness.Palette.Open();
+        harness.Announcements.Clear();
+
+        harness.Palette.MoveSelection(1);
+
+        CommandPaletteRowViewModel row = Assert.Single(
+            harness.Palette.Rows,
+            candidate => candidate.Id == "slate.file.save");
+        Assert.True(row.IsUnavailable);
+        Assert.Equal(CommandPaletteViewModel.StructuralMutationBusyReason, row.DisabledReason);
+        Assert.Equal("slate.file.save", harness.Palette.SelectedId);
+        A11yEvent.PaletteCommandSelected selected =
+            Assert.IsType<A11yEvent.PaletteCommandSelected>(Assert.Single(harness.Announcements));
+        Assert.Equal("Save", selected.Label);
+        Assert.Equal(CommandPaletteViewModel.StructuralMutationBusyReason, selected.DisabledReason);
+
+        // Still a stop in the cycle: Down continues past it.
+        harness.Palette.MoveSelection(1);
+        Assert.Equal("slate.nav.quickOpen", harness.Palette.SelectedId);
+    }
+
+    // --- P9: invocation ordering ------------------------------------------
+
+    [Fact]
+    public void SuccessfulInvocationRestoresFocusInvokesRecordsThenDismisses()
+    {
+        PaletteHarness harness = StandardHarness();
+        harness.Palette.Open();
+        harness.Palette.Query = "save";
+        harness.Log.Clear();
+        harness.Source.LogAvailabilityChecks = true;
+
+        harness.Palette.InvokeSelected();
+
+        Assert.Equal(
+            [
+                "focus",
+                "availability:slate.file.save",
+                "invoke:slate.file.save",
+                "record:slate.file.save",
+                "dismiss",
+            ],
+            harness.Log);
+        Assert.False(harness.Palette.IsOpen);
+    }
+
+    [Fact]
+    public void UnavailableCommandAnnouncesItsReasonVerbatimAndNeverReachesInvoke()
+    {
+        const string reason = "Wait for the current save to finish.";
+        PaletteHarness harness = StandardHarness();
+        harness.Palette.Open();
+        harness.Palette.Query = "save";
+        // Availability flips after the row was rendered; the gate must
+        // re-ask rather than trust the render-time value.
+        Assert.False(Assert.Single(harness.Palette.Rows).IsUnavailable);
+        harness.Source.DisabledReasons["slate.file.save"] = reason;
+        harness.Log.Clear();
+        harness.Announcements.Clear();
+        harness.Source.LogAvailabilityChecks = true;
+
+        harness.Palette.InvokeSelected();
+
+        Assert.Equal(
+            ["focus", "availability:slate.file.save", "announce:unavailable:" + reason],
+            harness.Log);
+        Assert.Empty(harness.Source.Invoked);
+        Assert.Empty(harness.Source.Recorded);
+        Assert.True(harness.Palette.IsOpen);
+        A11yEvent.PaletteCommandUnavailable announced =
+            Assert.IsType<A11yEvent.PaletteCommandUnavailable>(
+                Assert.Single(harness.Announcements));
+        // Verbatim: no "Unavailable: " prefix composed host-side.
+        Assert.Equal(reason, announced.Reason);
+    }
+
+    [Fact]
+    public void ActionFailedAnnouncesTheFailureAndLeavesThePaletteOpen()
+    {
+        PaletteHarness harness = StandardHarness();
+        harness.Source.InvokeFailures["slate.file.save"] =
+            new CommandException.ActionFailed("Disk is full.");
+        harness.Palette.Open();
+        harness.Palette.Query = "save";
+        harness.Announcements.Clear();
+        harness.Log.Clear();
+
+        harness.Palette.InvokeSelected();
+
+        Assert.True(harness.Palette.IsOpen);
+        Assert.Equal(["slate.file.save"], harness.Source.Invoked);
+        Assert.Empty(harness.Source.Recorded);
+        Assert.DoesNotContain("dismiss", harness.Log);
+        A11yEvent.PaletteCommandFailed failed =
+            Assert.IsType<A11yEvent.PaletteCommandFailed>(Assert.Single(harness.Announcements));
+        Assert.Equal("Save", failed.Label);
+        Assert.Equal("Disk is full.", failed.Detail);
+    }
+
+    [Fact]
+    public void UnknownIdAnnouncesNotFoundAndLeavesThePaletteOpen()
+    {
+        PaletteHarness harness = StandardHarness();
+        harness.Source.InvokeFailures["slate.file.save"] =
+            new CommandException.UnknownId("slate.file.save");
+        harness.Palette.Open();
+        harness.Palette.Query = "save";
+        harness.Announcements.Clear();
+        harness.Log.Clear();
+
+        harness.Palette.InvokeSelected();
+
+        Assert.True(harness.Palette.IsOpen);
+        Assert.Empty(harness.Source.Recorded);
+        Assert.DoesNotContain("dismiss", harness.Log);
+        A11yEvent.PaletteCommandNotFound notFound =
+            Assert.IsType<A11yEvent.PaletteCommandNotFound>(Assert.Single(harness.Announcements));
+        Assert.Equal("slate.file.save", notFound.Id);
+    }
+
+    [Fact]
+    public void StructuralBusyActionFailedRoutesToUnavailableNotFailed()
+    {
+        PaletteHarness harness = StandardHarness();
+        harness.Source.InvokeFailures["slate.file.save"] = new CommandException.ActionFailed(
+            CommandPaletteViewModel.StructuralMutationBusyReason);
+        harness.Palette.Open();
+        harness.Palette.Query = "save";
+        harness.Announcements.Clear();
+
+        harness.Palette.InvokeSelected();
+
+        A11yEvent.PaletteCommandUnavailable unavailable =
+            Assert.IsType<A11yEvent.PaletteCommandUnavailable>(
+                Assert.Single(harness.Announcements));
+        Assert.Equal(
+            CommandPaletteViewModel.StructuralMutationBusyReason,
+            unavailable.Reason);
+        Assert.True(harness.Palette.IsOpen);
+    }
+
+    [Fact]
+    public void InvokingWithNoSelectionDoesNothing()
+    {
+        PaletteHarness harness = StandardHarness();
+        harness.Palette.Open();
+        harness.Palette.Query = "zzzzzz";
+        harness.Log.Clear();
+
+        harness.Palette.InvokeSelected();
+
+        Assert.Empty(harness.Log);
+        Assert.True(harness.Palette.IsOpen);
+    }
+
+    // --- P10: announcement triggers ---------------------------------------
+
+    [Fact]
+    public void FilterCountFiresOnEveryNonEmptyKeystrokeAndIsSuppressedOnEmptyQuery()
+    {
+        PaletteHarness harness = StandardHarness();
+
+        harness.Palette.Open();
+        Assert.Empty(harness.Announcements);
+
+        harness.Palette.Query = "s";
+        harness.Palette.Query = "sa";
+        harness.Palette.Query = "sav";
+
+        uint[] counts = [.. harness.Announcements
+            .OfType<A11yEvent.PaletteFilterCount>()
+            .Select(count => count.Count)];
+        Assert.Equal(3, counts.Length);
+        Assert.Equal(
+            ["s", "sa", "sav"],
+            harness.Announcements.OfType<A11yEvent.PaletteFilterCount>().Select(c => c.Query));
+        Assert.Equal(1u, counts[^1]);
+
+        harness.Announcements.Clear();
+        harness.Palette.Query = string.Empty;
+        Assert.Empty(harness.Announcements.OfType<A11yEvent.PaletteFilterCount>());
+    }
+
+    [Fact]
+    public void FirstSelectionChangeAfterOpenIsSilentAndTheSecondIsNot()
+    {
+        PaletteHarness harness = StandardHarness();
+
+        harness.Palette.Open();
+
+        // Open selects the first row; that change is suppressed.
+        Assert.Equal("slate.file.newNote", harness.Palette.SelectedId);
+        Assert.Empty(harness.Announcements.OfType<A11yEvent.PaletteCommandSelected>());
+
+        harness.Palette.MoveSelection(1);
+        A11yEvent.PaletteCommandSelected selected = Assert.Single(
+            harness.Announcements.OfType<A11yEvent.PaletteCommandSelected>());
+        Assert.Equal("Save", selected.Label);
+        Assert.Null(selected.DisabledReason);
+
+        // Re-opening re-arms the suppression.
+        harness.Announcements.Clear();
+        harness.Palette.Open();
+        Assert.Empty(harness.Announcements.OfType<A11yEvent.PaletteCommandSelected>());
+    }
+
+    // --- P14: open / close and host copy ----------------------------------
+
+    [Fact]
+    public void OpeningWithoutAVaultAnnouncesAndLeavesThePaletteClosed()
+    {
+        PaletteHarness harness = StandardHarness();
+        harness.Source.IsVaultOpen = false;
+
+        harness.Palette.Open();
+
+        Assert.False(harness.Palette.IsOpen);
+        Assert.Empty(harness.Palette.Rows);
+        Assert.Equal(0, harness.Source.ListCommandsCalls);
+        Assert.IsType<A11yEvent.CommandPaletteNeedsVault>(Assert.Single(harness.Announcements));
+        // Not the empty-registry state: the palette is simply not open.
+        Assert.False(harness.Palette.ShowsEmptyRegistry);
+    }
+
+    [Fact]
+    public void OpeningWhileOpenReopensRatherThanToggling()
+    {
+        PaletteHarness harness = StandardHarness();
+        harness.Palette.Open();
+        harness.Palette.Query = "save";
+        Assert.Single(harness.Palette.Rows);
+
+        harness.Palette.Open();
+
+        Assert.True(harness.Palette.IsOpen);
+        Assert.Equal(string.Empty, harness.Palette.Query);
+        Assert.Equal(5, harness.Palette.Rows.Count);
+        Assert.Equal(2, harness.Source.ListCommandsCalls);
+    }
+
+    [Fact]
+    public void EmptyRegistryCopyIsTheContractCopy()
+    {
+        var harness = new PaletteHarness();
+
+        harness.Palette.Open();
+
+        Assert.True(harness.Palette.IsOpen);
+        Assert.True(harness.Palette.ShowsEmptyRegistry);
+        Assert.False(harness.Palette.ShowsNoMatches);
+        Assert.Equal("No commands available", CommandPaletteViewModel.EmptyRegistryTitle);
+        Assert.Equal(
+            "Open a vault to access the palette.",
+            CommandPaletteViewModel.EmptyRegistryDetail);
+    }
+
+    [Fact]
+    public void NoMatchesCopyQuotesTheQueryOnlyInTheVisibleLine()
+    {
+        PaletteHarness harness = StandardHarness();
+        harness.Palette.Open();
+
+        harness.Palette.Query = "zzzzzz";
+
+        Assert.True(harness.Palette.ShowsNoMatches);
+        Assert.False(harness.Palette.ShowsEmptyRegistry);
+        Assert.Equal("No matches", CommandPaletteViewModel.NoMatchesTitle);
+        Assert.Equal(
+            "No command matches \"zzzzzz\". Try fewer letters or a different word.",
+            harness.Palette.NoMatchesDetail);
+        Assert.Equal(
+            "No command matches zzzzzz. Try fewer letters or a different word.",
+            harness.Palette.NoMatchesAccessibleName);
+    }
+
+    [Fact]
+    public void DismissClosesTheOverlayAndDropsItsRows()
+    {
+        PaletteHarness harness = StandardHarness();
+        harness.Palette.Open();
+
+        harness.Palette.Dismiss();
+
+        Assert.False(harness.Palette.IsOpen);
+        Assert.Empty(harness.Palette.Rows);
+        Assert.Empty(harness.Palette.Sections);
+        Assert.Null(harness.Palette.SelectedRow);
+        Assert.Contains("dismiss", harness.Log);
+        Assert.Empty(harness.Announcements);
+    }
+
+    // --- helpers ----------------------------------------------------------
+
+    private static PaletteHarness StandardHarness() => new(
+        Cmd("slate.file.newNote", "New Note", CommandSection.File),
+        Cmd("slate.file.save", "Save", CommandSection.File),
+        Cmd("slate.nav.quickOpen", "Quick Open", CommandSection.Navigation),
+        Cmd("slate.editor.bold", "Toggle Bold", CommandSection.Editor),
+        Cmd("slate.tasks.review", "Tasks Review", CommandSection.Tasks));
+
+    private static Command Cmd(
+        string id,
+        string label,
+        CommandSection section,
+        string? accessibilityHint = null,
+        string? hotkeyHint = null) =>
+        new(id, label, accessibilityHint, hotkeyHint, section);
+
+    private sealed class PaletteHarness
+    {
+        public PaletteHarness(params Command[] commands)
+        {
+            Source = new FakePaletteCommandSource(Log);
+            Source.Commands.AddRange(commands);
+            Palette = new CommandPaletteViewModel(Source, Record);
+            Palette.SearchFocusRequested += (_, _) => Log.Add("focus");
+            Palette.Dismissed += (_, _) => Log.Add("dismiss");
+        }
+
+        public FakePaletteCommandSource Source { get; }
+
+        public CommandPaletteViewModel Palette { get; }
+
+        public List<A11yEvent> Announcements { get; } = [];
+
+        public List<string> Log { get; } = [];
+
+        public IEnumerable<string> RowIds => Palette.Rows.Select(row => row.Id);
+
+        public IEnumerable<string> SectionTitles => Palette.Sections.Select(section => section.Title);
+
+        private void Record(A11yEvent announcement)
+        {
+            Announcements.Add(announcement);
+            Log.Add("announce:" + Describe(announcement));
+        }
+
+        private static string Describe(A11yEvent announcement) => announcement switch
+        {
+            A11yEvent.PaletteFilterCount count => $"filter:{count.Count}:{count.Query}",
+            A11yEvent.PaletteCommandSelected selected =>
+                $"selected:{selected.Label}:{selected.DisabledReason ?? "-"}",
+            A11yEvent.PaletteCommandUnavailable unavailable => $"unavailable:{unavailable.Reason}",
+            A11yEvent.PaletteCommandFailed failed => $"failed:{failed.Label}:{failed.Detail ?? "-"}",
+            A11yEvent.PaletteCommandNotFound notFound => $"notfound:{notFound.Id}",
+            A11yEvent.CommandPaletteNeedsVault => "needsvault",
+            _ => announcement.GetType().Name,
+        };
+    }
+
+    private sealed class FakePaletteCommandSource(List<string> log) : IPaletteCommandSource
+    {
+        public List<Command> Commands { get; } = [];
+
+        public List<string> Recents { get; } = [];
+
+        public string[] SidebarPinnedOrder { get; set; } = [];
+
+        public Dictionary<string, string> DisabledReasons { get; } = [];
+
+        public Dictionary<string, Exception> InvokeFailures { get; } = [];
+
+        public List<string> Invoked { get; } = [];
+
+        public List<string> Recorded { get; } = [];
+
+        public bool IsVaultOpen { get; set; } = true;
+
+        public int ListCommandsCalls { get; private set; }
+
+        public int LoadRecentsCalls { get; private set; }
+
+        /// <summary>
+        /// Off by default: rendering asks every row, which would drown
+        /// the ordering log. The invocation-ordering facts turn it on
+        /// immediately before activating.
+        /// </summary>
+        public bool LogAvailabilityChecks { get; set; }
+
+        public Command[] ListCommands()
+        {
+            ListCommandsCalls++;
+            return [.. Commands];
+        }
+
+        public string[] LoadRecents()
+        {
+            LoadRecentsCalls++;
+            return [.. Recents];
+        }
+
+        public string? DisabledReason(string commandId)
+        {
+            if (LogAvailabilityChecks)
+            {
+                log.Add("availability:" + commandId);
+            }
+
+            return DisabledReasons.TryGetValue(commandId, out string? reason) ? reason : null;
+        }
+
+        public void Invoke(string commandId)
+        {
+            log.Add("invoke:" + commandId);
+            Invoked.Add(commandId);
+            if (InvokeFailures.TryGetValue(commandId, out Exception? failure))
+            {
+                throw failure;
+            }
+        }
+
+        public void RecordInvocation(string commandId)
+        {
+            log.Add("record:" + commandId);
+            Recorded.Add(commandId);
+        }
+    }
+}
