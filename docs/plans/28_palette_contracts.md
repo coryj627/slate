@@ -232,7 +232,16 @@ auto-presents an empty palette.
 - **PINV-1 — No announcement text is composed in C#.** Every spoken string
   comes from `A11yRender` or from `palette_sections`. New host-composed
   copy requires a recorded `// W0.5-3 residue:` marker and raises the §2.6
-  budget, which is an owner decision.
+  budget, which is an owner decision. **The owner approved a two-string
+  increase on 2026-08-13** for the palette's availability copy — "Open a
+  vault to use this command." and "This command is not available right
+  now." (`SlateCommandRegistrar`). Mac carries richer per-capability
+  reasons; matching them needs a capability model W5-1 does not build, and
+  a generic reason spoken verbatim beats no reason at all. The increase is
+  **pinned, not merely commented**: a fact asserts the palette's whole
+  invocation surface produces exactly these two texts and no third, so the
+  approved budget cannot drift upward silently the way an unpinned
+  convention would.
 - **PINV-2 — No ranking, ordering, or title rule exists host-side.**
   `fuzzy_score` and `section_title` are deliberately not exported; any C#
   equivalent is drift by construction.
@@ -259,12 +268,15 @@ auto-presents an empty palette.
 ## Recorded divergences (off-limits for re-litigation)
 
 - **PD-1 — Home / End / Page Up / Page Down navigate the palette list on
-  Windows.** Mac deliberately handles none of them (fn+arrows pass through
-  to its text field). WPF's `ListBox` provides all four, they are standard
-  Windows list behavior, and §W-C conformance expects them. Suppressing
-  them to match mac would cost work to produce a worse Windows surface.
-  Recorded per decision 12 (platform convention governs input). **The owner
-  may veto this at PR.**
+  Windows. APPROVED 2026-08-13, and mac converges up.** Mac deliberately
+  handles none of them (fn+arrows pass through to its text field). WPF's
+  `ListBox` provides all four, they are standard Windows list behavior, and
+  §W-C conformance expects them. The owner's call was **not** to keep this
+  as a permanent divergence: mac gains the same keys under
+  [#1105](https://github.com/coryj627/slate/issues/1105), on the reasoning
+  that they are useful in a long list on any platform even though they are
+  not a macOS palette convention. **This entry retires when #1105 lands** —
+  until then it is a convergence-pending divergence, not an accepted one.
 - **PD-2 — The palette chord is Ctrl+Shift+P**, the direct ⇧⌘P map and the
   Windows convention. Verified unbound across every chord surface in the
   app. Non-toggling, matching mac: pressing it while open re-opens rather

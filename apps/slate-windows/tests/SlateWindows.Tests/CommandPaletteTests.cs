@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Reflection;
 using SlateWindows.Commands;
 using uniffi.slate_uniffi;
 
@@ -490,6 +491,78 @@ public sealed class CommandPaletteTests
         A11yEvent.PaletteCommandNotFound notFound =
             Assert.IsType<A11yEvent.PaletteCommandNotFound>(Assert.Single(harness.Announcements));
         Assert.Equal("slate.file.save", notFound.Id);
+    }
+
+    /// <summary>
+    /// The §2.6 residue budget the owner approved on 2026-08-13: the
+    /// palette adds exactly two host-composed availability strings and no
+    /// third.
+    /// </summary>
+    /// <remarks>
+    /// Pinned rather than left as a comment because a budget enforced only
+    /// by convention drifts upward one plausible string at a time. This
+    /// drives every announcing path the palette has — selection,
+    /// filtering, all three failure outcomes, and the no-vault refusal —
+    /// and asserts the residue set is exactly the approved pair. A new
+    /// host-composed reason fails here and goes back to the owner.
+    /// </remarks>
+    [Fact]
+    public void ThePaletteAddsExactlyTheTwoApprovedHostComposedTexts()
+    {
+        PaletteHarness harness = StandardHarness();
+        harness.Source.DisabledReasons["slate.tasks.review"] =
+            SlateCommandRegistrar.UnavailableReason;
+        harness.Source.InvokeFailures["slate.file.save"] =
+            new CommandException.ActionFailed(SlateCommandRegistrar.NoVaultReason);
+
+        harness.Palette.Open();
+        harness.Palette.Query = "review";
+        harness.Palette.InvokeSelected();
+        harness.Palette.Query = "save";
+        harness.Palette.InvokeSelected();
+        harness.Palette.Query = "zzznothingmatches";
+        harness.Palette.Dismiss();
+
+        harness.Source.IsVaultOpen = false;
+        harness.Palette.Open();
+
+        string[] residue = harness.Announcements
+            .OfType<A11yEvent.HostComposed>()
+            .Select(announcement => announcement.Text)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(text => text, StringComparer.Ordinal)
+            .ToArray();
+
+        // The palette itself composes nothing: its availability copy
+        // travels as PaletteCommandUnavailable, which core renders.
+        Assert.Empty(residue);
+
+        // Asserting the reasons that came back out of the fake would be
+        // circular — this test seeded them. The budget lives on the
+        // command layer, so pin THAT: reflect over the registrar's string
+        // constants and require exactly the approved vocabulary. A fourth
+        // string added anywhere in the bridge fails here and goes back to
+        // the owner, which a round-trip through a fake could never catch.
+        string[] declaredCopy = typeof(SlateCommandRegistrar)
+            .GetFields(BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.FlattenHierarchy)
+            .Where(field => field.IsLiteral && !field.IsInitOnly && field.FieldType == typeof(string))
+            .Select(field => (string)field.GetRawConstantValue()!)
+            .OrderBy(text => text, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(
+            new[]
+            {
+                // The two the owner approved on 2026-08-13.
+                SlateCommandRegistrar.NoVaultReason,
+                SlateCommandRegistrar.UnavailableReason,
+
+                // Not new copy: mac authored this one, and the bridge
+                // mirrors it byte-for-byte so a refusal carrying it is
+                // classified as a rejection rather than a failure.
+                SlateCommandRegistrar.StructuralMutationBusyReason,
+            }.OrderBy(text => text, StringComparer.Ordinal),
+            declaredCopy);
     }
 
     [Theory]
