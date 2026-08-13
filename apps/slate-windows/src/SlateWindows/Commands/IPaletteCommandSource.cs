@@ -76,4 +76,22 @@ internal interface IPaletteCommandSource
     /// auto-presents an empty palette (contract P14).
     /// </summary>
     bool IsVaultOpen { get; }
+
+    /// <summary>
+    /// Whether <paramref name="message"/> — carried by a thrown
+    /// <c>CommandException.ActionFailed</c> — is an availability
+    /// rejection rather than an operation failure. Rejections announce
+    /// as <c>PaletteCommandUnavailable</c> (the reason verbatim, no
+    /// prefix); failures announce as <c>PaletteCommandFailed</c>
+    /// (contract P10).
+    /// </summary>
+    /// <remarks>
+    /// The distinction lives here because the availability vocabulary
+    /// belongs to the command layer, not the palette. Mac makes the same
+    /// call by comparing against one host constant; a Windows palette
+    /// hardcoding that string would misreport its own bridge's
+    /// rejections — which emit different copy — as "{label} failed:
+    /// {rejection}".
+    /// </remarks>
+    bool IsAvailabilityRejection(string message);
 }

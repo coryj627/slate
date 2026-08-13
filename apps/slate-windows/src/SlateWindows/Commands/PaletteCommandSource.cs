@@ -105,6 +105,10 @@ internal sealed class PaletteCommandSource : IPaletteCommandSource, IDisposable
     /// <inheritdoc />
     public bool IsVaultOpen => _host.IsVaultOpen;
 
+    /// <inheritdoc />
+    public bool IsAvailabilityRejection(string message) =>
+        SlateCommandRegistrar.IsAvailabilityRejection(message);
+
     /// <summary>The last recents-persistence failure, or
     /// <see langword="null"/>. Non-fatal, but not invisible.</summary>
     public Exception? LastRecentsSaveError => _recentsStore.LastSaveError;

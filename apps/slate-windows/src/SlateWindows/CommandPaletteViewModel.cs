@@ -167,21 +167,6 @@ internal sealed class CommandPaletteViewModel : BindableBase
     internal const string EmptyRegistryDetail = "Open a vault to access the palette.";
     internal const string NoMatchesTitle = "No matches";
 
-    /// <summary>
-    /// The reason a command refuses while a structural file operation
-    /// owns the mutation gate. An <c>ActionFailed</c> carrying exactly
-    /// this message is an availability rejection, not an operation
-    /// failure, and routes to <c>PaletteCommandUnavailable</c>
-    /// (contract P10).
-    /// </summary>
-    /// <remarks>
-    /// Byte-identical to mac's <c>AppState.structuralMutationBusyReason</c>.
-    /// Declared here because the Windows command bridge has no constant
-    /// for it yet; when the bridge grows one, this must collapse into
-    /// it rather than become a second authority.
-    /// </remarks>
-    internal const string StructuralMutationBusyReason =
-        "Wait for the current file operation to finish.";
 
     private readonly IPaletteCommandSource _source;
     private readonly Action<A11yEvent> _announce;
@@ -480,10 +465,11 @@ internal sealed class CommandPaletteViewModel : BindableBase
         }
         catch (CommandException.ActionFailed failed)
         {
-            _announce(string.Equals(
-                failed.message,
-                StructuralMutationBusyReason,
-                StringComparison.Ordinal)
+            // The command layer owns the availability vocabulary (contract
+            // P10). Asking it — rather than comparing against a string
+            // held here — is what keeps a bridge-side rejection from being
+            // announced as "{label} failed: {rejection}".
+            _announce(_source.IsAvailabilityRejection(failed.message)
                 ? new A11yEvent.PaletteCommandUnavailable(failed.message)
                 : new A11yEvent.PaletteCommandFailed(row.Label, failed.message));
             return;

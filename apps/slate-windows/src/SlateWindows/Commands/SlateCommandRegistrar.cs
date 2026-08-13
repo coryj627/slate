@@ -148,6 +148,28 @@ internal static class SlateCommandRegistrar
     internal const string NoVaultReason = "Open a vault to use this command.";
     internal const string UnavailableReason = "This command is not available right now.";
 
+    /// <summary>
+    /// Mac's structural-mutation refusal, byte-identical to
+    /// <c>AppState.structuralMutationBusyReason</c>. Windows has no
+    /// structural-mutation gate of its own yet, so nothing here emits it —
+    /// it is listed as an availability reason so that a core-side or
+    /// future host-side refusal carrying this exact text is announced as
+    /// a rejection rather than as "{label} failed: {reason}".
+    /// </summary>
+    internal const string StructuralMutationBusyReason =
+        "Wait for the current file operation to finish.";
+
+    /// <summary>
+    /// Whether a failed action's message is an availability rejection
+    /// rather than an operation failure (contract P10). The palette asks
+    /// through <see cref="IPaletteCommandSource.IsAvailabilityRejection"/>
+    /// so the vocabulary has exactly one owner.
+    /// </summary>
+    internal static bool IsAvailabilityRejection(string message) =>
+        string.Equals(message, NoVaultReason, StringComparison.Ordinal)
+        || string.Equals(message, UnavailableReason, StringComparison.Ordinal)
+        || string.Equals(message, StructuralMutationBusyReason, StringComparison.Ordinal);
+
     private static readonly Dictionary<string, Func<ISlateCommandHost, ICommand?>> Resolvers =
         BuildResolvers();
 

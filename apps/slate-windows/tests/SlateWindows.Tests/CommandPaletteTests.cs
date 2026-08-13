@@ -371,7 +371,7 @@ public sealed class CommandPaletteTests
     {
         PaletteHarness harness = StandardHarness();
         harness.Source.DisabledReasons["slate.file.save"] =
-            CommandPaletteViewModel.StructuralMutationBusyReason;
+            SlateCommandRegistrar.StructuralMutationBusyReason;
         harness.Palette.Open();
         harness.Announcements.Clear();
 
@@ -381,12 +381,12 @@ public sealed class CommandPaletteTests
             harness.Palette.Rows,
             candidate => candidate.Id == "slate.file.save");
         Assert.True(row.IsUnavailable);
-        Assert.Equal(CommandPaletteViewModel.StructuralMutationBusyReason, row.DisabledReason);
+        Assert.Equal(SlateCommandRegistrar.StructuralMutationBusyReason, row.DisabledReason);
         Assert.Equal("slate.file.save", harness.Palette.SelectedId);
         A11yEvent.PaletteCommandSelected selected =
             Assert.IsType<A11yEvent.PaletteCommandSelected>(Assert.Single(harness.Announcements));
         Assert.Equal("Save", selected.Label);
-        Assert.Equal(CommandPaletteViewModel.StructuralMutationBusyReason, selected.DisabledReason);
+        Assert.Equal(SlateCommandRegistrar.StructuralMutationBusyReason, selected.DisabledReason);
 
         // Still a stop in the cycle: Down continues past it.
         harness.Palette.MoveSelection(1);
@@ -492,12 +492,44 @@ public sealed class CommandPaletteTests
         Assert.Equal("slate.file.save", notFound.Id);
     }
 
+    [Theory]
+    [InlineData(nameof(SlateCommandRegistrar.NoVaultReason))]
+    [InlineData(nameof(SlateCommandRegistrar.UnavailableReason))]
+    public void TheBridgesOwnRefusalsRouteToUnavailableNotFailed(string which)
+    {
+        // The regression this pins: the palette used to compare against
+        // mac's structural-busy string, so a refusal thrown by the WINDOWS
+        // bridge — which uses different copy — fell through to
+        // PaletteCommandFailed and announced "Save failed: Open a vault to
+        // use this command." A rejection reported as a failure.
+        string reason = which == nameof(SlateCommandRegistrar.NoVaultReason)
+            ? SlateCommandRegistrar.NoVaultReason
+            : SlateCommandRegistrar.UnavailableReason;
+
+        PaletteHarness harness = StandardHarness();
+        harness.Source.InvokeFailures["slate.file.save"] =
+            new CommandException.ActionFailed(reason);
+        harness.Palette.Open();
+        harness.Palette.Query = "save";
+        harness.Announcements.Clear();
+
+        harness.Palette.InvokeSelected();
+
+        A11yEvent.PaletteCommandUnavailable unavailable =
+            Assert.IsType<A11yEvent.PaletteCommandUnavailable>(
+                Assert.Single(harness.Announcements));
+        // Verbatim, no prefix (contract P10).
+        Assert.Equal(reason, unavailable.Reason);
+        Assert.Empty(harness.Source.Recorded);
+        Assert.DoesNotContain("dismiss", harness.Log);
+    }
+
     [Fact]
     public void StructuralBusyActionFailedRoutesToUnavailableNotFailed()
     {
         PaletteHarness harness = StandardHarness();
         harness.Source.InvokeFailures["slate.file.save"] = new CommandException.ActionFailed(
-            CommandPaletteViewModel.StructuralMutationBusyReason);
+            SlateCommandRegistrar.StructuralMutationBusyReason);
         harness.Palette.Open();
         harness.Palette.Query = "save";
         harness.Announcements.Clear();
@@ -508,7 +540,7 @@ public sealed class CommandPaletteTests
             Assert.IsType<A11yEvent.PaletteCommandUnavailable>(
                 Assert.Single(harness.Announcements));
         Assert.Equal(
-            CommandPaletteViewModel.StructuralMutationBusyReason,
+            SlateCommandRegistrar.StructuralMutationBusyReason,
             unavailable.Reason);
         Assert.True(harness.Palette.IsOpen);
     }
@@ -739,6 +771,21 @@ public sealed class CommandPaletteTests
         public List<string> Recorded { get; } = [];
 
         public bool IsVaultOpen { get; set; } = true;
+
+        /// <summary>
+        /// The availability vocabulary the command layer owns. Seeded with
+        /// the real bridge's reasons so these facts bite the production
+        /// strings rather than a fake's private invention.
+        /// </summary>
+        public HashSet<string> AvailabilityRejections { get; } =
+        [
+            SlateCommandRegistrar.NoVaultReason,
+            SlateCommandRegistrar.UnavailableReason,
+            SlateCommandRegistrar.StructuralMutationBusyReason,
+        ];
+
+        public bool IsAvailabilityRejection(string message) =>
+            AvailabilityRejections.Contains(message);
 
         public int ListCommandsCalls { get; private set; }
 
