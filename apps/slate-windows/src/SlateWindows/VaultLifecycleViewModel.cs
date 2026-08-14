@@ -882,6 +882,11 @@ internal sealed class VaultLifecycleViewModel
         switcher.Dismissed += QuickSwitcher_Dismissed;
 
         Workspace = workspace;
+
+        // PINV-7: the workspace requeries far more often than the vault
+        // lifecycle does — on every tab switch — and that is the frequency
+        // the invariant's own example needs.
+        workspace.RegisteredCommandStatesChanged = RaiseRegisteredCommandStates;
         FileSidebar = sidebar;
         QuickSwitcher = switcher;
         WorkspaceReady?.Invoke(this, EventArgs.Empty);
@@ -1131,6 +1136,16 @@ internal sealed class VaultLifecycleViewModel
         // four hand-maintained lists allow. Only meaningful once the
         // bridge exists, hence the null check — an unopened palette has
         // registered nothing yet.
+        RaiseRegisteredCommandStates();
+    }
+
+    /// <summary>
+    /// PINV-7: requery the registered catalog by ENUMERATION, so a newly
+    /// registered command cannot be silently omitted the way the
+    /// hand-maintained lists allow. No-op until the bridge exists.
+    /// </summary>
+    private void RaiseRegisteredCommandStates()
+    {
         if (_paletteSource is not null)
         {
             SlateCommandRegistrar.RaiseCommandStates(this);

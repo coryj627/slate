@@ -428,6 +428,62 @@ had no test at all — the palette's routing facts assert against a fake
 seeded with the same constants, so deleting a clause left every test
 green.
 
+### Round 2 — verification (re-ran every round-1 mutation)
+
+**The headline result: 7 of 12 round-1 fixes had NO test anywhere.**
+Reverting them left the suite byte-identically green, so the claim "each
+round-1 fix works" was unfalsifiable for a majority of them — the
+recorded W4-8 lesson reproducing almost exactly. Gated: the SPDX header,
+the chord-table rows, the `ActionFailed` wrapping, and the chord data.
+Ungated: the text-editing allow-list (FlaUI only), the PD-2 re-open, the
+focus guard, the vault dismissal, the enumerating refresh, the UIA
+hosting, the double-click gate, and the suppression disarm.
+
+**Three new confirmed defects, two of them false claims in this document:**
+
+- **AltGr was still swallowed.** The round-1 record claimed the
+  allow-list fixed it; it did not. WPF reports AltGr as `Control|Alt`,
+  which fell through to the allow-list's final `return false`, so nine
+  ordinary Polish letters and the German `@` and euro sign were dropped.
+  Now distinguished by the right Alt key being physically down.
+- **PINV-7 was wired to one of four refresh points — and not the one
+  holding its own cited example.** The vault-lifecycle refresh fires on
+  vault transitions; `ToggleReadingModeCommand` gates on the active tab
+  being Markdown and needs a requery on tab switch. The workspace refresh
+  now raises a hook the shell answers with the enumerating pass. The
+  sidebar and quick-switcher lists remain hand-maintained; that residue is
+  real and recorded rather than claimed closed.
+- **Nothing enforced the palette/overlay mutual exclusion** the code
+  comment asserted. Ctrl+O then Ctrl+Shift+P left two `IsDialog` overlays
+  and two hit-test scrims live, with Quick Open's key handler unreachable
+  behind the palette branch. Quick Open is now dismissed first.
+
+**A round-1 finding that measurement refuted.** The claim that a closed
+palette leaves its search box and results list in the UIA tree did not
+hold: a mutation removing both `Visibility` bindings left the journey's
+closed-palette assertion green, so the children do leave the tree with
+their collapsed ancestor. The bindings are kept as precautionary and
+labelled as such in the XAML. This is the recorded pattern — a finding
+reasoned from framework behaviour measured in an earlier wave, wrong
+here.
+
+**Gates added, each mutation-verified:** a unit fact for the vault
+dismissal (reverting it fails on P14's forbidden state), and two journey
+legs — PD-2's re-open-with-cleared-query, and the closed-palette
+absence of both child surfaces.
+
+**Deliberately ungated, and said so in the source:** the suppression-flag
+disarm. Investigating why no test could bite it showed the state is
+unreachable — `Open()` re-arms the flag every time and P4 freezes the
+snapshot, so a palette that opens with zero rows can never gain one. The
+line stays as defensive hygiene; a test that passed either way would be
+worse than none.
+
+**Also resolved:** the intermittent 17/18 accessibility result flagged in
+round 1 was `GridConformanceTests.MatrixConformanceHolds` failing against
+a stale `GridConformanceHost` binary — the recorded trap. Rebuilt; 18/18
+twice consecutively.
+
 **Carried, with reasons.** The §2.6 pin's reflection has escapes a
 reviewer enumerated (a `public const`, a `static readonly`, or a literal
 in another type). No fact enumerates the app's `ICommand` properties, so

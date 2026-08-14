@@ -31,6 +31,39 @@ public sealed class CommandRegistrationTests
     /// while the shipped behaviour changed. Those facts prove the palette
     /// ASKS the seam; this one proves the seam ANSWERS.
     /// </remarks>
+    /// <summary>
+    /// Round 2 gate: a vault transition dismisses the palette (P14).
+    /// </summary>
+    /// <remarks>
+    /// The round-1 fix had NO test — the verification round deleted both
+    /// <c>Dismiss()</c> calls and the whole suite stayed green. Without
+    /// them the palette stays open and modal across the async gap where
+    /// <c>IsVaultOpen</c> is false, permanently if the new vault fails.
+    /// </remarks>
+    [Fact]
+    public async Task AVaultTransitionDismissesThePalette()
+    {
+        using var fixture = FixtureVault.Create(1);
+        using var lifecycle = new VaultLifecycleViewModel(
+            pickVault: () => Task.FromResult<string?>(fixture.Root),
+            enqueueUi: action => action(),
+            recentVaultsStore: new RecentVaultsStore(
+                Path.Combine(fixture.Root, "device-state", "recent-vaults.json")));
+
+        await lifecycle.OpenVaultAsync(fixture.Root);
+        Assert.True(lifecycle.IsVaultOpen);
+
+        lifecycle.Palette.Open();
+        Assert.True(lifecycle.Palette.IsOpen);
+
+        lifecycle.CloseVault();
+
+        Assert.False(lifecycle.IsVaultOpen);
+        Assert.False(
+            lifecycle.Palette.IsOpen,
+            "closing the vault left the palette open — P14's forbidden state.");
+    }
+
     [Theory]
     [InlineData("NoVault", true)]
     [InlineData("Unavailable", true)]

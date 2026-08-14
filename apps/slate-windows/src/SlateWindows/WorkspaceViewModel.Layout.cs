@@ -790,8 +790,22 @@ internal sealed partial class WorkspaceViewModel
         }
     }
 
+    /// <summary>
+    /// Raised after this view model requeries its own hand-maintained list,
+    /// so the shell can requery the REGISTERED catalog by enumeration
+    /// (PINV-7).
+    /// </summary>
+    /// <remarks>
+    /// The workspace refresh is the one that matters for the invariant's own
+    /// example: <c>ToggleReadingModeCommand</c> gates on the active tab
+    /// being Markdown, so it has to requery on a tab switch — which the
+    /// vault-lifecycle refresh never sees.
+    /// </remarks>
+    internal Action? RegisteredCommandStatesChanged { get; set; }
+
     private void RaiseCommandStates()
     {
+        RegisteredCommandStatesChanged?.Invoke();
         foreach (ICommand command in new[]
         {
             CloseActiveTabCommand,

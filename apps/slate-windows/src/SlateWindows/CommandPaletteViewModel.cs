@@ -760,10 +760,15 @@ internal sealed class CommandPaletteViewModel : BindableBase
 
         if (!changed)
         {
-            // Disarm even when nothing changed. Otherwise an open that
-            // lands on no selection leaves the flag set and swallows the
-            // user's FIRST real selection announcement instead of the
-            // at-open one it was armed for.
+            // Disarm even when nothing changed, so an open that lands on
+            // no selection cannot leave the flag armed.
+            //
+            // DEFENSIVE ONLY — deliberately ungated. The state is
+            // unreachable today: Open() re-arms the flag every time, and
+            // P4 freezes the snapshot, so a palette that opens with zero
+            // rows can never gain one within that session. A test here
+            // could not discriminate, and writing one that passes either
+            // way would be worse than none.
             _suppressSelectionAnnouncement = false;
             return;
         }

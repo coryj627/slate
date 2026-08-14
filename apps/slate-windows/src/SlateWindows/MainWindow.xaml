@@ -1973,6 +1973,16 @@
                              AutomationProperties.Name="Search commands"
                              Visibility="{Binding IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}"
                              AutomationProperties.HelpText="Up and Down move selection. Home, End, Page Up and Page Down jump. Enter runs the selected command. Escape closes the palette." />
+                    <!-- The two Visibility bindings on this list and on the
+                         search box above are PRECAUTIONARY, matching the Quick
+                         Open precedent. A round-2 mutation removed both and the
+                         journey's closed-palette assertion still passed, so the
+                         children do leave the UIA tree with their collapsed
+                         ancestor on this framework version — the reviewer's
+                         claim that they linger reasoned from behaviour measured
+                         in an earlier wave and did not hold here. Kept for
+                         consistency and cost nothing; the journey pins the
+                         behaviour rather than the mechanism. -->
                     <local:AutomationVisibilityListBox x:Name="CommandPaletteResultsList"
                              Grid.Row="1"
                              Margin="0,8"

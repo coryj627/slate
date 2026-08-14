@@ -399,6 +399,17 @@ public partial class MainWindow : Window
             // and the Windows convention. Handled here rather than as a
             // KeyBinding because the palette exposes methods, not
             // ICommands (PR-4).
+            //
+            // Quick Open is dismissed first. The two overlays are siblings
+            // in one Grid and the palette is declared later, so it renders
+            // ON TOP of an open Quick Open — leaving two IsDialog surfaces
+            // and two hit-test scrims live while Quick Open's key handler
+            // sits unreachable behind this branch.
+            if (_viewModel.QuickSwitcher?.IsOpen == true)
+            {
+                _viewModel.QuickSwitcher.Dismiss();
+            }
+
             _viewModel.Palette.Open();
             e.Handled = true;
             return;
@@ -640,6 +651,18 @@ public partial class MainWindow : Window
             // Ctrl+Shift+Z is redo; the rest are word-wise selection.
             return key is Key.Z
                 or Key.Left or Key.Right or Key.Home or Key.End;
+        }
+
+        // AltGr reaches WPF as Control|Alt, so a naive deny-list swallows it
+        // and the palette silently drops ordinary letters on every layout
+        // that uses it — nine of them in Polish, plus @ and the euro sign in
+        // German. Distinguished from a real Ctrl+Alt chord by the RIGHT Alt
+        // key being physically down. The shell-chord check is OR'd ahead of
+        // this at the call site, so Ctrl+Alt+{arrows, =, -, I, F} stay
+        // swallowed.
+        if (modifiers == (ModifierKeys.Control | ModifierKeys.Alt))
+        {
+            return Keyboard.IsKeyDown(Key.RightAlt);
         }
 
         return false;

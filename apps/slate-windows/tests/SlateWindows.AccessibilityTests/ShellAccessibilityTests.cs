@@ -4395,6 +4395,37 @@ public sealed class ShellAccessibilityTests
                     TimeSpan.FromSeconds(10)),
                 "the palette stayed open after a successful invocation");
 
+            // --- PD-2: the chord re-opens rather than toggling ---------
+            // Round 2 gate: reverting the re-open branch failed NOTHING,
+            // because every other chord press in this journey starts from a
+            // CLOSED palette. Pressing it while open must clear the query,
+            // not close the overlay and not sit inert.
+            search.Patterns.Value.Pattern.SetValue("zzznothing");
+            window.SetForeground();
+            PressChord(
+                VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_P);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            return window.FindFirstDescendant(automation.ConditionFactory
+                                .ByAutomationId("CommandPalette")) is not null
+                                && string.IsNullOrEmpty(
+                                    window.FindFirstDescendant(automation.ConditionFactory
+                                        .ByAutomationId("CommandPaletteSearch"))
+                                    ?.Patterns.Value.Pattern.Value.ValueOrDefault);
+                        }
+                        catch (System.Runtime.InteropServices.COMException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "Ctrl+Shift+P while open did not re-open the palette with a "
+                + "cleared query — PD-2 says it re-opens rather than toggling.");
+
             // --- Escape closes and restores focus ----------------------
             window.SetForeground();
             PressChord(
@@ -4419,6 +4450,31 @@ public sealed class ShellAccessibilityTests
                     },
                     TimeSpan.FromSeconds(10)),
                 "Escape did not close the palette");
+
+            // Round 2 gate: reverting the children's Visibility bindings
+            // failed nothing, because this journey only ever looked for the
+            // OVERLAY id after close. The overlay collapses, but Visibility
+            // does not inherit — without their own bindings the search box
+            // and results list linger as a phantom dialog surface.
+            foreach (string id in new[] { "CommandPaletteSearch", "CommandPaletteResults" })
+            {
+                Assert.True(
+                    SpinWait.SpinUntil(
+                        () =>
+                        {
+                            try
+                            {
+                                return window.FindFirstDescendant(automation.ConditionFactory
+                                    .ByAutomationId(id)) is null;
+                            }
+                            catch (System.Runtime.InteropServices.COMException)
+                            {
+                                return true;
+                            }
+                        },
+                        TimeSpan.FromSeconds(5)),
+                    $"{id} stayed in the UIA tree after the palette closed");
+            }
 
             // Focus must land somewhere real. A dismissed overlay that
             // leaves focus on the window root strands a keyboard user.
