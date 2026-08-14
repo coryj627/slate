@@ -1125,6 +1125,16 @@ internal sealed class VaultLifecycleViewModel
         _openVaultCommand.RaiseCanExecuteChanged();
         _openRecentCommand.RaiseCanExecuteChanged();
         _closeVaultCommand.RaiseCanExecuteChanged();
+
+        // PINV-7: requery the registered catalog by ENUMERATION, so a
+        // newly registered command cannot be silently omitted the way the
+        // four hand-maintained lists allow. Only meaningful once the
+        // bridge exists, hence the null check — an unopened palette has
+        // registered nothing yet.
+        if (_paletteSource is not null)
+        {
+            SlateCommandRegistrar.RaiseCommandStates(this);
+        }
     }
 
     private bool SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)

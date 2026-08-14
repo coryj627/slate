@@ -455,6 +455,12 @@ public sealed class ChordTableTests
                 + "(MainWindow.xaml:55) for the editor popover — a different claimant in "
                 + "the PR-2 chain, so the no-KeyBinding staleness check is waived here.",
                 SharesTheChordWithAnotherClaimant: true),
+            ["windows.view.showCommandPalette"] = new(
+                "W5-1: Ctrl+Shift+P is delivered from Window_PreviewKeyDown, not a "
+                + "KeyBinding, because the palette exposes methods rather than "
+                + "ICommands (PR-4). The red team found the chord shipping with no "
+                + "table row at all — the scrape reads only declarative sources, so "
+                + "an imperative chord must be allow-listed here to be checked."),
         };
         for (int slot = 1; slot <= 9; slot++)
         {

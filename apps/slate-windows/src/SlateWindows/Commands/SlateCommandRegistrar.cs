@@ -131,7 +131,21 @@ internal sealed class DispatcherCommandAction : CommandAction
             throw new CommandException.ActionFailed(disabled);
         }
 
-        command!.Execute(null);
+        try
+        {
+            command!.Execute(null);
+        }
+        catch (Exception exception) when (exception is not CommandException)
+        {
+            // Without this the exception escapes into the uniffi callback
+            // boundary, comes back as PanicException or InternalException —
+            // neither of which is a CommandException — and blows past the
+            // palette's catch chain onto the dispatcher. The palette would
+            // crash the app instead of announcing a failure and staying
+            // open (P9/P10). It also makes this method's own documented
+            // contract true.
+            throw new CommandException.ActionFailed(exception.Message);
+        }
     }
 }
 

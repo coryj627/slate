@@ -1971,10 +1971,12 @@
                              PreviewKeyDown="CommandPaletteSearch_PreviewKeyDown"
                              AutomationProperties.AutomationId="CommandPaletteSearch"
                              AutomationProperties.Name="Search commands"
+                             Visibility="{Binding IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}"
                              AutomationProperties.HelpText="Up and Down move selection. Home, End, Page Up and Page Down jump. Enter runs the selected command. Escape closes the palette." />
                     <local:AutomationVisibilityListBox x:Name="CommandPaletteResultsList"
                              Grid.Row="1"
                              Margin="0,8"
+                             Visibility="{Binding IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}"
                              SelectionChanged="CommandPaletteResults_SelectionChanged"
                              MouseDoubleClick="CommandPaletteResults_MouseDoubleClick"
                              AutomationProperties.AutomationId="CommandPaletteResults"
@@ -2069,16 +2071,23 @@
                          ItemsControl left on-screen at zero size fails the
                          axe BoundingRectangleNotNull check (the W4-5/W4-6
                          lesson). -->
-                    <StackPanel Grid.Row="2"
+                    <!-- AutomationLandmarkGrid, not StackPanel: a bare Panel
+                         creates NO automation peer, so the composed name
+                         below would be silently dropped and the block would
+                         publish nothing at all. Both children are
+                         presentation-only, so this host is the single stop. -->
+                    <local:AutomationLandmarkGrid Grid.Row="2"
                                 Margin="4,4,4,0"
                                 Visibility="{Binding ShowsEmptyState, Converter={StaticResource BooleanToVisibilityConverter}}"
                                 AutomationProperties.Name="{Binding EmptyStateAccessibleName}">
+                        <StackPanel>
                         <local:AutomationPresentationTextBlock Text="{Binding EmptyStateTitle}"
                                                                FontWeight="SemiBold" />
                         <local:AutomationPresentationTextBlock Text="{Binding EmptyStateDetail}"
                                                                Foreground="{DynamicResource Slate.SecondaryTextBrush}"
                                                                TextWrapping="Wrap" />
-                    </StackPanel>
+                        </StackPanel>
+                    </local:AutomationLandmarkGrid>
                     <local:AutomationPresentationTextBlock Grid.Row="3"
                             Margin="4,8,4,0"
                             Text="Enter run · Esc close"

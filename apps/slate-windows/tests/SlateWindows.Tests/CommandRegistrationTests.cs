@@ -21,6 +21,58 @@ namespace SlateWindows.Tests;
 /// </summary>
 public sealed class CommandRegistrationTests
 {
+    /// <summary>
+    /// The PRODUCTION availability vocabulary, not a fake's copy of it.
+    /// </summary>
+    /// <remarks>
+    /// The red team caught this: the palette's routing facts assert
+    /// against a fake source seeded with the same three constants, so
+    /// deleting a clause from the real predicate left every test green
+    /// while the shipped behaviour changed. Those facts prove the palette
+    /// ASKS the seam; this one proves the seam ANSWERS.
+    /// </remarks>
+    [Theory]
+    [InlineData("NoVault", true)]
+    [InlineData("Unavailable", true)]
+    [InlineData("StructuralBusy", true)]
+    [InlineData("Other", false)]
+    public void IsAvailabilityRejection_AnswersForTheWholeVocabulary(
+        string which, bool expected)
+    {
+        string message = which switch
+        {
+            "NoVault" => SlateCommandRegistrar.NoVaultReason,
+            "Unavailable" => SlateCommandRegistrar.UnavailableReason,
+            "StructuralBusy" => SlateCommandRegistrar.StructuralMutationBusyReason,
+            _ => "The disk is full.",
+        };
+
+        Assert.Equal(expected, SlateCommandRegistrar.IsAvailabilityRejection(message));
+    }
+
+    /// <summary>
+    /// A throwing <c>ICommand</c> becomes an <c>ActionFailed</c> the
+    /// palette can announce, rather than escaping through the uniffi
+    /// callback boundary as a non-<c>CommandException</c> and crashing the
+    /// dispatcher.
+    /// </summary>
+    [Fact]
+    public void AThrowingCommandSurfacesAsActionFailed()
+    {
+        var host = new FakeCommandHost
+        {
+            CloseVaultOverride = new StubCommand(
+                () => throw new InvalidOperationException("the vault exploded"),
+                () => true),
+        };
+        var action = new DispatcherCommandAction(
+            Dispatcher.CurrentDispatcher, host, ChordTable.Ids.VaultClose);
+
+        CommandException.ActionFailed failed =
+            Assert.Throws<CommandException.ActionFailed>(action.Invoke);
+        Assert.Equal("the vault exploded", failed.message);
+    }
+
     [Fact]
     public void DuplicateId_IsAFatalRegistrationConflict()
     {
@@ -422,8 +474,13 @@ public sealed class CommandRegistrationTests
             ? relay
             : new StubCommand(() => OpenVaultInvocations++, () => CanOpenVault);
 
+        /// <summary>When set, CloseVaultCommand resolves to this instead —
+        /// the throwing-command fact needs an ICommand that faults.</summary>
+        public ICommand? CloseVaultOverride { get; set; }
+
         public ICommand CloseVaultCommand =>
-            new StubCommand(() => CloseVaultInvocations++, () => true);
+            CloseVaultOverride
+            ?? new StubCommand(() => CloseVaultInvocations++, () => true);
     }
 
     private sealed class StubCommand : ICommand

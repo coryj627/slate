@@ -27,6 +27,10 @@ internal enum ChordScope
     /// <c>PreviewKeyDown</c> — live whenever the shell has focus.</summary>
     Global,
 
+    /// <summary>The command palette overlay (W5-1), live only while the
+    /// palette is open. Its opening chord is <see cref="Global"/>.</summary>
+    Palette,
+
     /// <summary>The reading view's structural navigator
     /// (<c>Reading/ReadingNavigator.cs</c>), live only with the reading
     /// surface focused.</summary>
@@ -943,6 +947,14 @@ internal static class ChordTable
                 readingReason));
         }
 
+        const string PaletteReason =
+            "W5-1: a command-palette overlay interaction, live only while the "
+            + "palette is open. Delivered imperatively from "
+            + "MainWindow.HandleCommandPaletteKey, not a KeyBinding.";
+        const string PaletteKeysDivergence =
+            "PD-1: Windows navigates with the Home/End/Page keys where mac "
+            + "deliberately handles none of them; mac converges under #1105.";
+
         rows.AddRange(
         [
             Chord("windows.quickOpen.openCurrentTab", "Quick Open: open in the current tab",
@@ -960,6 +972,33 @@ internal static class ChordTable
             Chord("windows.quickOpen.dismiss", "Quick Open: dismiss",
                 "Escape", ChordScope.QuickOpen,
                 quickOpenReason + " PR-2 records its place in the Escape chain."),
+
+            Chord("windows.view.showCommandPalette", "Show the command palette",
+                "Ctrl+Shift+P", ChordScope.Global,
+                "W5-1 (PD-2): the palette's own opening chord, delivered "
+                + "imperatively from MainWindow.Window_PreviewKeyDown rather than a "
+                + "KeyBinding because the palette exposes methods, not ICommands "
+                + "(PR-4). Non-toggling. mac homes ⇧⌘P in a menu CommandGroup; "
+                + "Windows has no menu item for it yet, so it emits no UIA "
+                + "AcceleratorKey — same class as the PR-5 chords.",
+                mac: "⇧⌘P"),
+            Chord("windows.palette.invoke", "Command palette: run the selected command",
+                "Enter", ChordScope.Palette, PaletteReason),
+            Chord("windows.palette.dismiss", "Command palette: dismiss",
+                "Escape", ChordScope.Palette,
+                PaletteReason + " PR-2 records its place in the Escape chain."),
+            Chord("windows.palette.moveNext", "Command palette: next result",
+                "Down", ChordScope.Palette, PaletteReason),
+            Chord("windows.palette.movePrevious", "Command palette: previous result",
+                "Up", ChordScope.Palette, PaletteReason),
+            Chord("windows.palette.moveFirst", "Command palette: first result",
+                "Home", ChordScope.Palette, PaletteReason + " " + PaletteKeysDivergence),
+            Chord("windows.palette.moveLast", "Command palette: last result",
+                "End", ChordScope.Palette, PaletteReason + " " + PaletteKeysDivergence),
+            Chord("windows.palette.pageDown", "Command palette: next page of results",
+                "PageDown", ChordScope.Palette, PaletteReason + " " + PaletteKeysDivergence),
+            Chord("windows.palette.pageUp", "Command palette: previous page of results",
+                "PageUp", ChordScope.Palette, PaletteReason + " " + PaletteKeysDivergence),
 
             Chord("windows.editor.closePopover", "Editor: close the interaction popover",
                 "Escape", ChordScope.Editor,
