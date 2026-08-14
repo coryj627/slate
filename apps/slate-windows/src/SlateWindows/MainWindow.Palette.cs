@@ -77,93 +77,51 @@ public partial class MainWindow
     /// </summary>
     /// <remarks>
     /// Derived from the view-model flags that already exist — no new
-    /// state. Enumerated in <see cref="ModalSurface"/> paint order, so the
-    /// LAST open one is on top and therefore owns the keyboard. This
-    /// exists because three review rounds produced blockers in the same
-    /// branch, each because a guard was written for one overlay while
-    /// eight others went unconsidered.
+    /// state. The precedence walk itself lives in
+    /// <see cref="ModalSurfaces.TopmostOpen"/> so it can be gated; this
+    /// property only answers "is THIS one open".
     /// </remarks>
-    internal ModalSurface? OpenModalSurface
+    internal ModalSurface? OpenModalSurface =>
+        ModalSurfaces.TopmostOpen(IsSurfaceOpen);
+
+    /// <summary>
+    /// Whether one named surface is open.
+    /// </summary>
+    /// <remarks>
+    /// An exhaustive <c>switch</c> with no default arm on purpose: adding
+    /// a <see cref="ModalSurface"/> member without mapping it here is a
+    /// compile error rather than a surface that silently never counts as
+    /// open.
+    /// </remarks>
+    private bool IsSurfaceOpen(ModalSurface surface)
     {
-        get
+        WorkspaceViewModel? workspace = _viewModel.Workspace;
+        return surface switch
         {
-            ModalSurface? top = null;
-            if (_viewModel.QuickSwitcher?.IsOpen == true)
-            {
-                top = ModalSurface.QuickOpen;
-            }
-
-            if (_viewModel.Palette.IsOpen)
-            {
-                top = ModalSurface.CommandPalette;
-            }
-
-            if (_viewModel.Workspace is not { } workspace)
-            {
-                return top;
-            }
-
-            if (workspace.AddPropertySheet is not null)
-            {
-                top = ModalSurface.AddProperty;
-            }
-
-            if (workspace.BulkRenameSheet is not null)
-            {
-                top = ModalSurface.BulkRename;
-            }
-
-            if (workspace.CitationDetails is not null)
-            {
-                top = ModalSurface.CitationDetails;
-            }
-
-            if (workspace.CitationSummary is not null)
-            {
-                top = ModalSurface.CitationSummary;
-            }
-
-            if (workspace.FilesCiting is not null)
-            {
-                top = ModalSurface.FilesCiting;
-            }
-
-            if (workspace.DashboardEditorSheet is not null)
-            {
-                top = ModalSurface.DashboardEditor;
-            }
-
-            if (workspace.BaseQueryBuilderSheet is not null)
-            {
-                top = ModalSurface.BaseQueryBuilder;
-            }
-
-            return top;
-        }
+            ModalSurface.QuickOpen => _viewModel.QuickSwitcher?.IsOpen == true,
+            ModalSurface.CommandPalette => _viewModel.Palette.IsOpen,
+            ModalSurface.AddProperty => workspace?.AddPropertySheet is not null,
+            ModalSurface.BulkRename => workspace?.BulkRenameSheet is not null,
+            ModalSurface.CitationDetails => workspace?.CitationDetails is not null,
+            ModalSurface.CitationSummary => workspace?.CitationSummary is not null,
+            ModalSurface.FilesCiting => workspace?.FilesCiting is not null,
+            ModalSurface.DashboardEditor => workspace?.DashboardEditorSheet is not null,
+            ModalSurface.BaseQueryBuilder => workspace?.BaseQueryBuilderSheet is not null,
+            _ => throw new ArgumentOutOfRangeException(nameof(surface)),
+        };
     }
 
     /// <summary>
-    /// Whether the palette may open right now, dismissing what it
-    /// supersedes.
+    /// Applies <see cref="ModalSurfaces.DecidePaletteOpen"/>, performing
+    /// the dismissal it calls for.
     /// </summary>
-    /// <remarks>
-    /// It may not open underneath a sheet. Every sheet is declared AFTER
-    /// the palette in <c>MainWindow.xaml</c> and carries its own scrim, so
-    /// a palette opened beneath one is invisible and unreachable by
-    /// pointer while still owning every keystroke — the round-3 blocker.
-    /// Quick Open is the one surface the palette supersedes rather than
-    /// defers to: it is declared before the palette, so the palette paints
-    /// on top of it legibly.
-    /// </remarks>
     private bool TryClearTheWayForThePalette()
     {
-        switch (OpenModalSurface)
+        switch (ModalSurfaces.DecidePaletteOpen(OpenModalSurface))
         {
-            case null:
-            case ModalSurface.CommandPalette:
-                // PD-2: re-opening while open is allowed and clears the query.
+            case PaletteOpenDecision.Open:
                 return true;
-            case ModalSurface.QuickOpen:
+            case PaletteOpenDecision.DismissQuickOpenThenOpen:
                 _viewModel.QuickSwitcher!.Dismiss();
                 return true;
             default:

@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System;
 using System.Windows.Input;
 
 namespace SlateWindows;
@@ -53,6 +54,82 @@ internal enum ModalSurface
 internal readonly record struct ModalSurfaceDescriptor(
     ModalSurface Surface,
     bool OwnsTextField);
+
+/// <summary>
+/// What the shell should do when the palette chord arrives.
+/// </summary>
+internal enum PaletteOpenDecision
+{
+    /// <summary>Nothing is in the way; open it.</summary>
+    Open,
+
+    /// <summary>Quick Open is up and the palette supersedes it.</summary>
+    DismissQuickOpenThenOpen,
+
+    /// <summary>A higher surface owns the screen; refuse.</summary>
+    Refuse,
+}
+
+/// <summary>
+/// The modal-surface precedence rules, as pure functions.
+/// </summary>
+/// <remarks>
+/// Extracted from <c>MainWindow</c> so they can be gated. The round-3
+/// blocker — the palette opening underneath seven sheets — was fixed in
+/// the design pass with a guard that NO test drove: removing any single
+/// sheet predicate left the suite green, which is the same
+/// fix-without-a-gate class the review rounds kept finding. Precedence
+/// is a pure decision over an enum, so there is no reason it should be
+/// reachable only through a live window.
+/// </remarks>
+internal static class ModalSurfaces
+{
+    /// <summary>
+    /// The topmost open surface, or <see langword="null"/>.
+    /// </summary>
+    /// <param name="isOpen">
+    /// Answers whether a given surface is currently open. Enumerated in
+    /// <see cref="ModalSurface"/> paint order, so the LAST open one wins.
+    /// </param>
+    internal static ModalSurface? TopmostOpen(Func<ModalSurface, bool> isOpen)
+    {
+        ArgumentNullException.ThrowIfNull(isOpen);
+        ModalSurface? top = null;
+        foreach (ModalSurface surface in Enum.GetValues<ModalSurface>())
+        {
+            if (isOpen(surface))
+            {
+                top = surface;
+            }
+        }
+
+        return top;
+    }
+
+    /// <summary>
+    /// Whether the palette may open, given what is already up.
+    /// </summary>
+    /// <remarks>
+    /// The palette refuses beneath any sheet: every sheet is declared
+    /// AFTER it in <c>MainWindow.xaml</c> and carries its own scrim, so a
+    /// palette opened underneath is invisible and unreachable by pointer
+    /// while still owning every keystroke. Quick Open is the one surface
+    /// it supersedes — declared before it, so the palette paints on top
+    /// legibly.
+    /// </remarks>
+    internal static PaletteOpenDecision DecidePaletteOpen(ModalSurface? topmost) =>
+        topmost switch
+        {
+            null => PaletteOpenDecision.Open,
+
+            // PD-2: re-opening while open is allowed and clears the query.
+            ModalSurface.CommandPalette => PaletteOpenDecision.Open,
+
+            ModalSurface.QuickOpen => PaletteOpenDecision.DismissQuickOpenThenOpen,
+
+            _ => PaletteOpenDecision.Refuse,
+        };
+}
 
 /// <summary>
 /// The keys a focused text field must keep while a modal surface owns the

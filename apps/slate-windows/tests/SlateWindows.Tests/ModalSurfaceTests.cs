@@ -89,6 +89,103 @@ public sealed class ModalSurfaceTests
     }
 
     /// <summary>
+    /// The palette refuses to open beneath ANY sheet, supersedes Quick
+    /// Open, and re-opens over itself.
+    /// </summary>
+    /// <remarks>
+    /// The round-3 blocker was the palette opening underneath seven
+    /// sheets, and the design pass fixed it with a guard NO test drove —
+    /// removing any single sheet predicate left the suite green. Codex
+    /// flagged that as the same fix-without-a-gate class the review rounds
+    /// kept finding, which is why the decision is now a pure function over
+    /// the enum and this drives every member of it.
+    /// </remarks>
+    [Theory]
+    [InlineData(null, PaletteOpenDecision.Open)]
+    [InlineData(ModalSurface.CommandPalette, PaletteOpenDecision.Open)]
+    [InlineData(ModalSurface.QuickOpen, PaletteOpenDecision.DismissQuickOpenThenOpen)]
+    [InlineData(ModalSurface.AddProperty, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.BulkRename, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.CitationDetails, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.CitationSummary, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.FilesCiting, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.DashboardEditor, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.BaseQueryBuilder, PaletteOpenDecision.Refuse)]
+    public void ThePaletteDefersToEverySheetAndSupersedesOnlyQuickOpen(
+        object? topmost, object expected)
+    {
+        // object parameters because xUnit needs a public test method and
+        // both enums are internal to the app assembly.
+        ModalSurface? surface = topmost is null ? null : (ModalSurface)topmost;
+        Assert.Equal(
+            (PaletteOpenDecision)expected,
+            ModalSurfaces.DecidePaletteOpen(surface));
+    }
+
+    /// <summary>
+    /// Every <see cref="ModalSurface"/> member is covered by the decision
+    /// table above.
+    /// </summary>
+    /// <remarks>
+    /// Without this, adding a surface and forgetting a row would leave the
+    /// new sheet silently in the "palette opens underneath it" state that
+    /// round 3 found — the decision falls through to the wildcard arm and
+    /// looks correct, but nothing asserts it.
+    /// </remarks>
+    [Fact]
+    public void EveryModalSurfaceHasADecision()
+    {
+        ModalSurface[] covered =
+        [
+            ModalSurface.QuickOpen,
+            ModalSurface.CommandPalette,
+            ModalSurface.AddProperty,
+            ModalSurface.BulkRename,
+            ModalSurface.CitationDetails,
+            ModalSurface.CitationSummary,
+            ModalSurface.FilesCiting,
+            ModalSurface.DashboardEditor,
+            ModalSurface.BaseQueryBuilder,
+        ];
+
+        Assert.Equal(
+            Enum.GetValues<ModalSurface>().OrderBy(surface => surface),
+            covered.OrderBy(surface => surface));
+    }
+
+    /// <summary>
+    /// The topmost-open walk returns the LAST open surface in paint order,
+    /// which is the one that owns the screen and the keyboard.
+    /// </summary>
+    [Fact]
+    public void TopmostOpenReturnsTheLastOpenSurfaceInPaintOrder()
+    {
+        Assert.Null(ModalSurfaces.TopmostOpen(_ => false));
+
+        // A sheet always wins over the palette and Quick Open beneath it.
+        Assert.Equal(
+            ModalSurface.AddProperty,
+            ModalSurfaces.TopmostOpen(surface => surface
+                is ModalSurface.QuickOpen
+                or ModalSurface.CommandPalette
+                or ModalSurface.AddProperty));
+
+        // The palette wins over Quick Open, which is declared before it.
+        Assert.Equal(
+            ModalSurface.CommandPalette,
+            ModalSurfaces.TopmostOpen(surface => surface
+                is ModalSurface.QuickOpen or ModalSurface.CommandPalette));
+
+        // Every surface, alone, is its own topmost.
+        foreach (ModalSurface surface in Enum.GetValues<ModalSurface>())
+        {
+            Assert.Equal(
+                surface,
+                ModalSurfaces.TopmostOpen(candidate => candidate == surface));
+        }
+    }
+
+    /// <summary>
     /// Every <c>Ctrl+Alt</c> chord the shell delivers must be answered by
     /// the shell-chord deny-list, because the AltGr arm un-swallows that
     /// whole modifier pair whenever right Alt is down.

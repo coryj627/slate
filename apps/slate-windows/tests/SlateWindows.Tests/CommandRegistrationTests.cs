@@ -55,6 +55,41 @@ public sealed class CommandRegistrationTests
     }
 
     /// <summary>
+    /// Opening a DIFFERENT vault dismisses the palette too.
+    /// </summary>
+    /// <remarks>
+    /// A sibling gap both the round-3 verifier and codex found
+    /// independently: the close-path fact above left the open path
+    /// entirely ungated, so deleting its dismissal stayed green. This is
+    /// the reachable one — a second Slate launch runs close-then-open, and
+    /// the palette stayed visible and modal across the whole async gap
+    /// where IsVaultOpen is false.
+    /// </remarks>
+    [Fact]
+    public async Task OpeningAnotherVaultAlsoDismissesThePalette()
+    {
+        using var first = FixtureVault.Create(1);
+        using var second = FixtureVault.Create(1);
+        using var lifecycle = new VaultLifecycleViewModel(
+            pickVault: () => Task.FromResult<string?>(first.Root),
+            enqueueUi: action => action(),
+            recentVaultsStore: new RecentVaultsStore(
+                Path.Combine(first.Root, "device-state", "recent-vaults.json")));
+
+        await lifecycle.OpenVaultAsync(first.Root);
+        lifecycle.Palette.Open();
+        Assert.True(lifecycle.Palette.IsOpen);
+
+        await lifecycle.OpenVaultAsync(second.Root);
+
+        Assert.True(lifecycle.IsVaultOpen);
+        Assert.False(
+            lifecycle.Palette.IsOpen,
+            "opening another vault left the palette open — it stays modal "
+            + "across the gap where no vault is open, which P14 forbids.");
+    }
+
+    /// <summary>
     /// The PRODUCTION availability vocabulary, not a fake's copy of it.
     /// </summary>
     /// <remarks>
