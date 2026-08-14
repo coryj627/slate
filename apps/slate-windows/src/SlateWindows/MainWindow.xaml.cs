@@ -389,7 +389,7 @@ public partial class MainWindow : Window
             // only for UNHANDLED key events.
             e.Handled = IsUnderlyingShellShortcut(e.Key, modifiers)
                 || (modifiers is not ModifierKeys.None
-                    && !IsTextEditingChord(e.Key, modifiers));
+                    && !TextEditingChords.Allows(e.Key, modifiers));
             return;
         }
 
@@ -405,12 +405,13 @@ public partial class MainWindow : Window
             // ON TOP of an open Quick Open — leaving two IsDialog surfaces
             // and two hit-test scrims live while Quick Open's key handler
             // sits unreachable behind this branch.
-            if (_viewModel.QuickSwitcher?.IsOpen == true)
+            if (TryClearTheWayForThePalette())
             {
-                _viewModel.QuickSwitcher.Dismiss();
+                _viewModel.Palette.Open();
             }
 
-            _viewModel.Palette.Open();
+            // Handled either way: a refusal must not fall through and let
+            // the chord reach the surface underneath.
             e.Handled = true;
             return;
         }
@@ -617,55 +618,6 @@ public partial class MainWindow : Window
         {
             e.Handled = true;
         }
-    }
-
-    /// <summary>
-    /// Chords that must reach a focused <see cref="TextBox"/> while a modal
-    /// overlay owns the keyboard.
-    /// </summary>
-    /// <remarks>
-    /// An allow-list rather than a shell-chord deny-list on purpose: the
-    /// deny-list (<see cref="IsUnderlyingShellShortcut"/>) was written for
-    /// W1 and has not tracked every chord added since — Ctrl+J,
-    /// Ctrl+Shift+E and Ctrl+R are all missing from it — so inverting the
-    /// test would let those fire underneath the overlay. Naming what text
-    /// editing needs is both smaller and stable.
-    /// </remarks>
-    private static bool IsTextEditingChord(Key key, ModifierKeys modifiers)
-    {
-        // Shift alone: capitals, and Shift+arrow/Home/End selection.
-        if (modifiers == ModifierKeys.Shift)
-        {
-            return true;
-        }
-
-        if (modifiers == ModifierKeys.Control)
-        {
-            return key is Key.A or Key.C or Key.V or Key.X or Key.Z or Key.Y
-                or Key.Left or Key.Right or Key.Home or Key.End
-                or Key.Back or Key.Delete;
-        }
-
-        if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift))
-        {
-            // Ctrl+Shift+Z is redo; the rest are word-wise selection.
-            return key is Key.Z
-                or Key.Left or Key.Right or Key.Home or Key.End;
-        }
-
-        // AltGr reaches WPF as Control|Alt, so a naive deny-list swallows it
-        // and the palette silently drops ordinary letters on every layout
-        // that uses it — nine of them in Polish, plus @ and the euro sign in
-        // German. Distinguished from a real Ctrl+Alt chord by the RIGHT Alt
-        // key being physically down. The shell-chord check is OR'd ahead of
-        // this at the call site, so Ctrl+Alt+{arrows, =, -, I, F} stay
-        // swallowed.
-        if (modifiers == (ModifierKeys.Control | ModifierKeys.Alt))
-        {
-            return Keyboard.IsKeyDown(Key.RightAlt);
-        }
-
-        return false;
     }
 
     private static bool IsUnderlyingShellShortcut(Key key, ModifierKeys modifiers)
