@@ -552,6 +552,58 @@ round 1 was `GridConformanceTests.MatrixConformanceHolds` failing against
 a stale `GridConformanceHost` binary — the recorded trap. Rebuilt; 18/18
 twice consecutively.
 
+### Round 3 — verification + fresh eyes, then the design pass
+
+**Verification found 2 of round 2's 3 new gates gate nothing**, and that
+my AltGr fix was HALF a fix, live on HEAD: the clause tested
+`modifiers == (Control|Alt)` by exact equality, so `Control|Alt|Shift`
+never reached it — and that is how the UPPERCASE forms of the nine
+Polish letters round 2 cited are typed. Nine lowercase letters fixed,
+nine capitals left broken, recorded as closed. Now stripped of Shift
+before the comparison, with the shifted rows the test table was missing.
+
+**Fresh eyes found the third consecutive blocker in the same subsystem**
+— the palette opened on top of the other seven sheets, because round 2's
+guard covered Quick Open alone. That fired stopping rule 4, so the
+design pass above was written before any further code.
+
+**A round-1 finding was refuted by measurement, then the refutation was
+itself corrected.** The closed-palette children do remain in the UIA RAW
+tree; what hides them is WPF dropping invisible elements from the
+CONTROL view, not the `Visibility` bindings. So the bindings are
+redundant (round 2's conclusion) but not for round 2's reason, and both
+comments that claimed otherwise are fixed.
+
+**FlaUI was put in order as its own pass.** Twelve of thirteen journeys
+silently degraded to a three-second smoke on a non-interactive runner —
+including the palette journey, while P13 claims all three drift tests run
+in CI. All thirteen now share one gate that honours
+`SLATE_REQUIRE_UI_AUTOMATION`. The Ctrl+Alt+arrow chords are registered
+process-wide by AMD, NVIDIA and Parsec on this box, so the suite now runs
+the `RegisterHotKey` probe itself and labels the skip instead of
+asserting what reads like a product defect. That probe returned FREE
+early in the session and TAKEN later, which is exactly why two rounds
+disagreed over 17/18 vs 18/18 — both were right when measured. Making
+the chord leg skippable then unmasked a second, deterministic failure in
+`FluentShell` that the suite had never reached; the palette was ruled out
+by deleting `ObservePalette()` and reproducing it byte-identically, and
+it is filed as
+[#1107](https://github.com/coryj627/slate/issues/1107).
+
+**Residue closed.** The shortcut-slot resolvers returned a fresh adapter
+per resolve, making PINV-7 silently false for those nine ids; they are
+now cached per sidebar instance. And the AltGr arm's dependency on the
+shell-chord deny-list is now a build break rather than a comment —
+driven from the chord table, because the first version scraped XAML
+`KeyBinding`s and did not bite on Ctrl+Alt+F, which a code-behind
+handler delivers.
+
+**PINV-7 remains PARTIAL and is stated that way deliberately.** The
+workspace and vault refresh points enumerate; the sidebar and
+quick-switcher lists are still hand-maintained. I claimed this invariant
+closed twice when it was not, so it is now recorded as residue rather
+than as a fix.
+
 **Carried, with reasons.** The §2.6 pin's reflection has escapes a
 reviewer enumerated (a `public const`, a `static readonly`, or a literal
 in another type). No fact enumerates the app's `ICommand` properties, so
