@@ -609,13 +609,22 @@ public sealed class ShellAccessibilityTests
                 ?? throw new Xunit.Sdk.XunitException("The right split editor is absent.");
             rightEditor.Focus();
             AssertEventuallyFocused(rightEditor, "The right split editor could not receive focus.");
-            Keyboard.TypeSimultaneously(
-                VirtualKeyShort.CONTROL,
-                VirtualKeyShort.ALT,
-                VirtualKeyShort.LEFT);
-            AssertEventuallyFocused(
-                leftEditor,
-                "Ctrl+Alt+Left changed the model but did not move keyboard focus to the left editor.");
+            if (ChordIsDeliverable(
+                NativeHotkey.ModControl | NativeHotkey.ModAlt, 0x25 /* VK_LEFT */))
+            {
+                Keyboard.TypeSimultaneously(
+                    VirtualKeyShort.CONTROL,
+                    VirtualKeyShort.ALT,
+                    VirtualKeyShort.LEFT);
+                AssertEventuallyFocused(
+                    leftEditor,
+                    "Ctrl+Alt+Left changed the model but did not move keyboard "
+                    + "focus to the left editor.");
+            }
+            else
+            {
+                SkipStolenChordLeg("Ctrl+Alt+Left");
+            }
 
             AssertAxeClean(process, "workspace");
 
@@ -879,15 +888,8 @@ public sealed class ShellAccessibilityTests
             process = Process.Start(startInfo)
                 ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
 
-            if (!Environment.UserInteractive)
+            if (!HasInteractiveDesktop(process, "identity-contract"))
             {
-                // Session-0 fallback, as the shell gate: the desktop UIA
-                // half runs on interactive runners; here the process must
-                // still survive startup.
-                Assert.False(
-                    process.WaitForExit(3_000),
-                    "Slate exited during the identity-contract startup smoke. " +
-                    $"app log: {ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log"))}");
                 return;
             }
 
@@ -1067,15 +1069,8 @@ public sealed class ShellAccessibilityTests
             process = Process.Start(startInfo)
                 ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
 
-            if (!Environment.UserInteractive)
+            if (!HasInteractiveDesktop(process, "RangeFromChild"))
             {
-                // Session-0 fallback, as the shell gate: the UIA half
-                // needs a desktop; here the process must still survive
-                // startup.
-                Assert.False(
-                    process.WaitForExit(3_000),
-                    "Slate exited during the RangeFromChild startup smoke. " +
-                    $"app log: {ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log"))}");
                 return;
             }
 
@@ -1739,13 +1734,8 @@ public sealed class ShellAccessibilityTests
             process = Process.Start(startInfo)
                 ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
 
-            if (!Environment.UserInteractive)
+            if (!HasInteractiveDesktop(process, "panels"))
             {
-                // Session-0 fallback, as the shell gate.
-                Assert.False(
-                    process.WaitForExit(3_000),
-                    "Slate exited during the panels startup smoke. " +
-                    $"app log: {ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log"))}");
                 return;
             }
 
@@ -1948,12 +1938,8 @@ public sealed class ShellAccessibilityTests
             process = Process.Start(startInfo)
                 ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
 
-            if (!Environment.UserInteractive)
+            if (!HasInteractiveDesktop(process, "tasks"))
             {
-                Assert.False(
-                    process.WaitForExit(3_000),
-                    "Slate exited during the tasks startup smoke. " +
-                    $"app log: {ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log"))}");
                 return;
             }
 
@@ -2162,12 +2148,8 @@ public sealed class ShellAccessibilityTests
             process = Process.Start(startInfo)
                 ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
 
-            if (!Environment.UserInteractive)
+            if (!HasInteractiveDesktop(process, "properties"))
             {
-                Assert.False(
-                    process.WaitForExit(3_000),
-                    "Slate exited during the properties startup smoke. " +
-                    $"app log: {ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log"))}");
                 return;
             }
 
@@ -2391,13 +2373,8 @@ public sealed class ShellAccessibilityTests
             process = Process.Start(startInfo)
                 ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
 
-            if (!Environment.UserInteractive)
+            if (!HasInteractiveDesktop(process, "citations"))
             {
-                // Session-0 fallback, as the shell gate.
-                Assert.False(
-                    process.WaitForExit(3_000),
-                    "Slate exited during the citations startup smoke. " +
-                    $"app log: {ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log"))}");
                 return;
             }
 
@@ -2895,12 +2872,8 @@ public sealed class ShellAccessibilityTests
             process = Process.Start(startInfo)
                 ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
 
-            if (!Environment.UserInteractive)
+            if (!HasInteractiveDesktop(process, "accessibility"))
             {
-                Assert.False(
-                    process.WaitForExit(3_000),
-                    "Slate exited during the degraded-vault smoke. "
-                        + $"app log: {ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log"))}");
                 return;
             }
 
@@ -3052,11 +3025,8 @@ public sealed class ShellAccessibilityTests
             process = Process.Start(startInfo)
                 ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
 
-            if (!Environment.UserInteractive)
+            if (!HasInteractiveDesktop(process, "Bases"))
             {
-                Assert.False(
-                    process.WaitForExit(3_000),
-                    "Slate exited during the Bases startup smoke.");
                 return;
             }
 
@@ -3528,11 +3498,8 @@ public sealed class ShellAccessibilityTests
             process = Process.Start(startInfo)
                 ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
 
-            if (!Environment.UserInteractive)
+            if (!HasInteractiveDesktop(process, "history"))
             {
-                Assert.False(
-                    process.WaitForExit(3_000),
-                    "Slate exited during the history startup smoke.");
                 return;
             }
 
@@ -3896,11 +3863,8 @@ public sealed class ShellAccessibilityTests
             process = Process.Start(startInfo)
                 ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
 
-            if (!Environment.UserInteractive)
+            if (!HasInteractiveDesktop(process, "sync-diagnostics"))
             {
-                Assert.False(
-                    process.WaitForExit(3_000),
-                    "Slate exited during the sync-diagnostics startup smoke.");
                 return;
             }
 
@@ -4162,11 +4126,8 @@ public sealed class ShellAccessibilityTests
             process = Process.Start(startInfo)
                 ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
 
-            if (!Environment.UserInteractive)
+            if (!HasInteractiveDesktop(process, "command-palette"))
             {
-                Assert.False(
-                    process.WaitForExit(3_000),
-                    "Slate exited during the command-palette startup smoke.");
                 return;
             }
 
@@ -4540,6 +4501,111 @@ public sealed class ShellAccessibilityTests
             {
             }
         }
+    }
+
+    /// <summary>
+    /// Whether a chord can actually be delivered to the app, or is held
+    /// globally by another process.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Ctrl+Alt+{Left,Right,Up,Down} are registered process-wide by AMD
+    /// Radeon Software, the NVIDIA container and Parsec on developer
+    /// boxes. The app then never receives the chord, and the resulting
+    /// assertion reads exactly like a product defect. It has been
+    /// re-diagnosed more than once, and cost a disagreement between two
+    /// review rounds over whether the suite was 17/18 or 18/18.
+    /// </para>
+    /// <para>
+    /// RegisterHotKey returning ERROR_HOTKEY_ALREADY_REGISTERED (1409) is
+    /// the definitive test, so the suite now runs it instead of leaving a
+    /// human to remember. Success registers the chord for an instant and
+    /// releases it immediately.
+    /// </para>
+    /// </remarks>
+    private static bool ChordIsDeliverable(uint modifiers, uint virtualKey)
+    {
+        if (!NativeHotkey.RegisterHotKey(IntPtr.Zero, ChordProbeId, modifiers, virtualKey))
+        {
+            return false;
+        }
+
+        NativeHotkey.UnregisterHotKey(IntPtr.Zero, ChordProbeId);
+        return true;
+    }
+
+    private const int ChordProbeId = 0x5131;
+
+    private static class NativeHotkey
+    {
+        internal const uint ModAlt = 0x0001;
+        internal const uint ModControl = 0x0002;
+
+        [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
+        internal static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
+        internal static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+    }
+
+    /// <summary>
+    /// Records that a chord leg was skipped because another process owns
+    /// the chord, and fails instead when CI has declared the gate
+    /// mandatory.
+    /// </summary>
+    private static void SkipStolenChordLeg(string chord)
+    {
+        if (RequiresUiAutomation())
+        {
+            throw new Xunit.Sdk.XunitException(
+                $"{chord} is registered by another process (win32 1409), so the "
+                + "app cannot receive it. On a CI runner that is a real failure: "
+                + "the runner must not have global hotkey owners installed.");
+        }
+
+        Console.WriteLine(
+            $"[accessibility] skipped the {chord} leg: another process holds the "
+            + "chord globally (win32 1409). Environmental, not a product defect.");
+    }
+
+    /// <summary>Whether CI has declared the interactive UIA gate mandatory.</summary>
+    private static bool RequiresUiAutomation() =>
+        string.Equals(
+            Environment.GetEnvironmentVariable("SLATE_REQUIRE_UI_AUTOMATION"),
+            "1",
+            StringComparison.Ordinal);
+
+    /// <summary>
+    /// The shared non-interactive gate. Returns <see langword="false"/>
+    /// when the journey must degrade to a startup smoke.
+    /// </summary>
+    /// <remarks>
+    /// Every journey used to make this decision itself, and only ONE of
+    /// the thirteen honoured SLATE_REQUIRE_UI_AUTOMATION. On a
+    /// non-interactive runner the other twelve returned green having
+    /// asserted nothing, so the suite could report success while covering
+    /// none of what it claims. Routing them through one gate means CI sets
+    /// the variable once and the suite cannot silently degrade.
+    /// </remarks>
+    private static bool HasInteractiveDesktop(Process process, string gateName)
+    {
+        if (Environment.UserInteractive)
+        {
+            return true;
+        }
+
+        if (RequiresUiAutomation())
+        {
+            throw new Xunit.Sdk.XunitException(
+                $"The {gateName} accessibility gate requires an interactive "
+                + "Windows desktop, but this runner is executing in a "
+                + "non-interactive session.");
+        }
+
+        Assert.False(
+            process.WaitForExit(3_000),
+            $"Slate exited during the {gateName} startup smoke.");
+        return false;
     }
 
     private static Window WaitForMainWindow(
