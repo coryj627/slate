@@ -22,16 +22,6 @@ namespace SlateWindows.Tests;
 public sealed class CommandRegistrationTests
 {
     /// <summary>
-    /// The PRODUCTION availability vocabulary, not a fake's copy of it.
-    /// </summary>
-    /// <remarks>
-    /// The red team caught this: the palette's routing facts assert
-    /// against a fake source seeded with the same three constants, so
-    /// deleting a clause from the real predicate left every test green
-    /// while the shipped behaviour changed. Those facts prove the palette
-    /// ASKS the seam; this one proves the seam ANSWERS.
-    /// </remarks>
-    /// <summary>
     /// Round 2 gate: a vault transition dismisses the palette (P14).
     /// </summary>
     /// <remarks>
@@ -64,6 +54,16 @@ public sealed class CommandRegistrationTests
             "closing the vault left the palette open — P14's forbidden state.");
     }
 
+    /// <summary>
+    /// The PRODUCTION availability vocabulary, not a fake's copy of it.
+    /// </summary>
+    /// <remarks>
+    /// The red team caught this: the palette's routing facts assert
+    /// against a fake source seeded with the same three constants, so
+    /// deleting a clause from the real predicate left every test green
+    /// while the shipped behaviour changed. Those facts prove the palette
+    /// ASKS the seam; this one proves the seam ANSWERS.
+    /// </remarks>
     [Theory]
     [InlineData("NoVault", true)]
     [InlineData("Unavailable", true)]

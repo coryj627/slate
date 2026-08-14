@@ -59,20 +59,29 @@ public sealed class ModalSurfaceTests
     /// swallow, or shell chords would fire underneath it.
     /// </remarks>
     [Theory]
-    [InlineData(Key.Q)]
-    [InlineData(Key.E)]
-    [InlineData(Key.A)]
-    public void AltGrReachesTheTextFieldButCtrlAltStillDoesNot(Key key)
+    // Lowercase: AltGr + letter.
+    [InlineData(Key.Q, false)]
+    [InlineData(Key.E, false)]
+    [InlineData(Key.A, false)]
+    // UPPERCASE: AltGr + Shift + letter. An exact-equality test on
+    // Control|Alt swallowed every one of these while passing the
+    // lowercase cases — which is exactly how the first version of this
+    // fix shipped.
+    [InlineData(Key.Q, true)]
+    [InlineData(Key.E, true)]
+    [InlineData(Key.A, true)]
+    public void AltGrReachesTheTextFieldButCtrlAltStillDoesNot(Key key, bool shifted)
     {
+        ModifierKeys modifiers = ModifierKeys.Control | ModifierKeys.Alt
+            | (shifted ? ModifierKeys.Shift : ModifierKeys.None);
+
         Assert.True(
-            TextEditingChords.Allows(
-                key, ModifierKeys.Control | ModifierKeys.Alt, rightAltDown: true),
-            "AltGr was swallowed — ordinary letters are undroppable on "
-            + "layouts that use it.");
+            TextEditingChords.Allows(key, modifiers, rightAltDown: true),
+            $"AltGr{(shifted ? "+Shift" : string.Empty)} was swallowed — "
+            + "ordinary letters are undroppable on layouts that use it.");
 
         Assert.False(
-            TextEditingChords.Allows(
-                key, ModifierKeys.Control | ModifierKeys.Alt, rightAltDown: false),
+            TextEditingChords.Allows(key, modifiers, rightAltDown: false),
             "a real Ctrl+Alt chord was treated as text editing and would "
             + "fire the shell command underneath the overlay.");
     }

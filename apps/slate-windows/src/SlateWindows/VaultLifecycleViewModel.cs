@@ -313,11 +313,6 @@ internal sealed class VaultLifecycleViewModel
             return;
         }
 
-        // P14: the palette must never be open with no vault, or the
-        // next vault open auto-presents it. Dismissed BEFORE the session
-        // goes away, so the overlay cannot survive the gap.
-        _palette?.Dismiss();
-
         string root;
         try
         {
@@ -333,6 +328,12 @@ internal sealed class VaultLifecycleViewModel
         {
             return;
         }
+
+        // P14: dismissed AFTER the cancellable gate, matching CloseVault.
+        // Dismissing before it meant a refused close — a dirty-tab prompt
+        // the user cancels, an import in flight — left the vault open with
+        // the palette already gone.
+        _palette?.Dismiss();
 
         CloseSession();
         int generation = ++_generation;

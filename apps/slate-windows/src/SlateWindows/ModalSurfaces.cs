@@ -110,7 +110,13 @@ internal static class TextEditingChords
         // layout that uses it — nine of them in Polish, plus @ and the
         // euro sign in German. Distinguished from a real Ctrl+Alt chord by
         // the RIGHT Alt key being physically down.
-        if (modifiers == (ModifierKeys.Control | ModifierKeys.Alt))
+        //
+        // Shift is STRIPPED before the comparison, not required absent.
+        // AltGr+Shift is how those same nine Polish letters are typed in
+        // UPPERCASE, and an exact-equality test on Control|Alt swallowed
+        // every one of them — the first version of this fix corrected the
+        // lowercase forms and left the capitals broken.
+        if ((modifiers & ~ModifierKeys.Shift) == (ModifierKeys.Control | ModifierKeys.Alt))
         {
             return rightAltDown;
         }

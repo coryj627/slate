@@ -4400,7 +4400,22 @@ public sealed class ShellAccessibilityTests
             // because every other chord press in this journey starts from a
             // CLOSED palette. Pressing it while open must clear the query,
             // not close the overlay and not sit inert.
-            search.Patterns.Value.Pattern.SetValue("zzznothing");
+            // The palette is CLOSED here (the invocation above dismissed
+            // it), so the chord must first re-open it — otherwise this leg
+            // exercises the ordinary open path and passes whether or not
+            // the re-open branch exists, which is exactly how it shipped.
+            window.SetForeground();
+            PressChord(
+                VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_P);
+            _ = WaitForElement(window, "CommandPalette", TimeSpan.FromSeconds(10));
+            AutomationElement reopened = WaitForElement(
+                window, "CommandPaletteSearch", TimeSpan.FromSeconds(10));
+            reopened.Patterns.Value.Pattern.SetValue("zzznothing");
+            Assert.Equal(
+                "zzznothing",
+                reopened.Patterns.Value.Pattern.Value.ValueOrDefault);
+
+            // NOW press it while OPEN — the branch under test.
             window.SetForeground();
             PressChord(
                 VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_P);
@@ -4451,11 +4466,16 @@ public sealed class ShellAccessibilityTests
                     TimeSpan.FromSeconds(10)),
                 "Escape did not close the palette");
 
-            // Round 2 gate: reverting the children's Visibility bindings
-            // failed nothing, because this journey only ever looked for the
-            // OVERLAY id after close. The overlay collapses, but Visibility
-            // does not inherit — without their own bindings the search box
-            // and results list linger as a phantom dialog surface.
+            // A closed palette must publish no part of itself to the
+            // CONTROL view, which is the view an AT walks.
+            //
+            // Measured, not assumed: all three elements remain in the UIA
+            // RAW tree when closed, and FindFirstDescendant misses them
+            // because WPF drops invisible elements from the control view.
+            // That means the children's own Visibility bindings are
+            // redundant on this runtime — kept for consistency with Quick
+            // Open, not because they are load-bearing — and this assertion
+            // pins the observable rather than the mechanism.
             foreach (string id in new[] { "CommandPaletteSearch", "CommandPaletteResults" })
             {
                 Assert.True(
