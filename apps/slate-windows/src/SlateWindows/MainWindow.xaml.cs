@@ -620,6 +620,17 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Test seam for the shell-chord deny-list.
+    /// </summary>
+    /// <remarks>
+    /// Exposed because the AltGr arm's safety depends on this list
+    /// answering every Ctrl+Alt chord the shell delivers, and that
+    /// dependency was previously only a comment.
+    /// </remarks>
+    internal static bool IsUnderlyingShellShortcutForTests(Key key, ModifierKeys modifiers) =>
+        IsUnderlyingShellShortcut(key, modifiers);
+
     private static bool IsUnderlyingShellShortcut(Key key, ModifierKeys modifiers)
     {
         if (key == Key.F2 || (modifiers == ModifierKeys.Control && ShortcutNumber(key) is not null))

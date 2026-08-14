@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Windows.Input;
 using System.Windows.Threading;
 using uniffi.slate_uniffi;
@@ -121,9 +122,8 @@ internal sealed class DispatcherCommandAction : CommandAction
         // the palette rendered (contract P8). One resolver serves the row
         // state, the selection announcement, and this gate — and the command
         // is resolved ONCE, so the instance the gate tested is the instance
-        // that runs. (Resolvers are free to hand back a fresh adapter, as the
-        // Shortcuts-slot resolver does; testing one and invoking another
-        // would be a real, if currently benign, gap.)
+        // that runs. Every resolver now also returns a STABLE instance, so
+        // that guarantee no longer rests on resolving once.
         ICommand? command = SlateCommandRegistrar.Resolve(_host, _commandId);
         string? disabled = SlateCommandRegistrar.DisabledReason(_host, _commandId, command);
         if (disabled is not null)
@@ -303,6 +303,49 @@ internal static class SlateCommandRegistrar
     /// registration-forward drift test can assert both directions.</summary>
     public static IReadOnlyCollection<string> ResolvableIds => Resolvers.Keys;
 
+    /// <summary>
+    /// The nine sidebar shortcut slots have no <see cref="ICommand"/> of
+    /// their own on the sidebar view model, so the bridge supplies one —
+    /// and must supply the SAME one every time.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A fresh adapter per resolve made PINV-7 quietly false for these
+    /// nine: the enumerating refresh raised <c>CanExecuteChanged</c> on a
+    /// throwaway object with no subscribers, so a requery could never
+    /// reach whatever had bound to it. Benign while the predicate is
+    /// constant, and silently wrong the moment it is not.
+    /// </para>
+    /// <para>
+    /// Keyed on the sidebar instance through a
+    /// <see cref="ConditionalWeakTable{TKey,TValue}"/> so the adapters die
+    /// with the vault that owns them — the sidebar is replaced wholesale
+    /// on every vault open, and a static cache would pin the old one.
+    /// </para>
+    /// </remarks>
+    private static ICommand ShortcutSlotCommand(FilesSidebarViewModel sidebar, int slot)
+    {
+        ICommand[] slots = ShortcutSlotCommands.GetValue(
+            sidebar,
+            owner =>
+            {
+                var built = new ICommand[9];
+                for (int index = 0; index < built.Length; index++)
+                {
+                    int captured = index + 1;
+                    built[index] = new RelayCommand(
+                        _ => owner.OpenShortcut(captured), _ => true);
+                }
+
+                return built;
+            });
+
+        return slots[slot - 1];
+    }
+
+    private static readonly ConditionalWeakTable<FilesSidebarViewModel, ICommand[]>
+        ShortcutSlotCommands = new();
+
     private static Dictionary<string, Func<ISlateCommandHost, ICommand?>> BuildResolvers()
     {
         var map = new Dictionary<string, Func<ISlateCommandHost, ICommand?>>(StringComparer.Ordinal)
@@ -451,7 +494,7 @@ internal static class SlateCommandRegistrar
             int captured = slot;
             map[ChordTable.Ids.OpenShortcut(captured)] = host =>
                 host.FileSidebar is { } sidebar
-                    ? new RelayCommand(_ => sidebar.OpenShortcut(captured), _ => true)
+                    ? ShortcutSlotCommand(sidebar, captured)
                     : null;
         }
 
