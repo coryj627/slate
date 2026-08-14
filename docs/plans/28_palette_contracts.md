@@ -176,8 +176,9 @@ declarative table maps command id → mac chord → Windows chord → Windows
 spoken string, and is the **only** place a Windows chord string is
 authored. Menu `InputGestureText`, palette display strings, W7-3 spoken
 hotkeys, and (in W8-6) the help-doc chord tables all read from it. Its
-required coverage is every chord the app actually delivers — which today is
-roughly triple what `chords.json` records; see PR-3. Two rules the current
+required coverage is every chord the app actually delivers — which at the
+start of this issue was roughly triple what `chords.json` recorded (35
+chords on `main`); see PR-3. Two rules the current
 data lacks:
 
 - **Modifier mapping is declared, not improvised.** ⌘→Ctrl and ⌥→Alt are
@@ -306,10 +307,11 @@ auto-presents an empty palette.
   catalogued entries the app also delivers 32 `ReadingNavigator` chords,
   grid Ctrl+F and Ctrl+Alt+S, editor Ctrl+E and Ctrl+Enter, property-row
   Ctrl+Backspace, F2 rename, Ctrl+1–9, and the Quick Open Enter-modifier
-  family. Two documentation claims are already false — `w3_spec.md` says the
-  reading chords are "registered in chords.json" and both
-  `WorkspaceTemplates.xaml` and `w_c_matrix.md` cite chords.json for
-  Ctrl+Backspace; neither entry exists. The table records what ships; it
+  family. Two documentation claims were false when this was written — `w3_spec.md`
+  said the reading chords were "registered in chords.json" and both
+  `WorkspaceTemplates.xaml` and `w_c_matrix.md` cited chords.json for
+  Ctrl+Backspace, while no entry existed. **Both are true as of this
+  issue.** The table records what ships; it
   does not re-adjudicate whether each binding was a good choice.
 - **PR-4 — Eleven command objects have no invocation path and need
   dispositions, not silent registration.** Six `QuickSwitcherViewModel`
@@ -375,5 +377,63 @@ keyed to the open snapshot, so no cache-invalidation question arises
 
 ## Round record
 
-Adversarial findings and their resolutions append here, per
-`24_red_team_protocol.md` §Per-round record.
+Per `24_red_team_protocol.md` §Per-round record.
+
+### Round 1 — four dimensions (correctness, accessibility, completeness/drift, lifecycle/re-entrancy)
+
+Heavy convergence: three findings were reported independently by three or
+four reviewers, which removed any doubt they were real.
+
+**Fixed — each case where the code contradicted something this branch asserted:**
+
+- **The modal swallow ate text editing and PD-2** (4/4 reviewers). Every
+  modified key was marked handled at the Window's `PreviewKeyDown`, the
+  tunnel root, and WPF runs a `TextBox`'s `InputBindings` only for
+  UNHANDLED events — so Ctrl+A/C/V/X/Z and every Shift-selection key were
+  dead inside the palette's own search box, and AltGr (which WPF reports
+  as Ctrl+Alt) made several characters untypeable on German, French and
+  Polish layouts. The same line ate Ctrl+Shift+P, leaving PD-2
+  unreachable. Fixed with a text-editing allow-list; the shell-chord
+  deny-list could not serve alone because it predates Ctrl+J,
+  Ctrl+Shift+E and Ctrl+R.
+- **Focus restore stole focus back from the invoked command** (3/4). A
+  command that opens its own surface queues its focus at the same
+  dispatcher priority during the invocation, so the palette's restore ran
+  last and undid it.
+- **Nothing dismissed the palette on a vault transition**, so P14's
+  forbidden state was reachable — permanently, if the new vault failed.
+- **The license-header CI gate was failing** on a missing SPDX header.
+- **The palette's own chord was absent from the chord table**, in the
+  issue whose job is to make that table authoritative. The drift test
+  scrapes only declarative sources and Ctrl+Shift+P is delivered
+  imperatively; now recorded with an allow-list entry.
+- **PINV-7 was false as shipped** — the enumerating refresh had zero
+  production callers. Now wired.
+- **The empty state published nothing to UIA** (its name sat on a bare
+  `Panel`, which creates no peer), and **a closed palette left its search
+  box and results list in the tree** (neither child carried a
+  `Visibility` of its own, so the guarded list type was inert).
+- **A throwing `ICommand` escaped the palette's catch chain** as a
+  non-`CommandException` and reached the dispatcher.
+- Data errors: `slate.file.newNote` and `slate.file.moveTo` recorded
+  `mac: null` while mac ships ⌘N and ⇧⌘M; `slate.file.cancelImport`'s
+  hint diverged from mac's, which is load-bearing (it tells the user
+  completed copies survive).
+- Behaviour: double-click on a section header or on empty space invoked
+  the selection; the first-selection suppression flag survived an open
+  that produced no selection change.
+
+**Test-coverage gap closed:** the production `IsAvailabilityRejection`
+had no test at all — the palette's routing facts assert against a fake
+seeded with the same constants, so deleting a clause left every test
+green.
+
+**Carried, with reasons.** The §2.6 pin's reflection has escapes a
+reviewer enumerated (a `public const`, a `static readonly`, or a literal
+in another type). No fact enumerates the app's `ICommand` properties, so
+PR-4's "the drift test forces the question" is not yet mechanised. The
+menu-scrape twin does not reach context menus. Splitter-arrow and
+property-row stepper chords remain unrecorded, and the forward chord
+comparison keys on bare strings, so a duplicate string can shield a
+missing row — the same under-match class already fixed once in
+`CommandDriftTests`.

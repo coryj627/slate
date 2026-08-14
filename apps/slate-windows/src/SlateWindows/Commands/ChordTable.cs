@@ -742,6 +742,16 @@ internal static class ChordTable
             OverlayReason + " The Windows builder sheet owns the row verbs."),
     ];
 
+    /// <summary>
+    /// A verb mac gives a chord and Windows does not. Recorded so the mac
+    /// column shows the real chord instead of reading as "mac has none",
+    /// which is what hid the New Note and Move To gaps.
+    /// </summary>
+    private const string UnboundOnWindows =
+        "Windows binds no chord: the verb is menu- and palette-only here. "
+        + "Recorded so the mac chord stays visible rather than reading as "
+        + "an absence.";
+
     private static IEnumerable<ChordTableEntry> SidebarRows()
     {
         var rows = new List<ChordTableEntry>
@@ -749,7 +759,8 @@ internal static class ChordTable
             Reg(Ids.SidebarOpen, "Open", CommandSection.Sidebar,
                 "Open the selected files."),
             Reg(Ids.NewNote, "New Note", CommandSection.Sidebar,
-                "Create an untitled note in the selected location, then rename it."),
+                "Create an untitled note in the selected location, then rename it.",
+                "⌘N", divergence: UnboundOnWindows),
             Reg(Ids.NewFolder, "New Folder", CommandSection.Sidebar,
                 "Create a new folder in the selected location, then rename it."),
             Reg(Ids.ImportFilesAndFolders, "Import Files and Folders…",
@@ -757,7 +768,8 @@ internal static class ChordTable
                 "Choose files and folders. External items are copied into the selected "
                 + "location; items already in this vault are moved."),
             Reg(Ids.CancelImport, "Cancel Import", CommandSection.Sidebar,
-                "Cancel the running import.", "⌘.", "Escape",
+                "Stops remaining imports. Completed copies remain in the vault.",
+                "⌘.", "Escape",
                 divergence:
                 "The rule maps ⌘. to Ctrl+. ; Windows cancels with Escape. Escape is "
                 + "the Windows cancellation convention and stays scoped to the running "
@@ -769,7 +781,8 @@ internal static class ChordTable
                 + "convention shared by Explorer, list views, and grids (decision 12: "
                 + "platform convention governs input)."),
             Reg(Ids.MoveTo, "Move To…", CommandSection.Sidebar,
-                "Move the selected files or folders to another folder."),
+                "Move the selected files or folders to another folder.",
+                "⇧⌘M", divergence: UnboundOnWindows),
             Reg(Ids.DeleteEntry, "Move to Trash", CommandSection.Sidebar,
                 "Move the selected files or folders to the Trash."),
             Reg(Ids.CopyWikilink, "Copy Wikilink", CommandSection.Sidebar,

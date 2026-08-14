@@ -760,6 +760,11 @@ internal sealed class CommandPaletteViewModel : BindableBase
 
         if (!changed)
         {
+            // Disarm even when nothing changed. Otherwise an open that
+            // lands on no selection leaves the flag set and swallows the
+            // user's FIRST real selection announcement instead of the
+            // at-open one it was armed for.
+            _suppressSelectionAnnouncement = false;
             return;
         }
 

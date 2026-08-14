@@ -144,10 +144,28 @@ public partial class MainWindow
 
     private void CommandPaletteResults_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
-        if (_viewModel.Palette.IsOpen)
+        // Only a double-click on an actual ROW invokes. Without this, a
+        // double-click on a section header or on the empty space below the
+        // last row ran whatever happened to be selected.
+        if (_viewModel.Palette.IsOpen
+            && e.OriginalSource is DependencyObject source
+            && ItemContainerOf(source) is not null)
         {
             _viewModel.Palette.InvokeSelected();
         }
+    }
+
+    private static ListBoxItem? ItemContainerOf(DependencyObject? node)
+    {
+        for (; node is not null; node = VisualTreeHelper.GetParent(node))
+        {
+            if (node is ListBoxItem item)
+            {
+                return item;
+            }
+        }
+
+        return null;
     }
 
     private void CommandPaletteSearch_PreviewKeyDown(object sender, KeyEventArgs e) =>

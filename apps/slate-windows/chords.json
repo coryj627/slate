@@ -816,12 +816,13 @@
       "label": "New Note",
       "section": "Sidebar",
       "hint": "Create an untitled note in the selected location, then rename it.",
-      "macChord": null,
-      "mac": null,
+      "macChord": "⌘N",
+      "mac": "Command N",
       "windows": null,
       "windowsSpoken": null,
       "scope": "None",
-      "registered": true
+      "registered": true,
+      "divergence": "Windows binds no chord: the verb is menu- and palette-only here. Recorded so the mac chord stays visible rather than reading as an absence."
     },
     {
       "id": "slate.file.newFolder",
@@ -851,7 +852,7 @@
       "id": "slate.file.cancelImport",
       "label": "Cancel Import",
       "section": "Sidebar",
-      "hint": "Cancel the running import.",
+      "hint": "Stops remaining imports. Completed copies remain in the vault.",
       "macChord": "⌘.",
       "mac": "Command Period",
       "windows": "Escape",
@@ -878,12 +879,13 @@
       "label": "Move To…",
       "section": "Sidebar",
       "hint": "Move the selected files or folders to another folder.",
-      "macChord": null,
-      "mac": null,
+      "macChord": "⇧⌘M",
+      "mac": "Shift Command M",
       "windows": null,
       "windowsSpoken": null,
       "scope": "None",
-      "registered": true
+      "registered": true,
+      "divergence": "Windows binds no chord: the verb is menu- and palette-only here. Recorded so the mac chord stays visible rather than reading as an absence."
     },
     {
       "id": "slate.file.delete",
