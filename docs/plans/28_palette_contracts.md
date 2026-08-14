@@ -375,6 +375,74 @@ computed properties; the Windows host does not, and the stored value is
 keyed to the open snapshot, so no cache-invalidation question arises
 (P4 makes the snapshot immutable for the palette's lifetime).
 
+## Design pass — modal surfaces and key routing (stopping rule 4, 2026-08-13)
+
+`24_red_team_protocol.md` rule 4 fired: three consecutive rounds produced
+blockers in one subsystem, so this is written **before** more code.
+
+| Round | Blocker | Where |
+|---|---|---|
+| 1 | Blanket modifier swallow killed text editing and PD-2 | `Window_PreviewKeyDown` palette branch |
+| 2 | AltGr still swallowed; palette/Quick Open exclusion unenforced | same branch |
+| 3 | Palette opens on top of the other seven sheets | same branch |
+
+**Why each fix was incomplete.** The branch answers three different
+questions in one `if` chain, and every round fixed one of them:
+
+1. *Does the palette want this key?* (navigation, Enter, Escape)
+2. *Would this key fire a shell command underneath the overlay?*
+   (modality suppression)
+3. *Does the focused text field need this key?* (editing passthrough)
+
+Question 2 is not the palette's question at all — it belongs to whatever
+modal surface is open. The app has **nine** `IsDialog` overlays declared
+as siblings in one `Grid` cell with no `Panel.ZIndex` anywhere, so paint
+order is declaration order and "which surface is on top" is implicit in
+the XAML's line numbering. Each overlay hand-rolls its own modality:
+its own scrim, its own `PreviewKeyDown` on its own element, and — for
+Quick Open and the palette only — `IsEnabled` `DataTrigger`s on the
+shell roots. **Nothing knows the set of open surfaces**, which is why a
+guard written for one of them silently omits the other seven.
+
+**The design: one modal-surface registry, one routing decision.**
+
+- **`ModalSurface`** — an enum or ordered list naming the nine overlays
+  and their precedence. Declaration order becomes explicit data instead
+  of an accident of XAML line numbers.
+- **`MainWindow.OpenModalSurface`** — a single computed property
+  returning the topmost open surface, derived from the view-model flags
+  that already exist (`QuickSwitcher.IsOpen`, `Palette.IsOpen`,
+  `Workspace.AddPropertySheet`, `BulkRenameSheet`, `CitationDetails`,
+  `CitationSummary`, `FilesCiting`, dashboard editor,
+  `BaseQueryBuilderSheet`). No new state.
+- **Opening is gated on it.** A surface may only open when nothing of
+  higher precedence is up; the palette chord refuses (or dismisses the
+  incumbent, per surface) rather than stacking. This replaces the
+  one-off Quick Open dismissal round 2 added.
+- **Key routing asks the registry, not the palette.** While a modal
+  surface is open the window handler consults that surface's descriptor
+  for the three questions above, so suppression policy lives with the
+  surface rather than being re-derived in the palette's branch.
+- **Text-editing passthrough becomes a property of the descriptor**, not
+  a special case: a surface that owns a text field declares it, and the
+  allow-list (including the AltGr arm) is applied once, in one place,
+  and is unit-testable because it stops being a `private static` on
+  `MainWindow`.
+
+**Scope discipline.** Retro-fitting all nine overlays onto the registry
+is larger than W5-1 and would rewrite W4-4/W4-5/W4-6 surfaces this issue
+does not own. W5-1 therefore ships:
+
+1. the registry and the `OpenModalSurface` predicate,
+2. the palette gated on it — which fixes the round-3 blocker for all
+   seven sheets, not just Quick Open, and
+3. the routing/allow-list extraction, made `internal` so the whole table
+   is pinned by unit facts rather than only by a journey.
+
+Converting the other eight surfaces to open through the registry is
+filed as follow-up work, with the registry already in place to convert
+onto.
+
 ## Round record
 
 Per `24_red_team_protocol.md` §Per-round record.

@@ -72,6 +72,105 @@ public partial class MainWindow
         }
     }
 
+    /// <summary>
+    /// The topmost modal surface currently open, or <see langword="null"/>.
+    /// </summary>
+    /// <remarks>
+    /// Derived from the view-model flags that already exist — no new
+    /// state. Enumerated in <see cref="ModalSurface"/> paint order, so the
+    /// LAST open one is on top and therefore owns the keyboard. This
+    /// exists because three review rounds produced blockers in the same
+    /// branch, each because a guard was written for one overlay while
+    /// eight others went unconsidered.
+    /// </remarks>
+    internal ModalSurface? OpenModalSurface
+    {
+        get
+        {
+            ModalSurface? top = null;
+            if (_viewModel.QuickSwitcher?.IsOpen == true)
+            {
+                top = ModalSurface.QuickOpen;
+            }
+
+            if (_viewModel.Palette.IsOpen)
+            {
+                top = ModalSurface.CommandPalette;
+            }
+
+            if (_viewModel.Workspace is not { } workspace)
+            {
+                return top;
+            }
+
+            if (workspace.AddPropertySheet is not null)
+            {
+                top = ModalSurface.AddProperty;
+            }
+
+            if (workspace.BulkRenameSheet is not null)
+            {
+                top = ModalSurface.BulkRename;
+            }
+
+            if (workspace.CitationDetails is not null)
+            {
+                top = ModalSurface.CitationDetails;
+            }
+
+            if (workspace.CitationSummary is not null)
+            {
+                top = ModalSurface.CitationSummary;
+            }
+
+            if (workspace.FilesCiting is not null)
+            {
+                top = ModalSurface.FilesCiting;
+            }
+
+            if (workspace.DashboardEditorSheet is not null)
+            {
+                top = ModalSurface.DashboardEditor;
+            }
+
+            if (workspace.BaseQueryBuilderSheet is not null)
+            {
+                top = ModalSurface.BaseQueryBuilder;
+            }
+
+            return top;
+        }
+    }
+
+    /// <summary>
+    /// Whether the palette may open right now, dismissing what it
+    /// supersedes.
+    /// </summary>
+    /// <remarks>
+    /// It may not open underneath a sheet. Every sheet is declared AFTER
+    /// the palette in <c>MainWindow.xaml</c> and carries its own scrim, so
+    /// a palette opened beneath one is invisible and unreachable by
+    /// pointer while still owning every keystroke — the round-3 blocker.
+    /// Quick Open is the one surface the palette supersedes rather than
+    /// defers to: it is declared before the palette, so the palette paints
+    /// on top of it legibly.
+    /// </remarks>
+    private bool TryClearTheWayForThePalette()
+    {
+        switch (OpenModalSurface)
+        {
+            case null:
+            case ModalSurface.CommandPalette:
+                // PD-2: re-opening while open is allowed and clears the query.
+                return true;
+            case ModalSurface.QuickOpen:
+                _viewModel.QuickSwitcher!.Dismiss();
+                return true;
+            default:
+                return false;
+        }
+    }
+
     private void Palette_SearchFocusRequested(object? sender, EventArgs e) =>
         _ = Dispatcher.InvokeAsync(
             () => CommandPaletteSearchTextBox.Focus(),
