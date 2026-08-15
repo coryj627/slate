@@ -590,6 +590,7 @@ public sealed class ChordTableTests
             [ChordScope.Grid] = GridGestureChords(),
             [ChordScope.Palette] = PaletteChords(),
             [ChordScope.QuickOpen] = QuickOpenChords(),
+            [ChordScope.Editor] = EditorChords(),
         };
 
     /// <summary>
@@ -602,9 +603,6 @@ public sealed class ChordTableTests
             [ChordScope.None] = "no chord to deliver.",
             [ChordScope.Global] = "checked in both directions below, against "
                 + "MainWindow.xaml's KeyBindings plus the imperative allow-list.",
-            [ChordScope.Editor] = "AvalonEdit's own key handling, which is a third-"
-                + "party control's and not ours to scrape, plus one window-level "
-                + "Escape gated on an open popover.",
         };
 
     /// <summary>
@@ -644,6 +642,59 @@ public sealed class ChordTableTests
     /// </remarks>
     private static HashSet<string> PaletteChords() =>
         UnmodifiedSwitchKeys("MainWindow.Palette.cs", "HandleCommandPaletteKey");
+
+    /// <summary>
+    /// The editor's own key route: <c>SlateTextEditor.OnPreviewKeyDown</c>.
+    /// </summary>
+    /// <remarks>
+    /// This scope was exempted with the reason "AvalonEdit's own key
+    /// handling, which is a third-party control's and not ours to scrape".
+    /// Codex found that false — Ctrl+E, Ctrl+Enter and Escape are all
+    /// handled by Slate's own <c>OnPreviewKeyDown</c> override. That was
+    /// the third untrue rationale in this list, so the list is now down to
+    /// the two entries that are structural rather than prose: Global,
+    /// which has its own both-direction check, and None, which has no
+    /// chord.
+    /// </remarks>
+    private static HashSet<string> EditorChords()
+    {
+        // Flattened because these guards wrap across four lines; the same
+        // whitespace hazard already bit the registrar scrape once.
+        string body = Regex.Replace(
+            MethodBody("SlateTextEditor.cs", "OnPreviewKeyDown"), @"\s+", string.Empty);
+
+        // The scrape prefixes "Ctrl+" on the strength of these two locals
+        // meaning what their names say. If either definition inverts, the
+        // prefix silently becomes a lie.
+        Assert.True(
+            body.Contains(
+                "boolcontrolGesture=(modifiers&ModifierKeys.Control)==ModifierKeys.Control",
+                System.StringComparison.Ordinal),
+            "controlGesture no longer means 'Control is down', so the Ctrl+ "
+            + "prefix this scrape adds is unfounded.");
+        Assert.True(
+            body.Contains(
+                "boolhasConflictingModifier=(modifiers&(ModifierKeys.Alt|ModifierKeys.Shift"
+                + "|ModifierKeys.Windows))!=ModifierKeys.None",
+                System.StringComparison.Ordinal),
+            "hasConflictingModifier no longer means 'Alt, Shift or Windows is "
+            + "down', so a Ctrl+ chord read here may carry other modifiers.");
+
+        var chords = new HashSet<string>(System.StringComparer.Ordinal);
+        foreach (Match match in Regex.Matches(
+            body, @"controlGesture&&!hasConflictingModifier&&e\.Key==Key\.([A-Za-z0-9]+)"))
+        {
+            chords.Add(Canonical("Control", match.Groups[1].Value));
+        }
+
+        foreach (Match match in Regex.Matches(
+            body, @"modifiers==ModifierKeys\.None&&e\.Key==Key\.([A-Za-z0-9]+)"))
+        {
+            chords.Add(Canonical(null, match.Groups[1].Value));
+        }
+
+        return chords;
+    }
 
     /// <summary>
     /// Quick Open's key route: three bare arms written as <c>if</c>
@@ -706,12 +757,14 @@ public sealed class ChordTableTests
     }
 
     /// <summary>
-    /// One method's source text, bounded by the next member declaration so
-    /// a neighbouring handler's keys cannot leak into the scrape.
+    /// One method's source text, comments stripped, bounded by the next
+    /// member declaration so a neighbouring handler's keys cannot leak
+    /// into the scrape.
     /// </summary>
     private static string MethodBody(string fileName, string methodName)
     {
-        string source = File.ReadAllText(Path.Combine(SourceRoot(), fileName));
+        string source = SourceText.WithoutComments(
+            File.ReadAllText(Path.Combine(SourceRoot(), fileName)));
 
         // Anchored on the DECLARATION, not the first mention. A bare name
         // search lands on the call site, which sits above the declaration
@@ -767,8 +820,8 @@ public sealed class ChordTableTests
     /// </summary>
     private static HashSet<string> SplitterChords()
     {
-        string source = File.ReadAllText(
-            Path.Combine(SourceRoot(), "WeightedSplitPanel.cs"));
+        string source = SourceText.WithoutComments(File.ReadAllText(
+            Path.Combine(SourceRoot(), "WeightedSplitPanel.cs")));
         var chords = new HashSet<string>(System.StringComparer.Ordinal);
         foreach (Match match in Regex.Matches(
             source, @"\(Orientation\.(?:Horizontal|Vertical), Key\.([A-Za-z0-9]+)\)"))
@@ -787,8 +840,8 @@ public sealed class ChordTableTests
     /// </summary>
     private static HashSet<string> ReadingHeadingLevelChords()
     {
-        string source = File.ReadAllText(
-            Path.Combine(SourceRoot(), "Reading", "ReadingNavigator.cs"));
+        string source = SourceText.WithoutComments(File.ReadAllText(
+            Path.Combine(SourceRoot(), "Reading", "ReadingNavigator.cs")));
         Match loop = Regex.Match(
             source, @"for \(byte level = 1; level <= (\d+); level\+\+\)");
         Assert.True(
@@ -821,8 +874,8 @@ public sealed class ChordTableTests
 
     private static HashSet<string> ReadingNavigatorChords()
     {
-        string source = File.ReadAllText(
-            Path.Combine(SourceRoot(), "Reading", "ReadingNavigator.cs"));
+        string source = SourceText.WithoutComments(File.ReadAllText(
+            Path.Combine(SourceRoot(), "Reading", "ReadingNavigator.cs")));
         var chords = new HashSet<string>(System.StringComparer.Ordinal);
         foreach (Match match in Regex.Matches(
             source,
@@ -838,8 +891,8 @@ public sealed class ChordTableTests
 
     private static HashSet<string> GridGestureChords()
     {
-        string source = File.ReadAllText(
-            Path.Combine(SourceRoot(), "Grids", "AccessibleDataGrid.cs"));
+        string source = SourceText.WithoutComments(File.ReadAllText(
+            Path.Combine(SourceRoot(), "Grids", "AccessibleDataGrid.cs")));
         var chords = new HashSet<string>(System.StringComparer.Ordinal);
         foreach (Match match in Regex.Matches(
             source,

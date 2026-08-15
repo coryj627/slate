@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Reflection;
+using System.Text.RegularExpressions;
 using SlateWindows.Commands;
 using uniffi.slate_uniffi;
 
@@ -417,6 +418,46 @@ public sealed class CommandPaletteTests
             ],
             harness.Log);
         Assert.False(harness.Palette.IsOpen);
+    }
+
+    /// <summary>
+    /// The shell's focus subscriber moves focus <b>now</b>, not on a
+    /// queued dispatcher callback.
+    /// </summary>
+    /// <remarks>
+    /// Codex's round-3 medium, and the gap the ordering test above cannot
+    /// see: it logs <c>"focus"</c> when the EVENT is raised, so the
+    /// production subscriber could be replaced with a no-op and the
+    /// sequence would still read correctly. The subscriber originally
+    /// queued <c>Focus()</c> at <c>Input</c> priority, which meant that on
+    /// a double-click the <c>ListBoxItem</c> still held focus while the
+    /// availability gate ran, the unavailable reason was announced, and
+    /// the command itself executed — P9's ordering satisfied on paper and
+    /// not in fact.
+    ///
+    /// A source fact rather than a runtime one because the subscriber is a
+    /// <c>MainWindow</c> member and a real shell would be needed to raise
+    /// it. It catches both regressions that matter: deleting the call, and
+    /// putting it back on the dispatcher.
+    /// </remarks>
+    [Fact]
+    public void TheShellFocusesTheSearchBoxSynchronously()
+    {
+        string body = SourceText.WithoutComments(
+            File.ReadAllText(Path.Combine(
+                SourceText.ShellSourceRoot(), "MainWindow.Palette.cs")));
+        Match subscriber = Regex.Match(
+            body,
+            @"private void Palette_SearchFocusRequested\([^)]*\)\s*=>(?<body>[^;]*);");
+        Assert.True(
+            subscriber.Success,
+            "Palette_SearchFocusRequested is gone or no longer an expression "
+            + "body; P9's focus step has no gate until this scrape is updated.");
+
+        string call = subscriber.Groups["body"].Value;
+        Assert.Contains("CommandPaletteSearchTextBox.Focus()", call, StringComparison.Ordinal);
+        Assert.DoesNotContain("InvokeAsync", call, StringComparison.Ordinal);
+        Assert.DoesNotContain("BeginInvoke", call, StringComparison.Ordinal);
     }
 
     [Fact]

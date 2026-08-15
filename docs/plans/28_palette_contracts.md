@@ -691,4 +691,50 @@ rather than argued.
 Only `Editor`, `Global` and `None` remain exempt: AvalonEdit's key
 handling is a third-party control's, and `Global` has its own
 both-direction check against `MainWindow.xaml` plus the imperative
-allow-list.
+allow-list. *(The `Editor` reason was false too — see round 3.)*
+
+### Codex round 3 — needs-attention, three highs, two mediums, one low
+
+Every finding was again the under-match class, and three of the six were
+in code written to close the previous round. All six are closed, each
+mutation-verified with codex's own stated mutation.
+
+- **High: the live state mapping had no test at all.** `IsOpen` became
+  exhaustive and gated, but `CurrentModalSurfaceState` — which fills that
+  record from live view models — was never exercised. Crossing
+  `DashboardEditor:` to read `BaseQueryBuilderSheet` left the suite green
+  and the palette opening beneath an open dashboard editor. The comment
+  claimed a wrong-property error would be "visible" in a flat list of
+  named assignments; **readability is not a gate**. Now each named
+  argument must read the property that bears its name.
+- **High: a menu accelerator's click-handler id was hard-coded.** The
+  identity fix credited `QuickOpen_Click` with Quick Open's id from a
+  dictionary, so pointing that handler at `Palette.Open()` advertised one
+  command's chord while running another, gate still green. The allow-list
+  now carries the call each handler must contain.
+- **High: every source scrape treated comments as executable code.**
+  Comment out the splitter's `Key.Up` arm and leave the text, and the
+  chord is gone from the product while the scrape still reads it — dead
+  source passing both directions and the non-empty guard. All scrapes now
+  run through one comment stripper, itself gated in both directions
+  (commented code must vanish; a `//` inside a string literal must not
+  eat the line).
+- **Medium: the `Editor` exemption reason was false.** Ctrl+E, Ctrl+Enter
+  and Escape are handled by Slate's own `SlateTextEditor.OnPreviewKeyDown`,
+  not by AvalonEdit. That is the **third** untrue rationale in that list —
+  after Palette and Quick Open, caught in self-QA one commit earlier. The
+  pattern is now unmistakable: a prose reason is the easiest place to
+  hide, so the list is down to `Global` (which has its own check) and
+  `None` (no chord), both structural.
+- **Medium: P9's focus step was requested, not completed.** The
+  subscriber queued `Focus()` at `Input` priority, so on a double-click
+  the row still held focus while the availability gate ran, the
+  unavailable reason was announced, and the command executed. The
+  ordering test logs the *event*, so the subscriber could have been a
+  no-op. Now synchronous, and gated. The open path still queues, and must
+  — the overlay is not realized when `IsOpen` flips.
+- **Low: the "CS8509 build break" was not real.** CS8509 is a warning,
+  nothing promoted it, and CI runs a plain `dotnet build`, so a new
+  surface would have shipped defaulting to "not open". Promoted to an
+  error rather than softening the claim, because the claim describes the
+  behaviour we want. Verified: removing an arm now fails the build.

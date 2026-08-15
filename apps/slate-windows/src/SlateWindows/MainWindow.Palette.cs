@@ -129,10 +129,24 @@ public partial class MainWindow
         }
     }
 
+    /// <summary>
+    /// Moves focus into the search box, synchronously.
+    /// </summary>
+    /// <remarks>
+    /// P9 orders the focus step before the availability gate, and codex
+    /// found that only the REQUEST was ordered: this queued the actual
+    /// <c>Focus()</c> at <c>Input</c> priority, so on a double-click the
+    /// <c>ListBoxItem</c> still owned focus while the disabled reason was
+    /// computed and announced, and while the command itself ran. Doing it
+    /// now makes the contract true rather than nearly true.
+    ///
+    /// The OPEN path above still queues, and must: the overlay is not
+    /// realized at the moment <c>IsOpen</c> flips, so a synchronous
+    /// <c>Focus()</c> there finds nothing to focus. This one runs while
+    /// the palette is on screen.
+    /// </remarks>
     private void Palette_SearchFocusRequested(object? sender, EventArgs e) =>
-        _ = Dispatcher.InvokeAsync(
-            () => CommandPaletteSearchTextBox.Focus(),
-            DispatcherPriority.Input);
+        CommandPaletteSearchTextBox.Focus();
 
     /// <summary>
     /// Rebuilds the grouped view over the current rows.

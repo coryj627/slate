@@ -185,7 +185,7 @@ public sealed class CommandDriftTests
             }
             else if (item.Attribute("Click")?.Value is { } handler)
             {
-                ClickHandlerCommandIds.TryGetValue(handler, out invokedId);
+                invokedId = ClickHandlerId(handler);
             }
 
             Assert.True(
@@ -208,15 +208,64 @@ public sealed class CommandDriftTests
     }
 
     /// <summary>
-    /// The two menu items whose command is reached through a click
-    /// handler rather than a binding — already allow-listed above.
+    /// The two menu items whose command is reached through a click handler
+    /// rather than a binding: the id each is taken to invoke, and the call
+    /// in its body that has to be there for that to be true.
     /// </summary>
-    private static readonly Dictionary<string, string> ClickHandlerCommandIds =
+    /// <remarks>
+    /// Codex's round-3 high. The first version of this was a bare
+    /// name → id dictionary, which asserted nothing about the handler:
+    /// point <c>QuickOpen_Click</c> at <c>_viewModel.Palette.Open()</c> and
+    /// the menu item advertises Quick Open's chord while opening the
+    /// command palette, with the gate still green because the id was
+    /// hard-coded beside the name. The marker is still a proxy — it reads
+    /// the call, not the runtime effect — but it is a CHECKED proxy, and it
+    /// fails on exactly that substitution.
+    /// </remarks>
+    private sealed record ClickHandlerCommand(string Id, string BodyMarker);
+
+    private static readonly Dictionary<string, ClickHandlerCommand> ClickHandlerCommandIds =
         new(StringComparer.Ordinal)
         {
-            ["QuickOpen_Click"] = "slate.workspace.quickOpen",
-            ["FocusFilter_Click"] = "slate.sidebar.focusFilter",
+            ["QuickOpen_Click"] = new("slate.workspace.quickOpen", "switcher.Open()"),
+            ["FocusFilter_Click"] = new("slate.sidebar.focusFilter", "SidebarFilterTextBox.Focus()"),
         };
+
+    /// <summary>
+    /// Each allow-listed click handler still contains the call the
+    /// allow-list credits it with.
+    /// </summary>
+    private static string? ClickHandlerId(string handler)
+    {
+        if (!ClickHandlerCommandIds.TryGetValue(handler, out ClickHandlerCommand? entry))
+        {
+            return null;
+        }
+
+        string source = SourceText.WithoutComments(
+            File.ReadAllText(Path.Combine(SourceRoot(), "MainWindow.xaml.cs")));
+        Match declaration = Regex.Match(
+            source,
+            $@"\r?\n    private void {Regex.Escape(handler)}\s*\(");
+        Assert.True(
+            declaration.Success,
+            $"{handler} is gone from MainWindow.xaml.cs, but the menu still "
+            + "names it and this allow-list still credits it with "
+            + $"{entry.Id}.");
+
+        int start = declaration.Index + declaration.Length;
+        Match next = Regex.Match(
+            source[start..],
+            @"\r?\n    (?:private|internal|public|protected)[ \r\n]");
+        string body = next.Success ? source.Substring(start, next.Index) : source[start..];
+
+        Assert.True(
+            body.Contains(entry.BodyMarker, StringComparison.Ordinal),
+            $"{handler} no longer calls {entry.BodyMarker}, so the claim that it "
+            + $"invokes {entry.Id} is unfounded — the menu item would advertise "
+            + "one command's chord while running another.");
+        return entry.Id;
+    }
 
     /// <summary>
     /// Maps each resolver's <c>ICommand</c> property path to the command

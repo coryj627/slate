@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Text.RegularExpressions;
 using System.Windows.Input;
 using SlateWindows.Commands;
 using System.Xml.Linq;
@@ -184,6 +185,89 @@ public sealed class ModalSurfaceTests
             Assert.Equal(surface, ModalSurfaces.TopmostOpen(state));
         }
     }
+
+    /// <summary>
+    /// Each field of the live state record reads the view-model property
+    /// that bears its own name.
+    /// </summary>
+    /// <remarks>
+    /// Codex's round-3 high, and the third time this exact class has bitten
+    /// in this subsystem. <see cref="EachSurfaceReadsItsOwnFlag"/> builds
+    /// the record itself, so it gates the pure enum mapping and nothing
+    /// else — <c>MainWindow.CurrentModalSurfaceState</c>, which fills that
+    /// record from live view models, had no test at all. Crossing one
+    /// assignment (<c>DashboardEditor:</c> reading
+    /// <c>BaseQueryBuilderSheet</c>) left the whole suite green while the
+    /// palette opened beneath an open dashboard editor. The comment there
+    /// claimed a wrong-property error would be "visible" in a flat list of
+    /// named assignments; readability is not a gate, so here is the gate.
+    ///
+    /// It is a source pairing rather than a runtime one because the
+    /// property is on <c>MainWindow</c> and every sheet would need a real
+    /// shell to open. The named-argument syntax is what makes the pairing
+    /// mechanical: the argument name and the property it reads must agree.
+    /// </remarks>
+    [Fact]
+    public void EveryLiveStateFieldReadsThePropertyNamedAfterIt()
+    {
+        string source = SourceText.WithoutComments(
+            File.ReadAllText(Path.Combine(
+                SourceRoot(), "MainWindow.Palette.cs")));
+
+        Match constructor = Regex.Match(
+            source,
+            @"new ModalSurfaceState\((?<arguments>[^;]*?)\);",
+            RegexOptions.Singleline);
+        Assert.True(
+            constructor.Success,
+            "CurrentModalSurfaceState no longer builds the record with a "
+            + "single new ModalSurfaceState(...) call, so this pairing cannot "
+            + "be read. Update the scrape rather than dropping the check.");
+
+        var seen = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (Match argument in Regex.Matches(
+            constructor.Groups["arguments"].Value,
+            @"(?<name>[A-Za-z]+):\s*(?<expression>[^,)]+)"))
+        {
+            seen[argument.Groups["name"].Value] = argument.Groups["expression"].Value.Trim();
+        }
+
+        foreach (ModalSurface surface in Enum.GetValues<ModalSurface>())
+        {
+            Assert.True(
+                seen.TryGetValue(surface.ToString(), out string? expression),
+                $"{surface} is never assigned in CurrentModalSurfaceState, so the "
+                + "palette cannot know whether it is open.");
+
+            if (OverlayStateExpressions.TryGetValue(surface, out string? expected))
+            {
+                // The two overlays read an IsOpen flag rather than a
+                // {Surface}Sheet property, so their exact expression is
+                // pinned instead of matched by name.
+                Assert.True(
+                    expression == expected,
+                    $"{surface} reads '{expression}', not '{expected}'.");
+                continue;
+            }
+
+            Assert.True(
+                expression!.Contains(surface.ToString(), StringComparison.Ordinal),
+                $"{surface} reads '{expression}', which does not name {surface}. "
+                + "A crossed assignment here reports the wrong surface open and "
+                + "lets the palette render beneath a live sheet.");
+        }
+    }
+
+    /// <summary>
+    /// The two surfaces whose live flag is not a <c>{Surface}Sheet</c>
+    /// property, with the expression each must read.
+    /// </summary>
+    private static readonly Dictionary<ModalSurface, string> OverlayStateExpressions =
+        new()
+        {
+            [ModalSurface.QuickOpen] = "_viewModel.QuickSwitcher?.IsOpen == true",
+            [ModalSurface.CommandPalette] = "_viewModel.Palette.IsOpen",
+        };
 
     private static ModalSurfaceState StateWithOnly(ModalSurface surface) =>
         new(
