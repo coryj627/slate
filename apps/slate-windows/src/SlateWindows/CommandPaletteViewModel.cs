@@ -370,8 +370,21 @@ internal sealed class CommandPaletteViewModel : BindableBase
         // taken once, here, and ranked for the palette's whole
         // lifetime. A command invoked during this session does not
         // appear under Recent until the next open.
-        _snapshot = _source.ListCommands();
-        _recents = _source.LoadRecents();
+        //
+        // Guarded on !IsOpen because PD-2 makes the chord RE-OPEN rather
+        // than toggle, so this method is re-entered while open — and an
+        // unguarded snapshot made that one chord press re-read the
+        // registry and re-read recents from disk, on the UI thread,
+        // swapping the rows underneath a palette the user is already
+        // looking at. The comment above claimed a whole-lifetime
+        // snapshot; this is what makes it true. Re-opening still clears
+        // the query and the selection, which is the visible half of PD-2.
+        if (!_isOpen)
+        {
+            _snapshot = _source.ListCommands();
+            _recents = _source.LoadRecents();
+        }
+
         _query = string.Empty;
         _selectedId = null;
         _selectedRow = null;

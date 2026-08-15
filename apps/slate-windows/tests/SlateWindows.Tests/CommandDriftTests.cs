@@ -244,15 +244,26 @@ public sealed class CommandDriftTests
 
         string source = SourceText.WithoutComments(
             File.ReadAllText(Path.Combine(SourceRoot(), "MainWindow.xaml.cs")));
-        Match declaration = Regex.Match(
+        MatchCollection declarations = Regex.Matches(
             source,
             $@"\r?\n    private void {Regex.Escape(handler)}\s*\(");
         Assert.True(
-            declaration.Success,
+            declarations.Count > 0,
             $"{handler} is gone from MainWindow.xaml.cs, but the menu still "
             + "names it and this allow-list still credits it with "
             + $"{entry.Id}.");
 
+        // An unused overload declared first, carrying the marker, would
+        // certify a handler that does something else entirely — the menu
+        // then advertises one command's chord while running another,
+        // which is the very defect this gate was added to catch.
+        Assert.True(
+            declarations.Count == 1,
+            $"{handler} has {declarations.Count} declarations. XAML binds one of "
+            + "them and this gate reads the first — disambiguate before adding "
+            + "an overload.");
+
+        Match declaration = declarations[0];
         int start = declaration.Index + declaration.Length;
         Match next = Regex.Match(
             source[start..],
@@ -273,12 +284,12 @@ public sealed class CommandDriftTests
     /// </summary>
     private static Dictionary<string, string> ResolverIdsByCommandPath()
     {
-        string source = File.ReadAllText(
-            Path.Combine(SourceRoot(), "Commands", "SlateCommandRegistrar.cs"));
+        string source = SourceText.WithoutComments(File.ReadAllText(
+            Path.Combine(SourceRoot(), "Commands", "SlateCommandRegistrar.cs")));
         string flattened = Regex.Replace(source, @"\s+", string.Empty).Replace("?", string.Empty);
 
-        string table = File.ReadAllText(
-            Path.Combine(SourceRoot(), "Commands", "ChordTable.cs"));
+        string table = SourceText.WithoutComments(File.ReadAllText(
+            Path.Combine(SourceRoot(), "Commands", "ChordTable.cs")));
         var idByName = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (Match match in Regex.Matches(
             table, @"(?:public|internal) const string (\w+)\s*=\s*""([^""]+)"""))
@@ -436,8 +447,8 @@ public sealed class CommandDriftTests
     /// </summary>
     private static HashSet<string> ResolverCommandPaths()
     {
-        string source = File.ReadAllText(
-            Path.Combine(SourceRoot(), "Commands", "SlateCommandRegistrar.cs"));
+        string source = SourceText.WithoutComments(File.ReadAllText(
+            Path.Combine(SourceRoot(), "Commands", "SlateCommandRegistrar.cs")));
 
         // Normalise before matching, because the resolvers are not uniform:
         // depth varies (host.OpenVaultCommand through

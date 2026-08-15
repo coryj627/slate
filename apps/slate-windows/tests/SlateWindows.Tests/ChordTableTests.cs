@@ -770,15 +770,28 @@ public sealed class ChordTableTests
         // search lands on the call site, which sits above the declaration
         // in both of these files — the scrape then read a neighbouring
         // method and reported the guard missing.
-        Match declaration = Regex.Match(
+        MatchCollection declarations = Regex.Matches(
             source,
             $@"\r?\n    (?:private|internal|public|protected)[^\r\n]*\b{Regex.Escape(methodName)}\s*\(");
         Assert.True(
-            declaration.Success,
+            declarations.Count > 0,
             $"{methodName} is gone from {fileName}, or its signature moved off the "
             + "class's own indent. The scrape that reads it would silently return "
             + "nothing, so it fails here instead.");
 
+        // Overload ambiguity is a failure, not first-one-wins. An unused
+        // overload declared above the shipping handler and carrying the
+        // old guard text would otherwise be scraped while the real
+        // signature quietly stopped delivering the chord — the same
+        // first-match-not-the-right-match bug this scrape was already
+        // corrected for once, at the call-site-above-declaration step.
+        Assert.True(
+            declarations.Count == 1,
+            $"{methodName} has {declarations.Count} declarations in {fileName}. "
+            + "This scrape reads one of them, so the rest are unchecked — "
+            + "disambiguate before adding an overload.");
+
+        Match declaration = declarations[0];
         int start = declaration.Index + declaration.Length;
         Match next = Regex.Match(
             source[start..],

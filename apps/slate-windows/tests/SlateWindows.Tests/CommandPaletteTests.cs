@@ -136,6 +136,44 @@ public sealed class CommandPaletteTests
         Assert.Equal(2, harness.Source.ListCommandsCalls);
     }
 
+    /// <summary>
+    /// Re-opening an already-open palette clears the query WITHOUT taking
+    /// a second snapshot.
+    /// </summary>
+    /// <remarks>
+    /// Codex's round-4 high, and the one finding of that round that was a
+    /// product defect rather than a test-quality one. PD-2 makes the chord
+    /// re-open rather than toggle, so <c>Open</c> is re-entered while open
+    /// — and it re-read the registry and re-read recents from disk on
+    /// every press, three lines below a comment promising a whole-lifetime
+    /// snapshot. The existing P4 fact only covered keystrokes and
+    /// dismiss-then-open, so the reachable path was the uncovered one.
+    /// </remarks>
+    [Fact]
+    public void ReOpeningWhileOpenClearsTheQueryButKeepsTheOriginalSnapshot()
+    {
+        PaletteHarness harness = StandardHarness();
+        harness.Palette.Open();
+        harness.Palette.Query = "save";
+
+        // A command registered after the first open must stay invisible:
+        // the re-open is the same lifetime, not a new one.
+        harness.Source.Commands.Add(
+            Cmd("slate.file.late", "Late Arrival", CommandSection.File));
+        harness.Source.Recents.Add("slate.file.late");
+
+        harness.Palette.Open();
+
+        Assert.True(harness.Palette.IsOpen);
+        Assert.Equal(string.Empty, harness.Palette.Query);
+        Assert.Equal(1, harness.Source.ListCommandsCalls);
+        Assert.Equal(1, harness.Source.LoadRecentsCalls);
+
+        harness.Palette.Query = "late";
+        Assert.Empty(harness.Palette.Rows);
+        Assert.DoesNotContain("Recent", harness.SectionTitles);
+    }
+
     // --- P6 / PINV-6: byte -> UTF-16 conversion ---------------------------
 
     [Fact]
@@ -755,7 +793,14 @@ public sealed class CommandPaletteTests
         Assert.True(harness.Palette.IsOpen);
         Assert.Equal(string.Empty, harness.Palette.Query);
         Assert.Equal(5, harness.Palette.Rows.Count);
-        Assert.Equal(2, harness.Source.ListCommandsCalls);
+
+        // Was `2`, and that pinned a behaviour the governing contract
+        // forbids. P4: "Neither refreshes while the palette is open." A
+        // re-open never closes the palette, so the snapshot must survive
+        // it — the rows above are recomputed from the ORIGINAL array.
+        // Codex found the contradiction between this line and P4; both
+        // the line and the production code were mine.
+        Assert.Equal(1, harness.Source.ListCommandsCalls);
     }
 
     [Fact]
