@@ -82,33 +82,33 @@ public partial class MainWindow
     /// property only answers "is THIS one open".
     /// </remarks>
     internal ModalSurface? OpenModalSurface =>
-        ModalSurfaces.TopmostOpen(IsSurfaceOpen);
+        ModalSurfaces.TopmostOpen(CurrentModalSurfaceState);
 
     /// <summary>
-    /// Whether one named surface is open.
+    /// Reads the live view-model flags into the pure state record.
     /// </summary>
     /// <remarks>
-    /// An exhaustive <c>switch</c> with no default arm on purpose: adding
-    /// a <see cref="ModalSurface"/> member without mapping it here is a
-    /// compile error rather than a surface that silently never counts as
-    /// open.
+    /// Deliberately a flat list of named assignments: each field sits
+    /// next to the property it reads, so a wrong-property error is
+    /// visible here rather than hidden in a switch. The ranking and the
+    /// enum mapping are both pure and gated in <c>ModalSurfaceTests</c>.
     /// </remarks>
-    private bool IsSurfaceOpen(ModalSurface surface)
+    private ModalSurfaceState CurrentModalSurfaceState
     {
-        WorkspaceViewModel? workspace = _viewModel.Workspace;
-        return surface switch
+        get
         {
-            ModalSurface.QuickOpen => _viewModel.QuickSwitcher?.IsOpen == true,
-            ModalSurface.CommandPalette => _viewModel.Palette.IsOpen,
-            ModalSurface.AddProperty => workspace?.AddPropertySheet is not null,
-            ModalSurface.BulkRename => workspace?.BulkRenameSheet is not null,
-            ModalSurface.CitationDetails => workspace?.CitationDetails is not null,
-            ModalSurface.CitationSummary => workspace?.CitationSummary is not null,
-            ModalSurface.FilesCiting => workspace?.FilesCiting is not null,
-            ModalSurface.DashboardEditor => workspace?.DashboardEditorSheet is not null,
-            ModalSurface.BaseQueryBuilder => workspace?.BaseQueryBuilderSheet is not null,
-            _ => throw new ArgumentOutOfRangeException(nameof(surface)),
-        };
+            WorkspaceViewModel? workspace = _viewModel.Workspace;
+            return new ModalSurfaceState(
+                QuickOpen: _viewModel.QuickSwitcher?.IsOpen == true,
+                CommandPalette: _viewModel.Palette.IsOpen,
+                AddProperty: workspace?.AddPropertySheet is not null,
+                BulkRename: workspace?.BulkRenameSheet is not null,
+                CitationDetails: workspace?.CitationDetails is not null,
+                CitationSummary: workspace?.CitationSummary is not null,
+                FilesCiting: workspace?.FilesCiting is not null,
+                DashboardEditor: workspace?.DashboardEditorSheet is not null,
+                BaseQueryBuilder: workspace?.BaseQueryBuilderSheet is not null);
+        }
     }
 
     /// <summary>

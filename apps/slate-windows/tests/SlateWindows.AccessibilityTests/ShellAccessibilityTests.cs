@@ -4509,12 +4509,16 @@ public sealed class ShellAccessibilityTests
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Ctrl+Alt+{Left,Right,Up,Down} are registered process-wide by AMD
-    /// Radeon Software, the NVIDIA container and Parsec on developer
-    /// boxes. The app then never receives the chord, and the resulting
-    /// assertion reads exactly like a product defect. It has been
-    /// re-diagnosed more than once, and cost a disagreement between two
-    /// review rounds over whether the suite was 17/18 or 18/18.
+    /// Ctrl+Alt+{Left,Right,Up,Down} are registered process-wide by
+    /// <b>Windows Magnifier</b>, which uses them to pan the magnified
+    /// view — and, on developer boxes, also by AMD Radeon Software, the
+    /// NVIDIA container and Parsec. The app then never receives the
+    /// chord, and the resulting assertion reads exactly like a product
+    /// defect. It has been re-diagnosed more than once, and cost a
+    /// disagreement between two review rounds over whether the suite was
+    /// 17/18 or 18/18 — Magnifier being toggled on and off mid-session is
+    /// exactly why the same probe answered FREE and then TAKEN within a
+    /// day.
     /// </para>
     /// <para>
     /// RegisterHotKey returning ERROR_HOTKEY_ALREADY_REGISTERED (1409) is

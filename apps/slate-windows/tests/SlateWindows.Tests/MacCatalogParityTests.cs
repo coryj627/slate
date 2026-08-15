@@ -34,12 +34,22 @@ public sealed class MacCatalogParityTests
     {
         IReadOnlyDictionary<string, string> mac = MacLabelsById();
         Assert.NotEmpty(mac);
+        IReadOnlySet<string> macIds = MacDeclaredIds();
 
         var divergences = new List<string>();
         foreach (ChordTableEntry row in ChordTable.Entries.Where(row => row.IsCommandId))
         {
             if (!mac.TryGetValue(row.Id, out string? macLabel))
             {
+                // Not silently skipped: a shared id whose mac label could
+                // not be parsed must say so, or an unparsed mac syntax
+                // hides real divergence the way the generated slot calls
+                // did.
+                Assert.True(
+                    !macIds.Contains(row.Id) || LabelNotMachineReadable.ContainsKey(row.Id),
+                    $"{row.Id} is shared with mac but no mac label could be "
+                    + "parsed, so its label is unchecked. Extend the parser or "
+                    + "record it in " + nameof(LabelNotMachineReadable) + ".");
                 continue;
             }
 
@@ -142,6 +152,26 @@ public sealed class MacCatalogParityTests
         };
 
     /// <summary>
+    /// Shared ids whose mac label genuinely is not machine-readable, with
+    /// why. Kept small and explicit — every entry is label coverage this
+    /// gate does not provide.
+    /// </summary>
+    private static readonly Dictionary<string, string> LabelNotMachineReadable =
+        new(StringComparer.Ordinal)
+        {
+            ["slate.file.cancelImport"] =
+                "mac carries this label on CancelImportCommandContract rather than "
+                + "in a register(...) call or the sidebar catalog.",
+        };
+
+    /// <summary>
+    /// mac's generated shortcut-slot rows:
+    /// <c>SlateCommandID.sidebarOpenShortcut(1), "Open Shortcut 1"</c>.
+    /// </summary>
+    private const string SidebarSlotLabelPattern =
+        "SlateCommandID\\.sidebarOpenShortcut\\((\\d)\\),\\s*\"((?:[^\"\\\\]|\\\\.)*)\"";
+
+    /// <summary>
     /// Every <c>slate.*</c> id mac declares, whether or not its label is
     /// machine-discoverable.
     /// </summary>
@@ -220,6 +250,19 @@ public sealed class MacCatalogParityTests
         {
             if (idByName.TryGetValue(match.Groups[1].Value, out string? id)
                 && !labels.ContainsKey(id))
+            {
+                labels[id] = Unescape(match.Groups[2].Value);
+            }
+        }
+
+        // The nine slots are written as a GENERATED call —
+        // SlateCommandID.sidebarOpenShortcut(1), "Open Shortcut 1" — which
+        // the identifier-comma pattern above cannot match. Codex caught
+        // that all nine were bypassing label parity in silence.
+        foreach (Match match in Regex.Matches(catalog, SidebarSlotLabelPattern))
+        {
+            string id = $"slate.sidebar.openShortcut{match.Groups[1].Value}";
+            if (!labels.ContainsKey(id))
             {
                 labels[id] = Unescape(match.Groups[2].Value);
             }

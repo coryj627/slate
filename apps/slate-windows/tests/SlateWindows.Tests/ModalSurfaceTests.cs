@@ -154,6 +154,50 @@ public sealed class ModalSurfaceTests
     }
 
     /// <summary>
+    /// Each surface reads its OWN flag out of the state record.
+    /// </summary>
+    /// <remarks>
+    /// Codex's round-2 high: the precedence tests proved how a supplied
+    /// surface ranks, but nothing exercised the mapping that turns live
+    /// state into that surface. Pointing any arm at the wrong flag left
+    /// every test green and let the palette open invisibly beneath that
+    /// sheet again. Setting exactly one flag and asserting exactly one
+    /// surface reads true catches a crossed arm.
+    /// </remarks>
+    [Fact]
+    public void EachSurfaceReadsItsOwnFlag()
+    {
+        foreach (ModalSurface surface in Enum.GetValues<ModalSurface>())
+        {
+            ModalSurfaceState state = StateWithOnly(surface);
+
+            foreach (ModalSurface candidate in Enum.GetValues<ModalSurface>())
+            {
+                bool expected = candidate == surface;
+                Assert.True(
+                    ModalSurfaces.IsOpen(candidate, state) == expected,
+                    $"with only {surface} open, IsOpen({candidate}) should be "
+                    + $"{expected} — an arm is reading the wrong flag.");
+            }
+
+            // And the whole pipeline agrees.
+            Assert.Equal(surface, ModalSurfaces.TopmostOpen(state));
+        }
+    }
+
+    private static ModalSurfaceState StateWithOnly(ModalSurface surface) =>
+        new(
+            QuickOpen: surface == ModalSurface.QuickOpen,
+            CommandPalette: surface == ModalSurface.CommandPalette,
+            AddProperty: surface == ModalSurface.AddProperty,
+            BulkRename: surface == ModalSurface.BulkRename,
+            CitationDetails: surface == ModalSurface.CitationDetails,
+            CitationSummary: surface == ModalSurface.CitationSummary,
+            FilesCiting: surface == ModalSurface.FilesCiting,
+            DashboardEditor: surface == ModalSurface.DashboardEditor,
+            BaseQueryBuilder: surface == ModalSurface.BaseQueryBuilder);
+
+    /// <summary>
     /// The topmost-open walk returns the LAST open surface in paint order,
     /// which is the one that owns the screen and the keyboard.
     /// </summary>

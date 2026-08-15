@@ -134,6 +134,123 @@ public sealed class CommandDriftTests
     }
 
     /// <summary>
+    /// Each menu accelerator names the command that same item invokes.
+    /// </summary>
+    /// <remarks>
+    /// Resolving accelerators from the chord table closed the
+    /// hand-typed-string hazard, but not the identity one: a
+    /// <c>{cmd:ChordText …}</c> referencing any OTHER valid chorded id
+    /// still parses, still renders, and still passes a check that only
+    /// asks "does this id exist". Swapping two items' ids, or reusing one
+    /// twice, would advertise the wrong shortcut in the menu and in UIA
+    /// while every gate stayed green — the identity-loss sibling of the
+    /// bare-string shielding this replaced. Codex found it; this pins the
+    /// pairing.
+    /// </remarks>
+    [Fact]
+    public void EveryMenuAcceleratorNamesTheCommandThatItemInvokes()
+    {
+        XElement menu = MenuElement();
+        HashSet<string> resolvedPaths = ResolverCommandPaths();
+        Dictionary<string, string> idByPath = ResolverIdsByCommandPath();
+        Assert.NotEmpty(idByPath);
+
+        var checkedItems = 0;
+        foreach (XElement item in menu.DescendantsAndSelf()
+            .Where(element => element.Name.LocalName == "MenuItem"))
+        {
+            string? accelerator = item.Attribute("InputGestureText")?.Value;
+            if (string.IsNullOrEmpty(accelerator))
+            {
+                continue;
+            }
+
+            Match reference = Regex.Match(
+                accelerator, @"^\{cmd:ChordText\s+([A-Za-z0-9_.]+)\}$");
+            Assert.True(
+                reference.Success,
+                $"menu accelerator '{accelerator}' is authored literally rather "
+                + "than resolved from the chord table (PINV-5).");
+            string acceleratorId = reference.Groups[1].Value;
+
+            // The id this item actually invokes, via its Command binding or
+            // its allow-listed click handler.
+            string? invokedId = null;
+            Match binding = Regex.Match(
+                item.Attribute("Command")?.Value ?? string.Empty,
+                @"^\{Binding ([A-Za-z0-9_.]+)\}$");
+            if (binding.Success)
+            {
+                idByPath.TryGetValue(binding.Groups[1].Value, out invokedId);
+            }
+            else if (item.Attribute("Click")?.Value is { } handler)
+            {
+                ClickHandlerCommandIds.TryGetValue(handler, out invokedId);
+            }
+
+            Assert.True(
+                invokedId is not null,
+                $"menu item advertising '{acceleratorId}' has no resolvable "
+                + "command, so its accelerator cannot be checked against what "
+                + "it invokes.");
+
+            Assert.True(
+                string.Equals(invokedId, acceleratorId, StringComparison.Ordinal),
+                $"menu item invokes '{invokedId}' but advertises the chord of "
+                + $"'{acceleratorId}'. The accelerator must name the command "
+                + "that item runs.");
+            checkedItems++;
+        }
+
+        // Guard against a scrape that quietly matches nothing.
+        Assert.True(checkedItems >= 20, $"only {checkedItems} accelerators checked");
+        Assert.NotEmpty(resolvedPaths);
+    }
+
+    /// <summary>
+    /// The two menu items whose command is reached through a click
+    /// handler rather than a binding — already allow-listed above.
+    /// </summary>
+    private static readonly Dictionary<string, string> ClickHandlerCommandIds =
+        new(StringComparer.Ordinal)
+        {
+            ["QuickOpen_Click"] = "slate.workspace.quickOpen",
+            ["FocusFilter_Click"] = "slate.sidebar.focusFilter",
+        };
+
+    /// <summary>
+    /// Maps each resolver's <c>ICommand</c> property path to the command
+    /// id that resolves to it.
+    /// </summary>
+    private static Dictionary<string, string> ResolverIdsByCommandPath()
+    {
+        string source = File.ReadAllText(
+            Path.Combine(SourceRoot(), "Commands", "SlateCommandRegistrar.cs"));
+        string flattened = Regex.Replace(source, @"\s+", string.Empty).Replace("?", string.Empty);
+
+        string table = File.ReadAllText(
+            Path.Combine(SourceRoot(), "Commands", "ChordTable.cs"));
+        var idByName = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (Match match in Regex.Matches(
+            table, @"(?:public|internal) const string (\w+)\s*=\s*""([^""]+)"""))
+        {
+            idByName[match.Groups[1].Value] = match.Groups[2].Value;
+        }
+
+        var byPath = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (Match match in Regex.Matches(
+            flattened, @"\[ChordTable\.Ids\.(\w+)\]=host=>host\.([A-Za-z0-9_.]*?Command)\b"))
+        {
+            if (idByName.TryGetValue(match.Groups[1].Value, out string? id))
+            {
+                byPath[match.Groups[2].Value] = id;
+            }
+        }
+
+        return byPath;
+    }
+
+    /// <summary>
     /// The allow-list is checked for staleness in both directions. Mac's
     /// rule, and what makes an allow-list non-bypassable: an entry that
     /// no longer matches a live menu leaf would silently shield the next

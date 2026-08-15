@@ -71,6 +71,27 @@ internal enum PaletteOpenDecision
 }
 
 /// <summary>
+/// Which modal surfaces are open, one named flag each.
+/// </summary>
+/// <remarks>
+/// The shell fills this in from its view models; everything downstream
+/// is pure. Named fields rather than a lambda so a wrong-property error
+/// is visible at the assignment site — <c>AddProperty</c> next to
+/// <c>AddPropertySheet</c> — instead of buried in a switch nothing
+/// exercises.
+/// </remarks>
+internal readonly record struct ModalSurfaceState(
+    bool QuickOpen,
+    bool CommandPalette,
+    bool AddProperty,
+    bool BulkRename,
+    bool CitationDetails,
+    bool CitationSummary,
+    bool FilesCiting,
+    bool DashboardEditor,
+    bool BaseQueryBuilder);
+
+/// <summary>
 /// The modal-surface precedence rules, as pure functions.
 /// </summary>
 /// <remarks>
@@ -105,6 +126,34 @@ internal static class ModalSurfaces
 
         return top;
     }
+
+    /// <summary>The topmost open surface for a given state.</summary>
+    internal static ModalSurface? TopmostOpen(ModalSurfaceState state) =>
+        TopmostOpen(surface => IsOpen(surface, state));
+
+    /// <summary>
+    /// Whether one named surface is open in <paramref name="state"/>.
+    /// </summary>
+    /// <remarks>
+    /// No wildcard arm: a switch expression that does not cover every
+    /// <see cref="ModalSurface"/> member raises CS8509, so adding a
+    /// surface without mapping it breaks the build. The previous version
+    /// DID have a wildcard and its doc comment claimed compile-time
+    /// exhaustiveness it did not have — codex caught that.
+    /// </remarks>
+    internal static bool IsOpen(ModalSurface surface, ModalSurfaceState state) =>
+        surface switch
+        {
+            ModalSurface.QuickOpen => state.QuickOpen,
+            ModalSurface.CommandPalette => state.CommandPalette,
+            ModalSurface.AddProperty => state.AddProperty,
+            ModalSurface.BulkRename => state.BulkRename,
+            ModalSurface.CitationDetails => state.CitationDetails,
+            ModalSurface.CitationSummary => state.CitationSummary,
+            ModalSurface.FilesCiting => state.FilesCiting,
+            ModalSurface.DashboardEditor => state.DashboardEditor,
+            ModalSurface.BaseQueryBuilder => state.BaseQueryBuilder,
+        };
 
     /// <summary>
     /// Whether the palette may open, given what is already up.

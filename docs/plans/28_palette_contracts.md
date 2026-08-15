@@ -290,7 +290,15 @@ auto-presents an empty palette.
 ## Accepted-risk register (off-limits for re-litigation)
 
 - **PR-1 — Ctrl+Alt+{Left,Right,Up,Down} collide with JAWS table-reading
-  commands.** These pane-focus chords shipped in W1-3 and `w3_spec.md`
+  commands, and with Windows Magnifier.** *(Basis materially changed
+  2026-08-15 — the owner reports Magnifier runs roughly half the time on
+  their machine and intercepts all four chords to pan the magnified view.
+  That is a first-party Microsoft accessibility tool, not vendor
+  software: in an accessibility-first app, these chords are unreachable
+  for exactly the low-vision users most likely to be running it. The
+  record below stands as W5-1's disposition, but the trade-off deserves
+  re-deciding on this new information rather than being carried
+  forward.)* These pane-focus chords shipped in W1-3 and `w3_spec.md`
   states the project's own rule that chords are vetted against AT binding
   tables precisely because JAWS owns this family. W5-1 **records** the
   conflict in the chord table rather than rebinding, because the issue's
