@@ -274,6 +274,17 @@ public sealed class ChordTableTests
     [Fact]
     public void TableCoversEveryDeclarativelyBoundChord_AndNothingStale()
     {
+        // Keyed on (chord, SCOPE), not the bare chord. A flat string set
+        // let one scope's row satisfy another's: the property-row Up/Down
+        // steppers were "covered" by the unrelated palette and Quick Open
+        // Up/Down rows, so they could go unrecorded with the test green.
+        // Codex found that; it is the same duplicate-string shielding class
+        // as the earlier CommandDriftTests under-match.
+        HashSet<(string Chord, ChordScope Scope)> declaredByScope = ChordTable.Entries
+            .Where(row => row.WindowsChord is not null)
+            .Select(row => (row.WindowsChord!, row.Scope))
+            .ToHashSet();
+
         HashSet<string> declared = ChordTable.Entries
             .Where(row => row.WindowsChord is not null)
             .Select(row => row.WindowsChord!)
@@ -296,6 +307,20 @@ public sealed class ChordTableTests
         {
             Assert.Contains($"Ctrl+Alt+{level}", declared);
             Assert.Contains($"Ctrl+Alt+Shift+{level}", declared);
+        }
+
+        // The two families a bare-string set could shield, asserted with
+        // their scope so an unrelated row carrying the same key cannot
+        // stand in for them.
+        foreach (string stepper in new[] { "Up", "Down" })
+        {
+            Assert.Contains((stepper, ChordScope.PropertyRow), declaredByScope);
+            Assert.Contains((stepper, ChordScope.Splitter), declaredByScope);
+        }
+
+        foreach (string arrow in new[] { "Left", "Right" })
+        {
+            Assert.Contains((arrow, ChordScope.Splitter), declaredByScope);
         }
 
         // Reverse direction (contract P13c): every globally scoped row must
@@ -504,14 +529,52 @@ public sealed class ChordTableTests
         return chords;
     }
 
+    /// <summary>
+    /// The chords the menu bar advertises, resolved through the table.
+    /// </summary>
+    /// <remarks>
+    /// Menu accelerators are no longer authored in XAML — every
+    /// <c>InputGestureText</c> is a <c>{cmd:ChordText &lt;id&gt;}</c>
+    /// extension that reads the table, which is what PINV-5 always
+    /// claimed and what codex found to be false. This scrape therefore
+    /// reads the ids and asserts each names a real, chorded row: the
+    /// markup extension throws at parse time on a bad id, and this makes
+    /// the same failure visible without launching the app.
+    /// </remarks>
     private static HashSet<string> MenuGestureStrings()
     {
         XDocument document = XDocument.Load(Path.Combine(SourceRoot(), "MainWindow.xaml"));
-        return document.Descendants()
+        string[] accelerators = document.Descendants()
             .Select(element => element.Attribute("InputGestureText")?.Value)
             .Where(value => !string.IsNullOrEmpty(value))
             .Select(value => value!)
-            .ToHashSet(System.StringComparer.Ordinal);
+            .ToArray();
+
+        // Guard against a scrape that quietly matches nothing.
+        Assert.NotEmpty(accelerators);
+
+        var chords = new HashSet<string>(System.StringComparer.Ordinal);
+        foreach (string accelerator in accelerators)
+        {
+            Match reference = Regex.Match(
+                accelerator, @"^\{cmd:ChordText\s+([A-Za-z0-9_.]+)\}$");
+            Assert.True(
+                reference.Success,
+                $"menu accelerator '{accelerator}' is authored literally. "
+                + "Accelerators resolve from the chord table (PINV-5) — use "
+                + "InputGestureText=\"{cmd:ChordText <id>}\".");
+
+            string id = reference.Groups[1].Value;
+            ChordTableEntry row = ChordTable.Find(id)
+                ?? throw new Xunit.Sdk.XunitException(
+                    $"menu accelerator references '{id}', which has no chord-table row.");
+            Assert.True(
+                row.WindowsChord is not null,
+                $"menu accelerator references '{id}', which has a row but no chord.");
+            chords.Add(row.WindowsChord!);
+        }
+
+        return chords;
     }
 
     private static HashSet<string> ReadingNavigatorChords()

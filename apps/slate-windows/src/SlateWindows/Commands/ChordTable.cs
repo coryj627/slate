@@ -31,6 +31,10 @@ internal enum ChordScope
     /// palette is open. Its opening chord is <see cref="Global"/>.</summary>
     Palette,
 
+    /// <summary>A pane splitter thumb (<c>WeightedSplitPanel</c>), live only
+    /// while the thumb has focus.</summary>
+    Splitter,
+
     /// <summary>The reading view's structural navigator
     /// (<c>Reading/ReadingNavigator.cs</c>), live only with the reading
     /// surface focused.</summary>
@@ -960,6 +964,14 @@ internal static class ChordTable
                 readingReason));
         }
 
+        const string PropertyRowReason =
+            "A property-row editor interaction, live only while a numeric row's "
+            + "TextBox has focus (WorkspaceTemplates.xaml). Delivered by a "
+            + "KeyBinding inside the row DataTemplate.";
+        const string SplitterReason =
+            "A pane-splitter interaction, live only while a splitter thumb has "
+            + "focus (WeightedSplitPanel). Resizes by 5% per press.";
+
         const string PaletteReason =
             "W5-1: a command-palette overlay interaction, live only while the "
             + "palette is open. Delivered imperatively from "
@@ -1012,6 +1024,19 @@ internal static class ChordTable
                 "PageDown", ChordScope.Palette, PaletteReason + " " + PaletteKeysDivergence),
             Chord("windows.palette.pageUp", "Command palette: previous page of results",
                 "PageUp", ChordScope.Palette, PaletteReason + " " + PaletteKeysDivergence),
+
+            Chord("windows.propertyRow.stepUp", "Property row: increment a numeric value",
+                "Up", ChordScope.PropertyRow, PropertyRowReason),
+            Chord("windows.propertyRow.stepDown", "Property row: decrement a numeric value",
+                "Down", ChordScope.PropertyRow, PropertyRowReason),
+            Chord("windows.splitter.growLeading", "Pane splitter: grow the leading pane",
+                "Left", ChordScope.Splitter, SplitterReason),
+            Chord("windows.splitter.growTrailing", "Pane splitter: grow the trailing pane",
+                "Right", ChordScope.Splitter, SplitterReason),
+            Chord("windows.splitter.growAbove", "Pane splitter: grow the pane above",
+                "Up", ChordScope.Splitter, SplitterReason),
+            Chord("windows.splitter.growBelow", "Pane splitter: grow the pane below",
+                "Down", ChordScope.Splitter, SplitterReason),
 
             Chord("windows.editor.closePopover", "Editor: close the interaction popover",
                 "Escape", ChordScope.Editor,
