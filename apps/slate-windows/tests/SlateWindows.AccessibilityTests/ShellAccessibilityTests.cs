@@ -4529,16 +4529,36 @@ public sealed class ShellAccessibilityTests
     /// </remarks>
     private static bool ChordIsDeliverable(uint modifiers, uint virtualKey)
     {
-        if (!NativeHotkey.RegisterHotKey(IntPtr.Zero, ChordProbeId, modifiers, virtualKey))
+        // A fresh id per probe. A fixed one collides with ITSELF if two
+        // probes overlap, and a self-collision reports 1409 — the suite
+        // would then blame Magnifier for a chord that is perfectly free.
+        int probeId = System.Threading.Interlocked.Increment(ref _chordProbeId);
+        if (NativeHotkey.RegisterHotKey(IntPtr.Zero, probeId, modifiers, virtualKey))
         {
-            return false;
+            NativeHotkey.UnregisterHotKey(IntPtr.Zero, probeId);
+            return true;
         }
 
-        NativeHotkey.UnregisterHotKey(IntPtr.Zero, ChordProbeId);
-        return true;
+        // Only 1409 means another process holds the chord. The comment
+        // above always said so; the code did not, and treated EVERY
+        // failure as a steal — so an unrelated Win32 error would have been
+        // reported as a Magnifier collision, which is the one diagnosis
+        // this probe exists to stop people guessing at. Codoki caught the
+        // gap between the two.
+        int error = System.Runtime.InteropServices.Marshal.GetLastWin32Error();
+        Assert.True(
+            error == ErrorHotkeyAlreadyRegistered,
+            $"RegisterHotKey failed with Win32 error {error}, which is not "
+            + $"ERROR_HOTKEY_ALREADY_REGISTERED ({ErrorHotkeyAlreadyRegistered}). "
+            + "The probe cannot say whether the chord is deliverable, and "
+            + "silently skipping the leg here would look like a hotkey steal.");
+        return false;
     }
 
-    private const int ChordProbeId = 0x5131;
+    /// <summary><c>ERROR_HOTKEY_ALREADY_REGISTERED</c>.</summary>
+    private const int ErrorHotkeyAlreadyRegistered = 1409;
+
+    private static int _chordProbeId = 0x5131;
 
     private static class NativeHotkey
     {
