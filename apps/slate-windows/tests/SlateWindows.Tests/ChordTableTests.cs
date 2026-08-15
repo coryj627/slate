@@ -274,17 +274,6 @@ public sealed class ChordTableTests
     [Fact]
     public void TableCoversEveryDeclarativelyBoundChord_AndNothingStale()
     {
-        // Keyed on (chord, SCOPE), not the bare chord. A flat string set
-        // let one scope's row satisfy another's: the property-row Up/Down
-        // steppers were "covered" by the unrelated palette and Quick Open
-        // Up/Down rows, so they could go unrecorded with the test green.
-        // Codex found that; it is the same duplicate-string shielding class
-        // as the earlier CommandDriftTests under-match.
-        HashSet<(string Chord, ChordScope Scope)> declaredByScope = ChordTable.Entries
-            .Where(row => row.WindowsChord is not null)
-            .Select(row => (row.WindowsChord!, row.Scope))
-            .ToHashSet();
-
         HashSet<string> declared = ChordTable.Entries
             .Where(row => row.WindowsChord is not null)
             .Select(row => row.WindowsChord!)
@@ -300,27 +289,35 @@ public sealed class ChordTableTests
             Assert.True(declared.Contains(chord), $"{chord} ships but the table omits it.");
         }
 
-        // The reading navigator's heading-level loop is built from
-        // `Key.D1 + (level - 1)`, which the source scrape deliberately does
-        // not match — assert the twelve chords explicitly instead.
-        for (int level = 1; level <= 6; level++)
+        // Scope-keyed, and BOTH sides derived from the shipping sources.
+        // The previous form built its expectations from the same table it
+        // was checking — Assert.Contains(("Up", PropertyRow), declared)
+        // only restated that the table had a row it already had. Codex
+        // found the consequence: deleting the real StepUpCommand binding,
+        // or the splitter's arrow arm, left every scoped assertion green.
+        foreach ((ChordScope scope, HashSet<string> shipped) in ScopedProductionChords())
         {
-            Assert.Contains($"Ctrl+Alt+{level}", declared);
-            Assert.Contains($"Ctrl+Alt+Shift+{level}", declared);
-        }
+            HashSet<string> tabled = ChordTable.Entries
+                .Where(row => row.Scope == scope && row.WindowsChord is not null)
+                .Select(row => row.WindowsChord!)
+                .ToHashSet(System.StringComparer.Ordinal);
 
-        // The two families a bare-string set could shield, asserted with
-        // their scope so an unrelated row carrying the same key cannot
-        // stand in for them.
-        foreach (string stepper in new[] { "Up", "Down" })
-        {
-            Assert.Contains((stepper, ChordScope.PropertyRow), declaredByScope);
-            Assert.Contains((stepper, ChordScope.Splitter), declaredByScope);
-        }
+            Assert.NotEmpty(shipped);
+            foreach (string chord in shipped)
+            {
+                Assert.True(
+                    tabled.Contains(chord),
+                    $"{chord} ships in {scope} scope but the table has no row for "
+                    + "it in that scope — another scope's row cannot stand in.");
+            }
 
-        foreach (string arrow in new[] { "Left", "Right" })
-        {
-            Assert.Contains((arrow, ChordScope.Splitter), declaredByScope);
+            foreach (string chord in tabled)
+            {
+                Assert.True(
+                    shipped.Contains(chord),
+                    $"the table claims {chord} in {scope} scope but no shipping "
+                    + "source delivers it — the row is stale, or the chord moved.");
+            }
         }
 
         // Reverse direction (contract P13c): every globally scoped row must
@@ -572,6 +569,152 @@ public sealed class ChordTableTests
                 row.WindowsChord is not null,
                 $"menu accelerator references '{id}', which has a row but no chord.");
             chords.Add(row.WindowsChord!);
+        }
+
+        return chords;
+    }
+
+    /// <summary>
+    /// Chords the shipping sources deliver, keyed by the scope they are
+    /// live in — the expected side of the scoped comparison, so it can
+    /// disagree with the table.
+    /// </summary>
+    private static Dictionary<ChordScope, HashSet<string>> ScopedProductionChords() =>
+        new()
+        {
+            [ChordScope.PropertyRow] = PropertyRowChords(),
+            [ChordScope.Splitter] = SplitterChords(),
+            [ChordScope.Reading] = ReadingNavigatorChords()
+                .Union(ReadingHeadingLevelChords())
+                .ToHashSet(System.StringComparer.Ordinal),
+            [ChordScope.Grid] = GridGestureChords(),
+        };
+
+    /// <summary>
+    /// Scopes with no source scrape, and why. Every entry is reverse-
+    /// direction coverage this suite does not provide.
+    /// </summary>
+    private static readonly Dictionary<ChordScope, string> ScopesWithoutAProductionScrape =
+        new()
+        {
+            [ChordScope.None] = "no chord to deliver.",
+            [ChordScope.Global] = "checked in both directions below, against "
+                + "MainWindow.xaml's KeyBindings plus the imperative allow-list.",
+            [ChordScope.Palette] = "W5-1's overlay reads keys in an imperative "
+                + "handler whose arms carry selection logic rather than a scrapable "
+                + "gesture list. ModalSurfaceTests and the FlaUI palette journey "
+                + "gate those rows instead.",
+            [ChordScope.QuickOpen] = "same shape as Palette — an imperative handler "
+                + "on the Quick Open overlay.",
+            [ChordScope.Editor] = "AvalonEdit's own key handling, which is not ours "
+                + "to scrape, plus one window-level Escape gated on an open popover.",
+        };
+
+    /// <summary>
+    /// Adding a scope must be a decision, not a silent exemption.
+    /// </summary>
+    [Fact]
+    public void EveryScopeIsEitherScrapedFromProductionOrDispositioned()
+    {
+        foreach (ChordScope scope in System.Enum.GetValues<ChordScope>())
+        {
+            Assert.True(
+                ScopedProductionChords().ContainsKey(scope)
+                    ^ ScopesWithoutAProductionScrape.ContainsKey(scope),
+                $"{scope} must have exactly one of a production scrape or a "
+                + "recorded reason for lacking one. A new scope with neither "
+                + "would be checked table-against-table, which proves nothing.");
+        }
+
+        foreach ((ChordScope scope, string reason) in ScopesWithoutAProductionScrape)
+        {
+            Assert.False(
+                string.IsNullOrWhiteSpace(reason),
+                $"{scope} is exempt from the source scrape with no reason given.");
+        }
+    }
+
+    /// <summary>
+    /// The property-row templates' <c>TextBox.InputBindings</c> — read only
+    /// from <c>DataTemplate</c>s bound to <c>PropertyRowViewModel</c>, so a
+    /// neighbouring template's Up/Down cannot stand in for a stepper.
+    /// </summary>
+    private static HashSet<string> PropertyRowChords()
+    {
+        XDocument document = XDocument.Load(
+            Path.Combine(SourceRoot(), "WorkspaceTemplates.xaml"));
+        var chords = new HashSet<string>(System.StringComparer.Ordinal);
+        foreach (XElement template in document.Descendants()
+            .Where(element => element.Name.LocalName == "DataTemplate"
+                && element.Attribute("DataType")?.Value.Contains(
+                    "PropertyRowViewModel", System.StringComparison.Ordinal) == true))
+        {
+            foreach (XElement binding in template.Descendants()
+                .Where(element => element.Name.LocalName == "KeyBinding"))
+            {
+                if (binding.Attribute("Key")?.Value is { } key)
+                {
+                    chords.Add(Canonical(binding.Attribute("Modifiers")?.Value, key));
+                }
+            }
+        }
+
+        return chords;
+    }
+
+    /// <summary>
+    /// <c>WeightedSplitPanel.Thumb_KeyDown</c>'s orientation switch — the
+    /// only place a focused splitter thumb reads an arrow.
+    /// </summary>
+    private static HashSet<string> SplitterChords()
+    {
+        string source = File.ReadAllText(
+            Path.Combine(SourceRoot(), "WeightedSplitPanel.cs"));
+        var chords = new HashSet<string>(System.StringComparer.Ordinal);
+        foreach (Match match in Regex.Matches(
+            source, @"\(Orientation\.(?:Horizontal|Vertical), Key\.([A-Za-z0-9]+)\)"))
+        {
+            chords.Add(Canonical(null, match.Groups[1].Value));
+        }
+
+        return chords;
+    }
+
+    /// <summary>
+    /// The navigator's generated heading-level chords. The loop bound is
+    /// read from the source rather than hard-coded at six, so narrowing the
+    /// loop fails the table's rows instead of leaving twelve assertions
+    /// green against a shorter reality.
+    /// </summary>
+    private static HashSet<string> ReadingHeadingLevelChords()
+    {
+        string source = File.ReadAllText(
+            Path.Combine(SourceRoot(), "Reading", "ReadingNavigator.cs"));
+        Match loop = Regex.Match(
+            source, @"for \(byte level = 1; level <= (\d+); level\+\+\)");
+        Assert.True(
+            loop.Success,
+            "the heading-level loop no longer matches the scrape, so its twelve "
+            + "chords are unchecked. Update this pattern.");
+
+        var chords = new HashSet<string>(System.StringComparer.Ordinal);
+        foreach (string shift in new[] { "false", "true" })
+        {
+            Assert.True(
+                source.Contains(
+                    $"AddChord(Key.D1 + (captured - 1), shift: {shift}",
+                    System.StringComparison.Ordinal),
+                $"the shift: {shift} heading-level registration is gone or "
+                + "rewritten; the scrape below would invent chords the app "
+                + "no longer delivers.");
+        }
+
+        int levels = int.Parse(
+            loop.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+        for (int level = 1; level <= levels; level++)
+        {
+            chords.Add($"Ctrl+Alt+{level}");
+            chords.Add($"Ctrl+Alt+Shift+{level}");
         }
 
         return chords;

@@ -620,4 +620,46 @@ menu-scrape twin does not reach context menus. Splitter-arrow and
 property-row stepper chords remain unrecorded, and the forward chord
 comparison keys on bare strings, so a duplicate string can shield a
 missing row — the same under-match class already fixed once in
-`CommandDriftTests`.
+`CommandDriftTests`. *(That last item was closed in codex round 2 — see
+below.)*
+
+### Codex round 1 — needs-attention, two highs
+
+Both highs were the same shape as the internal rounds: **a gate that
+does not reach the code it claims to protect.** The design pass's own
+modal exclusion had no test, and the palette open path was reachable
+around it. Closed with facts over both, mutation-verified.
+
+### Codex round 2 — needs-attention, two highs and two mediums
+
+Every one of the four was the *under-match* class again, which is now
+the recorded signature of this issue's defects.
+
+- **The modal mapping was untested, and its comment was false.** It
+  claimed compile-time exhaustiveness while carrying a `_` arm. Now a
+  pure function over a named `ModalSurfaceState` with no wildcard, so
+  CS8509 makes a new surface a build break, plus a fact asserting one
+  flag lights exactly one surface.
+- **A menu accelerator could name the wrong valid id.** Resolving
+  accelerators from the table closed the hand-typed hazard but not the
+  identity one. Now each accelerator must name the id backing that same
+  item's `Command`; verified by swapping Split Right and Split Down,
+  which the old gate passed.
+- **All nine shortcut-slot labels bypassed mac parity in silence.** mac
+  generates them as `sidebarOpenShortcut(1), "Open Shortcut 1"`, which
+  the identifier-comma pattern cannot match, and the loop skipped
+  unparsed ids with a bare `continue`. Now parsed, and an unparsed shared
+  label must be dispositioned rather than skipped.
+- **The scoped chord comparison built both sides from the table.**
+  `Assert.Contains(("Up", PropertyRow), declaredByScope)` only restated
+  that the table had a row it already had, so deleting the real
+  `StepUpCommand` binding or the splitter's `Key.Up` arm left it green.
+  The expected side is now scraped from `WorkspaceTemplates.xaml`'s
+  `PropertyRowViewModel` templates and `WeightedSplitPanel.Thumb_KeyDown`,
+  checked in **both** directions, and extended the same way to the
+  Reading and Grid scopes — including the navigator's twelve generated
+  heading chords, whose loop bound is read from the source rather than
+  hard-coded at six. Both of codex's named mutations now fail, each
+  naming the correct scope. A scope with neither a scrape nor a written
+  reason is now a test failure, so the exemption list cannot grow
+  silently.
