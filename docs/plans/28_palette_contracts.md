@@ -738,3 +738,58 @@ mutation-verified with codex's own stated mutation.
   surface would have shipped defaulting to "not open". Promoted to an
   error rather than softening the claim, because the claim describes the
   behaviour we want. Verified: removing an arm now fails the build.
+
+### Codex round 4 — needs-attention, eight highs, two mediums
+
+**Stopping rule 4 fired.** Rounds 2, 3 and 4 all produced blockers in one
+subsystem — the source-scraping drift gates — and round 4's
+recommendation for six of its ten findings was the same architectural
+change. That is the protocol's signal to stop patching and design.
+
+**Four were defects, and are closed:**
+
+- **P4 was violated on a one-chord-press path, and a test pinned the
+  violation.** PD-2 makes Ctrl+Shift+P re-open rather than toggle, so
+  `Open()` is re-entered while open — and it re-read the registry and
+  re-read recents from **disk** on every press, three lines below a
+  comment promising a whole-lifetime snapshot. P4 is unambiguous:
+  "Neither refreshes while the palette is open." A re-open never closes
+  it. `OpeningWhileOpenReopensRatherThanToggling` asserted
+  `ListCommandsCalls == 2`, so the contradiction between the test and the
+  contract was committed rather than overlooked. Both were mine.
+- **Three gates took the first regex match, not the right one.**
+  `MethodBody` and `ClickHandlerId` resolved a member by name and read
+  declaration one of N; an unused overload above the shipping handler
+  defeats all eight palette keys, all seven Quick Open keys and all three
+  editor chords at once. Overload ambiguity is now a failure — the same
+  correction applied to the `ModalSurfaceState` scrape one commit before,
+  which should have been applied here at the same time.
+- **The registrar scrapes bypassed the comment stripper entirely.**
+  `ChordTableTests` was routed through it and `CommandDriftTests` was
+  not, so the dead-source hole stayed open in the twin that maps menu
+  items to command ids.
+
+**Six were the ceiling of the technique, and are filed as
+[#1108](https://github.com/coryj627/slate/issues/1108).** Dead text in a
+string literal or an inactive `#if` satisfies any regex scrape, and the
+stripper cannot close that — it must preserve literal contents or a `//`
+in a URL would eat live code. A local alias
+(`bool isDashboardEditorOpen = workspace?.BaseQueryBuilderSheet is not
+null;`) defeats the name-substring pairing, and that one is reachable by
+ordinary refactoring rather than by intent. Mac's three Swift scrapes
+have no stripper at all. The fix codex recommends for all of them is
+semantic analysis or a production seam, across ~15 scrapes in four
+files — test infrastructure that serves every drift test in the repo,
+and not command-palette work.
+
+**Owner decision, 2026-08-15: file and merge.** The open bypasses require
+deleting live code *and* preserving its text in a literal, which does not
+clear the "reachable without multiple independent coincidences" bar the
+review itself set.
+
+**The honest summary of six review rounds:** every finding, in all of
+them, was one class — a gate that does not reach the code it claims to
+protect. Round 3 found three of its six findings inside round 2's fixes;
+round 4 found four inside round 3's. The gates are materially stronger
+than they were, and their remaining limit is now written down and owned
+rather than assumed away.
