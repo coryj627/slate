@@ -67,28 +67,36 @@ internal static class TextBoxAccessibility
     internal const string ClearButtonName = "Clear text";
 
     /// <summary>
-    /// Set once the part has been named, so the per-keystroke path costs a
-    /// property read instead of a template lookup.
+    /// Set once this box's template has been inspected, so the
+    /// per-keystroke path costs a property read instead of a template
+    /// lookup.
     /// </summary>
-    private static readonly DependencyProperty ClearButtonNamedProperty =
+    /// <remarks>
+    /// Set whether or not the part was found. A box with a non-Fluent
+    /// template has no clear button and never will, and only flagging the
+    /// success case left every keystroke in such a box repeating an
+    /// <c>ApplyTemplate</c> and a failed <c>FindName</c> forever.
+    /// </remarks>
+    private static readonly DependencyProperty ClearButtonCheckedProperty =
         DependencyProperty.RegisterAttached(
-            "ClearButtonNamed", typeof(bool), typeof(TextBoxAccessibility),
+            "ClearButtonChecked", typeof(bool), typeof(TextBoxAccessibility),
             new PropertyMetadata(false));
 
-    private static bool _installed;
+    private static int _installed;
 
     /// <summary>
-    /// Registers the app-wide handlers. Idempotent: WPF class handlers
-    /// cannot be removed, so a second call would double-handle.
+    /// Registers the app-wide handlers. Idempotent, and atomically so:
+    /// WPF class handlers cannot be removed, so two callers racing a
+    /// plain bool check would both register and every TextBox event would
+    /// be handled twice for the life of the process.
     /// </summary>
     internal static void Install()
     {
-        if (_installed)
+        if (System.Threading.Interlocked.Exchange(ref _installed, 1) == 1)
         {
             return;
         }
 
-        _installed = true;
         EventManager.RegisterClassHandler(
             typeof(TextBox),
             FrameworkElement.LoadedEvent,
@@ -121,7 +129,7 @@ internal static class TextBoxAccessibility
     /// </summary>
     internal static void NameClearButton(TextBox box)
     {
-        if ((bool)box.GetValue(ClearButtonNamedProperty))
+        if ((bool)box.GetValue(ClearButtonCheckedProperty))
         {
             return;
         }
@@ -129,18 +137,20 @@ internal static class TextBoxAccessibility
         // Forces template expansion: the template may not have been applied
         // yet on a box that has never been measured.
         box.ApplyTemplate();
-
-        if (box.Template?.FindName(ClearButtonPart, box) is not Button clearButton)
+        if (box.Template is null)
         {
+            // No template to inspect yet — stay unflagged so the next event
+            // tries again, rather than deciding this box has no part.
             return;
         }
 
-        // Never override a name someone set deliberately.
-        if (AutomationProperties.GetName(clearButton) is not { Length: > 0 })
+        if (box.Template.FindName(ClearButtonPart, box) is Button clearButton
+            && AutomationProperties.GetName(clearButton) is not { Length: > 0 })
         {
+            // Never override a name someone set deliberately.
             AutomationProperties.SetName(clearButton, ClearButtonName);
         }
 
-        box.SetValue(ClearButtonNamedProperty, true);
+        box.SetValue(ClearButtonCheckedProperty, true);
     }
 }

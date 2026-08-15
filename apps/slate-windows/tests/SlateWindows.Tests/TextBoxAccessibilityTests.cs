@@ -109,6 +109,34 @@ public sealed class TextBoxAccessibilityTests
             }
         }));
 
+    /// <summary>
+    /// A name set deliberately on the part is never overwritten.
+    /// </summary>
+    /// <remarks>
+    /// The guard exists so a future surface can give its clear button a
+    /// more specific name — "Clear search", say — without this handler
+    /// silently flattening it back to the generic one.
+    /// </remarks>
+    [Fact]
+    public void ADeliberatelySetNameSurvives()
+    {
+        const string chosen = "Clear the search box";
+        string? observed = OnStaThread(() =>
+        {
+            TextBox box = FluentTextBox(string.Empty);
+            box.ApplyTemplate();
+            var clearButton = (Button)box.Template.FindName(
+                TextBoxAccessibility.ClearButtonPart, box);
+            System.Windows.Automation.AutomationProperties.SetName(clearButton, chosen);
+
+            // The handler runs on this, and must leave the name alone.
+            box.Text = "typed";
+            return ClearButtonName(box);
+        });
+
+        Assert.Equal(chosen, observed);
+    }
+
     private static void AssertNoPrivateUseName(string? name)
     {
         Assert.False(
