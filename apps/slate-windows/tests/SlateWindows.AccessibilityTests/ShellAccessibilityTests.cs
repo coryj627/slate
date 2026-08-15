@@ -146,6 +146,15 @@ public sealed class ShellAccessibilityTests
                 Path.Combine(logDirectory, "slate-windows.log"),
                 TimeSpan.FromSeconds(30));
 
+            // #1107: this journey drives real keystrokes and then asserts
+            // keyboard focus, and HasKeyboardFocus is false for every
+            // element in a process that does not own the foreground. The
+            // palette journey added this when it was written; this one —
+            // older, and the place the symptom was actually reported —
+            // never had it, so its focus assertions read like product
+            // defects whenever anything else took the foreground.
+            window.SetForeground();
+
             AutomationElement workspace = WaitForElement(
                 window,
                 "WorkspaceView",
@@ -1604,13 +1613,79 @@ public sealed class ShellAccessibilityTests
         return found!;
     }
 
+    /// <summary>
+    /// Waits for <paramref name="element"/> to hold keyboard focus, and on
+    /// failure says what actually had it.
+    /// </summary>
+    /// <remarks>
+    /// <c>HasKeyboardFocus</c> is foreground-dependent: if any other
+    /// process owns the foreground window, every element in ours reports
+    /// false and the bare assertion reads exactly like a product defect.
+    /// #1107 was filed against this shape — a deterministic "Committing
+    /// Quick Open did not focus the destination editor" that had been
+    /// hidden for waves behind an earlier stolen-chord failure, with no way
+    /// to tell an environmental cause from a real one. The failure now
+    /// names the foreground owner, so the two are distinguishable on sight
+    /// rather than by re-deriving it each time.
+    /// </remarks>
     private static void AssertEventuallyFocused(AutomationElement element, string message)
     {
-        Assert.True(
-            SpinWait.SpinUntil(
-                () => element.Properties.HasKeyboardFocus.Value,
-                TimeSpan.FromSeconds(10)),
-            message);
+        if (SpinWait.SpinUntil(
+            () => element.Properties.HasKeyboardFocus.Value,
+            TimeSpan.FromSeconds(10)))
+        {
+            return;
+        }
+
+        throw new Xunit.Sdk.XunitException($"{message} {FocusDiagnosis()}");
+    }
+
+    /// <summary>
+    /// Who owns the foreground, and whether it is this test's app — the
+    /// difference between an environmental failure and a real one.
+    /// </summary>
+    private static string FocusDiagnosis()
+    {
+        IntPtr foreground = NativeForeground.GetForegroundWindow();
+        if (foreground == IntPtr.Zero)
+        {
+            return "No window owns the foreground at all — the desktop is "
+                + "locked, disconnected, or another session has it. This is "
+                + "environmental, not a product defect.";
+        }
+
+        var title = new System.Text.StringBuilder(512);
+        _ = NativeForeground.GetWindowText(foreground, title, title.Capacity);
+        _ = NativeForeground.GetWindowThreadProcessId(foreground, out uint processId);
+        string owner;
+        try
+        {
+            owner = Process.GetProcessById((int)processId).ProcessName;
+        }
+        catch (ArgumentException)
+        {
+            owner = "<exited>";
+        }
+
+        return $"The foreground window is '{title}' owned by {owner} "
+            + $"(pid {processId}). If that is not this test's Slate instance, "
+            + "keyboard focus cannot be observed in ours and the failure is "
+            + "environmental.";
+    }
+
+    private static class NativeForeground
+    {
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        internal static extern IntPtr GetForegroundWindow();
+
+        [System.Runtime.InteropServices.DllImport("user32.dll", CharSet =
+            System.Runtime.InteropServices.CharSet.Unicode)]
+        internal static extern int GetWindowText(
+            IntPtr hWnd, System.Text.StringBuilder text, int count);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        internal static extern uint GetWindowThreadProcessId(
+            IntPtr hWnd, out uint processId);
     }
 
 
