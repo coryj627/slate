@@ -146,6 +146,15 @@ public sealed class ShellAccessibilityTests
                 Path.Combine(logDirectory, "slate-windows.log"),
                 TimeSpan.FromSeconds(30));
 
+            // #1107: this journey drives real keystrokes and then asserts
+            // keyboard focus, and HasKeyboardFocus is false for every
+            // element in a process that does not own the foreground. The
+            // palette journey added this when it was written; this one —
+            // older, and the place the symptom was actually reported —
+            // never had it, so its focus assertions read like product
+            // defects whenever anything else took the foreground.
+            window.SetForeground();
+
             AutomationElement workspace = WaitForElement(
                 window,
                 "WorkspaceView",
@@ -1604,13 +1613,79 @@ public sealed class ShellAccessibilityTests
         return found!;
     }
 
+    /// <summary>
+    /// Waits for <paramref name="element"/> to hold keyboard focus, and on
+    /// failure says what actually had it.
+    /// </summary>
+    /// <remarks>
+    /// <c>HasKeyboardFocus</c> is foreground-dependent: if any other
+    /// process owns the foreground window, every element in ours reports
+    /// false and the bare assertion reads exactly like a product defect.
+    /// #1107 was filed against this shape — a deterministic "Committing
+    /// Quick Open did not focus the destination editor" that had been
+    /// hidden for waves behind an earlier stolen-chord failure, with no way
+    /// to tell an environmental cause from a real one. The failure now
+    /// names the foreground owner, so the two are distinguishable on sight
+    /// rather than by re-deriving it each time.
+    /// </remarks>
     private static void AssertEventuallyFocused(AutomationElement element, string message)
     {
-        Assert.True(
-            SpinWait.SpinUntil(
-                () => element.Properties.HasKeyboardFocus.Value,
-                TimeSpan.FromSeconds(10)),
-            message);
+        if (SpinWait.SpinUntil(
+            () => element.Properties.HasKeyboardFocus.Value,
+            TimeSpan.FromSeconds(10)))
+        {
+            return;
+        }
+
+        throw new Xunit.Sdk.XunitException($"{message} {FocusDiagnosis()}");
+    }
+
+    /// <summary>
+    /// Who owns the foreground, and whether it is this test's app — the
+    /// difference between an environmental failure and a real one.
+    /// </summary>
+    private static string FocusDiagnosis()
+    {
+        IntPtr foreground = NativeForeground.GetForegroundWindow();
+        if (foreground == IntPtr.Zero)
+        {
+            return "No window owns the foreground at all — the desktop is "
+                + "locked, disconnected, or another session has it. This is "
+                + "environmental, not a product defect.";
+        }
+
+        var title = new System.Text.StringBuilder(512);
+        _ = NativeForeground.GetWindowText(foreground, title, title.Capacity);
+        _ = NativeForeground.GetWindowThreadProcessId(foreground, out uint processId);
+        string owner;
+        try
+        {
+            owner = Process.GetProcessById((int)processId).ProcessName;
+        }
+        catch (ArgumentException)
+        {
+            owner = "<exited>";
+        }
+
+        return $"The foreground window is '{title}' owned by {owner} "
+            + $"(pid {processId}). If that is not this test's Slate instance, "
+            + "keyboard focus cannot be observed in ours and the failure is "
+            + "environmental.";
+    }
+
+    private static class NativeForeground
+    {
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        internal static extern IntPtr GetForegroundWindow();
+
+        [System.Runtime.InteropServices.DllImport("user32.dll", CharSet =
+            System.Runtime.InteropServices.CharSet.Unicode)]
+        internal static extern int GetWindowText(
+            IntPtr hWnd, System.Text.StringBuilder text, int count);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        internal static extern uint GetWindowThreadProcessId(
+            IntPtr hWnd, out uint processId);
     }
 
 
@@ -4203,20 +4278,9 @@ public sealed class ShellAccessibilityTests
                     TimeSpan.FromSeconds(10)),
                 "the palette opened without focusing its search field");
 
-            // Axe over the OPEN palette, before typing. This covers the
-            // overlay, the grouped result list, every row name, and the
-            // headers — the whole surface W5-1 owns.
-            //
-            // It is deliberately taken with an EMPTY query. The Fluent
-            // TextBox template adds a clear button once the box is
-            // non-empty whose accessible name is a private-use icon glyph,
-            // which fails NameExcludesPrivateUnicodeCharacters. That is a
-            // pre-existing framework defect shared by every TextBox in the
-            // app, not something the palette introduced — this journey is
-            // simply the first axe scan anywhere that types before
-            // scanning, which is why it went unseen until now. Tracked in
-            // #1106 with the measured element and three approaches that do
-            // NOT fix it; the scan moves after the filter when that lands.
+            // Axe over the OPEN palette: the overlay, the grouped result
+            // list, every row name, and the headers — the whole surface
+            // W5-1 owns.
             AssertAxeClean(process, "command-palette");
 
             // --- filter ------------------------------------------------
@@ -4266,6 +4330,17 @@ public sealed class ShellAccessibilityTests
             Assert.Contains(
                 results.FindAllDescendants(),
                 element => string.Equals(element.Name, "View", StringComparison.Ordinal));
+
+            // A SECOND scan, now that the box has text in it (#1106). The
+            // Fluent TextBox template reveals a clear button once the box
+            // is non-empty and keyboard focus is inside it, and that
+            // button published a Segoe MDL2 private-use glyph as its
+            // accessible name. Every axe scan in this suite until W5-1
+            // walked past an EMPTY box, which is exactly why a defect
+            // shared by every TextBox in the app stayed hidden since W1.
+            // The gap was never the rule — it was that nothing typed
+            // first. This is the leg that closes it.
+            AssertAxeClean(process, "command-palette-filtered");
 
             // --- text editing survives the modal swallow ---------------
             // The overlay swallows shell chords so they cannot fire
