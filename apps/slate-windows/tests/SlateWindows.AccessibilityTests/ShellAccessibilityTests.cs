@@ -4203,20 +4203,9 @@ public sealed class ShellAccessibilityTests
                     TimeSpan.FromSeconds(10)),
                 "the palette opened without focusing its search field");
 
-            // Axe over the OPEN palette, before typing. This covers the
-            // overlay, the grouped result list, every row name, and the
-            // headers — the whole surface W5-1 owns.
-            //
-            // It is deliberately taken with an EMPTY query. The Fluent
-            // TextBox template adds a clear button once the box is
-            // non-empty whose accessible name is a private-use icon glyph,
-            // which fails NameExcludesPrivateUnicodeCharacters. That is a
-            // pre-existing framework defect shared by every TextBox in the
-            // app, not something the palette introduced — this journey is
-            // simply the first axe scan anywhere that types before
-            // scanning, which is why it went unseen until now. Tracked in
-            // #1106 with the measured element and three approaches that do
-            // NOT fix it; the scan moves after the filter when that lands.
+            // Axe over the OPEN palette: the overlay, the grouped result
+            // list, every row name, and the headers — the whole surface
+            // W5-1 owns.
             AssertAxeClean(process, "command-palette");
 
             // --- filter ------------------------------------------------
@@ -4266,6 +4255,17 @@ public sealed class ShellAccessibilityTests
             Assert.Contains(
                 results.FindAllDescendants(),
                 element => string.Equals(element.Name, "View", StringComparison.Ordinal));
+
+            // A SECOND scan, now that the box has text in it (#1106). The
+            // Fluent TextBox template reveals a clear button once the box
+            // is non-empty and keyboard focus is inside it, and that
+            // button published a Segoe MDL2 private-use glyph as its
+            // accessible name. Every axe scan in this suite until W5-1
+            // walked past an EMPTY box, which is exactly why a defect
+            // shared by every TextBox in the app stayed hidden since W1.
+            // The gap was never the rule — it was that nothing typed
+            // first. This is the leg that closes it.
+            AssertAxeClean(process, "command-palette-filtered");
 
             // --- text editing survives the modal swallow ---------------
             // The overlay swallows shell chords so they cannot fire

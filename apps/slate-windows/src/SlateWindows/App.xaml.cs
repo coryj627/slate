@@ -28,6 +28,11 @@ public partial class App : Application
         // Guarded internally — never throws; the smoke test fails
         // loudly in CI if the bridge cannot install.
         Reading.MathMlUiaProperty.Initialize();
+        // #1106: the Fluent TextBox clear button publishes a private-use
+        // icon glyph as its accessible name. Registered here, before any
+        // window exists, because it is a class handler for every TextBox
+        // the app will ever create.
+        TextBoxAccessibility.Install();
         if (!DpiAwarenessProbe.EnsurePerMonitorV2())
         {
             HostLog.Write(HostDiagnosticEvent.DpiAwarenessFailed);
