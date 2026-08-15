@@ -62,6 +62,46 @@ public sealed class SourceTextTests
         }
     }
 
+    /// <summary>
+    /// Raw and <c>@$</c> literals do not end early and leak live code.
+    /// </summary>
+    /// <remarks>
+    /// A stripper that ends a literal at the wrong quote treats the code
+    /// after it as string content and stops stripping comments there —
+    /// a silent under-scrape, which is the exact failure class this
+    /// stripper exists to close. No scraped file uses either form today;
+    /// both are ordinary C# and would arrive without warning.
+    /// </remarks>
+    [Fact]
+    public void RawAndInterpolatedVerbatimLiteralsDoNotEndEarly()
+    {
+        // A raw literal containing quotes, a "//" and a "/*" — none of
+        // which end it, and none of which are comments.
+        string source = "var a = " + "\"\"\"" + " he said \"//\" /* x */ " + "\"\"\""
+            + "; case Key.Up: // gone\ncase Key.Down:";
+
+        string stripped = SourceText.WithoutComments(source);
+        Assert.Contains("Key.Up", stripped, System.StringComparison.Ordinal);
+        Assert.Contains("Key.Down", stripped, System.StringComparison.Ordinal);
+        Assert.DoesNotContain("gone", stripped, System.StringComparison.Ordinal);
+
+        // @$"…" and $@"…" are both legal; only one prefix order was
+        // recognised before. A TRAILING BACKSLASH is what discriminates:
+        // verbatim ends the literal at the quote, non-verbatim reads \"
+        // as an escape and runs on to the end of the line — swallowing
+        // the comment after it, which then never gets stripped. An input
+        // without the trailing backslash parses identically either way
+        // and proves nothing, which is how the first version of this test
+        // passed under mutation.
+        foreach (string prefix in new[] { "@$", "$@" })
+        {
+            string interpolated = $"var b = {prefix}\"C:\\\"; // case Key.Left:\ncase Key.End:";
+            string strippedLiteral = SourceText.WithoutComments(interpolated);
+            Assert.DoesNotContain("Key.Left", strippedLiteral, System.StringComparison.Ordinal);
+            Assert.Contains("Key.End", strippedLiteral, System.StringComparison.Ordinal);
+        }
+    }
+
     [Fact]
     public void LineStructureSurvives_SoAnchoredPatternsStillMatch()
     {
