@@ -588,6 +588,8 @@ public sealed class ChordTableTests
                 .Union(ReadingHeadingLevelChords())
                 .ToHashSet(System.StringComparer.Ordinal),
             [ChordScope.Grid] = GridGestureChords(),
+            [ChordScope.Palette] = PaletteChords(),
+            [ChordScope.QuickOpen] = QuickOpenChords(),
         };
 
     /// <summary>
@@ -600,14 +602,9 @@ public sealed class ChordTableTests
             [ChordScope.None] = "no chord to deliver.",
             [ChordScope.Global] = "checked in both directions below, against "
                 + "MainWindow.xaml's KeyBindings plus the imperative allow-list.",
-            [ChordScope.Palette] = "W5-1's overlay reads keys in an imperative "
-                + "handler whose arms carry selection logic rather than a scrapable "
-                + "gesture list. ModalSurfaceTests and the FlaUI palette journey "
-                + "gate those rows instead.",
-            [ChordScope.QuickOpen] = "same shape as Palette — an imperative handler "
-                + "on the Quick Open overlay.",
-            [ChordScope.Editor] = "AvalonEdit's own key handling, which is not ours "
-                + "to scrape, plus one window-level Escape gated on an open popover.",
+            [ChordScope.Editor] = "AvalonEdit's own key handling, which is a third-"
+                + "party control's and not ours to scrape, plus one window-level "
+                + "Escape gated on an open popover.",
         };
 
     /// <summary>
@@ -632,6 +629,108 @@ public sealed class ChordTableTests
                 string.IsNullOrWhiteSpace(reason),
                 $"{scope} is exempt from the source scrape with no reason given.");
         }
+    }
+
+    /// <summary>
+    /// The palette overlay's own key route.
+    /// </summary>
+    /// <remarks>
+    /// The first version of this list exempted Palette on the grounds that
+    /// its handler "carries selection logic rather than a scrapable gesture
+    /// list". That was not true of the code —
+    /// <c>HandleCommandPaletteKey</c> is a flat switch — and it would have
+    /// left the one surface W5-1 actually adds as the only scope checked
+    /// table-against-table.
+    /// </remarks>
+    private static HashSet<string> PaletteChords() =>
+        UnmodifiedSwitchKeys("MainWindow.Palette.cs", "HandleCommandPaletteKey");
+
+    /// <summary>
+    /// Quick Open's key route: three bare arms written as <c>if</c>
+    /// statements, plus a commit whose target comes from a modifier switch
+    /// — every arm of which is a separately advertised chord.
+    /// </summary>
+    private static HashSet<string> QuickOpenChords()
+    {
+        string body = MethodBody("MainWindow.xaml.cs", "HandleQuickSwitcherKey");
+        var chords = new HashSet<string>(System.StringComparer.Ordinal);
+        foreach (Match match in Regex.Matches(
+            body, @"e\.Key == Key\.([A-Za-z0-9]+) && modifiers == ModifierKeys\.None"))
+        {
+            chords.Add(Canonical(null, match.Groups[1].Value));
+        }
+
+        Assert.True(
+            body.Contains(
+                "e.Key == Key.Enter && Keyboard.FocusedElement is not Button",
+                System.StringComparison.Ordinal),
+            "Quick Open's commit arm was rewritten; the modifier scrape below "
+            + "would attribute its chords to a guard that no longer exists.");
+        Assert.True(
+            body.Contains("_ => WorkspaceOpenTarget.CurrentTab", System.StringComparison.Ordinal),
+            "Quick Open no longer commits to the current tab on an unmodified "
+            + "Enter, so the table's bare Enter row is stale.");
+        chords.Add("Enter");
+
+        foreach (Match match in Regex.Matches(
+            body,
+            @"(ModifierKeys\.[A-Za-z]+(?: \| ModifierKeys\.[A-Za-z]+)*) => WorkspaceOpenTarget\."))
+        {
+            chords.Add(Canonical(
+                match.Groups[1].Value.Replace("ModifierKeys.", string.Empty)
+                    .Replace(" | ", "+"),
+                "Enter"));
+        }
+
+        return chords;
+    }
+
+    /// <summary>
+    /// The <c>case Key.X:</c> arms of one method's unmodified switch.
+    /// </summary>
+    private static HashSet<string> UnmodifiedSwitchKeys(string fileName, string methodName)
+    {
+        string body = MethodBody(fileName, methodName);
+        Assert.True(
+            body.Contains("if (modifiers == ModifierKeys.None)", System.StringComparison.Ordinal),
+            $"{methodName} no longer guards its switch on an unmodified chord, so "
+            + "this scrape would record chords the app does not deliver bare.");
+
+        var chords = new HashSet<string>(System.StringComparer.Ordinal);
+        foreach (Match match in Regex.Matches(body, @"case Key\.([A-Za-z0-9]+):"))
+        {
+            chords.Add(Canonical(null, match.Groups[1].Value));
+        }
+
+        return chords;
+    }
+
+    /// <summary>
+    /// One method's source text, bounded by the next member declaration so
+    /// a neighbouring handler's keys cannot leak into the scrape.
+    /// </summary>
+    private static string MethodBody(string fileName, string methodName)
+    {
+        string source = File.ReadAllText(Path.Combine(SourceRoot(), fileName));
+
+        // Anchored on the DECLARATION, not the first mention. A bare name
+        // search lands on the call site, which sits above the declaration
+        // in both of these files — the scrape then read a neighbouring
+        // method and reported the guard missing.
+        Match declaration = Regex.Match(
+            source,
+            $@"\r?\n    (?:private|internal|public|protected)[^\r\n]*\b{Regex.Escape(methodName)}\s*\(");
+        Assert.True(
+            declaration.Success,
+            $"{methodName} is gone from {fileName}, or its signature moved off the "
+            + "class's own indent. The scrape that reads it would silently return "
+            + "nothing, so it fails here instead.");
+
+        int start = declaration.Index + declaration.Length;
+        Match next = Regex.Match(
+            source[start..],
+            @"\r?\n    (?:private|internal|public|protected)[ \r\n]");
+        return next.Success ? source.Substring(start, next.Index) : source[start..];
     }
 
     /// <summary>

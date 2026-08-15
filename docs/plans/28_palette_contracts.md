@@ -663,3 +663,32 @@ the recorded signature of this issue's defects.
   naming the correct scope. A scope with neither a scrape nor a written
   reason is now a test failure, so the exemption list cannot grow
   silently.
+
+**Self-QA on that last fix, before codex saw it.** The first version
+exempted `Palette` and `QuickOpen` with written reasons, and the Palette
+reason — "an imperative handler whose arms carry selection logic rather
+than a scrapable gesture list" — was **not true of the code**.
+`HandleCommandPaletteKey` is a flat `switch (e.Key)` under one
+`modifiers == ModifierKeys.None` guard. So the exemption would have left
+the single surface W5-1 actually adds as the only scope still checked
+table-against-table, which is precisely the defect the fix existed to
+remove, reintroduced one level up and dressed in a reason. Both scopes
+are now scraped: the palette's switch, and Quick Open's three bare `if`
+arms plus the modifier switch behind its commit. All fifteen rows agreed
+with the table on the first run, and the table was written before the
+scrapes existed.
+
+That work also produced a **negative control worth recording**. Quick
+Open's modifier switch is duplicated verbatim in a second handler
+further down `MainWindow.xaml.cs`. Mutating the copy *inside*
+`HandleQuickSwitcherKey` fails the gate; mutating the identical copy
+*outside* it leaves the gate green. The scrape is therefore bounded to
+the method it names, rather than matching a lookalike elsewhere in the
+file — which is the same under-match hazard in its other direction, and
+the only place in this issue where it has been positively disproved
+rather than argued.
+
+Only `Editor`, `Global` and `None` remain exempt: AvalonEdit's key
+handling is a third-party control's, and `Global` has its own
+both-direction check against `MainWindow.xaml` plus the imperative
+allow-list.
