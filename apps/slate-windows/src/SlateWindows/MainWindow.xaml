@@ -2,6 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:SlateWindows"
+        xmlns:cmd="clr-namespace:SlateWindows.Commands"
         xmlns:panels="clr-namespace:SlateWindows.Panels"
         xmlns:bases="clr-namespace:SlateWindows.Bases"
         xmlns:grids="clr-namespace:SlateWindows.Grids"
@@ -66,6 +67,9 @@
                         <DataTrigger Binding="{Binding QuickSwitcher.IsOpen}" Value="True">
                             <Setter Property="IsEnabled" Value="False" />
                         </DataTrigger>
+                        <DataTrigger Binding="{Binding Palette.IsOpen}" Value="True">
+                            <Setter Property="IsEnabled" Value="False" />
+                        </DataTrigger>
                     </Style.Triggers>
                 </Style>
             </Menu.Style>
@@ -73,11 +77,11 @@
                       AutomationProperties.AutomationId="FileMenu">
                 <MenuItem Header="_Open Vault…"
                           AutomationProperties.AutomationId="OpenVaultMenuItem"
-                          InputGestureText="Ctrl+Shift+O"
+                          InputGestureText="{cmd:ChordText slate.vault.open}"
                           Command="{Binding OpenVaultCommand}" />
                 <MenuItem Header="_Quick Open…"
                           AutomationProperties.AutomationId="QuickOpenMenuItem"
-                          InputGestureText="Ctrl+O"
+                          InputGestureText="{cmd:ChordText slate.workspace.quickOpen}"
                           Click="QuickOpen_Click" />
                 <Separator />
                 <MenuItem Header="_Close Vault"
@@ -88,27 +92,27 @@
             </MenuItem>
             <MenuItem Header="_Workspace"
                       AutomationProperties.AutomationId="WorkspaceMenu">
-                <MenuItem Header="_Duplicate Tab" InputGestureText="Ctrl+T" Command="{Binding Workspace.DuplicateTabCommand}" />
-                <MenuItem Header="_Close Tab" InputGestureText="Ctrl+W" Command="{Binding Workspace.CloseActiveTabCommand}" />
-                <MenuItem Header="_Reopen Closed Tab" InputGestureText="Ctrl+Shift+T" Command="{Binding Workspace.ReopenClosedTabCommand}" />
+                <MenuItem Header="_Duplicate Tab" InputGestureText="{cmd:ChordText slate.workspace.newTab}" Command="{Binding Workspace.DuplicateTabCommand}" />
+                <MenuItem Header="_Close Tab" InputGestureText="{cmd:ChordText slate.workspace.closeTab}" Command="{Binding Workspace.CloseActiveTabCommand}" />
+                <MenuItem Header="_Reopen Closed Tab" InputGestureText="{cmd:ChordText slate.workspace.reopenClosedTab}" Command="{Binding Workspace.ReopenClosedTabCommand}" />
                 <Separator />
-                <MenuItem Header="Split _Right" AutomationProperties.AutomationId="SplitRightMenuItem" InputGestureText="Ctrl+\" Command="{Binding Workspace.SplitRightCommand}" />
-                <MenuItem Header="Split _Down" AutomationProperties.AutomationId="SplitDownMenuItem" InputGestureText="Ctrl+Alt+\" Command="{Binding Workspace.SplitDownCommand}" />
+                <MenuItem Header="Split _Right" AutomationProperties.AutomationId="SplitRightMenuItem" InputGestureText="{cmd:ChordText slate.workspace.splitRight}" Command="{Binding Workspace.SplitRightCommand}" />
+                <MenuItem Header="Split _Down" AutomationProperties.AutomationId="SplitDownMenuItem" InputGestureText="{cmd:ChordText slate.workspace.splitDown}" Command="{Binding Workspace.SplitDownCommand}" />
                 <MenuItem Header="Close _Pane" AutomationProperties.AutomationId="ClosePaneMenuItem" Command="{Binding Workspace.ClosePaneCommand}" />
                 <Separator />
-                <MenuItem Header="Focus Pane _Left" InputGestureText="Ctrl+Alt+Left" Command="{Binding Workspace.FocusPaneLeftCommand}" />
-                <MenuItem Header="Focus Pane _Right" InputGestureText="Ctrl+Alt+Right" Command="{Binding Workspace.FocusPaneRightCommand}" />
-                <MenuItem Header="Focus Pane _Above" InputGestureText="Ctrl+Alt+Up" Command="{Binding Workspace.FocusPaneAboveCommand}" />
-                <MenuItem Header="Focus Pane _Below" InputGestureText="Ctrl+Alt+Down" Command="{Binding Workspace.FocusPaneBelowCommand}" />
-                <MenuItem Header="Move Tab Left" InputGestureText="Ctrl+Alt+Shift+Left" Command="{Binding Workspace.MoveTabLeftCommand}" />
-                <MenuItem Header="Move Tab Right" InputGestureText="Ctrl+Alt+Shift+Right" Command="{Binding Workspace.MoveTabRightCommand}" />
-                <MenuItem Header="_Grow Pane" InputGestureText="Ctrl+Alt+=" Command="{Binding Workspace.GrowPaneCommand}" />
-                <MenuItem Header="_Shrink Pane" InputGestureText="Ctrl+Alt+-" Command="{Binding Workspace.ShrinkPaneCommand}" />
+                <MenuItem Header="Focus Pane _Left" InputGestureText="{cmd:ChordText slate.workspace.focusPaneLeft}" Command="{Binding Workspace.FocusPaneLeftCommand}" />
+                <MenuItem Header="Focus Pane _Right" InputGestureText="{cmd:ChordText slate.workspace.focusPaneRight}" Command="{Binding Workspace.FocusPaneRightCommand}" />
+                <MenuItem Header="Focus Pane _Above" InputGestureText="{cmd:ChordText slate.workspace.focusPaneAbove}" Command="{Binding Workspace.FocusPaneAboveCommand}" />
+                <MenuItem Header="Focus Pane _Below" InputGestureText="{cmd:ChordText slate.workspace.focusPaneBelow}" Command="{Binding Workspace.FocusPaneBelowCommand}" />
+                <MenuItem Header="Move Tab Left" InputGestureText="{cmd:ChordText slate.workspace.moveTabLeft}" Command="{Binding Workspace.MoveTabLeftCommand}" />
+                <MenuItem Header="Move Tab Right" InputGestureText="{cmd:ChordText slate.workspace.moveTabRight}" Command="{Binding Workspace.MoveTabRightCommand}" />
+                <MenuItem Header="_Grow Pane" InputGestureText="{cmd:ChordText slate.workspace.growPane}" Command="{Binding Workspace.GrowPaneCommand}" />
+                <MenuItem Header="_Shrink Pane" InputGestureText="{cmd:ChordText slate.workspace.shrinkPane}" Command="{Binding Workspace.ShrinkPaneCommand}" />
                 <Separator />
-                <MenuItem Header="Toggle Right _Pane" InputGestureText="Ctrl+Alt+I" Command="{Binding Workspace.ToggleRightPaneCommand}" />
+                <MenuItem Header="Toggle Right _Pane" InputGestureText="{cmd:ChordText slate.view.toggleRightPane}" Command="{Binding Workspace.ToggleRightPaneCommand}" />
                 <MenuItem Header="Show Tasks _Review"
                           AutomationProperties.AutomationId="ShowTasksReviewMenuItem"
-                          InputGestureText="Ctrl+R"
+                          InputGestureText="{cmd:ChordText slate.tasks.review}"
                           Command="{Binding Workspace.OpenTasksReviewCommand}" />
                 <!-- W4-7 (#739): slate.history.showPanel — no chord on
                      mac (matrix row); the menu is the chordless
@@ -167,11 +171,11 @@
                 <Separator />
                 <MenuItem Header="Quick _Filter"
                           AutomationProperties.AutomationId="BasesQuickFilterMenuItem"
-                          InputGestureText="Ctrl+F"
+                          InputGestureText="{cmd:ChordText slate.bases.quickFilter}"
                           Command="{Binding Workspace.BasesQuickFilterCommand}" />
                 <MenuItem Header="Sort by _Column"
                           AutomationProperties.AutomationId="BasesSortByColumnMenuItem"
-                          InputGestureText="Ctrl+Alt+S"
+                          InputGestureText="{cmd:ChordText slate.bases.sortByColumn}"
                           Command="{Binding Workspace.BasesSortByColumnCommand}" />
                 <MenuItem Header="Save Sort to _View"
                           AutomationProperties.AutomationId="BasesSaveSortMenuItem"
@@ -211,15 +215,15 @@
                       AutomationProperties.AutomationId="EditorMenu">
                 <MenuItem Header="_Activate at Cursor"
                           AutomationProperties.AutomationId="EditorActivateMenuItem"
-                          InputGestureText="Ctrl+Enter"
+                          InputGestureText="{cmd:ChordText slate.editor.activateAtCaret}"
                           Command="{Binding Workspace.ActiveGroup.ActiveTab.EditorInteractions.ActivateAtCaretCommand}" />
                 <MenuItem Header="Preview _Embed"
                           AutomationProperties.AutomationId="EditorPreviewEmbedMenuItem"
-                          InputGestureText="Ctrl+E"
+                          InputGestureText="{cmd:ChordText slate.editor.previewEmbed}"
                           Command="{Binding Workspace.ActiveGroup.ActiveTab.EditorInteractions.PreviewEmbedCommand}" />
                 <MenuItem Header="Toggle _Reading Mode"
                           AutomationProperties.AutomationId="EditorToggleReadingModeMenuItem"
-                          InputGestureText="Ctrl+Shift+E"
+                          InputGestureText="{cmd:ChordText slate.editor.toggleViewMode}"
                           Command="{Binding Workspace.ToggleReadingModeCommand}" />
                 <Separator />
                 <!-- W4-4 (#736): menu-homed so bulk rename works when
@@ -230,7 +234,7 @@
                           Command="{Binding Workspace.OpenAddPropertySheetCommand}" />
                 <MenuItem Header="Bulk Rename Pr_operties…"
                           AutomationProperties.AutomationId="BulkRenamePropertiesMenuItem"
-                          InputGestureText="Ctrl+Shift+R"
+                          InputGestureText="{cmd:ChordText slate.editor.bulkRenameProperties}"
                           Command="{Binding Workspace.OpenBulkRenameSheetCommand}" />
                 <!-- W4-5 (#737). Both citation commands were bound only
                      in Window.InputBindings, so they had no menu home,
@@ -241,11 +245,11 @@
                      bad bibliography path, and it has no mac chord. -->
                 <MenuItem Header="Citation S_ummary"
                           AutomationProperties.AutomationId="CitationSummaryMenuItem"
-                          InputGestureText="Ctrl+Shift+J"
+                          InputGestureText="{cmd:ChordText slate.editor.citationSummary}"
                           Command="{Binding Workspace.OpenCitationSummaryCommand}" />
                 <MenuItem Header="_Jump to Bibliography"
                           AutomationProperties.AutomationId="JumpToBibliographyMenuItem"
-                          InputGestureText="Ctrl+J"
+                          InputGestureText="{cmd:ChordText slate.navigation.jumpToBibliography}"
                           Command="{Binding Workspace.JumpToBibliographyCommand}" />
                 <MenuItem Header="Reloa_d Bibliography"
                           AutomationProperties.AutomationId="ReloadBibliographyMenuItem"
@@ -352,9 +356,9 @@
                 <MenuItem Header="_Refresh" Command="{Binding FileSidebar.RefreshCommand}" />
                 <MenuItem Header="_Collapse All" Command="{Binding FileSidebar.CollapseAllCommand}" />
                 <MenuItem Header="_Expand Loaded" Command="{Binding FileSidebar.ExpandLoadedCommand}" />
-                <MenuItem Header="Focus _Filter" InputGestureText="Ctrl+Alt+F" Click="FocusFilter_Click" />
-                <MenuItem Header="_Back" InputGestureText="Ctrl+Alt+[" Command="{Binding FileSidebar.HistoryBackCommand}" />
-                <MenuItem Header="_Forward" InputGestureText="Ctrl+Alt+]" Command="{Binding FileSidebar.HistoryForwardCommand}" />
+                <MenuItem Header="Focus _Filter" InputGestureText="{cmd:ChordText slate.sidebar.focusFilter}" Click="FocusFilter_Click" />
+                <MenuItem Header="_Back" InputGestureText="{cmd:ChordText slate.sidebar.historyBack}" Command="{Binding FileSidebar.HistoryBackCommand}" />
+                <MenuItem Header="_Forward" InputGestureText="{cmd:ChordText slate.sidebar.historyForward}" Command="{Binding FileSidebar.HistoryForwardCommand}" />
                 <Separator />
                 <MenuItem Header="_Pin Note" Command="{Binding FileSidebar.PinCommand}" />
                 <MenuItem Header="_Unpin Note" Command="{Binding FileSidebar.UnpinCommand}" />
@@ -398,6 +402,9 @@
                         <Setter Property="IsEnabled" Value="True" />
                         <Style.Triggers>
                             <DataTrigger Binding="{Binding QuickSwitcher.IsOpen}" Value="True">
+                                <Setter Property="IsEnabled" Value="False" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding Palette.IsOpen}" Value="True">
                                 <Setter Property="IsEnabled" Value="False" />
                             </DataTrigger>
                         </Style.Triggers>
@@ -453,6 +460,9 @@
                         <Setter Property="IsEnabled" Value="True" />
                         <Style.Triggers>
                             <DataTrigger Binding="{Binding QuickSwitcher.IsOpen}" Value="True">
+                                <Setter Property="IsEnabled" Value="False" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding Palette.IsOpen}" Value="True">
                                 <Setter Property="IsEnabled" Value="False" />
                             </DataTrigger>
                         </Style.Triggers>
@@ -1907,6 +1917,193 @@
                                                                Visibility="{Binding IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}"
                                                                Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                     </DockPanel>
+                </Grid>
+            </local:AutomationLandmarkBorder>
+            <!-- ==========================================================
+                 W5-1 (#741): the command palette. Built on the Quick Open
+                 shape above — an in-window overlay, never a WPF Popup,
+                 whose UIA subtree would be a sibling HWND (contract P5).
+
+                 Two bindings here are load-bearing and easy to get wrong.
+                 Visibility resolves through the WINDOW, because this
+                 element overrides its own DataContext: binding the short
+                 path would resolve against CommandPaletteViewModel, fail,
+                 and stick at FallbackValue=Collapsed forever — shipped
+                 twice before, in W4-5 and W4-6. And the results list gets
+                 its ItemsSource from code-behind, not from a binding,
+                 because the rows are grouped by the section core PLACED
+                 them in; see RefreshPaletteGrouping.
+                 ========================================================== -->
+            <Border Background="Transparent"
+                    Visibility="{Binding Palette.IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}" />
+            <local:AutomationLandmarkBorder x:Name="CommandPaletteOverlay"
+                    Width="640"
+                    MaxHeight="470"
+                    Padding="16"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Top"
+                    Margin="0,72,0,0"
+                    Background="{DynamicResource Slate.SurfaceBrush}"
+                    BorderBrush="{DynamicResource Slate.BorderBrush}"
+                    BorderThickness="1"
+                    Visibility="{Binding DataContext.Palette.IsOpen, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Collapsed}"
+                    DataContext="{Binding Palette}"
+                    FocusManager.IsFocusScope="True"
+                    KeyboardNavigation.TabNavigation="Cycle"
+                    KeyboardNavigation.ControlTabNavigation="Cycle"
+                    AutomationProperties.AutomationId="CommandPalette"
+                    AutomationProperties.Name="Command Palette"
+                    AutomationProperties.IsDialog="True">
+                <local:AutomationLandmarkBorder.Effect>
+                    <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
+                </local:AutomationLandmarkBorder.Effect>
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <TextBox x:Name="CommandPaletteSearchTextBox"
+                             Grid.Row="0"
+                             Padding="10,8"
+                             FontSize="18"
+                             Text="{Binding Query, UpdateSourceTrigger=PropertyChanged}"
+                             PreviewKeyDown="CommandPaletteSearch_PreviewKeyDown"
+                             AutomationProperties.AutomationId="CommandPaletteSearch"
+                             AutomationProperties.Name="Search commands"
+                             Visibility="{Binding IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}"
+                             AutomationProperties.HelpText="Up and Down move selection. Home, End, Page Up and Page Down jump. Enter runs the selected command. Escape closes the palette." />
+                    <!-- The two Visibility bindings on this list and on the
+                         search box above are PRECAUTIONARY, matching the Quick
+                         Open precedent. A round-2 mutation removed both and the
+                         journey's closed-palette assertion still passed, so the
+                         children do leave the UIA tree with their collapsed
+                         ancestor on this framework version. A later probe
+                         walking the RAW tree showed why: the elements do
+                         remain in the raw tree, and it is WPF dropping
+                         invisible elements from the CONTROL view that hides
+                         them, not these bindings. Kept for consistency with
+                         Quick Open; they are redundant, not load-bearing. -->
+                    <local:AutomationVisibilityListBox x:Name="CommandPaletteResultsList"
+                             Grid.Row="1"
+                             Margin="0,8"
+                             Visibility="{Binding IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}"
+                             SelectionChanged="CommandPaletteResults_SelectionChanged"
+                             MouseDoubleClick="CommandPaletteResults_MouseDoubleClick"
+                             AutomationProperties.AutomationId="CommandPaletteResults"
+                             AutomationProperties.Name="Command results">
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <!-- ONE name per row (contract P6): label plus the
+                                     spoken chord. The visible chord and the bolded
+                                     runs below are presentation-only, so they never
+                                     become separate stops. -->
+                                <Setter Property="AutomationProperties.Name" Value="{Binding AccessibleName}" />
+                                <Setter Property="AutomationProperties.HelpText" Value="{Binding AccessibilityHint}" />
+                                <Style.Triggers>
+                                    <!-- Unavailable rows stay visible, selectable and
+                                         in the arrow cycle — only activation is
+                                         refused (contract P8). IsEnabled="False" here
+                                         would drop them from keyboard navigation AND
+                                         from the UIA tree, which is the opposite of
+                                         what the contract asks for. -->
+                                    <DataTrigger Binding="{Binding IsUnavailable}" Value="True">
+                                        <Setter Property="Opacity" Value="0.65" />
+                                        <Setter Property="AutomationProperties.HelpText" Value="{Binding DisabledReason}" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                        <ListBox.GroupStyle>
+                            <GroupStyle>
+                                <GroupStyle.HeaderTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding Name}"
+                                                   Margin="4,8,4,2"
+                                                   FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource Slate.SecondaryTextBrush}"
+                                                   AutomationProperties.Name="{Binding Name}"
+                                                   AutomationProperties.HeadingLevel="Level3" />
+                                    </DataTemplate>
+                                </GroupStyle.HeaderTemplate>
+                            </GroupStyle>
+                        </ListBox.GroupStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="4,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <!-- Match bolding. Segments always concatenate
+                                             back to the whole label, so a hint-only
+                                             match renders as one unbolded segment
+                                             rather than bold-everything. -->
+                                        <ItemsControl ItemsSource="{Binding LabelSegments}"
+                                                      Focusable="False">
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate>
+                                                    <StackPanel Orientation="Horizontal" />
+                                                </ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <local:AutomationPresentationTextBlock Text="{Binding Text}">
+                                                        <local:AutomationPresentationTextBlock.Style>
+                                                            <Style TargetType="local:AutomationPresentationTextBlock">
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding IsMatch}" Value="True">
+                                                                        <Setter Property="FontWeight" Value="Bold" />
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </local:AutomationPresentationTextBlock.Style>
+                                                    </local:AutomationPresentationTextBlock>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                        <local:AutomationPresentationTextBlock
+                                                Text="{Binding DisabledReason}"
+                                                Visibility="{Binding IsUnavailable, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                                Foreground="{DynamicResource Slate.SecondaryTextBrush}"
+                                                TextWrapping="Wrap"
+                                                MaxHeight="34" />
+                                    </StackPanel>
+                                    <local:AutomationPresentationTextBlock Grid.Column="1"
+                                            Margin="12,0,0,0"
+                                            Text="{Binding HotkeyHint}"
+                                            Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </local:AutomationVisibilityListBox>
+                    <!-- Empty states. Collapsed when unused: an empty
+                         ItemsControl left on-screen at zero size fails the
+                         axe BoundingRectangleNotNull check (the W4-5/W4-6
+                         lesson). -->
+                    <!-- AutomationLandmarkGrid, not StackPanel: a bare Panel
+                         creates NO automation peer, so the composed name
+                         below would be silently dropped and the block would
+                         publish nothing at all. Both children are
+                         presentation-only, so this host is the single stop. -->
+                    <local:AutomationLandmarkGrid Grid.Row="2"
+                                Margin="4,4,4,0"
+                                Visibility="{Binding ShowsEmptyState, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                AutomationProperties.Name="{Binding EmptyStateAccessibleName}">
+                        <StackPanel>
+                        <local:AutomationPresentationTextBlock Text="{Binding EmptyStateTitle}"
+                                                               FontWeight="SemiBold" />
+                        <local:AutomationPresentationTextBlock Text="{Binding EmptyStateDetail}"
+                                                               Foreground="{DynamicResource Slate.SecondaryTextBrush}"
+                                                               TextWrapping="Wrap" />
+                        </StackPanel>
+                    </local:AutomationLandmarkGrid>
+                    <local:AutomationPresentationTextBlock Grid.Row="3"
+                            Margin="4,8,4,0"
+                            Text="Enter run · Esc close"
+                            Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                 </Grid>
             </local:AutomationLandmarkBorder>
             <!-- ==========================================================

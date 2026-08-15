@@ -7,6 +7,7 @@ using System.IO;
 using System.Runtime.CompilerServices;
 using System.Windows.Input;
 using System.Windows.Threading;
+using SlateWindows.Commands;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows;
@@ -23,7 +24,15 @@ internal enum VaultCloseDecision
 /// the complete open-vault state; callbacks only enqueue work for the UI
 /// thread and never synchronously re-enter the session.
 /// </summary>
-internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposable
+/// <remarks>
+/// It is also the command bridge's <see cref="ISlateCommandHost"/> (contract
+/// P17): registered actions resolve live state through it at invoke time
+/// instead of capturing a workspace, so vault open and close never mutate
+/// the registry. The interface names members this type already exposed —
+/// implementing it added no surface.
+/// </remarks>
+internal sealed class VaultLifecycleViewModel
+    : INotifyPropertyChanged, IDisposable, ISlateCommandHost
 {
     private readonly Func<Task<string?>> _pickVault;
     private readonly Func<RecentVault, Task<bool>> _confirmRemoveMissingRecent;
@@ -85,6 +94,8 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
         new(StringComparer.OrdinalIgnoreCase);
 
     private readonly Dispatcher? _lifecycleDispatcher;
+    private CommandPaletteViewModel? _palette;
+    private PaletteCommandSource? _paletteSource;
     private readonly AsyncRelayCommand _openVaultCommand;
     private readonly AsyncRelayCommand _openRecentCommand;
     private readonly RelayCommand _closeVaultCommand;
@@ -274,6 +285,27 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
         private set => SetField(ref _quickSwitcher, value);
     }
 
+    /// <summary>
+    /// The command palette (W5-1, #741). Public because WPF binding
+    /// reflection only sees public properties — an internal one fails
+    /// silently and renders nothing (the W4-4 lesson).
+    /// </summary>
+    /// <remarks>
+    /// Created on first access rather than in the constructor: creating
+    /// it registers the whole command catalog and needs a dispatcher,
+    /// and the shell is the only caller that wants either. The
+    /// null-coalescing assignment is what keeps PINV-3's "exactly one
+    /// registry" true — every later access returns the same instance.
+    /// It survives vault open and close by contract P17, so it is
+    /// deliberately not reset alongside <see cref="Workspace"/>.
+    /// </remarks>
+    public CommandPaletteViewModel Palette =>
+        _palette ??= new CommandPaletteViewModel(
+            _paletteSource ??= new PaletteCommandSource(
+                this,
+                _lifecycleDispatcher ?? Dispatcher.CurrentDispatcher),
+            _announce);
+
     public async Task OpenVaultAsync(string path)
     {
         if (IsBusy)
@@ -296,6 +328,12 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
         {
             return;
         }
+
+        // P14: dismissed AFTER the cancellable gate, matching CloseVault.
+        // Dismissing before it meant a refused close — a dirty-tab prompt
+        // the user cancels, an import in flight — left the vault open with
+        // the palette already gone.
+        _palette?.Dismiss();
 
         CloseSession();
         int generation = ++_generation;
@@ -404,6 +442,11 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
             return;
         }
 
+        // P14: the palette must never be open with no vault, or the
+        // next vault open auto-presents it. Dismissed BEFORE the session
+        // goes away, so the overlay cannot survive the gap.
+        _palette?.Dismiss();
+
         ++_generation;
         CloseSession();
         IsVaultOpen = false;
@@ -446,6 +489,12 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
     {
         ++_generation;
         CloseSession();
+
+        // Releases the one CommandRegistry (PINV-3). Null unless the
+        // shell actually reached for the palette.
+        _paletteSource?.Dispose();
+        _paletteSource = null;
+        _palette = null;
     }
 
     private async Task PickAndOpenVaultAsync(object? _)
@@ -834,6 +883,11 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
         switcher.Dismissed += QuickSwitcher_Dismissed;
 
         Workspace = workspace;
+
+        // PINV-7: the workspace requeries far more often than the vault
+        // lifecycle does — on every tab switch — and that is the frequency
+        // the invariant's own example needs.
+        workspace.RegisteredCommandStatesChanged = RaiseRegisteredCommandStates;
         FileSidebar = sidebar;
         QuickSwitcher = switcher;
         WorkspaceReady?.Invoke(this, EventArgs.Empty);
@@ -1077,6 +1131,26 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
         _openVaultCommand.RaiseCanExecuteChanged();
         _openRecentCommand.RaiseCanExecuteChanged();
         _closeVaultCommand.RaiseCanExecuteChanged();
+
+        // PINV-7: requery the registered catalog by ENUMERATION, so a
+        // newly registered command cannot be silently omitted the way the
+        // four hand-maintained lists allow. Only meaningful once the
+        // bridge exists, hence the null check — an unopened palette has
+        // registered nothing yet.
+        RaiseRegisteredCommandStates();
+    }
+
+    /// <summary>
+    /// PINV-7: requery the registered catalog by ENUMERATION, so a newly
+    /// registered command cannot be silently omitted the way the
+    /// hand-maintained lists allow. No-op until the bridge exists.
+    /// </summary>
+    private void RaiseRegisteredCommandStates()
+    {
+        if (_paletteSource is not null)
+        {
+            SlateCommandRegistrar.RaiseCommandStates(this);
+        }
     }
 
     private bool SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)

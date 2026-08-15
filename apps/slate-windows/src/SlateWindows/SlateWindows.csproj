@@ -8,6 +8,16 @@
     <UseWPF>true</UseWPF>
     <RootNamespace>SlateWindows</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+
+    <!-- W5-1 (#741): CS8509 is a non-exhaustive switch expression. The
+         modal-surface mapping is documented as compiler-enforced — adding
+         a ModalSurface without an IsOpen arm is meant to break the build,
+         not warn. Codex found that claim false: CS8509 is only a warning,
+         nothing here promotes it, and CI runs a plain `dotnet build`, so
+         the new surface would ship defaulting to "not open" and the
+         palette would render beneath it. Promoted rather than the claim
+         softened, because the claim is the behaviour we want. -->
+    <WarningsAsErrors>$(WarningsAsErrors);CS8509</WarningsAsErrors>
   </PropertyGroup>
 
   <ItemGroup>

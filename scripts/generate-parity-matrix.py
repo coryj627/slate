@@ -562,6 +562,15 @@ W4_8_STATUS = (
     "interactive CI + human AT pending"
 )
 
+# W5-1 (#741): the palette is a SURFACE, not a command row — mac keeps
+# its own chord deliberately unregistered, so this issue delivers no
+# slate.* id of its own. Its status therefore rides the surface row
+# rather than any command.
+W5_1_STATUS = (
+    "implemented; local gates green 2026-08-13; "
+    "interactive CI + human AT pending"
+)
+
 # W4-8 (#740): mac registers exactly ONE sync command, and it is
 # CHORDLESS on both platforms ("refresh is a rare, deliberate action");
 # it refreshes only and never reveals the leaf (contract SD7).
@@ -659,7 +668,7 @@ def load_delivery_evidence(
 
     expected_issues = {
         "#381", "#720", "#721", "#722", "#723", "#724", "#725", "#728", "#735", "#736",
-        "#737", "#738", "#739", "#740",
+        "#737", "#738", "#739", "#740", "#741",
     }
     if set(issue_map) != expected_issues:
         fail(
@@ -700,11 +709,11 @@ def issue_delivery_status(
     issue_number = issue.split(" ", 1)[0]
     if issue_number not in evidence["issues"]:
         return "pending"
-    return (
-        W2_IMPLEMENTED_STATUS
-        if issue_number in {"#381", "#724", "#725"}
-        else IMPLEMENTED_STATUS
-    )
+    if issue_number in {"#381", "#724", "#725"}:
+        return W2_IMPLEMENTED_STATUS
+    if issue_number == "#741":
+        return W5_1_STATUS
+    return IMPLEMENTED_STATUS
 
 
 def main() -> int:
@@ -837,7 +846,7 @@ def main() -> int:
     a("| Accessible grid substrate | `AccessibleDataGrid.swift` | #733 (W4-1) | pending |")
     a("| Properties (in-note header, panel, typed rows, add-property) | `Properties*` views | #736 (W4-4) | pending |")
     a("| Bases grid + builder (N shipped) | `Bases/` | #738 (W4-6) | implemented; local gates green 2026-08-08; interactive CI + human AT pending |")
-    a("| Command palette | `CommandPaletteModel.swift` (core ranking, W0.5-1) | #741 (W5-1) | pending |")
+    a(f"| Command palette | `CommandPaletteModel.swift` (core ranking, W0.5-1) | #741 (W5-1) | {issue_delivery_status('#741 (W5-1)', delivery_evidence)} |")
     a("| Search overlay | search UI over `full_text_search` | #742 (W5-2) | pending |")
     a("| Templates picker + prompt flow | template views | #743 (W5-3) | pending |")
     a("| File management + bulk rename | sidebar/file commands | #744 (W5-4) | pending |")

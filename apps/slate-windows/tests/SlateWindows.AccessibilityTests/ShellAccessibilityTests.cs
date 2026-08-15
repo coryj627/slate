@@ -609,13 +609,22 @@ public sealed class ShellAccessibilityTests
                 ?? throw new Xunit.Sdk.XunitException("The right split editor is absent.");
             rightEditor.Focus();
             AssertEventuallyFocused(rightEditor, "The right split editor could not receive focus.");
-            Keyboard.TypeSimultaneously(
-                VirtualKeyShort.CONTROL,
-                VirtualKeyShort.ALT,
-                VirtualKeyShort.LEFT);
-            AssertEventuallyFocused(
-                leftEditor,
-                "Ctrl+Alt+Left changed the model but did not move keyboard focus to the left editor.");
+            if (ChordIsDeliverable(
+                NativeHotkey.ModControl | NativeHotkey.ModAlt, 0x25 /* VK_LEFT */))
+            {
+                Keyboard.TypeSimultaneously(
+                    VirtualKeyShort.CONTROL,
+                    VirtualKeyShort.ALT,
+                    VirtualKeyShort.LEFT);
+                AssertEventuallyFocused(
+                    leftEditor,
+                    "Ctrl+Alt+Left changed the model but did not move keyboard "
+                    + "focus to the left editor.");
+            }
+            else
+            {
+                SkipStolenChordLeg("Ctrl+Alt+Left");
+            }
 
             AssertAxeClean(process, "workspace");
 
@@ -879,15 +888,8 @@ public sealed class ShellAccessibilityTests
             process = Process.Start(startInfo)
                 ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
 
-            if (!Environment.UserInteractive)
+            if (!HasInteractiveDesktop(process, "identity-contract"))
             {
-                // Session-0 fallback, as the shell gate: the desktop UIA
-                // half runs on interactive runners; here the process must
-                // still survive startup.
-                Assert.False(
-                    process.WaitForExit(3_000),
-                    "Slate exited during the identity-contract startup smoke. " +
-                    $"app log: {ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log"))}");
                 return;
             }
 
@@ -1067,15 +1069,8 @@ public sealed class ShellAccessibilityTests
             process = Process.Start(startInfo)
                 ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
 
-            if (!Environment.UserInteractive)
+            if (!HasInteractiveDesktop(process, "RangeFromChild"))
             {
-                // Session-0 fallback, as the shell gate: the UIA half
-                // needs a desktop; here the process must still survive
-                // startup.
-                Assert.False(
-                    process.WaitForExit(3_000),
-                    "Slate exited during the RangeFromChild startup smoke. " +
-                    $"app log: {ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log"))}");
                 return;
             }
 
@@ -1739,13 +1734,8 @@ public sealed class ShellAccessibilityTests
             process = Process.Start(startInfo)
                 ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
 
-            if (!Environment.UserInteractive)
+            if (!HasInteractiveDesktop(process, "panels"))
             {
-                // Session-0 fallback, as the shell gate.
-                Assert.False(
-                    process.WaitForExit(3_000),
-                    "Slate exited during the panels startup smoke. " +
-                    $"app log: {ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log"))}");
                 return;
             }
 
@@ -1948,12 +1938,8 @@ public sealed class ShellAccessibilityTests
             process = Process.Start(startInfo)
                 ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
 
-            if (!Environment.UserInteractive)
+            if (!HasInteractiveDesktop(process, "tasks"))
             {
-                Assert.False(
-                    process.WaitForExit(3_000),
-                    "Slate exited during the tasks startup smoke. " +
-                    $"app log: {ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log"))}");
                 return;
             }
 
@@ -2162,12 +2148,8 @@ public sealed class ShellAccessibilityTests
             process = Process.Start(startInfo)
                 ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
 
-            if (!Environment.UserInteractive)
+            if (!HasInteractiveDesktop(process, "properties"))
             {
-                Assert.False(
-                    process.WaitForExit(3_000),
-                    "Slate exited during the properties startup smoke. " +
-                    $"app log: {ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log"))}");
                 return;
             }
 
@@ -2391,13 +2373,8 @@ public sealed class ShellAccessibilityTests
             process = Process.Start(startInfo)
                 ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
 
-            if (!Environment.UserInteractive)
+            if (!HasInteractiveDesktop(process, "citations"))
             {
-                // Session-0 fallback, as the shell gate.
-                Assert.False(
-                    process.WaitForExit(3_000),
-                    "Slate exited during the citations startup smoke. " +
-                    $"app log: {ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log"))}");
                 return;
             }
 
@@ -2895,12 +2872,8 @@ public sealed class ShellAccessibilityTests
             process = Process.Start(startInfo)
                 ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
 
-            if (!Environment.UserInteractive)
+            if (!HasInteractiveDesktop(process, "accessibility"))
             {
-                Assert.False(
-                    process.WaitForExit(3_000),
-                    "Slate exited during the degraded-vault smoke. "
-                        + $"app log: {ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log"))}");
                 return;
             }
 
@@ -3052,11 +3025,8 @@ public sealed class ShellAccessibilityTests
             process = Process.Start(startInfo)
                 ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
 
-            if (!Environment.UserInteractive)
+            if (!HasInteractiveDesktop(process, "Bases"))
             {
-                Assert.False(
-                    process.WaitForExit(3_000),
-                    "Slate exited during the Bases startup smoke.");
                 return;
             }
 
@@ -3528,11 +3498,8 @@ public sealed class ShellAccessibilityTests
             process = Process.Start(startInfo)
                 ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
 
-            if (!Environment.UserInteractive)
+            if (!HasInteractiveDesktop(process, "history"))
             {
-                Assert.False(
-                    process.WaitForExit(3_000),
-                    "Slate exited during the history startup smoke.");
                 return;
             }
 
@@ -3896,11 +3863,8 @@ public sealed class ShellAccessibilityTests
             process = Process.Start(startInfo)
                 ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
 
-            if (!Environment.UserInteractive)
+            if (!HasInteractiveDesktop(process, "sync-diagnostics"))
             {
-                Assert.False(
-                    process.WaitForExit(3_000),
-                    "Slate exited during the sync-diagnostics startup smoke.");
                 return;
             }
 
@@ -4113,6 +4077,559 @@ public sealed class ShellAccessibilityTests
             {
             }
         }
+    }
+
+
+    /// <summary>
+    /// W5-1 (#741): the command palette end to end — open by chord, filter,
+    /// the composed row name, invoke, and focus restore, with an axe scan
+    /// over the open overlay.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The unit facts rank against the real core engine but never render,
+    /// so everything UIA-visible is unproven until here: whether the
+    /// overlay's window-relative Visibility binding actually resolves (the
+    /// FallbackValue=Collapsed trap that shipped twice), whether the
+    /// composed row name reaches a client, and whether the grouped list
+    /// publishes headers rather than swallowing them.
+    /// </para>
+    /// <para>
+    /// Text goes in through the ValuePattern rather than synthetic
+    /// keystrokes, and the foreground is re-asserted before input — both
+    /// recorded journey traps.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void CommandPalette_OpensFiltersInvokesAndRestoresFocus_IsClean()
+    {
+        string testRoot = Path.Combine(
+            Path.GetTempPath(), $"slate-command-palette-{Guid.NewGuid():N}");
+        string vaultRoot = Path.Combine(testRoot, "Palette Vault");
+        string logDirectory = Path.Combine(testRoot, "logs");
+        Directory.CreateDirectory(vaultRoot);
+        File.WriteAllText(
+            Path.Combine(vaultRoot, "alpha.md"),
+            "# Alpha\n\nOriginal body.\n");
+
+        Process? process = null;
+        try
+        {
+            var startInfo = new ProcessStartInfo(SlateWindowsExe())
+            {
+                UseShellExecute = false,
+            };
+            startInfo.ArgumentList.Add(vaultRoot);
+            startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
+                $"slate-command-palette-{Guid.NewGuid():N}";
+            startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            process = Process.Start(startInfo)
+                ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+
+            if (!HasInteractiveDesktop(process, "command-palette"))
+            {
+                return;
+            }
+
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(
+                process,
+                automation,
+                Path.Combine(logDirectory, "slate-windows.log"),
+                TimeSpan.FromSeconds(30));
+            window.SetForeground();
+            window.Focus();
+
+            // The right pane is the observable the invocation leg asserts
+            // on, so read its starting state before anything opens.
+            bool RightPaneVisible()
+            {
+                try
+                {
+                    return window.FindFirstDescendant(automation.ConditionFactory
+                        .ByAutomationId("RightPaneLeaves")) is not null;
+                }
+                catch (System.Runtime.InteropServices.COMException)
+                {
+                    return false;
+                }
+            }
+
+            // WAIT FOR THE VAULT, not merely for the window. The palette
+            // refuses to open with no vault and deliberately leaves its
+            // flag false (contract P14), so a chord sent between window
+            // and vault is correctly swallowed — the app is right and the
+            // journey would be racing it. The rail only exists once a
+            // vault is open, so it is the readiness signal.
+            _ = WaitForElement(window, "RightPaneLeaves", TimeSpan.FromSeconds(30));
+
+            bool rightPaneAtStart = RightPaneVisible();
+
+            // --- open by chord (PD-2) ---------------------------------
+            // Put keyboard focus on a real element first. A freshly shown
+            // window can have NO WPF keyboard focus at all, and the chord
+            // rides Window.PreviewKeyDown, which needs focus inside the
+            // window to see the key — measured, after a run where the
+            // focused element reported neither id nor name and the chord
+            // vanished.
+            WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(10)).Focus();
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+            window.SetForeground();
+            PressChord(
+                VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_P);
+
+            AutomationElement overlay = WaitForElement(
+                window, "CommandPalette", TimeSpan.FromSeconds(10));
+            Assert.Equal("Command Palette", overlay.Name);
+
+            // Focus lands in the search field, not on the overlay root:
+            // a palette that opens without a caret is a palette you have
+            // to click into.
+            AutomationElement search = WaitForElement(
+                window, "CommandPaletteSearch", TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            return search.Properties.HasKeyboardFocus.ValueOrDefault;
+                        }
+                        catch (System.Runtime.InteropServices.COMException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the palette opened without focusing its search field");
+
+            // Axe over the OPEN palette, before typing. This covers the
+            // overlay, the grouped result list, every row name, and the
+            // headers — the whole surface W5-1 owns.
+            //
+            // It is deliberately taken with an EMPTY query. The Fluent
+            // TextBox template adds a clear button once the box is
+            // non-empty whose accessible name is a private-use icon glyph,
+            // which fails NameExcludesPrivateUnicodeCharacters. That is a
+            // pre-existing framework defect shared by every TextBox in the
+            // app, not something the palette introduced — this journey is
+            // simply the first axe scan anywhere that types before
+            // scanning, which is why it went unseen until now. Tracked in
+            // #1106 with the measured element and three approaches that do
+            // NOT fix it; the scan moves after the filter when that lands.
+            AssertAxeClean(process, "command-palette");
+
+            // --- filter ------------------------------------------------
+            search.Patterns.Value.Pattern.SetValue("right pane");
+
+            // The COMPOSED row name is the P6 contract: one accessible
+            // name per row carrying the label AND the spoken chord. The
+            // bolded runs, the visible chord, and any unavailability
+            // caption are presentation-only and must contribute no stops
+            // — so this exact string is what a screen reader hears.
+            AutomationElement results = WaitForElement(
+                window, "CommandPaletteResults", TimeSpan.FromSeconds(10));
+            AutomationElement? togglePaneRow = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            togglePaneRow = results
+                                .FindAllDescendants(automation.ConditionFactory
+                                    .ByControlType(ControlType.ListItem))
+                                .FirstOrDefault(item => string.Equals(
+                                    item.Name,
+                                    "Toggle Right Pane, Control Alt I",
+                                    StringComparison.Ordinal));
+                            return togglePaneRow is not null;
+                        }
+                        catch (System.Runtime.InteropServices.COMException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "no palette row published the composed name "
+                + "'Toggle Right Pane, Control Alt I'; names seen: "
+                + string.Join(
+                    " | ",
+                    results
+                        .FindAllDescendants(automation.ConditionFactory
+                            .ByControlType(ControlType.ListItem))
+                        .Select(item => item.Name)));
+
+            // Section headers reach the tree as their own elements — the
+            // palette groups by the section core PLACED each row in, and
+            // a header swallowed into a bare Panel would publish nothing.
+            Assert.Contains(
+                results.FindAllDescendants(),
+                element => string.Equals(element.Name, "View", StringComparison.Ordinal));
+
+            // --- text editing survives the modal swallow ---------------
+            // The overlay swallows shell chords so they cannot fire
+            // underneath it, and the first version swallowed EVERY
+            // modified key — which killed Ctrl+A, Ctrl+C, Ctrl+V and
+            // Shift-selection inside the palette's own search box, because
+            // TextBox reaches those through InputBindings and WPF runs
+            // InputBindings only for UNHANDLED key events. Ctrl+A then
+            // Delete discriminates: with Ctrl+A swallowed the caret sits
+            // at the end and Delete removes nothing.
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_A);
+            PressKey(VirtualKeyShort.DELETE);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            return string.IsNullOrEmpty(
+                                search.Patterns.Value.Pattern.Value.ValueOrDefault);
+                        }
+                        catch (System.Runtime.InteropServices.COMException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(5)),
+                "Ctrl+A did not reach the palette's search box — the modal "
+                + "swallow is eating text-editing chords. Query is still: "
+                + $"'{search.Patterns.Value.Pattern.Value.ValueOrDefault}'");
+
+            // Put the filter back for the invocation leg.
+            search.Patterns.Value.Pattern.SetValue("right pane");
+            togglePaneRow = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            togglePaneRow = results
+                                .FindAllDescendants(automation.ConditionFactory
+                                    .ByControlType(ControlType.ListItem))
+                                .FirstOrDefault(item => string.Equals(
+                                    item.Name,
+                                    "Toggle Right Pane, Control Alt I",
+                                    StringComparison.Ordinal));
+                            return togglePaneRow is not null;
+                        }
+                        catch (System.Runtime.InteropServices.COMException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the filtered row did not come back after retyping");
+
+            // --- invoke, and assert the command actually ran -----------
+            // Selection is view-model-authoritative, so drive it the way a
+            // user does rather than by setting SelectedItem.
+            togglePaneRow!.Patterns.SelectionItem.Pattern.Select();
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+            PressKey(VirtualKeyShort.ENTER);
+
+            // The palette closes on success only, and the right pane flips.
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => RightPaneVisible() != rightPaneAtStart,
+                    TimeSpan.FromSeconds(10)),
+                "invoking Toggle Right Pane from the palette did not change "
+                + "the right pane's visibility — the registry round-trip "
+                + "reached no live command.");
+
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            return window.FindFirstDescendant(automation.ConditionFactory
+                                .ByAutomationId("CommandPalette")) is null;
+                        }
+                        catch (System.Runtime.InteropServices.COMException)
+                        {
+                            return true;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the palette stayed open after a successful invocation");
+
+            // --- PD-2: the chord re-opens rather than toggling ---------
+            // Round 2 gate: reverting the re-open branch failed NOTHING,
+            // because every other chord press in this journey starts from a
+            // CLOSED palette. Pressing it while open must clear the query,
+            // not close the overlay and not sit inert.
+            // The palette is CLOSED here (the invocation above dismissed
+            // it), so the chord must first re-open it — otherwise this leg
+            // exercises the ordinary open path and passes whether or not
+            // the re-open branch exists, which is exactly how it shipped.
+            window.SetForeground();
+            PressChord(
+                VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_P);
+            _ = WaitForElement(window, "CommandPalette", TimeSpan.FromSeconds(10));
+            AutomationElement reopened = WaitForElement(
+                window, "CommandPaletteSearch", TimeSpan.FromSeconds(10));
+            reopened.Patterns.Value.Pattern.SetValue("zzznothing");
+            Assert.Equal(
+                "zzznothing",
+                reopened.Patterns.Value.Pattern.Value.ValueOrDefault);
+
+            // NOW press it while OPEN — the branch under test.
+            window.SetForeground();
+            PressChord(
+                VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_P);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            return window.FindFirstDescendant(automation.ConditionFactory
+                                .ByAutomationId("CommandPalette")) is not null
+                                && string.IsNullOrEmpty(
+                                    window.FindFirstDescendant(automation.ConditionFactory
+                                        .ByAutomationId("CommandPaletteSearch"))
+                                    ?.Patterns.Value.Pattern.Value.ValueOrDefault);
+                        }
+                        catch (System.Runtime.InteropServices.COMException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "Ctrl+Shift+P while open did not re-open the palette with a "
+                + "cleared query — PD-2 says it re-opens rather than toggling.");
+
+            // --- Escape closes and restores focus ----------------------
+            window.SetForeground();
+            PressChord(
+                VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_P);
+            _ = WaitForElement(window, "CommandPalette", TimeSpan.FromSeconds(10));
+            Keyboard.Press(VirtualKeyShort.ESCAPE);
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            return window.FindFirstDescendant(automation.ConditionFactory
+                                .ByAutomationId("CommandPalette")) is null;
+                        }
+                        catch (System.Runtime.InteropServices.COMException)
+                        {
+                            return true;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "Escape did not close the palette");
+
+            // A closed palette must publish no part of itself to the
+            // CONTROL view, which is the view an AT walks.
+            //
+            // Measured, not assumed: all three elements remain in the UIA
+            // RAW tree when closed, and FindFirstDescendant misses them
+            // because WPF drops invisible elements from the control view.
+            // That means the children's own Visibility bindings are
+            // redundant on this runtime — kept for consistency with Quick
+            // Open, not because they are load-bearing — and this assertion
+            // pins the observable rather than the mechanism.
+            foreach (string id in new[] { "CommandPaletteSearch", "CommandPaletteResults" })
+            {
+                Assert.True(
+                    SpinWait.SpinUntil(
+                        () =>
+                        {
+                            try
+                            {
+                                return window.FindFirstDescendant(automation.ConditionFactory
+                                    .ByAutomationId(id)) is null;
+                            }
+                            catch (System.Runtime.InteropServices.COMException)
+                            {
+                                return true;
+                            }
+                        },
+                        TimeSpan.FromSeconds(5)),
+                    $"{id} stayed in the UIA tree after the palette closed");
+            }
+
+            // Focus must land somewhere real. A dismissed overlay that
+            // leaves focus on the window root strands a keyboard user.
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            AutomationElement focused = automation.FocusedElement();
+                            return focused is not null
+                                && !string.Equals(
+                                    focused.Properties.AutomationId.ValueOrDefault,
+                                    "Slate.MainWindow",
+                                    StringComparison.Ordinal);
+                        }
+                        catch (System.Runtime.InteropServices.COMException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "closing the palette left focus on the window root");
+        }
+        finally
+        {
+            if (process is not null && !process.HasExited)
+            {
+                process.CloseMainWindow();
+                if (!process.WaitForExit(5_000))
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            try
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    /// <summary>
+    /// Whether a chord can actually be delivered to the app, or is held
+    /// globally by another process.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Ctrl+Alt+{Left,Right,Up,Down} are registered process-wide by
+    /// <b>Windows Magnifier</b>, which uses them to pan the magnified
+    /// view — and, on developer boxes, also by AMD Radeon Software, the
+    /// NVIDIA container and Parsec. The app then never receives the
+    /// chord, and the resulting assertion reads exactly like a product
+    /// defect. It has been re-diagnosed more than once, and cost a
+    /// disagreement between two review rounds over whether the suite was
+    /// 17/18 or 18/18 — Magnifier being toggled on and off mid-session is
+    /// exactly why the same probe answered FREE and then TAKEN within a
+    /// day.
+    /// </para>
+    /// <para>
+    /// RegisterHotKey returning ERROR_HOTKEY_ALREADY_REGISTERED (1409) is
+    /// the definitive test, so the suite now runs it instead of leaving a
+    /// human to remember. Success registers the chord for an instant and
+    /// releases it immediately.
+    /// </para>
+    /// </remarks>
+    private static bool ChordIsDeliverable(uint modifiers, uint virtualKey)
+    {
+        // A fresh id per probe. A fixed one collides with ITSELF if two
+        // probes overlap, and a self-collision reports 1409 — the suite
+        // would then blame Magnifier for a chord that is perfectly free.
+        int probeId = System.Threading.Interlocked.Increment(ref _chordProbeId);
+        if (NativeHotkey.RegisterHotKey(IntPtr.Zero, probeId, modifiers, virtualKey))
+        {
+            NativeHotkey.UnregisterHotKey(IntPtr.Zero, probeId);
+            return true;
+        }
+
+        // Only 1409 means another process holds the chord. The comment
+        // above always said so; the code did not, and treated EVERY
+        // failure as a steal — so an unrelated Win32 error would have been
+        // reported as a Magnifier collision, which is the one diagnosis
+        // this probe exists to stop people guessing at. Codoki caught the
+        // gap between the two.
+        int error = System.Runtime.InteropServices.Marshal.GetLastWin32Error();
+        Assert.True(
+            error == ErrorHotkeyAlreadyRegistered,
+            $"RegisterHotKey failed with Win32 error {error}, which is not "
+            + $"ERROR_HOTKEY_ALREADY_REGISTERED ({ErrorHotkeyAlreadyRegistered}). "
+            + "The probe cannot say whether the chord is deliverable, and "
+            + "silently skipping the leg here would look like a hotkey steal.");
+        return false;
+    }
+
+    /// <summary><c>ERROR_HOTKEY_ALREADY_REGISTERED</c>.</summary>
+    private const int ErrorHotkeyAlreadyRegistered = 1409;
+
+    private static int _chordProbeId = 0x5131;
+
+    private static class NativeHotkey
+    {
+        internal const uint ModAlt = 0x0001;
+        internal const uint ModControl = 0x0002;
+
+        [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
+        internal static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
+        internal static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+    }
+
+    /// <summary>
+    /// Records that a chord leg was skipped because another process owns
+    /// the chord, and fails instead when CI has declared the gate
+    /// mandatory.
+    /// </summary>
+    private static void SkipStolenChordLeg(string chord)
+    {
+        if (RequiresUiAutomation())
+        {
+            throw new Xunit.Sdk.XunitException(
+                $"{chord} is registered by another process (win32 1409), so the "
+                + "app cannot receive it. On a CI runner that is a real failure: "
+                + "the runner must not have global hotkey owners installed.");
+        }
+
+        Console.WriteLine(
+            $"[accessibility] skipped the {chord} leg: another process holds the "
+            + "chord globally (win32 1409). Environmental, not a product defect.");
+    }
+
+    /// <summary>Whether CI has declared the interactive UIA gate mandatory.</summary>
+    private static bool RequiresUiAutomation() =>
+        string.Equals(
+            Environment.GetEnvironmentVariable("SLATE_REQUIRE_UI_AUTOMATION"),
+            "1",
+            StringComparison.Ordinal);
+
+    /// <summary>
+    /// The shared non-interactive gate. Returns <see langword="false"/>
+    /// when the journey must degrade to a startup smoke.
+    /// </summary>
+    /// <remarks>
+    /// Every journey used to make this decision itself, and only ONE of
+    /// the thirteen honoured SLATE_REQUIRE_UI_AUTOMATION. On a
+    /// non-interactive runner the other twelve returned green having
+    /// asserted nothing, so the suite could report success while covering
+    /// none of what it claims. Routing them through one gate means CI sets
+    /// the variable once and the suite cannot silently degrade.
+    /// </remarks>
+    private static bool HasInteractiveDesktop(Process process, string gateName)
+    {
+        if (Environment.UserInteractive)
+        {
+            return true;
+        }
+
+        if (RequiresUiAutomation())
+        {
+            throw new Xunit.Sdk.XunitException(
+                $"The {gateName} accessibility gate requires an interactive "
+                + "Windows desktop, but this runner is executing in a "
+                + "non-interactive session.");
+        }
+
+        Assert.False(
+            process.WaitForExit(3_000),
+            $"Slate exited during the {gateName} startup smoke.");
+        return false;
     }
 
     private static Window WaitForMainWindow(

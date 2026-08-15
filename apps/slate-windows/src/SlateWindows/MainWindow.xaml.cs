@@ -48,6 +48,7 @@ public partial class MainWindow : Window
         _viewModel.WorkspaceFocusBoundaryRequested += ViewModel_WorkspaceFocusBoundaryRequested;
         _viewModel.PropertyChanged += ViewModel_PropertyChanged;
         DataContext = _viewModel;
+        ObservePalette();
         RecentVaultJumpList.Apply(_viewModel.RecentVaults);
     }
 
@@ -356,6 +357,65 @@ public partial class MainWindow : Window
     private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         ModifierKeys modifiers = Keyboard.Modifiers;
+
+        // The palette is modal: while it is open it owns the keyboard, so
+        // no shell chord fires underneath it. Placed ahead of Quick Open
+        // because the two overlays are mutually exclusive and the palette
+        // is the outer surface.
+        if (_viewModel.Palette.IsOpen)
+        {
+            HandleCommandPaletteKey(e, modifiers);
+            if (e.Handled)
+            {
+                return;
+            }
+
+            // PD-2: the chord does not toggle, so pressing it while open
+            // re-opens. Handled here because the blanket swallow below
+            // would otherwise eat it and make PD-2 unreachable.
+            if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.P)
+            {
+                _viewModel.Palette.Open();
+                e.Handled = true;
+                return;
+            }
+
+            // Swallow anything that would otherwise fire a shell command
+            // underneath the open overlay — but NOT plain typing, and NOT
+            // the chords that edit the search text. Marking every modified
+            // key handled here kills Ctrl+V, Ctrl+A, Ctrl+C and
+            // Shift-selection inside the palette's own box, because
+            // TextBox reaches those through InputBindings, which WPF runs
+            // only for UNHANDLED key events.
+            e.Handled = IsUnderlyingShellShortcut(e.Key, modifiers)
+                || (modifiers is not ModifierKeys.None
+                    && !TextEditingChords.Allows(e.Key, modifiers));
+            return;
+        }
+
+        if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.P)
+        {
+            // PD-2: Ctrl+Shift+P, the direct map of mac's Shift-Command-P
+            // and the Windows convention. Handled here rather than as a
+            // KeyBinding because the palette exposes methods, not
+            // ICommands (PR-4).
+            //
+            // Quick Open is dismissed first. The two overlays are siblings
+            // in one Grid and the palette is declared later, so it renders
+            // ON TOP of an open Quick Open — leaving two IsDialog surfaces
+            // and two hit-test scrims live while Quick Open's key handler
+            // sits unreachable behind this branch.
+            if (TryClearTheWayForThePalette())
+            {
+                _viewModel.Palette.Open();
+            }
+
+            // Handled either way: a refusal must not fall through and let
+            // the chord reach the surface underneath.
+            e.Handled = true;
+            return;
+        }
+
         if (_viewModel.QuickSwitcher?.IsOpen == true)
         {
             HandleQuickSwitcherKey(e, modifiers);
@@ -559,6 +619,17 @@ public partial class MainWindow : Window
             e.Handled = true;
         }
     }
+
+    /// <summary>
+    /// Test seam for the shell-chord deny-list.
+    /// </summary>
+    /// <remarks>
+    /// Exposed because the AltGr arm's safety depends on this list
+    /// answering every Ctrl+Alt chord the shell delivers, and that
+    /// dependency was previously only a comment.
+    /// </remarks>
+    internal static bool IsUnderlyingShellShortcutForTests(Key key, ModifierKeys modifiers) =>
+        IsUnderlyingShellShortcut(key, modifiers);
 
     private static bool IsUnderlyingShellShortcut(Key key, ModifierKeys modifiers)
     {
