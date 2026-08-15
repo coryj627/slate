@@ -214,6 +214,19 @@ public sealed class ModalSurfaceTests
             File.ReadAllText(Path.Combine(
                 SourceRoot(), "MainWindow.Palette.cs")));
 
+        // Singleness FIRST. Taking Regex.Match's first hit while the
+        // message claims "a single call" is the same first-match-not-the-
+        // right-match bug that already bit the MethodBody scrape once: a
+        // second construction site elsewhere in this file would be read
+        // instead of the live one, silently. Two sites is a failure, not a
+        // coin toss.
+        MatchCollection constructions = Regex.Matches(source, @"new ModalSurfaceState\(");
+        Assert.True(
+            constructions.Count == 1,
+            $"MainWindow.Palette.cs builds ModalSurfaceState in {constructions.Count} "
+            + "places. This pairing reads one of them, so any other is unchecked "
+            + "— scope the scrape before adding a second construction site.");
+
         Match constructor = Regex.Match(
             source,
             @"new ModalSurfaceState\((?<arguments>[^;]*?)\);",
@@ -231,6 +244,16 @@ public sealed class ModalSurfaceTests
         {
             seen[argument.Groups["name"].Value] = argument.Groups["expression"].Value.Trim();
         }
+
+        // Every field named, and nothing else parsed: an expression the
+        // argument pattern truncates (one containing a parenthesis, say)
+        // would otherwise be compared as a fragment.
+        Assert.True(
+            seen.Count == Enum.GetValues<ModalSurface>().Length,
+            $"parsed {seen.Count} named arguments for "
+            + $"{Enum.GetValues<ModalSurface>().Length} surfaces — the argument "
+            + "pattern is reading the call wrongly, so the pairings below are "
+            + "comparing fragments.");
 
         foreach (ModalSurface surface in Enum.GetValues<ModalSurface>())
         {
