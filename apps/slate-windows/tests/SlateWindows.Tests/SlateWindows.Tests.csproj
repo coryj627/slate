@@ -13,6 +13,21 @@
          test host, and VSTest runner from flowing to anything that
          references this project. `xunit` itself is left alone — the test
          sources compile against its API. -->
+    <!-- #1108: the drift twins read production source to prove the shipped
+         code agrees with the declarative tables. A regex cannot tell live
+         code from dead text — a chord commented out, moved into a string
+         literal, or parked behind an inactive #if still satisfied one, and
+         a first-match lookup could be answered by an unused overload. The
+         syntax layer alone fixes all three by construction: comments and
+         disabled regions are trivia, string contents are a distinct node
+         type, and overloads are enumerable.
+
+         Syntax only. Microsoft.CodeAnalysis.CSharp.Workspaces and
+         MSBuildWorkspace are deliberately NOT referenced — no project
+         loading, no MSBuild discovery, and the scrapes stay fast enough
+         to sit in the unit suite. Currency: 5.6.0 is the latest stable
+         (checked 2026-08-16). -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.6.0" PrivateAssets="all" />
     <PackageReference Include="coverlet.collector" Version="10.0.1" PrivateAssets="all" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.8.1" PrivateAssets="all" />
     <PackageReference Include="xunit" Version="2.9.3" />

@@ -1,6 +1,9 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using SlateWindows.Commands;
@@ -227,8 +230,8 @@ public sealed class CommandDriftTests
     private static readonly Dictionary<string, ClickHandlerCommand> ClickHandlerCommandIds =
         new(StringComparer.Ordinal)
         {
-            ["QuickOpen_Click"] = new("slate.workspace.quickOpen", "switcher.Open()"),
-            ["FocusFilter_Click"] = new("slate.sidebar.focusFilter", "SidebarFilterTextBox.Focus()"),
+            ["QuickOpen_Click"] = new("slate.workspace.quickOpen", "switcher.Open"),
+            ["FocusFilter_Click"] = new("slate.sidebar.focusFilter", "SidebarFilterTextBox.Focus"),
         };
 
     /// <summary>
@@ -242,40 +245,16 @@ public sealed class CommandDriftTests
             return null;
         }
 
-        string source = SourceText.WithoutComments(
-            File.ReadAllText(Path.Combine(SourceRoot(), "MainWindow.xaml.cs")));
-        MatchCollection declarations = Regex.Matches(
-            source,
-            $@"\r?\n    private void {Regex.Escape(handler)}\s*\(");
-        Assert.True(
-            declarations.Count > 0,
-            $"{handler} is gone from MainWindow.xaml.cs, but the menu still "
-            + "names it and this allow-list still credits it with "
-            + $"{entry.Id}.");
-
-        // An unused overload declared first, carrying the marker, would
-        // certify a handler that does something else entirely — the menu
-        // then advertises one command's chord while running another,
-        // which is the very defect this gate was added to catch.
-        Assert.True(
-            declarations.Count == 1,
-            $"{handler} has {declarations.Count} declarations. XAML binds one of "
-            + "them and this gate reads the first — disambiguate before adding "
-            + "an overload.");
-
-        Match declaration = declarations[0];
-        int start = declaration.Index + declaration.Length;
-        Match next = Regex.Match(
-            source[start..],
-            @"\r?\n    (?:private|internal|public|protected)[ \r\n]");
-        string body = next.Success ? source.Substring(start, next.Index) : source[start..];
+        MethodDeclarationSyntax declaration =
+            CSharpSource.Load("MainWindow.xaml.cs").Method(handler);
 
         Assert.True(
-            body.Contains(entry.BodyMarker, StringComparison.Ordinal),
-            $"{handler} no longer calls {entry.BodyMarker}, so the claim that it "
-            + $"invokes {entry.Id} is unfounded — the menu item would advertise "
-            + "one command's chord while running another.");
+            CSharpSource.Invokes(declaration, entry.BodyMarker),
+            $"{handler} no longer calls {entry.BodyMarker}(), so the claim that "
+            + $"it invokes {entry.Id} is unfounded — the menu item would "
+            + "advertise one command's chord while running another.");
         return entry.Id;
+
     }
 
     /// <summary>
@@ -284,30 +263,20 @@ public sealed class CommandDriftTests
     /// </summary>
     private static Dictionary<string, string> ResolverIdsByCommandPath()
     {
-        string source = SourceText.WithoutComments(File.ReadAllText(
-            Path.Combine(SourceRoot(), "Commands", "SlateCommandRegistrar.cs")));
-        string flattened = Regex.Replace(source, @"\s+", string.Empty).Replace("?", string.Empty);
-
-        string table = SourceText.WithoutComments(File.ReadAllText(
-            Path.Combine(SourceRoot(), "Commands", "ChordTable.cs")));
-        var idByName = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (Match match in Regex.Matches(
-            table, @"(?:public|internal) const string (\w+)\s*=\s*""([^""]+)"""))
-        {
-            idByName[match.Groups[1].Value] = match.Groups[2].Value;
-        }
+        Dictionary<string, string> idByName = ChordTableIdConstants();
 
         var byPath = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (Match match in Regex.Matches(
-            flattened, @"\[ChordTable\.Ids\.(\w+)\]=host=>host\.([A-Za-z0-9_.]*?Command)\b"))
+        foreach ((string name, ExpressionSyntax resolver) in ResolverEntries())
         {
-            if (idByName.TryGetValue(match.Groups[1].Value, out string? id))
+            if (idByName.TryGetValue(name, out string? id)
+                && CommandPath(resolver) is string path)
             {
-                byPath[match.Groups[2].Value] = id;
+                byPath[path] = id;
             }
         }
 
         return byPath;
+
     }
 
     /// <summary>
@@ -447,20 +416,103 @@ public sealed class CommandDriftTests
     /// </summary>
     private static HashSet<string> ResolverCommandPaths()
     {
-        string source = SourceText.WithoutComments(File.ReadAllText(
-            Path.Combine(SourceRoot(), "Commands", "SlateCommandRegistrar.cs")));
-
-        // Normalise before matching, because the resolvers are not uniform:
-        // depth varies (host.OpenVaultCommand through
-        // host.Workspace?.ActiveGroup?.ActiveTab?.EditorInteractions?.X),
-        // null-conditionals appear only where the link is nullable, and long
-        // lambdas wrap across lines. Collapsing whitespace and dropping '?'
-        // makes every shape one dotted path.
-        string flattened = Regex.Replace(source, @"\s+", string.Empty).Replace("?", string.Empty);
-
-        return Regex.Matches(flattened, @"host\.([A-Za-z0-9_.]*?Command)\b")
-            .Select(match => match.Groups[1].Value)
+        return ResolverEntries()
+            .Select(entry => CommandPath(entry.Resolver))
+            .Where(path => path is not null)
+            .Select(path => path!)
             .ToHashSet(StringComparer.Ordinal);
+
+    }
+
+    /// <summary>
+    /// Every <c>[ChordTable.Ids.Name] = host =&gt; …</c> entry in the
+    /// registrar's resolver table, as (constant name, resolver body).
+    /// </summary>
+    /// <remarks>
+    /// Read as initializer syntax rather than matched as text. The old
+    /// form flattened the whole file and pattern-matched it, so a resolver
+    /// commented out or quoted in a string still answered — change a live
+    /// resolver from ZoomInCommand to ZoomOutCommand, leave the former in
+    /// a comment beneath it, and the menu and palette invoked different
+    /// commands while the twin stayed green.
+    /// </remarks>
+    private static IEnumerable<(string Name, ExpressionSyntax Resolver)> ResolverEntries()
+    {
+        CSharpSource registrar = CSharpSource.Load("Commands", "SlateCommandRegistrar.cs");
+        foreach (AssignmentExpressionSyntax assignment in registrar.Root
+            .DescendantNodes()
+            .OfType<AssignmentExpressionSyntax>())
+        {
+            if (assignment.Left is not ImplicitElementAccessSyntax key
+                || key.ArgumentList.Arguments.Count != 1)
+            {
+                continue;
+            }
+
+            // [ChordTable.Ids.Name]
+            if (key.ArgumentList.Arguments[0].Expression
+                is not MemberAccessExpressionSyntax id
+                || CSharpSource.Normalize(id.Expression) != "ChordTable.Ids")
+            {
+                continue;
+            }
+
+            if (assignment.Right is not LambdaExpressionSyntax lambda
+                || lambda.ExpressionBody is null)
+            {
+                continue;
+            }
+
+            yield return (id.Name.Identifier.ValueText, lambda.ExpressionBody);
+        }
+    }
+
+    /// <summary>
+    /// The <c>ICommand</c> property path a resolver returns:
+    /// <c>host =&gt; host.Workspace?.XCommand</c> yields
+    /// <c>Workspace.XCommand</c>.
+    /// </summary>
+    private static string? CommandPath(ExpressionSyntax resolver)
+    {
+        // Null-conditionals appear only where a link is nullable, and the
+        // depth varies from host.OpenVaultCommand to four levels; dropping
+        // '?' from the resolved expression makes every shape one dotted
+        // path. The text being normalised here is a syntax node, not a
+        // file, so nothing dead can reach it.
+        string path = CSharpSource.Normalize(resolver).Replace("?", string.Empty);
+        const string root = "host.";
+        if (!path.StartsWith(root, StringComparison.Ordinal)
+            || !path.EndsWith("Command", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        return path[root.Length..];
+    }
+
+    /// <summary>
+    /// The chord table's <c>const string</c> id constants, by field name.
+    /// </summary>
+    private static Dictionary<string, string> ChordTableIdConstants()
+    {
+        CSharpSource table = CSharpSource.Load("Commands", "ChordTable.cs");
+        var byName = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (FieldDeclarationSyntax field in table.Root
+            .DescendantNodes()
+            .OfType<FieldDeclarationSyntax>()
+            .Where(field => field.Modifiers.Any(SyntaxKind.ConstKeyword)))
+        {
+            foreach (VariableDeclaratorSyntax declarator in field.Declaration.Variables)
+            {
+                if (declarator.Initializer?.Value is LiteralExpressionSyntax literal
+                    && literal.IsKind(SyntaxKind.StringLiteralExpression))
+                {
+                    byName[declarator.Identifier.ValueText] = literal.Token.ValueText;
+                }
+            }
+        }
+
+        return byName;
     }
 
     private static string SourceRoot() =>

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Reflection;
-using System.Text.RegularExpressions;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using SlateWindows.Commands;
 using uniffi.slate_uniffi;
 
@@ -481,21 +481,24 @@ public sealed class CommandPaletteTests
     [Fact]
     public void TheShellFocusesTheSearchBoxSynchronously()
     {
-        string body = SourceText.WithoutComments(
-            File.ReadAllText(Path.Combine(
-                SourceText.ShellSourceRoot(), "MainWindow.Palette.cs")));
-        Match subscriber = Regex.Match(
-            body,
-            @"private void Palette_SearchFocusRequested\([^)]*\)\s*=>(?<body>[^;]*);");
-        Assert.True(
-            subscriber.Success,
-            "Palette_SearchFocusRequested is gone or no longer an expression "
-            + "body; P9's focus step has no gate until this scrape is updated.");
+        MethodDeclarationSyntax subscriber = CSharpSource
+            .Load("MainWindow.Palette.cs")
+            .Method("Palette_SearchFocusRequested");
 
-        string call = subscriber.Groups["body"].Value;
-        Assert.Contains("CommandPaletteSearchTextBox.Focus()", call, StringComparison.Ordinal);
-        Assert.DoesNotContain("InvokeAsync", call, StringComparison.Ordinal);
-        Assert.DoesNotContain("BeginInvoke", call, StringComparison.Ordinal);
+        Assert.True(
+            subscriber.ExpressionBody is not null,
+            "Palette_SearchFocusRequested is no longer an expression body, so "
+            + "the whole-body equality below cannot say what it does. Read the "
+            + "block and re-express this rather than weakening it.");
+
+        // The body IS the call — not merely contains it. Codex's round-4
+        // finding was that a containment test accepts code that never
+        // focuses anything: `_ = new Action(() =>
+        // CommandPaletteSearchTextBox.Focus())` mentions the call, matches,
+        // and does nothing. Whole-body equality admits exactly one program.
+        Assert.Equal(
+            "CommandPaletteSearchTextBox.Focus()",
+            CSharpSource.Normalize(subscriber.ExpressionBody!.Expression));
     }
 
     [Fact]

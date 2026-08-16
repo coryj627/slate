@@ -1,7 +1,8 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-using System.Text.RegularExpressions;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using System.Windows.Input;
 using SlateWindows.Commands;
 using System.Xml.Linq;
@@ -210,74 +211,77 @@ public sealed class ModalSurfaceTests
     [Fact]
     public void EveryLiveStateFieldReadsThePropertyNamedAfterIt()
     {
-        string source = SourceText.WithoutComments(
-            File.ReadAllText(Path.Combine(
-                SourceRoot(), "MainWindow.Palette.cs")));
+        CSharpSource shell = CSharpSource.Load("MainWindow.Palette.cs");
 
-        // Singleness FIRST. Taking Regex.Match's first hit while the
-        // message claims "a single call" is the same first-match-not-the-
-        // right-match bug that already bit the MethodBody scrape once: a
-        // second construction site elsewhere in this file would be read
-        // instead of the live one, silently. Two sites is a failure, not a
-        // coin toss.
-        MatchCollection constructions = Regex.Matches(source, @"new ModalSurfaceState\(");
+        // Singleness first. A second construction site anywhere in this
+        // file would otherwise be read instead of the live one, silently
+        // — the first-match-not-the-right-match bug that bit three
+        // separate scrapes in #741.
+        ObjectCreationExpressionSyntax[] constructions = shell.Root
+            .DescendantNodes()
+            .OfType<ObjectCreationExpressionSyntax>()
+            .Where(creation => creation.Type is IdentifierNameSyntax type
+                && type.Identifier.ValueText == nameof(ModalSurfaceState))
+            .ToArray();
         Assert.True(
-            constructions.Count == 1,
-            $"MainWindow.Palette.cs builds ModalSurfaceState in {constructions.Count} "
-            + "places. This pairing reads one of them, so any other is unchecked "
-            + "— scope the scrape before adding a second construction site.");
+            constructions.Length == 1,
+            "MainWindow.Palette.cs builds ModalSurfaceState in "
+            + $"{constructions.Length} places. This pairing reads one of them, "
+            + "so any other is unchecked — scope the query before adding a "
+            + "second construction site.");
 
-        Match constructor = Regex.Match(
-            source,
-            @"new ModalSurfaceState\((?<arguments>[^;]*?)\);",
-            RegexOptions.Singleline);
-        Assert.True(
-            constructor.Success,
-            "CurrentModalSurfaceState no longer builds the record with a "
-            + "single new ModalSurfaceState(...) call, so this pairing cannot "
-            + "be read. Update the scrape rather than dropping the check.");
+        ObjectCreationExpressionSyntax construction = constructions[0];
+        SyntaxNode scope =
+            (SyntaxNode?)construction.FirstAncestorOrSelf<MemberDeclarationSyntax>()
+            ?? shell.Root;
 
-        var seen = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (Match argument in Regex.Matches(
-            constructor.Groups["arguments"].Value,
-            @"(?<name>[A-Za-z]+):\s*(?<expression>[^,)]+)"))
+        var seen = new Dictionary<string, ExpressionSyntax>(StringComparer.Ordinal);
+        foreach (ArgumentSyntax argument in construction.ArgumentList!.Arguments)
         {
-            seen[argument.Groups["name"].Value] = argument.Groups["expression"].Value.Trim();
+            Assert.True(
+                argument.NameColon is not null,
+                $"ModalSurfaceState is built with the positional argument "
+                + $"'{argument}'. The pairing below reads argument NAMES, and a "
+                + "positional list silently reorders without any of these "
+                + "assertions noticing.");
+            seen[argument.NameColon!.Name.Identifier.ValueText] = argument.Expression;
         }
 
-        // Every field named, and nothing else parsed: an expression the
-        // argument pattern truncates (one containing a parenthesis, say)
-        // would otherwise be compared as a fragment.
-        Assert.True(
-            seen.Count == Enum.GetValues<ModalSurface>().Length,
-            $"parsed {seen.Count} named arguments for "
-            + $"{Enum.GetValues<ModalSurface>().Length} surfaces — the argument "
-            + "pattern is reading the call wrongly, so the pairings below are "
-            + "comparing fragments.");
+        Assert.Equal(Enum.GetValues<ModalSurface>().Length, seen.Count);
 
         foreach (ModalSurface surface in Enum.GetValues<ModalSurface>())
         {
             Assert.True(
-                seen.TryGetValue(surface.ToString(), out string? expression),
+                seen.TryGetValue(surface.ToString(), out ExpressionSyntax? argument),
                 $"{surface} is never assigned in CurrentModalSurfaceState, so the "
                 + "palette cannot know whether it is open.");
+
+            // Resolved through any local alias, so extracting the read into
+            // a well-named bool cannot hide a wrong property behind it.
+            ExpressionSyntax effective = CSharpSource.Resolve(argument!, scope);
 
             if (OverlayStateExpressions.TryGetValue(surface, out string? expected))
             {
                 // The two overlays read an IsOpen flag rather than a
                 // {Surface}Sheet property, so their exact expression is
                 // pinned instead of matched by name.
-                Assert.True(
-                    expression == expected,
-                    $"{surface} reads '{expression}', not '{expected}'.");
+                Assert.Equal(expected, CSharpSource.Normalize(effective));
                 continue;
             }
 
+            // An EXACT member name, never a substring. The workspace names
+            // these inconsistently — AddPropertySheet and DashboardEditorSheet
+            // carry the suffix, CitationDetails and FilesCiting do not — so
+            // either spelling is accepted, but only as a whole name. A
+            // substring test would let a hypothetical AddPropertyRow stand in
+            // for AddPropertySheet, which is the shielding this replaces.
+            string[] accepted = [surface.ToString(), surface + "Sheet"];
             Assert.True(
-                expression!.Contains(surface.ToString(), StringComparison.Ordinal),
-                $"{surface} reads '{expression}', which does not name {surface}. "
-                + "A crossed assignment here reports the wrong surface open and "
-                + "lets the palette render beneath a live sheet.");
+                CSharpSource.MemberNames(effective).Intersect(accepted).Any(),
+                $"{surface} reads '{effective}', which never touches "
+                + $"{string.Join(" or ", accepted)}. A crossed assignment here "
+                + "reports the wrong surface open and lets the palette render "
+                + "beneath a live sheet.");
         }
     }
 
@@ -288,7 +292,7 @@ public sealed class ModalSurfaceTests
     private static readonly Dictionary<ModalSurface, string> OverlayStateExpressions =
         new()
         {
-            [ModalSurface.QuickOpen] = "_viewModel.QuickSwitcher?.IsOpen == true",
+            [ModalSurface.QuickOpen] = "_viewModel.QuickSwitcher?.IsOpen==true",
             [ModalSurface.CommandPalette] = "_viewModel.Palette.IsOpen",
         };
 
