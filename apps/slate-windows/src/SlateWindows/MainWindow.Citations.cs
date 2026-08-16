@@ -459,6 +459,15 @@ public partial class MainWindow
         _ = Dispatcher.InvokeAsync(
             () =>
             {
+                // Codex round 3 (#742): search topmost takes priority —
+                // this sheet is palette-invokable over an open search
+                // overlay, and both the captured target and the list
+                // fallback sit behind it.
+                if (TryFocusSearchIfTopmost())
+                {
+                    return;
+                }
+
                 if (target is UIElement { IsVisible: true } && target.Focus())
                 {
                     return;

@@ -613,17 +613,37 @@ public sealed class ModalSurfaceTests
     [Fact]
     public void TheSheetRestoreFallsBackToTheSearchBoxWhenSearchIsTopmost()
     {
-        Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax restore =
-            CSharpSource.Load("MainWindow.Properties.cs").Method("RestoreFocusAfterSheet");
+        // Codex round 3: the round-2 gate covered ONE of the three
+        // independent restore implementations, and the same defect
+        // survived through Citation Summary. Every restore site must
+        // route through the shared topmost-search rule.
+        foreach ((string file, string method) in new[]
+        {
+            ("MainWindow.Properties.cs", "RestoreFocusAfterSheet"),
+            ("MainWindow.Citations.cs", "RestoreFocusTo"),
+            ("MainWindow.Bases.cs", "RestoreBasesOverlayFocus"),
+        })
+        {
+            Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax restore =
+                CSharpSource.Load(file).Method(method);
+            Assert.True(
+                CSharpSource.Invokes(restore, "TryFocusSearchIfTopmost"),
+                $"{file}.{method} no longer routes through "
+                + "TryFocusSearchIfTopmost — a sheet closing above a "
+                + "still-open search overlay leaves the exposed search box "
+                + "without text focus.");
+        }
 
+        // And the shared helper itself must consult ownership and focus
+        // the search box.
+        Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax helper =
+            CSharpSource.Load("MainWindow.Search.cs").Method("TryFocusSearchIfTopmost");
         Assert.True(
-            CSharpSource.Invokes(restore, "ModalSurfaces.SearchOwnsKeys"),
-            "RestoreFocusAfterSheet no longer consults SearchOwnsKeys — a "
-            + "failed restore above a still-open search overlay leaves the "
-            + "exposed search box without text focus.");
+            CSharpSource.Invokes(helper, "ModalSurfaces.SearchOwnsKeys"),
+            "TryFocusSearchIfTopmost no longer consults SearchOwnsKeys.");
         Assert.True(
-            CSharpSource.Invokes(restore, "SearchOverlaySearchTextBox.Focus"),
-            "RestoreFocusAfterSheet no longer falls back to the search box.");
+            CSharpSource.Invokes(helper, "SearchOverlaySearchTextBox.Focus"),
+            "TryFocusSearchIfTopmost no longer focuses the search box.");
     }
 
     private static ModalSurfaceState StateWith(

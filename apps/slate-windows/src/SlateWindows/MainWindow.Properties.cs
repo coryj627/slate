@@ -193,14 +193,17 @@ public partial class MainWindow
                 // the captured target cannot take focus, hand focus to
                 // the topmost modal owner — the search box when search
                 // is topmost.
-                // Focus() returns false for a collapsed or unfocusable
-                // target, which is exactly the palette-box case.
-                bool restored = previous?.Focus() == true;
-                if (!restored
-                    && ModalSurfaces.SearchOwnsKeys(CurrentModalSurfaceState))
+                // Codex round 3 (#742): search topmost takes priority
+                // over the captured target, not merely over a FAILED
+                // restore — the pre-sheet element is behind the overlay
+                // by construction. One shared rule for all three sheet
+                // restore sites; see TryFocusSearchIfTopmost.
+                if (TryFocusSearchIfTopmost())
                 {
-                    _ = SearchOverlaySearchTextBox.Focus();
+                    return;
                 }
+
+                _ = previous?.Focus();
             },
             System.Windows.Threading.DispatcherPriority.Input);
     }

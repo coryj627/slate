@@ -63,6 +63,30 @@ public partial class MainWindow
     private void Search_Dismissed(object? sender, EventArgs e) => RestoreFocusAfterSearch();
 
     /// <summary>
+    /// The shared topmost-search focus rule for every closing surface
+    /// (codex rounds 2–3, #742). When search owns the keyboard, the
+    /// pre-surface element is BEHIND the overlay by construction — the
+    /// palette box that invoked the sheet is collapsed, and anything
+    /// else is under the scrim — so restoring to it is wrong even when
+    /// <c>Focus()</c> would succeed. Every sheet/overlay restore path
+    /// calls this FIRST; a true return means the search box took focus
+    /// and the caller's own restore logic must not run. Round 3 found
+    /// the round-2 fix covering only one of the three independent
+    /// restore implementations, which is why this is one shared helper
+    /// rather than three copies of the rule.
+    /// </summary>
+    internal bool TryFocusSearchIfTopmost()
+    {
+        if (!ModalSurfaces.SearchOwnsKeys(CurrentModalSurfaceState))
+        {
+            return false;
+        }
+
+        _ = SearchOverlaySearchTextBox.Focus();
+        return true;
+    }
+
+    /// <summary>
     /// Applies <see cref="ModalSurfaces.DecideSearchOpen"/>, performing
     /// the dismissal it calls for — the search twin of
     /// <see cref="TryClearTheWayForThePalette"/>.

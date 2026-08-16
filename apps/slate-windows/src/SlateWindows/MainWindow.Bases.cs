@@ -92,6 +92,13 @@ public partial class MainWindow
         _ = Dispatcher.InvokeAsync(
             () =>
             {
+                // Codex round 3 (#742): search topmost takes priority —
+                // see TryFocusSearchIfTopmost.
+                if (TryFocusSearchIfTopmost())
+                {
+                    return;
+                }
+
                 if (token is UIElement { IsVisible: true } && token.Focus())
                 {
                     return;
