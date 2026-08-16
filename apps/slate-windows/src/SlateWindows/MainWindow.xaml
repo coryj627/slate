@@ -113,6 +113,17 @@
                 <MenuItem Header="_Shrink Pane" InputGestureText="{cmd:ChordText slate.workspace.shrinkPane}" Command="{Binding Workspace.ShrinkPaneCommand}" />
                 <Separator />
                 <MenuItem Header="Toggle Right _Pane" InputGestureText="{cmd:ChordText slate.view.toggleRightPane}" Command="{Binding Workspace.ToggleRightPaneCommand}" />
+                <!-- W5-2 close-out (#742): slate.view.toggleSearch. mac
+                     homes "Search Vault…" in Edit; Windows has no Edit
+                     menu, and its view-section verbs live here beside
+                     Toggle Right Pane. Invokes the same unguarded
+                     ToggleSearchCommand the palette runs; the
+                     Ctrl+Shift+F chord stays imperative in
+                     Window_PreviewKeyDown, where the modal gate lives. -->
+                <MenuItem Header="Search _Vault…"
+                          AutomationProperties.AutomationId="SearchVaultMenuItem"
+                          InputGestureText="{cmd:ChordText slate.view.toggleSearch}"
+                          Command="{Binding ToggleSearchCommand}" />
                 <MenuItem Header="Show Tasks _Review"
                           AutomationProperties.AutomationId="ShowTasksReviewMenuItem"
                           InputGestureText="{cmd:ChordText slate.tasks.review}"
@@ -2047,8 +2058,14 @@
                                              palette's horizontal StackPanel: the
                                              snippet is never truncated (accepted
                                              risk SR-2, mac's WCAG 1.4.4 call), so
-                                             a long one wraps into a tall row. -->
-                                        <ItemsControl ItemsSource="{Binding SnippetSegments}"
+                                             a long one wraps into a tall row.
+                                             The host is peer-suppressed: a plain
+                                             ItemsControl publishes an unnamed
+                                             List INSIDE the row, breaking S4's
+                                             one-stop rule (close-out journey
+                                             finding). -->
+                                        <local:AutomationPresentationItemsControl
+                                                      ItemsSource="{Binding SnippetSegments}"
                                                       Focusable="False">
                                             <ItemsControl.ItemsPanel>
                                                 <ItemsPanelTemplate>
@@ -2073,7 +2090,7 @@
                                                     </local:AutomationPresentationTextBlock>
                                                 </DataTemplate>
                                             </ItemsControl.ItemTemplate>
-                                        </ItemsControl>
+                                        </local:AutomationPresentationItemsControl>
                                     </StackPanel>
                                 </DataTemplate>
                             </ListBox.ItemTemplate>

@@ -85,7 +85,13 @@ SECTION_ISSUE = {
 ID_ISSUE_OVERRIDES = {
     "slate.workspace.quickOpen": "#723 (W1-4)",
     "slate.view.toggleSearch": "#742 (W5-2)",
-    "slate.editor.findInNote": "#742 (W5-2)",
+    # Reassigned out of #742 at the W5-2 close-out: find-in-note shares
+    # no surface with vault search (mac ships it as the NSTextView find
+    # bar; core's SearchScope::File is reserved and unreachable), and
+    # the Windows equivalent was measured unusable as shipped — see
+    # docs/plans/29_search_overlay_contracts.md "Find-in-note is not in
+    # this issue".
+    "slate.editor.findInNote": "#1112 (find-in-note, split from #742)",
     "slate.editor.save": "#724 (W2-1)",
     "slate.editor.toggleViewMode": "#728 (W3-1)",
     "slate.editor.addProperty": "#736 (W4-4)",
@@ -579,6 +585,19 @@ W4_8_COMMANDS = {
 }
 W4_STATUS_BY_COMMAND.update({command: W4_8_STATUS for command in W4_8_COMMANDS})
 
+# W5-2 (#742): the vault-search overlay. mac registers exactly ONE
+# search command; the overlay's own keys are surface interactions
+# (chordSurface rows), and find-in-note moved to #1112 at the
+# close-out (see ID_ISSUE_OVERRIDES).
+W5_2_STATUS = (
+    "implemented; local gates green 2026-08-16; "
+    "interactive CI + human AT pending"
+)
+
+W5_2_DELIVERED_COMMANDS = {
+    "slate.view.toggleSearch",
+}
+
 # W4 delivery, same per-command shape as W3.
 # slate.editor.togglePropertiesSource stays PENDING: YAML source mode
 # was scoped out of W4-4 (no set_frontmatter_source call site) — the
@@ -655,7 +674,7 @@ def load_delivery_evidence(
     delivered_commands = {
         cid for cid, _, _, _, issue in cmd_rows
         if issue.startswith(("#720", "#721", "#722", "#723", "#724", "#725"))
-    } | W3_DELIVERED_COMMANDS | W4_DELIVERED_COMMANDS
+    } | W3_DELIVERED_COMMANDS | W4_DELIVERED_COMMANDS | W5_2_DELIVERED_COMMANDS
     mapped_commands = set(command_map)
     if mapped_commands != delivered_commands:
         missing = sorted(delivered_commands - mapped_commands)
@@ -668,7 +687,7 @@ def load_delivery_evidence(
 
     expected_issues = {
         "#381", "#720", "#721", "#722", "#723", "#724", "#725", "#728", "#735", "#736",
-        "#737", "#738", "#739", "#740", "#741",
+        "#737", "#738", "#739", "#740", "#741", "#742",
     }
     if set(issue_map) != expected_issues:
         fail(
@@ -695,6 +714,8 @@ def command_delivery_status(
         return W3_IMPLEMENTED_STATUS
     if command_id in W4_DELIVERED_COMMANDS:
         return W4_STATUS_BY_COMMAND.get(command_id, W4_IMPLEMENTED_STATUS)
+    if command_id in W5_2_DELIVERED_COMMANDS:
+        return W5_2_STATUS
     return (
         W2_IMPLEMENTED_STATUS
         if issue.startswith(("#381", "#724", "#725"))
@@ -713,6 +734,8 @@ def issue_delivery_status(
         return W2_IMPLEMENTED_STATUS
     if issue_number == "#741":
         return W5_1_STATUS
+    if issue_number == "#742":
+        return W5_2_STATUS
     return IMPLEMENTED_STATUS
 
 
@@ -847,7 +870,7 @@ def main() -> int:
     a("| Properties (in-note header, panel, typed rows, add-property) | `Properties*` views | #736 (W4-4) | pending |")
     a("| Bases grid + builder (N shipped) | `Bases/` | #738 (W4-6) | implemented; local gates green 2026-08-08; interactive CI + human AT pending |")
     a(f"| Command palette | `CommandPaletteModel.swift` (core ranking, W0.5-1) | #741 (W5-1) | {issue_delivery_status('#741 (W5-1)', delivery_evidence)} |")
-    a("| Search overlay | search UI over `full_text_search` | #742 (W5-2) | pending |")
+    a(f"| Search overlay | search UI over `full_text_search` | #742 (W5-2) | {issue_delivery_status('#742 (W5-2)', delivery_evidence)} |")
     a("| Templates picker + prompt flow | template views | #743 (W5-3) | pending |")
     a("| File management + bulk rename | sidebar/file commands | #744 (W5-4) | pending |")
     a("| Accessible canvas (T parity) | `Canvas/` | #745 (W6-1) | pending |")

@@ -549,6 +549,13 @@ public sealed class CommandRegistrationTests
         public ICommand CloseVaultCommand =>
             CloseVaultOverride
             ?? new StubCommand(() => CloseVaultInvocations++, () => true);
+
+        public int ToggleSearchInvocations { get; private set; }
+
+        // W5-2 close-out (#742): unguarded like the production command —
+        // the modal gate lives on the chord path, not the ICommand.
+        public ICommand ToggleSearchCommand =>
+            new StubCommand(() => ToggleSearchInvocations++, () => true);
     }
 
     private sealed class StubCommand : ICommand

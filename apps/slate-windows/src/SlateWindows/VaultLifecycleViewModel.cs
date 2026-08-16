@@ -101,6 +101,7 @@ internal sealed class VaultLifecycleViewModel
     private readonly AsyncRelayCommand _openVaultCommand;
     private readonly AsyncRelayCommand _openRecentCommand;
     private readonly RelayCommand _closeVaultCommand;
+    private readonly RelayCommand _toggleSearchCommand;
 
     private VaultSession? _session;
     private CancelToken? _scanCancel;
@@ -188,6 +189,15 @@ internal sealed class VaultLifecycleViewModel
         _closeVaultCommand = new RelayCommand(
             _ => CloseVault(),
             _ => IsVaultOpen && !IsBusy);
+        // W5-2 close-out (#742): UNGUARDED, matching mac's palette
+        // action (toggleSearchOverlay(), SlateCommands.swift:1483-1494).
+        // The palette invokes BEFORE dismissing (P9), so a modal gate
+        // here would see the palette itself open and refuse every
+        // palette invocation; the modal decision stays on the chord
+        // path (MainWindow.Window_PreviewKeyDown). The no-vault refusal
+        // lives inside Toggle() → Open(), which announces
+        // SearchNeedsVault — mac's exact posture.
+        _toggleSearchCommand = new RelayCommand(_ => Search.Toggle(), _ => true);
         ReloadRecentVaults();
     }
 
@@ -202,6 +212,12 @@ internal sealed class VaultLifecycleViewModel
     public ICommand OpenVaultCommand => _openVaultCommand;
     public ICommand OpenRecentCommand => _openRecentCommand;
     public ICommand CloseVaultCommand => _closeVaultCommand;
+
+    /// <summary>W5-2 close-out (#742): the registered
+    /// <c>slate.view.toggleSearch</c> surface — the palette and the
+    /// Workspace ▸ Search Vault… menu item both run it. See the
+    /// constructor note for why it is unguarded.</summary>
+    public ICommand ToggleSearchCommand => _toggleSearchCommand;
 
     public bool IsVaultOpen
     {

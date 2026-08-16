@@ -51,7 +51,10 @@ internal sealed record SearchOpenRequest(string Path, string Query, string Snipp
 /// </para>
 /// <para>
 /// <b>No <c>ICommand</c> surface</b>, the palette precedent (PR-4):
-/// the host binds key handlers to these methods.
+/// the host binds key handlers to these methods. The one registered
+/// command (<c>slate.view.toggleSearch</c>) is an unguarded adapter
+/// over <see cref="Toggle"/> on <c>VaultLifecycleViewModel</c>, added
+/// at the W5-2 close-out.
 /// </para>
 /// </remarks>
 internal sealed class SearchOverlayViewModel : BindableBase, IDisposable

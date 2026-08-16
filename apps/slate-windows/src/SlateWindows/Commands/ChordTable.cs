@@ -594,18 +594,20 @@ internal static class ChordTable
         Reg(Ids.ToggleRightPane, "Toggle Right Pane", CommandSection.View,
             "Hide or show the right pane (the panel rail). Control-Alt-I.",
             "⌥⌘I", "Ctrl+Alt+I"),
-        // W5-2 (#742): the vault-search overlay's toggle. mac registers
-        // this id ("Search Vault", ⇧⌘F); the Windows chord is delivered
-        // imperatively from MainWindow.Window_PreviewKeyDown — the
-        // palette-chord shape — because SearchOverlayViewModel exposes
-        // methods, not ICommands (PR-4), and registration would need a
-        // modal-decision-aware ICommand the registrar cannot resolve yet.
-        Unreg(Ids.ToggleSearch, "Search Vault", CommandSection.View,
-            "W5-2: delivered imperatively from MainWindow.Window_PreviewKeyDown "
-            + "because the overlay exposes methods rather than ICommands (PR-4, "
-            + "the palette's own shape). Palette registration is deferred to the "
-            + "W5-2 close-out.",
-            "⇧⌘F", "Ctrl+Shift+F", ChordScope.Global),
+        // W5-2 close-out (#742): the vault-search overlay's toggle,
+        // registered with mac's exact label and hint. The resolved
+        // ICommand is UNGUARDED — mac's palette action calls
+        // toggleSearchOverlay() with no modal gate
+        // (SlateCommands.swift:1483-1494), and the palette invokes
+        // BEFORE dismissing (P9), so a modal-decision-aware guard
+        // would refuse every palette invocation. The modal gate stays
+        // on the chord path only: Ctrl+Shift+F is still delivered
+        // imperatively from MainWindow.Window_PreviewKeyDown, where
+        // TryClearTheWayForSearch lives (the ChordTableTests
+        // imperative allow-list records why no KeyBinding exists).
+        Reg(Ids.ToggleSearch, "Search Vault", CommandSection.View,
+            "Toggle the vault-wide search overlay.",
+            "⇧⌘F", "Ctrl+Shift+F"),
         Reg(Ids.ShowHistoryPanel, "Show History Panel", CommandSection.View,
             "Open the History leaf in the right pane."),
         Reg(Ids.RefreshSyncDiagnostics, "Refresh Sync Diagnostics", CommandSection.View,

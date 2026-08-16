@@ -487,10 +487,13 @@ public sealed class ChordTableTests
                 + "an imperative chord must be allow-listed here to be checked."),
             [ChordTable.Ids.ToggleSearch] = new(
                 "W5-2: Ctrl+Shift+F is delivered from Window_PreviewKeyDown, not a "
-                + "KeyBinding, for the same PR-4 reason as the palette's chord — "
-                + "SearchOverlayViewModel exposes methods, not ICommands. Recorded "
-                + "here so the W5-1 red-team finding (an imperative chord shipping "
-                + "with no table row) cannot recur for search."),
+                + "KeyBinding. The close-out registered ToggleSearchCommand, but a "
+                + "KeyBinding to it would bypass the modal-surface gate "
+                + "(TryClearTheWayForSearch) that only the chord path applies — "
+                + "the registered command is deliberately unguarded because the "
+                + "palette invokes before dismissing (P9). Recorded here so the "
+                + "W5-1 red-team finding (an imperative chord shipping with no "
+                + "table row) cannot recur for search."),
         };
         for (int slot = 1; slot <= 9; slot++)
         {

@@ -629,6 +629,11 @@ final class ParityHarnessTests: XCTestCase {
         return String(text.prefix(targetBytes))
     }
 
+    // W5-2 (#742, contract S13): `summary` pins core's `summary_for`
+    // render — the string the overlay displays verbatim and the
+    // announcement template renders — byte-identical across both twins.
+    // Same key, same position as the C# twin (SurfaceSerializer.cs),
+    // same commit.
     private static func searchArtifact(session: VaultSession, cancel: CancelToken) throws -> String {
         let j = CanonicalJson()
         j.raw("{\"queries\":[")
@@ -641,7 +646,9 @@ final class ParityHarnessTests: XCTestCase {
                 }
                 return Array(lhs.snippet.utf16).lexicographicallyPrecedes(Array(rhs.snippet.utf16))
             }
-            j.raw("{\"query\":").str(query).raw(",\"rows\":[")
+            j.raw("{\"query\":").str(query)
+                .raw(",\"summary\":").str(rs.summary)
+                .raw(",\"rows\":[")
             for (i, row) in rows.enumerated() {
                 if i > 0 { j.raw(",") }
                 j.raw("{\"path\":").str(slash(row.path))
