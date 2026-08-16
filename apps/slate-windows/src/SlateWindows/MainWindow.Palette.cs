@@ -375,7 +375,12 @@ public partial class MainWindow
 
     private bool IsDescendantOfPaletteOverlay(DependencyObject? node)
     {
-        for (; node is not null; node = VisualTreeHelper.GetParent(node))
+        // Codex round 7 (#742): VisualTreeHelper.GetParent THROWS for a
+        // FrameworkContentElement — a focused reading-view Hyperlink is
+        // one — so the walk must go through the logical parent until it
+        // reaches a Visual. This walker predates W5-2 and the crash was
+        // latent in the claimed-focus probe too.
+        for (; node is not null; node = FocusAncestry.Parent(node))
         {
             if (ReferenceEquals(node, CommandPaletteOverlay))
             {

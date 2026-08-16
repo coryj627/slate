@@ -792,6 +792,63 @@ public sealed class ModalSurfaceTests
     }
 
     /// <summary>
+    /// The ancestry walk survives a non-Visual focus token (codex round
+    /// 7): a focused reading-view Hyperlink is a FrameworkContentElement,
+    /// and VisualTreeHelper.GetParent THROWS for one — the palette
+    /// dismissal crashed instead of preserving the search-predates-palette
+    /// lineage.
+    /// </summary>
+    [Fact]
+    public void TheAncestryWalkSurvivesAFocusedHyperlink()
+    {
+        Exception? failure = null;
+        var thread = new System.Threading.Thread(() =>
+        {
+            try
+            {
+                var hyperlink = new System.Windows.Documents.Hyperlink(
+                    new System.Windows.Documents.Run("link"));
+                var text = new System.Windows.Controls.TextBlock(hyperlink);
+                var inside = new System.Windows.Controls.Border { Child = text };
+                var outside = new System.Windows.Controls.Border();
+
+                // Walk from the Hyperlink: must not throw, must find the
+                // enclosing border, must not find an unrelated one.
+                Assert.True(WalksTo(hyperlink, inside));
+                Assert.False(WalksTo(hyperlink, outside));
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
+        });
+        thread.SetApartmentState(System.Threading.ApartmentState.STA);
+        thread.Start();
+        thread.Join();
+        if (failure is not null)
+        {
+            throw new Xunit.Sdk.XunitException(failure.ToString());
+        }
+    }
+
+    private static bool WalksTo(
+        System.Windows.DependencyObject start,
+        System.Windows.DependencyObject ancestor)
+    {
+        for (System.Windows.DependencyObject? node = start;
+            node is not null;
+            node = FocusAncestry.Parent(node))
+        {
+            if (ReferenceEquals(node, ancestor))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// The pickers are mutually exclusive (codex round 4): Quick Open
     /// paints BELOW search, so opening it under an open search overlay
     /// put focus in a hidden box. The shell's switcher-open observer

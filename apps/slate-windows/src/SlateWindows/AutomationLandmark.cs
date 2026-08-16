@@ -152,3 +152,20 @@ internal sealed class AutomationLandmarkPeer : FrameworkElementAutomationPeer
 
     protected override bool IsContentElementCore() => false;
 }
+
+/// <summary>
+/// Focus-token ancestry that survives non-Visual focus (#742, codex
+/// round 7). <see cref="System.Windows.Media.VisualTreeHelper"/> throws
+/// for a <see cref="System.Windows.FrameworkContentElement"/> — a
+/// focused reading-view Hyperlink is one — so content elements walk
+/// their logical parent until the tree re-enters visuals.
+/// </summary>
+internal static class FocusAncestry
+{
+    internal static System.Windows.DependencyObject? Parent(
+        System.Windows.DependencyObject node) =>
+        node is System.Windows.Media.Visual
+            or System.Windows.Media.Media3D.Visual3D
+            ? System.Windows.Media.VisualTreeHelper.GetParent(node)
+            : System.Windows.LogicalTreeHelper.GetParent(node);
+}
