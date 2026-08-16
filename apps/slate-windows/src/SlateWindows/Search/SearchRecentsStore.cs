@@ -54,6 +54,9 @@ internal sealed class SearchRecentsStore
 
     private const string FileName = "search-recents.json";
 
+    /// <summary>The UTF-8 byte-order mark, stripped on load only.</summary>
+    private static ReadOnlySpan<byte> Utf8Bom => [0xEF, 0xBB, 0xBF];
+
     private static readonly JsonSerializerOptions WriteOptions = new()
     {
         WriteIndented = true,
@@ -95,7 +98,18 @@ internal sealed class SearchRecentsStore
                 return [];
             }
 
-            string?[]? decoded = JsonSerializer.Deserialize<string?[]>(input);
+            // Interop, not leniency (contract S14): a Notepad round trip
+            // prepends a UTF-8 BOM, which mac's JSONDecoder accepts and
+            // Utf8JsonReader rejects — without this strip, one Windows
+            // edit of the file silently forgets every recent. Writes
+            // never emit one (SerializeToUtf8Bytes is BOM-free).
+            ReadOnlySpan<byte> json = input.AsSpan();
+            if (json.StartsWith(Utf8Bom))
+            {
+                json = json[Utf8Bom.Length..];
+            }
+
+            string?[]? decoded = JsonSerializer.Deserialize<string?[]>(json);
             if (decoded is null)
             {
                 return [];

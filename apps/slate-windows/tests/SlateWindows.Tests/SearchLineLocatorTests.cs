@@ -82,6 +82,57 @@ public sealed class SearchLineLocatorTests
         Assert.Equal(4, SearchLineLocator.FirstTokenLine(Body, "fourth"));
     }
 
+    // ---- SR-3: the accepted tokenizer nuances (contracts doc) -----------
+    //
+    // Three places the .NET and Swift standard libraries disagree at the
+    // margins. The port deliberately does NOT chase mac byte-for-byte;
+    // each divergence bottoms out in the benign no-match fallback —
+    // line 1 — and these facts pin that recorded behaviour so a future
+    // "fix" is a deliberate SR-3 revision, not drift.
+
+    [Fact]
+    public void Sr3AnAstralPlaneQueryDegradesToLineOne()
+    {
+        // (1) UTF-16 vs Character tokenization: 𝒜 (U+1D49C) is a letter
+        // to Swift's grapheme-based isLetter, but each of its UTF-16
+        // surrogate halves fails char.IsLetterOrDigit, so no token ever
+        // forms and the scan falls back to line 1 — even when the body
+        // contains the exact character. Mac would land on line 2.
+        string body = "first line\n\U0001D49C sits on line two";
+        Assert.Equal(1, SearchLineLocator.FirstTokenLine(body, "\U0001D49C"));
+    }
+
+    [Fact]
+    public void Sr3ANonDecimalNumeralDegradesToLineOne()
+    {
+        // (2) numeric classification: Swift's tokenizer admits Ⅻ
+        // (U+216B, category Nl — alphabetic to Character.isLetter) and
+        // then drops the pure-numeral token via isNumber; here
+        // char.IsLetterOrDigit excludes Nl entirely, so the numeral
+        // never forms a token and splits any token it touches. A bare
+        // numeral query bottoms out at line 1 on both platforms — by
+        // different routes — and a mixed token anchors on its letter
+        // fragments here.
+        string body = "first line\nⅫ on line two";
+        Assert.Equal(1, SearchLineLocator.FirstTokenLine(body, "Ⅻ"));
+        Assert.Equal(
+            2,
+            SearchLineLocator.FirstTokenLine("x\nnote here", "noteⅫ"));
+    }
+
+    [Fact]
+    public void Sr3CanonicalEquivalenceIsNotAppliedAndDegradesToLineOne()
+    {
+        // (3) ordinal IndexOf vs Swift's canonically-equivalent string
+        // search: a precomposed query (é, U+00E9) does not match a
+        // decomposed body (e + U+0301) here — mac would land on line 2;
+        // Windows accepts the line-1 fallback.
+        string decomposedBody = "first line\ncafe\u0301 on line two";
+        Assert.Equal(
+            1,
+            SearchLineLocator.FirstTokenLine(decomposedBody, "caf\u00E9"));
+    }
+
     // ---- LineStartOffset: where the caret parks -------------------------
 
     [Fact]

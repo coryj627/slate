@@ -37,10 +37,11 @@ internal sealed record SearchOpenRequest(string Path, string Query, string Snipp
 /// (<see cref="QuickSwitcherViewModel"/>): capture the UI
 /// <see cref="SynchronizationContext"/> at construction, debounce 150 ms
 /// trailing, run the search through <see cref="Task.Run(Action)"/>,
-/// marshal back, and check staleness on <b>four</b> independent things
+/// marshal back, and check staleness on <b>five</b> independent things
 /// before publishing — token identity, session identity, query
-/// unchanged, overlay still open — because three of them have each
-/// shipped as a bug on mac.
+/// unchanged, scope unchanged, overlay still open — because three of
+/// them have each shipped as a bug on mac and the scope arm closed a
+/// Windows-found one (red-team round 1).
 /// </para>
 /// <para>
 /// <b>No dedup on the query pipeline</b> (contract S7): mac's red-team
@@ -84,6 +85,7 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
     private string _summary = string.Empty;
     private string? _lastResultsQuery;
     private int _selectedIndex = -1;
+    private bool _suppressSelectionAnnouncement;
     private bool _isOpen;
     private IReadOnlyList<string> _recents = [];
 
@@ -208,10 +210,40 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
     /// anywhere in this feature.</summary>
     public string Summary => _summary;
 
+    /// <summary>
+    /// The selected result row. A change onto a valid row announces
+    /// <c>RowSelected</c> with the row's <b>basename only</b> — mac's
+    /// on-focus announcement (<c>SearchOverlay.swift:537-552</c>: the
+    /// full label with snippet stays on the element; every hop must not
+    /// speak a paragraph of snippet). The publish-time auto-select is
+    /// suppressed (the palette's P10 shape) so a result set never
+    /// double-speaks its top row over the summary announcement, and
+    /// <see cref="BindableBase.SetField"/>'s equality gate keeps a
+    /// re-selection of the same index silent.
+    /// </summary>
     public int SelectedIndex
     {
         get => _selectedIndex;
-        set => SetField(ref _selectedIndex, value);
+        set
+        {
+            // Disarm even when nothing changed, so a publish that lands
+            // on the already-selected index cannot leave the flag armed
+            // to swallow the NEXT arrow move (the palette's disarm-on-
+            // no-change discipline).
+            bool suppress = _suppressSelectionAnnouncement;
+            _suppressSelectionAnnouncement = false;
+            if (!SetField(ref _selectedIndex, value))
+            {
+                return;
+            }
+
+            if (suppress || value < 0 || value >= Rows.Count)
+            {
+                return;
+            }
+
+            _announce(new A11yEvent.RowSelected(Rows[value].Basename));
+        }
     }
 
     public bool IsOpen
@@ -595,7 +627,7 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
                 failure = exception;
             }
 
-            Publish(trimmed, cancel, sessionAtDispatch, resultSet, failure);
+            Publish(trimmed, cancel, sessionAtDispatch, scope, resultSet, failure);
             return null;
         }
 
@@ -621,28 +653,38 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
         }
 
         _uiContext!.Post(
-            _ => Publish(query, cancel, sessionAtDispatch, resultSet, failure),
+            _ => Publish(query, cancel, sessionAtDispatch, scope, resultSet, failure),
             null);
     }
 
     /// <summary>
     /// Publish a finished search — on the UI thread, behind the
-    /// four-way staleness check (contract S5). Each arm has shipped as
+    /// five-way staleness check (contract S5). Each arm has shipped as
     /// a bug somewhere: the token guards supersession, the session
     /// guards a vault switch racing the await (mac #876 Codex round 2),
-    /// the query guards the debounce window's run-ahead, and the
+    /// the query guards the debounce window's run-ahead, the scope
+    /// guards a chip cleared mid-flight (red-team round 1: the re-armed
+    /// wider search sits in an unfired debounce window, so token,
+    /// session, query and open-flag all still pass while the landing
+    /// rows belong to a scope the user just dismissed), and the
     /// open-flag guards a result resurrecting a closed overlay.
     /// </summary>
     private void Publish(
         string query,
         CancelToken cancel,
         object? sessionAtDispatch,
+        SearchScope scopeAtDispatch,
         QueryResultSet? resultSet,
         Exception? failure)
     {
+        // The scope arm compares structurally: the generated
+        // SearchScope records carry value equality, and Close/SetScope
+        // construct fresh instances, so reference identity would treat
+        // every publish as stale.
         if (!ReferenceEquals(_searchCancellation, cancel)
             || !ReferenceEquals(_source.SessionIdentity, sessionAtDispatch)
             || !string.Equals(Query.Trim(), query, StringComparison.Ordinal)
+            || !Equals(Scope, scopeAtDispatch)
             || !IsOpen)
         {
             return;
@@ -680,6 +722,11 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
             Rows.Add(new SearchResultRowViewModel(hit));
         }
 
+        // The auto-select must not double-speak with the summary
+        // announcement below: arm the suppression AFTER the row
+        // mutations (whose binding write-backs would disarm it) and
+        // immediately before the assignment it covers.
+        _suppressSelectionAnnouncement = true;
         SelectedIndex = Rows.Count > 0 ? 0 : -1;
         _lastResultsQuery = query;
         State = SearchOverlayState.Results;

@@ -173,6 +173,58 @@ public sealed class SearchRecentsStoreTests
         Assert.Equal(["second", "first"], decoded);
     }
 
+    [Fact]
+    public void LoadStripsAUtf8BomBeforeDecoding()
+    {
+        using FixtureVault vault = FixtureVault.Create(0, "search-recents-bom");
+        string directory = Path.Combine(vault.Root, ".slate");
+        Directory.CreateDirectory(directory);
+        // A Notepad round trip prepends EF BB BF. mac's JSONDecoder
+        // accepts the BOM, so the cross-platform file contract does too
+        // (contract S14) — a Windows edit of the file must not silently
+        // forget every recent.
+        File.WriteAllText(
+            Path.Combine(directory, "search-recents.json"),
+            "[\n  \"budget 2026\",\n  \"meeting notes\"\n]",
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+
+        Assert.Equal(
+            ["budget 2026", "meeting notes"],
+            new SearchRecentsStore(vault.Root).Load());
+    }
+
+    // ---- VaultSearchSource: the cached store (red-team round 1) ---------
+
+    [Fact]
+    public void VaultSearchSourceCachesOneStoreSoASaveErrorStaysObservable()
+    {
+        string root = Path.Combine(
+            Path.GetTempPath(), $"slate-search-source-cache-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            // A FILE named .slate blocks the store directory, so every
+            // save fails — the shape of a real broken vault.
+            File.WriteAllText(Path.Combine(root, ".slate"), "not a directory");
+            var source = new VaultSearchSource(() => null, () => root);
+
+            source.RecordRecent("doomed");
+
+            // Per-call construction discarded the failing store — and
+            // LastSaveError with it — before anything could read it;
+            // the cached store keeps the failure observable.
+            Assert.NotNull(source.LastRecentsSaveError);
+            // Load still degrades to empty rather than throwing, and
+            // does not launder the recorded failure.
+            Assert.Empty(source.LoadRecents());
+            Assert.NotNull(source.LastRecentsSaveError);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     private static void WriteRecentsFile(string vaultRoot, string content)
     {
         string directory = Path.Combine(vaultRoot, ".slate");

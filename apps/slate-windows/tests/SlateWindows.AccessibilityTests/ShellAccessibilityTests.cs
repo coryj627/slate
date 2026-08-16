@@ -4901,12 +4901,42 @@ public sealed class ShellAccessibilityTests
                 "Escape did not restore focus to the pre-open element "
                 + $"(id '{focusedBefore.Properties.AutomationId.ValueOrDefault}')");
 
+            // --- the close button dismisses by pointer (contract S15,
+            // red-team round 1): before it, Esc was the only way out of
+            // a surface the menu can open by pointer ------------------
+            window.SetForeground();
+            PressChord(
+                VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_F);
+            _ = WaitForElement(window, "SearchOverlay", TimeSpan.FromSeconds(10));
+            AutomationElement closeButton = WaitForElement(
+                window, "SearchOverlayClose", TimeSpan.FromSeconds(10));
+            Assert.Equal("Close search", closeButton.Name);
+            closeButton.Patterns.Invoke.Pattern.Invoke();
+
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            return window.FindFirstDescendant(automation.ConditionFactory
+                                .ByAutomationId("SearchOverlay")) is null;
+                        }
+                        catch (COMException)
+                        {
+                            return true;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the Close search button did not close the overlay");
+
             // --- teardown: nothing of the overlay survives in the
             // control view, which is the view an AT walks --------------
             foreach (string id in new[]
             {
                 "SearchOverlay",
                 "SearchOverlaySearch",
+                "SearchOverlayClose",
                 "SearchOverlayResults",
                 "SearchOverlayIdleHint",
                 "SearchOverlayTagChip",

@@ -254,4 +254,12 @@ public partial class MainWindow
         _viewModel.Search.ClearScope();
         SearchOverlaySearchTextBox.Focus();
     }
+
+    /// <summary>
+    /// Pointer dismissal (contract S15): the "Close search" button runs
+    /// the same <see cref="SearchOverlayViewModel.Close"/> Esc runs, so
+    /// focus restore rides the ordinary <c>Dismissed</c> path.
+    /// </summary>
+    private void SearchOverlayClose_Click(object sender, RoutedEventArgs e) =>
+        _viewModel.Search.Close();
 }

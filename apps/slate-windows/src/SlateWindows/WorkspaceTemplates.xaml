@@ -8,6 +8,7 @@
     <local:InverseBooleanToVisibilityConverter x:Key="InverseBooleanToVisibilityConverter" />
     <local:AxisToOrientationConverter x:Key="AxisToOrientationConverter" />
     <local:NullToVisibilityConverter x:Key="NullToVisibilityConverter" />
+    <local:IsNotNullConverter x:Key="IsNotNullConverter" />
     <local:SidebarSortModeLabelConverter x:Key="SidebarSortModeLabelConverter" />
 
     <HierarchicalDataTemplate x:Key="SidebarTagTemplate"

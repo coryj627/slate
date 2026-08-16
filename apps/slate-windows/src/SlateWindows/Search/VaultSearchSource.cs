@@ -21,16 +21,23 @@ namespace SlateWindows.Search;
 /// (contract S5).
 /// </para>
 /// <para>
-/// The recents store is constructed per call from the current vault
-/// root: it is a stateless path holder (the file is re-read on every
-/// operation, mac's documented single-writer discipline), so there is
-/// nothing to cache and no per-vault instance to invalidate.
+/// The recents store is cached, one instance per vault root, and
+/// rebuilt when the root changes. The file is still re-read on every
+/// operation (mac's documented single-writer discipline) — the cache
+/// exists for the store's one piece of state:
+/// <see cref="SearchRecentsStore.LastSaveError"/>. The first version
+/// constructed a store per call, which discarded every save failure
+/// with the instance that recorded it, leaving the property dead
+/// (red-team round 1).
 /// </para>
 /// </remarks>
 internal sealed class VaultSearchSource : ISearchSource
 {
     private readonly Func<VaultSession?> _session;
     private readonly Func<string?> _vaultRoot;
+
+    private SearchRecentsStore? _recents;
+    private string? _recentsRoot;
 
     public VaultSearchSource(Func<VaultSession?> session, Func<string?> vaultRoot)
     {
@@ -39,6 +46,11 @@ internal sealed class VaultSearchSource : ISearchSource
         _session = session;
         _vaultRoot = vaultRoot;
     }
+
+    /// <summary>The cached store's last persistence failure, or
+    /// <see langword="null"/> — non-fatal, but observable, which is the
+    /// point of caching the store at all.</summary>
+    public Exception? LastRecentsSaveError => _recents?.LastSaveError;
 
     /// <inheritdoc />
     public bool IsVaultOpen => _session() is not null;
@@ -56,24 +68,35 @@ internal sealed class VaultSearchSource : ISearchSource
     }
 
     /// <inheritdoc />
-    public IReadOnlyList<string> LoadRecents() =>
-        _vaultRoot() is string root ? new SearchRecentsStore(root).Load() : [];
+    public IReadOnlyList<string> LoadRecents() => RecentsStore()?.Load() ?? [];
 
     /// <inheritdoc />
-    public void RecordRecent(string query)
-    {
-        if (_vaultRoot() is string root)
-        {
-            _ = new SearchRecentsStore(root).Add(query);
-        }
-    }
+    public void RecordRecent(string query) => _ = RecentsStore()?.Add(query);
 
     /// <inheritdoc />
-    public void ClearRecents()
+    public void ClearRecents() => RecentsStore()?.Clear();
+
+    /// <summary>
+    /// The one store for the current vault root, or
+    /// <see langword="null"/> with no vault open. Identical behaviour
+    /// to per-call construction — the store re-reads the file on every
+    /// operation — except that <see cref="SearchRecentsStore.LastSaveError"/>
+    /// now survives the call that set it.
+    /// </summary>
+    private SearchRecentsStore? RecentsStore()
     {
-        if (_vaultRoot() is string root)
+        if (_vaultRoot() is not string root)
         {
-            new SearchRecentsStore(root).Clear();
+            return null;
         }
+
+        if (_recents is null
+            || !string.Equals(_recentsRoot, root, StringComparison.Ordinal))
+        {
+            _recents = new SearchRecentsStore(root);
+            _recentsRoot = root;
+        }
+
+        return _recents;
     }
 }

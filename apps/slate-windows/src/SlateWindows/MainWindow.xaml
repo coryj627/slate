@@ -60,6 +60,18 @@
         <Menu x:Name="MainMenu"
               DockPanel.Dock="Top"
               AutomationProperties.Name="Application commands">
+            <!-- The menu disables under EVERY modal surface — mac
+                 parity: AppKit disables the menu bar while a sheet is
+                 up, which is why mac's unguarded menu commands are
+                 safe. Red-team round 1 (W5-2): only the three overlays
+                 were listed here, so Workspace ▸ Search Vault… (and,
+                 pre-existing since W1, File ▸ Quick Open…) opened its
+                 overlay INVISIBLY beneath any of the seven sheets. One
+                 trigger per ModalSurface member, in paint order; the
+                 sheets are object properties (open == non-null), so
+                 they route through IsNotNullConverter. Gated by
+                 ModalSurfaceTests.TheMenuDisablesUnderEveryModalSurface,
+                 so surface #11 cannot be forgotten. -->
             <Menu.Style>
                 <Style TargetType="Menu">
                     <Setter Property="IsEnabled" Value="True" />
@@ -71,6 +83,27 @@
                             <Setter Property="IsEnabled" Value="False" />
                         </DataTrigger>
                         <DataTrigger Binding="{Binding Palette.IsOpen}" Value="True">
+                            <Setter Property="IsEnabled" Value="False" />
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding Workspace.AddPropertySheet, Converter={StaticResource IsNotNullConverter}}" Value="True">
+                            <Setter Property="IsEnabled" Value="False" />
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding Workspace.BulkRenameSheet, Converter={StaticResource IsNotNullConverter}}" Value="True">
+                            <Setter Property="IsEnabled" Value="False" />
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding Workspace.CitationDetails, Converter={StaticResource IsNotNullConverter}}" Value="True">
+                            <Setter Property="IsEnabled" Value="False" />
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding Workspace.CitationSummary, Converter={StaticResource IsNotNullConverter}}" Value="True">
+                            <Setter Property="IsEnabled" Value="False" />
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding Workspace.FilesCiting, Converter={StaticResource IsNotNullConverter}}" Value="True">
+                            <Setter Property="IsEnabled" Value="False" />
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding Workspace.DashboardEditorSheet, Converter={StaticResource IsNotNullConverter}}" Value="True">
+                            <Setter Property="IsEnabled" Value="False" />
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding Workspace.BaseQueryBuilderSheet, Converter={StaticResource IsNotNullConverter}}" Value="True">
                             <Setter Property="IsEnabled" Value="False" />
                         </DataTrigger>
                     </Style.Triggers>
@@ -1982,19 +2015,41 @@
                         <RowDefinition Height="*" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
-                    <!-- "Search vault" with NO trailing period — mac's
-                         actual label (its own doc comment claiming the
-                         period is recorded stale, contracts doc item 3). -->
-                    <TextBox x:Name="SearchOverlaySearchTextBox"
-                             Grid.Row="0"
-                             Padding="10,8"
-                             FontSize="18"
-                             Text="{Binding Query, UpdateSourceTrigger=PropertyChanged}"
-                             PreviewKeyDown="SearchOverlaySearch_PreviewKeyDown"
-                             AutomationProperties.AutomationId="SearchOverlaySearch"
-                             AutomationProperties.Name="Search vault"
-                             Visibility="{Binding IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}"
-                             AutomationProperties.HelpText="Type to search across every note in this vault. Return activates the top result. Tab moves to the results list." />
+                    <Grid Grid.Row="0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <!-- "Search vault" with NO trailing period — mac's
+                             actual label (its own doc comment claiming the
+                             period is recorded stale, contracts doc item 3). -->
+                        <TextBox x:Name="SearchOverlaySearchTextBox"
+                                 Grid.Column="0"
+                                 Padding="10,8"
+                                 FontSize="18"
+                                 Text="{Binding Query, UpdateSourceTrigger=PropertyChanged}"
+                                 PreviewKeyDown="SearchOverlaySearch_PreviewKeyDown"
+                                 AutomationProperties.AutomationId="SearchOverlaySearch"
+                                 AutomationProperties.Name="Search vault"
+                                 Visibility="{Binding IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                 AutomationProperties.HelpText="Type to search across every note in this vault. Return activates the top result. Tab moves to the results list." />
+                        <!-- Pointer dismissal (contract S15, red-team
+                             round 1): mac's field row ends in a "Close
+                             search" button (SearchOverlay.swift:169-198,
+                             label and hint verbatim); the Windows shape
+                             is Quick Open's "Close Quick Open". Without
+                             it, Esc was the only way out of a surface a
+                             pointer can open from the menu. -->
+                        <Button Grid.Column="1"
+                                Margin="8,0,0,0"
+                                Padding="10,4"
+                                Content="Close"
+                                Click="SearchOverlayClose_Click"
+                                Visibility="{Binding IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                AutomationProperties.AutomationId="SearchOverlayClose"
+                                AutomationProperties.Name="Close search"
+                                AutomationProperties.HelpText="Closes the search overlay and returns to the previous view." />
+                    </Grid>
                     <!-- The read-only tag chip (divergence SD-3: no scope
                          selector exists on either platform). One named
                          group stop; the visual "Tag: {name}" text is

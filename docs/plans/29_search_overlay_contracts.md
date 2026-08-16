@@ -112,12 +112,23 @@ dispatcher. The host follows the Quick Open shape
 (`QuickSwitcherViewModel.cs:295-346`): capture the UI `SynchronizationContext`,
 debounce, run off-thread, marshal back, and **discard a stale result**.
 
-Staleness is checked on **four** independent things, because three of them
-have each shipped as a bug on mac: the cancellation token is still the one
-this call minted, the session is still the same session, the query is
-unchanged, and the overlay is still open. The session check is not
-theoretical — mac added it after a direct vault switch published vault A's
-rows into vault B's overlay (`AppState.swift:8934-8949`).
+Staleness is checked on **five** independent things, because three of them
+have each shipped as a bug on mac and the fifth was found here: the
+cancellation token is still the one this call minted, the session is still
+the same session, the query is unchanged, the scope is still the scope the
+search was dispatched under, and the overlay is still open. The session
+check is not theoretical — mac added it after a direct vault switch
+published vault A's rows into vault B's overlay (`AppState.swift:8934-8949`).
+
+The scope arm (added in red-team round 1) closes a transient wrong-scope
+publish the other four cannot catch: clearing the tag chip mid-flight
+re-arms the wider search through the debounce, and until that window fires
+the in-flight tag search's token is still current, the session unchanged,
+the query identical, and the overlay open — so its rows would land under a
+chip the user just dismissed. Scope is captured at dispatch and compared
+structurally at publish (the generated `SearchScope` records carry value
+equality; `Close`/`SetScope` construct fresh instances, so reference
+identity would treat every publish as stale).
 
 **S6 — `Cancelled` is not an error.** A cancelled search returns
 `VaultError::Cancelled`, and the host **leaves the panel exactly as it
@@ -146,10 +157,21 @@ on the announcement.
 
 **S8 — Nothing is announced per keystroke beyond the count family.** The
 only announcements this surface makes are `SearchNeedsVault`,
-`SearchResultsSummary`, `SearchFailed`, `SearchResultOpened`, and the
-focus-change `RowSelected`. The transition into the searching state is
-silent. Verify against mac before treating any silence as a defect — the
-recorded W4-5 lesson.
+`SearchResultsSummary`, `SearchFailed`, `SearchResultOpened`, the
+recent-row `RecentSearchFocused` (S14), and the selection-change
+`RowSelected`. The transition into the searching state is silent. Verify
+against mac before treating any silence as a defect — the recorded W4-5
+lesson.
+
+`RowSelected` speaks the row's **basename only** — mac's on-focus
+announcement (`SearchOverlay.swift:537-552`: the full
+`{basename}: {snippet}` label stays on the element; a selection move must
+not read a paragraph of snippet). The publish-time auto-select of row 0 is
+suppressed with the palette's P10 pattern so a result set never
+double-speaks its top row over the summary announcement, and re-selecting
+the same index does not re-announce. (Round-1 correction: this contract's
+first draft listed `RowSelected` but nothing posted it — arrows moved the
+selection silently.)
 
 **S9 — Activation closes the overlay and is the only thing that records a
 recent.** Enter on a row (or on the field, which activates the top result)
@@ -172,6 +194,18 @@ break** — CS8509 is promoted to an error, `SlateWindows.csproj:20`), an
 arm on `DecidePaletteOpen`, a field read in `CurrentModalSurfaceState`,
 and a scrim plus overlay declared in XAML paint order with no
 `Panel.ZIndex`. `ModalSurfaceTests` gates every one of those.
+
+The registry also owns the **menu**: the Menu's `IsEnabled` trigger list
+disables it under EVERY `ModalSurface` member, not just the overlays —
+mac parity, since AppKit disables the menu bar while a sheet is up, which
+is why mac's unguarded menu commands are safe. Round 1 found the trigger
+list covering only the three overlays, so Workspace ▸ Search Vault… (an
+unguarded `Toggle` adapter, correctly so on mac) opened the overlay
+invisibly beneath any of the seven sheets — and File ▸ Quick Open… had
+carried the identical pre-existing gap since W1; this fix closes both.
+`ModalSurfaceTests.TheMenuDisablesUnderEveryModalSurface` pins one
+trigger per enum member, so surface #11 cannot be forgotten the way the
+sheets were.
 
 **S12 — The overlay owns a text field, so it needs the text-editing
 allow-list.** A blanket shell-chord swallow kills Ctrl+A/C/V/Z and
@@ -204,6 +238,11 @@ interoperate with mac's `SearchRecentsStore`
 - A missing, malformed, oversized or unreadable file degrades to an
   **empty list, never an error** — the overlay must open regardless of
   recents state.
+- Load tolerates (strips) a leading UTF-8 BOM before decoding; writes
+  never emit one. Interop, not leniency: a Windows Notepad round trip
+  prepends the BOM, mac's `JSONDecoder` accepts it, and `Utf8JsonReader`
+  rejects it — without the strip, one Notepad edit silently forgets every
+  recent on Windows only (round-1 finding).
 - `add` is LRU: remove any equal entry, insert at front, cap, write
   atomically (temp-file-then-rename inside `.slate/`).
 - `clear` persists an empty list rather than deleting the file, so the
@@ -226,6 +265,17 @@ The empty-query state therefore has two shapes, labels mac-verbatim:
   recent row announces through `A11yEvent.RecentSearchFocused`, which is
   already in the generated bindings.
 
+**S15 — Pointer dismissal: the overlay carries mac's close button.** The
+field row ends in a "Close search" button (`SearchOverlayClose`, hint
+"Closes the search overlay and returns to the previous view." — mac's
+label and hint verbatim, `SearchOverlay.swift:169-198`), in Quick Open's
+close-button shape (`QuickSwitcherClose`). It runs the same `Close()` Esc
+runs, so focus restore rides the ordinary `Dismissed` path. Added in
+red-team round 1: Esc was the only dismissal for a surface the menu can
+open by pointer. Note mac's field row also carries a separate
+"Clear search text" button; that one is native `TextBox` chrome on
+Windows (the Fluent clear button, #1106) and is not duplicated.
+
 ## Divergence register (owner-recorded; off-limits for re-litigation)
 
 - **SD-1 — Windows ships arrow-key result navigation; mac has none.**
@@ -234,7 +284,10 @@ The empty-query state therefore has two shapes, labels mac-verbatim:
   traversal would make search the only list surface in the Windows app
   that arrows do not drive. Same shape as PD-1 in W5-1, and resolved the
   same way: ship it here, and file mac convergence so the divergence has a
-  closing path rather than sitting open indefinitely.
+  closing path rather than sitting open indefinitely. Each arrow move
+  announces through `RowSelected` per S8 — an arrow model without a voice
+  is exactly the silent-focus defect mac's `announceFocusedResult` exists
+  to prevent (round-1 blocker: the first cut shipped the arrows silent).
 - **SD-2 — Windows restores focus on Esc; mac does not.** The W5-1 palette
   restores to the pre-open element and skips the restore when the invoked
   command claimed focus elsewhere (`MainWindow.Palette.cs:302-355`). The
@@ -293,6 +346,27 @@ The empty-query state therefore has two shapes, labels mac-verbatim:
   decision.** Mac deliberately sets no `lineLimit` because truncation
   broke at large Dynamic Type (`SearchOverlay.swift:490-496`). Windows
   wraps likewise, so a long snippet makes a tall row.
+- **SR-3 — `SearchLineLocator` accepts three tokenizer nuances vs mac.**
+  The line heuristic is mac's `firstTokenLineNumber`, but the two
+  standard libraries disagree at the margins and the port does not chase
+  byte-for-byte parity: **(1)** tokenization iterates UTF-16 code units
+  where Swift iterates `Character` graphemes, so an astral-plane letter
+  (a surrogate pair, e.g. 𝒜) never forms a token here — both halves fail
+  `char.IsLetterOrDigit` — where mac tokenizes it; **(2)** numeric
+  classification splits twice: the pure-numeric filter is `char.IsDigit`
+  (decimal Nd) against mac's `isNumber` (Nd + Nl + No), and the
+  tokenizer's `char.IsLetterOrDigit` excludes the letter-numbers Swift's
+  alphabetic `isLetter` admits — so a Roman numeral or circled digit
+  never forms a token here (splitting any mixed token it touches, whose
+  letter fragments still anchor) while mac tokenizes it and then drops
+  the pure-numeral token; **(3)** the body scan is ordinal
+  (`IndexOf(…, StringComparison.Ordinal)`) where Swift's string search
+  applies canonical equivalence, so a precomposed query misses a
+  decomposed body (and vice versa) on Windows only. Every divergent case
+  degrades to the documented no-match fallback — **line 1**, the top of
+  the correct, already-opened note — never a throw and never a wrong
+  file. Pinned by the `Sr3*` facts in `SearchLineLocatorTests` so a
+  future parity chase is a deliberate revision of this entry, not drift.
 
 ## Mac defects found while reading it (not this issue's to fix)
 

@@ -520,6 +520,169 @@ public sealed class ModalSurfaceTests
         }
     }
 
+    /// <summary>
+    /// The binding path the Menu's disable trigger must read for each
+    /// surface. The two overlays and the palette expose <c>IsOpen</c>
+    /// flags; the seven sheets are object properties (open == non-null)
+    /// and must route through <c>IsNotNullConverter</c>.
+    /// </summary>
+    private static readonly Dictionary<ModalSurface, string> MenuDisableBindings =
+        new()
+        {
+            [ModalSurface.QuickOpen] = "QuickSwitcher.IsOpen",
+            [ModalSurface.SearchOverlay] = "Search.IsOpen",
+            [ModalSurface.CommandPalette] = "Palette.IsOpen",
+            [ModalSurface.AddProperty] = "Workspace.AddPropertySheet",
+            [ModalSurface.BulkRename] = "Workspace.BulkRenameSheet",
+            [ModalSurface.CitationDetails] = "Workspace.CitationDetails",
+            [ModalSurface.CitationSummary] = "Workspace.CitationSummary",
+            [ModalSurface.FilesCiting] = "Workspace.FilesCiting",
+            [ModalSurface.DashboardEditor] = "Workspace.DashboardEditorSheet",
+            [ModalSurface.BaseQueryBuilder] = "Workspace.BaseQueryBuilderSheet",
+        };
+
+    /// <summary>
+    /// The Menu disables under EVERY modal surface, one trigger per
+    /// <see cref="ModalSurface"/> member.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// W5-2 red-team round 1: the trigger list covered only the three
+    /// overlays, so Workspace ▸ Search Vault… opened the overlay
+    /// INVISIBLY beneath any of the seven sheets — and File ▸ Quick
+    /// Open… had carried the same gap since W1. The declarative fix is
+    /// mac parity (AppKit disables the menu bar while a sheet is up,
+    /// which is why mac's unguarded menu commands are safe); this gate
+    /// is what keeps surface #11 from being forgotten the way the seven
+    /// sheets were: a new enum member without a mapping entry, or a
+    /// mapping entry without a trigger, fails here by name.
+    /// </para>
+    /// <para>
+    /// A XAML scrape rather than a live-window test for the recorded
+    /// drift-gate reason: the trigger list is declarative data, and
+    /// every sheet would need a real shell to open.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void TheMenuDisablesUnderEveryModalSurface()
+    {
+        XDocument document = XDocument.Load(
+            Path.Combine(SourceRoot(), "MainWindow.xaml"));
+        XElement[] menus = document.Descendants()
+            .Where(element => element.Name.LocalName == "Menu")
+            .ToArray();
+        XElement menu = Assert.Single(menus);
+
+        XElement style = menu.Elements()
+            .Single(element => element.Name.LocalName == "Menu.Style");
+        XElement[] triggers = style.Descendants()
+            .Where(element => element.Name.LocalName == "DataTrigger")
+            .ToArray();
+
+        foreach (ModalSurface surface in Enum.GetValues<ModalSurface>())
+        {
+            Assert.True(
+                MenuDisableBindings.TryGetValue(surface, out string? path),
+                $"{surface} has no entry in MenuDisableBindings — a new "
+                + "modal surface needs a Menu disable trigger AND a row in "
+                + "this map, or its menu commands run invisibly beneath it.");
+
+            XElement? trigger = triggers.FirstOrDefault(
+                candidate => BindsPath(candidate, path!));
+            Assert.True(
+                trigger is not null,
+                $"MainWindow.xaml's Menu style has no DataTrigger binding "
+                + $"'{path}' — with {surface} open the menu stays enabled and "
+                + "its commands open overlays beneath the surface (the "
+                + "round-1 finding).");
+
+            Assert.Equal("True", trigger!.Attribute("Value")?.Value);
+            if (!path!.EndsWith(".IsOpen", StringComparison.Ordinal))
+            {
+                // Object-typed sheet properties: without the converter
+                // the trigger compares a view model to the string
+                // "True" and never fires.
+                Assert.Contains(
+                    "IsNotNullConverter",
+                    trigger.Attribute("Binding")!.Value,
+                    StringComparison.Ordinal);
+            }
+
+            XElement setter = Assert.Single(trigger.Descendants()
+, element => element.Name.LocalName == "Setter");
+            Assert.Equal("IsEnabled", setter.Attribute("Property")?.Value);
+            Assert.Equal("False", setter.Attribute("Value")?.Value);
+        }
+    }
+
+    /// <summary>
+    /// Whether a DataTrigger's Binding reads exactly
+    /// <paramref name="path"/> — a whole-path match, so
+    /// <c>Search.IsOpen</c> cannot be satisfied by a hypothetical
+    /// <c>Search.IsOpenedOnce</c>.
+    /// </summary>
+    private static bool BindsPath(XElement trigger, string path)
+    {
+        string? binding = trigger.Attribute("Binding")?.Value;
+        string prefix = "{Binding " + path;
+        if (binding is null
+            || !binding.StartsWith(prefix, StringComparison.Ordinal)
+            || binding.Length == prefix.Length)
+        {
+            return false;
+        }
+
+        return binding[prefix.Length] is ',' or '}' or ' ';
+    }
+
+    /// <summary>
+    /// The search overlay's field row carries the "Close search" button
+    /// (contract S15, red-team round 1): mac's overlay has one
+    /// (<c>SearchOverlay.swift:169-198</c>, label and hint verbatim),
+    /// and without it Esc was the only dismissal for a surface the menu
+    /// can open by pointer. The journey clicks it; this pins the
+    /// anatomy and the wiring so the assertion does not depend on an
+    /// interactive desktop.
+    /// </summary>
+    [Fact]
+    public void TheSearchOverlayCarriesItsCloseButton()
+    {
+        XDocument document = XDocument.Load(
+            Path.Combine(SourceRoot(), "MainWindow.xaml"));
+        XElement button = Assert.Single(document.Descendants()
+, element =>
+                    element.Name.LocalName == "Button"
+                    && element.Attribute(
+                        "AutomationProperties.AutomationId")?.Value
+                        == "SearchOverlayClose");
+
+        Assert.Equal(
+            "Close search",
+            button.Attribute("AutomationProperties.Name")?.Value);
+        Assert.Equal(
+            "Closes the search overlay and returns to the previous view.",
+            button.Attribute("AutomationProperties.HelpText")?.Value);
+        Assert.Equal(
+            "SearchOverlayClose_Click",
+            button.Attribute("Click")?.Value);
+
+        // And the handler actually closes: a live Close() call on the
+        // search view model, read from the parsed source rather than a
+        // string scrape so a commented-out body cannot answer.
+        CSharpSource shell = CSharpSource.Load("MainWindow.Search.cs");
+        MethodDeclarationSyntax handler = shell.Root
+            .DescendantNodes()
+            .OfType<MethodDeclarationSyntax>()
+            .Single(method =>
+                method.Identifier.ValueText == "SearchOverlayClose_Click");
+        Assert.Contains(
+            handler.DescendantNodes().OfType<InvocationExpressionSyntax>(),
+            invocation => invocation.Expression is MemberAccessExpressionSyntax
+            {
+                Name.Identifier.ValueText: "Close",
+            });
+    }
+
     private static string SourceRoot() =>
         Path.Combine(RepoRoot(), "apps", "slate-windows", "src", "SlateWindows");
 

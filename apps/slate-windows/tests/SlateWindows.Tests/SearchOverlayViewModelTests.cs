@@ -768,6 +768,150 @@ public sealed class SearchOverlayViewModelTests
         Assert.Equal(0, harness.Overlay.SelectedIndex);
     }
 
+    // ---- SD-1: arrow selection speaks (red-team round 1 blocker) --------
+
+    [Fact]
+    public void ArrowMoveAnnouncesTheRowsBasenameOnly()
+    {
+        var harness = new OverlayHarness();
+        harness.Source.OnSearch = (_, _) => Results(
+            "two",
+            Hit("alpha.md", "a"),
+            Hit("deep/path/beta.md", "b"));
+        harness.Overlay.Open();
+        harness.Overlay.Query = "x";
+
+        harness.Overlay.MoveSelection(1);
+
+        // Basename only, mac parity (SearchOverlay.swift:537-552): the
+        // full "{basename}: {snippet}" label stays on the element; the
+        // move announcement must not read a paragraph of snippet.
+        A11yEvent.RowSelected selected =
+            Assert.IsType<A11yEvent.RowSelected>(harness.Announcements[^1]);
+        Assert.Equal("beta.md", selected.Name);
+    }
+
+    [Fact]
+    public void PublishWithAutoSelectAnnouncesOnlyTheSummary()
+    {
+        var harness = new OverlayHarness();
+        harness.Source.OnSearch = (_, _) => Results(
+            "two",
+            Hit("alpha.md", "a"),
+            Hit("beta.md", "b"));
+        harness.Overlay.Open();
+
+        harness.Overlay.Query = "x";
+
+        // The publish auto-selected row 0; the ONLY voice is the count
+        // (the palette's P10 suppression shape) — a RowSelected here
+        // would double-speak every result set.
+        Assert.Equal(0, harness.Overlay.SelectedIndex);
+        Assert.IsType<A11yEvent.SearchResultsSummary>(
+            Assert.Single(harness.Announcements));
+
+        // And a publish that lands on the ALREADY-selected index (the
+        // no-change arm) must disarm rather than bank the suppression:
+        // the next arrow move still speaks.
+        harness.Overlay.ActivateRecent("x");
+        Assert.Empty(harness.Announcements.OfType<A11yEvent.RowSelected>());
+        harness.Overlay.MoveSelection(1);
+        Assert.Single(harness.Announcements.OfType<A11yEvent.RowSelected>());
+    }
+
+    [Fact]
+    public void ReSelectingTheSameIndexDoesNotReAnnounce()
+    {
+        var harness = new OverlayHarness();
+        harness.Source.OnSearch = (_, _) => Results(
+            "two",
+            Hit("alpha.md", "a"),
+            Hit("beta.md", "b"));
+        harness.Overlay.Open();
+        harness.Overlay.Query = "x";
+
+        harness.Overlay.SelectedIndex = 1;
+        Assert.Single(harness.Announcements.OfType<A11yEvent.RowSelected>());
+
+        // The view's two-way binding writes back the value it just
+        // received; an equality-blind announcement would stutter every
+        // selection twice.
+        harness.Overlay.SelectedIndex = 1;
+        Assert.Single(harness.Announcements.OfType<A11yEvent.RowSelected>());
+    }
+
+    // ---- S5: the scope staleness arm (red-team round 1) -----------------
+
+    [Fact]
+    public async Task StaleScopeResultIsDiscardedWhenTheChipClearsMidFlight()
+    {
+        using var harness = new AsyncOverlayHarness();
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        harness.Source.OnSearch = (_, scope) =>
+        {
+            if (scope is SearchScope.Tag)
+            {
+                entered.Set();
+                release.Wait(TimeSpan.FromSeconds(10));
+                return Results("tag rows", Hit("tagged.md", string.Empty));
+            }
+
+            return Results("vault rows", Hit("vault.md", "v"));
+        };
+        harness.Overlay.Open();
+
+        try
+        {
+            // A retained query, then the tag scope goes in flight over
+            // it (the keystroke's own window is superseded by the
+            // scope re-arm before it ever fires).
+            harness.Overlay.Query = "q";
+            harness.Overlay.SetScope(new SearchScope.Tag("projects"));
+            Task first = harness.StartPipeline();
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
+
+            // The chip is cleared while the tag search runs. The
+            // re-armed Vault search sits in an UNFIRED debounce window,
+            // so the token is still the tag search's own, the session
+            // is unchanged, the query arm compares "q" to "q", and the
+            // overlay is open — ONLY the scope is stale. Without the
+            // fifth arm the tag rows land under a chip the user just
+            // dismissed.
+            harness.Overlay.ClearScope();
+            release.Set();
+            await first.WaitAsync(TimeSpan.FromSeconds(5));
+            harness.Context.Drain();
+
+            Assert.Empty(harness.Overlay.Rows);
+            Assert.Empty(harness.Announcements);
+
+            // The re-armed wider search still lands normally. Driven
+            // with a drain loop rather than CompletePipeline: past the
+            // awaits above the test runs on a continuation thread, the
+            // debounce-fire continuation is no longer inline there, and
+            // a single drain can run before the dispatch is posted.
+            Task vaultCompletion = harness.Overlay.SearchCompletion;
+            harness.Debounce.FireLatest();
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        harness.Context.Drain();
+                        return vaultCompletion.IsCompleted;
+                    },
+                    TimeSpan.FromSeconds(5)),
+                "the re-armed Vault search never published");
+            harness.Context.Drain();
+            Assert.Equal("vault.md", Assert.Single(harness.Overlay.Rows).Path);
+            Assert.Equal("vault rows", harness.Overlay.Summary);
+        }
+        finally
+        {
+            release.Set();
+        }
+    }
+
     [Fact]
     public void OpenRequestCarriesTheMarkerStrippedSnippet()
     {
