@@ -131,6 +131,77 @@ internal sealed class CSharpSource
                 && identifier.Identifier.ValueText == qualifier);
 
     /// <summary>
+    /// Every member name accessed under <paramref name="node"/> — the
+    /// <c>AddPropertySheet</c> in <c>workspace?.AddPropertySheet</c>.
+    /// </summary>
+    /// <remarks>
+    /// Both access forms, because they are different node types and the
+    /// codebase uses both: <c>a.B</c> is a
+    /// <c>MemberAccessExpressionSyntax</c>, while the <c>?.B</c> of
+    /// <c>a?.B</c> is a <c>MemberBindingExpressionSyntax</c>. Reading only
+    /// the first silently misses every null-conditional read, which is how
+    /// the live modal state is written throughout.
+    /// </remarks>
+    internal static IEnumerable<string> MemberNames(SyntaxNode node) =>
+        node.DescendantNodesAndSelf()
+            .SelectMany(descendant => descendant switch
+            {
+                MemberAccessExpressionSyntax access =>
+                    new[] { access.Name.Identifier.ValueText },
+                MemberBindingExpressionSyntax binding =>
+                    new[] { binding.Name.Identifier.ValueText },
+                _ => [],
+            });
+
+    /// <summary>
+    /// Follows a bare identifier back to the expression it was assigned,
+    /// within <paramref name="scope"/>.
+    /// </summary>
+    /// <remarks>
+    /// This is what closes the alias bypass, and it is the one of the
+    /// three that an ordinary refactor reaches rather than an adversary:
+    /// extracting <c>bool isDashboardEditorOpen = workspace?.
+    /// BaseQueryBuilderSheet is not null;</c> and passing the local
+    /// satisfies any check made against the argument as written, while the
+    /// value comes from the wrong property. Resolving through the local
+    /// makes the check see what is actually read.
+    /// </remarks>
+    internal static ExpressionSyntax Resolve(ExpressionSyntax expression, SyntaxNode scope)
+    {
+        // Bounded: a self-referential or mutually-referential chain must
+        // not spin, and no legitimate alias chain here is deep.
+        for (var depth = 0; depth < 8; depth++)
+        {
+            if (expression is not IdentifierNameSyntax identifier)
+            {
+                return expression;
+            }
+
+            ExpressionSyntax[] initializers = scope.DescendantNodes()
+                .OfType<VariableDeclaratorSyntax>()
+                .Where(declarator =>
+                    declarator.Identifier.ValueText == identifier.Identifier.ValueText)
+                .Select(declarator => declarator.Initializer?.Value)
+                .Where(value => value is not null)
+                .Select(value => value!)
+                .ToArray();
+
+            if (initializers.Length != 1)
+            {
+                // Zero: not a local — a field or parameter, returned as
+                // written. More than one: ambiguous, and guessing which
+                // assignment wins is exactly the sort of inference this
+                // layer exists to avoid.
+                return expression;
+            }
+
+            expression = initializers[0];
+        }
+
+        return expression;
+    }
+
+    /// <summary>
     /// Whether <paramref name="node"/> contains a call to
     /// <paramref name="expression"/>, written exactly that way.
     /// </summary>
