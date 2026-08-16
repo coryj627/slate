@@ -774,6 +774,19 @@ public sealed class ModalSurfaceTests
                     .EndsWith("QuickSwitcher.Open", StringComparison.Ordinal)),
             "QuickSwitcher.Open() is no longer inside the admission-gated "
             + "if — the decision is computed but does not control the open.");
+
+        // REACHABILITY (codex round 8): the branch must precede the
+        // search-ownership branch, or the selective swallow marks Ctrl+O
+        // handled and the gate is dead code while search is open.
+        var searchBranch = route.DescendantNodes()
+            .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.IfStatementSyntax>()
+            .First(statement => CSharpSource.Normalize(statement.Condition)
+                == "ModalSurfaces.SearchOwnsKeys(CurrentModalSurfaceState)");
+        Assert.True(
+            admission[0].SpanStart < searchBranch.SpanStart,
+            "the Ctrl+O admission branch sits AFTER the search-ownership "
+            + "branch — the swallow eats Ctrl+O first, and the picker "
+            + "handoff is unreachable while search is open.");
     }
 
     /// <summary>
@@ -829,6 +842,47 @@ public sealed class ModalSurfaceTests
         {
             throw new Xunit.Sdk.XunitException(failure.ToString());
         }
+    }
+
+    /// <summary>
+    /// Every ancestry walker in the shell uses the hybrid parent — a
+    /// census, because round 7 fixed one walker and round 8 found its
+    /// clone still crashing on non-Visual focus.
+    /// </summary>
+    [Fact]
+    public void EveryAncestryWalkerUsesTheHybridParent()
+    {
+        string root = SourceText.ShellSourceRoot();
+        var found = 0;
+        foreach (string path in System.IO.Directory.GetFiles(root, "MainWindow*.cs"))
+        {
+            string file = System.IO.Path.GetFileName(path);
+            foreach (Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax method
+                in CSharpSource.Load(file).Root
+                    .DescendantNodes()
+                    .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax>())
+            {
+                if (!method.Identifier.ValueText.StartsWith(
+                    "IsDescendantOf", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                found++;
+                Assert.True(
+                    CSharpSource.Invokes(method, "FocusAncestry.Parent"),
+                    $"{file}.{method.Identifier.ValueText} does not walk via "
+                    + "FocusAncestry.Parent — VisualTreeHelper.GetParent throws "
+                    + "for non-Visual focus (a reading-view Hyperlink).");
+                Assert.False(
+                    CSharpSource.Invokes(method, "VisualTreeHelper.GetParent"),
+                    $"{file}.{method.Identifier.ValueText} still calls "
+                    + "VisualTreeHelper.GetParent directly.");
+            }
+        }
+
+        Assert.True(found >= 2, $"expected at least the palette and search "
+            + $"walkers; found {found} — the census is scanning nothing.");
     }
 
     private static bool WalksTo(

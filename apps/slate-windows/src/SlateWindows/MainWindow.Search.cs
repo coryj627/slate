@@ -254,7 +254,10 @@ public partial class MainWindow
 
     private bool IsDescendantOfSearchOverlay(DependencyObject? node)
     {
-        for (; node is not null; node = VisualTreeHelper.GetParent(node))
+        // Codex round 8 (#742): the round-7 walker fix missed this
+        // CLONE — VisualTreeHelper.GetParent throws for a focused
+        // reading-view Hyperlink, crashing the claimed-focus probe.
+        for (; node is not null; node = FocusAncestry.Parent(node))
         {
             if (ReferenceEquals(node, SearchOverlay))
             {

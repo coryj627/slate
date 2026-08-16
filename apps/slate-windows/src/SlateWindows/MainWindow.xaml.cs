@@ -457,6 +457,27 @@ public partial class MainWindow : Window
             return;
         }
 
+        // Codex round 8 (#742): this branch must run BEFORE the
+        // search-ownership branch, or the selective swallow marks
+        // Ctrl+O handled and the picker handoff is unreachable
+        // while search is open.
+        if (e.Key == Key.O && modifiers == ModifierKeys.Control && _viewModel.QuickSwitcher is not null)
+        {
+            // Codex round 5 (#742): this branch was unconditional, so
+            // Ctrl+O opened Quick Open BENEATH any sheet — and the
+            // picker exclusion then closed a search overlay under the
+            // sheet too, leaving only the hidden picker taking keys.
+            if (ModalSurfaces.DecideQuickOpenOpen(OpenModalSurface)
+                == PaletteOpenDecision.Open)
+            {
+                _focusBeforeSwitcher ??= Keyboard.FocusedElement;
+                _viewModel.QuickSwitcher.Open();
+            }
+
+            e.Handled = true;
+            return;
+        }
+
         // Ownership, not openness (codex round 1): a palette-invoked
         // sheet sits above a still-open search overlay, and routing on
         // IsOpen alone let the hidden overlay steal the sheet's Enter
@@ -547,23 +568,6 @@ public partial class MainWindow : Window
             && _viewModel.FileSidebar?.IsImporting == true)
         {
             _viewModel.FileSidebar.CancelImportCommand.Execute(null);
-            e.Handled = true;
-            return;
-        }
-
-        if (e.Key == Key.O && modifiers == ModifierKeys.Control && _viewModel.QuickSwitcher is not null)
-        {
-            // Codex round 5 (#742): this branch was unconditional, so
-            // Ctrl+O opened Quick Open BENEATH any sheet — and the
-            // picker exclusion then closed a search overlay under the
-            // sheet too, leaving only the hidden picker taking keys.
-            if (ModalSurfaces.DecideQuickOpenOpen(OpenModalSurface)
-                == PaletteOpenDecision.Open)
-            {
-                _focusBeforeSwitcher ??= Keyboard.FocusedElement;
-                _viewModel.QuickSwitcher.Open();
-            }
-
             e.Handled = true;
             return;
         }
