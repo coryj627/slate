@@ -282,7 +282,7 @@ the SD-1 and SD-2 convergence items.
    the overlay's key monitor". The monitor rejects every modified Return
    (`SearchOverlay.swift:571`), so only ⌘-click works.
 
-Two core-side documentation defects, also filed:
+Three core-side defects, filed as [#1114](https://github.com/coryj627/slate/issues/1114):
 
 6. `crates/slate-uniffi/src/lib.rs:1346-1348` — says `File` and `Tag`
    scopes return `Cancelled` until they land. Both halves are wrong: `Tag`
