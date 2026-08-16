@@ -82,6 +82,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     private readonly Action<WorkspaceTabViewModel, EditorDocumentSyncEvent?>? _documentChanged;
     private readonly Action<EditorNavigationRequest>? _navigate;
     private readonly Action<string>? _activateTag;
+    private readonly Action<string>? _activateTagFromReading;
     private readonly Action<A11yEvent> _announce;
     private readonly bool _ownsEditorPreferences;
     private readonly bool _startInteractionBackgroundWork;
@@ -109,6 +110,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         Action<WorkspaceTabViewModel, EditorDocumentSyncEvent?>? documentChanged = null,
         Action<EditorNavigationRequest>? navigate = null,
         Action<string>? activateTag = null,
+        Action<string>? activateTagFromReading = null,
         Action<A11yEvent>? announce = null,
         EditorPreferencesViewModel? editorPreferences = null,
         bool startInteractionBackgroundWork = true,
@@ -120,6 +122,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         _documentChanged = documentChanged;
         _navigate = navigate;
         _activateTag = activateTag;
+        _activateTagFromReading = activateTagFromReading;
         _announce = announce ?? (_ => { });
         _ownsEditorPreferences = editorPreferences is null;
         _startInteractionBackgroundWork = startInteractionBackgroundWork;
@@ -183,13 +186,20 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     /// <summary>Created on first entry into reading mode; null before.</summary>
     public ReadingContentViewModel? Reading { get; private set; }
 
-    /// <summary>Reading-surface activation routes through the SAME
-    /// seams the editor uses — one navigation path, one tag path.</summary>
+    /// <summary>Reading-surface navigation routes through the SAME seam
+    /// the editor uses — one navigation path.</summary>
     internal void NavigateFromReading(EditorNavigationRequest request) =>
         _navigate?.Invoke(request);
 
+    /// <summary>There are TWO tag paths since W5-2 (divergence SD-4,
+    /// <c>29_search_overlay_contracts.md</c>): a reading-view tag opens
+    /// the tag-scoped search overlay — mac parity,
+    /// <c>ReadingLinkRouter.swift:243-258</c> — while an editor tag
+    /// keeps the sidebar filter, because mac's editor renders tags as
+    /// unclickable plain text and the editor path is a Windows-only
+    /// affordance with no mac twin to converge on.</summary>
     internal void ActivateTagFromReading(string tag) =>
-        _activateTag?.Invoke(tag);
+        _activateTagFromReading?.Invoke(tag);
 
     /// <summary>
     /// `slate.editor.toggleViewMode` (Ctrl+Shift+E, mac ⇧⌘E — W3-1
@@ -1541,6 +1551,13 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     public event EventHandler<string>? FileOpened;
     public event EventHandler<string>? EditorTagActivated;
 
+    /// <summary>W5-2 SD-4: a reading-view tag activation, bound for the
+    /// tag-scoped search overlay (the lifecycle subscribes). Split from
+    /// <see cref="EditorTagActivated"/> — see
+    /// <see cref="WorkspaceTabViewModel.ActivateTagFromReading"/> for
+    /// why the two gestures no longer share a seam.</summary>
+    public event EventHandler<string>? ReadingTagActivated;
+
     public static IReadOnlyList<WorkspaceLeafOption> Leaves { get; } =
     [
         new("outline", "Outline"),
@@ -1766,10 +1783,21 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     private void ActivateEditorTag(string tag)
     {
         EditorTagActivated?.Invoke(this, tag);
+        // W0.5-3 residue: Windows editor tag-filter copy. EDITOR path
+        // only since W5-2 SD-4 — the reading path opens the tag-scoped
+        // search overlay and speaks through the search vocabulary, so
+        // this string must never travel with it.
         _announce(new A11yEvent.HostComposed(
             $"Filtered files by tag {tag}.",
             A11yPriority.Medium));
     }
+
+    /// <summary>The reading half of the split tag seam (SD-4): raise
+    /// the event and nothing else. Deliberately NO announcement here —
+    /// the search overlay's own tag-scope listing summary (contract S2)
+    /// is the only voice on the reading path.</summary>
+    private void ActivateReadingTag(string tag) =>
+        ReadingTagActivated?.Invoke(this, tag);
 
     private bool OpenPathCore(string path, WorkspaceOpenTarget target)
     {

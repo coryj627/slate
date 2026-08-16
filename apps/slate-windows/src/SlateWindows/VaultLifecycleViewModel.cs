@@ -343,6 +343,18 @@ internal sealed class VaultLifecycleViewModel
         }
     }
 
+    /// <summary>
+    /// W5-2 SD-4: the shell's modal-surface gate over opening the
+    /// search overlay from a view-model path. <c>MainWindow</c>
+    /// installs <c>TryClearTheWayForSearch</c> — the same
+    /// <c>ModalSurfaces.DecideSearchOpen</c> decision the Ctrl+Shift+F
+    /// chord applies, including the Quick Open dismissal — so a
+    /// reading-view tag activation can never open the overlay beneath
+    /// a sheet. Null (headless tests, window-free hosts) admits: with
+    /// no window there is no modal surface to open beneath.
+    /// </summary>
+    internal Func<bool>? SearchOpenAdmission { get; set; }
+
     public async Task OpenVaultAsync(string path)
     {
         if (IsBusy)
@@ -883,6 +895,7 @@ internal sealed class VaultLifecycleViewModel
         {
             Workspace.FileOpened -= Workspace_FileOpened;
             Workspace.EditorTagActivated -= Workspace_EditorTagActivated;
+            Workspace.ReadingTagActivated -= Workspace_ReadingTagActivated;
             Workspace.FocusBoundaryRequested -= Workspace_FocusBoundaryRequested;
             Workspace.Dispose();
         }
@@ -948,6 +961,7 @@ internal sealed class VaultLifecycleViewModel
 
         workspace.FileOpened += Workspace_FileOpened;
         workspace.EditorTagActivated += Workspace_EditorTagActivated;
+        workspace.ReadingTagActivated += Workspace_ReadingTagActivated;
         workspace.FocusBoundaryRequested += Workspace_FocusBoundaryRequested;
         sidebar.OpenTargetRequested += FileSidebar_OpenTargetRequested;
         switcher.OpenRequested += QuickSwitcher_OpenRequested;
@@ -1157,6 +1171,26 @@ internal sealed class VaultLifecycleViewModel
 
     private void Workspace_EditorTagActivated(object? sender, string tag) =>
         FileSidebar?.ActivateTag(tag);
+
+    /// <summary>
+    /// W5-2 SD-4: a reading-view tag opens the tag-scoped search
+    /// overlay, never the sidebar filter. The shell's modal gate runs
+    /// first — an overlay must not open (invisibly) beneath a sheet —
+    /// and refusal leaves the overlay untouched: no cleared query, no
+    /// armed scope. Past the gate, <see
+    /// cref="SearchOverlayViewModel.OpenTagScoped"/> performs mac's
+    /// exact ordering (clear query, open, scope last).
+    /// </summary>
+    private void Workspace_ReadingTagActivated(object? sender, string tag)
+    {
+        SearchOverlayViewModel search = Search;
+        if (!search.IsOpen && SearchOpenAdmission?.Invoke() == false)
+        {
+            return;
+        }
+
+        search.OpenTagScoped(tag);
+    }
 
     private void Workspace_FocusBoundaryRequested(
         object? sender,

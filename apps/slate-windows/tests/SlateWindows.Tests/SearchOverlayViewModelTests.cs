@@ -554,6 +554,79 @@ public sealed class SearchOverlayViewModelTests
         }
     }
 
+    // ---- SD-4: reading-view tag activation (OpenTagScoped) --------------
+
+    [Fact]
+    public void OpenTagScopedClearsTheRetainedQueryAndFiresExactlyOneTagListing()
+    {
+        var harness = new OverlayHarness();
+        harness.Source.OnSearch = (_, _) => Results(
+            "Search returned 1 result.",
+            Hit("tagged.md", string.Empty));
+        // A prior session left a retained query behind (Close preserves
+        // it) — the exact state where a wrong ordering double-fires.
+        harness.Overlay.Open();
+        harness.Overlay.Query = "stale";
+        harness.Overlay.Close();
+        int callsBefore = harness.Source.SearchCalls.Count;
+        harness.Announcements.Clear();
+
+        harness.Overlay.OpenTagScoped("projects");
+
+        Assert.True(harness.Overlay.IsOpen);
+        Assert.Equal(string.Empty, harness.Overlay.Query);
+        Assert.Equal("projects", harness.Overlay.TagScopeName);
+        // Exactly ONE new search, the empty-query tag listing: clearing
+        // BEFORE opening kept the retained "stale" re-arm from firing a
+        // Vault-scope search first, and arming the scope LAST kept the
+        // listing from running under Vault scope (mac's ordering,
+        // ReadingLinkRouter.swift:243-258).
+        Assert.Equal(callsBefore + 1, harness.Source.SearchCalls.Count);
+        Assert.Equal(("", "Tag:projects"), harness.Source.SearchCalls[^1]);
+        Assert.Equal(SearchOverlayState.Results, harness.Overlay.State);
+        // The overlay's own summary is the ONLY voice on the reading
+        // path — never a HostComposed residue string (SD-4: the sidebar
+        // filter's "Filtered files by tag" belongs to the editor path).
+        A11yEvent announcement = Assert.Single(harness.Announcements);
+        Assert.IsType<A11yEvent.SearchResultsSummary>(announcement);
+    }
+
+    [Fact]
+    public void OpenTagScopedWhileOpenReplacesTheScopeWithoutReRunningTheOldQuery()
+    {
+        var harness = new OverlayHarness();
+        harness.Overlay.Open();
+        harness.Overlay.Query = "budget";
+        int callsBefore = harness.Source.SearchCalls.Count;
+
+        harness.Overlay.OpenTagScoped("projects");
+
+        Assert.True(harness.Overlay.IsOpen);
+        Assert.Equal(string.Empty, harness.Overlay.Query);
+        Assert.Equal("projects", harness.Overlay.TagScopeName);
+        // One new source call — the tag listing. The query clear itself
+        // short-circuits at the empty-query idle rule (still Vault scope
+        // at that instant), so "budget" is not re-run on the way.
+        Assert.Equal(callsBefore + 1, harness.Source.SearchCalls.Count);
+        Assert.Equal(("", "Tag:projects"), harness.Source.SearchCalls[^1]);
+    }
+
+    [Fact]
+    public void OpenTagScopedWithNoVaultRefusesWithoutArmingTheScope()
+    {
+        var harness = new OverlayHarness();
+        harness.Source.IsVaultOpen = false;
+
+        harness.Overlay.OpenTagScoped("projects");
+
+        Assert.False(harness.Overlay.IsOpen);
+        // A scope armed on a closed overlay would silently scope the
+        // NEXT open's first search — Close() never ran to reset it.
+        Assert.IsType<SearchScope.Vault>(harness.Overlay.Scope);
+        Assert.IsType<A11yEvent.SearchNeedsVault>(Assert.Single(harness.Announcements));
+        Assert.Empty(harness.Source.SearchCalls);
+    }
+
     // ---- S9: activation -------------------------------------------------
 
     [Fact]

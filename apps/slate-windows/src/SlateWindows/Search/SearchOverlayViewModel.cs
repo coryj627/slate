@@ -328,6 +328,39 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
     public void ClearScope() => SetScope(new SearchScope.Vault());
 
     /// <summary>
+    /// Reading-view tag activation (divergence SD-4), in mac's exact
+    /// order (<c>ReadingLinkRouter.swift:243-258</c>): clear the query,
+    /// open the overlay if closed, and arm Tag scope LAST — so the
+    /// empty-query tag listing fires exactly once, through the ordinary
+    /// pipeline. Clearing BEFORE opening keeps <see cref="Open"/>'s
+    /// retained-query re-arm from firing a stale Vault-scope search
+    /// first; arming the scope last keeps the listing from running
+    /// under the wrong scope. The listing's own summary announcement
+    /// (contract S2) is the only voice on this path — the editor tag
+    /// path's "Filtered files by tag" residue string is never spoken
+    /// here.
+    /// </summary>
+    public void OpenTagScoped(string tagName)
+    {
+        ArgumentNullException.ThrowIfNull(tagName);
+        Query = string.Empty;
+        if (!IsOpen)
+        {
+            Open();
+            if (!IsOpen)
+            {
+                // Open refused (no vault): never leave a scope armed on
+                // a closed overlay — Close() is what resets scope, and
+                // a never-opened overlay never runs Close(), so the tag
+                // would silently scope the NEXT open's first search.
+                return;
+            }
+        }
+
+        SetScope(new SearchScope.Tag(tagName));
+    }
+
+    /// <summary>
     /// Down (<c>delta = 1</c>) / Up (<c>delta = -1</c>), wrapping — the
     /// palette's shape (divergence SD-1: Windows ships arrow-key result
     /// navigation; mac has none, and matching mac's Tab-only traversal

@@ -39,8 +39,18 @@ After the activation slice landed, verified live: **click** activation for
 all four kinds (resolved wikilink opened its note; unresolved announced
 "is unresolved. Cannot open."; external opened the default browser with
 the canonical announcement; tag filtered the file list), and **Enter** /
-**Ctrl+Enter** at the caret after the containment fix. Two defects found
-and fixed by these passes: Enter dead on a landed link (the caret rests
+**Ctrl+Enter** at the caret after the containment fix.
+
+> **2026-08-16 — superseded in part by W5-2 SD-4 (#742):** reading-view
+> tag activation is rerouted to the tag-scoped search overlay
+> (`29_search_overlay_contracts.md` SD-4, mac parity with
+> `ReadingLinkRouter.swift:243-258`), so "tag filtered the file list"
+> above describes pre-W5-2 behaviour. The EDITOR tag path is unchanged:
+> it still filters the sidebar and still announces "Filtered files by
+> tag {tag}." — mac's editor tags are unclickable, so that path is a
+> Windows-only affordance with no mac twin.
+
+Two defects found and fixed by these passes: Enter dead on a landed link (the caret rests
 one symbol before a live link element), and navigation re-titling the tab
 while the reading surface kept the old note (ReplaceItem disposed the
 projection without rebuilding).
