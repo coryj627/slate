@@ -56,7 +56,11 @@ public partial class MainWindow
             case nameof(WorkspaceViewModel.BaseQueryBuilderSheet):
                 if (workspace.BaseQueryBuilderSheet is not null)
                 {
-                    _focusBeforeBuilder = Keyboard.FocusedElement;
+                    // Through the shared helper: this sheet presents
+                    // from the edit-JSON continuation, so a picker may
+                    // still be open and focused here (red team after
+                    // round 11) — its pre-open token is the lineage.
+                    _focusBeforeBuilder = CapturePreSheetFocus();
                     FocusWhenReady(() => BuilderCombinatorBox.Focus());
                 }
                 else
@@ -68,7 +72,7 @@ public partial class MainWindow
             case nameof(WorkspaceViewModel.DashboardEditorSheet):
                 if (workspace.DashboardEditorSheet is not null)
                 {
-                    _focusBeforeDashboardEditor = Keyboard.FocusedElement;
+                    _focusBeforeDashboardEditor = CapturePreSheetFocus();
                     FocusWhenReady(() => DashboardEditorNameBox.Focus());
                 }
                 else
@@ -92,6 +96,13 @@ public partial class MainWindow
         _ = Dispatcher.InvokeAsync(
             () =>
             {
+                // Codex round 3 (#742): search topmost takes priority —
+                // see TryFocusSearchIfTopmost.
+                if (TryFocusSearchIfTopmost())
+                {
+                    return;
+                }
+
                 if (token is UIElement { IsVisible: true } && token.Focus())
                 {
                     return;

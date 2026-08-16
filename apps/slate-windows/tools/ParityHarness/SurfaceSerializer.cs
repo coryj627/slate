@@ -931,6 +931,11 @@ public static class SurfaceSerializer
     }
 
     /// <summary>Vault-level artifact: pinned full-text-search queries.</summary>
+    /// <remarks>W5-2 (#742, contract S13): <c>summary</c> pins core's
+    /// <c>summary_for</c> render — the string the overlay displays
+    /// verbatim and the announcement template renders — byte-identical
+    /// across both twins. Same key, same position in the Swift twin
+    /// (<c>ParityHarnessTests.swift</c>), same commit.</remarks>
     public static string SearchArtifact(VaultSession session, CancelToken cancel)
     {
         var j = new CanonicalJson();
@@ -946,7 +951,9 @@ public static class SurfaceSerializer
                 .OrderBy(r => r.Path, StringComparer.Ordinal)
                 .ThenBy(r => r.Snippet, StringComparer.Ordinal)
                 .ToArray();
-            j.Raw("{\"query\":").Str(PinnedSearchQueries[q]).Raw(",\"rows\":[");
+            j.Raw("{\"query\":").Str(PinnedSearchQueries[q])
+             .Raw(",\"summary\":").Str(rs.Summary)
+             .Raw(",\"rows\":[");
             for (int i = 0; i < rows.Length; i++)
             {
                 if (i > 0)

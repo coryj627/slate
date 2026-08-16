@@ -53,6 +53,10 @@ internal enum ChordScope
 
     /// <summary>The Quick Open overlay's key handler.</summary>
     QuickOpen,
+
+    /// <summary>The vault-search overlay (W5-2), live only while the
+    /// overlay is open. Its opening chord is <see cref="Global"/>.</summary>
+    SearchOverlay,
 }
 
 /// <summary>
@@ -189,6 +193,7 @@ internal static class ChordTable
         public const string OpenInNewTab = "slate.workspace.openInNewTab";
         public const string OpenInSplit = "slate.workspace.openInSplit";
         public const string ToggleRightPane = "slate.view.toggleRightPane";
+        public const string ToggleSearch = "slate.view.toggleSearch";
         public const string ShowHistoryPanel = "slate.history.showPanel";
         public const string RefreshSyncDiagnostics = "slate.diagnostics.refreshSync";
 
@@ -589,6 +594,20 @@ internal static class ChordTable
         Reg(Ids.ToggleRightPane, "Toggle Right Pane", CommandSection.View,
             "Hide or show the right pane (the panel rail). Control-Alt-I.",
             "⌥⌘I", "Ctrl+Alt+I"),
+        // W5-2 close-out (#742): the vault-search overlay's toggle,
+        // registered with mac's exact label and hint. The resolved
+        // ICommand is UNGUARDED — mac's palette action calls
+        // toggleSearchOverlay() with no modal gate
+        // (SlateCommands.swift:1483-1494), and the palette invokes
+        // BEFORE dismissing (P9), so a modal-decision-aware guard
+        // would refuse every palette invocation. The modal gate stays
+        // on the chord path only: Ctrl+Shift+F is still delivered
+        // imperatively from MainWindow.Window_PreviewKeyDown, where
+        // TryClearTheWayForSearch lives (the ChordTableTests
+        // imperative allow-list records why no KeyBinding exists).
+        Reg(Ids.ToggleSearch, "Search Vault", CommandSection.View,
+            "Toggle the vault-wide search overlay.",
+            "⇧⌘F", "Ctrl+Shift+F"),
         Reg(Ids.ShowHistoryPanel, "Show History Panel", CommandSection.View,
             "Open the History leaf in the right pane."),
         Reg(Ids.RefreshSyncDiagnostics, "Refresh Sync Diagnostics", CommandSection.View,
@@ -976,6 +995,13 @@ internal static class ChordTable
             "W5-1: a command-palette overlay interaction, live only while the "
             + "palette is open. Delivered imperatively from "
             + "MainWindow.HandleCommandPaletteKey, not a KeyBinding.";
+        const string SearchOverlayInteractionReason =
+            "W5-2: a vault-search overlay interaction, live only while the "
+            + "overlay is open. Delivered imperatively from "
+            + "MainWindow.HandleSearchOverlayKey, not a KeyBinding.";
+        const string SearchOverlayArrowDivergence =
+            "SD-1: Windows navigates results with the arrow keys where mac has "
+            + "no arrow handling at all; mac converges under #1113.";
         const string PaletteKeysDivergence =
             "PD-1: Windows navigates with the Home/End/Page keys where mac "
             + "deliberately handles none of them; mac converges under #1105.";
@@ -1024,6 +1050,19 @@ internal static class ChordTable
                 "PageDown", ChordScope.Palette, PaletteReason + " " + PaletteKeysDivergence),
             Chord("windows.palette.pageUp", "Command palette: previous page of results",
                 "PageUp", ChordScope.Palette, PaletteReason + " " + PaletteKeysDivergence),
+
+            Chord("windows.searchOverlay.activate", "Search overlay: open the selected result",
+                "Enter", ChordScope.SearchOverlay, SearchOverlayInteractionReason),
+            Chord("windows.searchOverlay.dismiss", "Search overlay: dismiss",
+                "Escape", ChordScope.SearchOverlay,
+                SearchOverlayInteractionReason
+                + " PR-2 records its place in the Escape chain."),
+            Chord("windows.searchOverlay.moveNext", "Search overlay: next result",
+                "Down", ChordScope.SearchOverlay,
+                SearchOverlayInteractionReason + " " + SearchOverlayArrowDivergence),
+            Chord("windows.searchOverlay.movePrevious", "Search overlay: previous result",
+                "Up", ChordScope.SearchOverlay,
+                SearchOverlayInteractionReason + " " + SearchOverlayArrowDivergence),
 
             Chord("windows.propertyRow.stepUp", "Property row: increment a numeric value",
                 "Up", ChordScope.PropertyRow, PropertyRowReason),

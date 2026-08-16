@@ -202,6 +202,7 @@ internal sealed partial class WorkspaceViewModel
             MirrorSamePathDocumentState,
             OpenEditorNavigation,
             ActivateEditorTag,
+            ActivateReadingTag,
             _announce,
             EditorPreferences,
             startInteractionBackgroundWork: _startInteractionBackgroundWork);
@@ -431,6 +432,7 @@ internal sealed partial class WorkspaceViewModel
             MirrorSamePathDocumentState,
             OpenEditorNavigation,
             ActivateEditorTag,
+            ActivateReadingTag,
             _announce,
             EditorPreferences,
             startInteractionBackgroundWork: _startInteractionBackgroundWork);

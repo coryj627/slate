@@ -8,6 +8,7 @@ using System.Runtime.CompilerServices;
 using System.Windows.Input;
 using System.Windows.Threading;
 using SlateWindows.Commands;
+using SlateWindows.Search;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows;
@@ -96,9 +97,11 @@ internal sealed class VaultLifecycleViewModel
     private readonly Dispatcher? _lifecycleDispatcher;
     private CommandPaletteViewModel? _palette;
     private PaletteCommandSource? _paletteSource;
+    private SearchOverlayViewModel? _search;
     private readonly AsyncRelayCommand _openVaultCommand;
     private readonly AsyncRelayCommand _openRecentCommand;
     private readonly RelayCommand _closeVaultCommand;
+    private readonly RelayCommand _toggleSearchCommand;
 
     private VaultSession? _session;
     private CancelToken? _scanCancel;
@@ -186,6 +189,15 @@ internal sealed class VaultLifecycleViewModel
         _closeVaultCommand = new RelayCommand(
             _ => CloseVault(),
             _ => IsVaultOpen && !IsBusy);
+        // W5-2 close-out (#742): UNGUARDED, matching mac's palette
+        // action (toggleSearchOverlay(), SlateCommands.swift:1483-1494).
+        // The palette invokes BEFORE dismissing (P9), so a modal gate
+        // here would see the palette itself open and refuse every
+        // palette invocation; the modal decision stays on the chord
+        // path (MainWindow.Window_PreviewKeyDown). The no-vault refusal
+        // lives inside Toggle() → Open(), which announces
+        // SearchNeedsVault — mac's exact posture.
+        _toggleSearchCommand = new RelayCommand(_ => Search.Toggle(), _ => true);
         ReloadRecentVaults();
     }
 
@@ -200,6 +212,12 @@ internal sealed class VaultLifecycleViewModel
     public ICommand OpenVaultCommand => _openVaultCommand;
     public ICommand OpenRecentCommand => _openRecentCommand;
     public ICommand CloseVaultCommand => _closeVaultCommand;
+
+    /// <summary>W5-2 close-out (#742): the registered
+    /// <c>slate.view.toggleSearch</c> surface — the palette and the
+    /// Workspace ▸ Search Vault… menu item both run it. See the
+    /// constructor note for why it is unguarded.</summary>
+    public ICommand ToggleSearchCommand => _toggleSearchCommand;
 
     public bool IsVaultOpen
     {
@@ -306,6 +324,53 @@ internal sealed class VaultLifecycleViewModel
                 _lifecycleDispatcher ?? Dispatcher.CurrentDispatcher),
             _announce);
 
+    /// <summary>
+    /// The vault-search overlay (W5-2, #742). Public for the same W4-4
+    /// reason as <see cref="Palette"/>: WPF binding reflection only sees
+    /// public properties.
+    /// </summary>
+    /// <remarks>
+    /// One app-lifetime instance, the palette's shape: the
+    /// <see cref="VaultSearchSource"/> reads the session and vault root
+    /// through live delegates, so a vault switch invalidates in-flight
+    /// results through the view model's session-identity staleness arm
+    /// (contract S5) rather than by rebuilding the overlay. Constructed
+    /// on first access — the shell touches it at startup, on the UI
+    /// thread, which is where the view model captures its
+    /// <see cref="SynchronizationContext"/>.
+    /// </remarks>
+    public SearchOverlayViewModel Search
+    {
+        get
+        {
+            if (_search is null)
+            {
+                _search = new SearchOverlayViewModel(
+                    new VaultSearchSource(
+                        () => _session,
+                        () => _session is null || _vaultPath.Length == 0
+                            ? null
+                            : _vaultPath),
+                    _announce);
+                _search.OpenRequested += Search_OpenRequested;
+            }
+
+            return _search;
+        }
+    }
+
+    /// <summary>
+    /// W5-2 SD-4: the shell's modal-surface gate over opening the
+    /// search overlay from a view-model path. <c>MainWindow</c>
+    /// installs <c>TryClearTheWayForSearch</c> — the same
+    /// <c>ModalSurfaces.DecideSearchOpen</c> decision the Ctrl+Shift+F
+    /// chord applies, including the Quick Open dismissal — so a
+    /// reading-view tag activation can never open the overlay beneath
+    /// a sheet. Null (headless tests, window-free hosts) admits: with
+    /// no window there is no modal surface to open beneath.
+    /// </summary>
+    internal Func<bool>? SearchOpenAdmission { get; set; }
+
     public async Task OpenVaultAsync(string path)
     {
         if (IsBusy)
@@ -334,6 +399,12 @@ internal sealed class VaultLifecycleViewModel
         // the user cancels, an import in flight — left the vault open with
         // the palette already gone.
         _palette?.Dismiss();
+        // The W5-1 vault-transition precedent, extended to search: a
+        // direct A→B open bypasses CloseVault, and mac routes exactly
+        // this path through closeSearchOverlay too (AppState.swift:9761,
+        // the #876 Codex round-2 bug). Closed BEFORE CloseSession so the
+        // in-flight cancellation targets vault A's search.
+        CloseSearchForVaultTransition();
 
         CloseSession();
         int generation = ++_generation;
@@ -446,6 +517,10 @@ internal sealed class VaultLifecycleViewModel
         // next vault open auto-presents it. Dismissed BEFORE the session
         // goes away, so the overlay cannot survive the gap.
         _palette?.Dismiss();
+        // Search joins the same teardown (mac closeVault,
+        // AppState.swift:11016-11017): overlay closed, retained query
+        // cleared, while the session still exists.
+        CloseSearchForVaultTransition();
 
         ++_generation;
         CloseSession();
@@ -495,6 +570,32 @@ internal sealed class VaultLifecycleViewModel
         _paletteSource?.Dispose();
         _paletteSource = null;
         _palette = null;
+
+        if (_search is not null)
+        {
+            _search.OpenRequested -= Search_OpenRequested;
+            _search.Dispose();
+            _search = null;
+        }
+    }
+
+    /// <summary>
+    /// The vault-transition teardown mac performs in both closeVault and
+    /// the direct-switch path (<c>AppState.swift:9761-9762</c>,
+    /// <c>:11016-11017</c>): nothing of vault A's search — query, scope,
+    /// rows, announcement memory — may re-arm inside vault B. Through
+    /// <see cref="SearchOverlayViewModel.ResetForVaultTransition"/>
+    /// rather than <c>Close()</c> (codex round 12): Close early-returns
+    /// on a CLOSED overlay, and a superseded overlay is closed with its
+    /// scope deliberately preserved — the old body carried vault A's
+    /// tag scope across the switch.
+    /// </summary>
+    private void CloseSearchForVaultTransition()
+    {
+        if (_search is SearchOverlayViewModel search)
+        {
+            search.ResetForVaultTransition();
+        }
     }
 
     private async Task PickAndOpenVaultAsync(object? _)
@@ -812,7 +913,9 @@ internal sealed class VaultLifecycleViewModel
         {
             Workspace.FileOpened -= Workspace_FileOpened;
             Workspace.EditorTagActivated -= Workspace_EditorTagActivated;
+            Workspace.ReadingTagActivated -= Workspace_ReadingTagActivated;
             Workspace.FocusBoundaryRequested -= Workspace_FocusBoundaryRequested;
+            Workspace.PropertyChanged -= Workspace_SheetPresented;
             Workspace.Dispose();
         }
 
@@ -877,12 +980,21 @@ internal sealed class VaultLifecycleViewModel
 
         workspace.FileOpened += Workspace_FileOpened;
         workspace.EditorTagActivated += Workspace_EditorTagActivated;
+        workspace.ReadingTagActivated += Workspace_ReadingTagActivated;
         workspace.FocusBoundaryRequested += Workspace_FocusBoundaryRequested;
         sidebar.OpenTargetRequested += FileSidebar_OpenTargetRequested;
         switcher.OpenRequested += QuickSwitcher_OpenRequested;
         switcher.Dismissed += QuickSwitcher_Dismissed;
 
         Workspace = workspace;
+
+        // Subscribed AFTER the Workspace assignment on purpose: the
+        // shell observes that assignment synchronously and subscribes
+        // its own sheet handlers first, so on a sheet presentation the
+        // sheet's focus grab is queued BEFORE any restore this
+        // handler's dismissals queue — the same converged order the
+        // pickers already produce.
+        workspace.PropertyChanged += Workspace_SheetPresented;
 
         // PINV-7: the workspace requeries far more often than the vault
         // lifecycle does — on every tab switch — and that is the frequency
@@ -1087,10 +1199,98 @@ internal sealed class VaultLifecycleViewModel
     private void Workspace_EditorTagActivated(object? sender, string tag) =>
         FileSidebar?.ActivateTag(tag);
 
+    /// <summary>
+    /// W5-2 SD-4: a reading-view tag opens the tag-scoped search
+    /// overlay, never the sidebar filter. The shell's modal gate runs
+    /// first — an overlay must not open (invisibly) beneath a sheet —
+    /// and refusal leaves the overlay untouched: no cleared query, no
+    /// armed scope. Past the gate, <see
+    /// cref="SearchOverlayViewModel.OpenTagScoped"/> performs mac's
+    /// exact ordering (clear query, open, scope last).
+    /// </summary>
+    private void Workspace_ReadingTagActivated(object? sender, string tag)
+    {
+        SearchOverlayViewModel search = Search;
+        if (!search.IsOpen && SearchOpenAdmission?.Invoke() == false)
+        {
+            return;
+        }
+
+        search.OpenTagScoped(tag);
+    }
+
     private void Workspace_FocusBoundaryRequested(
         object? sender,
         WorkspaceFocusBoundary boundary) =>
         WorkspaceFocusBoundaryRequested?.Invoke(this, boundary);
+
+    /// <summary>
+    /// Invariant 6's presentation-time admission (codex round 11,
+    /// #742). A sheet may PRESENT from a deferred continuation — the
+    /// files-citing load, the bases edit-JSON fetch, a citation
+    /// summary parked on <c>RowsPublished</c> — and the modal decision
+    /// taken at command dispatch is stale by the time the sheet lands:
+    /// a picker opened during that window would sit hidden-but-live
+    /// beneath the sheet, the round-1/round-10 class SD-5 retires.
+    /// Enforced here, reactively, the moment a sheet property becomes
+    /// non-null, so every present and future presentation path is
+    /// covered without per-site admission calls. All three dismissals
+    /// are idempotent; the palette arm also fires during the
+    /// sanctioned P9 transient (a palette-invoked SYNCHRONOUS sheet),
+    /// where it runs the dismissal P9 itself would run moments later.
+    /// P9's subsequent success steps survive that early dismissal:
+    /// <c>RecordInvocation(row.Id)</c> reads only its parameter, never
+    /// palette state, and P9's own <c>Dismiss()</c> becomes a no-op.
+    /// </summary>
+    private void Workspace_SheetPresented(
+        object? sender, PropertyChangedEventArgs eventArgs)
+    {
+        if (sender is not WorkspaceViewModel workspace
+            || !ReferenceEquals(workspace, Workspace))
+        {
+            return;
+        }
+
+        // A flat name-by-name read, the CurrentModalSurfaceState
+        // idiom: each arm sits next to the property it reads, so a
+        // wrong-property error is visible here rather than hidden in
+        // shared plumbing. Census-pinned against the sheet members of
+        // ModalSurface in ModalSurfaceTests.
+        bool presented = eventArgs.PropertyName switch
+        {
+            nameof(WorkspaceViewModel.AddPropertySheet) =>
+                workspace.AddPropertySheet is not null,
+            nameof(WorkspaceViewModel.BulkRenameSheet) =>
+                workspace.BulkRenameSheet is not null,
+            nameof(WorkspaceViewModel.CitationDetails) =>
+                workspace.CitationDetails is not null,
+            nameof(WorkspaceViewModel.CitationSummary) =>
+                workspace.CitationSummary is not null,
+            nameof(WorkspaceViewModel.FilesCiting) =>
+                workspace.FilesCiting is not null,
+            nameof(WorkspaceViewModel.DashboardEditorSheet) =>
+                workspace.DashboardEditorSheet is not null,
+            nameof(WorkspaceViewModel.BaseQueryBuilderSheet) =>
+                workspace.BaseQueryBuilderSheet is not null,
+            _ => false,
+        };
+        if (!presented)
+        {
+            return;
+        }
+
+        // SUPERSEDE, not Close, for search (red team after round 11):
+        // the landing sheet is borrowing the screen the way the
+        // palette does, so the scope survives and Ctrl+Shift+F after
+        // the sheet restores the overlay the user actually had.
+        // Backing fields, not the lazy getters: closing a picker that
+        // was never constructed should not construct it — in a
+        // window-free host the Palette getter registers the whole
+        // command catalog as a side effect of this dispatch.
+        _search?.Supersede();
+        QuickSwitcher?.Dismiss();
+        _palette?.Dismiss();
+    }
 
     private static SwitcherFile[] LoadSwitcherFiles(VaultSession session)
     {
@@ -1118,6 +1318,98 @@ internal sealed class VaultLifecycleViewModel
 
     private void QuickSwitcher_Dismissed(object? sender, EventArgs e) =>
         QuickSwitcherDismissed?.Invoke(this, EventArgs.Empty);
+
+    /// <summary>
+    /// A search activation (contract S9): open the hit in the CURRENT
+    /// tab (contract S10 — no modifier variants; mac's ⌘Return is
+    /// rejected by its own key monitor and only ⌘-click works, so
+    /// Windows builds neither), derive the match line host-side, park
+    /// the caret at its start, and announce
+    /// <c>SearchResultOpened(filename, line, snippet)</c> with the
+    /// WHOLE-FILE line number.
+    /// </summary>
+    /// <remarks>
+    /// The overlay has already closed and recorded the recent
+    /// (record→close→open, the phase-1 ordering fact); this handler runs
+    /// synchronously after it on the UI thread — the Windows tab load is
+    /// synchronous, so there is no mac-style await on a pending note
+    /// load. An open the dirty-navigation prompt refuses leaves the user
+    /// on their current note, so nothing is scrolled or announced.
+    /// </remarks>
+    private void Search_OpenRequested(object? sender, SearchOpenRequest request)
+    {
+        if (Workspace is not WorkspaceViewModel workspace)
+        {
+            return;
+        }
+
+        // S10: opening a file that is already the selected file does not
+        // re-open it (mac wasAlreadyOpen, AppState.swift:9471-9477).
+        WorkspaceTabViewModel? active = workspace.ActiveGroup.ActiveTab;
+        bool alreadyActive = active is { IsMarkdown: true }
+            && string.Equals(active.Path, request.Path, StringComparison.Ordinal);
+        if (!alreadyActive)
+        {
+            workspace.OpenPath(request.Path, WorkspaceOpenTarget.CurrentTab);
+        }
+
+        WorkspaceTabViewModel? tab = workspace.ActiveGroup.ActiveTab;
+        if (tab is not { IsMarkdown: true }
+            || !string.Equals(tab.Path, request.Path, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        int fileLine = DeriveSearchResultLine(tab, request);
+        // The caret park follows the W4-3 dirty posture rather than mac's
+        // unverified scroll: a dirty or externally stale buffer no longer
+        // matches the indexed bytes the line was derived from, so the
+        // caret stays put (the silent non-move is the honest observable).
+        // The announcement still fires — the note did open, and the line
+        // describes the saved note the search indexed.
+        if (!tab.IsDirty && !tab.IsExternallyStale)
+        {
+            tab.EditorInteractions?.RequestCaret(
+                SearchLineLocator.LineStartOffset(tab.Text, fileLine));
+        }
+
+        _announce(new A11yEvent.SearchResultOpened(
+            Path.GetFileName(request.Path),
+            (uint)fileLine,
+            request.Snippet));
+    }
+
+    /// <summary>
+    /// The whole-file line for an activated hit. The scan runs over the
+    /// BODY (mac scans its body-space buffer) and the result is rebased
+    /// to file space with core's <c>BodyLineOffset</c> — the one
+    /// conversion authority (<c>read_note_parts</c>, the U3-5 law:
+    /// frontmatter geometry is never re-derived host-side). Windows
+    /// buffers are whole-file, so the same number both scrolls the
+    /// editor and is announced (mac needs <c>fileLine(fromBodyLine:)</c>
+    /// only for the announcement).
+    /// </summary>
+    private int DeriveSearchResultLine(
+        WorkspaceTabViewModel tab, SearchOpenRequest request)
+    {
+        if (_session is VaultSession session)
+        {
+            try
+            {
+                NotePartsBundle parts = session.ReadNoteParts(request.Path);
+                return SearchLineLocator.FirstTokenLine(parts.Body, request.Query)
+                    + (int)parts.BodyLineOffset;
+            }
+            catch (VaultException)
+            {
+                // The note opened but its parts read failed (deleted in
+                // the gap, a reparse refusal): degrade to a whole-file
+                // scan of the loaded buffer, which is already file-space.
+            }
+        }
+
+        return SearchLineLocator.FirstTokenLine(tab.Text, request.Query);
+    }
 
     private void ReportTerminalStatus(string message, A11yPriority priority)
     {

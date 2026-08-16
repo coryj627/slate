@@ -280,6 +280,18 @@
       "registered": true
     },
     {
+      "id": "slate.view.toggleSearch",
+      "label": "Search Vault",
+      "section": "View",
+      "hint": "Toggle the vault-wide search overlay.",
+      "macChord": "⇧⌘F",
+      "mac": "Shift Command F",
+      "windows": "Ctrl+Shift+F",
+      "windowsSpoken": "Control Shift F",
+      "scope": "Global",
+      "registered": true
+    },
+    {
       "id": "slate.history.showPanel",
       "label": "Show History Panel",
       "section": "View",
@@ -1551,6 +1563,22 @@
           "apps/slate-windows/tests/SlateWindows.Tests/CommandDriftTests.cs#CommandDriftTests",
           "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#CommandPalette_OpensFiltersInvokesAndRestoresFocus_IsClean"
         ]
+      },
+      "searchOverlay": {
+        "implementation": [
+          "apps/slate-windows/src/SlateWindows/Search/SearchOverlayViewModel.cs#SearchOverlayViewModel",
+          "apps/slate-windows/src/SlateWindows/Search/SearchRecentsStore.cs#SearchRecentsStore",
+          "apps/slate-windows/src/SlateWindows/Search/VaultSearchSource.cs#VaultSearchSource",
+          "apps/slate-windows/src/SlateWindows/MainWindow.Search.cs#ObserveSearch",
+          "apps/slate-windows/src/SlateWindows/VaultLifecycleViewModel.cs#ToggleSearchCommand"
+        ],
+        "tests": [
+          "apps/slate-windows/tests/SlateWindows.Tests/SearchOverlayViewModelTests.cs#SearchOverlayViewModelTests",
+          "apps/slate-windows/tests/SlateWindows.Tests/SearchRecentsStoreTests.cs#SearchRecentsStoreTests",
+          "apps/slate-windows/tests/SlateWindows.Tests/ReadingTagSearchRerouteTests.cs#ReadingTagSearchRerouteTests",
+          "apps/slate-windows/tests/SlateWindows.Tests/ModalSurfaceTests.cs#ModalSurfaceTests",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#SearchOverlay_OpensSearchesActivatesAndRestoresFocus_IsClean"
+        ]
       }
     },
     "commands": {
@@ -1651,7 +1679,8 @@
       "slate.bases.viewAsTable": "bases",
       "slate.bases.whereAmI": "bases",
       "slate.history.showPanel": "history",
-      "slate.diagnostics.refreshSync": "syncDiagnostics"
+      "slate.diagnostics.refreshSync": "syncDiagnostics",
+      "slate.view.toggleSearch": "searchOverlay"
     },
     "issues": {
       "#720": "vault",
@@ -1668,7 +1697,8 @@
       "#738": "bases",
       "#739": "history",
       "#740": "syncDiagnostics",
-      "#741": "commandPalette"
+      "#741": "commandPalette",
+      "#742": "searchOverlay"
     }
   },
   "chordSurface": [
@@ -2503,6 +2533,58 @@
       "scope": "Palette",
       "registered": false,
       "reason": "W5-1: a command-palette overlay interaction, live only while the palette is open. Delivered imperatively from MainWindow.HandleCommandPaletteKey, not a KeyBinding. PD-1: Windows navigates with the Home/End/Page keys where mac deliberately handles none of them; mac converges under #1105."
+    },
+    {
+      "id": "windows.searchOverlay.activate",
+      "label": "Search overlay: open the selected result",
+      "section": "View",
+      "hint": null,
+      "macChord": null,
+      "mac": null,
+      "windows": "Enter",
+      "windowsSpoken": "Enter",
+      "scope": "SearchOverlay",
+      "registered": false,
+      "reason": "W5-2: a vault-search overlay interaction, live only while the overlay is open. Delivered imperatively from MainWindow.HandleSearchOverlayKey, not a KeyBinding."
+    },
+    {
+      "id": "windows.searchOverlay.dismiss",
+      "label": "Search overlay: dismiss",
+      "section": "View",
+      "hint": null,
+      "macChord": null,
+      "mac": null,
+      "windows": "Escape",
+      "windowsSpoken": "Escape",
+      "scope": "SearchOverlay",
+      "registered": false,
+      "reason": "W5-2: a vault-search overlay interaction, live only while the overlay is open. Delivered imperatively from MainWindow.HandleSearchOverlayKey, not a KeyBinding. PR-2 records its place in the Escape chain."
+    },
+    {
+      "id": "windows.searchOverlay.moveNext",
+      "label": "Search overlay: next result",
+      "section": "View",
+      "hint": null,
+      "macChord": null,
+      "mac": null,
+      "windows": "Down",
+      "windowsSpoken": "Down Arrow",
+      "scope": "SearchOverlay",
+      "registered": false,
+      "reason": "W5-2: a vault-search overlay interaction, live only while the overlay is open. Delivered imperatively from MainWindow.HandleSearchOverlayKey, not a KeyBinding. SD-1: Windows navigates results with the arrow keys where mac has no arrow handling at all; mac converges under #1113."
+    },
+    {
+      "id": "windows.searchOverlay.movePrevious",
+      "label": "Search overlay: previous result",
+      "section": "View",
+      "hint": null,
+      "macChord": null,
+      "mac": null,
+      "windows": "Up",
+      "windowsSpoken": "Up Arrow",
+      "scope": "SearchOverlay",
+      "registered": false,
+      "reason": "W5-2: a vault-search overlay interaction, live only while the overlay is open. Delivered imperatively from MainWindow.HandleSearchOverlayKey, not a KeyBinding. SD-1: Windows navigates results with the arrow keys where mac has no arrow handling at all; mac converges under #1113."
     },
     {
       "id": "windows.propertyRow.stepUp",

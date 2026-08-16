@@ -2640,14 +2640,43 @@ public sealed class ShellAccessibilityTests
 
             AssertAxeClean(process, "citation-details-sheet");
 
-            // The Jump menu item must be USABLE, not just present.
-            // Round 4 argued it is disabled in every state a user can
-            // reach it, because it requires the details sheet and the
-            // sheet is IsDialog and focus-trapped. Measured: the sheet
-            // is an in-window overlay, not a true modal, so the menu
-            // still opens over it and the item is enabled there.
-            AutomationElement editMenu = WaitForElement(
-                window, "MainMenu", TimeSpan.FromSeconds(10))
+            // S11 (W5-2 round 1) reversed the W3 round-4 measurement
+            // here: the menu now DISABLES under every modal surface —
+            // mac parity, AppKit disables the menu bar while a sheet is
+            // up — so the probe that once expanded Edit OVER this sheet
+            // asserts the opposite. Jump's enable condition IS the
+            // sheet (CitationDetails non-null), and S11 disables the
+            // menu exactly then, so the MENU route is gone in every
+            // reachable state — the recorded SR-4 consequence, measured
+            // below as correctly-greyed; Ctrl+J (which fires with the
+            // sheet open) is the working route.
+            AutomationElement mainMenu = WaitForElement(
+                window, "MainMenu", TimeSpan.FromSeconds(10));
+            Assert.False(
+                mainMenu.Properties.IsEnabled.ValueOrDefault,
+                "the menu is enabled over the citation details sheet — "
+                + "S11 disables it under every modal surface.");
+            detailsClose.Focus();
+
+            PressKey(VirtualKeyShort.ESCAPE);
+            AssertElementDisappears(window, automation, "CitationDetailsSheet");
+            AssertEventuallyFocused(
+                resolvedRow, "Escape did not return focus to the citation row.");
+
+            // The Jump menu item after S11: its enable condition IS the
+            // details sheet (CitationDetails non-null — the Windows
+            // twin of mac's expandedCitation), and S11 disables the
+            // whole menu exactly while that sheet is up. The item is
+            // therefore chord advertisement: present and correctly
+            // greyed whenever the menu is reachable, with Ctrl+J
+            // (measured below, sheet open) as the working route.
+            // Recorded in 29_search_overlay_contracts.md S11.
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => mainMenu.Properties.IsEnabled.ValueOrDefault,
+                    TimeSpan.FromSeconds(10)),
+                "the menu did not re-enable after the sheet closed");
+            AutomationElement editMenu = mainMenu
                 .FindAllChildren(
                     automation.ConditionFactory.ByControlType(ControlType.MenuItem))
                 .First(item => (item.Properties.Name.ValueOrDefault ?? "")
@@ -2655,17 +2684,14 @@ public sealed class ShellAccessibilityTests
             editMenu.Patterns.ExpandCollapse.Pattern.Expand();
             AutomationElement jumpItem = WaitForElement(
                 window, "JumpToBibliographyMenuItem", TimeSpan.FromSeconds(10));
-            Assert.True(
+            Assert.False(
                 jumpItem.Properties.IsEnabled.ValueOrDefault,
-                "Jump to Bibliography is greyed out in the only state that enables it");
+                "Jump to Bibliography is enabled with no citation "
+                + "expanded — the command has no key to jump to, and "
+                + "invoking it here would be the W4-5 disabled-state "
+                + "defect reborn.");
             editMenu.Patterns.ExpandCollapse.Pattern.Collapse();
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(300));
-            detailsClose.Focus();
-
-            PressKey(VirtualKeyShort.ESCAPE);
-            AssertElementDisappears(window, automation, "CitationDetailsSheet");
-            AssertEventuallyFocused(
-                resolvedRow, "Escape did not return focus to the citation row.");
 
             // ---- Ctrl+J: the landing, not just the announcement -----
             // The docstring claimed this for a version of the test that
@@ -4554,6 +4580,540 @@ public sealed class ShellAccessibilityTests
                     },
                     TimeSpan.FromSeconds(10)),
                 "closing the palette left focus on the window root");
+        }
+        finally
+        {
+            if (process is not null && !process.HasExited)
+            {
+                process.CloseMainWindow();
+                if (!process.WaitForExit(5_000))
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            try
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    /// <summary>
+    /// W5-2 (#742): the vault-search overlay end to end — open by chord,
+    /// the composed one-stop row names over a fixture vault, activation
+    /// asserted by EFFECT on the editor document, Esc focus restore to
+    /// the pre-open element, and the control-view teardown of every
+    /// SearchOverlay* id, with axe scans over both the empty and the
+    /// typed overlay.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The unit facts run the pipeline against a fake source and never
+    /// render, so everything UIA-visible is unproven until here: whether
+    /// the window-relative Visibility binding resolves (the
+    /// FallbackValue=Collapsed trap that shipped twice), whether the
+    /// composed S4 row name reaches a client as ONE stop, and whether
+    /// activation actually opens the hit.
+    /// </para>
+    /// <para>
+    /// Every recorded journey trap is honoured: the journey waits for
+    /// the VAULT (the rail), not merely the window; the foreground is
+    /// re-asserted before every chord; text goes in through the
+    /// ValuePattern rather than synthetic keystrokes; and assertions
+    /// key on AutomationId + Name.
+    /// </para>
+    /// <para>
+    /// The typed axe scan exists because of #1106: the Fluent TextBox
+    /// clear button appears only once the box has text and focus, and
+    /// its unnamed glyph hid from every empty-box scan since W1. #1106
+    /// is fixed; this leg keeps it fixed for the search box.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void SearchOverlay_OpensSearchesActivatesAndRestoresFocus_IsClean()
+    {
+        string testRoot = Path.Combine(
+            Path.GetTempPath(), $"slate-search-overlay-{Guid.NewGuid():N}");
+        string vaultRoot = Path.Combine(testRoot, "Search Vault");
+        string logDirectory = Path.Combine(testRoot, "logs");
+        Directory.CreateDirectory(vaultRoot);
+        // Two fixture files carry the pinned token, one does not — so the
+        // query has a known hit set and the composed row names are
+        // predictable up to core's snippet windowing.
+        File.WriteAllText(
+            Path.Combine(vaultRoot, "meridian-alpha.md"),
+            "# Alpha\n\nThe meridian crosses the alpha field.\n");
+        File.WriteAllText(
+            Path.Combine(vaultRoot, "meridian-beta.md"),
+            "# Beta\n\nA second meridian sits in the beta note.\n");
+        File.WriteAllText(
+            Path.Combine(vaultRoot, "quiet.md"),
+            "# Quiet\n\nNothing to find here.\n");
+
+        Process? process = null;
+        try
+        {
+            var startInfo = new ProcessStartInfo(SlateWindowsExe())
+            {
+                UseShellExecute = false,
+            };
+            startInfo.ArgumentList.Add(vaultRoot);
+            startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
+                $"slate-search-overlay-{Guid.NewGuid():N}";
+            startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            process = Process.Start(startInfo)
+                ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+
+            if (!HasInteractiveDesktop(process, "search-overlay"))
+            {
+                return;
+            }
+
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(
+                process,
+                automation,
+                Path.Combine(logDirectory, "slate-windows.log"),
+                TimeSpan.FromSeconds(30));
+            window.SetForeground();
+            window.Focus();
+
+            // WAIT FOR THE VAULT, not merely for the window (the palette
+            // journey's recorded trap): the overlay refuses to open with
+            // no vault (it announces SearchNeedsVault and stays closed),
+            // so a chord sent between window and vault is correctly
+            // swallowed and the journey would be racing the app. The
+            // right-pane rail only exists once a vault is open.
+            _ = WaitForElement(window, "RightPaneLeaves", TimeSpan.FromSeconds(30));
+
+            // --- open by chord ----------------------------------------
+            // Put keyboard focus on a real element first: a freshly
+            // shown window can have NO WPF keyboard focus at all, and
+            // the chord rides Window.PreviewKeyDown.
+            WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(10)).Focus();
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+            window.SetForeground();
+            PressChord(
+                VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_F);
+
+            AutomationElement overlay = WaitForElement(
+                window, "SearchOverlay", TimeSpan.FromSeconds(10));
+            Assert.Equal("Search Vault", overlay.Name);
+
+            // Focus lands IN the search box, not on the overlay root: an
+            // overlay that opens without a caret is one you have to
+            // click into.
+            AutomationElement search = WaitForElement(
+                window, "SearchOverlaySearch", TimeSpan.FromSeconds(10));
+            Assert.Equal("Search vault", search.Name);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            return search.Properties.HasKeyboardFocus.ValueOrDefault;
+                        }
+                        catch (COMException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the search overlay opened without focusing its search box");
+
+            // Axe over the OPEN, EMPTY overlay: the idle hint, the
+            // field, and the dialog chrome.
+            AssertAxeClean(process, "search-overlay");
+
+            // --- type a query, walk the composed rows -----------------
+            // ValuePattern, not synthetic keystrokes (the recorded
+            // journey trap): the debounced pipeline sees one change.
+            search.Patterns.Value.Pattern.SetValue("meridian");
+
+            AutomationElement results = WaitForElement(
+                window, "SearchOverlayResults", TimeSpan.FromSeconds(10));
+            AutomationElement[] rows = [];
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            rows = results.FindAllDescendants(
+                                automation.ConditionFactory
+                                    .ByControlType(ControlType.ListItem));
+                            return rows.Length == 2;
+                        }
+                        catch (COMException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the query 'meridian' did not produce exactly its two fixture "
+                + "hits; names seen: "
+                + string.Join(" | ", rows.Select(item => item.Name)));
+
+            // Contract S4: one accessible stop per row, named
+            // "{basename}: {marker-stripped snippet}". The emphasis
+            // runs are presentation-only, so the control view must show
+            // NO children under a row — and the name must carry no STX
+            // or ETX marker byte, which is what "stripped" means.
+            var seenBasenames = new List<string>();
+            FlaUI.Core.ITreeWalker controlWalker =
+                automation.TreeWalkerFactory.GetControlViewWalker();
+            foreach (AutomationElement row in rows)
+            {
+                string name = row.Name;
+                int separator = name.IndexOf(": ", StringComparison.Ordinal);
+                Assert.True(
+                    separator > 0,
+                    $"row name '{name}' is not the composed "
+                    + "'{{basename}}: {{snippet}}' shape.");
+                seenBasenames.Add(name[..separator]);
+                Assert.Contains("meridian", name, StringComparison.Ordinal);
+                Assert.DoesNotContain('', name);
+                Assert.DoesNotContain('', name);
+                AutomationElement? strayChild = controlWalker.GetFirstChild(row);
+                Assert.True(
+                    strayChild is null,
+                    $"row '{name}' publishes a control-view child — the "
+                    + "emphasis runs must be presentation-only (S4). Child: "
+                    + $"type={strayChild?.Properties.ControlType.ValueOrDefault}, "
+                    + $"class='{strayChild?.Properties.ClassName.ValueOrDefault}', "
+                    + $"name='{strayChild?.Properties.Name.ValueOrDefault}', "
+                    + $"id='{strayChild?.Properties.AutomationId.ValueOrDefault}'");
+            }
+
+            Assert.Equal(
+                new[] { "meridian-alpha.md", "meridian-beta.md" },
+                seenBasenames.OrderBy(item => item, StringComparer.Ordinal).ToArray());
+
+            // A SECOND scan with text in the box (#1106): the Fluent
+            // clear button exists only now, and the workspace behind the
+            // overlay is unchanged — a new failure here is the overlay's.
+            AssertAxeClean(process, "search-overlay-typed");
+
+            // --- Enter opens the target, asserted by EFFECT -----------
+            // The top row is auto-selected on publish; read its basename
+            // rather than assuming which file ranks first.
+            string topRowName = rows[0].Name;
+            string topBasename = topRowName[..topRowName.IndexOf(
+                ": ", StringComparison.Ordinal)];
+            window.SetForeground();
+            PressKey(VirtualKeyShort.ENTER);
+
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            return window.FindFirstDescendant(automation.ConditionFactory
+                                .ByAutomationId("SearchOverlay")) is null;
+                        }
+                        catch (COMException)
+                        {
+                            return true;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the overlay stayed open after activating a result");
+
+            // The EFFECT: the target note is open in the editor. The
+            // document name is the "{filename} editor" contract, so this
+            // cannot pass on a closed overlay alone.
+            _ = WaitForEditor(
+                window,
+                automation,
+                $"{topBasename} editor",
+                TimeSpan.FromSeconds(10));
+
+            // --- Esc on a REOPENED overlay restores the pre-open focus -
+            // Park focus somewhere deliberate first, and remember the
+            // exact element by runtime id — "restores prior focus" means
+            // THAT element, not merely "not the window root" (SD-2).
+            AutomationElement filesTree = WaitForElement(
+                window, "FilesTree", TimeSpan.FromSeconds(10));
+            filesTree.Focus();
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+            AutomationElement? focusedBefore = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            focusedBefore = automation.FocusedElement();
+                            return focusedBefore is not null;
+                        }
+                        catch (COMException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "no element reported keyboard focus before the reopen");
+            int[] runtimeIdBefore = focusedBefore!.Properties.RuntimeId.Value;
+
+            window.SetForeground();
+            PressChord(
+                VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_F);
+            _ = WaitForElement(window, "SearchOverlay", TimeSpan.FromSeconds(10));
+            AutomationElement reopenedSearch = WaitForElement(
+                window, "SearchOverlaySearch", TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            return reopenedSearch.Properties
+                                .HasKeyboardFocus.ValueOrDefault;
+                        }
+                        catch (COMException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the reopened overlay did not focus its search box");
+
+            Keyboard.Press(VirtualKeyShort.ESCAPE);
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            return window.FindFirstDescendant(automation.ConditionFactory
+                                .ByAutomationId("SearchOverlay")) is null;
+                        }
+                        catch (COMException)
+                        {
+                            return true;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "Escape did not close the search overlay");
+
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            AutomationElement? focusedAfter = automation.FocusedElement();
+                            int[]? runtimeIdAfter =
+                                focusedAfter?.Properties.RuntimeId.ValueOrDefault;
+                            return runtimeIdAfter is not null
+                                && runtimeIdAfter.SequenceEqual(runtimeIdBefore);
+                        }
+                        catch (COMException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "Escape did not restore focus to the pre-open element "
+                + $"(id '{focusedBefore.Properties.AutomationId.ValueOrDefault}')");
+
+            // --- the close button dismisses by pointer (contract S15,
+            // red-team round 1): before it, Esc was the only way out of
+            // a surface the menu can open by pointer ------------------
+            window.SetForeground();
+            PressChord(
+                VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_F);
+            _ = WaitForElement(window, "SearchOverlay", TimeSpan.FromSeconds(10));
+            AutomationElement closeButton = WaitForElement(
+                window, "SearchOverlayClose", TimeSpan.FromSeconds(10));
+            Assert.Equal("Close search", closeButton.Name);
+            closeButton.Patterns.Invoke.Pattern.Invoke();
+
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            return window.FindFirstDescendant(automation.ConditionFactory
+                                .ByAutomationId("SearchOverlay")) is null;
+                        }
+                        catch (COMException)
+                        {
+                            return true;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the Close search button did not close the overlay");
+
+            // --- SD-5: the palette SUPERSEDES an open search overlay --
+            // Opening the palette CLOSES search: a closed overlay is
+            // collapsed, and a collapsed overlay is absent from the
+            // control view, which retires the round-9/round-10
+            // hidden-but-exposed UIA class by construction. The
+            // preserved query then makes Ctrl+Shift+F the way back.
+            // Focus is parked on a deliberate element FIRST so the
+            // supersession's focus lineage — palette adopts search's
+            // pre-open token — is asserted by identity, not vibes
+            // (codex round 11: the adoption was previously unprovable
+            // from this journey).
+            AutomationElement parkedBeforeSearch = WaitForElement(
+                window, "FilesTree", TimeSpan.FromSeconds(10));
+            parkedBeforeSearch.Focus();
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+            int[] parkedRuntimeId = parkedBeforeSearch.Properties.RuntimeId.Value;
+
+            window.SetForeground();
+            PressChord(
+                VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_F);
+            AutomationElement supersededSearch = WaitForElement(
+                window, "SearchOverlaySearch", TimeSpan.FromSeconds(10));
+            supersededSearch.Patterns.Value.Pattern.SetValue("meridian");
+            _ = WaitForElement(
+                window, "SearchOverlayResults", TimeSpan.FromSeconds(10));
+
+            window.SetForeground();
+            PressChord(
+                VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_P);
+            AutomationElement paletteBox = WaitForElement(
+                window, "CommandPaletteSearch", TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            return paletteBox.Properties.HasKeyboardFocus.ValueOrDefault;
+                        }
+                        catch (COMException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the palette superseded search without taking focus");
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            return window.FindFirstDescendant(automation.ConditionFactory
+                                .ByAutomationId("SearchOverlay")) is null;
+                        }
+                        catch (COMException)
+                        {
+                            return true;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the search overlay is still in the control view beneath "
+                + "the palette — SD-5 exclusivity did not close it, so a "
+                + "UIA client can walk (and drive) a surface the palette "
+                + "hides.");
+
+            window.SetForeground();
+            Keyboard.Press(VirtualKeyShort.ESCAPE);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            return window.FindFirstDescendant(automation.ConditionFactory
+                                .ByAutomationId("CommandPalette")) is null;
+                        }
+                        catch (COMException)
+                        {
+                            return true;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "Escape did not dismiss the palette after the supersession");
+
+            // The lineage must LAND: dismissing the palette restores
+            // the element focused before SEARCH opened — the whole
+            // point of the consume-first handoff — asserted by runtime
+            // id, not by "something has focus".
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            int[]? focusedId = automation.FocusedElement()?
+                                .Properties.RuntimeId.ValueOrDefault;
+                            return focusedId is not null
+                                && focusedId.SequenceEqual(parkedRuntimeId);
+                        }
+                        catch (COMException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "dismissing the palette did not restore focus to the "
+                + "element from before search opened — the supersession "
+                + "dropped the focus lineage (codex round 11).");
+
+            window.SetForeground();
+            PressChord(
+                VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_F);
+            AutomationElement restoredSearch = WaitForElement(
+                window, "SearchOverlaySearch", TimeSpan.FromSeconds(10));
+            Assert.Equal(
+                "meridian", restoredSearch.Patterns.Value.Pattern.Value.Value);
+            _ = WaitForElement(
+                window, "SearchOverlayResults", TimeSpan.FromSeconds(10));
+
+            window.SetForeground();
+            Keyboard.Press(VirtualKeyShort.ESCAPE);
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+
+            // --- teardown: nothing of the overlay survives in the
+            // control view, which is the view an AT walks --------------
+            foreach (string id in new[]
+            {
+                "SearchOverlay",
+                "SearchOverlaySearch",
+                "SearchOverlayClose",
+                "SearchOverlayResults",
+                "SearchOverlayIdleHint",
+                "SearchOverlayTagChip",
+                "SearchOverlayClearTagScope",
+                "SearchOverlayClearRecents",
+                "SearchOverlaySearching",
+                "SearchOverlayNoResults",
+            })
+            {
+                Assert.True(
+                    SpinWait.SpinUntil(
+                        () =>
+                        {
+                            try
+                            {
+                                return window.FindFirstDescendant(
+                                    automation.ConditionFactory
+                                        .ByAutomationId(id)) is null;
+                            }
+                            catch (COMException)
+                            {
+                                return true;
+                            }
+                        },
+                        TimeSpan.FromSeconds(5)),
+                    $"{id} stayed in the UIA control view after the overlay closed");
+            }
         }
         finally
         {

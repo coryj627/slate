@@ -961,11 +961,13 @@ public sealed class ReadingViewTests
     /// with a live vault session, records from the scanned index): a
     /// resolved wikilink navigates through the editor's own seam, an
     /// unresolved one announces core's "is unresolved. Cannot open.", a
-    /// tag routes to the tag seam, a citation speaks core's speech text,
-    /// and an embed activates via ReadingMatchLink with embed:true. The
-    /// run kinds come off the built document's own hyperlinks — exactly
-    /// what a click delivers — so nothing is re-derived in the test
-    /// either.
+    /// tag routes to the READING tag seam and never the editor's (W5-2
+    /// SD-4 — the split that sends reading tags to tag-scoped search
+    /// while editor tags keep the sidebar), a citation speaks core's
+    /// speech text, and an embed activates via ReadingMatchLink with
+    /// embed:true. The run kinds come off the built document's own
+    /// hyperlinks — exactly what a click delivers — so nothing is
+    /// re-derived in the test either.
     /// </summary>
     [Fact]
     public void ActivationRoutesEveryRunKindThroughCoreAndTheEditorSeams()
@@ -983,7 +985,8 @@ public sealed class ReadingViewTests
             session.ScanInitial(cancel);
 
             var navigations = new List<EditorNavigationRequest>();
-            var tags = new List<string>();
+            var readingTags = new List<string>();
+            var editorTags = new List<string>();
             var announced = new List<A11yEvent>();
             using var tab = new WorkspaceTabViewModel(
                 session,
@@ -991,7 +994,8 @@ public sealed class ReadingViewTests
                     Guid.NewGuid(),
                     new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
                 navigate: navigations.Add,
-                activateTag: tags.Add,
+                activateTag: editorTags.Add,
+                activateTagFromReading: readingTags.Add,
                 announce: announced.Add,
                 startInteractionBackgroundWork: false);
 
@@ -1045,9 +1049,12 @@ public sealed class ReadingViewTests
                 "absent is unresolved. Cannot open.",
                 SlateUniffiMethods.A11yRender(Assert.Single(announced)).Text);
 
-            // Tag → the tag seam.
+            // Tag → the READING tag seam, and ONLY that seam (SD-4):
+            // re-pointing reading activation back at the editor's
+            // sidebar-filter seam fails both of these lines.
             reading.Activate(kinds[2]);
-            Assert.Equal("atag", Assert.Single(tags));
+            Assert.Equal("atag", Assert.Single(readingTags));
+            Assert.Empty(editorTags);
 
             // External link → the system opener, announced.
             announced.Clear();

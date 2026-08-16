@@ -107,6 +107,34 @@ internal sealed class AutomationPresentationTextBlockPeer : TextBlockAutomationP
     protected override bool IsContentElementCore() => false;
 }
 
+/// <summary>
+/// An items host whose children are presentation-only (the search
+/// result row's emphasis runs). WPF gives a plain <see cref="ItemsControl"/>
+/// an automation peer that publishes an unnamed List element, which put
+/// a nameless stop inside every search result row — the extra stop
+/// contract S4 forbids and the W5-2 close-out journey caught.
+/// Suppressing the wrapper peer removes the host from the control and
+/// content views; its <see cref="AutomationPresentationTextBlock"/>
+/// children were already suppressed.
+/// </summary>
+internal sealed class AutomationPresentationItemsControl : ItemsControl
+{
+    protected override AutomationPeer OnCreateAutomationPeer() =>
+        new AutomationPresentationItemsControlPeer(this);
+}
+
+internal sealed class AutomationPresentationItemsControlPeer : FrameworkElementAutomationPeer
+{
+    internal AutomationPresentationItemsControlPeer(AutomationPresentationItemsControl owner)
+        : base(owner)
+    {
+    }
+
+    protected override bool IsControlElementCore() => false;
+
+    protected override bool IsContentElementCore() => false;
+}
+
 internal sealed class AutomationLandmarkPeer : FrameworkElementAutomationPeer
 {
     internal AutomationLandmarkPeer(FrameworkElement owner)
@@ -123,4 +151,21 @@ internal sealed class AutomationLandmarkPeer : FrameworkElementAutomationPeer
         Owner is UIElement { Visibility: Visibility.Visible };
 
     protected override bool IsContentElementCore() => false;
+}
+
+/// <summary>
+/// Focus-token ancestry that survives non-Visual focus (#742, codex
+/// round 7). <see cref="System.Windows.Media.VisualTreeHelper"/> throws
+/// for a <see cref="System.Windows.FrameworkContentElement"/> — a
+/// focused reading-view Hyperlink is one — so content elements walk
+/// their logical parent until the tree re-enters visuals.
+/// </summary>
+internal static class FocusAncestry
+{
+    internal static System.Windows.DependencyObject? Parent(
+        System.Windows.DependencyObject node) =>
+        node is System.Windows.Media.Visual
+            or System.Windows.Media.Media3D.Visual3D
+            ? System.Windows.Media.VisualTreeHelper.GetParent(node)
+            : System.Windows.LogicalTreeHelper.GetParent(node);
 }

@@ -37,6 +37,22 @@ internal sealed class NullToVisibilityConverter : IValueConverter
         Binding.DoNothing;
 }
 
+/// <summary>
+/// Projects "this sheet is open" (a non-null view model) to a bool a
+/// <c>DataTrigger</c> can compare. Exists for the Menu's disable
+/// triggers (W5-2 red-team round 1): the two overlays expose
+/// <c>IsOpen</c> flags, but the seven sheets are object properties, and
+/// a trigger can only equality-match a value.
+/// </summary>
+internal sealed class IsNotNullConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture) =>
+        value is not null;
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) =>
+        Binding.DoNothing;
+}
+
 internal sealed class SidebarSortModeLabelConverter : IValueConverter
 {
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture) =>

@@ -147,7 +147,7 @@ public partial class MainWindow
         {
             if (workspace.AddPropertySheet is not null)
             {
-                _focusBeforeSheet ??= Keyboard.FocusedElement;
+                _focusBeforeSheet ??= CapturePreSheetFocus();
                 _ = Dispatcher.InvokeAsync(
                     () => AddPropertyKeyTextBox.Focus(),
                     System.Windows.Threading.DispatcherPriority.Input);
@@ -162,7 +162,7 @@ public partial class MainWindow
             ObserveBulkRenameSheet(workspace.BulkRenameSheet);
             if (workspace.BulkRenameSheet is not null)
             {
-                _focusBeforeSheet ??= Keyboard.FocusedElement;
+                _focusBeforeSheet ??= CapturePreSheetFocus();
                 BindBulkRenameGrid(workspace.BulkRenameSheet);
                 _ = Dispatcher.InvokeAsync(
                     () => BulkRenameOldKeyTextBox.Focus(),
@@ -179,12 +179,31 @@ public partial class MainWindow
     {
         IInputElement? previous = _focusBeforeSheet;
         _focusBeforeSheet = null;
-        if (previous is not null)
-        {
-            _ = Dispatcher.InvokeAsync(
-                () => previous.Focus(),
-                System.Windows.Threading.DispatcherPriority.Input);
-        }
+        _ = Dispatcher.InvokeAsync(
+            () =>
+            {
+                // Codex rounds 2-3 (#742): under the original stacking
+                // design a palette-invoked sheet's captured target was
+                // the collapsed palette box, and search stayed open
+                // beneath — so the topmost-search rule runs FIRST
+                // (invariant 4's backstop now that SD-5 made that
+                // state unreachable; see TryFocusSearchIfTopmost).
+                if (TryFocusSearchIfTopmost())
+                {
+                    return;
+                }
+
+                // Red team after round 11: a failed restore was a bare
+                // ignored Focus() — the one census member with no miss
+                // fallback, stranding focus on the window root when
+                // the captured element had been destroyed (a panel
+                // republish) or collapsed (a dismissed picker box).
+                if (previous is null || !TryFocus(previous))
+                {
+                    FocusActiveEditorPane();
+                }
+            },
+            System.Windows.Threading.DispatcherPriority.Input);
     }
 
     private void ObserveBulkRenameSheet(BulkRenameViewModel? sheet)

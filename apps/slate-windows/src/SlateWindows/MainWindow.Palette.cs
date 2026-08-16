@@ -100,6 +100,7 @@ public partial class MainWindow
             WorkspaceViewModel? workspace = _viewModel.Workspace;
             return new ModalSurfaceState(
                 QuickOpen: _viewModel.QuickSwitcher?.IsOpen == true,
+                SearchOverlay: _viewModel.Search.IsOpen,
                 CommandPalette: _viewModel.Palette.IsOpen,
                 AddProperty: workspace?.AddPropertySheet is not null,
                 BulkRename: workspace?.BulkRenameSheet is not null,
@@ -115,6 +116,19 @@ public partial class MainWindow
     /// Applies <see cref="ModalSurfaces.DecidePaletteOpen"/>, performing
     /// the dismissal it calls for.
     /// </summary>
+    /// <summary>
+    /// Hands the palette's captured pre-open focus to a caller that is
+    /// closing it on its own initiative (a presenting sheet consuming
+    /// lineage), clearing it here so the palette's own dismissal
+    /// restore runs inert — the <c>ConsumePreSearchFocus</c> twin.
+    /// </summary>
+    internal IInputElement? ConsumePrePaletteFocus()
+    {
+        IInputElement? previous = _focusBeforePalette;
+        _focusBeforePalette = null;
+        return previous;
+    }
+
     private bool TryClearTheWayForThePalette()
     {
         switch (ModalSurfaces.DecidePaletteOpen(OpenModalSurface))
@@ -122,7 +136,29 @@ public partial class MainWindow
             case PaletteOpenDecision.Open:
                 return true;
             case PaletteOpenDecision.DismissQuickOpenThenOpen:
+                // Red team after codex round 11: this arm dismissed
+                // WITHOUT adopting, so the palette's ??= capture then
+                // grabbed the collapsing Quick Open box and Escape fell
+                // back to the editor instead of the element the user
+                // started from — the lineage every other supersession
+                // already hands down (invariant 5).
+                _focusBeforePalette = ConsumePreSwitcherFocus();
                 _viewModel.QuickSwitcher!.Dismiss();
+                return true;
+            case PaletteOpenDecision.DismissSearchThenOpen:
+                // SD-5: the palette supersedes an open search overlay the
+                // way it supersedes Quick Open, with the same focus
+                // lineage — the palette's return target becomes the
+                // element from before SEARCH opened, so Escape lands the
+                // user where they started, not on the collapsed search
+                // box. Consuming first leaves search's own queued restore
+                // inert (it stands down while the palette is open), and
+                // Supersede rather than Close keeps the SCOPE alongside
+                // the query, so Ctrl+Shift+F restores a tag-scoped
+                // overlay as that tag's listing.
+                IInputElement? preSearch = ConsumePreSearchFocus();
+                _viewModel.Search.Supersede();
+                _focusBeforePalette = preSearch;
                 return true;
             default:
                 return false;
@@ -306,6 +342,41 @@ public partial class MainWindow
         _ = Dispatcher.InvokeAsync(
             () =>
             {
+                // Codex round 6 (#742): a palette-invoked "Search Vault"
+                // captured the PALETTE box as search's return target
+                // (P9 had focus there at invoke time); the palette's own
+                // pre-open token is the true lineage and replaces it.
+                // Same rule for a palette-invoked Quick Open (red team
+                // after round 11 — the missing twin).
+                AdoptPaletteFocusIntoSearch(
+                    focusBefore, IsDescendantOfPaletteOverlay);
+                AdoptPaletteFocusIntoQuickOpen(
+                    focusBefore, IsDescendantOfPaletteOverlay);
+
+                // Codex round 4 (#742): search topmost takes priority
+                // here too. Since SD-5 the one reachable case is the
+                // palette-invoked "Search Vault": the unguarded toggle
+                // opens search beneath the still-open palette, P9
+                // dismisses it in the same flow, and this hands focus
+                // to the search box the user just asked for — not to
+                // whatever sat beneath before the palette opened. Runs
+                // FIRST: with a sheet or picker above, SearchOwnsKeys
+                // is false and the ordinary logic runs.
+                if (TryFocusSearchIfTopmost())
+                {
+                    return;
+                }
+
+                // The supersession stand-down (red team after round
+                // 11): any other surface open at restore time owns the
+                // moment — a palette-invoked Quick Open or sheet has
+                // its own grab queued or landed, and restoring here
+                // would flash-and-announce the editor mid-handoff.
+                if (OpenModalSurface is not null)
+                {
+                    return;
+                }
+
                 // An invoked command often opens its own surface and
                 // focuses it deliberately — the Add Property sheet's Key
                 // field, Quick Open's search box. Those focus operations
@@ -356,7 +427,12 @@ public partial class MainWindow
 
     private bool IsDescendantOfPaletteOverlay(DependencyObject? node)
     {
-        for (; node is not null; node = VisualTreeHelper.GetParent(node))
+        // Codex round 7 (#742): VisualTreeHelper.GetParent THROWS for a
+        // FrameworkContentElement — a focused reading-view Hyperlink is
+        // one — so the walk must go through the logical parent until it
+        // reaches a Visual. This walker predates W5-2 and the crash was
+        // latent in the claimed-focus probe too.
+        for (; node is not null; node = FocusAncestry.Parent(node))
         {
             if (ReferenceEquals(node, CommandPaletteOverlay))
             {

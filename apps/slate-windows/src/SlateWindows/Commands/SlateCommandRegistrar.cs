@@ -41,6 +41,17 @@ internal interface ISlateCommandHost
 
     ICommand CloseVaultCommand { get; }
 
+    /// <summary>
+    /// W5-2 close-out (#742): toggles the vault-search overlay.
+    /// Deliberately UNGUARDED — mac's palette action calls
+    /// <c>toggleSearchOverlay()</c> with no modal gate
+    /// (<c>SlateCommands.swift:1483-1494</c>), and the palette invokes
+    /// before dismissing (P9), so a modal-decision-aware guard would
+    /// refuse every palette invocation. The modal gate stays on the
+    /// chord path (<c>MainWindow.Window_PreviewKeyDown</c>).
+    /// </summary>
+    ICommand ToggleSearchCommand { get; }
+
     bool IsVaultOpen { get; }
 }
 
@@ -382,6 +393,10 @@ internal static class SlateCommandRegistrar
             [ChordTable.Ids.OpenInNewTab] = host => host.FileSidebar?.OpenNewTabCommand,
             [ChordTable.Ids.OpenInSplit] = host => host.FileSidebar?.OpenSplitCommand,
             [ChordTable.Ids.ToggleRightPane] = host => host.Workspace?.ToggleRightPaneCommand,
+            // W5-2 close-out (#742): lives on the HOST, not the
+            // workspace — the overlay survives vault open/close (P17)
+            // and mac's action is likewise vault-lifetime-free.
+            [ChordTable.Ids.ToggleSearch] = host => host.ToggleSearchCommand,
             [ChordTable.Ids.ShowHistoryPanel] = host => host.Workspace?.ShowHistoryPanelCommand,
             [ChordTable.Ids.RefreshSyncDiagnostics] =
                 host => host.Workspace?.RefreshSyncDiagnosticsCommand,

@@ -402,7 +402,12 @@ public partial class MainWindow
                     // The summary sheet has no row identity of its own
                     // — it is opened by a chord from wherever focus
                     // happens to be — so it captures at open time.
-                    _focusBeforeCitationSummary = Keyboard.FocusedElement;
+                    // Through the shared helper: a summary parked on
+                    // RowsPublished presents while a picker may still
+                    // be open and focused (red team after round 11),
+                    // and the picker's pre-open token is the true
+                    // lineage, not its about-to-collapse box.
+                    _focusBeforeCitationSummary = CapturePreSheetFocus();
                     FocusWhenReady(() => (summary.CanWalkThrough
                         ? CitationSummaryWalkButton
                         : CitationSummaryDismissButton).Focus());
@@ -452,14 +457,26 @@ public partial class MainWindow
     /// </summary>
     private void RestoreFocusTo(object? token)
     {
-        if (token is not IInputElement target)
-        {
-            return;
-        }
+        // The queue is unconditional (red team after round 11): the
+        // old null-token early return skipped the WHOLE restore,
+        // including the invariant-4 backstop, dropping focus to the
+        // window root — the Bases twin already queued unconditionally.
+        IInputElement? target = token as IInputElement;
         _ = Dispatcher.InvokeAsync(
             () =>
             {
-                if (target is UIElement { IsVisible: true } && target.Focus())
+                // Codex round 3 (#742): search topmost takes priority —
+                // under the original stacking design this sheet was
+                // palette-invokable over a still-open search overlay,
+                // with both the captured target and the list fallback
+                // behind it. SD-5 made that state unreachable; the rule
+                // stays as invariant 4's backstop.
+                if (TryFocusSearchIfTopmost())
+                {
+                    return;
+                }
+
+                if (target is not null && TryFocus(target))
                 {
                     return;
                 }

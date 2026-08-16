@@ -105,6 +105,11 @@ public sealed class ModalSurfaceTests
     [Theory]
     [InlineData(null, PaletteOpenDecision.Open)]
     [InlineData(ModalSurface.CommandPalette, PaletteOpenDecision.Open)]
+    // SD-5 (replacing the original S11 stacking arm after the round-10
+    // root cause analysis): the palette SUPERSEDES an open search
+    // overlay exactly as it supersedes Quick Open — no persistent
+    // stacking, per 28_palette_contracts.md's own rule.
+    [InlineData(ModalSurface.SearchOverlay, PaletteOpenDecision.DismissSearchThenOpen)]
     [InlineData(ModalSurface.QuickOpen, PaletteOpenDecision.DismissQuickOpenThenOpen)]
     [InlineData(ModalSurface.AddProperty, PaletteOpenDecision.Refuse)]
     [InlineData(ModalSurface.BulkRename, PaletteOpenDecision.Refuse)]
@@ -113,7 +118,7 @@ public sealed class ModalSurfaceTests
     [InlineData(ModalSurface.FilesCiting, PaletteOpenDecision.Refuse)]
     [InlineData(ModalSurface.DashboardEditor, PaletteOpenDecision.Refuse)]
     [InlineData(ModalSurface.BaseQueryBuilder, PaletteOpenDecision.Refuse)]
-    public void ThePaletteDefersToEverySheetAndSupersedesOnlyQuickOpen(
+    public void ThePaletteDefersToEverySheetAndSupersedesBothPickers(
         object? topmost, object expected)
     {
         // object parameters because xUnit needs a public test method and
@@ -122,6 +127,34 @@ public sealed class ModalSurfaceTests
         Assert.Equal(
             (PaletteOpenDecision)expected,
             ModalSurfaces.DecidePaletteOpen(surface));
+    }
+
+    /// <summary>
+    /// The search chord's precedence (W5-2, contract S11), every member
+    /// covered: it opens over nothing, toggles over itself (the view
+    /// model's Toggle closes an already-open overlay), supersedes Quick
+    /// Open, and refuses beneath the palette and every sheet — the
+    /// palette supersedes search (SD-5), never the reverse.
+    /// </summary>
+    [Theory]
+    [InlineData(null, PaletteOpenDecision.Open)]
+    [InlineData(ModalSurface.SearchOverlay, PaletteOpenDecision.Open)]
+    [InlineData(ModalSurface.QuickOpen, PaletteOpenDecision.DismissQuickOpenThenOpen)]
+    [InlineData(ModalSurface.CommandPalette, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.AddProperty, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.BulkRename, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.CitationDetails, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.CitationSummary, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.FilesCiting, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.DashboardEditor, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.BaseQueryBuilder, PaletteOpenDecision.Refuse)]
+    public void TheSearchChordDefersToEverySheetAndThePalette(
+        object? topmost, object expected)
+    {
+        ModalSurface? surface = topmost is null ? null : (ModalSurface)topmost;
+        Assert.Equal(
+            (PaletteOpenDecision)expected,
+            ModalSurfaces.DecideSearchOpen(surface));
     }
 
     /// <summary>
@@ -140,6 +173,7 @@ public sealed class ModalSurfaceTests
         ModalSurface[] covered =
         [
             ModalSurface.QuickOpen,
+            ModalSurface.SearchOverlay,
             ModalSurface.CommandPalette,
             ModalSurface.AddProperty,
             ModalSurface.BulkRename,
@@ -293,12 +327,14 @@ public sealed class ModalSurfaceTests
         new()
         {
             [ModalSurface.QuickOpen] = "_viewModel.QuickSwitcher?.IsOpen==true",
+            [ModalSurface.SearchOverlay] = "_viewModel.Search.IsOpen",
             [ModalSurface.CommandPalette] = "_viewModel.Palette.IsOpen",
         };
 
     private static ModalSurfaceState StateWithOnly(ModalSurface surface) =>
         new(
             QuickOpen: surface == ModalSurface.QuickOpen,
+            SearchOverlay: surface == ModalSurface.SearchOverlay,
             CommandPalette: surface == ModalSurface.CommandPalette,
             AddProperty: surface == ModalSurface.AddProperty,
             BulkRename: surface == ModalSurface.BulkRename,
@@ -330,6 +366,15 @@ public sealed class ModalSurfaceTests
             ModalSurface.CommandPalette,
             ModalSurfaces.TopmostOpen(surface => surface
                 is ModalSurface.QuickOpen or ModalSurface.CommandPalette));
+
+        // W5-2: the palette outranks an open search overlay. Since SD-5
+        // the two never coexist outside a palette invoke's transient
+        // window; the ranking is invariant 6's backstop, and the reason
+        // search is declared before the palette.
+        Assert.Equal(
+            ModalSurface.CommandPalette,
+            ModalSurfaces.TopmostOpen(surface => surface
+                is ModalSurface.SearchOverlay or ModalSurface.CommandPalette));
 
         // Every surface, alone, is its own topmost.
         foreach (ModalSurface surface in Enum.GetValues<ModalSurface>())
@@ -450,6 +495,7 @@ public sealed class ModalSurfaceTests
         (ModalSurface Surface, string AutomationId)[] expected =
         [
             (ModalSurface.QuickOpen, "QuickSwitcher"),
+            (ModalSurface.SearchOverlay, "SearchOverlay"),
             (ModalSurface.CommandPalette, "CommandPalette"),
             (ModalSurface.AddProperty, "AddPropertySheet"),
             (ModalSurface.BulkRename, "BulkRenameSheet"),
@@ -474,6 +520,941 @@ public sealed class ModalSurfaceTests
                 + "so the topmost-surface calculation is wrong.");
             previous = at;
         }
+    }
+
+    /// <summary>
+    /// The binding path the Menu's disable trigger must read for each
+    /// surface. The two overlays and the palette expose <c>IsOpen</c>
+    /// flags; the seven sheets are object properties (open == non-null)
+    /// and must route through <c>IsNotNullConverter</c>.
+    /// </summary>
+    private static readonly Dictionary<ModalSurface, string> MenuDisableBindings =
+        new()
+        {
+            [ModalSurface.QuickOpen] = "QuickSwitcher.IsOpen",
+            [ModalSurface.SearchOverlay] = "Search.IsOpen",
+            [ModalSurface.CommandPalette] = "Palette.IsOpen",
+            [ModalSurface.AddProperty] = "Workspace.AddPropertySheet",
+            [ModalSurface.BulkRename] = "Workspace.BulkRenameSheet",
+            [ModalSurface.CitationDetails] = "Workspace.CitationDetails",
+            [ModalSurface.CitationSummary] = "Workspace.CitationSummary",
+            [ModalSurface.FilesCiting] = "Workspace.FilesCiting",
+            [ModalSurface.DashboardEditor] = "Workspace.DashboardEditorSheet",
+            [ModalSurface.BaseQueryBuilder] = "Workspace.BaseQueryBuilderSheet",
+        };
+
+    /// <summary>
+    /// Every path in <see cref="MenuDisableBindings"/> resolves against
+    /// the live view-model types by reflection.
+    /// </summary>
+    /// <remarks>
+    /// Round-2 finding F3: the XAML gate verified the trigger list
+    /// against the markup, but a renamed sheet property recompiles the
+    /// C# state reader while the XAML path STRING silently stops firing
+    /// — the round-1 menu bug reborn with the gate green. Pinning each
+    /// segment against the real property closes that residual
+    /// under-match.
+    /// </remarks>
+    [Fact]
+    public void SearchOwnsKeysOnlyWhenItIsTheTopmostSurface()
+    {
+        // Codex round 1: under the original stacking design a
+        // palette-invoked sheet sat OVER a still-open search overlay,
+        // and routing on IsOpen alone let the hidden overlay steal the
+        // sheet's Enter and Escape. SD-5 made those states unreachable;
+        // the facts stay because this function is invariant 3's
+        // backstop against a future stacking violation.
+        Assert.True(ModalSurfaces.SearchOwnsKeys(
+            StateWithOnly(ModalSurface.SearchOverlay)));
+
+        foreach (ModalSurface above in new[]
+        {
+            ModalSurface.CommandPalette,
+            ModalSurface.AddProperty,
+            ModalSurface.BulkRename,
+            ModalSurface.CitationSummary,
+        })
+        {
+            ModalSurfaceState state = StateWith(ModalSurface.SearchOverlay, above);
+            Assert.False(
+                ModalSurfaces.SearchOwnsKeys(state),
+                $"search owned the keyboard beneath an open {above}.");
+        }
+
+        // All closed: nothing owns the keyboard.
+        Assert.False(ModalSurfaces.SearchOwnsKeys(default));
+    }
+
+    /// <summary>
+    /// The shell's search key branch routes through
+    /// <c>SearchOwnsKeys</c>, not a bare <c>IsOpen</c> read.
+    /// </summary>
+    [Fact]
+    public void TheSearchKeyBranchRoutesOnOwnershipNotOpenness()
+    {
+        Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax route =
+            CSharpSource.Load("MainWindow.xaml.cs").Method("Window_PreviewKeyDown");
+
+        Assert.True(
+            route.DescendantNodes()
+                .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.IfStatementSyntax>()
+                .Any(statement => CSharpSource.Normalize(statement.Condition)
+                    == "ModalSurfaces.SearchOwnsKeys(CurrentModalSurfaceState)"),
+            "Window_PreviewKeyDown no longer gates the search branch on "
+            + "ModalSurfaces.SearchOwnsKeys(CurrentModalSurfaceState) — a "
+            + "bare IsOpen read lets a hidden overlay steal a sheet's keys.");
+    }
+
+    /// <summary>
+    /// The sheet restore path hands focus to the search box when the
+    /// captured target cannot take it and search is topmost.
+    /// </summary>
+    /// <remarks>
+    /// Codex round 2: a palette-invoked sheet captures the PALETTE box
+    /// as its return target, the palette dismisses beneath the sheet,
+    /// and the failed <c>Focus()</c> was ignored — the exposed search
+    /// overlay owned the keys but not text focus.
+    /// </remarks>
+    /// <summary>
+    /// Restore sites the topmost-search rule covers, and the ones
+    /// exempt with a reason. Discovery below asserts every
+    /// <c>Restore*Focus*</c> method in the shell is in exactly one
+    /// list, so a fifth implementation cannot appear uncovered — the
+    /// round-3 and round-4 findings were both exactly that.
+    /// </summary>
+    private static readonly (string File, string Method)[] CoveredRestoreSites =
+    [
+        ("MainWindow.Properties.cs", "RestoreFocusAfterSheet"),
+        ("MainWindow.Citations.cs", "RestoreFocusTo"),
+        ("MainWindow.Bases.cs", "RestoreBasesOverlayFocus"),
+        ("MainWindow.Palette.cs", "RestoreFocusAfterPalette"),
+        // Red team after codex round 11: this restore previously lived
+        // anonymous inside the QuickSwitcher Dismissed handler, where
+        // this census could not discover it — invariant 4 was true
+        // only nominally, and a sheet landing over an open Quick Open
+        // had focus stolen back out from behind its scrim.
+        ("MainWindow.xaml.cs", "RestoreFocusAfterQuickOpen"),
+    ];
+
+    private static readonly Dictionary<(string File, string Method), string> ExemptRestoreSites =
+        new()
+        {
+            [("MainWindow.Search.cs", "RestoreFocusAfterSearch")] =
+                "runs when SEARCH ITSELF closes, so search cannot be the "
+                + "topmost surface during it by construction.",
+        };
+
+    [Fact]
+    public void TheSheetRestoreFallsBackToTheSearchBoxWhenSearchIsTopmost()
+    {
+        // Discovery: every Restore*Focus* method in the shell partials
+        // must be covered or exempt — hardcoding the list is how the
+        // Citation Summary (round 3) and palette (round 4) sites hid.
+        string root = SourceText.ShellSourceRoot();
+        foreach (string path in System.IO.Directory.GetFiles(root, "MainWindow*.cs"))
+        {
+            string file = System.IO.Path.GetFileName(path);
+            foreach (Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax method
+                in CSharpSource.Load(file).Root
+                    .DescendantNodes()
+                    .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax>())
+            {
+                string name = method.Identifier.ValueText;
+                if (!name.StartsWith("Restore", StringComparison.Ordinal)
+                    || !name.Contains("Focus", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                bool covered = CoveredRestoreSites.Contains((file, name));
+                bool exempt = ExemptRestoreSites.ContainsKey((file, name));
+                Assert.True(
+                    covered ^ exempt,
+                    $"{file}.{name} is a focus-restore implementation in "
+                    + "neither the covered list nor the exempt list — a "
+                    + "surface closing above an open search overlay through "
+                    + "it would strand text focus, invisibly.");
+            }
+        }
+
+        foreach ((string file, string methodName) in CoveredRestoreSites)
+        {
+            Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax restore =
+                CSharpSource.Load(file).Method(methodName);
+            var invocations = restore.DescendantNodes()
+                .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax>()
+                .ToList();
+            int guard = invocations.FindIndex(call =>
+                CSharpSource.Normalize(call.Expression) == "TryFocusSearchIfTopmost");
+            Assert.True(
+                guard >= 0,
+                $"{file}.{methodName} no longer routes through "
+                + "TryFocusSearchIfTopmost — a surface closing above a "
+                + "still-open search overlay leaves the exposed search box "
+                + "without text focus.");
+
+            // ORDERING, not mere presence (codex round 4): the guard must
+            // precede every competing .Focus() attempt, or a successful
+            // restore to an element BEHIND the overlay wins the race.
+            for (var index = 0; index < guard; index++)
+            {
+                // The CALLEE only — normalizing the whole call would
+                // match Dispatcher.InvokeAsync's lambda text, whose
+                // body legitimately contains the guarded restores.
+                Assert.False(
+                    CSharpSource.Normalize(invocations[index].Expression)
+                        .EndsWith(".Focus", StringComparison.Ordinal),
+                    $"{file}.{methodName} attempts a focus restore BEFORE "
+                    + "the topmost-search guard — search topmost must win "
+                    + "even against a restore that would succeed.");
+            }
+        }
+
+        // And the shared helper itself must consult ownership and focus
+        // the search box.
+        Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax helper =
+            CSharpSource.Load("MainWindow.Search.cs").Method("TryFocusSearchIfTopmost");
+        Assert.True(
+            CSharpSource.Invokes(helper, "ModalSurfaces.SearchOwnsKeys"),
+            "TryFocusSearchIfTopmost no longer consults SearchOwnsKeys.");
+        Assert.True(
+            CSharpSource.Invokes(helper, "SearchOverlaySearchTextBox.Focus"),
+            "TryFocusSearchIfTopmost no longer focuses the search box.");
+    }
+
+    /// <summary>
+    /// Quick Open's chord refuses beneath every sheet and the palette
+    /// (codex round 5): the Ctrl+O branch was unconditional, and the
+    /// picker exclusion then closed a search overlay under the sheet
+    /// too, leaving only the hidden picker taking keys.
+    /// </summary>
+    [Theory]
+    [InlineData(null, PaletteOpenDecision.Open)]
+    [InlineData(ModalSurface.QuickOpen, PaletteOpenDecision.Open)]
+    [InlineData(ModalSurface.SearchOverlay, PaletteOpenDecision.Open)]
+    [InlineData(ModalSurface.CommandPalette, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.AddProperty, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.BulkRename, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.CitationDetails, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.CitationSummary, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.FilesCiting, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.DashboardEditor, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.BaseQueryBuilder, PaletteOpenDecision.Refuse)]
+    public void QuickOpenRefusesBeneathEverySheetAndThePalette(
+        object? topmost, object expected)
+    {
+        ModalSurface? surface = topmost is null ? null : (ModalSurface)topmost;
+        Assert.Equal(
+            (PaletteOpenDecision)expected,
+            ModalSurfaces.DecideQuickOpenOpen(surface));
+    }
+
+    /// <summary>
+    /// The Ctrl+O branch's <c>Open()</c> is CONTROL-DEPENDENT on the
+    /// admission decision, not merely near it.
+    /// </summary>
+    /// <remarks>
+    /// Codex round 6: the previous presence pin passed with
+    /// <c>_ = DecideQuickOpenOpen(...); QuickSwitcher.Open();</c> — the
+    /// decision computed and ignored, the recorded under-match class.
+    /// The pin now locates the <c>if</c> whose CONDITION is the
+    /// decision comparison and requires the <c>Open()</c> call inside
+    /// its statement.
+    /// </remarks>
+    [Fact]
+    public void TheQuickOpenChordBranchConsultsTheAdmissionDecision()
+    {
+        Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax route =
+            CSharpSource.Load("MainWindow.xaml.cs").Method("Window_PreviewKeyDown");
+
+        var admission = route.DescendantNodes()
+            .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.IfStatementSyntax>()
+            .Where(statement => CSharpSource.Normalize(statement.Condition)
+                == "ModalSurfaces.DecideQuickOpenOpen(OpenModalSurface)==PaletteOpenDecision.Open")
+            .ToList();
+        Assert.True(
+            admission.Count == 1,
+            $"expected exactly one admission-gated if in Window_PreviewKeyDown, "
+            + $"found {admission.Count} — Quick Open opens beneath any sheet "
+            + "again if the gate is gone, and two gates would mean a second "
+            + "unaudited open path.");
+        Assert.True(
+            admission[0].Statement.DescendantNodesAndSelf()
+                .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax>()
+                .Any(call => CSharpSource.Normalize(call.Expression)
+                    .EndsWith("QuickSwitcher.Open", StringComparison.Ordinal)),
+            "QuickSwitcher.Open() is no longer inside the admission-gated "
+            + "if — the decision is computed but does not control the open.");
+
+        // REACHABILITY (codex round 8): the branch must precede the
+        // search-ownership branch, or the selective swallow marks Ctrl+O
+        // handled and the gate is dead code while search is open.
+        var searchBranch = route.DescendantNodes()
+            .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.IfStatementSyntax>()
+            .First(statement => CSharpSource.Normalize(statement.Condition)
+                == "ModalSurfaces.SearchOwnsKeys(CurrentModalSurfaceState)");
+        Assert.True(
+            admission[0].SpanStart < searchBranch.SpanStart,
+            "the Ctrl+O admission branch sits AFTER the search-ownership "
+            + "branch — the swallow eats Ctrl+O first, and the picker "
+            + "handoff is unreachable while search is open.");
+    }
+
+    /// <summary>
+    /// The reverse picker handoff (codex round 5): search superseding
+    /// Quick Open adopts the pre-SWITCHER focus, or Escape falls back to
+    /// the editor instead of the element the user came from.
+    /// </summary>
+    [Fact]
+    public void TheSearchSupersessionAdoptsThePreSwitcherFocus()
+    {
+        Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax clear =
+            CSharpSource.Load("MainWindow.Search.cs").Method("TryClearTheWayForSearch");
+        string body = CSharpSource.Normalize(clear);
+        // Consume-then-adopt: the consume must run UNCONDITIONALLY (so
+        // the switcher's own restore is inert either way), and the
+        // adoption keeps an older search token when one exists.
+        Assert.Contains(
+            "preSwitcher=ConsumePreSwitcherFocus()", body, StringComparison.Ordinal);
+        Assert.Contains(
+            "_focusBeforeSearch??=preSwitcher", body, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The palette supersession (SD-5, replacing the original S11
+    /// stacking arm after the round-10 root cause analysis): the
+    /// palette-chord dismissal arm closes an open search overlay and
+    /// adopts its captured pre-open focus, consume-first so search's
+    /// own queued restore cannot race the handoff. This is what
+    /// retired the round-9 IsEnabled triggers and the round-10 UIA
+    /// Control View exposure with them: a closed overlay is collapsed,
+    /// and a collapsed overlay is not in the UIA tree at all.
+    /// </summary>
+    [Fact]
+    public void ThePaletteSupersessionClosesSearchAndAdoptsItsFocus()
+    {
+        Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax clear =
+            CSharpSource.Load("MainWindow.Palette.cs")
+                .Method("TryClearTheWayForThePalette");
+
+        // The arm hangs off the SAME pure decision the every-member
+        // theory drives, so flipping the decision table and gutting
+        // the arm each fail a named gate. (Chord-path REACHABILITY —
+        // that Ctrl+Shift+P actually calls this method — is pinned
+        // separately by ThePaletteChordBranchConsultsTheAdmissionDecision;
+        // the red team found this comment's first draft claiming that
+        // coverage without owning it.)
+        Microsoft.CodeAnalysis.CSharp.Syntax.SwitchStatementSyntax gate = clear
+            .DescendantNodes()
+            .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.SwitchStatementSyntax>()
+            .Single();
+        Assert.Equal(
+            "ModalSurfaces.DecidePaletteOpen(OpenModalSurface)",
+            CSharpSource.Normalize(gate.Expression));
+
+        Microsoft.CodeAnalysis.CSharp.Syntax.SwitchSectionSyntax arm =
+            Assert.Single(
+                gate.Sections,
+                section => section.Labels
+                    .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.CaseSwitchLabelSyntax>()
+                    .Any(label => CSharpSource.Normalize(label.Value)
+                        == "PaletteOpenDecision.DismissSearchThenOpen"));
+
+        // Control-dependence AND ordering, inside the arm itself:
+        // consume, then close, then adopt. Close-before-consume hands
+        // the restore race back to search's Dismissed path, and
+        // adopt-before-close would capture a token search then nulls.
+        string body = string.Concat(
+            arm.Statements.Select(statement => CSharpSource.Normalize(statement)));
+        int consume = body.IndexOf(
+            "preSearch=ConsumePreSearchFocus()", StringComparison.Ordinal);
+        int close = body.IndexOf(
+            "_viewModel.Search.Supersede()", StringComparison.Ordinal);
+        int adopt = body.IndexOf(
+            "_focusBeforePalette=preSearch", StringComparison.Ordinal);
+        Assert.True(consume >= 0,
+            "the dismissal arm no longer consumes the pre-search focus "
+            + "INTO the local the adoption reads — a discarded consume "
+            + "leaves the palette's restore targeting the collapsed "
+            + "search box.");
+        Assert.True(close > consume,
+            "the dismissal arm supersedes search before consuming its "
+            + "focus (or not at all — a plain Close here also drops the "
+            + "scope) — search's own queued restore races the handoff.");
+        Assert.True(adopt > close,
+            "the dismissal arm never adopts the consumed focus into "
+            + "_focusBeforePalette after the supersession — Escape from "
+            + "the palette falls back to the editor instead of the "
+            + "element the user came from.");
+
+        // Red team A4: exactly ONE assignment to _focusBeforePalette in
+        // the arm — a second, later assignment (nulling or re-capturing)
+        // would defeat the adoption while every pin above stays green.
+        Assert.Equal(
+            1,
+            arm.Statements
+                .SelectMany(statement => statement.DescendantNodesAndSelf())
+                .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax>()
+                .Count(assignment => CSharpSource.Normalize(assignment.Left)
+                    == "_focusBeforePalette"));
+
+        // The arm ADMITS the open: a false return would dismiss search
+        // and then refuse the palette, stranding the user surface-less.
+        Microsoft.CodeAnalysis.CSharp.Syntax.ReturnStatementSyntax admit =
+            Assert.Single(arm.Statements
+                .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.ReturnStatementSyntax>());
+        Assert.Equal("true", CSharpSource.Normalize(admit.Expression!));
+
+        // The Quick Open arm adopts too (red team F2 after round 11):
+        // dismissal without adoption let the palette's ??= capture the
+        // collapsing switcher box, and Escape landed in the editor
+        // instead of the element the user came from.
+        Microsoft.CodeAnalysis.CSharp.Syntax.SwitchSectionSyntax quickOpenArm =
+            Assert.Single(
+                gate.Sections,
+                section => section.Labels
+                    .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.CaseSwitchLabelSyntax>()
+                    .Any(label => CSharpSource.Normalize(label.Value)
+                        == "PaletteOpenDecision.DismissQuickOpenThenOpen"));
+        string quickOpenBody = string.Concat(
+            quickOpenArm.Statements.Select(
+                statement => CSharpSource.Normalize(statement)));
+        int adoptSwitcher = quickOpenBody.IndexOf(
+            "_focusBeforePalette=ConsumePreSwitcherFocus()",
+            StringComparison.Ordinal);
+        int dismissSwitcher = quickOpenBody.IndexOf(
+            "_viewModel.QuickSwitcher!.Dismiss()", StringComparison.Ordinal);
+        Assert.True(adoptSwitcher >= 0,
+            "the Quick Open arm no longer adopts the pre-switcher focus "
+            + "into _focusBeforePalette.");
+        Assert.True(dismissSwitcher > adoptSwitcher,
+            "the Quick Open arm dismisses before adopting — the ??= "
+            + "capture then grabs the collapsing switcher box.");
+
+        // The palette restore runs BOTH adoption twins (rounds 6 and
+        // 11) and the supersession stand-down; the picker dismissal
+        // restores all stand down while another surface owns the
+        // moment, which is what keeps a supersession from flashing and
+        // announcing the editor mid-handoff, and a landing sheet from
+        // having focus stolen back out from behind its scrim.
+        Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax paletteRestore =
+            CSharpSource.Load("MainWindow.Palette.cs").Method("RestoreFocusAfterPalette");
+        Assert.True(
+            CSharpSource.Invokes(paletteRestore, "AdoptPaletteFocusIntoSearch"),
+            "RestoreFocusAfterPalette dropped the round-6 search adoption.");
+        Assert.True(
+            CSharpSource.Invokes(paletteRestore, "AdoptPaletteFocusIntoQuickOpen"),
+            "RestoreFocusAfterPalette dropped the Quick Open adoption twin.");
+        foreach ((string file, string method) in new[]
+        {
+            ("MainWindow.Search.cs", "RestoreFocusAfterSearch"),
+            ("MainWindow.Palette.cs", "RestoreFocusAfterPalette"),
+            ("MainWindow.xaml.cs", "RestoreFocusAfterQuickOpen"),
+        })
+        {
+            Assert.Contains(
+                "if(OpenModalSurfaceisnotnull){return;}",
+                CSharpSource.Normalize(CSharpSource.Load(file).Method(method)),
+                StringComparison.Ordinal);
+        }
+
+        // Codex round 11: the adopted token SURVIVES only because the
+        // palette's open observer captures with ??= — a plain
+        // assignment overwrites the adoption with the focused,
+        // about-to-collapse search box the moment Palette.Open raises
+        // IsOpen, and every pin above stays textually intact. The
+        // exclusion is the broad "_focusBeforePalette=" (red team A4:
+        // the narrower uncast spelling missed a cast-and-assign
+        // mutation); "??=" does not contain that substring.
+        string observer = CSharpSource.Normalize(
+            CSharpSource.Load("MainWindow.Palette.cs")
+                .Method("Palette_PropertyChanged"));
+        Assert.Contains(
+            "_focusBeforePalette??=Keyboard.FocusedElement",
+            observer,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "_focusBeforePalette=",
+            observer,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The palette CHORD consults the admission (red team A1 after
+    /// codex round 11 — the milestone's exact defect signature, found
+    /// in this branch's own new gate): every unit pin bound the
+    /// decision to the arm inside <c>TryClearTheWayForThePalette</c>,
+    /// but nothing pinned that Ctrl+Shift+P calls that method at all —
+    /// a bare <c>Palette.Open()</c> in the chord branch left every
+    /// gate green while the palette stacked over a live search again.
+    /// The Quick Open twin got this pin after rounds 6/8; the palette
+    /// now has it too: every <c>Palette.Open()</c> in the key route is
+    /// control-dependent on either the admission or the PD-2 re-open
+    /// branch.
+    /// </summary>
+    [Fact]
+    public void ThePaletteChordBranchConsultsTheAdmissionDecision()
+    {
+        Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax route =
+            CSharpSource.Load("MainWindow.xaml.cs").Method("Window_PreviewKeyDown");
+
+        var admission = route.DescendantNodes()
+            .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.IfStatementSyntax>()
+            .Where(statement => CSharpSource.Normalize(statement.Condition)
+                == "TryClearTheWayForThePalette()")
+            .ToList();
+        Assert.True(
+            admission.Count == 1,
+            $"expected exactly one TryClearTheWayForThePalette-gated if in "
+            + $"Window_PreviewKeyDown, found {admission.Count}.");
+
+        var reopen = route.DescendantNodes()
+            .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.IfStatementSyntax>()
+            .Single(statement => CSharpSource.Normalize(statement.Condition)
+                == "_viewModel.Palette.IsOpen");
+
+        foreach (Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax open
+            in route.DescendantNodes()
+                .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax>()
+                .Where(call => CSharpSource.Normalize(call.Expression)
+                    == "_viewModel.Palette.Open"))
+        {
+            bool insideAdmission = open.Ancestors().Contains(admission[0].Statement);
+            bool insideReopen = open.Ancestors().Contains(reopen.Statement);
+            Assert.True(
+                insideAdmission || insideReopen,
+                "a Palette.Open() in the key route is gated by neither the "
+                + "admission decision nor the PD-2 re-open branch — the "
+                + "palette opens beneath whatever is up.");
+        }
+
+        Assert.True(
+            admission[0].Statement.DescendantNodesAndSelf()
+                .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax>()
+                .Any(call => CSharpSource.Normalize(call.Expression)
+                    == "_viewModel.Palette.Open"),
+            "the admission-gated if no longer contains the Open() — the "
+            + "decision is computed but does not control the open.");
+    }
+
+    /// <summary>
+    /// The presentation-time admission covers every sheet and is wired
+    /// (codex round 11): a sheet may present from a deferred
+    /// continuation — the files-citing load, the bases edit-JSON
+    /// fetch, a parked citation summary — after the dispatch-time
+    /// modal decision has gone stale, so the lifecycle closes the
+    /// pickers reactively when a sheet property becomes non-null. One
+    /// nameof arm per sheet member of <see cref="ModalSurface"/>, so a
+    /// new sheet without an arm fails here by name; nameof makes each
+    /// arm's property compile-checked, so no reflection pin is needed
+    /// on top. The behavioural halves live in
+    /// <c>SheetPresentationAdmissionTests</c>.
+    /// </summary>
+    [Fact]
+    public void TheSheetPresentationObserverCoversEverySheetAndIsWired()
+    {
+        CSharpSource source = CSharpSource.Load("VaultLifecycleViewModel.cs");
+        Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax handler =
+            source.Method("Workspace_SheetPresented");
+
+        Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax presented = handler
+            .DescendantNodes()
+            .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax>()
+            .Single();
+        foreach (ModalSurface sheet in Enum.GetValues<ModalSurface>()
+            .Where(surface => surface > ModalSurface.CommandPalette))
+        {
+            string property = sheet switch
+            {
+                ModalSurface.AddProperty => "AddPropertySheet",
+                ModalSurface.BulkRename => "BulkRenameSheet",
+                ModalSurface.CitationDetails => "CitationDetails",
+                ModalSurface.CitationSummary => "CitationSummary",
+                ModalSurface.FilesCiting => "FilesCiting",
+                ModalSurface.DashboardEditor => "DashboardEditorSheet",
+                ModalSurface.BaseQueryBuilder => "BaseQueryBuilderSheet",
+                _ => throw new Xunit.Sdk.XunitException(
+                    $"{sheet} is a sheet with no property mapping here — "
+                    + "add it AND the observer arm."),
+            };
+            Assert.True(
+                presented.Arms.Any(arm =>
+                    CSharpSource.Normalize(arm.Pattern)
+                        == $"nameof(WorkspaceViewModel.{property})"
+                    && CSharpSource.Normalize(arm.Expression)
+                        == $"workspace.{property}isnotnull"),
+                $"Workspace_SheetPresented has no arm for {sheet} "
+                + $"(WorkspaceViewModel.{property}) — that sheet can land "
+                + "over an open picker unnoticed.");
+        }
+
+        // The dismissals exist and EVERY one is control-dependent on a
+        // presented sheet (red team A2: the first draft ordered the
+        // guard against one of the three, so hoisting Palette.Dismiss
+        // above the guard — dismissing on every workspace property
+        // change — stayed green). Supersede, not Close, for search:
+        // the scope survives a sheet landing exactly as it survives
+        // the palette. Backing fields, not the lazy getters, so a
+        // window-free host's first presentation does not construct the
+        // palette as a side effect.
+        Microsoft.CodeAnalysis.CSharp.Syntax.IfStatementSyntax guard = handler
+            .DescendantNodes()
+            .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.IfStatementSyntax>()
+            .Single(statement =>
+                CSharpSource.Normalize(statement.Condition) == "!presented");
+        foreach (string dismissal in new[]
+        {
+            "_search?.Supersede();",
+            "QuickSwitcher?.Dismiss();",
+            "_palette?.Dismiss();",
+        })
+        {
+            Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionStatementSyntax statement =
+                Assert.Single(
+                    handler.DescendantNodes()
+                        .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionStatementSyntax>(),
+                    candidate => CSharpSource.Normalize(candidate) == dismissal);
+            Assert.True(
+                guard.SpanStart < statement.SpanStart,
+                $"{dismissal} runs BEFORE the presented guard — it would "
+                + "fire on every workspace property change, not just "
+                + "presentations.");
+        }
+
+        // Reachability AND position: subscribed when the workspace is
+        // created, AFTER the Workspace assignment (so the shell's sheet
+        // handlers subscribe first and the sheet's focus grab queues
+        // before any restore the dismissals queue — red team B4: this
+        // ordering was previously comment-only), and unsubscribed at
+        // teardown.
+        Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax initialize =
+            source.Method("InitializeWorkspace");
+        Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionStatementSyntax assignment =
+            Assert.Single(
+                initialize.DescendantNodes()
+                    .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionStatementSyntax>(),
+                candidate => CSharpSource.Normalize(candidate) == "Workspace=workspace;");
+        Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionStatementSyntax subscription =
+            Assert.Single(
+                initialize.DescendantNodes()
+                    .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionStatementSyntax>(),
+                candidate => CSharpSource.Normalize(candidate)
+                    == "workspace.PropertyChanged+=Workspace_SheetPresented;");
+        Assert.True(
+            assignment.SpanStart < subscription.SpanStart,
+            "Workspace_SheetPresented subscribes BEFORE the Workspace "
+            + "assignment — the lifecycle's dismissals would then queue "
+            + "their restores before the shell's sheet focus grab, and "
+            + "the restore steals focus from behind the landing sheet.");
+        Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionStatementSyntax unsubscription =
+            Assert.Single(
+                source.Root.DescendantNodes()
+                    .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionStatementSyntax>(),
+                candidate => CSharpSource.Normalize(candidate)
+                    == "Workspace.PropertyChanged-=Workspace_SheetPresented;");
+        Assert.NotNull(unsubscription);
+    }
+
+    /// <summary>
+    /// The ancestry walk survives a non-Visual focus token (codex round
+    /// 7): a focused reading-view Hyperlink is a FrameworkContentElement,
+    /// and VisualTreeHelper.GetParent THROWS for one — the palette
+    /// dismissal crashed instead of preserving the search-predates-palette
+    /// lineage.
+    /// </summary>
+    [Fact]
+    public void TheAncestryWalkSurvivesAFocusedHyperlink()
+    {
+        Exception? failure = null;
+        var thread = new System.Threading.Thread(() =>
+        {
+            try
+            {
+                var hyperlink = new System.Windows.Documents.Hyperlink(
+                    new System.Windows.Documents.Run("link"));
+                var text = new System.Windows.Controls.TextBlock(hyperlink);
+                var inside = new System.Windows.Controls.Border { Child = text };
+                var outside = new System.Windows.Controls.Border();
+
+                // Walk from the Hyperlink: must not throw, must find the
+                // enclosing border, must not find an unrelated one.
+                Assert.True(WalksTo(hyperlink, inside));
+                Assert.False(WalksTo(hyperlink, outside));
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
+        });
+        thread.SetApartmentState(System.Threading.ApartmentState.STA);
+        thread.Start();
+        thread.Join();
+        if (failure is not null)
+        {
+            throw new Xunit.Sdk.XunitException(failure.ToString());
+        }
+    }
+
+    /// <summary>
+    /// Every ancestry walker in the shell uses the hybrid parent — a
+    /// census, because round 7 fixed one walker and round 8 found its
+    /// clone still crashing on non-Visual focus.
+    /// </summary>
+    [Fact]
+    public void EveryAncestryWalkerUsesTheHybridParent()
+    {
+        string root = SourceText.ShellSourceRoot();
+        var found = 0;
+        foreach (string path in System.IO.Directory.GetFiles(root, "MainWindow*.cs"))
+        {
+            string file = System.IO.Path.GetFileName(path);
+            foreach (Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax method
+                in CSharpSource.Load(file).Root
+                    .DescendantNodes()
+                    .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax>())
+            {
+                if (!method.Identifier.ValueText.StartsWith(
+                    "IsDescendantOf", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                found++;
+                Assert.True(
+                    CSharpSource.Invokes(method, "FocusAncestry.Parent"),
+                    $"{file}.{method.Identifier.ValueText} does not walk via "
+                    + "FocusAncestry.Parent — VisualTreeHelper.GetParent throws "
+                    + "for non-Visual focus (a reading-view Hyperlink).");
+                Assert.False(
+                    CSharpSource.Invokes(method, "VisualTreeHelper.GetParent"),
+                    $"{file}.{method.Identifier.ValueText} still calls "
+                    + "VisualTreeHelper.GetParent directly.");
+            }
+        }
+
+        Assert.True(found >= 2, $"expected at least the palette and search "
+            + $"walkers; found {found} — the census is scanning nothing.");
+    }
+
+    private static bool WalksTo(
+        System.Windows.DependencyObject start,
+        System.Windows.DependencyObject ancestor)
+    {
+        for (System.Windows.DependencyObject? node = start;
+            node is not null;
+            node = FocusAncestry.Parent(node))
+        {
+            if (ReferenceEquals(node, ancestor))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// The pickers are mutually exclusive (codex round 4): Quick Open
+    /// paints BELOW search, so opening it under an open search overlay
+    /// put focus in a hidden box. The shell's switcher-open observer
+    /// must close search and adopt the pre-search focus as the
+    /// switcher's return target.
+    /// </summary>
+    [Fact]
+    public void QuickOpenOpeningClosesAnOpenSearchOverlay()
+    {
+        Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax observer =
+            CSharpSource.Load("MainWindow.xaml.cs").Method("QuickSwitcher_PropertyChanged");
+
+        Assert.True(
+            CSharpSource.Invokes(observer, "_viewModel.Search.Supersede"),
+            "the switcher-open observer no longer supersedes an open search "
+            + "overlay — Quick Open opens BENEATH it and typing lands in a "
+            + "hidden box (and a plain Close here would drop the scope).");
+        Assert.True(
+            CSharpSource.Invokes(observer, "ConsumePreSearchFocus"),
+            "the switcher-open observer no longer adopts the pre-search "
+            + "focus, so its restore would target the collapsed search box.");
+    }
+
+    private static ModalSurfaceState StateWith(
+        ModalSurface first, ModalSurface second) =>
+        new(
+            QuickOpen: first is ModalSurface.QuickOpen || second is ModalSurface.QuickOpen,
+            SearchOverlay: first is ModalSurface.SearchOverlay || second is ModalSurface.SearchOverlay,
+            CommandPalette: first is ModalSurface.CommandPalette || second is ModalSurface.CommandPalette,
+            AddProperty: first is ModalSurface.AddProperty || second is ModalSurface.AddProperty,
+            BulkRename: first is ModalSurface.BulkRename || second is ModalSurface.BulkRename,
+            CitationDetails: first is ModalSurface.CitationDetails || second is ModalSurface.CitationDetails,
+            CitationSummary: first is ModalSurface.CitationSummary || second is ModalSurface.CitationSummary,
+            FilesCiting: first is ModalSurface.FilesCiting || second is ModalSurface.FilesCiting,
+            DashboardEditor: first is ModalSurface.DashboardEditor || second is ModalSurface.DashboardEditor,
+            BaseQueryBuilder: first is ModalSurface.BaseQueryBuilder || second is ModalSurface.BaseQueryBuilder);
+
+    [Fact]
+    public void EveryMenuDisablePathResolvesAgainstTheLiveViewModels()
+    {
+        foreach ((ModalSurface surface, string path) in MenuDisableBindings)
+        {
+            System.Type owner = typeof(VaultLifecycleViewModel);
+            foreach (string segment in path.Split('.'))
+            {
+                System.Reflection.PropertyInfo? property = owner.GetProperty(
+                    segment,
+                    System.Reflection.BindingFlags.Public
+                        | System.Reflection.BindingFlags.NonPublic
+                        | System.Reflection.BindingFlags.Instance);
+                Assert.True(
+                    property is not null,
+                    $"{surface}: binding path segment '{segment}' of '{path}' "
+                    + $"does not resolve on {owner.Name} — the menu trigger "
+                    + "is silently dead while the C# state reader still "
+                    + "compiles.");
+                owner = property!.PropertyType;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The Menu disables under EVERY modal surface, one trigger per
+    /// <see cref="ModalSurface"/> member.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// W5-2 red-team round 1: the trigger list covered only the three
+    /// overlays, so Workspace ▸ Search Vault… opened the overlay
+    /// INVISIBLY beneath any of the seven sheets — and File ▸ Quick
+    /// Open… had carried the same gap since W1. The declarative fix is
+    /// mac parity (AppKit disables the menu bar while a sheet is up,
+    /// which is why mac's unguarded menu commands are safe); this gate
+    /// is what keeps surface #11 from being forgotten the way the seven
+    /// sheets were: a new enum member without a mapping entry, or a
+    /// mapping entry without a trigger, fails here by name.
+    /// </para>
+    /// <para>
+    /// A XAML scrape rather than a live-window test for the recorded
+    /// drift-gate reason: the trigger list is declarative data, and
+    /// every sheet would need a real shell to open.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void TheMenuDisablesUnderEveryModalSurface()
+    {
+        XDocument document = XDocument.Load(
+            Path.Combine(SourceRoot(), "MainWindow.xaml"));
+        XElement[] menus = document.Descendants()
+            .Where(element => element.Name.LocalName == "Menu")
+            .ToArray();
+        XElement menu = Assert.Single(menus);
+
+        XElement style = menu.Elements()
+            .Single(element => element.Name.LocalName == "Menu.Style");
+        XElement[] triggers = style.Descendants()
+            .Where(element => element.Name.LocalName == "DataTrigger")
+            .ToArray();
+
+        foreach (ModalSurface surface in Enum.GetValues<ModalSurface>())
+        {
+            Assert.True(
+                MenuDisableBindings.TryGetValue(surface, out string? path),
+                $"{surface} has no entry in MenuDisableBindings — a new "
+                + "modal surface needs a Menu disable trigger AND a row in "
+                + "this map, or its menu commands run invisibly beneath it.");
+
+            XElement? trigger = triggers.FirstOrDefault(
+                candidate => BindsPath(candidate, path!));
+            Assert.True(
+                trigger is not null,
+                $"MainWindow.xaml's Menu style has no DataTrigger binding "
+                + $"'{path}' — with {surface} open the menu stays enabled and "
+                + "its commands open overlays beneath the surface (the "
+                + "round-1 finding).");
+
+            Assert.Equal("True", trigger!.Attribute("Value")?.Value);
+            if (!path!.EndsWith(".IsOpen", StringComparison.Ordinal))
+            {
+                // Object-typed sheet properties: without the converter
+                // the trigger compares a view model to the string
+                // "True" and never fires.
+                Assert.Contains(
+                    "IsNotNullConverter",
+                    trigger.Attribute("Binding")!.Value,
+                    StringComparison.Ordinal);
+            }
+
+            XElement setter = Assert.Single(trigger.Descendants()
+, element => element.Name.LocalName == "Setter");
+            Assert.Equal("IsEnabled", setter.Attribute("Property")?.Value);
+            Assert.Equal("False", setter.Attribute("Value")?.Value);
+        }
+    }
+
+    /// <summary>
+    /// Whether a DataTrigger's Binding reads exactly
+    /// <paramref name="path"/> — a whole-path match, so
+    /// <c>Search.IsOpen</c> cannot be satisfied by a hypothetical
+    /// <c>Search.IsOpenedOnce</c>.
+    /// </summary>
+    private static bool BindsPath(XElement trigger, string path)
+    {
+        string? binding = trigger.Attribute("Binding")?.Value;
+        string prefix = "{Binding " + path;
+        if (binding is null
+            || !binding.StartsWith(prefix, StringComparison.Ordinal)
+            || binding.Length == prefix.Length)
+        {
+            return false;
+        }
+
+        return binding[prefix.Length] is ',' or '}' or ' ';
+    }
+
+    /// <summary>
+    /// The search overlay's field row carries the "Close search" button
+    /// (contract S15, red-team round 1): mac's overlay has one
+    /// (<c>SearchOverlay.swift:169-198</c>, label and hint verbatim),
+    /// and without it Esc was the only dismissal for a surface the menu
+    /// can open by pointer. The journey clicks it; this pins the
+    /// anatomy and the wiring so the assertion does not depend on an
+    /// interactive desktop.
+    /// </summary>
+    [Fact]
+    public void TheSearchOverlayCarriesItsCloseButton()
+    {
+        XDocument document = XDocument.Load(
+            Path.Combine(SourceRoot(), "MainWindow.xaml"));
+        XElement button = Assert.Single(document.Descendants()
+, element =>
+                    element.Name.LocalName == "Button"
+                    && element.Attribute(
+                        "AutomationProperties.AutomationId")?.Value
+                        == "SearchOverlayClose");
+
+        Assert.Equal(
+            "Close search",
+            button.Attribute("AutomationProperties.Name")?.Value);
+        Assert.Equal(
+            "Closes the search overlay and returns to the previous view.",
+            button.Attribute("AutomationProperties.HelpText")?.Value);
+        Assert.Equal(
+            "SearchOverlayClose_Click",
+            button.Attribute("Click")?.Value);
+
+        // And the handler actually closes: a live Close() call on the
+        // search view model, read from the parsed source rather than a
+        // string scrape so a commented-out body cannot answer.
+        CSharpSource shell = CSharpSource.Load("MainWindow.Search.cs");
+        MethodDeclarationSyntax handler = shell.Root
+            .DescendantNodes()
+            .OfType<MethodDeclarationSyntax>()
+            .Single(method =>
+                method.Identifier.ValueText == "SearchOverlayClose_Click");
+        Assert.Contains(
+            handler.DescendantNodes().OfType<InvocationExpressionSyntax>(),
+            invocation => invocation.Expression is MemberAccessExpressionSyntax
+            {
+                Name.Identifier.ValueText: "Close",
+            });
     }
 
     private static string SourceRoot() =>

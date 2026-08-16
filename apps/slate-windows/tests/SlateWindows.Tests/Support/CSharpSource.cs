@@ -245,6 +245,15 @@ internal sealed class CSharpSource
     /// Source text with trivia and whitespace removed, for comparing an
     /// expression against a written form.
     /// </summary>
+    /// <remarks>
+    /// Token concatenation, NOT <c>ToString()</c> minus whitespace (red
+    /// team after codex round 11): <c>ToString()</c> keeps interior
+    /// COMMENTS, so every <c>Assert.Contains</c> pin over a method or
+    /// file was satisfiable by writing the pinned text in a comment —
+    /// deleting the code and mentioning it kept the gate green. Tokens
+    /// carry no trivia, and for comment-free code the two forms are
+    /// byte-identical, so every existing pin keeps its meaning.
+    /// </remarks>
     internal static string Normalize(SyntaxNode node) =>
-        string.Concat(node.ToString().Where(character => !char.IsWhiteSpace(character)));
+        string.Concat(node.DescendantTokens().Select(token => token.Text));
 }

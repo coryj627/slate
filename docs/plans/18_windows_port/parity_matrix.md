@@ -1,6 +1,6 @@
 # Milestone W parity matrix (§W-F row-level checklist)
 
-Generated 2026-08-13 at `b456dc0` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
+Generated 2026-08-16 at `2f4b769` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
 
 ## Entry-criteria snapshot (w0_spec §W0-4 item 3)
 
@@ -116,7 +116,7 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 | `slate.editor.addProperty` | Add Property… | — | — | #736 (W4-4) | implemented; local gates green 2026-08-03; interactive CI + human AT pending |
 | `slate.editor.bulkRenameProperties` | Bulk Rename Properties… | ⇧⌘R | Shift Command R | #736 (W4-4) | implemented; local gates green 2026-08-03; interactive CI + human AT pending |
 | `slate.editor.citationSummary` | Citation Summary | ⇧⌘J | Shift Command J | #737 (W4-5) | implemented; local gates green 2026-08-04; interactive CI + human AT pending |
-| `slate.editor.findInNote` | Find… | ⌘F | Command F | #742 (W5-2) | pending |
+| `slate.editor.findInNote` | Find… | ⌘F | Command F | #1112 (find-in-note, split from #742) | pending |
 | `slate.editor.save` | Save | ⌘S | Command S | #724 (W2-1) | implemented; local gates green 2026-07-23; interactive CI + human AT pending |
 | `slate.editor.togglePropertiesSource` | Show Properties Source | ⇧⌘D | Shift Command D | #736 (W4-4) | pending |
 | `slate.editor.toggleSpellCheck` | Check Spelling While Typing | — | — | #725 (W2-3) | implemented; local gates green 2026-07-23; interactive CI + human AT pending |
@@ -192,7 +192,7 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 | `slate.vault.close` | Close Vault | — | — | #720 (W1-1) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
 | `slate.vault.open` | Open Vault… | ⇧⌘O | Shift Command O | #720 (W1-1) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
 | `slate.view.toggleRightPane` | Toggle Right Pane | ⌥⌘I | Option Command I | #722 (W1-3) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
-| `slate.view.toggleSearch` | Search Vault | ⇧⌘F | Shift Command F | #742 (W5-2) | pending |
+| `slate.view.toggleSearch` | Search Vault | ⇧⌘F | Shift Command F | #742 (W5-2) | implemented; local gates green 2026-08-16; interactive CI + human AT pending |
 | `slate.workspace.closePane` | Close Pane | — | — | #722 (W1-3) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
 | `slate.workspace.closeTab` | Close Tab | ⌘W | Command W | #722 (W1-3) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
 | `slate.workspace.focusPaneAbove` | Focus Pane Above | ⌥⌘↑ | Option Command Up Arrow | #722 (W1-3) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
@@ -269,7 +269,7 @@ What `WorkspaceStore` round-trips — a **separate** inventory from the right-pa
 | Properties (in-note header, panel, typed rows, add-property) | `Properties*` views | #736 (W4-4) | pending |
 | Bases grid + builder (N shipped) | `Bases/` | #738 (W4-6) | implemented; local gates green 2026-08-08; interactive CI + human AT pending |
 | Command palette | `CommandPaletteModel.swift` (core ranking, W0.5-1) | #741 (W5-1) | implemented; local gates green 2026-08-13; interactive CI + human AT pending |
-| Search overlay | search UI over `full_text_search` | #742 (W5-2) | pending |
+| Search overlay | search UI over `full_text_search` | #742 (W5-2) | implemented; local gates green 2026-08-16; interactive CI + human AT pending |
 | Templates picker + prompt flow | template views | #743 (W5-3) | pending |
 | File management + bulk rename | sidebar/file commands | #744 (W5-4) | pending |
 | Accessible canvas (T parity) | `Canvas/` | #745 (W6-1) | pending |

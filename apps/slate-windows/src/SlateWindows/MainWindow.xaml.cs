@@ -49,6 +49,7 @@ public partial class MainWindow : Window
         _viewModel.PropertyChanged += ViewModel_PropertyChanged;
         DataContext = _viewModel;
         ObservePalette();
+        ObserveSearch();
         RecentVaultJumpList.Apply(_viewModel.RecentVaults);
     }
 
@@ -295,6 +296,27 @@ public partial class MainWindow : Window
         if (eventArgs.PropertyName == nameof(QuickSwitcherViewModel.IsOpen)
             && _observedQuickSwitcher?.IsOpen == true)
         {
+            // Codex round 4 (#742): the pickers are mutually exclusive.
+            // Quick Open paints BELOW the search overlay, so a
+            // palette-invoked Quick Open under an open search left focus
+            // in a hidden text box — typing edited an invisible query
+            // while arrows and Escape operated search. Search opening
+            // already dismisses Quick Open (DecideSearchOpen); this is
+            // the symmetric half. The pre-SEARCH focus is adopted as the
+            // switcher's return target so its eventual restore lands on
+            // the element from before either picker, not on the
+            // now-collapsed search box.
+            if (_viewModel.Search.IsOpen)
+            {
+                IInputElement? preSearch = ConsumePreSearchFocus();
+                // Supersede, not Close (red team after round 11): the
+                // scope survives alongside the query, so Ctrl+Shift+F
+                // after the switcher restores a tag-scoped overlay as
+                // that tag's listing, not as an idle vault-wide field.
+                _viewModel.Search.Supersede();
+                _focusBeforeSwitcher = preSearch;
+            }
+
             _focusBeforeSwitcher ??= Keyboard.FocusedElement;
             _quickSwitcherCommitted = false;
             _ = Dispatcher.InvokeAsync(() =>
@@ -312,7 +334,71 @@ public partial class MainWindow : Window
         _quickSwitcherCommitted = true;
     }
 
-    private void ViewModel_QuickSwitcherDismissed(object? sender, EventArgs e)
+    private void ViewModel_QuickSwitcherDismissed(object? sender, EventArgs e) =>
+        RestoreFocusAfterQuickOpen();
+
+    /// <summary>
+    /// Hands Quick Open's captured pre-open focus to a caller that is
+    /// closing the switcher on its own initiative (the supersession
+    /// paths), clearing it here so the ordinary dismissal restore runs
+    /// inert instead of racing the caller — the
+    /// <c>ConsumePreSearchFocus</c> twin.
+    /// </summary>
+    internal IInputElement? ConsumePreSwitcherFocus()
+    {
+        IInputElement? previous = _focusBeforeSwitcher;
+        _focusBeforeSwitcher = null;
+        return previous;
+    }
+
+    /// <summary>
+    /// The Quick Open twin of <c>AdoptPaletteFocusIntoSearch</c>
+    /// (codex round 6): a palette-invoked Quick Open captures the
+    /// PALETTE's box as its return target — P9 focuses that box at
+    /// invoke time — and it is collapsed by the time the switcher
+    /// closes. The palette's own pre-open token is the true lineage.
+    /// </summary>
+    internal void AdoptPaletteFocusIntoQuickOpen(
+        IInputElement? paletteFocusBefore,
+        Func<DependencyObject, bool> isInsidePaletteOverlay)
+    {
+        if (_viewModel.QuickSwitcher?.IsOpen == true
+            && _focusBeforeSwitcher is DependencyObject captured
+            && isInsidePaletteOverlay(captured))
+        {
+            _focusBeforeSwitcher = paletteFocusBefore;
+        }
+    }
+
+    /// <summary>
+    /// The return token for a PRESENTING sheet (red team after codex
+    /// round 11). Captured at presentation time, a picker may still be
+    /// open and focused — the deferred continuations land before the
+    /// lifecycle's observer closes it — so a raw
+    /// <c>Keyboard.FocusedElement</c> is the about-to-collapse overlay
+    /// box and the sheet's eventual restore misses into a fallback.
+    /// The picker's own captured pre-open token IS the true lineage;
+    /// consuming it also leaves the picker's dismissal restore inert.
+    /// At most one picker can be open (invariant 6), so at most one
+    /// consume returns a token.
+    /// </summary>
+    internal IInputElement? CapturePreSheetFocus() =>
+        ConsumePreSearchFocus()
+            ?? ConsumePreSwitcherFocus()
+            ?? ConsumePrePaletteFocus()
+            ?? Keyboard.FocusedElement;
+
+    /// <summary>
+    /// The Quick Open dismissal restore. Red team after codex round
+    /// 11: this restore previously lived anonymous inside the
+    /// Dismissed handler, where the invariant-4 census could not
+    /// discover it, and it carried neither the topmost-search rule nor
+    /// any stand-down — a sheet landing over an open Quick Open (the
+    /// deferred-presentation window) had focus stolen straight back
+    /// out from behind its scrim, leaving the sheet's Escape dead
+    /// until a click.
+    /// </summary>
+    private void RestoreFocusAfterQuickOpen()
     {
         IInputElement? focusBeforeSwitcher = _focusBeforeSwitcher;
         bool committed = _quickSwitcherCommitted;
@@ -320,6 +406,24 @@ public partial class MainWindow : Window
         _quickSwitcherCommitted = false;
         _ = Dispatcher.InvokeAsync(() =>
         {
+            // The shared topmost-search rule first (invariant 4) —
+            // when Ctrl+Shift+F superseded the switcher, this hands
+            // focus straight to the search box instead of flashing the
+            // editor. Then the supersession stand-down: any OTHER open
+            // surface owns the moment (its own grab is queued or has
+            // landed), so restoring here would either steal focus from
+            // behind a scrim or flash-and-announce the editor
+            // mid-handoff.
+            if (TryFocusSearchIfTopmost())
+            {
+                return;
+            }
+
+            if (OpenModalSurface is not null)
+            {
+                return;
+            }
+
             if (committed)
             {
                 if (_viewModel.Workspace is WorkspaceViewModel workspace)
@@ -416,6 +520,79 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.F)
+        {
+            // W5-2: Ctrl+Shift+F, the direct map of mac's ⇧⌘F
+            // (slate.view.toggleSearch). Delivered here rather than as a
+            // KeyBinding because the overlay exposes methods, not
+            // ICommands — the palette-chord precedent above. TOGGLING,
+            // unlike Ctrl+Shift+P: DecideSearchOpen answers Open for an
+            // already-open overlay and Toggle closes it. Placed BEFORE
+            // the search-open branch below so its selective swallow
+            // cannot eat the overlay's own chord, and after the palette
+            // branches so an open palette (which paints ABOVE search)
+            // keeps the keyboard.
+            if (TryClearTheWayForSearch())
+            {
+                _viewModel.Search.Toggle();
+            }
+
+            // Handled either way: a refusal must not fall through and let
+            // the chord reach the surface underneath.
+            e.Handled = true;
+            return;
+        }
+
+        // Codex round 8 (#742): this branch must run BEFORE the
+        // search-ownership branch, or the selective swallow marks
+        // Ctrl+O handled and the picker handoff is unreachable
+        // while search is open.
+        if (e.Key == Key.O && modifiers == ModifierKeys.Control && _viewModel.QuickSwitcher is not null)
+        {
+            // Codex round 5 (#742): this branch was unconditional, so
+            // Ctrl+O opened Quick Open BENEATH any sheet — and the
+            // picker exclusion then closed a search overlay under the
+            // sheet too, leaving only the hidden picker taking keys.
+            if (ModalSurfaces.DecideQuickOpenOpen(OpenModalSurface)
+                == PaletteOpenDecision.Open)
+            {
+                _focusBeforeSwitcher ??= Keyboard.FocusedElement;
+                _viewModel.QuickSwitcher.Open();
+            }
+
+            e.Handled = true;
+            return;
+        }
+
+        // Ownership, not openness (codex round 1): under the original
+        // stacking design a palette-invoked sheet sat above a still-open
+        // search overlay, and routing on IsOpen alone let the hidden
+        // overlay steal the sheet's Enter and Escape. SD-5 removed
+        // persistent stacking — open now implies topmost — so ownership
+        // routing is invariant 3's backstop, kept so a future stacking
+        // violation degrades to the visible surface.
+        if (ModalSurfaces.SearchOwnsKeys(CurrentModalSurfaceState))
+        {
+            HandleSearchOverlayKey(e, modifiers);
+            if (e.Handled)
+            {
+                return;
+            }
+
+            // The palette's selective swallow, verbatim (contract S12):
+            // the overlay owns a TextBox, and marking every modified key
+            // handled here kills Ctrl+V, Ctrl+A, Ctrl+C and
+            // Shift-selection inside it, because TextBox reaches those
+            // through InputBindings, which WPF runs only for UNHANDLED
+            // key events. Ctrl+Shift+P never reaches this line — the
+            // palette-chord branch above runs first, which is how the
+            // palette SUPERSEDES an open search overlay (SD-5).
+            e.Handled = IsUnderlyingShellShortcut(e.Key, modifiers)
+                || (modifiers is not ModifierKeys.None
+                    && !TextEditingChords.Allows(e.Key, modifiers));
+            return;
+        }
+
         if (_viewModel.QuickSwitcher?.IsOpen == true)
         {
             HandleQuickSwitcherKey(e, modifiers);
@@ -480,14 +657,6 @@ public partial class MainWindow : Window
             && _viewModel.FileSidebar?.IsImporting == true)
         {
             _viewModel.FileSidebar.CancelImportCommand.Execute(null);
-            e.Handled = true;
-            return;
-        }
-
-        if (e.Key == Key.O && modifiers == ModifierKeys.Control && _viewModel.QuickSwitcher is not null)
-        {
-            _focusBeforeSwitcher ??= Keyboard.FocusedElement;
-            _viewModel.QuickSwitcher.Open();
             e.Handled = true;
             return;
         }
@@ -566,8 +735,18 @@ public partial class MainWindow : Window
         SidebarMutationNameTextBox.Select(0, extension > 0 ? extension : text.Length);
     }
 
-    private static bool TryFocus(IInputElement target)
+    private bool TryFocus(IInputElement target)
     {
+        // Red team after codex round 11: the window root is a visible,
+        // enabled UIElement, so a token captured while focus sat
+        // "nowhere" restored to the ROOT and bypassed the editor
+        // fallback. Both claim probes already treat the root as
+        // focus-nowhere; the restore side now agrees.
+        if (ReferenceEquals(target, this))
+        {
+            return false;
+        }
+
         return target switch
         {
             UIElement element when element.IsVisible && element.IsEnabled => element.Focus(),

@@ -485,6 +485,15 @@ public sealed class ChordTableTests
                 + "ICommands (PR-4). The red team found the chord shipping with no "
                 + "table row at all — the scrape reads only declarative sources, so "
                 + "an imperative chord must be allow-listed here to be checked."),
+            [ChordTable.Ids.ToggleSearch] = new(
+                "W5-2: Ctrl+Shift+F is delivered from Window_PreviewKeyDown, not a "
+                + "KeyBinding. The close-out registered ToggleSearchCommand, but a "
+                + "KeyBinding to it would bypass the modal-surface gate "
+                + "(TryClearTheWayForSearch) that only the chord path applies — "
+                + "the registered command is deliberately unguarded because the "
+                + "palette invokes before dismissing (P9). Recorded here so the "
+                + "W5-1 red-team finding (an imperative chord shipping with no "
+                + "table row) cannot recur for search."),
         };
         for (int slot = 1; slot <= 9; slot++)
         {
@@ -592,6 +601,7 @@ public sealed class ChordTableTests
             [ChordScope.Grid] = GridGestureChords(),
             [ChordScope.Palette] = PaletteChords(),
             [ChordScope.QuickOpen] = QuickOpenChords(),
+            [ChordScope.SearchOverlay] = SearchOverlayChords(),
             [ChordScope.Editor] = EditorChords(),
         };
 
@@ -644,6 +654,15 @@ public sealed class ChordTableTests
     /// </remarks>
     private static HashSet<string> PaletteChords() =>
         UnmodifiedSwitchKeys("MainWindow.Palette.cs", "HandleCommandPaletteKey");
+
+    /// <summary>
+    /// The search overlay's own key route (W5-2) — a flat unmodified
+    /// switch like the palette's, and scraped the same way so a key
+    /// added to <c>HandleSearchOverlayKey</c> without a table row fails
+    /// here in both directions.
+    /// </summary>
+    private static HashSet<string> SearchOverlayChords() =>
+        UnmodifiedSwitchKeys("MainWindow.Search.cs", "HandleSearchOverlayKey");
 
     /// <summary>
     /// The editor's own key route: <c>SlateTextEditor.OnPreviewKeyDown</c>.
