@@ -913,6 +913,7 @@ internal sealed class VaultLifecycleViewModel
             Workspace.EditorTagActivated -= Workspace_EditorTagActivated;
             Workspace.ReadingTagActivated -= Workspace_ReadingTagActivated;
             Workspace.FocusBoundaryRequested -= Workspace_FocusBoundaryRequested;
+            Workspace.PropertyChanged -= Workspace_SheetPresented;
             Workspace.Dispose();
         }
 
@@ -984,6 +985,14 @@ internal sealed class VaultLifecycleViewModel
         switcher.Dismissed += QuickSwitcher_Dismissed;
 
         Workspace = workspace;
+
+        // Subscribed AFTER the Workspace assignment on purpose: the
+        // shell observes that assignment synchronously and subscribes
+        // its own sheet handlers first, so on a sheet presentation the
+        // sheet's focus grab is queued BEFORE any restore this
+        // handler's dismissals queue — the same converged order the
+        // pickers already produce.
+        workspace.PropertyChanged += Workspace_SheetPresented;
 
         // PINV-7: the workspace requeries far more often than the vault
         // lifecycle does — on every tab switch — and that is the frequency
@@ -1212,6 +1221,66 @@ internal sealed class VaultLifecycleViewModel
         object? sender,
         WorkspaceFocusBoundary boundary) =>
         WorkspaceFocusBoundaryRequested?.Invoke(this, boundary);
+
+    /// <summary>
+    /// Invariant 6's presentation-time admission (codex round 11,
+    /// #742). A sheet may PRESENT from a deferred continuation — the
+    /// files-citing load, the bases edit-JSON fetch, a citation
+    /// summary parked on <c>RowsPublished</c> — and the modal decision
+    /// taken at command dispatch is stale by the time the sheet lands:
+    /// a picker opened during that window would sit hidden-but-live
+    /// beneath the sheet, the round-1/round-10 class SD-5 retires.
+    /// Enforced here, reactively, the moment a sheet property becomes
+    /// non-null, so every present and future presentation path is
+    /// covered without per-site admission calls. All three dismissals
+    /// are idempotent; the palette arm also fires during the
+    /// sanctioned P9 transient (a palette-invoked SYNCHRONOUS sheet),
+    /// where it runs the dismissal P9 itself would run moments later.
+    /// P9's subsequent success steps survive that early dismissal:
+    /// <c>RecordInvocation(row.Id)</c> reads only its parameter, never
+    /// palette state, and P9's own <c>Dismiss()</c> becomes a no-op.
+    /// </summary>
+    private void Workspace_SheetPresented(
+        object? sender, PropertyChangedEventArgs eventArgs)
+    {
+        if (sender is not WorkspaceViewModel workspace
+            || !ReferenceEquals(workspace, Workspace))
+        {
+            return;
+        }
+
+        // A flat name-by-name read, the CurrentModalSurfaceState
+        // idiom: each arm sits next to the property it reads, so a
+        // wrong-property error is visible here rather than hidden in
+        // shared plumbing. Census-pinned against the sheet members of
+        // ModalSurface in ModalSurfaceTests.
+        bool presented = eventArgs.PropertyName switch
+        {
+            nameof(WorkspaceViewModel.AddPropertySheet) =>
+                workspace.AddPropertySheet is not null,
+            nameof(WorkspaceViewModel.BulkRenameSheet) =>
+                workspace.BulkRenameSheet is not null,
+            nameof(WorkspaceViewModel.CitationDetails) =>
+                workspace.CitationDetails is not null,
+            nameof(WorkspaceViewModel.CitationSummary) =>
+                workspace.CitationSummary is not null,
+            nameof(WorkspaceViewModel.FilesCiting) =>
+                workspace.FilesCiting is not null,
+            nameof(WorkspaceViewModel.DashboardEditorSheet) =>
+                workspace.DashboardEditorSheet is not null,
+            nameof(WorkspaceViewModel.BaseQueryBuilderSheet) =>
+                workspace.BaseQueryBuilderSheet is not null,
+            _ => false,
+        };
+        if (!presented)
+        {
+            return;
+        }
+
+        Search.Close();
+        QuickSwitcher?.Dismiss();
+        Palette.Dismiss();
+    }
 
     private static SwitcherFile[] LoadSwitcherFiles(VaultSession session)
     {

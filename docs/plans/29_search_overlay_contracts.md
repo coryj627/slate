@@ -335,15 +335,29 @@ model rather than discovered gap by gap:
    before either picker. As of SD-5 the palette is in this exclusion
    too: opening it closes an open search overlay the same way.
 6. **No persistent stacking** (SD-5, recorded after the round-10 root
-   cause analysis): between dispatcher turns, at most ONE of Quick
-   Open, the search overlay and the palette is open, and sheets never
-   coexist with any of them. The single sanctioned overlap is the
-   TRANSIENT window inside a palette invoke — P9 runs the command
-   before dismissing, so a command that opens a surface (a sheet, or
-   the deliberately unguarded `slate.view.toggleSearch`) briefly holds
-   it beneath the still-open palette until the same synchronous flow
-   dismisses the palette. Control never returns to the user inside
-   that window. Every
+   cause analysis; deferred-presentation arm added after round 11):
+   between dispatcher turns, at most ONE of Quick Open, the search
+   overlay and the palette is open, and sheets never coexist with any
+   of them. This is enforced from BOTH ends, because admission at
+   dispatch time alone cannot hold it: a sheet may present from a
+   deferred continuation — the files-citing load, the bases edit-JSON
+   fetch, a citation summary parked on `RowsPublished` — and a picker
+   opened during that window would otherwise sit beneath the landing
+   sheet (codex round 11's finding). So (a) every OPEN path consults
+   admission at dispatch (invariant 2), and (b) every sheet
+   PRESENTATION closes the pickers reactively: the lifecycle observes
+   the workspace's seven sheet properties and, in the same
+   property-change notification that presents a sheet, closes an open
+   search overlay, Quick Open, and palette
+   (`Workspace_SheetPresented`, census-pinned). The single sanctioned
+   overlap is the TRANSIENT window inside a palette invoke — P9 runs
+   the command before dismissing, so a command that opens a surface (a
+   synchronous sheet, or the deliberately unguarded
+   `slate.view.toggleSearch`) briefly holds it beneath the still-open
+   palette until the same synchronous flow dismisses the palette; for
+   synchronous sheets the presentation observer simply performs that
+   dismissal a few statements early. Control never returns to the user
+   inside that window. Every
    stacked-state mechanism the review rounds built — ownership routing
    (3), the topmost-search restore rule (4), the ranking in
    `TopmostOpen` — is retained as the invariant's BACKSTOP, not as a

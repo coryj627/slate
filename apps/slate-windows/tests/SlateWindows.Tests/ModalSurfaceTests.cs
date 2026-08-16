@@ -876,6 +876,108 @@ public sealed class ModalSurfaceTests
             Assert.Single(arm.Statements
                 .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.ReturnStatementSyntax>());
         Assert.Equal("true", CSharpSource.Normalize(admit.Expression!));
+
+        // Codex round 11: the adopted token SURVIVES only because the
+        // palette's open observer captures with ??= — a plain
+        // assignment overwrites the adoption with the focused,
+        // about-to-collapse search box the moment Palette.Open raises
+        // IsOpen, and every pin above stays textually intact.
+        string observer = CSharpSource.Normalize(
+            CSharpSource.Load("MainWindow.Palette.cs")
+                .Method("Palette_PropertyChanged"));
+        Assert.Contains(
+            "_focusBeforePalette??=Keyboard.FocusedElement",
+            observer,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "_focusBeforePalette=Keyboard.FocusedElement",
+            observer,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The presentation-time admission covers every sheet and is wired
+    /// (codex round 11): a sheet may present from a deferred
+    /// continuation — the files-citing load, the bases edit-JSON
+    /// fetch, a parked citation summary — after the dispatch-time
+    /// modal decision has gone stale, so the lifecycle closes the
+    /// pickers reactively when a sheet property becomes non-null. One
+    /// nameof arm per sheet member of <see cref="ModalSurface"/>, so a
+    /// new sheet without an arm fails here by name; nameof makes each
+    /// arm's property compile-checked, so no reflection pin is needed
+    /// on top. The behavioural halves live in
+    /// <c>SheetPresentationAdmissionTests</c>.
+    /// </summary>
+    [Fact]
+    public void TheSheetPresentationObserverCoversEverySheetAndIsWired()
+    {
+        CSharpSource source = CSharpSource.Load("VaultLifecycleViewModel.cs");
+        Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax handler =
+            source.Method("Workspace_SheetPresented");
+
+        Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax presented = handler
+            .DescendantNodes()
+            .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax>()
+            .Single();
+        foreach (ModalSurface sheet in Enum.GetValues<ModalSurface>()
+            .Where(surface => surface > ModalSurface.CommandPalette))
+        {
+            string property = sheet switch
+            {
+                ModalSurface.AddProperty => "AddPropertySheet",
+                ModalSurface.BulkRename => "BulkRenameSheet",
+                ModalSurface.CitationDetails => "CitationDetails",
+                ModalSurface.CitationSummary => "CitationSummary",
+                ModalSurface.FilesCiting => "FilesCiting",
+                ModalSurface.DashboardEditor => "DashboardEditorSheet",
+                ModalSurface.BaseQueryBuilder => "BaseQueryBuilderSheet",
+                _ => throw new Xunit.Sdk.XunitException(
+                    $"{sheet} is a sheet with no property mapping here — "
+                    + "add it AND the observer arm."),
+            };
+            Assert.True(
+                presented.Arms.Any(arm =>
+                    CSharpSource.Normalize(arm.Pattern)
+                        == $"nameof(WorkspaceViewModel.{property})"
+                    && CSharpSource.Normalize(arm.Expression)
+                        == $"workspace.{property}isnotnull"),
+                $"Workspace_SheetPresented has no arm for {sheet} "
+                + $"(WorkspaceViewModel.{property}) — that sheet can land "
+                + "over an open picker unnoticed.");
+        }
+
+        // The dismissals exist and are control-dependent on a presented
+        // sheet: the !presented early return precedes all three.
+        string body = CSharpSource.Normalize(handler);
+        Assert.Contains("Search.Close()", body, StringComparison.Ordinal);
+        Assert.Contains(
+            "QuickSwitcher?.Dismiss()", body, StringComparison.Ordinal);
+        Assert.Contains("Palette.Dismiss()", body, StringComparison.Ordinal);
+        Microsoft.CodeAnalysis.CSharp.Syntax.IfStatementSyntax guard = handler
+            .DescendantNodes()
+            .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.IfStatementSyntax>()
+            .Single(statement =>
+                CSharpSource.Normalize(statement.Condition) == "!presented");
+        Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax close = handler
+            .DescendantNodes()
+            .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax>()
+            .Single(invocation => CSharpSource.Normalize(invocation)
+                == "Search.Close()");
+        Assert.True(
+            guard.SpanStart < close.SpanStart,
+            "the presented guard no longer precedes the dismissals — "
+            + "every workspace property change would close the pickers.");
+
+        // Reachability: subscribed when the workspace is created,
+        // unsubscribed at teardown.
+        Assert.Contains(
+            "workspace.PropertyChanged+=Workspace_SheetPresented",
+            CSharpSource.Normalize(source.Method("InitializeWorkspace")),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "PropertyChanged-=Workspace_SheetPresented",
+            CSharpSource.Normalize(source.Root),
+            StringComparison.Ordinal);
     }
 
     /// <summary>

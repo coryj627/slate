@@ -4960,6 +4960,17 @@ public sealed class ShellAccessibilityTests
             // control view, which retires the round-9/round-10
             // hidden-but-exposed UIA class by construction. The
             // preserved query then makes Ctrl+Shift+F the way back.
+            // Focus is parked on a deliberate element FIRST so the
+            // supersession's focus lineage — palette adopts search's
+            // pre-open token — is asserted by identity, not vibes
+            // (codex round 11: the adoption was previously unprovable
+            // from this journey).
+            AutomationElement parkedBeforeSearch = WaitForElement(
+                window, "FilesTree", TimeSpan.FromSeconds(10));
+            parkedBeforeSearch.Focus();
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+            int[] parkedRuntimeId = parkedBeforeSearch.Properties.RuntimeId.Value;
+
             window.SetForeground();
             PressChord(
                 VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_F);
@@ -5027,6 +5038,31 @@ public sealed class ShellAccessibilityTests
                     },
                     TimeSpan.FromSeconds(10)),
                 "Escape did not dismiss the palette after the supersession");
+
+            // The lineage must LAND: dismissing the palette restores
+            // the element focused before SEARCH opened — the whole
+            // point of the consume-first handoff — asserted by runtime
+            // id, not by "something has focus".
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            int[]? focusedId = automation.FocusedElement()?
+                                .Properties.RuntimeId.ValueOrDefault;
+                            return focusedId is not null
+                                && focusedId.SequenceEqual(parkedRuntimeId);
+                        }
+                        catch (COMException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "dismissing the palette did not restore focus to the "
+                + "element from before search opened — the supersession "
+                + "dropped the focus lineage (codex round 11).");
 
             window.SetForeground();
             PressChord(
