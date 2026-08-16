@@ -404,7 +404,12 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
     /// </summary>
     public void MoveSelection(int delta)
     {
-        if (Rows.Count == 0 || delta == 0)
+        // Gated on Results, symmetric with ActivateSelected: the Error
+        // and Searching states keep Rows populated while the list is
+        // collapsed, and moving selection there announced rows of a
+        // HIDDEN list — the round-1 announce fix made a pre-existing
+        // silent selection audible (red team round 2, F1).
+        if (State != SearchOverlayState.Results || Rows.Count == 0 || delta == 0)
         {
             return;
         }

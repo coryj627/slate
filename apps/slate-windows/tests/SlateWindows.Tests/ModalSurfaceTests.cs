@@ -542,6 +542,42 @@ public sealed class ModalSurfaceTests
         };
 
     /// <summary>
+    /// Every path in <see cref="MenuDisableBindings"/> resolves against
+    /// the live view-model types by reflection.
+    /// </summary>
+    /// <remarks>
+    /// Round-2 finding F3: the XAML gate verified the trigger list
+    /// against the markup, but a renamed sheet property recompiles the
+    /// C# state reader while the XAML path STRING silently stops firing
+    /// — the round-1 menu bug reborn with the gate green. Pinning each
+    /// segment against the real property closes that residual
+    /// under-match.
+    /// </remarks>
+    [Fact]
+    public void EveryMenuDisablePathResolvesAgainstTheLiveViewModels()
+    {
+        foreach ((ModalSurface surface, string path) in MenuDisableBindings)
+        {
+            System.Type owner = typeof(VaultLifecycleViewModel);
+            foreach (string segment in path.Split('.'))
+            {
+                System.Reflection.PropertyInfo? property = owner.GetProperty(
+                    segment,
+                    System.Reflection.BindingFlags.Public
+                        | System.Reflection.BindingFlags.NonPublic
+                        | System.Reflection.BindingFlags.Instance);
+                Assert.True(
+                    property is not null,
+                    $"{surface}: binding path segment '{segment}' of '{path}' "
+                    + $"does not resolve on {owner.Name} — the menu trigger "
+                    + "is silently dead while the C# state reader still "
+                    + "compiles.");
+                owner = property!.PropertyType;
+            }
+        }
+    }
+
+    /// <summary>
     /// The Menu disables under EVERY modal surface, one trigger per
     /// <see cref="ModalSurface"/> member.
     /// </summary>

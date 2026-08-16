@@ -819,6 +819,34 @@ public sealed class SearchOverlayViewModelTests
         Assert.Single(harness.Announcements.OfType<A11yEvent.RowSelected>());
     }
 
+    /// <summary>
+    /// Round-2 finding F1: the Error state keeps Rows populated while
+    /// the list is collapsed, and an ungated MoveSelection announced
+    /// rows of a HIDDEN list — made audible by the round-1 announce fix.
+    /// </summary>
+    [Fact]
+    public void MoveSelectionOutsideResultsNeitherMovesNorAnnounces()
+    {
+        var harness = new OverlayHarness();
+        harness.Overlay.Open();
+        harness.Source.OnSearch = (_, _) => Results("s", Hit("a.md", "x"), Hit("b.md", "y"));
+        harness.Overlay.Query = "q";
+        Assert.Equal(SearchOverlayState.Results, harness.Overlay.State);
+
+        // Flip to the Error state; rows remain but the list is hidden.
+        harness.Source.OnSearch = (_, _) =>
+            throw new uniffi.slate_uniffi.VaultException.InvalidQuery("bad");
+        harness.Overlay.Query = "q\"";
+        Assert.Equal(SearchOverlayState.Error, harness.Overlay.State);
+
+        int before = harness.Overlay.SelectedIndex;
+        harness.Announcements.Clear();
+        harness.Overlay.MoveSelection(1);
+
+        Assert.Equal(before, harness.Overlay.SelectedIndex);
+        Assert.Empty(harness.Announcements.OfType<A11yEvent.RowSelected>());
+    }
+
     [Fact]
     public void ReSelectingTheSameIndexDoesNotReAnnounce()
     {

@@ -2032,7 +2032,7 @@
                                  AutomationProperties.AutomationId="SearchOverlaySearch"
                                  AutomationProperties.Name="Search vault"
                                  Visibility="{Binding IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}"
-                                 AutomationProperties.HelpText="Type to search across every note in this vault. Return activates the top result. Tab moves to the results list." />
+                                 AutomationProperties.HelpText="Type to search across every note in this vault. Return activates the top result. Up and Down move through results. Escape closes." />
                         <!-- Pointer dismissal (contract S15, red-team
                              round 1): mac's field row ends in a "Close
                              search" button (SearchOverlay.swift:169-198,
