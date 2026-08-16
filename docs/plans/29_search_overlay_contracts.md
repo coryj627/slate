@@ -69,6 +69,16 @@ The host therefore:
 - **announces** by posting the typed `A11yEvent.SearchResultsSummary(count)`,
   which core renders from the same template.
 
+The zero-result case follows mac exactly, and this is the place to
+know it: the VISIBLE zero state is the mac-verbatim label
+`No results.` (SearchOverlay.swift:391-397), while the SPOKEN string
+is core's `Search returned no results.` — mac renders the visible
+summary tally only when rows are non-empty and marks it AX-hidden
+(SearchOverlay.swift:419-426), so on zero results no visible element
+shows the Summary and that is PARITY, not a violation. A reviewer
+reading the paragraph above literally has flagged this once (codex
+round 2); the answer is recorded here rather than re-derived.
+
 Composing either string in C# is forbidden. There is no host-side
 "{n} results" anywhere in this feature.
 

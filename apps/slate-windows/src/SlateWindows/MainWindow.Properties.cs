@@ -179,12 +179,30 @@ public partial class MainWindow
     {
         IInputElement? previous = _focusBeforeSheet;
         _focusBeforeSheet = null;
-        if (previous is not null)
-        {
-            _ = Dispatcher.InvokeAsync(
-                () => previous.Focus(),
-                System.Windows.Threading.DispatcherPriority.Input);
-        }
+        _ = Dispatcher.InvokeAsync(
+            () =>
+            {
+                // Codex round 2 (#742): a palette-invoked sheet captures
+                // the PALETTE's text box as its return target, and the
+                // palette dismisses while the sheet is up — so the
+                // captured element is collapsed by the time the sheet
+                // closes, Focus() fails, and the false result was
+                // ignored. With search still open beneath (it stays open
+                // by design), the exposed overlay owned the keys but not
+                // text focus: typing went nowhere until a click. When
+                // the captured target cannot take focus, hand focus to
+                // the topmost modal owner — the search box when search
+                // is topmost.
+                // Focus() returns false for a collapsed or unfocusable
+                // target, which is exactly the palette-box case.
+                bool restored = previous?.Focus() == true;
+                if (!restored
+                    && ModalSurfaces.SearchOwnsKeys(CurrentModalSurfaceState))
+                {
+                    _ = SearchOverlaySearchTextBox.Focus();
+                }
+            },
+            System.Windows.Threading.DispatcherPriority.Input);
     }
 
     private void ObserveBulkRenameSheet(BulkRenameViewModel? sheet)

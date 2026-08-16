@@ -600,6 +600,32 @@ public sealed class ModalSurfaceTests
             + "bare IsOpen read lets a hidden overlay steal a sheet's keys.");
     }
 
+    /// <summary>
+    /// The sheet restore path hands focus to the search box when the
+    /// captured target cannot take it and search is topmost.
+    /// </summary>
+    /// <remarks>
+    /// Codex round 2: a palette-invoked sheet captures the PALETTE box
+    /// as its return target, the palette dismisses beneath the sheet,
+    /// and the failed <c>Focus()</c> was ignored — the exposed search
+    /// overlay owned the keys but not text focus.
+    /// </remarks>
+    [Fact]
+    public void TheSheetRestoreFallsBackToTheSearchBoxWhenSearchIsTopmost()
+    {
+        Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax restore =
+            CSharpSource.Load("MainWindow.Properties.cs").Method("RestoreFocusAfterSheet");
+
+        Assert.True(
+            CSharpSource.Invokes(restore, "ModalSurfaces.SearchOwnsKeys"),
+            "RestoreFocusAfterSheet no longer consults SearchOwnsKeys — a "
+            + "failed restore above a still-open search overlay leaves the "
+            + "exposed search box without text focus.");
+        Assert.True(
+            CSharpSource.Invokes(restore, "SearchOverlaySearchTextBox.Focus"),
+            "RestoreFocusAfterSheet no longer falls back to the search box.");
+    }
+
     private static ModalSurfaceState StateWith(
         ModalSurface first, ModalSurface second) =>
         new(
