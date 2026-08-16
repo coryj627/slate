@@ -59,7 +59,7 @@ None of these are content edits — they're preference changes, applied instantl
 
 **⌥⌘F** focuses the filter field at the top of the sidebar. Typing filters as you go (committed after a short pause, or immediately with ⏎); a committed query replaces the tree below the field with a flat result list, while your tree expansion and selection wait underneath, untouched, for **Esc**. The last committed query is remembered per device and restored **into the field** on relaunch — shown, not re-applied, until you commit it.
 
-The filter searches the vault **index** (what's been saved and scanned) and matches file **names** — not file contents. Full-text content search stays in ⌘F, deliberately: the sidebar filter answers "which files", the search overlay answers "which passages".
+The filter searches the vault **index** (what's been saved and scanned) and matches file **names** — not file contents. Full-text content search stays in ⇧⌘F, deliberately: the sidebar filter answers "which files", the search overlay answers "which passages".
 
 ### The grammar
 
