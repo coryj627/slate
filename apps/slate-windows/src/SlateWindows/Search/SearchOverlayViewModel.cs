@@ -354,7 +354,21 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
     public void SetScope(SearchScope scope)
     {
         ArgumentNullException.ThrowIfNull(scope);
+        bool changed = !Equals(Scope, scope);
         Scope = scope;
+        // Codex round 9 (#742): the rendered rows are invalidated
+        // SYNCHRONOUSLY on a scope change — the chip disappears at once,
+        // and during the 150 ms debounce the old scope's rows were still
+        // activatable under a UI presenting the new scope. Stricter than
+        // mac, which keeps the stale window; recorded as a deliberate
+        // tightening, not parity.
+        if (changed && State == SearchOverlayState.Results)
+        {
+            ClearRows();
+            _lastResultsQuery = null;
+            State = SearchOverlayState.Searching;
+        }
+
         ScheduleSearch();
     }
 

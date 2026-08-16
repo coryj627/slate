@@ -820,6 +820,33 @@ public sealed class SearchOverlayViewModelTests
     }
 
     /// <summary>
+    /// A scope change invalidates the rendered rows SYNCHRONOUSLY
+    /// (codex round 9): the chip disappears at once, and during the
+    /// debounce the old scope's rows were still activatable under a UI
+    /// presenting the new scope. Stricter than mac, deliberately.
+    /// </summary>
+    [Fact]
+    public void ClearingScopeSynchronouslyInvalidatesTheOldScopesRows()
+    {
+        using var harness = new AsyncOverlayHarness();
+        harness.Source.OnSearch = (_, _) => Results("tagged", Hit("t.md", "x"));
+        harness.Overlay.Open();
+        harness.Overlay.SetScope(new SearchScope.Tag("a"));
+        harness.CompletePipeline().GetAwaiter().GetResult();
+        Assert.Equal(SearchOverlayState.Results, harness.Overlay.State);
+        Assert.NotEmpty(harness.Overlay.Rows);
+
+        // Clear the chip; do NOT fire the debounce. The old tag rows
+        // must be gone and unactivatable immediately.
+        harness.Overlay.ClearScope();
+        Assert.NotEqual(SearchOverlayState.Results, harness.Overlay.State);
+        Assert.Empty(harness.Overlay.Rows);
+        harness.Overlay.ActivateSelected();
+        Assert.Empty(harness.OpenRequests);
+        Assert.Empty(harness.Source.Recorded);
+    }
+
+    /// <summary>
     /// Round-2 finding F1: the Error state keeps Rows populated while
     /// the list is collapsed, and an ungated MoveSelection announced
     /// rows of a HIDDEN list — made audible by the round-1 announce fix.

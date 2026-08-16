@@ -805,6 +805,59 @@ public sealed class ModalSurfaceTests
     }
 
     /// <summary>
+    /// The search overlay disables beneath every surface above it in
+    /// paint order (codex round 9): a UIA client can drive ValuePattern
+    /// or Invoke on elements a higher modal hides, bypassing the
+    /// keyboard-ownership gate.
+    /// </summary>
+    [Fact]
+    public void TheSearchOverlayDisablesBeneathEveryHigherSurface()
+    {
+        XDocument document = XDocument.Load(
+            Path.Combine(SourceText.ShellSourceRoot(), "MainWindow.xaml"));
+        XElement overlay = document.Descendants()
+            .Single(element =>
+                (string?)element.Attribute(
+                    XName.Get("Name", "http://schemas.microsoft.com/winfx/2006/xaml"))
+                == "SearchOverlay");
+        string style = string.Concat(
+            overlay.Elements()
+                .Where(child => child.Name.LocalName.EndsWith(
+                    ".Style", StringComparison.Ordinal))
+                .Select(child => child.ToString()));
+
+        // Every surface ABOVE SearchOverlay in the enum (paint) order
+        // must disable it. Derived from the enum, not hardcoded, so a
+        // new higher surface fails here by name.
+        foreach (ModalSurface above in Enum.GetValues<ModalSurface>()
+            .Where(surface => surface > ModalSurface.SearchOverlay))
+        {
+            string leaf = above switch
+            {
+                ModalSurface.CommandPalette => "Palette.IsOpen",
+                ModalSurface.AddProperty => "Workspace.AddPropertySheet",
+                ModalSurface.BulkRename => "Workspace.BulkRenameSheet",
+                ModalSurface.CitationDetails => "Workspace.CitationDetails",
+                ModalSurface.CitationSummary => "Workspace.CitationSummary",
+                ModalSurface.FilesCiting => "Workspace.FilesCiting",
+                ModalSurface.DashboardEditor => "Workspace.DashboardEditorSheet",
+                ModalSurface.BaseQueryBuilder => "Workspace.BaseQueryBuilderSheet",
+                _ => throw new Xunit.Sdk.XunitException(
+                    $"{above} is above SearchOverlay in paint order but has "
+                    + "no binding-path mapping here — add it AND the XAML "
+                    + "trigger."),
+            };
+            Assert.True(
+                style.Contains($"DataContext.{leaf},", StringComparison.Ordinal),
+                $"the search overlay has no IsEnabled trigger for {above} "
+                + $"(path {leaf}) — a UIA client can drive the hidden "
+                + "overlay beneath it.");
+        }
+
+        Assert.Contains("IsEnabled", style, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The ancestry walk survives a non-Visual focus token (codex round
     /// 7): a focused reading-view Hyperlink is a FrameworkContentElement,
     /// and VisualTreeHelper.GetParent THROWS for one — the palette
