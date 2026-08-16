@@ -88,6 +88,29 @@ public partial class MainWindow
         return previous;
     }
 
+    /// <summary>
+    /// The palette half of the focus-lineage handoff (codex round 6,
+    /// #742). A palette-invoked "Search Vault" opens search while P9
+    /// has focus in the PALETTE's text box, so search captures that box
+    /// as its return target — and it is collapsed by the time search
+    /// closes, sending Escape's restore to the editor instead of the
+    /// element the user came from. When the palette dismisses over a
+    /// search whose captured token sits inside the palette overlay, the
+    /// palette's own pre-open token replaces it. A search that predated
+    /// the palette keeps its older, correct token.
+    /// </summary>
+    internal void AdoptPaletteFocusIntoSearch(
+        IInputElement? paletteFocusBefore,
+        Func<DependencyObject, bool> isInsidePaletteOverlay)
+    {
+        if (_viewModel.Search.IsOpen
+            && _focusBeforeSearch is DependencyObject captured
+            && isInsidePaletteOverlay(captured))
+        {
+            _focusBeforeSearch = paletteFocusBefore;
+        }
+    }
+
     internal bool TryFocusSearchIfTopmost()
     {
         if (!ModalSurfaces.SearchOwnsKeys(CurrentModalSurfaceState))

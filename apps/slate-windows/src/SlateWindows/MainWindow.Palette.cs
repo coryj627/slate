@@ -307,6 +307,13 @@ public partial class MainWindow
         _ = Dispatcher.InvokeAsync(
             () =>
             {
+                // Codex round 6 (#742): a palette-invoked "Search Vault"
+                // captured the PALETTE box as search's return target
+                // (P9 had focus there at invoke time); the palette's own
+                // pre-open token is the true lineage and replaces it.
+                AdoptPaletteFocusIntoSearch(
+                    focusBefore, IsDescendantOfPaletteOverlay);
+
                 // Codex round 4 (#742): search topmost takes priority
                 // here too — the palette dismissing above a still-open
                 // search overlay must hand focus to the search box, not

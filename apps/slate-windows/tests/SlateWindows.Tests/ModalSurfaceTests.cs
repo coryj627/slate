@@ -738,16 +738,42 @@ public sealed class ModalSurfaceTests
             ModalSurfaces.DecideQuickOpenOpen(surface));
     }
 
-    /// <summary>The Ctrl+O branch consults the decision.</summary>
+    /// <summary>
+    /// The Ctrl+O branch's <c>Open()</c> is CONTROL-DEPENDENT on the
+    /// admission decision, not merely near it.
+    /// </summary>
+    /// <remarks>
+    /// Codex round 6: the previous presence pin passed with
+    /// <c>_ = DecideQuickOpenOpen(...); QuickSwitcher.Open();</c> — the
+    /// decision computed and ignored, the recorded under-match class.
+    /// The pin now locates the <c>if</c> whose CONDITION is the
+    /// decision comparison and requires the <c>Open()</c> call inside
+    /// its statement.
+    /// </remarks>
     [Fact]
     public void TheQuickOpenChordBranchConsultsTheAdmissionDecision()
     {
         Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax route =
             CSharpSource.Load("MainWindow.xaml.cs").Method("Window_PreviewKeyDown");
+
+        var admission = route.DescendantNodes()
+            .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.IfStatementSyntax>()
+            .Where(statement => CSharpSource.Normalize(statement.Condition)
+                == "ModalSurfaces.DecideQuickOpenOpen(OpenModalSurface)==PaletteOpenDecision.Open")
+            .ToList();
         Assert.True(
-            CSharpSource.Invokes(route, "ModalSurfaces.DecideQuickOpenOpen"),
-            "the Ctrl+O branch no longer consults DecideQuickOpenOpen — "
-            + "Quick Open opens beneath any sheet again.");
+            admission.Count == 1,
+            $"expected exactly one admission-gated if in Window_PreviewKeyDown, "
+            + $"found {admission.Count} — Quick Open opens beneath any sheet "
+            + "again if the gate is gone, and two gates would mean a second "
+            + "unaudited open path.");
+        Assert.True(
+            admission[0].Statement.DescendantNodesAndSelf()
+                .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax>()
+                .Any(call => CSharpSource.Normalize(call.Expression)
+                    .EndsWith("QuickSwitcher.Open", StringComparison.Ordinal)),
+            "QuickSwitcher.Open() is no longer inside the admission-gated "
+            + "if — the decision is computed but does not control the open.");
     }
 
     /// <summary>
