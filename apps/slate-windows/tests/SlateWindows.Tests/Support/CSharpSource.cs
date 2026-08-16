@@ -113,6 +113,24 @@ internal sealed class CSharpSource
     }
 
     /// <summary>
+    /// The one constructor in this file. Overload ambiguity fails, for the
+    /// same reason it does for methods.
+    /// </summary>
+    internal ConstructorDeclarationSyntax Constructor()
+    {
+        ConstructorDeclarationSyntax[] declarations = Root
+            .DescendantNodes()
+            .OfType<ConstructorDeclarationSyntax>()
+            .ToArray();
+
+        Assert.True(
+            declarations.Length == 1,
+            $"{Path} declares {declarations.Length} constructors; this query "
+            + "reads exactly one, so any other would go unchecked.");
+        return declarations[0];
+    }
+
+    /// <summary>
     /// Every <c>Key.X</c> member access under <paramref name="node"/>,
     /// as the bare member name.
     /// </summary>
@@ -200,6 +218,18 @@ internal sealed class CSharpSource
 
         return expression;
     }
+
+    /// <summary>
+    /// Whether <paramref name="node"/> reads an identifier of this name.
+    /// </summary>
+    /// <remarks>
+    /// Structural, so the name appearing in a comment or a string under
+    /// the same node does not count.
+    /// </remarks>
+    internal static bool References(SyntaxNode node, string identifier) =>
+        node.DescendantNodesAndSelf()
+            .OfType<IdentifierNameSyntax>()
+            .Any(name => name.Identifier.ValueText == identifier);
 
     /// <summary>
     /// Whether <paramref name="node"/> contains a call to

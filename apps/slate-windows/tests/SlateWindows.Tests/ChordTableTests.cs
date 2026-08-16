@@ -7,6 +7,8 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using SlateWindows.Commands;
@@ -658,42 +660,44 @@ public sealed class ChordTableTests
     /// </remarks>
     private static HashSet<string> EditorChords()
     {
-        // Flattened because these guards wrap across four lines; the same
-        // whitespace hazard already bit the registrar scrape once.
-        string body = Regex.Replace(
-            MethodBody("SlateTextEditor.cs", "OnPreviewKeyDown"), @"\s+", string.Empty);
+        MethodDeclarationSyntax route =
+            CSharpSource.Load("SlateTextEditor.cs").Method("OnPreviewKeyDown");
 
-        // The scrape prefixes "Ctrl+" on the strength of these two locals
-        // meaning what their names say. If either definition inverts, the
-        // prefix silently becomes a lie.
-        Assert.True(
-            body.Contains(
-                "boolcontrolGesture=(modifiers&ModifierKeys.Control)==ModifierKeys.Control",
-                System.StringComparison.Ordinal),
-            "controlGesture no longer means 'Control is down', so the Ctrl+ "
-            + "prefix this scrape adds is unfounded.");
-        Assert.True(
-            body.Contains(
-                "boolhasConflictingModifier=(modifiers&(ModifierKeys.Alt|ModifierKeys.Shift"
-                + "|ModifierKeys.Windows))!=ModifierKeys.None",
-                System.StringComparison.Ordinal),
-            "hasConflictingModifier no longer means 'Alt, Shift or Windows is "
-            + "down', so a Ctrl+ chord read here may carry other modifiers.");
+        // The Ctrl+ prefix below rests entirely on these two locals meaning
+        // what their names say. Read through their declarations, so an
+        // inverted definition fails rather than quietly making the prefix
+        // a lie.
+        AssertLocalMeans(
+            route,
+            "controlGesture",
+            "(modifiers&ModifierKeys.Control)==ModifierKeys.Control");
+        AssertLocalMeans(
+            route,
+            "hasConflictingModifier",
+            "(modifiers&(ModifierKeys.Alt|ModifierKeys.Shift|ModifierKeys.Windows))"
+            + "!=ModifierKeys.None");
 
         var chords = new HashSet<string>(System.StringComparer.Ordinal);
-        foreach (Match match in Regex.Matches(
-            body, @"controlGesture&&!hasConflictingModifier&&e\.Key==Key\.([A-Za-z0-9]+)"))
+        foreach (IfStatementSyntax arm in route.DescendantNodes().OfType<IfStatementSyntax>())
         {
-            chords.Add(Canonical("Control", match.Groups[1].Value));
-        }
+            if (CSharpSource.KeyNames(arm.Condition).FirstOrDefault() is not string key)
+            {
+                continue;
+            }
 
-        foreach (Match match in Regex.Matches(
-            body, @"modifiers==ModifierKeys\.None&&e\.Key==Key\.([A-Za-z0-9]+)"))
-        {
-            chords.Add(Canonical(null, match.Groups[1].Value));
+            if (CSharpSource.References(arm.Condition, "controlGesture"))
+            {
+                chords.Add(Canonical("Control", key));
+            }
+            else if (CSharpSource.Normalize(arm.Condition)
+                .Contains("modifiers==ModifierKeys.None", System.StringComparison.Ordinal))
+            {
+                chords.Add(Canonical(null, key));
+            }
         }
 
         return chords;
+
     }
 
     /// <summary>
@@ -703,37 +707,52 @@ public sealed class ChordTableTests
     /// </summary>
     private static HashSet<string> QuickOpenChords()
     {
-        string body = MethodBody("MainWindow.xaml.cs", "HandleQuickSwitcherKey");
+        MethodDeclarationSyntax route =
+            CSharpSource.Load("MainWindow.xaml.cs").Method("HandleQuickSwitcherKey");
         var chords = new HashSet<string>(System.StringComparer.Ordinal);
-        foreach (Match match in Regex.Matches(
-            body, @"e\.Key == Key\.([A-Za-z0-9]+) && modifiers == ModifierKeys\.None"))
+
+        foreach (IfStatementSyntax arm in route.DescendantNodes().OfType<IfStatementSyntax>())
         {
-            chords.Add(Canonical(null, match.Groups[1].Value));
+            if (CSharpSource.KeyNames(arm.Condition).FirstOrDefault() is string key
+                && CSharpSource.Normalize(arm.Condition)
+                    .Contains("modifiers==ModifierKeys.None", System.StringComparison.Ordinal))
+            {
+                chords.Add(Canonical(null, key));
+            }
         }
 
+        // Commit is one Enter arm whose destination comes from a switch over
+        // the modifiers — every arm of that switch is a separately
+        // advertised chord, including the discard, which is the bare Enter.
+        SwitchExpressionSyntax[] targets = route.DescendantNodes()
+            .OfType<SwitchExpressionSyntax>()
+            .Where(switchExpression =>
+                CSharpSource.Normalize(switchExpression.GoverningExpression) == "modifiers")
+            .ToArray();
         Assert.True(
-            body.Contains(
-                "e.Key == Key.Enter && Keyboard.FocusedElement is not Button",
-                System.StringComparison.Ordinal),
-            "Quick Open's commit arm was rewritten; the modifier scrape below "
-            + "would attribute its chords to a guard that no longer exists.");
-        Assert.True(
-            body.Contains("_ => WorkspaceOpenTarget.CurrentTab", System.StringComparison.Ordinal),
-            "Quick Open no longer commits to the current tab on an unmodified "
-            + "Enter, so the table's bare Enter row is stale.");
-        chords.Add("Enter");
+            targets.Length == 1,
+            $"HandleQuickSwitcherKey has {targets.Length} switches over `modifiers`. "
+            + "This reads one of them, so the rest go unchecked.");
 
-        foreach (Match match in Regex.Matches(
-            body,
-            @"(ModifierKeys\.[A-Za-z]+(?: \| ModifierKeys\.[A-Za-z]+)*) => WorkspaceOpenTarget\."))
+        IfStatementSyntax commit = targets[0].Ancestors().OfType<IfStatementSyntax>().First();
+        Assert.True(
+            CSharpSource.KeyNames(commit.Condition).Contains("Enter"),
+            "the switch that chooses Quick Open's destination is no longer "
+            + "guarded on Enter, so attributing its arms to Enter is unfounded.");
+
+        foreach (SwitchExpressionArmSyntax arm in targets[0].Arms)
         {
-            chords.Add(Canonical(
-                match.Groups[1].Value.Replace("ModifierKeys.", string.Empty)
-                    .Replace(" | ", "+"),
-                "Enter"));
+            chords.Add(arm.Pattern is DiscardPatternSyntax
+                ? "Enter"
+                : Canonical(
+                    CSharpSource.Normalize(arm.Pattern)
+                        .Replace("ModifierKeys.", string.Empty)
+                        .Replace("|", "+"),
+                    "Enter"));
         }
 
         return chords;
+
     }
 
     /// <summary>
@@ -741,62 +760,74 @@ public sealed class ChordTableTests
     /// </summary>
     private static HashSet<string> UnmodifiedSwitchKeys(string fileName, string methodName)
     {
-        string body = MethodBody(fileName, methodName);
+        MethodDeclarationSyntax route = CSharpSource.Load(fileName).Method(methodName);
+        IfStatementSyntax[] guards = route.DescendantNodes()
+            .OfType<IfStatementSyntax>()
+            .Where(statement =>
+                CSharpSource.Normalize(statement.Condition) == "modifiers==ModifierKeys.None")
+            .ToArray();
         Assert.True(
-            body.Contains("if (modifiers == ModifierKeys.None)", System.StringComparison.Ordinal),
-            $"{methodName} no longer guards its switch on an unmodified chord, so "
-            + "this scrape would record chords the app does not deliver bare.");
+            guards.Length == 1,
+            $"{methodName} has {guards.Length} unmodified-chord guards; this "
+            + "reads the keys inside exactly one, so any other is unchecked.");
 
+        // Only the labels INSIDE the guard. Reading the whole method would
+        // credit a modified arm elsewhere in it as a bare chord.
         var chords = new HashSet<string>(System.StringComparer.Ordinal);
-        foreach (Match match in Regex.Matches(body, @"case Key\.([A-Za-z0-9]+):"))
+        foreach (CaseSwitchLabelSyntax label in guards[0]
+            .DescendantNodes().OfType<CaseSwitchLabelSyntax>())
         {
-            chords.Add(Canonical(null, match.Groups[1].Value));
+            foreach (string key in CSharpSource.KeyNames(label.Value))
+            {
+                chords.Add(Canonical(null, key));
+            }
         }
 
         return chords;
+
     }
 
     /// <summary>
-    /// One method's source text, comments stripped, bounded by the next
-    /// member declaration so a neighbouring handler's keys cannot leak
-    /// into the scrape.
+    /// <c>ReadingNavigator.Bind</c>, where every reading chord is
+    /// registered. The constructor only calls it.
     /// </summary>
-    private static string MethodBody(string fileName, string methodName)
+    private static SyntaxNode NavigatorRegistration() =>
+        CSharpSource.Load("Reading", "ReadingNavigator.cs").Method("Bind");
+
+    /// <summary>Every <c>AddChord(...)</c> call under a node.</summary>
+    private static IEnumerable<InvocationExpressionSyntax> AddChordCalls(SyntaxNode scope) =>
+        scope.DescendantNodes()
+            .OfType<InvocationExpressionSyntax>()
+            .Where(call => call.Expression is IdentifierNameSyntax name
+                && name.Identifier.ValueText == "AddChord")
+            .Where(call => call.ArgumentList.Arguments.Count >= 2);
+
+    /// <summary>The value of an <c>AddChord</c> call's <c>shift:</c> argument.</summary>
+    private static bool ShiftArgument(InvocationExpressionSyntax call)
     {
-        string source = SourceText.WithoutComments(
-            File.ReadAllText(Path.Combine(SourceRoot(), fileName)));
+        ArgumentSyntax shift = call.ArgumentList.Arguments
+            .FirstOrDefault(argument => argument.NameColon?.Name.Identifier.ValueText == "shift")
+            ?? call.ArgumentList.Arguments[1];
+        return CSharpSource.Normalize(shift.Expression) == "true";
+    }
 
-        // Anchored on the DECLARATION, not the first mention. A bare name
-        // search lands on the call site, which sits above the declaration
-        // in both of these files — the scrape then read a neighbouring
-        // method and reported the guard missing.
-        MatchCollection declarations = Regex.Matches(
-            source,
-            $@"\r?\n    (?:private|internal|public|protected)[^\r\n]*\b{Regex.Escape(methodName)}\s*\(");
+    /// <summary>
+    /// A local must still be declared with the meaning a query depends on.
+    /// </summary>
+    private static void AssertLocalMeans(
+        SyntaxNode scope, string local, string expected)
+    {
+        VariableDeclaratorSyntax[] declarations = scope.DescendantNodes()
+            .OfType<VariableDeclaratorSyntax>()
+            .Where(declarator => declarator.Identifier.ValueText == local)
+            .ToArray();
         Assert.True(
-            declarations.Count > 0,
-            $"{methodName} is gone from {fileName}, or its signature moved off the "
-            + "class's own indent. The scrape that reads it would silently return "
-            + "nothing, so it fails here instead.");
-
-        // Overload ambiguity is a failure, not first-one-wins. An unused
-        // overload declared above the shipping handler and carrying the
-        // old guard text would otherwise be scraped while the real
-        // signature quietly stopped delivering the chord — the same
-        // first-match-not-the-right-match bug this scrape was already
-        // corrected for once, at the call-site-above-declaration step.
-        Assert.True(
-            declarations.Count == 1,
-            $"{methodName} has {declarations.Count} declarations in {fileName}. "
-            + "This scrape reads one of them, so the rest are unchecked — "
-            + "disambiguate before adding an overload.");
-
-        Match declaration = declarations[0];
-        int start = declaration.Index + declaration.Length;
-        Match next = Regex.Match(
-            source[start..],
-            @"\r?\n    (?:private|internal|public|protected)[ \r\n]");
-        return next.Success ? source.Substring(start, next.Index) : source[start..];
+            declarations.Length == 1,
+            $"{local} is declared {declarations.Length} times here; the query "
+            + "that depends on its meaning reads one of them.");
+        Assert.Equal(
+            expected,
+            CSharpSource.Normalize(declarations[0].Initializer!.Value));
     }
 
     /// <summary>
@@ -833,16 +864,21 @@ public sealed class ChordTableTests
     /// </summary>
     private static HashSet<string> SplitterChords()
     {
-        string source = SourceText.WithoutComments(File.ReadAllText(
-            Path.Combine(SourceRoot(), "WeightedSplitPanel.cs")));
+        MethodDeclarationSyntax thumb =
+            CSharpSource.Load("WeightedSplitPanel.cs").Method("Thumb_KeyDown");
+
         var chords = new HashSet<string>(System.StringComparer.Ordinal);
-        foreach (Match match in Regex.Matches(
-            source, @"\(Orientation\.(?:Horizontal|Vertical), Key\.([A-Za-z0-9]+)\)"))
+        foreach (SwitchExpressionArmSyntax arm in thumb
+            .DescendantNodes().OfType<SwitchExpressionArmSyntax>())
         {
-            chords.Add(Canonical(null, match.Groups[1].Value));
+            foreach (string key in CSharpSource.KeyNames(arm.Pattern))
+            {
+                chords.Add(Canonical(null, key));
+            }
         }
 
         return chords;
+
     }
 
     /// <summary>
@@ -853,29 +889,46 @@ public sealed class ChordTableTests
     /// </summary>
     private static HashSet<string> ReadingHeadingLevelChords()
     {
-        string source = SourceText.WithoutComments(File.ReadAllText(
-            Path.Combine(SourceRoot(), "Reading", "ReadingNavigator.cs")));
-        Match loop = Regex.Match(
-            source, @"for \(byte level = 1; level <= (\d+); level\+\+\)");
+        SyntaxNode register = NavigatorRegistration();
+        ForStatementSyntax[] loops = register.DescendantNodes()
+            .OfType<ForStatementSyntax>()
+            .Where(loop => loop.Declaration is not null
+                && loop.Declaration.Variables.Any(v => v.Identifier.ValueText == "level"))
+            .ToArray();
         Assert.True(
-            loop.Success,
-            "the heading-level loop no longer matches the scrape, so its twelve "
-            + "chords are unchecked. Update this pattern.");
+            loops.Length == 1,
+            $"the navigator has {loops.Length} loops over `level`; the heading "
+            + "chords below are generated from exactly one.");
 
-        var chords = new HashSet<string>(System.StringComparer.Ordinal);
-        foreach (string shift in new[] { "false", "true" })
+        // The bound is read from the loop, so narrowing it to four levels
+        // fails the table's twelve rows instead of passing against a
+        // shorter reality.
+        Assert.True(
+            loops[0].Condition is BinaryExpressionSyntax { Right: LiteralExpressionSyntax }
+                condition
+                && condition.OperatorToken.Text == "<=",
+            "the heading-level loop no longer ends at a literal bound, so its "
+            + "chords cannot be generated from it. Update this query.");
+        int levels = int.Parse(
+            ((LiteralExpressionSyntax)((BinaryExpressionSyntax)loops[0].Condition!).Right)
+                .Token.ValueText,
+            System.Globalization.CultureInfo.InvariantCulture);
+
+        // Both registrations must still exist, and their key argument must
+        // still be COMPUTED — a plain Key.X here would mean the loop no
+        // longer generates the levels this projects.
+        foreach (bool shifted in new[] { false, true })
         {
             Assert.True(
-                source.Contains(
-                    $"AddChord(Key.D1 + (captured - 1), shift: {shift}",
-                    System.StringComparison.Ordinal),
-                $"the shift: {shift} heading-level registration is gone or "
-                + "rewritten; the scrape below would invent chords the app "
-                + "no longer delivers.");
+                AddChordCalls(register).Any(call =>
+                    call.ArgumentList.Arguments[0].Expression is BinaryExpressionSyntax
+                    && ShiftArgument(call) == shifted),
+                $"the shift: {(shifted ? "true" : "false")} heading-level "
+                + "registration is gone or rewritten; this would otherwise "
+                + "invent chords the app no longer delivers.");
         }
 
-        int levels = int.Parse(
-            loop.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+        var chords = new HashSet<string>(System.StringComparer.Ordinal);
         for (int level = 1; level <= levels; level++)
         {
             chords.Add($"Ctrl+Alt+{level}");
@@ -883,38 +936,49 @@ public sealed class ChordTableTests
         }
 
         return chords;
+
     }
 
     private static HashSet<string> ReadingNavigatorChords()
     {
-        string source = SourceText.WithoutComments(File.ReadAllText(
-            Path.Combine(SourceRoot(), "Reading", "ReadingNavigator.cs")));
         var chords = new HashSet<string>(System.StringComparer.Ordinal);
-        foreach (Match match in Regex.Matches(
-            source,
-            @"AddChord\(Key\.([A-Z][A-Za-z0-9]*), shift: (true|false)"))
+        foreach (InvocationExpressionSyntax call in AddChordCalls(NavigatorRegistration()))
         {
-            string shift = match.Groups[2].Value == "true" ? "Shift+" : string.Empty;
-            chords.Add($"Ctrl+Alt+{shift}{match.Groups[1].Value}");
+            // Only the literal Key.X registrations; the computed
+            // heading-level ones are projected from their loop instead.
+            if (call.ArgumentList.Arguments[0].Expression
+                    is not MemberAccessExpressionSyntax access
+                || CSharpSource.Normalize(access.Expression) != "Key")
+            {
+                continue;
+            }
+
+            string shift = ShiftArgument(call) ? "Shift+" : string.Empty;
+            chords.Add($"Ctrl+Alt+{shift}{access.Name.Identifier.ValueText}");
         }
 
         Assert.Equal(20, chords.Count);
         return chords;
+
     }
 
     private static HashSet<string> GridGestureChords()
     {
-        string source = SourceText.WithoutComments(File.ReadAllText(
-            Path.Combine(SourceRoot(), "Grids", "AccessibleDataGrid.cs")));
+        CSharpSource grid = CSharpSource.Load("Grids", "AccessibleDataGrid.cs");
         var chords = new HashSet<string>(System.StringComparer.Ordinal);
-        foreach (Match match in Regex.Matches(
-            source,
-            @"new KeyGesture\(Key\.([A-Za-z0-9]+), ([^)]+)\)"))
+        foreach (ObjectCreationExpressionSyntax gesture in grid.Root
+            .DescendantNodes()
+            .OfType<ObjectCreationExpressionSyntax>()
+            .Where(creation => creation.Type is IdentifierNameSyntax type
+                && type.Identifier.ValueText == "KeyGesture"))
         {
+            ArgumentSyntax[] arguments = gesture.ArgumentList!.Arguments.ToArray();
+            Assert.True(arguments.Length >= 2, $"KeyGesture {gesture} has no modifiers.");
             chords.Add(Canonical(
-                match.Groups[2].Value.Replace("ModifierKeys.", string.Empty)
-                    .Replace(" | ", "+"),
-                match.Groups[1].Value));
+                CSharpSource.Normalize(arguments[1].Expression)
+                    .Replace("ModifierKeys.", string.Empty)
+                    .Replace("|", "+"),
+                CSharpSource.KeyNames(arguments[0].Expression).Single()));
         }
 
         Assert.Equal(2, chords.Count);
