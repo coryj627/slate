@@ -473,6 +473,16 @@ A new surface joins ALL SIX or fails a named gate.
   the correct, already-opened note — never a throw and never a wrong
   file. Pinned by the `Sr3*` facts in `SearchLineLocatorTests` so a
   future parity chase is a deliberate revision of this entry, not drift.
+- **SR-4 — The Jump to Bibliography MENU ITEM has no reachable enabled
+  state.** Owner-recorded 2026-08-16, the S11 × W4-5 intersection
+  detailed in S11: the item's enable condition is the citation details
+  sheet, and S11 disables the menu exactly while that sheet is up. The
+  item stays as chord advertisement (present, greyed, `InputGestureText`
+  Ctrl+J); the chord, which fires with the sheet open, is the working
+  route and is journey-measured end to end. The alternative — exempting
+  the citation surfaces from the menu disable — was rejected because it
+  reopens the round-1 class for every menu command that is not
+  admission-gated.
 
 ## Mac defects found while reading it (not this issue's to fix)
 
