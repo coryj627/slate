@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Microsoft.CodeAnalysis;
@@ -168,7 +169,7 @@ internal sealed class CSharpSource
                     new[] { access.Name.Identifier.ValueText },
                 MemberBindingExpressionSyntax binding =>
                     new[] { binding.Name.Identifier.ValueText },
-                _ => [],
+                _ => Array.Empty<string>(),
             });
 
     /// <summary>

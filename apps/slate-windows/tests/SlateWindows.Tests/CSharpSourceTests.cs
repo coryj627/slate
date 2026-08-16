@@ -130,6 +130,111 @@ public sealed class CSharpSourceTests
         Assert.False(CSharpSource.Invokes(method, "Search.Blur"));
     }
 
+    /// <summary>
+    /// An alias resolves to what it was initialised with.
+    /// </summary>
+    [Fact]
+    public void ResolveFollowsALocalToItsInitializer()
+    {
+        ExpressionSyntax resolved = ResolveArgument("""
+            namespace Probe;
+
+            internal static class Handler
+            {
+                private static object Build(Workspace? workspace)
+                {
+                    bool isDashboardOpen = workspace?.BaseQueryBuilderSheet is not null;
+                    return new State(DashboardEditor: isDashboardOpen);
+                }
+            }
+            """);
+
+        Assert.Equal(
+            "workspace?.BaseQueryBuilderSheetisnotnull",
+            CSharpSource.Normalize(resolved));
+    }
+
+    /// <summary>
+    /// Two locals of the same name in different scopes resolve to
+    /// neither.
+    /// </summary>
+    /// <remarks>
+    /// Guessing which one reaches the call would be inference, and picking
+    /// wrong is worse than declining: the caller compares what it gets
+    /// against an expectation, so returning the identifier as written
+    /// fails loudly rather than passing against the wrong initializer.
+    /// </remarks>
+    [Fact]
+    public void ResolveDeclinesWhenTheNameIsAmbiguous()
+    {
+        ExpressionSyntax resolved = ResolveArgument("""
+            namespace Probe;
+
+            internal static class Handler
+            {
+                private static object Build(Workspace? workspace, bool flag)
+                {
+                    if (flag)
+                    {
+                        bool isDashboardOpen = workspace?.DashboardEditorSheet is not null;
+                        Use(isDashboardOpen);
+                    }
+
+                    bool isDashboardOpen = workspace?.BaseQueryBuilderSheet is not null;
+                    return new State(DashboardEditor: isDashboardOpen);
+                }
+            }
+            """);
+
+        Assert.Equal("isDashboardOpen", CSharpSource.Normalize(resolved));
+    }
+
+    /// <summary>
+    /// Only the initializer is followed — a later assignment is not.
+    /// </summary>
+    /// <remarks>
+    /// Reassignment is control flow, and following it would mean deciding
+    /// which write reaches the call. The declared value is what this
+    /// reports, and the expectation is written against that.
+    /// </remarks>
+    [Fact]
+    public void ResolveFollowsTheInitializerAndNotALaterAssignment()
+    {
+        ExpressionSyntax resolved = ResolveArgument("""
+            namespace Probe;
+
+            internal static class Handler
+            {
+                private static object Build(Workspace? workspace)
+                {
+                    bool isDashboardOpen = workspace?.DashboardEditorSheet is not null;
+                    isDashboardOpen = workspace?.BaseQueryBuilderSheet is not null;
+                    return new State(DashboardEditor: isDashboardOpen);
+                }
+            }
+            """);
+
+        Assert.Equal(
+            "workspace?.DashboardEditorSheetisnotnull",
+            CSharpSource.Normalize(resolved));
+    }
+
+    /// <summary>
+    /// Resolves the single named argument of the sample's
+    /// <c>new State(...)</c>.
+    /// </summary>
+    private static ExpressionSyntax ResolveArgument(string source)
+    {
+        SyntaxNode root = Root(source);
+        ObjectCreationExpressionSyntax creation = root
+            .DescendantNodes()
+            .OfType<ObjectCreationExpressionSyntax>()
+            .Single();
+        ArgumentSyntax argument = creation.ArgumentList!.Arguments.Single();
+        SyntaxNode scope = creation.FirstAncestorOrSelf<MethodDeclarationSyntax>()!;
+        return CSharpSource.Resolve(argument.Expression, scope);
+    }
+
     private static string[] Keys(string source) =>
         CSharpSource.KeyNames(Root(source)).ToArray();
 
