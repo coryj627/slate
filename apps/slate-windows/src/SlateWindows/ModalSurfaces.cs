@@ -27,10 +27,12 @@ namespace SlateWindows;
 /// </para>
 /// <para>
 /// <c>SearchOverlay</c> (W5-2, #742) sits between Quick Open and the
-/// palette: mac allows the palette to open OVER an open search overlay —
-/// its Return monitor guards <c>!isCommandPaletteOpen</c> for exactly
-/// that stacking — so the palette must be declared after search and
-/// paint above it.
+/// palette. Since SD-5 the three never coexist — opening any one closes
+/// the others — so the position is the invariant BACKSTOP, not a
+/// reachable paint decision: if exclusivity is ever violated, the
+/// palette still paints on top and still ranks above search in
+/// <see cref="ModalSurfaces.TopmostOpen(ModalSurfaceState)"/>, so keys
+/// and focus degrade to the higher surface instead of a hidden one.
 /// </para>
 /// </remarks>
 internal enum ModalSurface
@@ -73,6 +75,13 @@ internal enum PaletteOpenDecision
 
     /// <summary>Quick Open is up and the palette supersedes it.</summary>
     DismissQuickOpenThenOpen,
+
+    /// <summary>
+    /// The search overlay is up and the opener supersedes it (SD-5):
+    /// close search, hand its captured pre-open focus to the opener,
+    /// then open.
+    /// </summary>
+    DismissSearchThenOpen,
 
     /// <summary>A higher surface owns the screen; refuse.</summary>
     Refuse,
@@ -141,21 +150,6 @@ internal static class ModalSurfaces
         TopmostOpen(surface => IsOpen(surface, state));
 
     /// <summary>
-    /// Whether the search overlay owns the keyboard: open AND topmost.
-    /// </summary>
-    /// <remarks>
-    /// Codex round 1 (#742): a palette-invoked sheet opens OVER search
-    /// without closing it — the palette admits itself above search by
-    /// design, and a sheet-opening command presents before the palette
-    /// dismisses. The key branch routed on <c>Search.IsOpen</c> alone,
-    /// so the hidden overlay stole Enter (activating an invisible result
-    /// and opening a note behind the sheet) and Escape (closing the
-    /// hidden overlay instead of the sheet). Ownership, not openness, is
-    /// the routing question. Search deliberately REMAINS OPEN beneath the
-    /// sheet — mac parity, where nothing closes it either — and regains
-    /// the keyboard when the sheet closes and it is topmost again.
-    /// </remarks>
-    /// <summary>
     /// Whether Quick Open's chord may act, given what is already up
     /// (codex round 5, #742). The Ctrl+O branch was unconditional, so
     /// Quick Open opened BENEATH any sheet — and the round-4 picker
@@ -174,6 +168,20 @@ internal static class ModalSurfaces
             _ => PaletteOpenDecision.Refuse,
         };
 
+    /// <summary>
+    /// Whether the search overlay owns the keyboard: open AND topmost.
+    /// </summary>
+    /// <remarks>
+    /// Codex round 1 (#742): under this contract's original stacking
+    /// design a palette-invoked sheet sat above a still-open search
+    /// overlay, and a key branch routed on <c>Search.IsOpen</c> alone
+    /// let the hidden overlay steal the sheet's Enter and Escape.
+    /// Ownership, not openness, is the routing question. SD-5 has since
+    /// removed persistent stacking — search open now implies search
+    /// topmost — so this is invariant 3's BACKSTOP: should a future
+    /// path leave search open beneath something, keys route to the
+    /// visible surface, not the hidden one.
+    /// </remarks>
     internal static bool SearchOwnsKeys(ModalSurfaceState state) =>
         TopmostOpen(state) == ModalSurface.SearchOverlay;
 
@@ -221,12 +229,14 @@ internal static class ModalSurfaces
             // PD-2: re-opening while open is allowed and clears the query.
             ModalSurface.CommandPalette => PaletteOpenDecision.Open,
 
-            // W5-2 (S11): the palette opens OVER an open search overlay —
-            // mac parity, where the search overlay's Return monitor guards
-            // !isCommandPaletteOpen for exactly this stacking. Search is
-            // declared before the palette in XAML, so the palette paints on
-            // top legibly and owns the keyboard while both are open.
-            ModalSurface.SearchOverlay => PaletteOpenDecision.Open,
+            // SD-5 (replacing this contract's original stacking arm
+            // after the round-10 root cause analysis): the palette
+            // SUPERSEDES an open search overlay exactly as it supersedes
+            // Quick Open — 28_palette_contracts.md's own rule, "dismisses
+            // the incumbent rather than stacking". The dismissal arm
+            // hands search's captured pre-open focus to the palette, and
+            // the preserved query makes Ctrl+Shift+F the way back.
+            ModalSurface.SearchOverlay => PaletteOpenDecision.DismissSearchThenOpen,
 
             ModalSurface.QuickOpen => PaletteOpenDecision.DismissQuickOpenThenOpen,
 
@@ -243,8 +253,14 @@ internal static class ModalSurfaces
     /// because Ctrl+Shift+F TOGGLES: the view model's <c>Toggle</c>
     /// closes an already-open overlay, so this function's only job is to
     /// keep the chord from firing beneath a higher surface. The palette
-    /// and every sheet refuse — the palette may open over search (mac
-    /// parity), never the reverse.
+    /// and every sheet refuse — the palette supersedes search (SD-5),
+    /// never the reverse. A palette-invoked "Search Vault" still works
+    /// because the registered command is deliberately unguarded
+    /// (<c>ChordTable.cs</c> — P9 invokes BEFORE dismissing, so a
+    /// modal-decision-aware guard would refuse every palette
+    /// invocation): search opens beneath the palette for the transient
+    /// remainder of that same synchronous invoke, and the P9 dismissal
+    /// leaves it topmost.
     /// </remarks>
     internal static PaletteOpenDecision DecideSearchOpen(ModalSurface? topmost) =>
         topmost switch

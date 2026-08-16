@@ -460,9 +460,11 @@ public partial class MainWindow
             () =>
             {
                 // Codex round 3 (#742): search topmost takes priority —
-                // this sheet is palette-invokable over an open search
-                // overlay, and both the captured target and the list
-                // fallback sit behind it.
+                // under the original stacking design this sheet was
+                // palette-invokable over a still-open search overlay,
+                // with both the captured target and the list fallback
+                // behind it. SD-5 made that state unreachable; the rule
+                // stays as invariant 4's backstop.
                 if (TryFocusSearchIfTopmost())
                 {
                     return;

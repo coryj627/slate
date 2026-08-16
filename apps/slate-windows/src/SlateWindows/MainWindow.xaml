@@ -1974,10 +1974,12 @@
             </local:AutomationLandmarkBorder>
             <!-- ==========================================================
                  W5-2 (#742): the vault-search overlay. Declared BETWEEN
-                 Quick Open and the palette (contract S11): the palette
-                 may open OVER an open search overlay — mac's Return
-                 monitor guards !isCommandPaletteOpen for exactly that
-                 stacking — so the palette must paint above it.
+                 Quick Open and the palette (contract S11). Since SD-5
+                 the three never coexist outside a palette invoke's
+                 transient window, so the position is the stacking
+                 invariant's backstop: if exclusivity is ever violated,
+                 the palette still paints above search rather than
+                 beneath it.
 
                  Visibility resolves through the WINDOW because this
                  element overrides its own DataContext: the short path
@@ -2005,46 +2007,6 @@
                     AutomationProperties.AutomationId="SearchOverlay"
                     AutomationProperties.Name="Search Vault"
                     AutomationProperties.IsDialog="True">
-                <!-- Codex round 9 (#742): a UIA client can drive ValuePattern or
-                     Invoke on elements a higher modal hides, bypassing the
-                     keyboard-ownership gate entirely. The search subtree is
-                     therefore DISABLED whenever any surface above it in paint
-                     order is open: the palette and the seven sheets. Quick
-                     Open cannot stack (picker exclusion). IsEnabled=False
-                     drops the subtree from the control view, which is exactly
-                     the isolation wanted here (unlike the palette rows, where
-                     the same setting was the recorded W5-1 trap). View-model
-                     state is untouched, so topmost restoration is intact. -->
-                <local:AutomationLandmarkBorder.Style>
-                    <Style TargetType="local:AutomationLandmarkBorder">
-                        <Style.Triggers>
-                            <DataTrigger Binding="{Binding DataContext.Palette.IsOpen, RelativeSource={RelativeSource AncestorType=Window}}" Value="True">
-                                <Setter Property="IsEnabled" Value="False" />
-                            </DataTrigger>
-                            <DataTrigger Binding="{Binding DataContext.Workspace.AddPropertySheet, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource IsNotNullConverter}}" Value="True">
-                                <Setter Property="IsEnabled" Value="False" />
-                            </DataTrigger>
-                            <DataTrigger Binding="{Binding DataContext.Workspace.BulkRenameSheet, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource IsNotNullConverter}}" Value="True">
-                                <Setter Property="IsEnabled" Value="False" />
-                            </DataTrigger>
-                            <DataTrigger Binding="{Binding DataContext.Workspace.CitationDetails, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource IsNotNullConverter}}" Value="True">
-                                <Setter Property="IsEnabled" Value="False" />
-                            </DataTrigger>
-                            <DataTrigger Binding="{Binding DataContext.Workspace.CitationSummary, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource IsNotNullConverter}}" Value="True">
-                                <Setter Property="IsEnabled" Value="False" />
-                            </DataTrigger>
-                            <DataTrigger Binding="{Binding DataContext.Workspace.FilesCiting, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource IsNotNullConverter}}" Value="True">
-                                <Setter Property="IsEnabled" Value="False" />
-                            </DataTrigger>
-                            <DataTrigger Binding="{Binding DataContext.Workspace.DashboardEditorSheet, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource IsNotNullConverter}}" Value="True">
-                                <Setter Property="IsEnabled" Value="False" />
-                            </DataTrigger>
-                            <DataTrigger Binding="{Binding DataContext.Workspace.BaseQueryBuilderSheet, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource IsNotNullConverter}}" Value="True">
-                                <Setter Property="IsEnabled" Value="False" />
-                            </DataTrigger>
-                        </Style.Triggers>
-                    </Style>
-                </local:AutomationLandmarkBorder.Style>
                 <local:AutomationLandmarkBorder.Effect>
                     <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
                 </local:AutomationLandmarkBorder.Effect>

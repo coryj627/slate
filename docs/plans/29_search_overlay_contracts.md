@@ -217,6 +217,29 @@ carried the identical pre-existing gap since W1; this fix closes both.
 trigger per enum member, so surface #11 cannot be forgotten the way the
 sheets were.
 
+This fix also REVERSED a measured W3 behaviour: the round-4 W3 red team
+had established that the Edit menu opens OVER the citation details sheet
+(the evidence that Jump to Bibliography is usable), and the
+`CitationSurfaces` journey pinned that measurement. Disabling the menu
+under every surface flipped it, and the conflict surfaced only when the
+FULL journey suite was re-run during the SD-5 pass — the round-1 fix had
+shipped with only the shell and search journeys re-run. The journey now
+asserts the S11 behaviour: the menu is disabled over the sheet, and the
+Jump to Bibliography MENU ITEM — whose enable condition is the sheet
+itself (`CitationDetails is not null`, the Windows twin of mac's
+`expandedCitation`) — consequently has no reachable enabled state. It
+stays in the menu as chord advertisement (present, correctly greyed,
+`InputGestureText` Ctrl+J), and the chord, which fires with the sheet
+open, is the working route the journey measures end to end. This is a
+recorded consequence, not an oversight: the alternative — exempting the
+citation surfaces from the menu disable — reopens the round-1 class for
+every menu command that is not admission-gated. (On mac the menu works
+over the citation POPOVER because AppKit only disables the menu bar for
+true sheets; the Windows citation surfaces are modal-registry members,
+so the stricter rule wins here.) Lesson recorded: a shell-wide
+behavioural fix re-runs the whole journey suite, not the feature's own
+journeys.
+
 **S12 — The overlay owns a text field, so it needs the text-editing
 allow-list.** A blanket shell-chord swallow kills Ctrl+A/C/V/Z and
 Shift-selection inside the overlay's own box, because WPF runs
@@ -309,9 +332,25 @@ model rather than discovered gap by gap:
 5. **The pickers are mutually exclusive, both directions, with focus
    handoff**: whichever opens closes the other and adopts its captured
    pre-open focus, so the eventual restore lands on the element from
-   before either picker.
+   before either picker. As of SD-5 the palette is in this exclusion
+   too: opening it closes an open search overlay the same way.
+6. **No persistent stacking** (SD-5, recorded after the round-10 root
+   cause analysis): between dispatcher turns, at most ONE of Quick
+   Open, the search overlay and the palette is open, and sheets never
+   coexist with any of them. The single sanctioned overlap is the
+   TRANSIENT window inside a palette invoke — P9 runs the command
+   before dismissing, so a command that opens a surface (a sheet, or
+   the deliberately unguarded `slate.view.toggleSearch`) briefly holds
+   it beneath the still-open palette until the same synchronous flow
+   dismisses the palette. Control never returns to the user inside
+   that window. Every
+   stacked-state mechanism the review rounds built — ownership routing
+   (3), the topmost-search restore rule (4), the ranking in
+   `TopmostOpen` — is retained as the invariant's BACKSTOP, not as a
+   reachable feature: if a future path violates this invariant, those
+   mechanisms degrade the failure instead of compounding it.
 
-A new surface joins ALL FIVE or fails a named gate.
+A new surface joins ALL SIX or fails a named gate.
 
 ## Divergence register (owner-recorded; off-limits for re-litigation)
 
@@ -369,6 +408,36 @@ A new surface joins ALL FIVE or fails a named gate.
 
   Because this changes shipped W3 reading-view behaviour, it needs its own
   fact and a note in the W3 close-out record, not just a W5-2 fact.
+
+- **SD-5 — The palette closes an open search overlay; mac stacks over
+  it.** Owner decision 2026-08-16, replacing this contract's original
+  S11 stacking arm after the root cause analysis of codex rounds 1–10:
+  search was the app's first surface that deliberately REMAINED OPEN
+  beneath another, and every subsystem — key routing, four focus-restore
+  paths, chord admission, the ancestry walkers, view-model staleness,
+  UIA exposure — embedded the assumption that no such surface exists.
+  Ten consecutive review rounds were the census of those embeddings.
+  Rather than keep servicing the violated assumption one site per round,
+  the assumption is restored: Ctrl+Shift+P over an open search closes it
+  with the same focus-lineage handoff Quick Open already performs
+  (`DecidePaletteOpen` answers `DismissSearchThenOpen`), so the
+  palette's eventual restore lands on the element from before search
+  opened.
+
+  This is also the app's OWN stated design: `28_palette_contracts.md`
+  — "the palette chord refuses (or dismisses the incumbent, per
+  surface) rather than stacking." The S11 stacking arm was the one
+  exception to that rule, imported for mac parity. Mac's stacking is
+  itself half-implemented (its Return monitor guards
+  `!isCommandPaletteOpen` precisely because the stack misroutes keys
+  there too; see the #1113 defect list), so the divergence cost is one
+  observable: on Windows the overlay is closed while the palette is up,
+  and Ctrl+Shift+F restores it with the query preserved — `Close()`
+  keeps the query and `Open()` re-arms it through the ordinary
+  pipeline, mac's own `closeSearchOverlay`/`onAppear` shape
+  (`AppState.swift:8832-8846`). Convergence direction is noted on
+  [#1113](https://github.com/coryj627/slate/issues/1113): mac adopting
+  exclusivity is the cheaper end state for both platforms.
 
 ## Accepted-risk register (owner-recorded; off-limits for re-litigation)
 

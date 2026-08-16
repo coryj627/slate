@@ -478,10 +478,13 @@ public partial class MainWindow : Window
             return;
         }
 
-        // Ownership, not openness (codex round 1): a palette-invoked
-        // sheet sits above a still-open search overlay, and routing on
-        // IsOpen alone let the hidden overlay steal the sheet's Enter
-        // and Escape.
+        // Ownership, not openness (codex round 1): under the original
+        // stacking design a palette-invoked sheet sat above a still-open
+        // search overlay, and routing on IsOpen alone let the hidden
+        // overlay steal the sheet's Enter and Escape. SD-5 removed
+        // persistent stacking — open now implies topmost — so ownership
+        // routing is invariant 3's backstop, kept so a future stacking
+        // violation degrades to the visible surface.
         if (ModalSurfaces.SearchOwnsKeys(CurrentModalSurfaceState))
         {
             HandleSearchOverlayKey(e, modifiers);
@@ -496,8 +499,8 @@ public partial class MainWindow : Window
             // Shift-selection inside it, because TextBox reaches those
             // through InputBindings, which WPF runs only for UNHANDLED
             // key events. Ctrl+Shift+P never reaches this line — the
-            // palette branch above runs first, which is how the palette
-            // opens OVER an open search overlay (mac parity).
+            // palette-chord branch above runs first, which is how the
+            // palette SUPERSEDES an open search overlay (SD-5).
             e.Handled = IsUnderlyingShellShortcut(e.Key, modifiers)
                 || (modifiers is not ModifierKeys.None
                     && !TextEditingChords.Allows(e.Key, modifiers));

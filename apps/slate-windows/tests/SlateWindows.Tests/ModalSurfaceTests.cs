@@ -105,10 +105,11 @@ public sealed class ModalSurfaceTests
     [Theory]
     [InlineData(null, PaletteOpenDecision.Open)]
     [InlineData(ModalSurface.CommandPalette, PaletteOpenDecision.Open)]
-    // W5-2 (S11): the palette opens OVER an open search overlay — mac
-    // parity, where the overlay's Return monitor guards
-    // !isCommandPaletteOpen for exactly this stacking.
-    [InlineData(ModalSurface.SearchOverlay, PaletteOpenDecision.Open)]
+    // SD-5 (replacing the original S11 stacking arm after the round-10
+    // root cause analysis): the palette SUPERSEDES an open search
+    // overlay exactly as it supersedes Quick Open — no persistent
+    // stacking, per 28_palette_contracts.md's own rule.
+    [InlineData(ModalSurface.SearchOverlay, PaletteOpenDecision.DismissSearchThenOpen)]
     [InlineData(ModalSurface.QuickOpen, PaletteOpenDecision.DismissQuickOpenThenOpen)]
     [InlineData(ModalSurface.AddProperty, PaletteOpenDecision.Refuse)]
     [InlineData(ModalSurface.BulkRename, PaletteOpenDecision.Refuse)]
@@ -117,7 +118,7 @@ public sealed class ModalSurfaceTests
     [InlineData(ModalSurface.FilesCiting, PaletteOpenDecision.Refuse)]
     [InlineData(ModalSurface.DashboardEditor, PaletteOpenDecision.Refuse)]
     [InlineData(ModalSurface.BaseQueryBuilder, PaletteOpenDecision.Refuse)]
-    public void ThePaletteDefersToEverySheetAndSupersedesOnlyQuickOpen(
+    public void ThePaletteDefersToEverySheetAndSupersedesBothPickers(
         object? topmost, object expected)
     {
         // object parameters because xUnit needs a public test method and
@@ -133,7 +134,7 @@ public sealed class ModalSurfaceTests
     /// covered: it opens over nothing, toggles over itself (the view
     /// model's Toggle closes an already-open overlay), supersedes Quick
     /// Open, and refuses beneath the palette and every sheet — the
-    /// palette may open over search (mac parity), never the reverse.
+    /// palette supersedes search (SD-5), never the reverse.
     /// </summary>
     [Theory]
     [InlineData(null, PaletteOpenDecision.Open)]
@@ -366,9 +367,10 @@ public sealed class ModalSurfaceTests
             ModalSurfaces.TopmostOpen(surface => surface
                 is ModalSurface.QuickOpen or ModalSurface.CommandPalette));
 
-        // W5-2: the palette also wins over an open search overlay — the
-        // stacking mac allows, and the reason search is declared before
-        // the palette.
+        // W5-2: the palette outranks an open search overlay. Since SD-5
+        // the two never coexist outside a palette invoke's transient
+        // window; the ranking is invariant 6's backstop, and the reason
+        // search is declared before the palette.
         Assert.Equal(
             ModalSurface.CommandPalette,
             ModalSurfaces.TopmostOpen(surface => surface
@@ -556,9 +558,12 @@ public sealed class ModalSurfaceTests
     [Fact]
     public void SearchOwnsKeysOnlyWhenItIsTheTopmostSurface()
     {
-        // Codex round 1: a palette-invoked sheet opens OVER a still-open
-        // search overlay, and routing on IsOpen alone let the hidden
-        // overlay steal the sheet's Enter and Escape.
+        // Codex round 1: under the original stacking design a
+        // palette-invoked sheet sat OVER a still-open search overlay,
+        // and routing on IsOpen alone let the hidden overlay steal the
+        // sheet's Enter and Escape. SD-5 made those states unreachable;
+        // the facts stay because this function is invariant 3's
+        // backstop against a future stacking violation.
         Assert.True(ModalSurfaces.SearchOwnsKeys(
             StateWithOnly(ModalSurface.SearchOverlay)));
 
@@ -805,56 +810,72 @@ public sealed class ModalSurfaceTests
     }
 
     /// <summary>
-    /// The search overlay disables beneath every surface above it in
-    /// paint order (codex round 9): a UIA client can drive ValuePattern
-    /// or Invoke on elements a higher modal hides, bypassing the
-    /// keyboard-ownership gate.
+    /// The palette supersession (SD-5, replacing the original S11
+    /// stacking arm after the round-10 root cause analysis): the
+    /// palette-chord dismissal arm closes an open search overlay and
+    /// adopts its captured pre-open focus, consume-first so search's
+    /// own queued restore cannot race the handoff. This is what
+    /// retired the round-9 IsEnabled triggers and the round-10 UIA
+    /// Control View exposure with them: a closed overlay is collapsed,
+    /// and a collapsed overlay is not in the UIA tree at all.
     /// </summary>
     [Fact]
-    public void TheSearchOverlayDisablesBeneathEveryHigherSurface()
+    public void ThePaletteSupersessionClosesSearchAndAdoptsItsFocus()
     {
-        XDocument document = XDocument.Load(
-            Path.Combine(SourceText.ShellSourceRoot(), "MainWindow.xaml"));
-        XElement overlay = document.Descendants()
-            .Single(element =>
-                (string?)element.Attribute(
-                    XName.Get("Name", "http://schemas.microsoft.com/winfx/2006/xaml"))
-                == "SearchOverlay");
-        string style = string.Concat(
-            overlay.Elements()
-                .Where(child => child.Name.LocalName.EndsWith(
-                    ".Style", StringComparison.Ordinal))
-                .Select(child => child.ToString()));
+        Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax clear =
+            CSharpSource.Load("MainWindow.Palette.cs")
+                .Method("TryClearTheWayForThePalette");
 
-        // Every surface ABOVE SearchOverlay in the enum (paint) order
-        // must disable it. Derived from the enum, not hardcoded, so a
-        // new higher surface fails here by name.
-        foreach (ModalSurface above in Enum.GetValues<ModalSurface>()
-            .Where(surface => surface > ModalSurface.SearchOverlay))
-        {
-            string leaf = above switch
-            {
-                ModalSurface.CommandPalette => "Palette.IsOpen",
-                ModalSurface.AddProperty => "Workspace.AddPropertySheet",
-                ModalSurface.BulkRename => "Workspace.BulkRenameSheet",
-                ModalSurface.CitationDetails => "Workspace.CitationDetails",
-                ModalSurface.CitationSummary => "Workspace.CitationSummary",
-                ModalSurface.FilesCiting => "Workspace.FilesCiting",
-                ModalSurface.DashboardEditor => "Workspace.DashboardEditorSheet",
-                ModalSurface.BaseQueryBuilder => "Workspace.BaseQueryBuilderSheet",
-                _ => throw new Xunit.Sdk.XunitException(
-                    $"{above} is above SearchOverlay in paint order but has "
-                    + "no binding-path mapping here — add it AND the XAML "
-                    + "trigger."),
-            };
-            Assert.True(
-                style.Contains($"DataContext.{leaf},", StringComparison.Ordinal),
-                $"the search overlay has no IsEnabled trigger for {above} "
-                + $"(path {leaf}) — a UIA client can drive the hidden "
-                + "overlay beneath it.");
-        }
+        // Reachability: the arm hangs off the SAME pure decision the
+        // every-member theory drives, so flipping the decision table
+        // and gutting the arm each fail a named gate.
+        Microsoft.CodeAnalysis.CSharp.Syntax.SwitchStatementSyntax gate = clear
+            .DescendantNodes()
+            .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.SwitchStatementSyntax>()
+            .Single();
+        Assert.Equal(
+            "ModalSurfaces.DecidePaletteOpen(OpenModalSurface)",
+            CSharpSource.Normalize(gate.Expression));
 
-        Assert.Contains("IsEnabled", style, StringComparison.Ordinal);
+        Microsoft.CodeAnalysis.CSharp.Syntax.SwitchSectionSyntax arm =
+            Assert.Single(
+                gate.Sections,
+                section => section.Labels
+                    .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.CaseSwitchLabelSyntax>()
+                    .Any(label => CSharpSource.Normalize(label.Value)
+                        == "PaletteOpenDecision.DismissSearchThenOpen"));
+
+        // Control-dependence AND ordering, inside the arm itself:
+        // consume, then close, then adopt. Close-before-consume hands
+        // the restore race back to search's Dismissed path, and
+        // adopt-before-close would capture a token search then nulls.
+        string body = string.Concat(
+            arm.Statements.Select(statement => CSharpSource.Normalize(statement)));
+        int consume = body.IndexOf(
+            "=ConsumePreSearchFocus()", StringComparison.Ordinal);
+        int close = body.IndexOf(
+            "_viewModel.Search.Close()", StringComparison.Ordinal);
+        int adopt = body.IndexOf(
+            "_focusBeforePalette=preSearch", StringComparison.Ordinal);
+        Assert.True(consume >= 0,
+            "the dismissal arm no longer consumes the pre-search focus — "
+            + "the palette's restore will target the collapsed search box.");
+        Assert.True(close > consume,
+            "the dismissal arm closes search before consuming its focus "
+            + "(or not at all) — search's own queued restore races the "
+            + "handoff for the same element.");
+        Assert.True(adopt > close,
+            "the dismissal arm never adopts the consumed focus into "
+            + "_focusBeforePalette after the close — Escape from the "
+            + "palette falls back to the editor instead of the element "
+            + "the user came from.");
+
+        // The arm ADMITS the open: a false return would dismiss search
+        // and then refuse the palette, stranding the user surface-less.
+        Microsoft.CodeAnalysis.CSharp.Syntax.ReturnStatementSyntax admit =
+            Assert.Single(arm.Statements
+                .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.ReturnStatementSyntax>());
+        Assert.Equal("true", CSharpSource.Normalize(admit.Expression!));
     }
 
     /// <summary>

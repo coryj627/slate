@@ -125,6 +125,19 @@ public partial class MainWindow
             case PaletteOpenDecision.DismissQuickOpenThenOpen:
                 _viewModel.QuickSwitcher!.Dismiss();
                 return true;
+            case PaletteOpenDecision.DismissSearchThenOpen:
+                // SD-5: the palette supersedes an open search overlay the
+                // way it supersedes Quick Open, with the same focus
+                // lineage — the palette's return target becomes the
+                // element from before SEARCH opened, so Escape lands the
+                // user where they started, not on the collapsed search
+                // box. Consuming first also keeps search's own queued
+                // restore from racing this handoff for the same element
+                // (the switcher-open observer's shape, mirrored).
+                IInputElement? preSearch = ConsumePreSearchFocus();
+                _viewModel.Search.Close();
+                _focusBeforePalette = preSearch;
+                return true;
             default:
                 return false;
         }
@@ -315,11 +328,14 @@ public partial class MainWindow
                     focusBefore, IsDescendantOfPaletteOverlay);
 
                 // Codex round 4 (#742): search topmost takes priority
-                // here too — the palette dismissing above a still-open
-                // search overlay must hand focus to the search box, not
-                // to whatever sat beneath the overlay before the palette
-                // opened. Runs FIRST: with a sheet or picker above,
-                // SearchOwnsKeys is false and the ordinary logic runs.
+                // here too. Since SD-5 the one reachable case is the
+                // palette-invoked "Search Vault": the unguarded toggle
+                // opens search beneath the still-open palette, P9
+                // dismisses it in the same flow, and this hands focus
+                // to the search box the user just asked for — not to
+                // whatever sat beneath before the palette opened. Runs
+                // FIRST: with a sheet or picker above, SearchOwnsKeys
+                // is false and the ordinary logic runs.
                 if (TryFocusSearchIfTopmost())
                 {
                     return;

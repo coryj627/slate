@@ -2640,14 +2640,41 @@ public sealed class ShellAccessibilityTests
 
             AssertAxeClean(process, "citation-details-sheet");
 
-            // The Jump menu item must be USABLE, not just present.
-            // Round 4 argued it is disabled in every state a user can
-            // reach it, because it requires the details sheet and the
-            // sheet is IsDialog and focus-trapped. Measured: the sheet
-            // is an in-window overlay, not a true modal, so the menu
-            // still opens over it and the item is enabled there.
-            AutomationElement editMenu = WaitForElement(
-                window, "MainMenu", TimeSpan.FromSeconds(10))
+            // S11 (W5-2 round 1) reversed the W3 round-4 measurement
+            // here: the menu now DISABLES under every modal surface —
+            // mac parity, AppKit disables the menu bar while a sheet is
+            // up — so the probe that once expanded Edit OVER this sheet
+            // asserts the opposite. Jump loses nothing: its enable
+            // condition is an EXPANDED CITATION, not the sheet, so the
+            // menu route survives with the sheet closed (measured
+            // below) and Ctrl+J is unaffected.
+            AutomationElement mainMenu = WaitForElement(
+                window, "MainMenu", TimeSpan.FromSeconds(10));
+            Assert.False(
+                mainMenu.Properties.IsEnabled.ValueOrDefault,
+                "the menu is enabled over the citation details sheet — "
+                + "S11 disables it under every modal surface.");
+            detailsClose.Focus();
+
+            PressKey(VirtualKeyShort.ESCAPE);
+            AssertElementDisappears(window, automation, "CitationDetailsSheet");
+            AssertEventuallyFocused(
+                resolvedRow, "Escape did not return focus to the citation row.");
+
+            // The Jump menu item after S11: its enable condition IS the
+            // details sheet (CitationDetails non-null — the Windows
+            // twin of mac's expandedCitation), and S11 disables the
+            // whole menu exactly while that sheet is up. The item is
+            // therefore chord advertisement: present and correctly
+            // greyed whenever the menu is reachable, with Ctrl+J
+            // (measured below, sheet open) as the working route.
+            // Recorded in 29_search_overlay_contracts.md S11.
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => mainMenu.Properties.IsEnabled.ValueOrDefault,
+                    TimeSpan.FromSeconds(10)),
+                "the menu did not re-enable after the sheet closed");
+            AutomationElement editMenu = mainMenu
                 .FindAllChildren(
                     automation.ConditionFactory.ByControlType(ControlType.MenuItem))
                 .First(item => (item.Properties.Name.ValueOrDefault ?? "")
@@ -2655,17 +2682,14 @@ public sealed class ShellAccessibilityTests
             editMenu.Patterns.ExpandCollapse.Pattern.Expand();
             AutomationElement jumpItem = WaitForElement(
                 window, "JumpToBibliographyMenuItem", TimeSpan.FromSeconds(10));
-            Assert.True(
+            Assert.False(
                 jumpItem.Properties.IsEnabled.ValueOrDefault,
-                "Jump to Bibliography is greyed out in the only state that enables it");
+                "Jump to Bibliography is enabled with no citation "
+                + "expanded — the command has no key to jump to, and "
+                + "invoking it here would be the W4-5 disabled-state "
+                + "defect reborn.");
             editMenu.Patterns.ExpandCollapse.Pattern.Collapse();
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(300));
-            detailsClose.Focus();
-
-            PressKey(VirtualKeyShort.ESCAPE);
-            AssertElementDisappears(window, automation, "CitationDetailsSheet");
-            AssertEventuallyFocused(
-                resolvedRow, "Escape did not return focus to the citation row.");
 
             // ---- Ctrl+J: the landing, not just the announcement -----
             // The docstring claimed this for a version of the test that
@@ -4929,6 +4953,94 @@ public sealed class ShellAccessibilityTests
                     },
                     TimeSpan.FromSeconds(10)),
                 "the Close search button did not close the overlay");
+
+            // --- SD-5: the palette SUPERSEDES an open search overlay --
+            // Opening the palette CLOSES search: a closed overlay is
+            // collapsed, and a collapsed overlay is absent from the
+            // control view, which retires the round-9/round-10
+            // hidden-but-exposed UIA class by construction. The
+            // preserved query then makes Ctrl+Shift+F the way back.
+            window.SetForeground();
+            PressChord(
+                VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_F);
+            AutomationElement supersededSearch = WaitForElement(
+                window, "SearchOverlaySearch", TimeSpan.FromSeconds(10));
+            supersededSearch.Patterns.Value.Pattern.SetValue("meridian");
+            _ = WaitForElement(
+                window, "SearchOverlayResults", TimeSpan.FromSeconds(10));
+
+            window.SetForeground();
+            PressChord(
+                VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_P);
+            AutomationElement paletteBox = WaitForElement(
+                window, "CommandPaletteSearch", TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            return paletteBox.Properties.HasKeyboardFocus.ValueOrDefault;
+                        }
+                        catch (COMException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the palette superseded search without taking focus");
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            return window.FindFirstDescendant(automation.ConditionFactory
+                                .ByAutomationId("SearchOverlay")) is null;
+                        }
+                        catch (COMException)
+                        {
+                            return true;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the search overlay is still in the control view beneath "
+                + "the palette — SD-5 exclusivity did not close it, so a "
+                + "UIA client can walk (and drive) a surface the palette "
+                + "hides.");
+
+            window.SetForeground();
+            Keyboard.Press(VirtualKeyShort.ESCAPE);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            return window.FindFirstDescendant(automation.ConditionFactory
+                                .ByAutomationId("CommandPalette")) is null;
+                        }
+                        catch (COMException)
+                        {
+                            return true;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "Escape did not dismiss the palette after the supersession");
+
+            window.SetForeground();
+            PressChord(
+                VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_F);
+            AutomationElement restoredSearch = WaitForElement(
+                window, "SearchOverlaySearch", TimeSpan.FromSeconds(10));
+            Assert.Equal(
+                "meridian", restoredSearch.Patterns.Value.Pattern.Value.Value);
+            _ = WaitForElement(
+                window, "SearchOverlayResults", TimeSpan.FromSeconds(10));
+
+            window.SetForeground();
+            Keyboard.Press(VirtualKeyShort.ESCAPE);
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
 
             // --- teardown: nothing of the overlay survives in the
             // control view, which is the view an AT walks --------------
