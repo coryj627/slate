@@ -1344,8 +1344,10 @@ impl VaultSession {
     }
 
     /// Full-text search. Cancellable via the supplied `cancel`
-    /// token. Reserved scopes (`File`, `Tag`) return
-    /// `VaultError::Cancelled` until those code paths land.
+    /// token. `Vault`, `Folder`, and `Tag` scopes are live (`Tag`
+    /// lists all tagged files on an empty query); the reserved
+    /// `File` scope returns `VaultError::Unsupported` — see
+    /// `SearchScope`.
     pub fn full_text_search(
         &self,
         query: String,
