@@ -34,7 +34,7 @@ internal interface ISearchSource
     /// An opaque identity for the current session, or
     /// <see langword="null"/> with no vault open. Captured at search
     /// dispatch and compared by reference before a result publishes —
-    /// the session arm of contract S5's four-way staleness check. Not
+    /// the session arm of contract S5's five-way staleness check. Not
     /// theoretical: mac added the same guard after a direct vault
     /// switch published vault A's rows into vault B's overlay
     /// (<c>AppState.swift:8934-8949</c>).

@@ -363,7 +363,7 @@ public sealed class SearchOverlayViewModelTests
         Assert.Equal("Runs this search again.", SearchOverlayViewModel.RecentRowHint);
     }
 
-    // ---- debounce (S7) and the four-way staleness check (S5) ------------
+    // ---- debounce (S7) and the five-way staleness check (S5) ------------
 
     [Fact]
     public async Task DebounceCoalescesKeystrokesIntoOneTrailingSearch()
