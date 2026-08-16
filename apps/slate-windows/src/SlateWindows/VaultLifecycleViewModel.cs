@@ -8,6 +8,7 @@ using System.Runtime.CompilerServices;
 using System.Windows.Input;
 using System.Windows.Threading;
 using SlateWindows.Commands;
+using SlateWindows.Search;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows;
@@ -96,6 +97,7 @@ internal sealed class VaultLifecycleViewModel
     private readonly Dispatcher? _lifecycleDispatcher;
     private CommandPaletteViewModel? _palette;
     private PaletteCommandSource? _paletteSource;
+    private SearchOverlayViewModel? _search;
     private readonly AsyncRelayCommand _openVaultCommand;
     private readonly AsyncRelayCommand _openRecentCommand;
     private readonly RelayCommand _closeVaultCommand;
@@ -306,6 +308,41 @@ internal sealed class VaultLifecycleViewModel
                 _lifecycleDispatcher ?? Dispatcher.CurrentDispatcher),
             _announce);
 
+    /// <summary>
+    /// The vault-search overlay (W5-2, #742). Public for the same W4-4
+    /// reason as <see cref="Palette"/>: WPF binding reflection only sees
+    /// public properties.
+    /// </summary>
+    /// <remarks>
+    /// One app-lifetime instance, the palette's shape: the
+    /// <see cref="VaultSearchSource"/> reads the session and vault root
+    /// through live delegates, so a vault switch invalidates in-flight
+    /// results through the view model's session-identity staleness arm
+    /// (contract S5) rather than by rebuilding the overlay. Constructed
+    /// on first access — the shell touches it at startup, on the UI
+    /// thread, which is where the view model captures its
+    /// <see cref="SynchronizationContext"/>.
+    /// </remarks>
+    public SearchOverlayViewModel Search
+    {
+        get
+        {
+            if (_search is null)
+            {
+                _search = new SearchOverlayViewModel(
+                    new VaultSearchSource(
+                        () => _session,
+                        () => _session is null || _vaultPath.Length == 0
+                            ? null
+                            : _vaultPath),
+                    _announce);
+                _search.OpenRequested += Search_OpenRequested;
+            }
+
+            return _search;
+        }
+    }
+
     public async Task OpenVaultAsync(string path)
     {
         if (IsBusy)
@@ -334,6 +371,12 @@ internal sealed class VaultLifecycleViewModel
         // the user cancels, an import in flight — left the vault open with
         // the palette already gone.
         _palette?.Dismiss();
+        // The W5-1 vault-transition precedent, extended to search: a
+        // direct A→B open bypasses CloseVault, and mac routes exactly
+        // this path through closeSearchOverlay too (AppState.swift:9761,
+        // the #876 Codex round-2 bug). Closed BEFORE CloseSession so the
+        // in-flight cancellation targets vault A's search.
+        CloseSearchForVaultTransition();
 
         CloseSession();
         int generation = ++_generation;
@@ -446,6 +489,10 @@ internal sealed class VaultLifecycleViewModel
         // next vault open auto-presents it. Dismissed BEFORE the session
         // goes away, so the overlay cannot survive the gap.
         _palette?.Dismiss();
+        // Search joins the same teardown (mac closeVault,
+        // AppState.swift:11016-11017): overlay closed, retained query
+        // cleared, while the session still exists.
+        CloseSearchForVaultTransition();
 
         ++_generation;
         CloseSession();
@@ -495,6 +542,30 @@ internal sealed class VaultLifecycleViewModel
         _paletteSource?.Dispose();
         _paletteSource = null;
         _palette = null;
+
+        if (_search is not null)
+        {
+            _search.OpenRequested -= Search_OpenRequested;
+            _search.Dispose();
+            _search = null;
+        }
+    }
+
+    /// <summary>
+    /// The vault-transition teardown mac performs in both closeVault and
+    /// the direct-switch path: close the overlay (which cancels the
+    /// in-flight search and resets scope, state, and the announcement
+    /// memory) and clear the retained query, so vault A's query cannot
+    /// re-arm inside vault B (<c>AppState.swift:9761-9762</c>,
+    /// <c>:11016-11017</c>).
+    /// </summary>
+    private void CloseSearchForVaultTransition()
+    {
+        if (_search is SearchOverlayViewModel search)
+        {
+            search.Close();
+            search.Query = string.Empty;
+        }
     }
 
     private async Task PickAndOpenVaultAsync(object? _)
@@ -1118,6 +1189,98 @@ internal sealed class VaultLifecycleViewModel
 
     private void QuickSwitcher_Dismissed(object? sender, EventArgs e) =>
         QuickSwitcherDismissed?.Invoke(this, EventArgs.Empty);
+
+    /// <summary>
+    /// A search activation (contract S9): open the hit in the CURRENT
+    /// tab (contract S10 — no modifier variants; mac's ⌘Return is
+    /// rejected by its own key monitor and only ⌘-click works, so
+    /// Windows builds neither), derive the match line host-side, park
+    /// the caret at its start, and announce
+    /// <c>SearchResultOpened(filename, line, snippet)</c> with the
+    /// WHOLE-FILE line number.
+    /// </summary>
+    /// <remarks>
+    /// The overlay has already closed and recorded the recent
+    /// (record→close→open, the phase-1 ordering fact); this handler runs
+    /// synchronously after it on the UI thread — the Windows tab load is
+    /// synchronous, so there is no mac-style await on a pending note
+    /// load. An open the dirty-navigation prompt refuses leaves the user
+    /// on their current note, so nothing is scrolled or announced.
+    /// </remarks>
+    private void Search_OpenRequested(object? sender, SearchOpenRequest request)
+    {
+        if (Workspace is not WorkspaceViewModel workspace)
+        {
+            return;
+        }
+
+        // S10: opening a file that is already the selected file does not
+        // re-open it (mac wasAlreadyOpen, AppState.swift:9471-9477).
+        WorkspaceTabViewModel? active = workspace.ActiveGroup.ActiveTab;
+        bool alreadyActive = active is { IsMarkdown: true }
+            && string.Equals(active.Path, request.Path, StringComparison.Ordinal);
+        if (!alreadyActive)
+        {
+            workspace.OpenPath(request.Path, WorkspaceOpenTarget.CurrentTab);
+        }
+
+        WorkspaceTabViewModel? tab = workspace.ActiveGroup.ActiveTab;
+        if (tab is not { IsMarkdown: true }
+            || !string.Equals(tab.Path, request.Path, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        int fileLine = DeriveSearchResultLine(tab, request);
+        // The caret park follows the W4-3 dirty posture rather than mac's
+        // unverified scroll: a dirty or externally stale buffer no longer
+        // matches the indexed bytes the line was derived from, so the
+        // caret stays put (the silent non-move is the honest observable).
+        // The announcement still fires — the note did open, and the line
+        // describes the saved note the search indexed.
+        if (!tab.IsDirty && !tab.IsExternallyStale)
+        {
+            tab.EditorInteractions?.RequestCaret(
+                SearchLineLocator.LineStartOffset(tab.Text, fileLine));
+        }
+
+        _announce(new A11yEvent.SearchResultOpened(
+            Path.GetFileName(request.Path),
+            (uint)fileLine,
+            request.Snippet));
+    }
+
+    /// <summary>
+    /// The whole-file line for an activated hit. The scan runs over the
+    /// BODY (mac scans its body-space buffer) and the result is rebased
+    /// to file space with core's <c>BodyLineOffset</c> — the one
+    /// conversion authority (<c>read_note_parts</c>, the U3-5 law:
+    /// frontmatter geometry is never re-derived host-side). Windows
+    /// buffers are whole-file, so the same number both scrolls the
+    /// editor and is announced (mac needs <c>fileLine(fromBodyLine:)</c>
+    /// only for the announcement).
+    /// </summary>
+    private int DeriveSearchResultLine(
+        WorkspaceTabViewModel tab, SearchOpenRequest request)
+    {
+        if (_session is VaultSession session)
+        {
+            try
+            {
+                NotePartsBundle parts = session.ReadNoteParts(request.Path);
+                return SearchLineLocator.FirstTokenLine(parts.Body, request.Query)
+                    + (int)parts.BodyLineOffset;
+            }
+            catch (VaultException)
+            {
+                // The note opened but its parts read failed (deleted in
+                // the gap, a reparse refusal): degrade to a whole-file
+                // scan of the loaded buffer, which is already file-space.
+            }
+        }
+
+        return SearchLineLocator.FirstTokenLine(tab.Text, request.Query);
+    }
 
     private void ReportTerminalStatus(string message, A11yPriority priority)
     {

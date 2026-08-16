@@ -105,6 +105,10 @@ public sealed class ModalSurfaceTests
     [Theory]
     [InlineData(null, PaletteOpenDecision.Open)]
     [InlineData(ModalSurface.CommandPalette, PaletteOpenDecision.Open)]
+    // W5-2 (S11): the palette opens OVER an open search overlay — mac
+    // parity, where the overlay's Return monitor guards
+    // !isCommandPaletteOpen for exactly this stacking.
+    [InlineData(ModalSurface.SearchOverlay, PaletteOpenDecision.Open)]
     [InlineData(ModalSurface.QuickOpen, PaletteOpenDecision.DismissQuickOpenThenOpen)]
     [InlineData(ModalSurface.AddProperty, PaletteOpenDecision.Refuse)]
     [InlineData(ModalSurface.BulkRename, PaletteOpenDecision.Refuse)]
@@ -125,6 +129,34 @@ public sealed class ModalSurfaceTests
     }
 
     /// <summary>
+    /// The search chord's precedence (W5-2, contract S11), every member
+    /// covered: it opens over nothing, toggles over itself (the view
+    /// model's Toggle closes an already-open overlay), supersedes Quick
+    /// Open, and refuses beneath the palette and every sheet — the
+    /// palette may open over search (mac parity), never the reverse.
+    /// </summary>
+    [Theory]
+    [InlineData(null, PaletteOpenDecision.Open)]
+    [InlineData(ModalSurface.SearchOverlay, PaletteOpenDecision.Open)]
+    [InlineData(ModalSurface.QuickOpen, PaletteOpenDecision.DismissQuickOpenThenOpen)]
+    [InlineData(ModalSurface.CommandPalette, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.AddProperty, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.BulkRename, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.CitationDetails, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.CitationSummary, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.FilesCiting, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.DashboardEditor, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.BaseQueryBuilder, PaletteOpenDecision.Refuse)]
+    public void TheSearchChordDefersToEverySheetAndThePalette(
+        object? topmost, object expected)
+    {
+        ModalSurface? surface = topmost is null ? null : (ModalSurface)topmost;
+        Assert.Equal(
+            (PaletteOpenDecision)expected,
+            ModalSurfaces.DecideSearchOpen(surface));
+    }
+
+    /// <summary>
     /// Every <see cref="ModalSurface"/> member is covered by the decision
     /// table above.
     /// </summary>
@@ -140,6 +172,7 @@ public sealed class ModalSurfaceTests
         ModalSurface[] covered =
         [
             ModalSurface.QuickOpen,
+            ModalSurface.SearchOverlay,
             ModalSurface.CommandPalette,
             ModalSurface.AddProperty,
             ModalSurface.BulkRename,
@@ -293,12 +326,14 @@ public sealed class ModalSurfaceTests
         new()
         {
             [ModalSurface.QuickOpen] = "_viewModel.QuickSwitcher?.IsOpen==true",
+            [ModalSurface.SearchOverlay] = "_viewModel.Search.IsOpen",
             [ModalSurface.CommandPalette] = "_viewModel.Palette.IsOpen",
         };
 
     private static ModalSurfaceState StateWithOnly(ModalSurface surface) =>
         new(
             QuickOpen: surface == ModalSurface.QuickOpen,
+            SearchOverlay: surface == ModalSurface.SearchOverlay,
             CommandPalette: surface == ModalSurface.CommandPalette,
             AddProperty: surface == ModalSurface.AddProperty,
             BulkRename: surface == ModalSurface.BulkRename,
@@ -330,6 +365,14 @@ public sealed class ModalSurfaceTests
             ModalSurface.CommandPalette,
             ModalSurfaces.TopmostOpen(surface => surface
                 is ModalSurface.QuickOpen or ModalSurface.CommandPalette));
+
+        // W5-2: the palette also wins over an open search overlay — the
+        // stacking mac allows, and the reason search is declared before
+        // the palette.
+        Assert.Equal(
+            ModalSurface.CommandPalette,
+            ModalSurfaces.TopmostOpen(surface => surface
+                is ModalSurface.SearchOverlay or ModalSurface.CommandPalette));
 
         // Every surface, alone, is its own topmost.
         foreach (ModalSurface surface in Enum.GetValues<ModalSurface>())
@@ -450,6 +493,7 @@ public sealed class ModalSurfaceTests
         (ModalSurface Surface, string AutomationId)[] expected =
         [
             (ModalSurface.QuickOpen, "QuickSwitcher"),
+            (ModalSurface.SearchOverlay, "SearchOverlay"),
             (ModalSurface.CommandPalette, "CommandPalette"),
             (ModalSurface.AddProperty, "AddPropertySheet"),
             (ModalSurface.BulkRename, "BulkRenameSheet"),

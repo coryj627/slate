@@ -100,6 +100,7 @@ public partial class MainWindow
             WorkspaceViewModel? workspace = _viewModel.Workspace;
             return new ModalSurfaceState(
                 QuickOpen: _viewModel.QuickSwitcher?.IsOpen == true,
+                SearchOverlay: _viewModel.Search.IsOpen,
                 CommandPalette: _viewModel.Palette.IsOpen,
                 AddProperty: workspace?.AddPropertySheet is not null,
                 BulkRename: workspace?.BulkRenameSheet is not null,

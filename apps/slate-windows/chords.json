@@ -280,6 +280,19 @@
       "registered": true
     },
     {
+      "id": "slate.view.toggleSearch",
+      "label": "Search Vault",
+      "section": "View",
+      "hint": null,
+      "macChord": "⇧⌘F",
+      "mac": "Shift Command F",
+      "windows": "Ctrl+Shift+F",
+      "windowsSpoken": "Control Shift F",
+      "scope": "Global",
+      "registered": false,
+      "reason": "W5-2: delivered imperatively from MainWindow.Window_PreviewKeyDown because the overlay exposes methods rather than ICommands (PR-4, the palette's own shape). Palette registration is deferred to the W5-2 close-out."
+    },
+    {
       "id": "slate.history.showPanel",
       "label": "Show History Panel",
       "section": "View",
@@ -2503,6 +2516,58 @@
       "scope": "Palette",
       "registered": false,
       "reason": "W5-1: a command-palette overlay interaction, live only while the palette is open. Delivered imperatively from MainWindow.HandleCommandPaletteKey, not a KeyBinding. PD-1: Windows navigates with the Home/End/Page keys where mac deliberately handles none of them; mac converges under #1105."
+    },
+    {
+      "id": "windows.searchOverlay.activate",
+      "label": "Search overlay: open the selected result",
+      "section": "View",
+      "hint": null,
+      "macChord": null,
+      "mac": null,
+      "windows": "Enter",
+      "windowsSpoken": "Enter",
+      "scope": "SearchOverlay",
+      "registered": false,
+      "reason": "W5-2: a vault-search overlay interaction, live only while the overlay is open. Delivered imperatively from MainWindow.HandleSearchOverlayKey, not a KeyBinding."
+    },
+    {
+      "id": "windows.searchOverlay.dismiss",
+      "label": "Search overlay: dismiss",
+      "section": "View",
+      "hint": null,
+      "macChord": null,
+      "mac": null,
+      "windows": "Escape",
+      "windowsSpoken": "Escape",
+      "scope": "SearchOverlay",
+      "registered": false,
+      "reason": "W5-2: a vault-search overlay interaction, live only while the overlay is open. Delivered imperatively from MainWindow.HandleSearchOverlayKey, not a KeyBinding. PR-2 records its place in the Escape chain."
+    },
+    {
+      "id": "windows.searchOverlay.moveNext",
+      "label": "Search overlay: next result",
+      "section": "View",
+      "hint": null,
+      "macChord": null,
+      "mac": null,
+      "windows": "Down",
+      "windowsSpoken": "Down Arrow",
+      "scope": "SearchOverlay",
+      "registered": false,
+      "reason": "W5-2: a vault-search overlay interaction, live only while the overlay is open. Delivered imperatively from MainWindow.HandleSearchOverlayKey, not a KeyBinding. SD-1: Windows navigates results with the arrow keys where mac has no arrow handling at all; mac converges under #1113."
+    },
+    {
+      "id": "windows.searchOverlay.movePrevious",
+      "label": "Search overlay: previous result",
+      "section": "View",
+      "hint": null,
+      "macChord": null,
+      "mac": null,
+      "windows": "Up",
+      "windowsSpoken": "Up Arrow",
+      "scope": "SearchOverlay",
+      "registered": false,
+      "reason": "W5-2: a vault-search overlay interaction, live only while the overlay is open. Delivered imperatively from MainWindow.HandleSearchOverlayKey, not a KeyBinding. SD-1: Windows navigates results with the arrow keys where mac has no arrow handling at all; mac converges under #1113."
     },
     {
       "id": "windows.propertyRow.stepUp",

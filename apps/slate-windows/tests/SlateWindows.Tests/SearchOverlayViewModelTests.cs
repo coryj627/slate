@@ -583,6 +583,151 @@ public sealed class SearchOverlayViewModelTests
         Assert.Equal("alpha", request.Query);
     }
 
+    // ---- phase-2 view surface: chip, panels, selection ------------------
+
+    [Fact]
+    public void TagScopeNameIsNullOutsideTagScopeAndTheNameInsideIt()
+    {
+        var harness = new OverlayHarness();
+        harness.Overlay.Open();
+
+        Assert.Null(harness.Overlay.TagScopeName);
+
+        harness.Overlay.SetScope(new SearchScope.Tag("projects"));
+        Assert.Equal("projects", harness.Overlay.TagScopeName);
+
+        harness.Overlay.ClearScope();
+        Assert.Null(harness.Overlay.TagScopeName);
+    }
+
+    [Fact]
+    public void PanelFlagsAreMutuallyExclusiveAcrossEveryState()
+    {
+        var harness = new OverlayHarness();
+
+        // Idle with no recents.
+        harness.Overlay.Open();
+        AssertPanels(harness.Overlay, idleHint: true);
+
+        // Results with rows.
+        harness.Source.OnSearch = (_, _) => Results("one", Hit("a.md", "s"));
+        harness.Overlay.Query = "alpha";
+        AssertPanels(harness.Overlay, resultRows: true);
+
+        // Results with zero rows.
+        harness.Source.OnSearch = (_, _) => Results("none");
+        harness.Overlay.Query = "beta";
+        AssertPanels(harness.Overlay, noResults: true);
+
+        // Error.
+        harness.Source.OnSearch = (_, _) =>
+            throw new VaultException.InvalidQuery("bad syntax");
+        harness.Overlay.Query = "gamma\"";
+        AssertPanels(harness.Overlay, error: true);
+
+        // Back to idle — and with recents on disk, the recents panel.
+        harness.Overlay.Close();
+        harness.Source.RecentsOnDisk.Add("alpha");
+        harness.Overlay.Open();
+        harness.Overlay.Query = string.Empty;
+        AssertPanels(harness.Overlay, recents: true);
+    }
+
+    [Fact]
+    public void RowCountFlippingWithoutAStateChangeStillRetargetsThePanels()
+    {
+        // PublishResults can land Results→Results with the row count
+        // crossing zero; the flags must follow the rows, not only the
+        // state transitions.
+        var harness = new OverlayHarness();
+        harness.Overlay.Open();
+
+        harness.Source.OnSearch = (_, _) => Results("one", Hit("a.md", "s"));
+        harness.Overlay.Query = "alpha";
+        Assert.True(harness.Overlay.ShowsResultRows);
+
+        bool sawResultRows = false;
+        bool sawNoResults = false;
+        harness.Overlay.PropertyChanged += (_, args) =>
+        {
+            sawResultRows |= args.PropertyName
+                == nameof(SearchOverlayViewModel.ShowsResultRows);
+            sawNoResults |= args.PropertyName
+                == nameof(SearchOverlayViewModel.ShowsNoResults);
+        };
+
+        harness.Source.OnSearch = (_, _) => Results("none");
+        harness.Overlay.Query = "beta";
+
+        Assert.True(harness.Overlay.ShowsNoResults);
+        Assert.False(harness.Overlay.ShowsResultRows);
+        Assert.True(sawResultRows, "ShowsResultRows never notified");
+        Assert.True(sawNoResults, "ShowsNoResults never notified");
+    }
+
+    [Fact]
+    public void MoveSelectionWrapsLikeThePaletteAndIgnoresAnEmptyList()
+    {
+        var harness = new OverlayHarness();
+        harness.Overlay.Open();
+
+        // SD-1: arrows drive the list on Windows; mac has no arrow
+        // handling at all. Empty list: a no-op, never a throw.
+        harness.Overlay.MoveSelection(1);
+        Assert.Equal(-1, harness.Overlay.SelectedIndex);
+
+        harness.Source.OnSearch = (_, _) => Results(
+            "three",
+            Hit("a.md", "a"),
+            Hit("b.md", "b"),
+            Hit("c.md", "c"));
+        harness.Overlay.Query = "alpha";
+        Assert.Equal(0, harness.Overlay.SelectedIndex);
+
+        harness.Overlay.MoveSelection(1);
+        Assert.Equal(1, harness.Overlay.SelectedIndex);
+
+        harness.Overlay.MoveSelection(-1);
+        harness.Overlay.MoveSelection(-1);
+        Assert.Equal(2, harness.Overlay.SelectedIndex);
+
+        harness.Overlay.MoveSelection(1);
+        Assert.Equal(0, harness.Overlay.SelectedIndex);
+    }
+
+    [Fact]
+    public void OpenRequestCarriesTheMarkerStrippedSnippet()
+    {
+        var harness = new OverlayHarness();
+        harness.Source.OnSearch = (_, _) => Results(
+            "one",
+            Hit("alpha.md", "before match after"));
+        harness.Overlay.Open();
+
+        harness.Overlay.Query = "match";
+        harness.Overlay.ActivateSelected();
+
+        SearchOpenRequest request = Assert.Single(harness.OpenRequests);
+        Assert.Equal("before match after", request.Snippet);
+    }
+
+    private static void AssertPanels(
+        SearchOverlayViewModel overlay,
+        bool idleHint = false,
+        bool recents = false,
+        bool searching = false,
+        bool resultRows = false,
+        bool noResults = false,
+        bool error = false)
+    {
+        Assert.Equal(idleHint, overlay.ShowsIdleHint);
+        Assert.Equal(recents, overlay.ShowsRecents);
+        Assert.Equal(searching, overlay.IsSearching);
+        Assert.Equal(resultRows, overlay.ShowsResultRows);
+        Assert.Equal(noResults, overlay.ShowsNoResults);
+        Assert.Equal(error, overlay.ShowsError);
+    }
+
     // ---- helpers --------------------------------------------------------
 
     private static QueryHit Hit(string path, string snippet, double score = -1.0) =>

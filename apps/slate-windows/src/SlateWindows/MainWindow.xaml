@@ -67,6 +67,9 @@
                         <DataTrigger Binding="{Binding QuickSwitcher.IsOpen}" Value="True">
                             <Setter Property="IsEnabled" Value="False" />
                         </DataTrigger>
+                        <DataTrigger Binding="{Binding Search.IsOpen}" Value="True">
+                            <Setter Property="IsEnabled" Value="False" />
+                        </DataTrigger>
                         <DataTrigger Binding="{Binding Palette.IsOpen}" Value="True">
                             <Setter Property="IsEnabled" Value="False" />
                         </DataTrigger>
@@ -404,6 +407,9 @@
                             <DataTrigger Binding="{Binding QuickSwitcher.IsOpen}" Value="True">
                                 <Setter Property="IsEnabled" Value="False" />
                             </DataTrigger>
+                            <DataTrigger Binding="{Binding Search.IsOpen}" Value="True">
+                                <Setter Property="IsEnabled" Value="False" />
+                            </DataTrigger>
                             <DataTrigger Binding="{Binding Palette.IsOpen}" Value="True">
                                 <Setter Property="IsEnabled" Value="False" />
                             </DataTrigger>
@@ -460,6 +466,9 @@
                         <Setter Property="IsEnabled" Value="True" />
                         <Style.Triggers>
                             <DataTrigger Binding="{Binding QuickSwitcher.IsOpen}" Value="True">
+                                <Setter Property="IsEnabled" Value="False" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding Search.IsOpen}" Value="True">
                                 <Setter Property="IsEnabled" Value="False" />
                             </DataTrigger>
                             <DataTrigger Binding="{Binding Palette.IsOpen}" Value="True">
@@ -1917,6 +1926,261 @@
                                                                Visibility="{Binding IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}"
                                                                Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                     </DockPanel>
+                </Grid>
+            </local:AutomationLandmarkBorder>
+            <!-- ==========================================================
+                 W5-2 (#742): the vault-search overlay. Declared BETWEEN
+                 Quick Open and the palette (contract S11): the palette
+                 may open OVER an open search overlay — mac's Return
+                 monitor guards !isCommandPaletteOpen for exactly that
+                 stacking — so the palette must paint above it.
+
+                 Visibility resolves through the WINDOW because this
+                 element overrides its own DataContext: the short path
+                 would resolve against SearchOverlayViewModel, fail, and
+                 stick at FallbackValue=Collapsed forever — shipped
+                 broken twice before, in W4-5 and W4-6.
+                 ========================================================== -->
+            <Border Background="Transparent"
+                    Visibility="{Binding Search.IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}" />
+            <local:AutomationLandmarkBorder x:Name="SearchOverlay"
+                    Width="640"
+                    MaxHeight="470"
+                    Padding="16"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Top"
+                    Margin="0,72,0,0"
+                    Background="{DynamicResource Slate.SurfaceBrush}"
+                    BorderBrush="{DynamicResource Slate.BorderBrush}"
+                    BorderThickness="1"
+                    Visibility="{Binding DataContext.Search.IsOpen, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Collapsed}"
+                    DataContext="{Binding Search}"
+                    FocusManager.IsFocusScope="True"
+                    KeyboardNavigation.TabNavigation="Cycle"
+                    KeyboardNavigation.ControlTabNavigation="Cycle"
+                    AutomationProperties.AutomationId="SearchOverlay"
+                    AutomationProperties.Name="Search Vault"
+                    AutomationProperties.IsDialog="True">
+                <local:AutomationLandmarkBorder.Effect>
+                    <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
+                </local:AutomationLandmarkBorder.Effect>
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <!-- "Search vault" with NO trailing period — mac's
+                         actual label (its own doc comment claiming the
+                         period is recorded stale, contracts doc item 3). -->
+                    <TextBox x:Name="SearchOverlaySearchTextBox"
+                             Grid.Row="0"
+                             Padding="10,8"
+                             FontSize="18"
+                             Text="{Binding Query, UpdateSourceTrigger=PropertyChanged}"
+                             PreviewKeyDown="SearchOverlaySearch_PreviewKeyDown"
+                             AutomationProperties.AutomationId="SearchOverlaySearch"
+                             AutomationProperties.Name="Search vault"
+                             Visibility="{Binding IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}"
+                             AutomationProperties.HelpText="Type to search across every note in this vault. Return activates the top result. Tab moves to the results list." />
+                    <!-- The read-only tag chip (divergence SD-3: no scope
+                         selector exists on either platform). One named
+                         group stop; the visual "Tag: {name}" text is
+                         presentation-only; the clear button is its own
+                         focusable stop, exactly mac's chip anatomy. -->
+                    <local:AutomationNamedRowBorder Grid.Row="1"
+                            Margin="0,8,0,0"
+                            Padding="8,4"
+                            CornerRadius="4"
+                            Background="{DynamicResource Slate.RaisedSurfaceBrush}"
+                            BorderBrush="{DynamicResource Slate.BorderBrush}"
+                            BorderThickness="1"
+                            Visibility="{Binding TagScopeName, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}"
+                            AutomationProperties.AutomationId="SearchOverlayTagChip"
+                            AutomationProperties.Name="{Binding TagScopeName, StringFormat='Filtered to tag {0}'}">
+                        <DockPanel>
+                            <Button DockPanel.Dock="Right"
+                                    Margin="8,0,0,0"
+                                    Padding="6,0"
+                                    MinWidth="28"
+                                    MinHeight="24"
+                                    Content="✕"
+                                    Click="SearchOverlayClearTagScope_Click"
+                                    AutomationProperties.AutomationId="SearchOverlayClearTagScope"
+                                    AutomationProperties.Name="Clear tag filter"
+                                    AutomationProperties.HelpText="Removes the tag filter and searches the whole vault." />
+                            <local:AutomationPresentationTextBlock
+                                    VerticalAlignment="Center"
+                                    Text="{Binding TagScopeName, StringFormat='Tag: {0}'}" />
+                        </DockPanel>
+                    </local:AutomationNamedRowBorder>
+                    <Grid Grid.Row="2" Margin="0,8,0,0">
+                        <!-- ONE accessible stop per result row (contract
+                             S4): the container carries the composed name;
+                             the emphasis runs and the basename line are
+                             presentation-only. Summary rides ItemStatus —
+                             the Quick Open precedent for the collection
+                             description. -->
+                        <local:AutomationVisibilityListBox x:Name="SearchOverlayResults"
+                                 ItemsSource="{Binding Rows}"
+                                 SelectedIndex="{Binding SelectedIndex, Mode=TwoWay}"
+                                 Visibility="{Binding ShowsResultRows, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                 SelectionChanged="SearchOverlayResults_SelectionChanged"
+                                 MouseDoubleClick="SearchOverlayResults_MouseDoubleClick"
+                                 AutomationProperties.AutomationId="SearchOverlayResults"
+                                 AutomationProperties.Name="Search results"
+                                 AutomationProperties.ItemStatus="{Binding Summary}">
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem">
+                                    <Setter Property="AutomationProperties.Name" Value="{Binding AccessibleName}" />
+                                    <Setter Property="ToolTip" Value="{Binding Path}" />
+                                </Style>
+                            </ListBox.ItemContainerStyle>
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Margin="4,2">
+                                        <local:AutomationPresentationTextBlock
+                                                Text="{Binding Basename}"
+                                                FontWeight="SemiBold" />
+                                        <!-- Match emphasis. A WrapPanel, not the
+                                             palette's horizontal StackPanel: the
+                                             snippet is never truncated (accepted
+                                             risk SR-2, mac's WCAG 1.4.4 call), so
+                                             a long one wraps into a tall row. -->
+                                        <ItemsControl ItemsSource="{Binding SnippetSegments}"
+                                                      Focusable="False">
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate>
+                                                    <WrapPanel Orientation="Horizontal" />
+                                                </ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <local:AutomationPresentationTextBlock
+                                                            Text="{Binding Text}"
+                                                            FontSize="12"
+                                                            Foreground="{DynamicResource Slate.SecondaryTextBrush}">
+                                                        <local:AutomationPresentationTextBlock.Style>
+                                                            <Style TargetType="local:AutomationPresentationTextBlock">
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding IsMatch}" Value="True">
+                                                                        <Setter Property="FontWeight" Value="Bold" />
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </local:AutomationPresentationTextBlock.Style>
+                                                    </local:AutomationPresentationTextBlock>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </local:AutomationVisibilityListBox>
+                        <!-- The mutually exclusive state panels, labels
+                             mac-verbatim (contract S14; the strings are
+                             pinned by SearchOverlayViewModel's constants
+                             and IdleStateLabelsAreMacVerbatim). Each is
+                             collapsed when unused — an empty panel left
+                             on-screen at zero size fails the axe
+                             BoundingRectangleNotNull check — and each
+                             publishes through a peer-bearing element: a
+                             bare StackPanel publishes nothing. -->
+                        <local:AutomationLandmarkGrid
+                                Visibility="{Binding ShowsIdleHint, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                AutomationProperties.AutomationId="SearchOverlayIdleHint"
+                                AutomationProperties.Name="Type to search.">
+                            <local:AutomationPresentationTextBlock Margin="4"
+                                    Text="Type to search."
+                                    Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
+                        </local:AutomationLandmarkGrid>
+                        <Grid Visibility="{Binding ShowsRecents, Converter={StaticResource BooleanToVisibilityConverter}}">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            <DockPanel Grid.Row="0" Margin="4,0">
+                                <Button DockPanel.Dock="Right"
+                                        Padding="8,2"
+                                        Content="Clear"
+                                        Click="SearchOverlayClearRecents_Click"
+                                        AutomationProperties.AutomationId="SearchOverlayClearRecents"
+                                        AutomationProperties.Name="Clear recent searches"
+                                        AutomationProperties.HelpText="Forgets every remembered search in this vault." />
+                                <TextBlock Text="Recent Searches"
+                                           VerticalAlignment="Center"
+                                           FontWeight="SemiBold"
+                                           Foreground="{DynamicResource Slate.SecondaryTextBrush}"
+                                           AutomationProperties.Name="Recent Searches"
+                                           AutomationProperties.HeadingLevel="Level2" />
+                            </DockPanel>
+                            <ScrollViewer Grid.Row="1"
+                                          Margin="0,4,0,0"
+                                          VerticalScrollBarVisibility="Auto">
+                                <ItemsControl ItemsSource="{Binding Recents}"
+                                              AutomationProperties.Name="Recent searches">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Button Margin="4,1"
+                                                    Padding="8,4"
+                                                    HorizontalAlignment="Stretch"
+                                                    HorizontalContentAlignment="Left"
+                                                    Content="{Binding}"
+                                                    Click="SearchOverlayRecentRow_Click"
+                                                    GotKeyboardFocus="SearchOverlayRecentRow_GotKeyboardFocus"
+                                                    AutomationProperties.Name="{Binding StringFormat='Recent search: {0}'}"
+                                                    AutomationProperties.HelpText="Runs this search again." />
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
+                        </Grid>
+                        <!-- Visible "Searching…", spoken "Searching." —
+                             mac's deliberate split. The transition into
+                             this state is SILENT (contract S8): the name
+                             is what an AT reads on focus, not a live
+                             announcement. -->
+                        <local:AutomationLandmarkGrid
+                                Visibility="{Binding IsSearching, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                AutomationProperties.AutomationId="SearchOverlaySearching"
+                                AutomationProperties.Name="Searching.">
+                            <local:AutomationPresentationTextBlock Margin="4"
+                                    Text="Searching…"
+                                    Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
+                        </local:AutomationLandmarkGrid>
+                        <local:AutomationLandmarkGrid
+                                Visibility="{Binding ShowsNoResults, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                AutomationProperties.AutomationId="SearchOverlayNoResults"
+                                AutomationProperties.Name="No results.">
+                            <local:AutomationPresentationTextBlock Margin="4"
+                                    Text="No results."
+                                    Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
+                        </local:AutomationLandmarkGrid>
+                        <StackPanel Margin="4"
+                                    Visibility="{Binding ShowsError, Converter={StaticResource BooleanToVisibilityConverter}}">
+                            <TextBlock Text="Search error"
+                                       FontWeight="SemiBold"
+                                       AutomationProperties.Name="Search error"
+                                       AutomationProperties.HeadingLevel="Level2" />
+                            <!-- The VM's Summary is the event's own
+                                 rendering ("Search error: {message}",
+                                 a11y.rs:872) — displayed and spoken from
+                                 one template, never two copies (S6). -->
+                            <TextBlock Margin="0,4,0,0"
+                                       Text="{Binding Summary}"
+                                       TextWrapping="Wrap"
+                                       Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
+                        </StackPanel>
+                    </Grid>
+                    <!-- Visible twin of the summary announcement, hidden
+                         from AT like mac's (the announcement is the audio
+                         source of truth; ItemStatus carries the UIA copy). -->
+                    <local:AutomationPresentationTextBlock Grid.Row="3"
+                            Margin="4,8,4,0"
+                            Text="{Binding Summary}"
+                            Visibility="{Binding ShowsResultRows, Converter={StaticResource BooleanToVisibilityConverter}}"
+                            Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                 </Grid>
             </local:AutomationLandmarkBorder>
             <!-- ==========================================================

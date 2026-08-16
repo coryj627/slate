@@ -11,7 +11,7 @@ namespace SlateWindows;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Nine surfaces are declared as siblings in one <c>Grid</c> cell of
+/// Ten surfaces are declared as siblings in one <c>Grid</c> cell of
 /// <c>MainWindow.xaml</c> with no <c>Panel.ZIndex</c> anywhere, so which
 /// one paints on top is decided by XAML declaration order. This enum
 /// makes that order explicit data instead of an accident of line
@@ -25,10 +25,18 @@ namespace SlateWindows;
 /// knew the SET of open surfaces. A guard written for one overlay
 /// silently omitted the other eight.
 /// </para>
+/// <para>
+/// <c>SearchOverlay</c> (W5-2, #742) sits between Quick Open and the
+/// palette: mac allows the palette to open OVER an open search overlay —
+/// its Return monitor guards <c>!isCommandPaletteOpen</c> for exactly
+/// that stacking — so the palette must be declared after search and
+/// paint above it.
+/// </para>
 /// </remarks>
 internal enum ModalSurface
 {
     QuickOpen,
+    SearchOverlay,
     CommandPalette,
     AddProperty,
     BulkRename,
@@ -82,6 +90,7 @@ internal enum PaletteOpenDecision
 /// </remarks>
 internal readonly record struct ModalSurfaceState(
     bool QuickOpen,
+    bool SearchOverlay,
     bool CommandPalette,
     bool AddProperty,
     bool BulkRename,
@@ -145,6 +154,7 @@ internal static class ModalSurfaces
         surface switch
         {
             ModalSurface.QuickOpen => state.QuickOpen,
+            ModalSurface.SearchOverlay => state.SearchOverlay,
             ModalSurface.CommandPalette => state.CommandPalette,
             ModalSurface.AddProperty => state.AddProperty,
             ModalSurface.BulkRename => state.BulkRename,
@@ -173,6 +183,38 @@ internal static class ModalSurfaces
 
             // PD-2: re-opening while open is allowed and clears the query.
             ModalSurface.CommandPalette => PaletteOpenDecision.Open,
+
+            // W5-2 (S11): the palette opens OVER an open search overlay —
+            // mac parity, where the search overlay's Return monitor guards
+            // !isCommandPaletteOpen for exactly this stacking. Search is
+            // declared before the palette in XAML, so the palette paints on
+            // top legibly and owns the keyboard while both are open.
+            ModalSurface.SearchOverlay => PaletteOpenDecision.Open,
+
+            ModalSurface.QuickOpen => PaletteOpenDecision.DismissQuickOpenThenOpen,
+
+            _ => PaletteOpenDecision.Refuse,
+        };
+
+    /// <summary>
+    /// Whether the search overlay's chord may act, given what is already
+    /// up (W5-2, contract S11).
+    /// </summary>
+    /// <remarks>
+    /// Mirrors <see cref="DecidePaletteOpen"/> and reuses its decision
+    /// enum. <c>SearchOverlay</c> answers <see cref="PaletteOpenDecision.Open"/>
+    /// because Ctrl+Shift+F TOGGLES: the view model's <c>Toggle</c>
+    /// closes an already-open overlay, so this function's only job is to
+    /// keep the chord from firing beneath a higher surface. The palette
+    /// and every sheet refuse — the palette may open over search (mac
+    /// parity), never the reverse.
+    /// </remarks>
+    internal static PaletteOpenDecision DecideSearchOpen(ModalSurface? topmost) =>
+        topmost switch
+        {
+            null => PaletteOpenDecision.Open,
+
+            ModalSurface.SearchOverlay => PaletteOpenDecision.Open,
 
             ModalSurface.QuickOpen => PaletteOpenDecision.DismissQuickOpenThenOpen,
 

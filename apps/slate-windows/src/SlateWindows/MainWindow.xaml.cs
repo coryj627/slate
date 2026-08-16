@@ -49,6 +49,7 @@ public partial class MainWindow : Window
         _viewModel.PropertyChanged += ViewModel_PropertyChanged;
         DataContext = _viewModel;
         ObservePalette();
+        ObserveSearch();
         RecentVaultJumpList.Apply(_viewModel.RecentVaults);
     }
 
@@ -413,6 +414,51 @@ public partial class MainWindow : Window
             // Handled either way: a refusal must not fall through and let
             // the chord reach the surface underneath.
             e.Handled = true;
+            return;
+        }
+
+        if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.F)
+        {
+            // W5-2: Ctrl+Shift+F, the direct map of mac's ⇧⌘F
+            // (slate.view.toggleSearch). Delivered here rather than as a
+            // KeyBinding because the overlay exposes methods, not
+            // ICommands — the palette-chord precedent above. TOGGLING,
+            // unlike Ctrl+Shift+P: DecideSearchOpen answers Open for an
+            // already-open overlay and Toggle closes it. Placed BEFORE
+            // the search-open branch below so its selective swallow
+            // cannot eat the overlay's own chord, and after the palette
+            // branches so an open palette (which paints ABOVE search)
+            // keeps the keyboard.
+            if (TryClearTheWayForSearch())
+            {
+                _viewModel.Search.Toggle();
+            }
+
+            // Handled either way: a refusal must not fall through and let
+            // the chord reach the surface underneath.
+            e.Handled = true;
+            return;
+        }
+
+        if (_viewModel.Search.IsOpen)
+        {
+            HandleSearchOverlayKey(e, modifiers);
+            if (e.Handled)
+            {
+                return;
+            }
+
+            // The palette's selective swallow, verbatim (contract S12):
+            // the overlay owns a TextBox, and marking every modified key
+            // handled here kills Ctrl+V, Ctrl+A, Ctrl+C and
+            // Shift-selection inside it, because TextBox reaches those
+            // through InputBindings, which WPF runs only for UNHANDLED
+            // key events. Ctrl+Shift+P never reaches this line — the
+            // palette branch above runs first, which is how the palette
+            // opens OVER an open search overlay (mac parity).
+            e.Handled = IsUnderlyingShellShortcut(e.Key, modifiers)
+                || (modifiers is not ModifierKeys.None
+                    && !TextEditingChords.Allows(e.Key, modifiers));
             return;
         }
 

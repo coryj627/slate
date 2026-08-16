@@ -19,8 +19,11 @@ internal enum SearchOverlayState
 
 /// <summary>Raised on activation (contract S9): the shell opens
 /// <see cref="Path"/> and derives the target line from
-/// <see cref="Query"/> — the query that produced the activated row.</summary>
-internal sealed record SearchOpenRequest(string Path, string Query);
+/// <see cref="Query"/> — the query that produced the activated row.
+/// <see cref="Snippet"/> is the row's marker-stripped snippet, carried
+/// for the shell's <c>SearchResultOpened</c> announcement (mac
+/// <c>cleanSnippet</c>, <c>AppState.swift:9441-9443</c>).</summary>
+internal sealed record SearchOpenRequest(string Path, string Query, string Snippet);
 
 /// <summary>
 /// W5-2 vault-search overlay state (#742). Core searches, ranks,
@@ -134,14 +137,68 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
     public SearchScope Scope
     {
         get => _scope;
-        private set => SetField(ref _scope, value);
+        private set
+        {
+            if (SetField(ref _scope, value))
+            {
+                OnPropertyChanged(nameof(TagScopeName));
+            }
+        }
     }
+
+    /// <summary>
+    /// The armed tag's name, or <see langword="null"/> outside Tag scope
+    /// — the phase-2 view's binding surface for the read-only
+    /// <c>Tag: {name}</c> chip (divergence SD-3: there is no scope
+    /// selector; the chip and its clear button are the whole UI).
+    /// </summary>
+    public string? TagScopeName => _scope is SearchScope.Tag tag ? tag.Name : null;
 
     public SearchOverlayState State
     {
         get => _state;
-        private set => SetField(ref _state, value);
+        private set
+        {
+            if (SetField(ref _state, value))
+            {
+                RaisePanelState();
+            }
+        }
     }
+
+    // ---- panel-state flags (phase-2 view surface) -----------------------
+    //
+    // The idle/searching/results/error panels are mutually exclusive on
+    // mac (SearchOverlay.swift's state switch); these flags let the XAML
+    // collapse every unused panel — an empty panel left on-screen at zero
+    // size fails the axe BoundingRectangleNotNull check (the W4-5/W4-6
+    // lesson) — without a MultiDataTrigger per panel.
+
+    /// <summary>Idle with no remembered searches: the bare
+    /// <see cref="IdleHint"/> (contract S14).</summary>
+    public bool ShowsIdleHint => State == SearchOverlayState.Idle && Recents.Count == 0;
+
+    /// <summary>Idle with remembered searches: the Recent Searches
+    /// section (contract S14).</summary>
+    public bool ShowsRecents => State == SearchOverlayState.Idle && Recents.Count > 0;
+
+    /// <summary>The transition into searching is visible but silent
+    /// (contract S8).</summary>
+    public bool IsSearching => State == SearchOverlayState.Searching;
+
+    /// <summary>Results with rows: the list itself (mac's
+    /// <c>resultsList</c> arm).</summary>
+    public bool ShowsResultRows =>
+        State == SearchOverlayState.Results && Rows.Count > 0;
+
+    /// <summary>Results with zero rows: the "No results." panel (mac's
+    /// <c>emptyResultsState</c> arm).</summary>
+    public bool ShowsNoResults =>
+        State == SearchOverlayState.Results && Rows.Count == 0;
+
+    /// <summary>Error: the "Search error" heading over
+    /// <see cref="Summary"/>.</summary>
+    public bool ShowsError => State == SearchOverlayState.Error;
 
     /// <summary>Core's summary string, displayed verbatim (contract
     /// S2). Never composed host-side — there is no "{n} results"
@@ -165,7 +222,13 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
     public IReadOnlyList<string> Recents
     {
         get => _recents;
-        private set => SetField(ref _recents, value);
+        private set
+        {
+            if (SetField(ref _recents, value))
+            {
+                RaisePanelState();
+            }
+        }
     }
 
     /// <summary>
@@ -264,6 +327,31 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
     /// scope (the chip's clear button; mac <c>clearSearchScope</c>).</summary>
     public void ClearScope() => SetScope(new SearchScope.Vault());
 
+    /// <summary>
+    /// Down (<c>delta = 1</c>) / Up (<c>delta = -1</c>), wrapping — the
+    /// palette's shape (divergence SD-1: Windows ships arrow-key result
+    /// navigation; mac has none, and matching mac's Tab-only traversal
+    /// would make search the only list surface here that arrows do not
+    /// drive).
+    /// </summary>
+    public void MoveSelection(int delta)
+    {
+        if (Rows.Count == 0 || delta == 0)
+        {
+            return;
+        }
+
+        int index = SelectedIndex;
+        if (index < 0 || index >= Rows.Count)
+        {
+            // From no selection: Down lands on the first row, Up on the
+            // last (the palette's P7 shape).
+            index = delta > 0 ? -1 : Rows.Count;
+        }
+
+        SelectedIndex = (((index + delta) % Rows.Count) + Rows.Count) % Rows.Count;
+    }
+
     /// <summary>Activate the selected row; Enter on the field activates
     /// the top result via a zero <see cref="SelectedIndex"/> (contract S9).</summary>
     public void ActivateSelected()
@@ -304,7 +392,8 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
         }
 
         Close();
-        OpenRequested?.Invoke(this, new SearchOpenRequest(row.Path, query));
+        OpenRequested?.Invoke(
+            this, new SearchOpenRequest(row.Path, query, row.StrippedSnippet));
     }
 
     /// <summary>
@@ -558,6 +647,10 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
         SelectedIndex = Rows.Count > 0 ? 0 : -1;
         _lastResultsQuery = query;
         State = SearchOverlayState.Results;
+        // Raised even when State was ALREADY Results — the row count can
+        // flip between zero and non-zero without a state change, and the
+        // ShowsResultRows/ShowsNoResults pair reads both.
+        RaisePanelState();
         // Contract S2: display core's summary verbatim; announce the
         // typed event, which core renders from the same template.
         PublishSummary(
@@ -612,6 +705,20 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
     {
         Rows.Clear();
         SelectedIndex = -1;
+        RaisePanelState();
+    }
+
+    /// <summary>Re-derive every mutually-exclusive panel flag. Cheap and
+    /// idempotent, so mutation sites call it without checking which flag
+    /// actually flipped.</summary>
+    private void RaisePanelState()
+    {
+        OnPropertyChanged(nameof(ShowsIdleHint));
+        OnPropertyChanged(nameof(ShowsRecents));
+        OnPropertyChanged(nameof(IsSearching));
+        OnPropertyChanged(nameof(ShowsResultRows));
+        OnPropertyChanged(nameof(ShowsNoResults));
+        OnPropertyChanged(nameof(ShowsError));
     }
 
     private void CancelDebounce()
