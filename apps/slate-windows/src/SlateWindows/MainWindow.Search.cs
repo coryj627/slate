@@ -142,11 +142,12 @@ public partial class MainWindow
                 // search captured the still-focused, about-to-collapse
                 // Quick Open box as its return target, and Escape then
                 // fell back to the editor instead of the element the
-                // user actually came from. Symmetric with the
-                // ConsumePreSearchFocus adoption in the switcher-open
-                // observer.
-                _focusBeforeSearch ??= _focusBeforeSwitcher;
-                _focusBeforeSwitcher = null;
+                // user actually came from. The consume runs
+                // unconditionally so the switcher's own restore is
+                // inert either way; ??= keeps an older search token if
+                // one exists.
+                IInputElement? preSwitcher = ConsumePreSwitcherFocus();
+                _focusBeforeSearch ??= preSwitcher;
                 _viewModel.QuickSwitcher!.Dismiss();
                 return true;
             default:
@@ -211,6 +212,18 @@ public partial class MainWindow
         _ = Dispatcher.InvokeAsync(
             () =>
             {
+                // The supersession stand-down (red team after codex
+                // round 11): when search was superseded — the palette,
+                // Quick Open, or a landing sheet is open by the time
+                // this runs — that surface owns the moment, and the
+                // null-token fallback below would otherwise flash the
+                // editor and speak a spurious pane announcement in the
+                // middle of the handoff.
+                if (OpenModalSurface is not null)
+                {
+                    return;
+                }
+
                 // Activation opens the hit and parks the caret, and the
                 // editor claims focus in that same flow — so restoring
                 // unconditionally would steal focus straight back out of

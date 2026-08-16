@@ -2644,10 +2644,12 @@ public sealed class ShellAccessibilityTests
             // here: the menu now DISABLES under every modal surface —
             // mac parity, AppKit disables the menu bar while a sheet is
             // up — so the probe that once expanded Edit OVER this sheet
-            // asserts the opposite. Jump loses nothing: its enable
-            // condition is an EXPANDED CITATION, not the sheet, so the
-            // menu route survives with the sheet closed (measured
-            // below) and Ctrl+J is unaffected.
+            // asserts the opposite. Jump's enable condition IS the
+            // sheet (CitationDetails non-null), and S11 disables the
+            // menu exactly then, so the MENU route is gone in every
+            // reachable state — the recorded SR-4 consequence, measured
+            // below as correctly-greyed; Ctrl+J (which fires with the
+            // sheet open) is the working route.
             AutomationElement mainMenu = WaitForElement(
                 window, "MainMenu", TimeSpan.FromSeconds(10));
             Assert.False(

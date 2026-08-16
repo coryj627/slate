@@ -257,6 +257,74 @@ public sealed class SearchOverlayViewModelTests
             harness.Announcements.OfType<A11yEvent.SearchResultsSummary>().Count());
     }
 
+    // ---- supersession (SD-5, red team after codex round 11) -------------
+
+    [Fact]
+    public void SupersedePreservesTheScopeWhereCloseResets()
+    {
+        var harness = new OverlayHarness();
+        harness.Overlay.Open();
+        harness.Overlay.SetScope(new SearchScope.Tag("project"));
+        harness.Overlay.Query = "budget";
+
+        harness.Overlay.Supersede();
+
+        // Everything else matches Close — rows gone, state Idle,
+        // overlay closed, query preserved...
+        Assert.False(harness.Overlay.IsOpen);
+        Assert.Equal(SearchOverlayState.Idle, harness.Overlay.State);
+        Assert.Empty(harness.Overlay.Rows);
+        Assert.Equal("budget", harness.Overlay.Query);
+        // ...but the SCOPE survives: the palette (or a landing sheet)
+        // only borrowed the screen, and Ctrl+Shift+F must give back
+        // what the user had — a plain Close here re-ran the refining
+        // query VAULT-wide on reopen, same-looking overlay, silently
+        // different results, no chip.
+        Assert.Equal("project", harness.Overlay.TagScopeName);
+    }
+
+    [Fact]
+    public void ReopenAfterSupersessionReArmsTheTagListingOnAnEmptyQuery()
+    {
+        // The SD-4 shape: a reading-tag overlay is empty-query + Tag
+        // scope, so nothing at all survived a Close-based supersession
+        // and Ctrl+Shift+F reopened an idle vault-wide field. After
+        // Supersede the reopen re-runs the tag listing under the
+        // preserved scope, chip and rows restored.
+        var harness = new OverlayHarness();
+        harness.Source.OnSearch = (_, _) => Results(
+            "Tagged files.",
+            Hit("a/tagged.md", string.Empty));
+        harness.Overlay.OpenTagScoped("project");
+        int callsBefore = harness.Source.SearchCalls.Count;
+
+        harness.Overlay.Supersede();
+        harness.Overlay.Open();
+
+        Assert.Equal(callsBefore + 1, harness.Source.SearchCalls.Count);
+        Assert.Equal(("", "Tag:project"), harness.Source.SearchCalls[^1]);
+        Assert.Equal("project", harness.Overlay.TagScopeName);
+        Assert.Equal(SearchOverlayState.Results, harness.Overlay.State);
+    }
+
+    [Fact]
+    public void UserCloseAfterSupersessionStillResetsTheScope()
+    {
+        // Supersede must not weaken Close: an Esc on the RESTORED
+        // overlay resets the scope exactly as mac's closeSearchOverlay
+        // does — the preserved scope lives only across the supersession
+        // round trip.
+        var harness = new OverlayHarness();
+        harness.Overlay.OpenTagScoped("project");
+
+        harness.Overlay.Supersede();
+        harness.Overlay.Open();
+        harness.Overlay.Close();
+
+        Assert.Null(harness.Overlay.TagScopeName);
+        Assert.IsType<SearchScope.Vault>(harness.Overlay.Scope);
+    }
+
     // ---- S6: cancellation is benign, errors are terminal ----------------
 
     [Fact]

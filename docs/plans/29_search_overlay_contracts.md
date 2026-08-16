@@ -317,11 +317,21 @@ model rather than discovered gap by gap:
 
 1. **Paint order is the enum order**, declared once in `ModalSurface`;
    XAML declaration order matches and is census-pinned.
-2. **Every open path consults a pure admission decision** —
+2. **Every picker open path consults a pure admission decision** —
    `DecidePaletteOpen`, `DecideSearchOpen`, `DecideQuickOpenOpen` — each
-   total over the enum with an every-member theory. Sheets refuse
-   everything beneath them. The chord, the menu (disabled under all ten
-   surfaces, census-pinned), and command invocation are all gated paths.
+   total over the enum with an every-member theory: the three picker
+   chords, the SD-4 view-model seam, and the menu (disabled under all
+   ten surfaces, census-pinned). Two deliberate carve-outs, both
+   recorded: the palette-invoked `slate.view.toggleSearch` is unguarded
+   (P9 invokes before dismissing, so a decision-aware guard would
+   refuse every palette invocation — the transient in invariant 6),
+   and the two W4-era sheet-opening chords (Ctrl+Shift+R,
+   Ctrl+Shift+J) predate admission entirely and can present a sheet
+   beneath a higher sheet — a pre-existing defect this wave found and
+   filed as [#1118](https://github.com/coryj627/slate/issues/1118),
+   not a gated path. (This entry originally claimed "the chord, the
+   menu, and command invocation are ALL gated paths"; the red team
+   falsified the universal.)
 3. **Key routing is by OWNERSHIP (topmost), not openness** —
    `SearchOwnsKeys`; a hidden surface never takes keys.
 4. **Focus restore is a census with ordering**: every `Restore*Focus*`
@@ -343,13 +353,15 @@ model rather than discovered gap by gap:
    deferred continuation — the files-citing load, the bases edit-JSON
    fetch, a citation summary parked on `RowsPublished` — and a picker
    opened during that window would otherwise sit beneath the landing
-   sheet (codex round 11's finding). So (a) every OPEN path consults
-   admission at dispatch (invariant 2), and (b) every sheet
-   PRESENTATION closes the pickers reactively: the lifecycle observes
-   the workspace's seven sheet properties and, in the same
-   property-change notification that presents a sheet, closes an open
-   search overlay, Quick Open, and palette
-   (`Workspace_SheetPresented`, census-pinned). The single sanctioned
+   sheet (codex round 11's finding). So (a) the picker open paths
+   consult admission at dispatch (invariant 2, with its recorded
+   carve-outs), and (b) every sheet PRESENTATION clears the pickers
+   reactively: the lifecycle observes the workspace's seven sheet
+   properties and, in the same property-change notification that
+   presents a sheet, SUPERSEDES an open search overlay (scope and
+   query preserved, per SD-5's restoration promise) and dismisses
+   Quick Open and the palette (`Workspace_SheetPresented`,
+   census-pinned). The single sanctioned
    overlap is the TRANSIENT window inside a palette invoke — P9 runs
    the command before dismissing, so a command that opens a surface (a
    synchronous sheet, or the deliberately unguarded
@@ -446,10 +458,18 @@ A new surface joins ALL SIX or fails a named gate.
   `!isCommandPaletteOpen` precisely because the stack misroutes keys
   there too; see the #1113 defect list), so the divergence cost is one
   observable: on Windows the overlay is closed while the palette is up,
-  and Ctrl+Shift+F restores it with the query preserved — `Close()`
-  keeps the query and `Open()` re-arms it through the ordinary
-  pipeline, mac's own `closeSearchOverlay`/`onAppear` shape
-  (`AppState.swift:8832-8846`). Convergence direction is noted on
+  and Ctrl+Shift+F restores what the user had. Restoration is real,
+  not approximate (red team after codex round 11 — the first draft
+  claimed it with a plain `Close()`, which resets the scope, so the
+  SD-4 tag flow lost everything and a refining query re-armed
+  VAULT-wide on reopen): supersessions call `Supersede()`, which is
+  `Close()` with the SCOPE preserved alongside the query, and `Open()`
+  re-arms a preserved Tag scope even on an empty query (the tag
+  listing returns with its chip). A USER close — Esc, the close
+  button, activation — remains mac's `closeSearchOverlay` verbatim,
+  scope reset included (`AppState.swift:8832-8846`): the armed-scope
+  reset exists for overlays the user closed, not for overlays another
+  surface borrowed the screen from. Convergence direction is noted on
   [#1113](https://github.com/coryj627/slate/issues/1113): mac adopting
   exclusivity is the cheaper end state for both platforms.
 

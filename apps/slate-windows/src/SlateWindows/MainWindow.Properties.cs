@@ -147,7 +147,7 @@ public partial class MainWindow
         {
             if (workspace.AddPropertySheet is not null)
             {
-                _focusBeforeSheet ??= Keyboard.FocusedElement;
+                _focusBeforeSheet ??= CapturePreSheetFocus();
                 _ = Dispatcher.InvokeAsync(
                     () => AddPropertyKeyTextBox.Focus(),
                     System.Windows.Threading.DispatcherPriority.Input);
@@ -162,7 +162,7 @@ public partial class MainWindow
             ObserveBulkRenameSheet(workspace.BulkRenameSheet);
             if (workspace.BulkRenameSheet is not null)
             {
-                _focusBeforeSheet ??= Keyboard.FocusedElement;
+                _focusBeforeSheet ??= CapturePreSheetFocus();
                 BindBulkRenameGrid(workspace.BulkRenameSheet);
                 _ = Dispatcher.InvokeAsync(
                     () => BulkRenameOldKeyTextBox.Focus(),
@@ -182,28 +182,26 @@ public partial class MainWindow
         _ = Dispatcher.InvokeAsync(
             () =>
             {
-                // Codex round 2 (#742): a palette-invoked sheet captures
-                // the PALETTE's text box as its return target, and the
-                // palette dismisses while the sheet is up — so the
-                // captured element is collapsed by the time the sheet
-                // closes, Focus() fails, and the false result was
-                // ignored. With search still open beneath (it stays open
-                // by design), the exposed overlay owned the keys but not
-                // text focus: typing went nowhere until a click. When
-                // the captured target cannot take focus, hand focus to
-                // the topmost modal owner — the search box when search
-                // is topmost.
-                // Codex round 3 (#742): search topmost takes priority
-                // over the captured target, not merely over a FAILED
-                // restore — the pre-sheet element is behind the overlay
-                // by construction. One shared rule for all three sheet
-                // restore sites; see TryFocusSearchIfTopmost.
+                // Codex rounds 2-3 (#742): under the original stacking
+                // design a palette-invoked sheet's captured target was
+                // the collapsed palette box, and search stayed open
+                // beneath — so the topmost-search rule runs FIRST
+                // (invariant 4's backstop now that SD-5 made that
+                // state unreachable; see TryFocusSearchIfTopmost).
                 if (TryFocusSearchIfTopmost())
                 {
                     return;
                 }
 
-                _ = previous?.Focus();
+                // Red team after round 11: a failed restore was a bare
+                // ignored Focus() — the one census member with no miss
+                // fallback, stranding focus on the window root when
+                // the captured element had been destroyed (a panel
+                // republish) or collapsed (a dismissed picker box).
+                if (previous is null || !TryFocus(previous))
+                {
+                    FocusActiveEditorPane();
+                }
             },
             System.Windows.Threading.DispatcherPriority.Input);
     }

@@ -1277,9 +1277,17 @@ internal sealed class VaultLifecycleViewModel
             return;
         }
 
-        Search.Close();
+        // SUPERSEDE, not Close, for search (red team after round 11):
+        // the landing sheet is borrowing the screen the way the
+        // palette does, so the scope survives and Ctrl+Shift+F after
+        // the sheet restores the overlay the user actually had.
+        // Backing fields, not the lazy getters: closing a picker that
+        // was never constructed should not construct it — in a
+        // window-free host the Palette getter registers the whole
+        // command catalog as a side effect of this dispatch.
+        _search?.Supersede();
         QuickSwitcher?.Dismiss();
-        Palette.Dismiss();
+        _palette?.Dismiss();
     }
 
     private static SwitcherFile[] LoadSwitcherFiles(VaultSession session)

@@ -310,7 +310,12 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
         // the debounced pipeline, which is exactly why that pipeline
         // has no dedup (contract S7) — with dedup the identical string
         // was silently swallowed and this line was dead code on mac.
-        if (Query.Length > 0)
+        // A Tag scope preserved by Supersede re-arms even with an
+        // empty query — under Tag scope an empty query is meaningful
+        // (core lists every tagged file), and reopening onto a chip
+        // with no listing would be the silent-scope defect Close's
+        // reset exists to prevent.
+        if (Query.Length > 0 || Scope is SearchScope.Tag)
         {
             ScheduleSearch();
         }
@@ -343,6 +348,32 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
         PublishSummary(string.Empty, null);
         IsOpen = false;
         Dismissed?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>
+    /// Close the overlay because ANOTHER SURFACE is superseding it
+    /// (SD-5): identical to <see cref="Close"/> except the scope
+    /// survives, so Ctrl+Shift+F after the palette (or after a landing
+    /// sheet) restores what the user actually had — a tag-scoped
+    /// overlay reopens as that tag's listing, not as an idle
+    /// vault-wide field. Red team after codex round 11: with a plain
+    /// Close here, the SD-4 tag flow lost everything across a
+    /// supersession, and a refining query re-armed VAULT-wide on
+    /// reopen — same-looking overlay, silently different results, no
+    /// chip. Close keeps mac's reset (a scope armed on a USER-closed
+    /// overlay is the silent-misdirection case); supersession is the
+    /// one path where the scope is coming back to a visible chip.
+    /// </summary>
+    public void Supersede()
+    {
+        if (!IsOpen)
+        {
+            return;
+        }
+
+        SearchScope preserved = Scope;
+        Close();
+        Scope = preserved;
     }
 
     /// <summary>

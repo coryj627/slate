@@ -177,10 +177,12 @@ internal static class ModalSurfaces
     /// overlay, and a key branch routed on <c>Search.IsOpen</c> alone
     /// let the hidden overlay steal the sheet's Enter and Escape.
     /// Ownership, not openness, is the routing question. SD-5 has since
-    /// removed persistent stacking — search open now implies search
-    /// topmost — so this is invariant 3's BACKSTOP: should a future
-    /// path leave search open beneath something, keys route to the
-    /// visible surface, not the hidden one.
+    /// removed persistent stacking — BETWEEN DISPATCHER TURNS, search
+    /// open implies search topmost (inside a palette invoke's sanctioned
+    /// transient it is briefly beneath the palette) — so this is
+    /// invariant 3's BACKSTOP: should a future path leave search open
+    /// beneath something, keys route to the visible surface, not the
+    /// hidden one.
     /// </remarks>
     internal static bool SearchOwnsKeys(ModalSurfaceState state) =>
         TopmostOpen(state) == ModalSurface.SearchOverlay;
@@ -235,7 +237,8 @@ internal static class ModalSurfaces
             // Quick Open — 28_palette_contracts.md's own rule, "dismisses
             // the incumbent rather than stacking". The dismissal arm
             // hands search's captured pre-open focus to the palette, and
-            // the preserved query makes Ctrl+Shift+F the way back.
+            // Supersede preserves query AND scope, so Ctrl+Shift+F gives
+            // back what the user had — a tag listing included.
             ModalSurface.SearchOverlay => PaletteOpenDecision.DismissSearchThenOpen,
 
             ModalSurface.QuickOpen => PaletteOpenDecision.DismissQuickOpenThenOpen,

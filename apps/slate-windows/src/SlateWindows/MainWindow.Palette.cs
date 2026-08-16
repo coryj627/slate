@@ -116,6 +116,19 @@ public partial class MainWindow
     /// Applies <see cref="ModalSurfaces.DecidePaletteOpen"/>, performing
     /// the dismissal it calls for.
     /// </summary>
+    /// <summary>
+    /// Hands the palette's captured pre-open focus to a caller that is
+    /// closing it on its own initiative (a presenting sheet consuming
+    /// lineage), clearing it here so the palette's own dismissal
+    /// restore runs inert — the <c>ConsumePreSearchFocus</c> twin.
+    /// </summary>
+    internal IInputElement? ConsumePrePaletteFocus()
+    {
+        IInputElement? previous = _focusBeforePalette;
+        _focusBeforePalette = null;
+        return previous;
+    }
+
     private bool TryClearTheWayForThePalette()
     {
         switch (ModalSurfaces.DecidePaletteOpen(OpenModalSurface))
@@ -123,6 +136,13 @@ public partial class MainWindow
             case PaletteOpenDecision.Open:
                 return true;
             case PaletteOpenDecision.DismissQuickOpenThenOpen:
+                // Red team after codex round 11: this arm dismissed
+                // WITHOUT adopting, so the palette's ??= capture then
+                // grabbed the collapsing Quick Open box and Escape fell
+                // back to the editor instead of the element the user
+                // started from — the lineage every other supersession
+                // already hands down (invariant 5).
+                _focusBeforePalette = ConsumePreSwitcherFocus();
                 _viewModel.QuickSwitcher!.Dismiss();
                 return true;
             case PaletteOpenDecision.DismissSearchThenOpen:
@@ -131,11 +151,13 @@ public partial class MainWindow
                 // lineage — the palette's return target becomes the
                 // element from before SEARCH opened, so Escape lands the
                 // user where they started, not on the collapsed search
-                // box. Consuming first also keeps search's own queued
-                // restore from racing this handoff for the same element
-                // (the switcher-open observer's shape, mirrored).
+                // box. Consuming first leaves search's own queued restore
+                // inert (it stands down while the palette is open), and
+                // Supersede rather than Close keeps the SCOPE alongside
+                // the query, so Ctrl+Shift+F restores a tag-scoped
+                // overlay as that tag's listing.
                 IInputElement? preSearch = ConsumePreSearchFocus();
-                _viewModel.Search.Close();
+                _viewModel.Search.Supersede();
                 _focusBeforePalette = preSearch;
                 return true;
             default:
@@ -324,7 +346,11 @@ public partial class MainWindow
                 // captured the PALETTE box as search's return target
                 // (P9 had focus there at invoke time); the palette's own
                 // pre-open token is the true lineage and replaces it.
+                // Same rule for a palette-invoked Quick Open (red team
+                // after round 11 — the missing twin).
                 AdoptPaletteFocusIntoSearch(
+                    focusBefore, IsDescendantOfPaletteOverlay);
+                AdoptPaletteFocusIntoQuickOpen(
                     focusBefore, IsDescendantOfPaletteOverlay);
 
                 // Codex round 4 (#742): search topmost takes priority
@@ -337,6 +363,16 @@ public partial class MainWindow
                 // FIRST: with a sheet or picker above, SearchOwnsKeys
                 // is false and the ordinary logic runs.
                 if (TryFocusSearchIfTopmost())
+                {
+                    return;
+                }
+
+                // The supersession stand-down (red team after round
+                // 11): any other surface open at restore time owns the
+                // moment — a palette-invoked Quick Open or sheet has
+                // its own grab queued or landed, and restoring here
+                // would flash-and-announce the editor mid-handoff.
+                if (OpenModalSurface is not null)
                 {
                     return;
                 }

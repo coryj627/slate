@@ -44,9 +44,11 @@ public sealed class SheetPresentationAdmissionTests : IDisposable
 
     /// <summary>
     /// The synchronous shape: a citation summary presenting while the
-    /// search overlay is open closes the overlay in the same
-    /// notification — and preserves the query, so Ctrl+Shift+F remains
-    /// the way back (SD-5's supersession semantics, not a reset).
+    /// search overlay is open SUPERSEDES the overlay in the same
+    /// notification — query preserved here, scope preservation pinned
+    /// by the `Supersede*` facts in `SearchOverlayViewModelTests` — so
+    /// Ctrl+Shift+F remains the way back (SD-5's restoration promise,
+    /// not a reset).
     /// </summary>
     [Fact]
     public async Task ASheetPresentationClosesAnOpenSearchOverlay()
