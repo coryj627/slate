@@ -148,7 +148,7 @@ pub fn full_text_search(
     if trimmed.is_empty() {
         return Ok(QueryResultSet {
             rows: Vec::new(),
-            summary: "Search returned no results.".to_string(),
+            summary: summary_for(0),
         });
     }
 
