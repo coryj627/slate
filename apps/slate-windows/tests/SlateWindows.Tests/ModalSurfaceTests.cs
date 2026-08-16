@@ -554,6 +554,67 @@ public sealed class ModalSurfaceTests
     /// under-match.
     /// </remarks>
     [Fact]
+    public void SearchOwnsKeysOnlyWhenItIsTheTopmostSurface()
+    {
+        // Codex round 1: a palette-invoked sheet opens OVER a still-open
+        // search overlay, and routing on IsOpen alone let the hidden
+        // overlay steal the sheet's Enter and Escape.
+        Assert.True(ModalSurfaces.SearchOwnsKeys(
+            StateWithOnly(ModalSurface.SearchOverlay)));
+
+        foreach (ModalSurface above in new[]
+        {
+            ModalSurface.CommandPalette,
+            ModalSurface.AddProperty,
+            ModalSurface.BulkRename,
+            ModalSurface.CitationSummary,
+        })
+        {
+            ModalSurfaceState state = StateWith(ModalSurface.SearchOverlay, above);
+            Assert.False(
+                ModalSurfaces.SearchOwnsKeys(state),
+                $"search owned the keyboard beneath an open {above}.");
+        }
+
+        // All closed: nothing owns the keyboard.
+        Assert.False(ModalSurfaces.SearchOwnsKeys(default));
+    }
+
+    /// <summary>
+    /// The shell's search key branch routes through
+    /// <c>SearchOwnsKeys</c>, not a bare <c>IsOpen</c> read.
+    /// </summary>
+    [Fact]
+    public void TheSearchKeyBranchRoutesOnOwnershipNotOpenness()
+    {
+        Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax route =
+            CSharpSource.Load("MainWindow.xaml.cs").Method("Window_PreviewKeyDown");
+
+        Assert.True(
+            route.DescendantNodes()
+                .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.IfStatementSyntax>()
+                .Any(statement => CSharpSource.Normalize(statement.Condition)
+                    == "ModalSurfaces.SearchOwnsKeys(CurrentModalSurfaceState)"),
+            "Window_PreviewKeyDown no longer gates the search branch on "
+            + "ModalSurfaces.SearchOwnsKeys(CurrentModalSurfaceState) — a "
+            + "bare IsOpen read lets a hidden overlay steal a sheet's keys.");
+    }
+
+    private static ModalSurfaceState StateWith(
+        ModalSurface first, ModalSurface second) =>
+        new(
+            QuickOpen: first is ModalSurface.QuickOpen || second is ModalSurface.QuickOpen,
+            SearchOverlay: first is ModalSurface.SearchOverlay || second is ModalSurface.SearchOverlay,
+            CommandPalette: first is ModalSurface.CommandPalette || second is ModalSurface.CommandPalette,
+            AddProperty: first is ModalSurface.AddProperty || second is ModalSurface.AddProperty,
+            BulkRename: first is ModalSurface.BulkRename || second is ModalSurface.BulkRename,
+            CitationDetails: first is ModalSurface.CitationDetails || second is ModalSurface.CitationDetails,
+            CitationSummary: first is ModalSurface.CitationSummary || second is ModalSurface.CitationSummary,
+            FilesCiting: first is ModalSurface.FilesCiting || second is ModalSurface.FilesCiting,
+            DashboardEditor: first is ModalSurface.DashboardEditor || second is ModalSurface.DashboardEditor,
+            BaseQueryBuilder: first is ModalSurface.BaseQueryBuilder || second is ModalSurface.BaseQueryBuilder);
+
+    [Fact]
     public void EveryMenuDisablePathResolvesAgainstTheLiveViewModels()
     {
         foreach ((ModalSurface surface, string path) in MenuDisableBindings)

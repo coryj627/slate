@@ -440,7 +440,11 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (_viewModel.Search.IsOpen)
+        // Ownership, not openness (codex round 1): a palette-invoked
+        // sheet sits above a still-open search overlay, and routing on
+        // IsOpen alone let the hidden overlay steal the sheet's Enter
+        // and Escape.
+        if (ModalSurfaces.SearchOwnsKeys(CurrentModalSurfaceState))
         {
             HandleSearchOverlayKey(e, modifiers);
             if (e.Handled)

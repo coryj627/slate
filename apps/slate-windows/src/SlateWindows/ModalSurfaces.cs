@@ -141,6 +141,24 @@ internal static class ModalSurfaces
         TopmostOpen(surface => IsOpen(surface, state));
 
     /// <summary>
+    /// Whether the search overlay owns the keyboard: open AND topmost.
+    /// </summary>
+    /// <remarks>
+    /// Codex round 1 (#742): a palette-invoked sheet opens OVER search
+    /// without closing it — the palette admits itself above search by
+    /// design, and a sheet-opening command presents before the palette
+    /// dismisses. The key branch routed on <c>Search.IsOpen</c> alone,
+    /// so the hidden overlay stole Enter (activating an invisible result
+    /// and opening a note behind the sheet) and Escape (closing the
+    /// hidden overlay instead of the sheet). Ownership, not openness, is
+    /// the routing question. Search deliberately REMAINS OPEN beneath the
+    /// sheet — mac parity, where nothing closes it either — and regains
+    /// the keyboard when the sheet closes and it is topmost again.
+    /// </remarks>
+    internal static bool SearchOwnsKeys(ModalSurfaceState state) =>
+        TopmostOpen(state) == ModalSurface.SearchOverlay;
+
+    /// <summary>
     /// Whether one named surface is open in <paramref name="state"/>.
     /// </summary>
     /// <remarks>
