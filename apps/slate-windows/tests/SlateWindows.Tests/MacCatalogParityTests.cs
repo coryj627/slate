@@ -186,7 +186,7 @@ public sealed class MacCatalogParityTests
     /// </remarks>
     private static IReadOnlySet<string> MacDeclaredIds()
     {
-        string commands = File.ReadAllText(Path.Combine(MacSourceRoot(), "SlateCommands.swift"));
+        string commands = SwiftSource.WithoutComments(File.ReadAllText(MacCommandsPath()));
         var ids = new HashSet<string>(StringComparer.Ordinal);
         foreach (Match match in Regex.Matches(
             commands, @"static let \w+(?::\s*String)?\s*=\s*""(slate\.[A-Za-z0-9.]+)"""))
@@ -211,7 +211,7 @@ public sealed class MacCatalogParityTests
     /// </summary>
     private static IReadOnlyDictionary<string, string> MacLabelsById()
     {
-        string commands = File.ReadAllText(Path.Combine(MacSourceRoot(), "SlateCommands.swift"));
+        string commands = SwiftSource.WithoutComments(File.ReadAllText(MacCommandsPath()));
 
         // static let <name> = "slate.…"
         var idByName = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -242,8 +242,8 @@ public sealed class MacCatalogParityTests
         // Reading only the first file left 43 shared ids looking
         // Windows-only — a scrape that under-matches rather than a real
         // divergence, which is the class this project keeps hitting.
-        string catalog = File.ReadAllText(
-            Path.Combine(MacSourceRoot(), "Sidebar", "SidebarActionCatalog.swift"));
+        string catalog = SwiftSource.WithoutComments(File.ReadAllText(
+            Path.Combine(MacSourceRoot(), "Sidebar", "SidebarActionCatalog.swift")));
         foreach (Match match in Regex.Matches(
             catalog,
             SidebarCatalogLabelPattern))
@@ -281,6 +281,14 @@ public sealed class MacCatalogParityTests
     private static string Unescape(string value) =>
         value.Replace("\\\\", "\\", StringComparison.Ordinal)
             .Replace("\\\"", "\"", StringComparison.Ordinal);
+
+    /// <summary>
+    /// mac's command catalog. Exposed so the Swift stripper's
+    /// over-stripping guard can measure itself against the real file
+    /// rather than a sample.
+    /// </summary>
+    internal static string MacCommandsPath() =>
+        Path.Combine(MacSourceRoot(), "SlateCommands.swift");
 
     private static string MacSourceRoot() =>
         Path.Combine(RepoRoot(), "apps", "slate-mac", "Sources", "SlateMac");
