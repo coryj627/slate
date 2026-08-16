@@ -610,28 +610,93 @@ public sealed class ModalSurfaceTests
     /// and the failed <c>Focus()</c> was ignored — the exposed search
     /// overlay owned the keys but not text focus.
     /// </remarks>
+    /// <summary>
+    /// Restore sites the topmost-search rule covers, and the ones
+    /// exempt with a reason. Discovery below asserts every
+    /// <c>Restore*Focus*</c> method in the shell is in exactly one
+    /// list, so a fifth implementation cannot appear uncovered — the
+    /// round-3 and round-4 findings were both exactly that.
+    /// </summary>
+    private static readonly (string File, string Method)[] CoveredRestoreSites =
+    [
+        ("MainWindow.Properties.cs", "RestoreFocusAfterSheet"),
+        ("MainWindow.Citations.cs", "RestoreFocusTo"),
+        ("MainWindow.Bases.cs", "RestoreBasesOverlayFocus"),
+        ("MainWindow.Palette.cs", "RestoreFocusAfterPalette"),
+    ];
+
+    private static readonly Dictionary<(string File, string Method), string> ExemptRestoreSites =
+        new()
+        {
+            [("MainWindow.Search.cs", "RestoreFocusAfterSearch")] =
+                "runs when SEARCH ITSELF closes, so search cannot be the "
+                + "topmost surface during it by construction.",
+        };
+
     [Fact]
     public void TheSheetRestoreFallsBackToTheSearchBoxWhenSearchIsTopmost()
     {
-        // Codex round 3: the round-2 gate covered ONE of the three
-        // independent restore implementations, and the same defect
-        // survived through Citation Summary. Every restore site must
-        // route through the shared topmost-search rule.
-        foreach ((string file, string method) in new[]
+        // Discovery: every Restore*Focus* method in the shell partials
+        // must be covered or exempt — hardcoding the list is how the
+        // Citation Summary (round 3) and palette (round 4) sites hid.
+        string root = SourceText.ShellSourceRoot();
+        foreach (string path in System.IO.Directory.GetFiles(root, "MainWindow*.cs"))
         {
-            ("MainWindow.Properties.cs", "RestoreFocusAfterSheet"),
-            ("MainWindow.Citations.cs", "RestoreFocusTo"),
-            ("MainWindow.Bases.cs", "RestoreBasesOverlayFocus"),
-        })
+            string file = System.IO.Path.GetFileName(path);
+            foreach (Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax method
+                in CSharpSource.Load(file).Root
+                    .DescendantNodes()
+                    .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax>())
+            {
+                string name = method.Identifier.ValueText;
+                if (!name.StartsWith("Restore", StringComparison.Ordinal)
+                    || !name.Contains("Focus", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                bool covered = CoveredRestoreSites.Contains((file, name));
+                bool exempt = ExemptRestoreSites.ContainsKey((file, name));
+                Assert.True(
+                    covered ^ exempt,
+                    $"{file}.{name} is a focus-restore implementation in "
+                    + "neither the covered list nor the exempt list — a "
+                    + "surface closing above an open search overlay through "
+                    + "it would strand text focus, invisibly.");
+            }
+        }
+
+        foreach ((string file, string methodName) in CoveredRestoreSites)
         {
             Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax restore =
-                CSharpSource.Load(file).Method(method);
+                CSharpSource.Load(file).Method(methodName);
+            var invocations = restore.DescendantNodes()
+                .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax>()
+                .ToList();
+            int guard = invocations.FindIndex(call =>
+                CSharpSource.Normalize(call.Expression) == "TryFocusSearchIfTopmost");
             Assert.True(
-                CSharpSource.Invokes(restore, "TryFocusSearchIfTopmost"),
-                $"{file}.{method} no longer routes through "
-                + "TryFocusSearchIfTopmost — a sheet closing above a "
+                guard >= 0,
+                $"{file}.{methodName} no longer routes through "
+                + "TryFocusSearchIfTopmost — a surface closing above a "
                 + "still-open search overlay leaves the exposed search box "
                 + "without text focus.");
+
+            // ORDERING, not mere presence (codex round 4): the guard must
+            // precede every competing .Focus() attempt, or a successful
+            // restore to an element BEHIND the overlay wins the race.
+            for (var index = 0; index < guard; index++)
+            {
+                // The CALLEE only — normalizing the whole call would
+                // match Dispatcher.InvokeAsync's lambda text, whose
+                // body legitimately contains the guarded restores.
+                Assert.False(
+                    CSharpSource.Normalize(invocations[index].Expression)
+                        .EndsWith(".Focus", StringComparison.Ordinal),
+                    $"{file}.{methodName} attempts a focus restore BEFORE "
+                    + "the topmost-search guard — search topmost must win "
+                    + "even against a restore that would succeed.");
+            }
         }
 
         // And the shared helper itself must consult ownership and focus
@@ -644,6 +709,30 @@ public sealed class ModalSurfaceTests
         Assert.True(
             CSharpSource.Invokes(helper, "SearchOverlaySearchTextBox.Focus"),
             "TryFocusSearchIfTopmost no longer focuses the search box.");
+    }
+
+    /// <summary>
+    /// The pickers are mutually exclusive (codex round 4): Quick Open
+    /// paints BELOW search, so opening it under an open search overlay
+    /// put focus in a hidden box. The shell's switcher-open observer
+    /// must close search and adopt the pre-search focus as the
+    /// switcher's return target.
+    /// </summary>
+    [Fact]
+    public void QuickOpenOpeningClosesAnOpenSearchOverlay()
+    {
+        Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax observer =
+            CSharpSource.Load("MainWindow.xaml.cs").Method("QuickSwitcher_PropertyChanged");
+
+        Assert.True(
+            CSharpSource.Invokes(observer, "_viewModel.Search.Close"),
+            "the switcher-open observer no longer closes an open search "
+            + "overlay — Quick Open opens BENEATH it and typing lands in a "
+            + "hidden box.");
+        Assert.True(
+            CSharpSource.Invokes(observer, "ConsumePreSearchFocus"),
+            "the switcher-open observer no longer adopts the pre-search "
+            + "focus, so its restore would target the collapsed search box.");
     }
 
     private static ModalSurfaceState StateWith(

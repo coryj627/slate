@@ -296,6 +296,23 @@ public partial class MainWindow : Window
         if (eventArgs.PropertyName == nameof(QuickSwitcherViewModel.IsOpen)
             && _observedQuickSwitcher?.IsOpen == true)
         {
+            // Codex round 4 (#742): the pickers are mutually exclusive.
+            // Quick Open paints BELOW the search overlay, so a
+            // palette-invoked Quick Open under an open search left focus
+            // in a hidden text box — typing edited an invisible query
+            // while arrows and Escape operated search. Search opening
+            // already dismisses Quick Open (DecideSearchOpen); this is
+            // the symmetric half. The pre-SEARCH focus is adopted as the
+            // switcher's return target so its eventual restore lands on
+            // the element from before either picker, not on the
+            // now-collapsed search box.
+            if (_viewModel.Search.IsOpen)
+            {
+                IInputElement? preSearch = ConsumePreSearchFocus();
+                _viewModel.Search.Close();
+                _focusBeforeSwitcher = preSearch;
+            }
+
             _focusBeforeSwitcher ??= Keyboard.FocusedElement;
             _quickSwitcherCommitted = false;
             _ = Dispatcher.InvokeAsync(() =>

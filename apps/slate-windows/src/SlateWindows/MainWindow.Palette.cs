@@ -307,6 +307,17 @@ public partial class MainWindow
         _ = Dispatcher.InvokeAsync(
             () =>
             {
+                // Codex round 4 (#742): search topmost takes priority
+                // here too — the palette dismissing above a still-open
+                // search overlay must hand focus to the search box, not
+                // to whatever sat beneath the overlay before the palette
+                // opened. Runs FIRST: with a sheet or picker above,
+                // SearchOwnsKeys is false and the ordinary logic runs.
+                if (TryFocusSearchIfTopmost())
+                {
+                    return;
+                }
+
                 // An invoked command often opens its own surface and
                 // focuses it deliberately — the Add Property sheet's Key
                 // field, Quick Open's search box. Those focus operations

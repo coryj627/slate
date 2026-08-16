@@ -75,6 +75,19 @@ public partial class MainWindow
     /// restore implementations, which is why this is one shared helper
     /// rather than three copies of the rule.
     /// </summary>
+    /// <summary>
+    /// Hands the search overlay's captured pre-open focus to a caller
+    /// that is closing search on its own initiative (the picker
+    /// mutual-exclusion path), clearing it here so the ordinary
+    /// dismissal restore does not race the caller for the same element.
+    /// </summary>
+    internal IInputElement? ConsumePreSearchFocus()
+    {
+        IInputElement? previous = _focusBeforeSearch;
+        _focusBeforeSearch = null;
+        return previous;
+    }
+
     internal bool TryFocusSearchIfTopmost()
     {
         if (!ModalSurfaces.SearchOwnsKeys(CurrentModalSurfaceState))
