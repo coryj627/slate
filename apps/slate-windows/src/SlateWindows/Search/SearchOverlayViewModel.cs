@@ -377,6 +377,26 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
     }
 
     /// <summary>
+    /// The vault-transition reset (codex round 12): <see cref="Close"/>
+    /// early-returns on a CLOSED overlay, and <see cref="Supersede"/>
+    /// deliberately leaves its preserved scope on one — so a transition
+    /// that only called Close carried vault A's tag scope into vault B,
+    /// where <see cref="Open"/>'s tag re-arm silently searched the new
+    /// vault under the old tag, stale chip and all: the cross-vault
+    /// session-identity class the staleness axes exist for, arriving
+    /// through a new door. Works on open AND closed overlays: Close is
+    /// the open-overlay teardown, and the two fields it deliberately
+    /// leaves for a SAME-VAULT reopen — the superseded scope, the
+    /// retained query — are cleared explicitly.
+    /// </summary>
+    public void ResetForVaultTransition()
+    {
+        Close();
+        Scope = new SearchScope.Vault();
+        Query = string.Empty;
+    }
+
+    /// <summary>
     /// Arm a scope and re-run the current query under it (mac
     /// <c>setSearchScope</c>): under Tag scope an empty query is
     /// meaningful — core lists every tagged file — so the re-arm always

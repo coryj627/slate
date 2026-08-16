@@ -581,18 +581,20 @@ internal sealed class VaultLifecycleViewModel
 
     /// <summary>
     /// The vault-transition teardown mac performs in both closeVault and
-    /// the direct-switch path: close the overlay (which cancels the
-    /// in-flight search and resets scope, state, and the announcement
-    /// memory) and clear the retained query, so vault A's query cannot
-    /// re-arm inside vault B (<c>AppState.swift:9761-9762</c>,
-    /// <c>:11016-11017</c>).
+    /// the direct-switch path (<c>AppState.swift:9761-9762</c>,
+    /// <c>:11016-11017</c>): nothing of vault A's search — query, scope,
+    /// rows, announcement memory — may re-arm inside vault B. Through
+    /// <see cref="SearchOverlayViewModel.ResetForVaultTransition"/>
+    /// rather than <c>Close()</c> (codex round 12): Close early-returns
+    /// on a CLOSED overlay, and a superseded overlay is closed with its
+    /// scope deliberately preserved — the old body carried vault A's
+    /// tag scope across the switch.
     /// </summary>
     private void CloseSearchForVaultTransition()
     {
         if (_search is SearchOverlayViewModel search)
         {
-            search.Close();
-            search.Query = string.Empty;
+            search.ResetForVaultTransition();
         }
     }
 

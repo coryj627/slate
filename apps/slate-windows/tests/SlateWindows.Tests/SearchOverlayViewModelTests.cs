@@ -308,6 +308,36 @@ public sealed class SearchOverlayViewModelTests
     }
 
     [Fact]
+    public void ResetForVaultTransitionClearsASupersededScopeOnAClosedOverlay()
+    {
+        // Codex round 12: Close() early-returns on a closed overlay,
+        // and Supersede deliberately leaves its scope on one — so the
+        // vault transition must reset THROUGH the closed state, or
+        // vault A's tag scope re-arms silently inside vault B.
+        var harness = new OverlayHarness();
+        harness.Source.OnSearch = (_, _) => Results(
+            "Tagged files.",
+            Hit("a/tagged.md", string.Empty));
+        harness.Overlay.OpenTagScoped("project");
+        harness.Overlay.Query = "budget";
+        harness.Overlay.Supersede();
+        Assert.False(harness.Overlay.IsOpen);
+        Assert.Equal("project", harness.Overlay.TagScopeName);
+
+        harness.Overlay.ResetForVaultTransition();
+
+        Assert.Null(harness.Overlay.TagScopeName);
+        Assert.IsType<SearchScope.Vault>(harness.Overlay.Scope);
+        Assert.Equal(string.Empty, harness.Overlay.Query);
+        // And the next Open is genuinely idle: no tag re-arm, no
+        // retained-query re-arm, no call to the source.
+        int callsBefore = harness.Source.SearchCalls.Count;
+        harness.Overlay.Open();
+        Assert.Equal(callsBefore, harness.Source.SearchCalls.Count);
+        Assert.Equal(SearchOverlayState.Idle, harness.Overlay.State);
+    }
+
+    [Fact]
     public void UserCloseAfterSupersessionStillResetsTheScope()
     {
         // Supersede must not weaken Close: an Esc on the RESTORED

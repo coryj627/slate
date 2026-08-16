@@ -164,6 +164,39 @@ public sealed class SheetPresentationAdmissionTests : IDisposable
             + "sheet (the W5-1 round-1 class).");
     }
 
+    /// <summary>
+    /// Codex round 12: a scope preserved by a supersession must not
+    /// survive a vault transition. The direct-switch path runs the
+    /// transition reset through the CLOSED overlay — with a bare
+    /// Close() (which early-returns when closed), vault A's tag scope
+    /// re-armed silently inside vault B, stale chip and all.
+    /// </summary>
+    [Fact]
+    public async Task ASupersededTagScopeDoesNotLeakIntoTheNextVault()
+    {
+        string rootA = NewVault("scope-leak-a");
+        string rootB = NewVault("scope-leak-b");
+        using VaultLifecycleViewModel lifecycle = NewLifecycle(rootA);
+        await lifecycle.OpenVaultAsync(rootA);
+        WorkspaceViewModel workspace = Assert.IsType<WorkspaceViewModel>(lifecycle.Workspace);
+
+        lifecycle.Search.OpenTagScoped("project");
+        workspace.OpenCitationSummary();
+        Assert.False(lifecycle.Search.IsOpen);
+        // The supersession preserved the scope — correct within one
+        // vault, the hazard across two.
+        Assert.Equal("project", lifecycle.Search.TagScopeName);
+
+        await lifecycle.OpenVaultAsync(rootB);
+
+        Assert.Null(lifecycle.Search.TagScopeName);
+        Assert.IsType<SearchScope.Vault>(lifecycle.Search.Scope);
+        Assert.Equal(string.Empty, lifecycle.Search.Query);
+        lifecycle.Search.Open();
+        Assert.True(lifecycle.Search.IsOpen);
+        Assert.Equal(SearchOverlayState.Idle, lifecycle.Search.State);
+    }
+
     // ---- Helpers --------------------------------------------------------
 
     private VaultLifecycleViewModel NewLifecycle(string root) =>
