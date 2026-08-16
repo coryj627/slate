@@ -111,6 +111,16 @@ public partial class MainWindow
             case PaletteOpenDecision.Open:
                 return true;
             case PaletteOpenDecision.DismissQuickOpenThenOpen:
+                // Codex round 5 (#742): the reverse half of the picker
+                // handoff. Without adopting the pre-SWITCHER focus,
+                // search captured the still-focused, about-to-collapse
+                // Quick Open box as its return target, and Escape then
+                // fell back to the editor instead of the element the
+                // user actually came from. Symmetric with the
+                // ConsumePreSearchFocus adoption in the switcher-open
+                // observer.
+                _focusBeforeSearch ??= _focusBeforeSwitcher;
+                _focusBeforeSwitcher = null;
                 _viewModel.QuickSwitcher!.Dismiss();
                 return true;
             default:

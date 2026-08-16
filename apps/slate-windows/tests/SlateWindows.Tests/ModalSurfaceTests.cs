@@ -712,6 +712,60 @@ public sealed class ModalSurfaceTests
     }
 
     /// <summary>
+    /// Quick Open's chord refuses beneath every sheet and the palette
+    /// (codex round 5): the Ctrl+O branch was unconditional, and the
+    /// picker exclusion then closed a search overlay under the sheet
+    /// too, leaving only the hidden picker taking keys.
+    /// </summary>
+    [Theory]
+    [InlineData(null, PaletteOpenDecision.Open)]
+    [InlineData(ModalSurface.QuickOpen, PaletteOpenDecision.Open)]
+    [InlineData(ModalSurface.SearchOverlay, PaletteOpenDecision.Open)]
+    [InlineData(ModalSurface.CommandPalette, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.AddProperty, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.BulkRename, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.CitationDetails, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.CitationSummary, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.FilesCiting, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.DashboardEditor, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.BaseQueryBuilder, PaletteOpenDecision.Refuse)]
+    public void QuickOpenRefusesBeneathEverySheetAndThePalette(
+        object? topmost, object expected)
+    {
+        ModalSurface? surface = topmost is null ? null : (ModalSurface)topmost;
+        Assert.Equal(
+            (PaletteOpenDecision)expected,
+            ModalSurfaces.DecideQuickOpenOpen(surface));
+    }
+
+    /// <summary>The Ctrl+O branch consults the decision.</summary>
+    [Fact]
+    public void TheQuickOpenChordBranchConsultsTheAdmissionDecision()
+    {
+        Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax route =
+            CSharpSource.Load("MainWindow.xaml.cs").Method("Window_PreviewKeyDown");
+        Assert.True(
+            CSharpSource.Invokes(route, "ModalSurfaces.DecideQuickOpenOpen"),
+            "the Ctrl+O branch no longer consults DecideQuickOpenOpen — "
+            + "Quick Open opens beneath any sheet again.");
+    }
+
+    /// <summary>
+    /// The reverse picker handoff (codex round 5): search superseding
+    /// Quick Open adopts the pre-SWITCHER focus, or Escape falls back to
+    /// the editor instead of the element the user came from.
+    /// </summary>
+    [Fact]
+    public void TheSearchSupersessionAdoptsThePreSwitcherFocus()
+    {
+        Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax clear =
+            CSharpSource.Load("MainWindow.Search.cs").Method("TryClearTheWayForSearch");
+        string body = CSharpSource.Normalize(clear);
+        Assert.Contains(
+            "_focusBeforeSearch??=_focusBeforeSwitcher", body, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The pickers are mutually exclusive (codex round 4): Quick Open
     /// paints BELOW search, so opening it under an open search overlay
     /// put focus in a hidden box. The shell's switcher-open observer

@@ -155,6 +155,25 @@ internal static class ModalSurfaces
     /// sheet — mac parity, where nothing closes it either — and regains
     /// the keyboard when the sheet closes and it is topmost again.
     /// </remarks>
+    /// <summary>
+    /// Whether Quick Open's chord may act, given what is already up
+    /// (codex round 5, #742). The Ctrl+O branch was unconditional, so
+    /// Quick Open opened BENEATH any sheet — and the round-4 picker
+    /// exclusion then closed a search overlay under that sheet too,
+    /// leaving only the hidden picker active. Search is admitted
+    /// because the switcher-open observer closes it (the picker
+    /// exclusion); Quick Open re-opens over itself per W1; the palette
+    /// and every sheet refuse.
+    /// </summary>
+    internal static PaletteOpenDecision DecideQuickOpenOpen(ModalSurface? topmost) =>
+        topmost switch
+        {
+            null => PaletteOpenDecision.Open,
+            ModalSurface.QuickOpen => PaletteOpenDecision.Open,
+            ModalSurface.SearchOverlay => PaletteOpenDecision.Open,
+            _ => PaletteOpenDecision.Refuse,
+        };
+
     internal static bool SearchOwnsKeys(ModalSurfaceState state) =>
         TopmostOpen(state) == ModalSurface.SearchOverlay;
 

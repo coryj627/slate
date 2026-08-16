@@ -553,8 +553,17 @@ public partial class MainWindow : Window
 
         if (e.Key == Key.O && modifiers == ModifierKeys.Control && _viewModel.QuickSwitcher is not null)
         {
-            _focusBeforeSwitcher ??= Keyboard.FocusedElement;
-            _viewModel.QuickSwitcher.Open();
+            // Codex round 5 (#742): this branch was unconditional, so
+            // Ctrl+O opened Quick Open BENEATH any sheet — and the
+            // picker exclusion then closed a search overlay under the
+            // sheet too, leaving only the hidden picker taking keys.
+            if (ModalSurfaces.DecideQuickOpenOpen(OpenModalSurface)
+                == PaletteOpenDecision.Open)
+            {
+                _focusBeforeSwitcher ??= Keyboard.FocusedElement;
+                _viewModel.QuickSwitcher.Open();
+            }
+
             e.Handled = true;
             return;
         }
