@@ -286,6 +286,33 @@ open by pointer. Note mac's field row also carries a separate
 "Clear search text" button; that one is native `TextBox` chrome on
 Windows (the Fluent clear button, #1106) and is not duplicated.
 
+## The modal-stack invariants (written per stopping rule 4)
+
+Codex rounds 2-5 each found a blocker in the modal-stack subsystem, so
+per `24_red_team_protocol.md` rule 4 the design is stated here as one
+model rather than discovered gap by gap:
+
+1. **Paint order is the enum order**, declared once in `ModalSurface`;
+   XAML declaration order matches and is census-pinned.
+2. **Every open path consults a pure admission decision** —
+   `DecidePaletteOpen`, `DecideSearchOpen`, `DecideQuickOpenOpen` — each
+   total over the enum with an every-member theory. Sheets refuse
+   everything beneath them. The chord, the menu (disabled under all ten
+   surfaces, census-pinned), and command invocation are all gated paths.
+3. **Key routing is by OWNERSHIP (topmost), not openness** —
+   `SearchOwnsKeys`; a hidden surface never takes keys.
+4. **Focus restore is a census with ordering**: every `Restore*Focus*`
+   implementation in the shell is covered by the shared
+   `TryFocusSearchIfTopmost` rule (which runs FIRST, beating even a
+   restore that would succeed onto an element behind the overlay) or is
+   exempt with a written reason.
+5. **The pickers are mutually exclusive, both directions, with focus
+   handoff**: whichever opens closes the other and adopts its captured
+   pre-open focus, so the eventual restore lands on the element from
+   before either picker.
+
+A new surface joins ALL FIVE or fails a named gate.
+
 ## Divergence register (owner-recorded; off-limits for re-litigation)
 
 - **SD-1 — Windows ships arrow-key result navigation; mac has none.**
