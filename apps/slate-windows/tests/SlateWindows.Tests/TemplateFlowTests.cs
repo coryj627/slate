@@ -466,6 +466,87 @@ public sealed class TemplateFlowTests
     }
 
     [Fact]
+    public void AStaleSamePathTabIsReloadedBeforeTheCaretParks()
+    {
+        RunSta(() =>
+        {
+            using FixtureVault fixture = FixtureVault.Create(1, "tpl-ghost");
+            WriteTemplate(
+                fixture.Root, "Plain.md", "# {{title}}\n\nCafé {{cursor}}end\n");
+            using VaultSession session = OpenScanned(fixture.Root);
+            using var workspace = new WorkspaceViewModel(
+                session, fixture.Root, () => [], _ => { },
+                startInteractionBackgroundWork: false);
+
+            // A tab parked on a path with NO file behind it — the
+            // persistence-restore / InvalidatePath shape (T8, red team
+            // correctness finding 1): its buffer is empty and clean.
+            workspace.OpenPath("Ghost.md");
+            WorkspaceTabViewModel ghost = workspace.ActiveGroup.ActiveTab!;
+            Assert.Equal("Ghost.md", ghost.Path);
+            Assert.Equal(string.Empty, ghost.Text);
+            Assert.False(ghost.IsDirty);
+
+            OpenFlowFor(workspace, "Plain");
+            TemplateFlowViewModel flow = workspace.TemplateFlowSheet!;
+            flow.NoteName = "Ghost";
+            flow.CreateCommand.Execute(null);
+
+            // The open landed the SAME tab object (the same-group arm
+            // activates, it does not construct) — and the fresh-read
+            // rule reloaded it, so the buffer is the rendered body and
+            // the caret sits at the {{cursor}} site, not at 0 inside a
+            // stale empty document.
+            WorkspaceTabViewModel tab = workspace.ActiveGroup.ActiveTab!;
+            Assert.Equal("Ghost.md", tab.Path);
+            Assert.Equal("# Ghost\n\nCafé end\n", tab.Text);
+            Assert.Equal(
+                tab.Text.IndexOf("end", StringComparison.Ordinal),
+                tab.EditorCaretOffset);
+        });
+    }
+
+    [Fact]
+    public void ARefusedDirtyNavigationDropsTheParkAndLeavesTheOldCaretAlone()
+    {
+        RunSta(() =>
+        {
+            using FixtureVault fixture = FixtureVault.Create(1, "tpl-refused");
+            WriteTemplate(
+                fixture.Root, "Plain.md", "Body {{cursor}}tail\n");
+            using VaultSession session = OpenScanned(fixture.Root);
+            var announced = new List<A11yEvent>();
+            // The headless default dirty-navigation decision is Cancel,
+            // which IS the refusal arm under test (TD-3).
+            using var workspace = new WorkspaceViewModel(
+                session, fixture.Root, () => [], announced.Add,
+                startInteractionBackgroundWork: false);
+
+            workspace.OpenPath("note0.md");
+            WorkspaceTabViewModel current = workspace.ActiveGroup.ActiveTab!;
+            current.EditorDocument!.Insert(0, "unsaved ");
+            Assert.True(current.IsDirty);
+            int caretBefore = current.EditorCaretOffset;
+
+            OpenFlowFor(workspace, "Plain");
+            workspace.TemplateFlowSheet!.NoteName = "Blocked";
+            workspace.TemplateFlowSheet.CreateCommand.Execute(null);
+
+            // The note EXISTS and was announced — creation succeeded —
+            // but the refused open keeps the user on their dirty note,
+            // parks nothing, and retains no deferred landing (TD-3).
+            Assert.True(File.Exists(Path.Combine(fixture.Root, "Blocked.md")));
+            Assert.Contains(
+                announced, item => item is A11yEvent.TemplateNoteCreated);
+            Assert.Null(workspace.TemplateFlowSheet);
+            Assert.Same(current, workspace.ActiveGroup.ActiveTab);
+            Assert.Equal("note0.md", current.Path);
+            Assert.Equal(caretBefore, current.EditorCaretOffset);
+            Assert.True(current.IsDirty);
+        });
+    }
+
+    [Fact]
     public void TheCaretParkSurvivesEditorMaterialization()
     {
         RunSta(() =>

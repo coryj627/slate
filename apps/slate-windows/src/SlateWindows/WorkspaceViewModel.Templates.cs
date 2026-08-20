@@ -195,32 +195,60 @@ internal sealed partial class WorkspaceViewModel
             return;
         }
 
-        TemplateFlowSheet = null;
-        _templateCreationDestination = string.Empty;
         // Announce BEFORE the open (mac's order): the created event is
         // High so it outlives the tab-switch announcement that follows.
         _announce(new A11yEvent.TemplateNoteCreated(
             System.IO.Path.GetFileName(path), flow.Template.Name));
         TemplateNoteWritten?.Invoke(this, path);
 
+        // The open runs while the flow sheet is STILL UP (red team,
+        // correctness finding 2): a dirty current tab makes OpenPath
+        // show the owner-modal Save/Discard prompt, whose nested pump
+        // drains the dispatcher — a restore queued by an earlier sheet
+        // close would execute against a disabled window, spending the
+        // pre-flow focus token and speaking a spurious pane
+        // announcement mid-dialog. Closing the sheet AFTER the open
+        // resolves means the restore queues into an enabled window,
+        // after any editor focus claim, so the SD-2 stand-down probe
+        // evaluates the create's real focus outcome.
         OpenPath(path, WorkspaceOpenTarget.CurrentTab);
         WorkspaceTabViewModel? tab = ActiveGroup.ActiveTab;
-        if (tab is not { IsMarkdown: true }
-            || !string.Equals(tab.Path, path, StringComparison.Ordinal))
+        if (tab is { IsMarkdown: true }
+            && string.Equals(tab.Path, path, StringComparison.Ordinal))
         {
-            // The dirty-navigation prompt refused the open (TD-3): the
-            // note exists and was announced; no caret is parked and no
-            // deferred landing is retained — the S9 posture.
-            return;
+            // T8's fresh-read rule (red team, correctness finding 1): a
+            // same-path tab can land the open WITHOUT a disk read — the
+            // same-group arm just activates the existing tab, and the
+            // cross-group arm mirrors the peer's buffer over the fresh
+            // read — so a parked tab of a previously deleted file (a
+            // persistence restore, or the mid-session InvalidatePath
+            // sweep) would display its stale buffer over the note just
+            // created. A CLEAN tab whose text is not the rendered body
+            // reloads from disk; a DIRTY tab is never reloaded — the
+            // user's unsaved buffer outranks the render, and the caret
+            // guard below already stands down for it.
+            if (!tab.IsDirty
+                && !string.Equals(tab.Text, rendered.Body, StringComparison.Ordinal))
+            {
+                tab.ReplaceItem(tab.Item);
+            }
+
+            // The Search_OpenRequested posture: a dirty or externally
+            // stale buffer no longer matches the bytes the offset was
+            // rendered from, so the caret stays put.
+            if (!tab.IsDirty && !tab.IsExternallyStale)
+            {
+                tab.EditorInteractions?.RequestCaret(
+                    TemplateCursor.CaretIndex(rendered.Body, rendered.CursorByteOffset));
+            }
         }
 
-        // T8's stale-tab guard, the Search_OpenRequested posture: a
-        // dirty or externally stale buffer no longer matches the bytes
-        // the offset was rendered from, so the caret stays put.
-        if (!tab.IsDirty && !tab.IsExternallyStale)
-        {
-            tab.EditorInteractions?.RequestCaret(
-                TemplateCursor.CaretIndex(rendered.Body, rendered.CursorByteOffset));
-        }
+        // else: the dirty-navigation prompt refused the open (TD-3) —
+        // the note exists and was announced; no caret is parked and no
+        // deferred landing is retained (the S9 posture). The sheet
+        // still closes, and the queued restore returns focus to the
+        // pre-flow element.
+        TemplateFlowSheet = null;
+        _templateCreationDestination = string.Empty;
     }
 }
