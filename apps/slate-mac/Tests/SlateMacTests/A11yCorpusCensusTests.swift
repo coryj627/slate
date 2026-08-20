@@ -313,6 +313,10 @@ final class A11yCorpusCensusTests: XCTestCase {
             .gridCellMoved(column: "Status", value: "Open"),
             .gridGroup(label: "Open", rowCount: 1, summary: nil),
             .gridGroup(label: "Done", rowCount: 12, summary: "Count: 12"),
+            .templatePickerOpened(count: 0),
+            .templatePickerOpened(count: 1),
+            .templatePickerOpened(count: 7),
+            .templateNoteCreated(name: "Meeting 2026-08-20.md", template: "Meeting"),
             .hostComposed(text: "Composed by a host engine.", priority: .high),
         ]
     }
