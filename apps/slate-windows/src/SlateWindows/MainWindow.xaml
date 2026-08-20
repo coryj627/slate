@@ -3419,7 +3419,13 @@
                                     AutomationProperties.HelpText="Continue to choose the new note's name. Return." />
                         </StackPanel>
                         <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <!-- Focusable=False: an ItemsControl is a Control,
+                                 whose Focusable default is TRUE — the journey's
+                                 axe scan caught it as a focusable unnamed List
+                                 (the W4-5 class). The prompt TextBoxes are the
+                                 tab stops; this host is pure layout. -->
                             <ItemsControl x:Name="TemplateFlowPromptsList"
+                                          Focusable="False"
                                           ItemsSource="{Binding PromptFields}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>

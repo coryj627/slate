@@ -465,6 +465,92 @@ public sealed class TemplateFlowTests
         Assert.Equal(4, TemplateCursor.CaretIndex("abcd", 99));
     }
 
+    [Fact]
+    public void TheCaretParkSurvivesEditorMaterialization()
+    {
+        RunSta(() =>
+        {
+            using FixtureVault fixture = FixtureVault.Create(1, "tpl-materialize");
+            // The journey's exact fixture shape: template frontmatter
+            // renders through into the note, and the multibyte char
+            // sits before {{cursor}} so a byte/UTF-16 confusion moves
+            // the caret visibly.
+            WriteTemplate(
+                fixture.Root, "Meeting.md",
+                "---\ndescription: Journey fixture\n---\n# {{title}}\n\n"
+                + "Topic: {{prompt:Topic}}\n\nCafé {{cursor}}end\n");
+            using VaultSession session = OpenScanned(fixture.Root);
+            using var workspace = new WorkspaceViewModel(
+                session, fixture.Root, () => [], _ => { },
+                startInteractionBackgroundWork: false);
+
+            OpenFlowFor(workspace, "Meeting");
+            TemplateFlowViewModel flow = workspace.TemplateFlowSheet!;
+            flow.PromptFields[0].Value = "Quarterly sync";
+            flow.NextCommand.Execute(null);
+            flow.CreateCommand.Execute(null);
+
+            WorkspaceTabViewModel tab = workspace.ActiveGroup.ActiveTab!;
+            int expected = tab.Text.IndexOf("end", StringComparison.Ordinal);
+            Assert.Equal(expected, tab.EditorCaretOffset);
+
+            // Materialize a REAL editor bound the way the tab template
+            // binds it (WorkspaceTemplates.xaml:390-393) AFTER the park
+            // — the journey found the live caret at 0 while the VM-only
+            // assertion above stayed green, so this is the regression
+            // gate for whatever the view layer does to a parked caret
+            // during materialization.
+            var editor = new SlateTextEditor();
+            // DataContext FIRST, then the caret binding BEFORE the
+            // document binding: each SetBinding then transfers
+            // immediately, so the caret value arrives while the editor
+            // still holds its default empty document — the order the
+            // live template materialization was MEASURED applying them
+            // (the journey's probe: caretDpChanged new=89 with
+            // doclen=0, then the destructive clamp wrote 0 back
+            // through the TwoWay binding and poisoned the tab). WPF
+            // does not promise attribute-order application on a fresh
+            // template, so the editor must survive either order.
+            editor.DataContext = tab;
+            _ = editor.SetBinding(
+                SlateTextEditor.EditorCaretOffsetProperty,
+                new System.Windows.Data.Binding("EditorCaretOffset")
+                {
+                    Mode = System.Windows.Data.BindingMode.TwoWay,
+                    UpdateSourceTrigger =
+                        System.Windows.Data.UpdateSourceTrigger.PropertyChanged,
+                });
+            _ = editor.SetBinding(
+                ICSharpCode.AvalonEdit.TextEditor.DocumentProperty,
+                new System.Windows.Data.Binding("EditorDocument"));
+            _ = editor.SetBinding(
+                SlateTextEditor.HighlightSessionProperty,
+                new System.Windows.Data.Binding("EditorSession"));
+            _ = editor.SetBinding(
+                SlateTextEditor.InteractionSessionProperty,
+                new System.Windows.Data.Binding("EditorInteractions"));
+            var window = new System.Windows.Window
+            {
+                Content = editor,
+                Width = 500,
+                Height = 300,
+                ShowInTaskbar = false,
+                WindowStyle = System.Windows.WindowStyle.None,
+            };
+            window.Show();
+            try
+            {
+                WaitForUi(() => editor.IsLoaded);
+                Assert.Equal(expected, editor.CaretOffset);
+                Assert.Equal(expected, tab.EditorCaretOffset);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
+
     // ---- Helpers ------------------------------------------------------
 
     private static void WriteTemplate(string root, string name, string body)
@@ -504,6 +590,21 @@ public sealed class TemplateFlowTests
         using var cancel = new CancelToken();
         session.ScanInitial(cancel);
         return session;
+    }
+
+    private static void WaitForUi(Func<bool> condition)
+    {
+        DateTime deadline = DateTime.UtcNow.AddSeconds(20);
+        while (!condition())
+        {
+            Assert.True(DateTime.UtcNow < deadline, "Asynchronous action timed out.");
+            var frame = new System.Windows.Threading.DispatcherFrame();
+            _ = System.Windows.Threading.Dispatcher.CurrentDispatcher.BeginInvoke(
+                System.Windows.Threading.DispatcherPriority.Background,
+                new Action(() => frame.Continue = false));
+            System.Windows.Threading.Dispatcher.PushFrame(frame);
+            Thread.Yield();
+        }
     }
 
     private static void RunSta(Action body)
