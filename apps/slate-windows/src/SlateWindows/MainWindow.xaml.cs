@@ -249,6 +249,7 @@ public partial class MainWindow : Window
             UnwireWorkspaceProperties(_observedWorkspace);
             UnwireWorkspaceCitations(_observedWorkspace);
             UnwireWorkspaceBases(_observedWorkspace);
+            UnwireWorkspaceTemplates(_observedWorkspace);
         }
 
         _observedWorkspace = workspace;
@@ -258,6 +259,7 @@ public partial class MainWindow : Window
             WireWorkspaceProperties(workspace);
             WireWorkspaceCitations(workspace);
             WireWorkspaceBases(workspace);
+            WireWorkspaceTemplates(workspace);
         }
     }
 
@@ -536,6 +538,24 @@ public partial class MainWindow : Window
             {
                 _viewModel.Search.Toggle();
             }
+
+            // Handled either way: a refusal must not fall through and let
+            // the chord reach the surface underneath.
+            e.Handled = true;
+            return;
+        }
+
+        if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.N)
+        {
+            // W5-3 (#743): Ctrl+Shift+N, the direct map of mac's ⇧⌘N
+            // (slate.file.newFromTemplate). The modal admission runs
+            // INSIDE the workspace's open (contract T9 — one gate for
+            // chord, menu, and palette row alike), so unlike #1118's
+            // sheet chords this can never present beneath a higher
+            // surface. Placed before the search-ownership swallow so
+            // the chord supersedes an open search overlay the way the
+            // palette chord does.
+            _viewModel.Workspace?.OpenTemplatePicker();
 
             // Handled either way: a refusal must not fall through and let
             // the chord reach the surface underneath.

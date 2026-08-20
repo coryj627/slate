@@ -494,6 +494,17 @@ public sealed class ChordTableTests
                 + "palette invokes before dismissing (P9). Recorded here so the "
                 + "W5-1 red-team finding (an imperative chord shipping with no "
                 + "table row) cannot recur for search."),
+            [ChordTable.Ids.NewFromTemplate] = new(
+                "W5-3 (T9): Ctrl+Shift+N is delivered from Window_PreviewKeyDown, "
+                + "not a KeyBinding — a KeyBinding runs only for UNHANDLED key "
+                + "events, so the pickers' selective swallows would eat the chord "
+                + "and kill the DismissQuickOpen/DismissSearch supersession arms; "
+                + "the imperative branch runs BEFORE those swallows. Unlike "
+                + "toggleSearch, the registered command is NOT unguarded: the "
+                + "admission (TemplateOpenAdmission → DecideTemplateOpen) runs "
+                + "inside the workspace open, one gate for chord, menu, and "
+                + "palette row — the palette transient is served by its "
+                + "DismissPaletteThenOpen arm, mac's retire-then-stage rule."),
         };
         for (int slot = 1; slot <= 9; slot++)
         {

@@ -118,6 +118,8 @@ public sealed class ModalSurfaceTests
     [InlineData(ModalSurface.FilesCiting, PaletteOpenDecision.Refuse)]
     [InlineData(ModalSurface.DashboardEditor, PaletteOpenDecision.Refuse)]
     [InlineData(ModalSurface.BaseQueryBuilder, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.TemplatePicker, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.TemplateFlow, PaletteOpenDecision.Refuse)]
     public void ThePaletteDefersToEverySheetAndSupersedesBothPickers(
         object? topmost, object expected)
     {
@@ -148,6 +150,8 @@ public sealed class ModalSurfaceTests
     [InlineData(ModalSurface.FilesCiting, PaletteOpenDecision.Refuse)]
     [InlineData(ModalSurface.DashboardEditor, PaletteOpenDecision.Refuse)]
     [InlineData(ModalSurface.BaseQueryBuilder, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.TemplatePicker, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.TemplateFlow, PaletteOpenDecision.Refuse)]
     public void TheSearchChordDefersToEverySheetAndThePalette(
         object? topmost, object expected)
     {
@@ -155,6 +159,38 @@ public sealed class ModalSurfaceTests
         Assert.Equal(
             (PaletteOpenDecision)expected,
             ModalSurfaces.DecideSearchOpen(surface));
+    }
+
+    /// <summary>
+    /// The template flow (W5-3, T9) supersedes both pickers, retires
+    /// the palette (mac's registry-dispatch rule — the same arm serves
+    /// the palette-invoked command during P9's transient), refuses
+    /// beneath every sheet, and refuses re-entry over its own
+    /// surfaces: the flow holds user input worth more than a stale
+    /// query, so PD-2's reopen-clears semantic deliberately does not
+    /// apply.
+    /// </summary>
+    [Theory]
+    [InlineData(null, PaletteOpenDecision.Open)]
+    [InlineData(ModalSurface.QuickOpen, PaletteOpenDecision.DismissQuickOpenThenOpen)]
+    [InlineData(ModalSurface.SearchOverlay, PaletteOpenDecision.DismissSearchThenOpen)]
+    [InlineData(ModalSurface.CommandPalette, PaletteOpenDecision.DismissPaletteThenOpen)]
+    [InlineData(ModalSurface.AddProperty, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.BulkRename, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.CitationDetails, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.CitationSummary, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.FilesCiting, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.DashboardEditor, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.BaseQueryBuilder, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.TemplatePicker, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.TemplateFlow, PaletteOpenDecision.Refuse)]
+    public void TheTemplateFlowSupersedesTheOverlaysAndDefersToEverySheet(
+        object? topmost, object expected)
+    {
+        ModalSurface? surface = topmost is null ? null : (ModalSurface)topmost;
+        Assert.Equal(
+            (PaletteOpenDecision)expected,
+            ModalSurfaces.DecideTemplateOpen(surface));
     }
 
     /// <summary>
@@ -182,6 +218,8 @@ public sealed class ModalSurfaceTests
             ModalSurface.FilesCiting,
             ModalSurface.DashboardEditor,
             ModalSurface.BaseQueryBuilder,
+            ModalSurface.TemplatePicker,
+            ModalSurface.TemplateFlow,
         ];
 
         Assert.Equal(
@@ -342,7 +380,9 @@ public sealed class ModalSurfaceTests
             CitationSummary: surface == ModalSurface.CitationSummary,
             FilesCiting: surface == ModalSurface.FilesCiting,
             DashboardEditor: surface == ModalSurface.DashboardEditor,
-            BaseQueryBuilder: surface == ModalSurface.BaseQueryBuilder);
+            BaseQueryBuilder: surface == ModalSurface.BaseQueryBuilder,
+            TemplatePicker: surface == ModalSurface.TemplatePicker,
+            TemplateFlow: surface == ModalSurface.TemplateFlow);
 
     /// <summary>
     /// The topmost-open walk returns the LAST open surface in paint order,
@@ -541,6 +581,8 @@ public sealed class ModalSurfaceTests
             [ModalSurface.FilesCiting] = "Workspace.FilesCiting",
             [ModalSurface.DashboardEditor] = "Workspace.DashboardEditorSheet",
             [ModalSurface.BaseQueryBuilder] = "Workspace.BaseQueryBuilderSheet",
+            [ModalSurface.TemplatePicker] = "Workspace.TemplatePickerSheet",
+            [ModalSurface.TemplateFlow] = "Workspace.TemplateFlowSheet",
         };
 
     /// <summary>
@@ -628,6 +670,7 @@ public sealed class ModalSurfaceTests
         ("MainWindow.Citations.cs", "RestoreFocusTo"),
         ("MainWindow.Bases.cs", "RestoreBasesOverlayFocus"),
         ("MainWindow.Palette.cs", "RestoreFocusAfterPalette"),
+        ("MainWindow.Templates.cs", "RestoreFocusAfterTemplates"),
         // Red team after codex round 11: this restore previously lived
         // anonymous inside the QuickSwitcher Dismissed handler, where
         // this census could not discover it — invariant 4 was true
@@ -740,6 +783,8 @@ public sealed class ModalSurfaceTests
     [InlineData(ModalSurface.FilesCiting, PaletteOpenDecision.Refuse)]
     [InlineData(ModalSurface.DashboardEditor, PaletteOpenDecision.Refuse)]
     [InlineData(ModalSurface.BaseQueryBuilder, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.TemplatePicker, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.TemplateFlow, PaletteOpenDecision.Refuse)]
     public void QuickOpenRefusesBeneathEverySheetAndThePalette(
         object? topmost, object expected)
     {
@@ -1073,6 +1118,8 @@ public sealed class ModalSurfaceTests
                 ModalSurface.FilesCiting => "FilesCiting",
                 ModalSurface.DashboardEditor => "DashboardEditorSheet",
                 ModalSurface.BaseQueryBuilder => "BaseQueryBuilderSheet",
+                ModalSurface.TemplatePicker => "TemplatePickerSheet",
+                ModalSurface.TemplateFlow => "TemplateFlowSheet",
                 _ => throw new Xunit.Sdk.XunitException(
                     $"{sheet} is a sheet with no property mapping here — "
                     + "add it AND the observer arm."),
@@ -1289,7 +1336,9 @@ public sealed class ModalSurfaceTests
             CitationSummary: first is ModalSurface.CitationSummary || second is ModalSurface.CitationSummary,
             FilesCiting: first is ModalSurface.FilesCiting || second is ModalSurface.FilesCiting,
             DashboardEditor: first is ModalSurface.DashboardEditor || second is ModalSurface.DashboardEditor,
-            BaseQueryBuilder: first is ModalSurface.BaseQueryBuilder || second is ModalSurface.BaseQueryBuilder);
+            BaseQueryBuilder: first is ModalSurface.BaseQueryBuilder || second is ModalSurface.BaseQueryBuilder,
+            TemplatePicker: first is ModalSurface.TemplatePicker || second is ModalSurface.TemplatePicker,
+            TemplateFlow: first is ModalSurface.TemplateFlow || second is ModalSurface.TemplateFlow);
 
     [Fact]
     public void EveryMenuDisablePathResolvesAgainstTheLiveViewModels()

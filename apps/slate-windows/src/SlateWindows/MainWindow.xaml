@@ -6,6 +6,7 @@
         xmlns:panels="clr-namespace:SlateWindows.Panels"
         xmlns:bases="clr-namespace:SlateWindows.Bases"
         xmlns:grids="clr-namespace:SlateWindows.Grids"
+        xmlns:templates="clr-namespace:SlateWindows.Templates"
         Title="Slate"
         Height="720" Width="1120"
         MinHeight="480" MinWidth="760"
@@ -106,6 +107,12 @@
                         <DataTrigger Binding="{Binding Workspace.BaseQueryBuilderSheet, Converter={StaticResource IsNotNullConverter}}" Value="True">
                             <Setter Property="IsEnabled" Value="False" />
                         </DataTrigger>
+                        <DataTrigger Binding="{Binding Workspace.TemplatePickerSheet, Converter={StaticResource IsNotNullConverter}}" Value="True">
+                            <Setter Property="IsEnabled" Value="False" />
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding Workspace.TemplateFlowSheet, Converter={StaticResource IsNotNullConverter}}" Value="True">
+                            <Setter Property="IsEnabled" Value="False" />
+                        </DataTrigger>
                     </Style.Triggers>
                 </Style>
             </Menu.Style>
@@ -119,6 +126,18 @@
                           AutomationProperties.AutomationId="QuickOpenMenuItem"
                           InputGestureText="{cmd:ChordText slate.workspace.quickOpen}"
                           Click="QuickOpen_Click" />
+                <Separator />
+                <!-- W5-3 (#743): create-from-template. mac homes this in
+                     the sidebar action catalog + ⇧⌘N; the Windows menu
+                     home is File per the W4 convention. Invokes the
+                     workspace command; the modal admission runs inside
+                     the open (T9), so a menu invocation under a sheet
+                     refuses instead of presenting beneath it (#1118's
+                     class). -->
+                <MenuItem Header="New Note from _Template…"
+                          AutomationProperties.AutomationId="NewFromTemplateMenuItem"
+                          InputGestureText="{cmd:ChordText slate.file.newFromTemplate}"
+                          Command="{Binding Workspace.NewFromTemplateCommand}" />
                 <Separator />
                 <MenuItem Header="_Close Vault"
                           AutomationProperties.AutomationId="CloseVaultMenuItem"
@@ -3210,6 +3229,259 @@
                         </StackPanel>
                     </ScrollViewer>
                 </DockPanel>
+            </local:AutomationLandmarkBorder>
+            <!-- ==========================================================
+                 W5-3 (#743): the template picker sheet. Focus lands per
+                 state (first row / Try Again / Cancel); Enter activates
+                 the selected row, Esc cancels (code-behind
+                 PreviewKeyDown). Declared after every earlier sheet —
+                 ModalSurface paint order is XAML declaration order.
+                 ========================================================== -->
+            <Border Background="Transparent"
+                    Visibility="{Binding Workspace.TemplatePickerSheet, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
+            <local:AutomationLandmarkBorder x:Name="TemplatePickerOverlay"
+                    Width="520"
+                    MaxHeight="440"
+                    Padding="16"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Background="{DynamicResource Slate.SurfaceBrush}"
+                    BorderBrush="{DynamicResource Slate.BorderBrush}"
+                    BorderThickness="1"
+                    Visibility="{Binding DataContext.Workspace.TemplatePickerSheet, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}"
+                    DataContext="{Binding Workspace.TemplatePickerSheet}"
+                    FocusManager.IsFocusScope="True"
+                    KeyboardNavigation.TabNavigation="Cycle"
+                    KeyboardNavigation.ControlTabNavigation="Cycle"
+                    PreviewKeyDown="TemplatePickerOverlay_PreviewKeyDown"
+                    AutomationProperties.AutomationId="TemplatePickerSheet"
+                    AutomationProperties.Name="Choose a template"
+                    AutomationProperties.IsDialog="True">
+                <local:AutomationLandmarkBorder.Effect>
+                    <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
+                </local:AutomationLandmarkBorder.Effect>
+                <DockPanel>
+                    <StackPanel DockPanel.Dock="Top">
+                        <TextBlock Text="Choose a template"
+                                   FontSize="16"
+                                   FontWeight="SemiBold"
+                                   AutomationProperties.HeadingLevel="Level2" />
+                        <local:AutomationPresentationTextBlock Margin="0,4,0,8"
+                                Text="{Binding Subtitle}"
+                                Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
+                    </StackPanel>
+                    <StackPanel DockPanel.Dock="Bottom"
+                                Margin="0,12,0,0"
+                                HorizontalAlignment="Right"
+                                Orientation="Horizontal">
+                        <Button x:Name="TemplatePickerCancelButton"
+                                Padding="10,4"
+                                Content="Cancel"
+                                Command="{Binding CancelCommand}"
+                                AutomationProperties.AutomationId="TemplatePickerCancel"
+                                AutomationProperties.HelpText="Closes the template picker without creating a note." />
+                    </StackPanel>
+                    <Grid>
+                        <StackPanel Visibility="{Binding IsLoading, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                    VerticalAlignment="Center">
+                            <ProgressBar IsIndeterminate="True" Height="4" Margin="24,0" />
+                            <TextBlock Margin="0,8,0,0"
+                                       HorizontalAlignment="Center"
+                                       Text="Loading templates…"
+                                       Foreground="{DynamicResource Slate.SecondaryTextBrush}"
+                                       AutomationProperties.Name="Loading templates." />
+                        </StackPanel>
+                        <StackPanel Visibility="{Binding IsEmpty, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                    VerticalAlignment="Center">
+                            <TextBlock Text="No templates found."
+                                       FontWeight="SemiBold" />
+                            <TextBlock Margin="0,4,0,8"
+                                       Text="{x:Static templates:TemplatePickerViewModel.EmptyStateDetail}"
+                                       TextWrapping="Wrap"
+                                       Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
+                            <Button x:Name="TemplatePickerTryAgainButton"
+                                    Padding="10,4"
+                                    HorizontalAlignment="Left"
+                                    Content="Try Again"
+                                    Command="{Binding RetryCommand}"
+                                    AutomationProperties.AutomationId="TemplatePickerTryAgain"
+                                    AutomationProperties.HelpText="Reloads templates for the same destination." />
+                        </StackPanel>
+                        <StackPanel Visibility="{Binding IsFailed, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                    VerticalAlignment="Center">
+                            <TextBlock Text="Couldn’t load templates"
+                                       FontWeight="SemiBold" />
+                            <TextBlock Margin="0,4,0,8"
+                                       Text="{x:Static templates:TemplatePickerViewModel.FailedStateDetail}"
+                                       TextWrapping="Wrap"
+                                       Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
+                            <Button x:Name="TemplatePickerFailedTryAgainButton"
+                                    Padding="10,4"
+                                    HorizontalAlignment="Left"
+                                    Content="Try Again"
+                                    Command="{Binding RetryCommand}"
+                                    AutomationProperties.AutomationId="TemplatePickerFailedTryAgain"
+                                    AutomationProperties.HelpText="Reloads templates for the same destination." />
+                        </StackPanel>
+                        <ListBox x:Name="TemplatePickerList"
+                                 Visibility="{Binding IsAvailable, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                 ItemsSource="{Binding Rows}"
+                                 BorderThickness="0"
+                                 Background="Transparent"
+                                 MouseDoubleClick="TemplatePickerList_MouseDoubleClick"
+                                 AutomationProperties.AutomationId="TemplatePickerList"
+                                 AutomationProperties.Name="Templates">
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem">
+                                    <Setter Property="AutomationProperties.Name" Value="{Binding AccessibleName}" />
+                                    <Setter Property="AutomationProperties.HelpText" Value="Activate to use this template for a new note." />
+                                    <Setter Property="Padding" Value="8,6" />
+                                </Style>
+                            </ListBox.ItemContainerStyle>
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                                        <TextBlock Text="{Binding Description}"
+                                                   TextWrapping="Wrap"
+                                                   Foreground="{DynamicResource Slate.SecondaryTextBrush}">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Style.Triggers>
+                                                        <Trigger Property="Text" Value="{x:Null}">
+                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                        </Trigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </Grid>
+                </DockPanel>
+            </local:AutomationLandmarkBorder>
+            <!-- ==========================================================
+                 W5-3 (#743): the prompt/name flow sheet — one sheet, two
+                 steps (contracts TD-5). Enter is Next on the prompt step
+                 and Create on the name step; Esc cancels the whole flow
+                 and nothing is written (T7).
+                 ========================================================== -->
+            <Border Background="Transparent"
+                    Visibility="{Binding Workspace.TemplateFlowSheet, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
+            <local:AutomationLandmarkBorder x:Name="TemplateFlowOverlay"
+                    Width="520"
+                    MaxHeight="480"
+                    Padding="16"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Background="{DynamicResource Slate.SurfaceBrush}"
+                    BorderBrush="{DynamicResource Slate.BorderBrush}"
+                    BorderThickness="1"
+                    Visibility="{Binding DataContext.Workspace.TemplateFlowSheet, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}"
+                    DataContext="{Binding Workspace.TemplateFlowSheet}"
+                    FocusManager.IsFocusScope="True"
+                    KeyboardNavigation.TabNavigation="Cycle"
+                    KeyboardNavigation.ControlTabNavigation="Cycle"
+                    PreviewKeyDown="TemplateFlowOverlay_PreviewKeyDown"
+                    AutomationProperties.AutomationId="TemplateFlowSheet"
+                    AutomationProperties.Name="Create from template"
+                    AutomationProperties.IsDialog="True">
+                <local:AutomationLandmarkBorder.Effect>
+                    <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
+                </local:AutomationLandmarkBorder.Effect>
+                <Grid>
+                    <DockPanel Visibility="{Binding IsPromptStep, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <StackPanel DockPanel.Dock="Top">
+                            <TextBlock Text="Fill in template details"
+                                       FontSize="16"
+                                       FontWeight="SemiBold"
+                                       AutomationProperties.HeadingLevel="Level2" />
+                            <local:AutomationPresentationTextBlock Margin="0,4,0,8"
+                                    Text="{Binding PromptStepSubtitle}"
+                                    Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
+                        </StackPanel>
+                        <StackPanel DockPanel.Dock="Bottom"
+                                    Margin="0,12,0,0"
+                                    HorizontalAlignment="Right"
+                                    Orientation="Horizontal">
+                            <Button Padding="10,4"
+                                    Content="Cancel"
+                                    Command="{Binding CancelCommand}"
+                                    AutomationProperties.AutomationId="TemplatePromptsCancel"
+                                    AutomationProperties.HelpText="Cancels the create-from-template flow." />
+                            <Button Margin="8,0,0,0"
+                                    Padding="10,4"
+                                    Content="Next"
+                                    Command="{Binding NextCommand}"
+                                    AutomationProperties.AutomationId="TemplatePromptsNext"
+                                    AutomationProperties.HelpText="Continue to choose the new note's name. Return." />
+                        </StackPanel>
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <ItemsControl x:Name="TemplateFlowPromptsList"
+                                          ItemsSource="{Binding PromptFields}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Margin="0,0,0,10">
+                                            <local:AutomationPresentationTextBlock Margin="0,0,0,2"
+                                                    Text="{Binding Label}" />
+                                            <TextBox Padding="6,4"
+                                                     Text="{Binding Value, UpdateSourceTrigger=PropertyChanged}"
+                                                     AutomationProperties.Name="{Binding Label}" />
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </DockPanel>
+                    <DockPanel Visibility="{Binding IsNameStep, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <StackPanel DockPanel.Dock="Top">
+                            <TextBlock Text="Name the new note"
+                                       FontSize="16"
+                                       FontWeight="SemiBold"
+                                       AutomationProperties.HeadingLevel="Level2" />
+                            <local:AutomationPresentationTextBlock Margin="0,4,0,8"
+                                    Text="{Binding NameStepSubtitle}"
+                                    Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
+                        </StackPanel>
+                        <StackPanel DockPanel.Dock="Bottom"
+                                    Margin="0,12,0,0"
+                                    HorizontalAlignment="Right"
+                                    Orientation="Horizontal">
+                            <Button Padding="10,4"
+                                    Content="Cancel"
+                                    Command="{Binding CancelCommand}"
+                                    AutomationProperties.AutomationId="TemplateNameCancel"
+                                    AutomationProperties.HelpText="Cancels the create-from-template flow. No file is written." />
+                            <Button Margin="8,0,0,0"
+                                    Padding="10,4"
+                                    Content="Create"
+                                    Command="{Binding CreateCommand}"
+                                    AutomationProperties.AutomationId="TemplateNameCreate"
+                                    AutomationProperties.HelpText="Render the template and open the new note. Return." />
+                        </StackPanel>
+                        <StackPanel>
+                            <local:AutomationPresentationTextBlock Margin="0,0,0,2" Text="New note name" />
+                            <local:AutomationPresentationTextBlock Margin="0,0,0,4"
+                                    Text="{Binding NameHint}"
+                                    Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
+                            <TextBox x:Name="TemplateFlowNameTextBox"
+                                     Padding="6,4"
+                                     Text="{Binding NoteName, UpdateSourceTrigger=PropertyChanged}"
+                                     AutomationProperties.AutomationId="TemplateFlowName"
+                                     AutomationProperties.Name="{Binding NameFieldAccessibleName}"
+                                     AutomationProperties.HelpText=".md extension added automatically." />
+                            <TextBlock Margin="0,8,0,0"
+                                       Text="{Binding ValidationError}"
+                                       Foreground="{DynamicResource Slate.WarningBrush}"
+                                       TextWrapping="Wrap"
+                                       Focusable="True"
+                                       AutomationProperties.Name="{Binding ValidationErrorAccessibleName}"
+                                       Visibility="{Binding ValidationError, Converter={StaticResource NullToVisibilityConverter}}" />
+                        </StackPanel>
+                    </DockPanel>
+                </Grid>
             </local:AutomationLandmarkBorder>
         </Grid>
     </DockPanel>

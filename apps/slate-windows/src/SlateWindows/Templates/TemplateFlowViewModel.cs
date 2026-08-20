@@ -109,6 +109,21 @@ internal sealed class TemplateFlowViewModel : BindableBase
 
     public string DestinationDescription { get; }
 
+    /// <summary>mac's prompt-sheet subtitle, verbatim.</summary>
+    public string PromptStepSubtitle =>
+        $"{Template.Name} · Create in {DestinationDescription}";
+
+    /// <summary>mac's name-sheet subtitle, verbatim.</summary>
+    public string NameStepSubtitle =>
+        $"from {Template.Name} · Create in {DestinationDescription}";
+
+    /// <summary>mac's name-field caption, verbatim.</summary>
+    public string NameHint => $"Name relative to {DestinationDescription}.";
+
+    /// <summary>mac's name-field accessibility label, verbatim.</summary>
+    public string NameFieldAccessibleName =>
+        $"New note name. Name relative to {DestinationDescription}";
+
     public IReadOnlyList<TemplatePromptFieldViewModel> PromptFields { get; }
 
     public TemplateFlowStep Step
@@ -143,11 +158,16 @@ internal sealed class TemplateFlowViewModel : BindableBase
             if (SetField(ref _validationError, value))
             {
                 OnPropertyChanged(nameof(HasValidationError));
+                OnPropertyChanged(nameof(ValidationErrorAccessibleName));
             }
         }
     }
 
     public bool HasValidationError => ValidationError is not null;
+
+    /// <summary>mac's "Validation error: {error}" accessibility label.</summary>
+    public string? ValidationErrorAccessibleName =>
+        ValidationError is { } error ? $"Validation error: {error}" : null;
 
     /// <summary>Prompts → Name (mac's Next). No validation on prompt
     /// values — any string including empty is a valid answer (T4).</summary>

@@ -99,6 +99,19 @@ internal sealed class TemplatePickerViewModel : BindableBase
     /// <summary>The frozen destination, as prose (T12).</summary>
     public string DestinationDescription { get; }
 
+    /// <summary>mac's picker subtitle with the Windows chord (program
+    /// decision 12 for the chord text; the sentence shape is mac's).</summary>
+    public string Subtitle =>
+        $"Create in {DestinationDescription}. Ctrl+Shift+N. Escape to cancel.";
+
+    /// <summary>mac `emptyStateDetail`, verbatim.</summary>
+    public static string EmptyStateDetail =>
+        "Create a .md file in this vault’s configured template folder to add one.";
+
+    /// <summary>mac's failed-state guidance, verbatim.</summary>
+    public static string FailedStateDetail =>
+        "Check the configured template folder, then try again.";
+
     public TemplatePickerState State
     {
         get => _state;

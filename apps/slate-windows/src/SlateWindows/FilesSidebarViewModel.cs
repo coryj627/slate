@@ -1010,7 +1010,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
     private void CreateFolder()
     {
-        string parent = SelectedNode?.IsDirectory == true ? SelectedNode.Path : ParentPath(SelectedNode?.Path);
+        string parent = CreationParentPath();
         string path = CombineVaultPath(parent, MutationName);
         try
         {
@@ -1028,9 +1028,16 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
     }
 
+    /// <summary>The creation-parent rule, shared with the template flow
+    /// (W5-3 T12): the selected directory, else the selection's parent,
+    /// else the vault root — mac's canonicalSidebarCreationParent
+    /// semantics.</summary>
+    internal string CreationParentPath() =>
+        SelectedNode?.IsDirectory == true ? SelectedNode.Path : ParentPath(SelectedNode?.Path);
+
     private void CreateNote()
     {
-        string parent = SelectedNode?.IsDirectory == true ? SelectedNode.Path : ParentPath(SelectedNode?.Path);
+        string parent = CreationParentPath();
         string name = MutationName.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
             ? MutationName
             : $"{MutationName}.md";

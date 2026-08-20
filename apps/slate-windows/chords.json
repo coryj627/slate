@@ -849,6 +849,18 @@
       "registered": true
     },
     {
+      "id": "slate.file.newFromTemplate",
+      "label": "New Note from Template…",
+      "section": "Sidebar",
+      "hint": "Choose a template for a new note.",
+      "macChord": "⇧⌘N",
+      "mac": "Shift Command N",
+      "windows": "Ctrl+Shift+N",
+      "windowsSpoken": "Control Shift N",
+      "scope": "Global",
+      "registered": true
+    },
+    {
       "id": "slate.file.importFilesAndFolders",
       "label": "Import Files and Folders…",
       "section": "Sidebar",

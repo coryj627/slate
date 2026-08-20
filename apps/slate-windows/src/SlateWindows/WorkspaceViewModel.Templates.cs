@@ -139,13 +139,16 @@ internal sealed partial class WorkspaceViewModel
         }
 
         TemplateMetadata metadata = SlateUniffiMethods.ExtractTemplateMetadata(source);
-        TemplatePickerSheet = null;
+        // Flow first, THEN the picker goes away: the window's restore
+        // runs when BOTH sheets read null, so this order keeps the
+        // picker→flow transition from restoring focus mid-flow.
         TemplateFlowSheet = new TemplateFlowViewModel(
             summary,
             metadata.Prompts,
             TemplateNameRules.DestinationDescription(_templateCreationDestination),
             CreateFromTemplate,
             CancelTemplateFlow);
+        TemplatePickerSheet = null;
     }
 
     /// <summary>
