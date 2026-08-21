@@ -283,7 +283,7 @@ final class MutationHarnessTests: XCTestCase {
                     items: op.items!.map {
                         StructuralBatchItem(path: $0, isDirectory: false)
                     },
-                    destination: op.destination!))
+                    newParent: op.destination!))
             batchByIndex[index] = report
             return normalizeBatch(report, &opIdOrder)
         case "deleteFile":
