@@ -210,10 +210,11 @@ model, minus nothing the FFI supports:
   (implementation finding, recorded in the mutation-golden README):*
   compound folder-note renames also reverse by re-running
   `RenameFolderWithNote` with inverse arguments — the recorded
-  `UndoOpIds` sequence is not host-executable as FL6-1 documents it,
+  `UndoOpIds` sequence is not host-executable as FL6-1 documented it,
   because `undo_structural` admits only the LATEST journal row and
-  every undo journals itself; a core follow-up records the contract
-  contradiction. For the same reason a batch entry is undoable only
+  every undo journals itself; #1127 corrected the core contract text
+  to record the field as the journal record and the forward-inverse
+  re-run as the host model. For the same reason a batch entry is undoable only
   while its row is still the journal's latest — any newer step
   purges recorded batch entries from both stacks rather than letting
   them surface later as a false "files have changed".
