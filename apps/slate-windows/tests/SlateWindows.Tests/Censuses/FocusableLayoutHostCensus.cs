@@ -31,38 +31,33 @@ public sealed class FocusableLayoutHostCensus
         "ContentControl",
     ];
 
-    private static string SourceDirectory
-    {
-        get
-        {
-            // tests/.../bin/<cfg>/net10.0-windows/ -> apps/slate-windows is
-            // six hops above (the trailing separator costs one — the
-            // MutationHarnessCensus walk, two short of the repo root);
-            // the shell XAML lives in src/SlateWindows.
-            string dir = AppContext.BaseDirectory;
-            for (int i = 0; i < 6; i++)
-            {
-                dir = Path.GetDirectoryName(dir)!;
-            }
-            return Path.Combine(dir, "src", "SlateWindows");
-        }
-    }
-
-    private static readonly string[] ShellXaml =
-    [
-        "MainWindow.xaml",
-        "WorkspaceTemplates.xaml",
-    ];
+    /// <summary>The shell's VIEW XAML — the files that declare live
+    /// elements. Discovered rather than hardcoded, and rooted by the
+    /// repo walk rather than a hop count (codoki): the theme resource
+    /// dictionaries and App.xaml are excluded because they declare
+    /// styles and templates, not instances — a <c>Setter</c> for
+    /// <c>Focusable</c> inside a control template is a different
+    /// question this census does not answer.</summary>
+    private static IEnumerable<string> ShellViewXaml() =>
+        Directory.EnumerateFiles(
+                SourceText.ShellSourceRoot(), "*.xaml", SearchOption.AllDirectories)
+            .Where(path => !path.Contains(
+                $"{Path.DirectorySeparatorChar}Themes{Path.DirectorySeparatorChar}",
+                StringComparison.OrdinalIgnoreCase))
+            .Where(path => !string.Equals(
+                Path.GetFileName(path), "App.xaml", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(path => path, StringComparer.Ordinal);
 
     [Fact]
     public void EveryLayoutHostIsNonFocusableOrNamed()
     {
         var offenders = new List<string>();
         int hosts = 0;
-        foreach (string file in ShellXaml)
+        int files = 0;
+        foreach (string path in ShellViewXaml())
         {
-            string path = Path.Combine(SourceDirectory, file);
-            Assert.True(File.Exists(path), $"shell XAML missing at {path}");
+            files++;
+            string file = Path.GetFileName(path);
             XDocument document = XDocument.Load(path, LoadOptions.SetLineInfo);
             foreach (XElement element in document.Descendants())
             {
@@ -72,8 +67,13 @@ public sealed class FocusableLayoutHostCensus
                 }
 
                 hosts++;
+                // XAML's boolean parse is case-insensitive, so "false"
+                // must count exactly as "False" does (codoki) — a
+                // case-only difference is not an accessibility defect,
+                // and failing on it would train people to distrust the
+                // census.
                 bool nonFocusable = string.Equals(
-                    Attribute(element, "Focusable"), "False", StringComparison.Ordinal);
+                    Attribute(element, "Focusable"), "False", StringComparison.OrdinalIgnoreCase);
                 bool named = Attribute(element, "AutomationProperties.Name") is not null;
                 if (!nonFocusable && !named)
                 {
@@ -83,6 +83,7 @@ public sealed class FocusableLayoutHostCensus
             }
         }
 
+        Assert.True(files > 0, "the census found no shell view XAML — the discovery is broken");
         Assert.True(hosts > 0, "the census found no layout hosts — the scrape is broken");
         Assert.True(
             offenders.Count == 0,
