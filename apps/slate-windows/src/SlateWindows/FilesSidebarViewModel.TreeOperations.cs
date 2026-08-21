@@ -407,6 +407,12 @@ internal sealed partial class FilesSidebarViewModel
                 materialized[node.Path] = node;
             }
 
+            // Absence pruning only from a COMPLETE publication (codex
+            // round 6): any truncation — the root level or a restored
+            // folder's overflow — makes the listing non-authoritative
+            // for what does NOT exist.
+            bool publicationComplete = !outcome.Level.Truncated
+                && outcome.RestoredOverflowPath is null;
             foreach (string path in _batchChecked.Keys.ToList())
             {
                 if (materialized.TryGetValue(path, out FileTreeNodeViewModel? node))
@@ -415,7 +421,7 @@ internal sealed partial class FilesSidebarViewModel
                     continue;
                 }
 
-                if (outcome.Level.Truncated)
+                if (!publicationComplete)
                 {
                     continue;
                 }

@@ -60,6 +60,16 @@ internal sealed partial class FilesSidebarViewModel
         string query = FilterText.Trim();
         if (query.Length == 0)
         {
+            // Codex round 6: a USER clearing the filter cancels the
+            // automatic refilter that would have consumed the pending
+            // mutation reassert — clear it here, or a later organic
+            // refresh resurrects the obsolete status. The automatic
+            // path preserves it for its own publication.
+            if (!automatic)
+            {
+                _statusToReassert = null;
+            }
+
             FilterResults.Clear();
             lock (_filterCancellationGate)
             {

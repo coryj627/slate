@@ -1202,6 +1202,78 @@ public sealed class FileManagementTests
         Assert.Equal(1, countsBefore);
     }
 
+    [Fact]
+    public async Task ReExpansionProjectsTheAuthoritativeCheckOntoFreshNodes()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "fm-reexpand-check");
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "folder"));
+        File.WriteAllText(Path.Combine(fixture.Root, "folder", "a.md"), "A\n");
+        File.WriteAllText(Path.Combine(fixture.Root, "folder", "b.md"), "B\n");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new List<A11yEvent>();
+        SidebarRig rig = await NewSidebar(session, fixture, announced);
+
+        FileTreeNodeViewModel folder = Node(rig, "folder");
+        folder.IsExpanded = true;
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => folder.Children.Any(child => child.Path == "folder/a.md"),
+                TimeSpan.FromSeconds(5)));
+        folder.Children.Single(child => child.Path == "folder/a.md")
+            .IsBatchSelected = true;
+        folder.IsExpanded = false;
+
+        rig.Sidebar.Refresh();
+        await rig.Settle();
+        Assert.Equal(1, rig.Sidebar.BatchSelectionCount);
+
+        // Codex round 6: re-expanding materializes FRESH child nodes —
+        // without projection the checkbox showed unchecked while the
+        // batch verbs still targeted the path (a visually unchecked
+        // file could be trashed without any visible selection).
+        FileTreeNodeViewModel freshFolder = Node(rig, "folder");
+        freshFolder.IsExpanded = true;
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => freshFolder.Children.Any(child =>
+                    child.Path == "folder/a.md" && child.IsBatchSelected),
+                TimeSpan.FromSeconds(5)),
+            "the re-expanded child never projected its authoritative check.");
+        Assert.False(freshFolder.Children
+            .Single(child => child.Path == "folder/b.md").IsBatchSelected);
+        Assert.Equal(1, rig.Sidebar.BatchSelectionCount);
+    }
+
+    [Fact]
+    public async Task ClearingTheFilterDropsThePendingMutationReassert()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "fm-filter-clear");
+        File.WriteAllText(Path.Combine(fixture.Root, "a.md"), "# A\n");
+        File.WriteAllText(Path.Combine(fixture.Root, "other.md"), "O\n");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new List<A11yEvent>();
+        SidebarRig rig = await NewSidebar(session, fixture, announced);
+
+        rig.Sidebar.FilterText = "other";
+        await rig.Sidebar.FilterCompletion;
+
+        rig.Sidebar.SelectedNode = Node(rig, "a.md");
+        rig.Sidebar.MutationName = "b.md";
+        Assert.True(rig.Sidebar.TryRenameSelected());
+
+        // The USER clears the filter while the automatic refilter is
+        // pending (codex round 6): the pending reassert must clear
+        // with it, or a later organic refresh resurrects the obsolete
+        // mutation status.
+        rig.Sidebar.FilterText = string.Empty;
+        await rig.Settle();
+        await rig.Sidebar.FilterCompletion;
+
+        rig.Sidebar.Refresh();
+        await rig.Settle();
+        Assert.DoesNotContain("Renamed", rig.Sidebar.Status, StringComparison.Ordinal);
+    }
+
     // ---- Helpers ------------------------------------------------------
 
     private sealed record SidebarRig(FilesSidebarViewModel Sidebar)

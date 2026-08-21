@@ -176,12 +176,15 @@ internal sealed class FileTreeNodeViewModel : BindableBase
         }
     }
 
-    /// <summary>Whether this folder's children are REAL rows rather
-    /// than the "Loading…" placeholder — the signal the batch-check
-    /// reconciliation uses to distinguish "provably gone" from
-    /// "merely unmaterialized" (codex round 5).</summary>
+    /// <summary>Whether this folder's children are COMPLETELY loaded
+    /// real rows — the signal the batch-check reconciliation uses to
+    /// distinguish "provably gone" from "merely unmaterialized"
+    /// (codex rounds 5-6): the load state must be Loaded AND no
+    /// placeholder of any shape may remain (Loading…, error, or
+    /// overflow rows all make the listing non-authoritative).</summary>
     internal bool HasLoadedChildren =>
-        !(Children.Count == 1 && Children[0].IsPlaceholder);
+        _childLoadState == FileTreeChildLoadState.Loaded
+        && Children.All(child => !child.IsPlaceholder);
 
     /// <summary>W5-4 (verification 1): the VM→view selection channel.
     /// The container style binds TreeViewItem.IsSelected TwoWay, so a
@@ -287,6 +290,11 @@ internal sealed class FileTreeNodeViewModel : BindableBase
     {
         _childLoadState = FileTreeChildLoadState.Loaded;
         ReplaceChildrenCore(children);
+        // Codex round 6: EVERY child materialization projects the
+        // authoritative checks — lazy expansion after a refresh
+        // otherwise showed a checked path as unchecked while the
+        // batch verbs still targeted it.
+        _owner?.ProjectBatchChecksOnto(children);
     }
 
     private void ReplaceChildrenCore(ObservableCollection<FileTreeNodeViewModel> children)
@@ -722,6 +730,26 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     /// node.</summary>
     private readonly Dictionary<string, bool> _batchChecked =
         new(StringComparer.Ordinal);
+
+    /// <summary>Project the authoritative checks onto freshly
+    /// materialized nodes (codex round 6) — silent; the count did not
+    /// change, only its visual projection.</summary>
+    internal void ProjectBatchChecksOnto(
+        IEnumerable<FileTreeNodeViewModel> nodes)
+    {
+        if (_batchChecked.Count == 0)
+        {
+            return;
+        }
+
+        foreach (FileTreeNodeViewModel node in nodes)
+        {
+            if (_batchChecked.ContainsKey(node.Path))
+            {
+                _ = node.MarkBatchSelectedSilently();
+            }
+        }
+    }
 
     internal void BatchCheckChanged(FileTreeNodeViewModel node)
     {
