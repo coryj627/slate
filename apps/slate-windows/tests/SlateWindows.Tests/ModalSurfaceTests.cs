@@ -1312,6 +1312,41 @@ public sealed class ModalSurfaceTests
     }
 
     /// <summary>
+    /// The two-string refusal partition is pinned — the strings
+    /// literally, the routing structurally (verification round,
+    /// finding 2): the code was correct but swapping the strings or
+    /// inverting the own-flow condition left the whole suite green,
+    /// the exact constant-vs-constant blindness the empty/failed
+    /// reasons were cured of in the same wave.
+    /// </summary>
+    [Fact]
+    public void TheRefusalSpeaksMacsTwoStringPartition()
+    {
+        // The LITERAL mac strings (AppState.swift:7901-7904).
+        Assert.Equal(
+            "Finish or cancel the current template note before starting another.",
+            MainWindow.TemplateFlowBusyReason);
+        Assert.Equal(
+            "Finish or cancel the current dialog before creating from a template.",
+            MainWindow.TemplateDialogBusyReason);
+
+        // The routing: re-entry over the flow's own surfaces speaks
+        // flow-busy, everything else dialog-busy.
+        string admission = CSharpSource.Normalize(
+            CSharpSource.Load("MainWindow.Templates.cs")
+                .Method("TryClearTheWayForTemplates"));
+        Assert.Contains(
+            "boolrefusedByOwnFlow=OpenModalSurface"
+            + "isModalSurface.TemplatePickerorModalSurface.TemplateFlow",
+            admission,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "refusedByOwnFlow?TemplateFlowBusyReason:TemplateDialogBusyReason",
+            admission,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Esc cancels from BOTH template sheets' key routes (red team,
     /// tests finding 9): every unit fact drives CancelCommand directly
     /// and the journey Escapes only the picker, so deleting either

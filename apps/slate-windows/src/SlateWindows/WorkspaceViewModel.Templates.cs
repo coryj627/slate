@@ -223,14 +223,31 @@ internal sealed partial class WorkspaceViewModel
             // read — so a parked tab of a previously deleted file (a
             // persistence restore, or the mid-session InvalidatePath
             // sweep) would display its stale buffer over the note just
-            // created. A CLEAN tab whose text is not the rendered body
-            // reloads from disk; a DIRTY tab is never reloaded — the
-            // user's unsaved buffer outranks the render, and the caret
-            // guard below already stands down for it.
-            if (!tab.IsDirty
-                && !string.Equals(tab.Text, rendered.Body, StringComparison.Ordinal))
+            // created. EVERY clean same-path tab reloads, not just the
+            // landed one (verification round, finding 1): the workspace
+            // mirrors same-path documents edit-by-edit with cross-
+            // document offsets, so reloading one and leaving a stale
+            // peer arms a divergence that the first keystroke turns
+            // into an out-of-range replay or the refresh funnel's
+            // divergence trap. A DIRTY tab is never reloaded — the
+            // user's unsaved buffer outranks the render (mirroring
+            // keeps same-path dirtiness in step, so a dirty peer
+            // implies a dirty landed tab, which the caret guard below
+            // stands down for). The IsMissingFromDisk arm also reloads
+            // a byte-IDENTICAL ghost (verification finding 3): its
+            // buffer needs no change, but its missing-status and saved
+            // content hash are stale bookkeeping that would raise a
+            // spurious WriteConflict on the first save.
+            foreach (WorkspaceTabViewModel samePath in Groups
+                .SelectMany(group => group.Tabs)
+                .Where(candidate => candidate.IsMarkdown
+                    && string.Equals(candidate.Path, path, StringComparison.Ordinal)
+                    && !candidate.IsDirty
+                    && (!string.Equals(
+                            candidate.Text, rendered.Body, StringComparison.Ordinal)
+                        || candidate.IsMissingFromDisk)))
             {
-                tab.ReplaceItem(tab.Item);
+                samePath.ReplaceItem(samePath.Item);
             }
 
             // The Search_OpenRequested posture: a dirty or externally

@@ -713,6 +713,52 @@ public sealed class TemplateFlowTests
     }
 
     [Fact]
+    public void EveryCleanSamePathTabReloadsSoTheMirrorNeverDiverges()
+    {
+        RunSta(() =>
+        {
+            using FixtureVault fixture = FixtureVault.Create(1, "tpl-peers");
+            WriteTemplate(
+                fixture.Root, "Plain.md", "# {{title}}\n\nCafé {{cursor}}end\n");
+            using VaultSession session = OpenScanned(fixture.Root);
+            using var workspace = new WorkspaceViewModel(
+                session, fixture.Root, () => [], _ => { },
+                startInteractionBackgroundWork: false);
+
+            // TWO ghost tabs at the same nonexistent path, one per
+            // group — the verification round's finding 1: reloading
+            // only the landed tab leaves the peer's stale buffer
+            // diverged from a document the workspace mirrors
+            // edit-by-edit with cross-document offsets.
+            workspace.OpenPath("Ghost.md");
+            workspace.OpenPath("Ghost.md", WorkspaceOpenTarget.SplitRight);
+
+            OpenFlowFor(workspace, "Plain");
+            workspace.TemplateFlowSheet!.NoteName = "Ghost";
+            workspace.TemplateFlowSheet.CreateCommand.Execute(null);
+
+            WorkspaceTabViewModel[] samePath = [.. workspace.Groups
+                .SelectMany(group => group.Tabs)
+                .Where(tab => tab.Path == "Ghost.md")];
+            Assert.Equal(2, samePath.Length);
+            Assert.All(
+                samePath,
+                tab => Assert.Equal("# Ghost\n\nCafé end\n", tab.Text));
+
+            // The first keystroke is where a stale peer detonates
+            // (an out-of-range cross-document replay): edit the landed
+            // tab at the parked caret and require the peer to MIRROR
+            // it rather than throw or diverge.
+            WorkspaceTabViewModel landed = workspace.ActiveGroup.ActiveTab!;
+            landed.EditorDocument!.Insert(landed.EditorCaretOffset, "typed");
+            Assert.All(
+                samePath,
+                tab => Assert.Equal(
+                    "# Ghost\n\nCafé typedend\n", tab.Text));
+        });
+    }
+
+    [Fact]
     public void ARefusedDirtyNavigationDropsTheParkAndLeavesTheOldCaretAlone()
     {
         RunSta(() =>
