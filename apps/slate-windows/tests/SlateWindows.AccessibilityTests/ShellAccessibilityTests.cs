@@ -795,6 +795,30 @@ public sealed class ShellAccessibilityTests
         }
     }
 
+    /// <summary>The focused element's identity for a failure message —
+    /// which element took focus is the diagnosis, not merely that the
+    /// expected one did not.</summary>
+    private static string DescribeFocusedElement(UIA3Automation automation)
+    {
+        try
+        {
+            AutomationElement? focused = automation.FocusedElement();
+            if (focused is null)
+            {
+                return "(nothing)";
+            }
+
+            return $"{focused.Properties.ControlType.ValueOrDefault} "
+                + $"name='{focused.Properties.Name.ValueOrDefault}' "
+                + $"id='{focused.Properties.AutomationId.ValueOrDefault}' "
+                + $"class='{focused.Properties.ClassName.ValueOrDefault}'";
+        }
+        catch (Exception exception) when (exception is COMException or FlaUI.Core.Exceptions.FlaUIException)
+        {
+            return $"(unreadable: {exception.GetType().Name})";
+        }
+    }
+
     internal static void AssertAxeClean(Process process, string surface)
     {
         var config = Config.Builder.ForProcessId(process.Id).Build();
@@ -2589,6 +2613,60 @@ public sealed class ShellAccessibilityTests
                         automation.ConditionFactory.ByControlType(ControlType.ListItem))
                     .Select(item => item.Properties.Name.ValueOrDefault ?? ""),
                 name => name.Contains("Unresolved", StringComparison.OrdinalIgnoreCase));
+
+            // ---- #1098: a save's republish keeps focus on the list --
+            // Dirty the note, sit on a citation row, save. The save's
+            // republish destroys every row container (WPF ejects focus
+            // to the window root when a focused item unloads — the
+            // W5-4 tree finding), so restoring only the SELECTION left
+            // AT users Tabbing back to resume; the restored row must
+            // own keyboard focus again.
+            AutomationElement citedEditor = WaitForEditor(
+                window, automation, "cited.md editor", TimeSpan.FromSeconds(10));
+            citedEditor.Focus();
+            AssertEventuallyFocused(citedEditor, "the cited.md editor could not take focus.");
+            Keyboard.Type(" ");
+            resolvedRow!.Patterns.SelectionItem.Pattern.Select();
+            resolvedRow.Focus();
+            AssertEventuallyFocused(
+                resolvedRow, "the Knuth row could not take keyboard focus before the save.");
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_S);
+            AutomationElement? republishedRow = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            republishedRow = citations
+                                .FindAllDescendants(
+                                    automation.ConditionFactory.ByControlType(
+                                        ControlType.ListItem))
+                                .FirstOrDefault(item =>
+                                    (item.Properties.Name.ValueOrDefault ?? "")
+                                        .Contains("Knuth", StringComparison.OrdinalIgnoreCase));
+                            return republishedRow is not null
+                                && republishedRow.Properties.HasKeyboardFocus.ValueOrDefault;
+                        }
+                        catch (COMException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "after the save's republish, keyboard focus did not return to the "
+                + "restored citation row (#1098); focus is on "
+                + DescribeFocusedElement(automation)
+                + "; list selection = ["
+                + string.Join(
+                    ", ",
+                    (citations.Patterns.Selection.PatternOrDefault?.Selection.ValueOrDefault
+                        ?? [])
+                        .Select(item => item.Properties.Name.ValueOrDefault ?? "?"))
+                + "]; rows = "
+                + citations.FindAllDescendants(
+                    automation.ConditionFactory.ByControlType(ControlType.ListItem)).Length);
+            resolvedRow = republishedRow;
 
             // ---- Details sheet: in-window, and focus returns -------
             resolvedRow!.Patterns.SelectionItem.Pattern.Select();

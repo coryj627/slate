@@ -4,10 +4,10 @@
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 using SlateWindows.Grids;
 using SlateWindows.Panels;
-
 using uniffi.slate_uniffi;
 
 namespace SlateWindows;
@@ -187,6 +187,7 @@ public partial class MainWindow
         }
         if (_observedCitations is not null)
         {
+            _observedCitations.RowsPublishing -= CitationRows_Publishing;
             _observedCitations.RowsPublished -= CitationRows_Published;
             _observedCitations = null;
         }
@@ -201,6 +202,7 @@ public partial class MainWindow
         _observedBibliography.UnresolvedPublished += BibliographyUnresolved_Changed;
         _observedBibliography.KeyFocusRequested += Bibliography_KeyFocusRequested;
         _observedCitations = workspace.Citations;
+        _observedCitations.RowsPublishing += CitationRows_Publishing;
         _observedCitations.RowsPublished += CitationRows_Published;
         BindBibliographyEntriesGrid();
         BindBibliographyUnresolvedGrid();
@@ -235,10 +237,20 @@ public partial class MainWindow
     /// </summary>
     private string? _selectedCitationKey;
 
-    private void PanelCitations_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e) =>
-        _selectedCitationKey = PanelCitationsList.SelectedItem is CitationRowViewModel row
-            ? row.Reference.Citations.FirstOrDefault()?.Key
-            : null;
+    private void PanelCitations_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        // Remember a SELECTION, never a clearing (#1098, measured by the
+        // shell gate): the publish's Rows.Clear() raises SelectionChanged
+        // with a null SelectedItem, and nulling the key here erased the
+        // reading position BEFORE RestoreCitationSelection ran — the W4-5
+        // round-4 restore never fired for a real publish. Single-select
+        // has no user deselection; a note without the key simply finds
+        // no row to restore.
+        if (PanelCitationsList.SelectedItem is CitationRowViewModel row)
+        {
+            _selectedCitationKey = row.Reference.Citations.FirstOrDefault()?.Key;
+        }
+    }
 
     private void RestoreCitationSelection()
     {
@@ -259,9 +271,116 @@ public partial class MainWindow
         }
     }
 
+    /// <summary>Whether the citations list owned keyboard focus when the
+    /// last publish began (#1098). Sampled BEFORE the rebuild: the
+    /// publish clears the rows, which destroys the focused container,
+    /// and WPF ejects keyboard focus to the window root when a focused
+    /// item unloads (the W5-4 tree finding) — so after the rebuild the
+    /// list reads as not-focused whether or not the user was on it.</summary>
+    private bool _citationsListOwnedFocusBeforePublish;
+
+    private void CitationRows_Publishing(object? sender, EventArgs e)
+    {
+        // Sample BOTH halves of the reading position while the rows are
+        // alive: the key the selection restore re-seats by (belt and
+        // braces with the selection handler above), and whether the list
+        // owned keyboard focus.
+        if (PanelCitationsList.SelectedItem is CitationRowViewModel row)
+        {
+            _selectedCitationKey = row.Reference.Citations.FirstOrDefault()?.Key;
+        }
+
+        _citationsListOwnedFocusBeforePublish = PanelCitationsList.IsKeyboardFocusWithin;
+    }
+
+    /// <summary>
+    /// The focus half of the republish restore (#1098): the selection
+    /// restore above keeps the reading position in the MODEL, but the
+    /// user's keyboard focus was ejected with the old container, so
+    /// they would have to Tab back to resume. When the list owned focus
+    /// before the publish, put it back on the restored row's container
+    /// (the list itself if the container has not generated yet) —
+    /// guarded so it never steals: a modal surface owns the moment, and
+    /// a real focus claim elsewhere (the editor after a save's own
+    /// landing) wins; only window-root/null focus is the stranded state
+    /// this repairs.
+    /// </summary>
+    private void RestoreCitationFocus()
+    {
+        if (!_citationsListOwnedFocusBeforePublish)
+        {
+            return;
+        }
+
+        _citationsListOwnedFocusBeforePublish = false;
+        _ = Dispatcher.InvokeAsync(
+            () =>
+            {
+                // The shared topmost-search rule first (invariant 4 of
+                // the search contracts; the Restore*Focus* census): a
+                // republish can land while the search overlay is up —
+                // an external change, the watcher — and focusing the
+                // list behind its scrim would strand text focus.
+                if (TryFocusSearchIfTopmost())
+                {
+                    return;
+                }
+
+                if (OpenModalSurface is not null)
+                {
+                    return;
+                }
+
+                if (Keyboard.FocusedElement is DependencyObject focused
+                    && !ReferenceEquals(focused, this)
+                    && !PanelCitationsList.IsKeyboardFocusWithin)
+                {
+                    return;
+                }
+
+                if (PanelCitationsList.SelectedItem is not { } selected)
+                {
+                    _ = PanelCitationsList.Focus();
+                    return;
+                }
+
+                PanelCitationsList.ScrollIntoView(selected);
+                PanelCitationsList.UpdateLayout();
+                if (PanelCitationsList.ItemContainerGenerator.ContainerFromItem(selected)
+                    is ListBoxItem container)
+                {
+                    _ = container.Focus();
+                    return;
+                }
+
+                // The row's container has not generated yet — the
+                // virtualizing panel materializes it on the next layout
+                // pass (measured: at Input priority the generator still
+                // answers null and focus landed on the list itself). Hold
+                // focus on the list so it is never stranded, then seat it
+                // on the row once the container exists; the second step
+                // stands down if focus has moved on meanwhile.
+                _ = PanelCitationsList.Focus();
+                _ = Dispatcher.InvokeAsync(
+                    () =>
+                    {
+                        if (PanelCitationsList.IsKeyboardFocusWithin
+                            && ReferenceEquals(PanelCitationsList.SelectedItem, selected)
+                            && PanelCitationsList.ItemContainerGenerator
+                                .ContainerFromItem(selected) is ListBoxItem late)
+                        {
+                            _ = late.Focus();
+                        }
+                    },
+                    System.Windows.Threading.DispatcherPriority.Background);
+            },
+            System.Windows.Threading.DispatcherPriority.Input);
+    }
+
     private void CitationRows_Published(object? sender, EventArgs e)
     {
         RestoreCitationSelection();
+        RestoreCitationFocus();
         if (_observedWorkspace?.CitationDetails is not { } details
             || _observedCitations is not { } citations)
         {
