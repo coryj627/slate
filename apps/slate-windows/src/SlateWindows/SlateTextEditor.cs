@@ -266,11 +266,21 @@ internal sealed class SlateTextEditor : TextEditor
         editor._synchronizingCaretOffset = true;
         try
         {
+            // Clamp the LIVE caret only — never write the clamp back
+            // through the (TwoWay) binding. On a fresh template
+            // materialization WPF can transfer this DP BEFORE the
+            // Document binding (measured by the W5-3 journey: the
+            // parked offset arrived with the default empty document
+            // still in place), and the old write-back poisoned the
+            // VIEW MODEL with the 0 it clamped to — after which the
+            // document-change restore faithfully re-applied the
+            // poison over the pending-caret rescue. The document's
+            // arrival is the reconciliation seat:
+            // RestoreCaretAfterDocumentChange re-reads this DP against
+            // the REAL document and writes back then, so a stale
+            // out-of-range value still converges — at a moment when
+            // "out of range" is a fact rather than a race.
             editor.CaretOffset = clamped;
-            if (requested != clamped)
-            {
-                editor.SetCurrentValue(EditorCaretOffsetProperty, clamped);
-            }
         }
         finally
         {

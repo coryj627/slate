@@ -252,6 +252,7 @@ internal static class ChordTable
         // Sidebar / file management (mac projects these into CommandSection.sidebar).
         public const string SidebarOpen = "slate.sidebar.open";
         public const string NewNote = "slate.file.newNote";
+        public const string NewFromTemplate = "slate.file.newFromTemplate";
         public const string NewFolder = "slate.file.newFolder";
         public const string ImportFilesAndFolders = "slate.file.importFilesAndFolders";
         public const string CancelImport = "slate.file.cancelImport";
@@ -337,6 +338,7 @@ internal static class ChordTable
         Ids.SidebarOpen,
         Ids.NewNote,
         Ids.NewFolder,
+        Ids.NewFromTemplate,
         Ids.ImportFilesAndFolders,
         Ids.RenameEntry,
         Ids.MoveTo,
@@ -786,6 +788,14 @@ internal static class ChordTable
                 "⌘N", divergence: UnboundOnWindows),
             Reg(Ids.NewFolder, "New Folder", CommandSection.Sidebar,
                 "Create a new folder in the selected location, then rename it."),
+            // W5-3 (#743): a clean ⌘→Ctrl mapping — Ctrl+Shift+N is
+            // unclaimed here and by Windows convention in-app. Recorded
+            // beside the deliberately chord-UNBOUND NewNote: the
+            // asymmetry is mac's own (⌘N exists but Windows declined it
+            // for the inline-rename flow; the template flow has no such
+            // conflict). Contracts doc TD-6.
+            Reg(Ids.NewFromTemplate, "New Note from Template…", CommandSection.Sidebar,
+                "Choose a template for a new note.", "⇧⌘N", "Ctrl+Shift+N"),
             Reg(Ids.ImportFilesAndFolders, "Import Files and Folders…",
                 CommandSection.Sidebar,
                 "Choose files and folders. External items are copied into the selected "

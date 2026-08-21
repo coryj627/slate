@@ -7173,6 +7173,13 @@ pub enum A11yEvent {
         row_count: u32,
         summary: Option<String>,
     },
+    TemplatePickerOpened {
+        count: u32,
+    },
+    TemplateNoteCreated {
+        name: String,
+        template: String,
+    },
     HostComposed {
         text: String,
         priority: A11yPriority,
@@ -7550,6 +7557,8 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
                 row_count,
                 summary,
             },
+            F::TemplatePickerOpened { count } => C::TemplatePickerOpened { count },
+            F::TemplateNoteCreated { name, template } => C::TemplateNoteCreated { name, template },
             F::HostComposed { text, priority } => C::HostComposed {
                 text,
                 priority: priority.into(),

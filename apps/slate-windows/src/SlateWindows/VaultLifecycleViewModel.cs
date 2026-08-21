@@ -915,6 +915,7 @@ internal sealed class VaultLifecycleViewModel
             Workspace.EditorTagActivated -= Workspace_EditorTagActivated;
             Workspace.ReadingTagActivated -= Workspace_ReadingTagActivated;
             Workspace.FocusBoundaryRequested -= Workspace_FocusBoundaryRequested;
+            Workspace.TemplateNoteWritten -= Workspace_TemplateNoteWritten;
             Workspace.PropertyChanged -= Workspace_SheetPresented;
             Workspace.Dispose();
         }
@@ -982,6 +983,15 @@ internal sealed class VaultLifecycleViewModel
         workspace.EditorTagActivated += Workspace_EditorTagActivated;
         workspace.ReadingTagActivated += Workspace_ReadingTagActivated;
         workspace.FocusBoundaryRequested += Workspace_FocusBoundaryRequested;
+        // W5-3 (T12, T7): the creation parent is the sidebar's rule —
+        // frozen by the workspace at picker open — and `{{vault}}` is
+        // the root's basename; a written template note refreshes the
+        // sidebar the way its own creates do.
+        FilesSidebarViewModel capturedSidebar = sidebar;
+        workspace.TemplateCreationParentProvider = capturedSidebar.CreationParentPath;
+        workspace.TemplateVaultNameProvider =
+            () => Path.GetFileName(Path.TrimEndingDirectorySeparator(root));
+        workspace.TemplateNoteWritten += Workspace_TemplateNoteWritten;
         sidebar.OpenTargetRequested += FileSidebar_OpenTargetRequested;
         switcher.OpenRequested += QuickSwitcher_OpenRequested;
         switcher.Dismissed += QuickSwitcher_Dismissed;
@@ -1196,6 +1206,13 @@ internal sealed class VaultLifecycleViewModel
         QuickSwitcher?.RecordOpen(path);
     }
 
+    /// <summary>W5-3 (T7): a template note was written outside the
+    /// sidebar's own mutation paths, which refresh inline — this one
+    /// refreshes the tree the same way so the new note is visible and
+    /// selectable immediately.</summary>
+    private void Workspace_TemplateNoteWritten(object? sender, string path) =>
+        FileSidebar?.Refresh();
+
     private void Workspace_EditorTagActivated(object? sender, string tag) =>
         FileSidebar?.ActivateTag(tag);
 
@@ -1272,6 +1289,10 @@ internal sealed class VaultLifecycleViewModel
                 workspace.DashboardEditorSheet is not null,
             nameof(WorkspaceViewModel.BaseQueryBuilderSheet) =>
                 workspace.BaseQueryBuilderSheet is not null,
+            nameof(WorkspaceViewModel.TemplatePickerSheet) =>
+                workspace.TemplatePickerSheet is not null,
+            nameof(WorkspaceViewModel.TemplateFlowSheet) =>
+                workspace.TemplateFlowSheet is not null,
             _ => false,
         };
         if (!presented)

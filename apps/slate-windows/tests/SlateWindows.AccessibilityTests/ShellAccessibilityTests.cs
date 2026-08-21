@@ -3264,8 +3264,24 @@ public sealed class ShellAccessibilityTests
             Keyboard.Release(VirtualKeyShort.RETURN);
             Assert.True(
                 SpinWait.SpinUntil(
-                    () => File.ReadAllText(Path.Combine(vaultRoot, "alpha.md"))
-                        .Contains("status: todo-edited", StringComparison.Ordinal),
+                    () =>
+                    {
+                        // Tolerant of the app's atomic temp+rename
+                        // write racing this poll (the CI sharing
+                        // violation this journey tripped on PR #1124).
+                        try
+                        {
+                            return File.ReadAllText(
+                                    Path.Combine(vaultRoot, "alpha.md"))
+                                .Contains(
+                                    "status: todo-edited",
+                                    StringComparison.Ordinal);
+                        }
+                        catch (IOException)
+                        {
+                            return false;
+                        }
+                    },
                     TimeSpan.FromSeconds(15)),
                 "the committed cell edit never reached the file");
             // The committed edit's vault event re-executes every Bases
@@ -3635,16 +3651,42 @@ public sealed class ShellAccessibilityTests
             PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_S);
             Assert.True(
                 SpinWait.SpinUntil(
-                    () => File.ReadAllText(Path.Combine(vaultRoot, "alpha.md"))
-                        .Contains("first revision", StringComparison.Ordinal),
+                    () =>
+                    {
+                        // Tolerant of the atomic write racing the poll.
+                        try
+                        {
+                            return File.ReadAllText(
+                                    Path.Combine(vaultRoot, "alpha.md"))
+                                .Contains(
+                                    "first revision", StringComparison.Ordinal);
+                        }
+                        catch (IOException)
+                        {
+                            return false;
+                        }
+                    },
                     TimeSpan.FromSeconds(10)),
                 "the first in-app save never reached disk");
             Keyboard.Type("second revision ");
             PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_S);
             Assert.True(
                 SpinWait.SpinUntil(
-                    () => File.ReadAllText(Path.Combine(vaultRoot, "alpha.md"))
-                        .Contains("second revision", StringComparison.Ordinal),
+                    () =>
+                    {
+                        // Tolerant of the atomic write racing the poll.
+                        try
+                        {
+                            return File.ReadAllText(
+                                    Path.Combine(vaultRoot, "alpha.md"))
+                                .Contains(
+                                    "second revision", StringComparison.Ordinal);
+                        }
+                        catch (IOException)
+                        {
+                            return false;
+                        }
+                    },
                     TimeSpan.FromSeconds(10)),
                 "the second in-app save never reached disk");
 
@@ -3850,8 +3892,21 @@ public sealed class ShellAccessibilityTests
                 + "Cancel/Restore buttons never appeared");
             Assert.True(
                 SpinWait.SpinUntil(
-                    () => !File.ReadAllText(Path.Combine(vaultRoot, "alpha.md"))
-                        .Contains("second revision", StringComparison.Ordinal),
+                    () =>
+                    {
+                        // Tolerant of the atomic write racing the poll.
+                        try
+                        {
+                            return !File.ReadAllText(
+                                    Path.Combine(vaultRoot, "alpha.md"))
+                                .Contains(
+                                    "second revision", StringComparison.Ordinal);
+                        }
+                        catch (IOException)
+                        {
+                            return false;
+                        }
+                    },
                     TimeSpan.FromSeconds(15)),
                 "the restore never landed on disk");
             // Success returns focus to the NEW HEAD row — exactly
@@ -5137,6 +5192,391 @@ public sealed class ShellAccessibilityTests
             }
         }
     }
+
+    /// <summary>
+    /// W5-3 (#743): create-from-template end to end. Chord opens the
+    /// picker with focus on the first row; Esc cancels writing nothing;
+    /// the full flow renders through core, creates exclusively, opens
+    /// the note, and parks the caret at the template's `{{cursor}}` —
+    /// proven by TYPING at the landed caret and reading the note's
+    /// bytes back off disk after Ctrl+S (contracts T7/T8). Axe scans
+    /// the picker, the prompt step, and the name step.
+    /// </summary>
+    [Fact]
+    public void Templates_PickerPromptsCreateAndCancel_AreClean()
+    {
+        string testRoot = Path.Combine(
+            Path.GetTempPath(), $"slate-templates-{Guid.NewGuid():N}");
+        string vaultRoot = Path.Combine(testRoot, "Template Vault");
+        string logDirectory = Path.Combine(testRoot, "logs");
+        string templatesDir = Path.Combine(vaultRoot, "Templates");
+        // The vault starts with NO templates folder: the journey's
+        // first leg exercises the EMPTY picker state, then creates the
+        // template on disk and lands Try Again — the availability
+        // transition whose focus re-seat mac wires deliberately
+        // (red team, a11y finding 1).
+        Directory.CreateDirectory(vaultRoot);
+        File.WriteAllText(
+            Path.Combine(vaultRoot, "existing.md"),
+            "# Existing\n\nAlready here.\n");
+
+        Process? process = null;
+        try
+        {
+            var startInfo = new ProcessStartInfo(SlateWindowsExe())
+            {
+                UseShellExecute = false,
+            };
+            startInfo.ArgumentList.Add(vaultRoot);
+            startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
+                $"slate-templates-{Guid.NewGuid():N}";
+            startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            process = Process.Start(startInfo)
+                ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+
+            if (!HasInteractiveDesktop(process, "templates"))
+            {
+                return;
+            }
+
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(
+                process,
+                automation,
+                Path.Combine(logDirectory, "slate-windows.log"),
+                TimeSpan.FromSeconds(30));
+            window.SetForeground();
+            window.Focus();
+
+            // Wait for the VAULT, not merely the window (the palette
+            // journey's recorded trap): the chord needs a workspace.
+            _ = WaitForElement(window, "RightPaneLeaves", TimeSpan.FromSeconds(30));
+            string[] filesBefore = VaultUserFiles(vaultRoot);
+
+            // --- open by chord on a template-less vault: the EMPTY
+            // state, with focus on Try Again ---------------------------
+            WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(10)).Focus();
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+            window.SetForeground();
+            PressChord(
+                VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_N);
+
+            AutomationElement picker = WaitForElement(
+                window, "TemplatePickerSheet", TimeSpan.FromSeconds(10));
+            Assert.Equal("Choose a template", picker.Name);
+            // The destination subtitle is REAL UIA content — an AT user
+            // must be able to learn where the note will be created
+            // (red team, a11y finding 2).
+            AutomationElement subtitle = WaitForElement(
+                window, "TemplatePickerSubtitle", TimeSpan.FromSeconds(10));
+            Assert.Equal(
+                "Create in the vault root. Ctrl+Shift+N. Escape to cancel.",
+                subtitle.Name);
+            AutomationElement tryAgain = WaitForElement(
+                window, "TemplatePickerTryAgain", TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            return tryAgain.Properties.HasKeyboardFocus.ValueOrDefault;
+                        }
+                        catch (COMException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the empty picker did not focus Try Again (T3).");
+
+            // --- the template appears on disk; Try Again lands
+            // Available and RE-SEATS focus on the first row — the
+            // availability transition that evicted keyboard focus from
+            // the modal before the picker-state observer existed ------
+            // One prompt to complete via the Value pattern, one left
+            // untouched (an empty answer substitutes EMPTY, T4), a
+            // multibyte char before {{cursor}} so the caret leg pins
+            // the UTF-8→UTF-16 conversion end to end, and a description
+            // for the composed row name.
+            Directory.CreateDirectory(templatesDir);
+            File.WriteAllText(
+                Path.Combine(templatesDir, "Meeting.md"),
+                "---\ndescription: Journey fixture\n---\n# {{title}}\n\n"
+                + "Topic: {{prompt:Topic}}\nNotes: {{prompt:Extra}}\n\nCafé {{cursor}}end\n");
+            window.SetForeground();
+            PressKey(VirtualKeyShort.ENTER);
+
+            AutomationElement pickerList = WaitForElement(
+                window, "TemplatePickerList", TimeSpan.FromSeconds(10));
+            AutomationElement? firstRow = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            firstRow = pickerList.FindFirstDescendant(
+                                automation.ConditionFactory
+                                    .ByControlType(ControlType.ListItem));
+                            return firstRow?.Properties
+                                .HasKeyboardFocus.ValueOrDefault == true;
+                        }
+                        catch (COMException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the Try Again landing did not re-seat focus on the first row "
+                + "(red team a11y finding 1 — focus was evicted from the modal).");
+            // The composed row name: "{name}. {description}." (mac's
+            // rowAccessibilityLabel, T3).
+            Assert.Equal("Meeting. Journey fixture.", firstRow!.Name);
+
+            AssertAxeClean(process, "template-picker");
+
+            // --- Esc cancels the picker; nothing is written (T7) ------
+            string[] filesBeforeCancel = VaultUserFiles(vaultRoot);
+            window.SetForeground();
+            Keyboard.Press(VirtualKeyShort.ESCAPE);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            return window.FindFirstDescendant(automation.ConditionFactory
+                                .ByAutomationId("TemplatePickerSheet")) is null;
+                        }
+                        catch (COMException)
+                        {
+                            return true;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "Escape did not close the template picker");
+            Assert.Equal(filesBeforeCancel, VaultUserFiles(vaultRoot));
+            // The pre-template snapshot differs only by the template
+            // file this journey itself wrote — the app wrote nothing.
+            Assert.Equal(filesBefore.Length + 1, filesBeforeCancel.Length);
+
+            // --- Esc at the PROMPT STEP cancels the whole flow too
+            // (T7 promises Esc at every step; red team, tests
+            // finding 9) -----------------------------------------------
+            window.SetForeground();
+            PressChord(
+                VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_N);
+            _ = WaitForElement(window, "TemplatePickerSheet", TimeSpan.FromSeconds(10));
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+            window.SetForeground();
+            PressKey(VirtualKeyShort.ENTER);
+            _ = WaitForElement(window, "TemplateFlowSheet", TimeSpan.FromSeconds(10));
+            window.SetForeground();
+            Keyboard.Press(VirtualKeyShort.ESCAPE);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            return window.FindFirstDescendant(automation.ConditionFactory
+                                .ByAutomationId("TemplateFlowSheet")) is null;
+                        }
+                        catch (COMException)
+                        {
+                            return true;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "Escape did not cancel the flow from the prompt step");
+            Assert.Equal(filesBeforeCancel, VaultUserFiles(vaultRoot));
+
+            // --- reopen, activate the row, complete a prompt ----------
+            window.SetForeground();
+            PressChord(
+                VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_N);
+            _ = WaitForElement(window, "TemplatePickerSheet", TimeSpan.FromSeconds(10));
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+            window.SetForeground();
+            PressKey(VirtualKeyShort.ENTER);
+
+            AutomationElement flow = WaitForElement(
+                window, "TemplateFlowSheet", TimeSpan.FromSeconds(10));
+            Assert.Equal("Create from template", flow.Name);
+
+            // The prompt step: fields in declaration order, first
+            // focused, labelled with the author's text (T4). Value
+            // pattern, not synthetic keystrokes (the recorded journey
+            // trap).
+            AutomationElement? topicBox = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            topicBox = flow.FindAllDescendants(
+                                    automation.ConditionFactory
+                                        .ByControlType(ControlType.Edit))
+                                .FirstOrDefault(box => box.Name == "Topic");
+                            return topicBox?.Properties
+                                .HasKeyboardFocus.ValueOrDefault == true;
+                        }
+                        catch (COMException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the prompt step did not focus its first field (T4).");
+            topicBox!.Patterns.Value.Pattern.SetValue("Quarterly sync");
+
+            AssertAxeClean(process, "template-prompts");
+
+            window.SetForeground();
+            PressKey(VirtualKeyShort.ENTER);
+
+            // The name step: seeded with "{template}.md", focused (T6).
+            AutomationElement nameBox = WaitForElement(
+                window, "TemplateFlowName", TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            return nameBox.Properties
+                                .HasKeyboardFocus.ValueOrDefault;
+                        }
+                        catch (COMException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the name step did not focus the name field (T6).");
+            Assert.Equal("Meeting.md", nameBox.Patterns.Value.Pattern.Value.Value);
+
+            AssertAxeClean(process, "template-name");
+
+            nameBox.Patterns.Value.Pattern.SetValue("Journey Note");
+            window.SetForeground();
+            PressKey(VirtualKeyShort.ENTER);
+
+            // --- the create: sheet closes, the note opens -------------
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            return window.FindFirstDescendant(automation.ConditionFactory
+                                .ByAutomationId("TemplateFlowSheet")) is null;
+                        }
+                        catch (COMException)
+                        {
+                            return true;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the flow sheet stayed open after Create");
+
+            AutomationElement editor = WaitForEditor(
+                window,
+                automation,
+                "Journey Note.md editor",
+                TimeSpan.FromSeconds(10));
+
+            // Focus follows content (T8): the editor holds the keyboard.
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            return editor.Properties.HasKeyboardFocus.ValueOrDefault;
+                        }
+                        catch (COMException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the created note's editor did not take keyboard focus (T8).");
+
+            // --- the caret leg: TYPE at the landed caret, save, and
+            // read the bytes back — the {{cursor}} offset is proven by
+            // where the typed marker lands on DISK, after the multibyte
+            // 'é' that makes byte-vs-UTF-16 confusion visible ----------
+            window.SetForeground();
+            Keyboard.Type("MARK");
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+            Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_S);
+
+            string createdPath = Path.Combine(vaultRoot, "Journey Note.md");
+            string saved = string.Empty;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            saved = File.ReadAllText(createdPath);
+                            return saved.Contains("MARK", StringComparison.Ordinal);
+                        }
+                        catch (IOException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the typed caret marker never reached the note on disk.");
+            // The template's own frontmatter renders through into the
+            // note (that is how template frontmatter seeds properties;
+            // mac-identical), and MARK sits exactly where {{cursor}}
+            // stood — after the multibyte 'é'.
+            Assert.Equal(
+                "---\ndescription: Journey fixture\n---\n# Journey Note\n\n"
+                + "Topic: Quarterly sync\nNotes: \n\nCafé MARKend\n",
+                saved);
+        }
+        finally
+        {
+            if (process is not null && !process.HasExited)
+            {
+                process.CloseMainWindow();
+                if (!process.WaitForExit(5_000))
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            try
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    /// <summary>Every user-visible vault file with its content — the
+    /// nothing-was-written snapshot for the cancel legs. ALL files,
+    /// not just Markdown; only the `.slate` index directory is carved
+    /// out (reads legitimately touch it), so the claim the cancel legs
+    /// make is honest (red team, tests finding 9).</summary>
+    private static string[] VaultUserFiles(string vaultRoot) =>
+        [.. Directory
+            .EnumerateFiles(vaultRoot, "*", SearchOption.AllDirectories)
+            .Where(path => !path
+                .Replace('\\', '/')
+                .Contains("/.slate/", StringComparison.Ordinal))
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .Select(path => $"{path}|{File.ReadAllText(path)}")];
 
     /// <summary>
     /// Whether a chord can actually be delivered to the app, or is held

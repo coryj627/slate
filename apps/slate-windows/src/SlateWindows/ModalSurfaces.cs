@@ -47,6 +47,16 @@ internal enum ModalSurface
     FilesCiting,
     DashboardEditor,
     BaseQueryBuilder,
+
+    /// <summary>W5-3 (#743): the template picker sheet. Declared after
+    /// every earlier sheet so a violated exclusivity degrades to the
+    /// template flow, whose sheets are the newest paint.</summary>
+    TemplatePicker,
+
+    /// <summary>W5-3 (#743): the prompt/name flow sheet. Last in paint
+    /// order — it follows the picker in the flow, so between the two it
+    /// must win the tie.</summary>
+    TemplateFlow,
 }
 
 /// <summary>
@@ -83,6 +93,15 @@ internal enum PaletteOpenDecision
     /// </summary>
     DismissSearchThenOpen,
 
+    /// <summary>
+    /// The command palette is up and the opener retires it (W5-3 T9,
+    /// mac's rule: the palette is an action launcher, not a blocking
+    /// authoring dialog — retire it before staging the sheet so the
+    /// two presentations never overlap). Consume its focus lineage,
+    /// dismiss, then open.
+    /// </summary>
+    DismissPaletteThenOpen,
+
     /// <summary>A higher surface owns the screen; refuse.</summary>
     Refuse,
 }
@@ -107,7 +126,9 @@ internal readonly record struct ModalSurfaceState(
     bool CitationSummary,
     bool FilesCiting,
     bool DashboardEditor,
-    bool BaseQueryBuilder);
+    bool BaseQueryBuilder,
+    bool TemplatePicker,
+    bool TemplateFlow);
 
 /// <summary>
 /// The modal-surface precedence rules, as pure functions.
@@ -210,6 +231,8 @@ internal static class ModalSurfaces
             ModalSurface.FilesCiting => state.FilesCiting,
             ModalSurface.DashboardEditor => state.DashboardEditor,
             ModalSurface.BaseQueryBuilder => state.BaseQueryBuilder,
+            ModalSurface.TemplatePicker => state.TemplatePicker,
+            ModalSurface.TemplateFlow => state.TemplateFlow,
         };
 
     /// <summary>
@@ -273,6 +296,40 @@ internal static class ModalSurfaces
             ModalSurface.SearchOverlay => PaletteOpenDecision.Open,
 
             ModalSurface.QuickOpen => PaletteOpenDecision.DismissQuickOpenThenOpen,
+
+            _ => PaletteOpenDecision.Refuse,
+        };
+
+    /// <summary>
+    /// Whether the template picker may open, given what is already up
+    /// (W5-3, contract T9). Unlike #1118's Ctrl+Shift+R/J, the
+    /// template chord consults this BEFORE presenting, so the flow
+    /// never opens beneath a higher surface.
+    /// </summary>
+    /// <remarks>
+    /// The overlays are superseded with the palette's exact arms —
+    /// focus lineage included (the caller performs the dismissal).
+    /// The palette itself is RETIRED, not refused (mac's rule at its
+    /// registry dispatch: an action launcher completes by launching;
+    /// AppState.swift:1980-1989) — and because the admission runs
+    /// inside the workspace's open, the same arm serves the
+    /// palette-INVOKED command during P9's sanctioned transient. An
+    /// already-open template surface refuses: there is no re-entrant
+    /// flow (mac's <c>templateFlowBusyReason</c> moment), and
+    /// re-opening-clears-state is a palette PD-2 semantic the flow
+    /// deliberately does not share — a template flow holds user input
+    /// worth more than a stale query. Every sheet refuses.
+    /// </remarks>
+    internal static PaletteOpenDecision DecideTemplateOpen(ModalSurface? topmost) =>
+        topmost switch
+        {
+            null => PaletteOpenDecision.Open,
+
+            ModalSurface.QuickOpen => PaletteOpenDecision.DismissQuickOpenThenOpen,
+
+            ModalSurface.SearchOverlay => PaletteOpenDecision.DismissSearchThenOpen,
+
+            ModalSurface.CommandPalette => PaletteOpenDecision.DismissPaletteThenOpen,
 
             _ => PaletteOpenDecision.Refuse,
         };

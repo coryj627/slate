@@ -1,6 +1,6 @@
 # Milestone W parity matrix (§W-F row-level checklist)
 
-Generated 2026-08-16 at `2f4b769` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
+Generated 2026-08-20 at `fe2fe62` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
 
 ## Entry-criteria snapshot (w0_spec §W0-4 item 3)
 
@@ -131,7 +131,7 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 | `slate.file.moveTo` | Move To… | ⇧⌘M | Shift Command M | #744 (W5-4) | pending |
 | `slate.file.newCanvas` | New Canvas | — | — | #745 (W6-1) | pending |
 | `slate.file.newFolder` | New Folder | — | — | #744 (W5-4) | pending |
-| `slate.file.newFromTemplate` | New Note from Template… | ⇧⌘N | Shift Command N | #743 (W5-3) | pending |
+| `slate.file.newFromTemplate` | New Note from Template… | ⇧⌘N | Shift Command N | #743 (W5-3) | implemented; local gates green 2026-08-20; interactive CI + human AT pending |
 | `slate.file.newNote` | New Note | ⌘N | Command N | #744 (W5-4) | pending |
 | `slate.file.printNote` | Print… | ⌘P | Command P | #728 (W3-1) | **§W-F waiver** — out of W3-1 (owner, 2026-07-25); a second composition path, as mac shows by routing print through a separate `ReadingPrintComposer` that re-segments through core. Needs its own unit; tracked, not unshipped. |
 | `slate.file.rename` | Rename… | ⌥⌘R | Option Command R | #744 (W5-4) | pending |
@@ -270,7 +270,7 @@ What `WorkspaceStore` round-trips — a **separate** inventory from the right-pa
 | Bases grid + builder (N shipped) | `Bases/` | #738 (W4-6) | implemented; local gates green 2026-08-08; interactive CI + human AT pending |
 | Command palette | `CommandPaletteModel.swift` (core ranking, W0.5-1) | #741 (W5-1) | implemented; local gates green 2026-08-13; interactive CI + human AT pending |
 | Search overlay | search UI over `full_text_search` | #742 (W5-2) | implemented; local gates green 2026-08-16; interactive CI + human AT pending |
-| Templates picker + prompt flow | template views | #743 (W5-3) | pending |
+| Templates picker + prompt flow | template views | #743 (W5-3) | implemented; local gates green 2026-08-20; interactive CI + human AT pending |
 | File management + bulk rename | sidebar/file commands | #744 (W5-4) | pending |
 | Accessible canvas (T parity) | `Canvas/` | #745 (W6-1) | pending |
 | Graph view (P parity, canonical textual representation) | `Graph/` | #746 (W6-2) | pending |

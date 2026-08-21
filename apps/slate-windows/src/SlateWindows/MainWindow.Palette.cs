@@ -108,7 +108,9 @@ public partial class MainWindow
                 CitationSummary: workspace?.CitationSummary is not null,
                 FilesCiting: workspace?.FilesCiting is not null,
                 DashboardEditor: workspace?.DashboardEditorSheet is not null,
-                BaseQueryBuilder: workspace?.BaseQueryBuilderSheet is not null);
+                BaseQueryBuilder: workspace?.BaseQueryBuilderSheet is not null,
+                TemplatePicker: workspace?.TemplatePickerSheet is not null,
+                TemplateFlow: workspace?.TemplateFlowSheet is not null);
         }
     }
 

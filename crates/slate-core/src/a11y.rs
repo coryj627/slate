@@ -759,6 +759,23 @@ pub enum A11yEvent {
         summary: Option<String>,
     },
 
+    // --- Templates (W5-3, #743) ---
+    /// The template picker presented with its enumeration result. The
+    /// three count arms are mac's `templatePickerOpenAnnouncement`
+    /// verbatim (the 0 arm is carried for completeness; mac's empty
+    /// present speaks its availability reason instead — contracts doc
+    /// T10).
+    TemplatePickerOpened {
+        count: u32,
+    },
+    /// Create-from-template succeeded. High priority (mac #421 F-H1:
+    /// the created announcement must win over the tab-switch
+    /// announcement that immediately follows the open).
+    TemplateNoteCreated {
+        name: String,
+        template: String,
+    },
+
     HostComposed {
         text: String,
         priority: A11yPriority,
@@ -792,7 +809,8 @@ impl A11yEvent {
             | RenameFailed { .. }
             | RestoredVersionFrom { .. }
             | RestoredFile { .. }
-            | RestoredFileAs { .. } => A11yPriority::High,
+            | RestoredFileAs { .. }
+            | TemplateNoteCreated { .. } => A11yPriority::High,
             HostComposed { priority, .. } => *priority,
             _ => A11yPriority::Medium,
         }
@@ -1364,6 +1382,17 @@ impl A11yEvent {
                     }
                     _ => format!("Group: {label}, {rows}"),
                 }
+            }
+
+            TemplatePickerOpened { count } => match *count {
+                0 => "Template picker opened. No templates found. \
+                      Add a Markdown file to the configured template folder."
+                    .to_owned(),
+                1 => "Template picker opened. 1 template available.".to_owned(),
+                n => format!("Template picker opened. {n} templates available."),
+            },
+            TemplateNoteCreated { name, template } => {
+                format!("Created {name} from {template}.")
             }
 
             HostComposed { text, .. } => text.clone(),
@@ -2105,6 +2134,13 @@ pub fn corpus() -> Vec<A11yEvent> {
             row_count: 12,
             summary: Some("Count: 12".into()),
         },
+        TemplatePickerOpened { count: 0 },
+        TemplatePickerOpened { count: 1 },
+        TemplatePickerOpened { count: 7 },
+        TemplateNoteCreated {
+            name: "Meeting 2026-08-20.md".into(),
+            template: "Meeting".into(),
+        },
         HostComposed {
             text: "Composed by a host engine.".into(),
             priority: A11yPriority::High,
@@ -2454,6 +2490,14 @@ mod tests {
             (Medium, "Status: Open"),
             (Medium, "Group: Open, 1 row"),
             (Medium, "Group: Done, 12 rows. Summary: Count: 12"),
+            (
+                Medium,
+                "Template picker opened. No templates found. \
+                 Add a Markdown file to the configured template folder.",
+            ),
+            (Medium, "Template picker opened. 1 template available."),
+            (Medium, "Template picker opened. 7 templates available."),
+            (High, "Created Meeting 2026-08-20.md from Meeting."),
             (High, "Composed by a host engine."),
         ];
 

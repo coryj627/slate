@@ -249,6 +249,7 @@ public partial class MainWindow : Window
             UnwireWorkspaceProperties(_observedWorkspace);
             UnwireWorkspaceCitations(_observedWorkspace);
             UnwireWorkspaceBases(_observedWorkspace);
+            UnwireWorkspaceTemplates(_observedWorkspace);
         }
 
         _observedWorkspace = workspace;
@@ -258,6 +259,7 @@ public partial class MainWindow : Window
             WireWorkspaceProperties(workspace);
             WireWorkspaceCitations(workspace);
             WireWorkspaceBases(workspace);
+            WireWorkspaceTemplates(workspace);
         }
     }
 
@@ -484,6 +486,20 @@ public partial class MainWindow : Window
                 return;
             }
 
+            // W5-3 (red team, three-way convergence): without this
+            // carve-out the blanket swallow below ate Ctrl+Shift+N
+            // silently — neither mac's retire-and-open (its registry
+            // dispatch retires the palette, AppState.swift:1980-1989)
+            // nor a refusal announcement. The admission inside the
+            // workspace open takes the DismissPaletteThenOpen arm,
+            // which retires the palette with its focus lineage.
+            if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.N)
+            {
+                _viewModel.Workspace?.OpenTemplatePicker();
+                e.Handled = true;
+                return;
+            }
+
             // Swallow anything that would otherwise fire a shell command
             // underneath the open overlay — but NOT plain typing, and NOT
             // the chords that edit the search text. Marking every modified
@@ -536,6 +552,24 @@ public partial class MainWindow : Window
             {
                 _viewModel.Search.Toggle();
             }
+
+            // Handled either way: a refusal must not fall through and let
+            // the chord reach the surface underneath.
+            e.Handled = true;
+            return;
+        }
+
+        if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.N)
+        {
+            // W5-3 (#743): Ctrl+Shift+N, the direct map of mac's ⇧⌘N
+            // (slate.file.newFromTemplate). The modal admission runs
+            // INSIDE the workspace's open (contract T9 — one gate for
+            // chord, menu, and palette row alike), so unlike #1118's
+            // sheet chords this can never present beneath a higher
+            // surface. Placed before the search-ownership swallow so
+            // the chord supersedes an open search overlay the way the
+            // palette chord does.
+            _viewModel.Workspace?.OpenTemplatePicker();
 
             // Handled either way: a refusal must not fall through and let
             // the chord reach the surface underneath.

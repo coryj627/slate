@@ -118,6 +118,8 @@ public sealed class ModalSurfaceTests
     [InlineData(ModalSurface.FilesCiting, PaletteOpenDecision.Refuse)]
     [InlineData(ModalSurface.DashboardEditor, PaletteOpenDecision.Refuse)]
     [InlineData(ModalSurface.BaseQueryBuilder, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.TemplatePicker, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.TemplateFlow, PaletteOpenDecision.Refuse)]
     public void ThePaletteDefersToEverySheetAndSupersedesBothPickers(
         object? topmost, object expected)
     {
@@ -148,6 +150,8 @@ public sealed class ModalSurfaceTests
     [InlineData(ModalSurface.FilesCiting, PaletteOpenDecision.Refuse)]
     [InlineData(ModalSurface.DashboardEditor, PaletteOpenDecision.Refuse)]
     [InlineData(ModalSurface.BaseQueryBuilder, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.TemplatePicker, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.TemplateFlow, PaletteOpenDecision.Refuse)]
     public void TheSearchChordDefersToEverySheetAndThePalette(
         object? topmost, object expected)
     {
@@ -155,6 +159,38 @@ public sealed class ModalSurfaceTests
         Assert.Equal(
             (PaletteOpenDecision)expected,
             ModalSurfaces.DecideSearchOpen(surface));
+    }
+
+    /// <summary>
+    /// The template flow (W5-3, T9) supersedes both pickers, retires
+    /// the palette (mac's registry-dispatch rule — the same arm serves
+    /// the palette-invoked command during P9's transient), refuses
+    /// beneath every sheet, and refuses re-entry over its own
+    /// surfaces: the flow holds user input worth more than a stale
+    /// query, so PD-2's reopen-clears semantic deliberately does not
+    /// apply.
+    /// </summary>
+    [Theory]
+    [InlineData(null, PaletteOpenDecision.Open)]
+    [InlineData(ModalSurface.QuickOpen, PaletteOpenDecision.DismissQuickOpenThenOpen)]
+    [InlineData(ModalSurface.SearchOverlay, PaletteOpenDecision.DismissSearchThenOpen)]
+    [InlineData(ModalSurface.CommandPalette, PaletteOpenDecision.DismissPaletteThenOpen)]
+    [InlineData(ModalSurface.AddProperty, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.BulkRename, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.CitationDetails, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.CitationSummary, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.FilesCiting, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.DashboardEditor, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.BaseQueryBuilder, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.TemplatePicker, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.TemplateFlow, PaletteOpenDecision.Refuse)]
+    public void TheTemplateFlowSupersedesTheOverlaysAndDefersToEverySheet(
+        object? topmost, object expected)
+    {
+        ModalSurface? surface = topmost is null ? null : (ModalSurface)topmost;
+        Assert.Equal(
+            (PaletteOpenDecision)expected,
+            ModalSurfaces.DecideTemplateOpen(surface));
     }
 
     /// <summary>
@@ -182,6 +218,8 @@ public sealed class ModalSurfaceTests
             ModalSurface.FilesCiting,
             ModalSurface.DashboardEditor,
             ModalSurface.BaseQueryBuilder,
+            ModalSurface.TemplatePicker,
+            ModalSurface.TemplateFlow,
         ];
 
         Assert.Equal(
@@ -342,7 +380,9 @@ public sealed class ModalSurfaceTests
             CitationSummary: surface == ModalSurface.CitationSummary,
             FilesCiting: surface == ModalSurface.FilesCiting,
             DashboardEditor: surface == ModalSurface.DashboardEditor,
-            BaseQueryBuilder: surface == ModalSurface.BaseQueryBuilder);
+            BaseQueryBuilder: surface == ModalSurface.BaseQueryBuilder,
+            TemplatePicker: surface == ModalSurface.TemplatePicker,
+            TemplateFlow: surface == ModalSurface.TemplateFlow);
 
     /// <summary>
     /// The topmost-open walk returns the LAST open surface in paint order,
@@ -504,7 +544,18 @@ public sealed class ModalSurfaceTests
             (ModalSurface.FilesCiting, "FilesCitingSheet"),
             (ModalSurface.DashboardEditor, "DashboardEditorSheet"),
             (ModalSurface.BaseQueryBuilder, "BaseQueryBuilderSheet"),
+            (ModalSurface.TemplatePicker, "TemplatePickerSheet"),
+            (ModalSurface.TemplateFlow, "TemplateFlowSheet"),
         ];
+
+        // Exhaustiveness (red team W5-3, tests finding 3): the two
+        // template surfaces shipped ABSENT from this list, so swapping
+        // their XAML order — the exact key/paint divergence the enum
+        // exists to prevent — left the census green. A surface added
+        // to the enum without a row here now fails loudly.
+        Assert.Equal(
+            Enum.GetValues<ModalSurface>().OrderBy(surface => surface),
+            expected.Select(entry => entry.Surface).OrderBy(surface => surface));
 
         int previous = -1;
         foreach ((ModalSurface surface, string automationId) in expected)
@@ -525,7 +576,7 @@ public sealed class ModalSurfaceTests
     /// <summary>
     /// The binding path the Menu's disable trigger must read for each
     /// surface. The two overlays and the palette expose <c>IsOpen</c>
-    /// flags; the seven sheets are object properties (open == non-null)
+    /// flags; the nine sheets are object properties (open == non-null)
     /// and must route through <c>IsNotNullConverter</c>.
     /// </summary>
     private static readonly Dictionary<ModalSurface, string> MenuDisableBindings =
@@ -541,6 +592,8 @@ public sealed class ModalSurfaceTests
             [ModalSurface.FilesCiting] = "Workspace.FilesCiting",
             [ModalSurface.DashboardEditor] = "Workspace.DashboardEditorSheet",
             [ModalSurface.BaseQueryBuilder] = "Workspace.BaseQueryBuilderSheet",
+            [ModalSurface.TemplatePicker] = "Workspace.TemplatePickerSheet",
+            [ModalSurface.TemplateFlow] = "Workspace.TemplateFlowSheet",
         };
 
     /// <summary>
@@ -628,6 +681,7 @@ public sealed class ModalSurfaceTests
         ("MainWindow.Citations.cs", "RestoreFocusTo"),
         ("MainWindow.Bases.cs", "RestoreBasesOverlayFocus"),
         ("MainWindow.Palette.cs", "RestoreFocusAfterPalette"),
+        ("MainWindow.Templates.cs", "RestoreFocusAfterTemplates"),
         // Red team after codex round 11: this restore previously lived
         // anonymous inside the QuickSwitcher Dismissed handler, where
         // this census could not discover it — invariant 4 was true
@@ -740,6 +794,8 @@ public sealed class ModalSurfaceTests
     [InlineData(ModalSurface.FilesCiting, PaletteOpenDecision.Refuse)]
     [InlineData(ModalSurface.DashboardEditor, PaletteOpenDecision.Refuse)]
     [InlineData(ModalSurface.BaseQueryBuilder, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.TemplatePicker, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.TemplateFlow, PaletteOpenDecision.Refuse)]
     public void QuickOpenRefusesBeneathEverySheetAndThePalette(
         object? topmost, object expected)
     {
@@ -1073,6 +1129,8 @@ public sealed class ModalSurfaceTests
                 ModalSurface.FilesCiting => "FilesCiting",
                 ModalSurface.DashboardEditor => "DashboardEditorSheet",
                 ModalSurface.BaseQueryBuilder => "BaseQueryBuilderSheet",
+                ModalSurface.TemplatePicker => "TemplatePickerSheet",
+                ModalSurface.TemplateFlow => "TemplateFlowSheet",
                 _ => throw new Xunit.Sdk.XunitException(
                     $"{sheet} is a sheet with no property mapping here — "
                     + "add it AND the observer arm."),
@@ -1254,6 +1312,184 @@ public sealed class ModalSurfaceTests
     }
 
     /// <summary>
+    /// The two-string refusal partition is pinned — the strings
+    /// literally, the routing structurally (verification round,
+    /// finding 2): the code was correct but swapping the strings or
+    /// inverting the own-flow condition left the whole suite green,
+    /// the exact constant-vs-constant blindness the empty/failed
+    /// reasons were cured of in the same wave.
+    /// </summary>
+    [Fact]
+    public void TheRefusalSpeaksMacsTwoStringPartition()
+    {
+        // The LITERAL mac strings (AppState.swift:7901-7904).
+        Assert.Equal(
+            "Finish or cancel the current template note before starting another.",
+            MainWindow.TemplateFlowBusyReason);
+        Assert.Equal(
+            "Finish or cancel the current dialog before creating from a template.",
+            MainWindow.TemplateDialogBusyReason);
+
+        // The routing: re-entry over the flow's own surfaces speaks
+        // flow-busy, everything else dialog-busy.
+        string admission = CSharpSource.Normalize(
+            CSharpSource.Load("MainWindow.Templates.cs")
+                .Method("TryClearTheWayForTemplates"));
+        Assert.Contains(
+            "boolrefusedByOwnFlow=OpenModalSurface"
+            + "isModalSurface.TemplatePickerorModalSurface.TemplateFlow",
+            admission,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "refusedByOwnFlow?TemplateFlowBusyReason:TemplateDialogBusyReason",
+            admission,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Esc cancels from BOTH template sheets' key routes (red team,
+    /// tests finding 9): every unit fact drives CancelCommand directly
+    /// and the journey Escapes only the picker, so deleting either
+    /// Escape case left Esc dead on that sheet with the suite green.
+    /// T7 promises Esc at every step.
+    /// </summary>
+    [Theory]
+    [InlineData("TemplatePickerOverlay_PreviewKeyDown")]
+    [InlineData("TemplateFlowOverlay_PreviewKeyDown")]
+    public void TheTemplateSheetKeyRoutesCancelOnEscape(string handler)
+    {
+        string route = CSharpSource.Normalize(
+            CSharpSource.Load("MainWindow.Templates.cs").Method(handler));
+        Assert.Contains("caseKey.Escape:", route, StringComparison.Ordinal);
+        Assert.Contains(
+            "CancelCommand.Execute(null)", route, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// One physical gesture, one flow step (codex round 4): a held
+    /// Enter's key repeats land in the NEXT step's freshly focused
+    /// field, collapsing picker-activate → Next → Create into a single
+    /// press; the second click of a double-click on Next lands on the
+    /// freshly revealed Create button (Next and Create share a footer
+    /// position across the step panels — a TD-5 mechanics consequence
+    /// mac's sequential sheets cannot have). Both fences are
+    /// view-layer input state a headless fact cannot synthesize, so
+    /// they are pinned structurally.
+    /// </summary>
+    [Fact]
+    public void TheFlowFencesOneGesturePerStep()
+    {
+        foreach (string handler in new[]
+        {
+            "TemplatePickerOverlay_PreviewKeyDown",
+            "TemplateFlowOverlay_PreviewKeyDown",
+        })
+        {
+            string route = CSharpSource.Normalize(
+                CSharpSource.Load("MainWindow.Templates.cs").Method(handler));
+            Assert.Contains(
+                "if(e.IsRepeat){e.Handled=true;return;}",
+                route,
+                StringComparison.Ordinal);
+        }
+
+        string fence = CSharpSource.Normalize(
+            CSharpSource.Load("MainWindow.Templates.cs")
+                .Method("TemplateNameCreate_PreviewMouseLeftButtonDown"));
+        Assert.Contains(
+            "if(e.ClickCount>1){e.Handled=true;}",
+            fence,
+            StringComparison.Ordinal);
+
+        string xaml = File.ReadAllText(
+            Path.Combine(SourceRoot(), "MainWindow.xaml"));
+        Assert.Contains(
+            "PreviewMouseLeftButtonDown=\"TemplateNameCreate_PreviewMouseLeftButtonDown\"",
+            xaml,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The template flow's one-gate design is WIRED, not just designed
+    /// (red team W5-3, tests finding 2 — the milestone's exact defect
+    /// signature, again): the pure DecideTemplateOpen theory proves the
+    /// table, but nothing bound (a) the window handing the workspace
+    /// its admission, (b) the workspace consulting it before any
+    /// presentation, (c) the admission consulting the decision and
+    /// performing the dismissals, or (d) the chord reaching the guarded
+    /// open from BOTH branches — deleting any one left the suite green
+    /// while the flow presented beneath sheets or lost an opener.
+    /// </summary>
+    [Fact]
+    public void TheTemplateOpenersShareOneWiredAdmission()
+    {
+        // (a) The window wires the seam.
+        Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax wire =
+            CSharpSource.Load("MainWindow.Templates.cs").Method("WireWorkspaceTemplates");
+        Assert.Contains(
+            "workspace.TemplateOpenAdmission=TryClearTheWayForTemplates",
+            CSharpSource.Normalize(wire),
+            StringComparison.Ordinal);
+
+        // (b) The workspace consults the seam BEFORE any presentation:
+        // the refusal return precedes the sheet assignment in source.
+        Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax open =
+            CSharpSource.Load("WorkspaceViewModel.Templates.cs").Method("OpenTemplatePicker");
+        string openText = CSharpSource.Normalize(open);
+        int admissionAt = openText.IndexOf(
+            "TemplateOpenAdmission?.Invoke()==false", StringComparison.Ordinal);
+        int presentAt = openText.IndexOf(
+            "TemplatePickerSheet=picker", StringComparison.Ordinal);
+        Assert.True(
+            admissionAt >= 0 && presentAt > admissionAt,
+            "OpenTemplatePicker no longer consults TemplateOpenAdmission "
+            + "before presenting — a refused open would still present, or "
+            + "present first and refuse after.");
+
+        // (c) The admission consults the decision and can perform every
+        // dismissal arm plus the refusal announcement.
+        Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax admission =
+            CSharpSource.Load("MainWindow.Templates.cs").Method("TryClearTheWayForTemplates");
+        Assert.True(
+            CSharpSource.Invokes(admission, "ModalSurfaces.DecideTemplateOpen"),
+            "TryClearTheWayForTemplates no longer consults DecideTemplateOpen.");
+        string admissionText = CSharpSource.Normalize(admission);
+        foreach (string dismissal in new[]
+        {
+            "_viewModel.QuickSwitcher!.Dismiss",
+            "_viewModel.Search.Supersede",
+            "_viewModel.Palette.Dismiss",
+            "_announcer.Post",
+        })
+        {
+            Assert.Contains(dismissal, admissionText, StringComparison.Ordinal);
+        }
+
+        // (d) Both chord branches reach the guarded open: the ordinary
+        // branch, and the carve-out inside the palette-open block —
+        // without the latter, Ctrl+Shift+N under the palette is a
+        // silent dead key (three-way red-team convergence).
+        Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax route =
+            CSharpSource.Load("MainWindow.xaml.cs").Method("Window_PreviewKeyDown");
+        // A conditional access parses as a MemberBinding invocation
+        // (".OpenTemplatePicker"); match the whole ?.-chain instead.
+        var opens = route.DescendantNodes()
+            .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalAccessExpressionSyntax>()
+            .Where(access => CSharpSource.Normalize(access)
+                == "_viewModel.Workspace?.OpenTemplatePicker()")
+            .ToList();
+        Assert.Equal(2, opens.Count);
+        Microsoft.CodeAnalysis.CSharp.Syntax.IfStatementSyntax paletteBlock =
+            route.DescendantNodes()
+                .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.IfStatementSyntax>()
+                .Single(statement => CSharpSource.Normalize(statement.Condition)
+                    == "_viewModel.Palette.IsOpen");
+        Assert.Equal(
+            1,
+            opens.Count(call => call.Ancestors().Contains(paletteBlock.Statement)));
+    }
+
+    /// <summary>
     /// The pickers are mutually exclusive (codex round 4): Quick Open
     /// paints BELOW search, so opening it under an open search overlay
     /// put focus in a hidden box. The shell's switcher-open observer
@@ -1289,7 +1525,9 @@ public sealed class ModalSurfaceTests
             CitationSummary: first is ModalSurface.CitationSummary || second is ModalSurface.CitationSummary,
             FilesCiting: first is ModalSurface.FilesCiting || second is ModalSurface.FilesCiting,
             DashboardEditor: first is ModalSurface.DashboardEditor || second is ModalSurface.DashboardEditor,
-            BaseQueryBuilder: first is ModalSurface.BaseQueryBuilder || second is ModalSurface.BaseQueryBuilder);
+            BaseQueryBuilder: first is ModalSurface.BaseQueryBuilder || second is ModalSurface.BaseQueryBuilder,
+            TemplatePicker: first is ModalSurface.TemplatePicker || second is ModalSurface.TemplatePicker,
+            TemplateFlow: first is ModalSurface.TemplateFlow || second is ModalSurface.TemplateFlow);
 
     [Fact]
     public void EveryMenuDisablePathResolvesAgainstTheLiveViewModels()

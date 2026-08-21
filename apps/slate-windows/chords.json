@@ -849,6 +849,18 @@
       "registered": true
     },
     {
+      "id": "slate.file.newFromTemplate",
+      "label": "New Note from Template…",
+      "section": "Sidebar",
+      "hint": "Choose a template for a new note.",
+      "macChord": "⇧⌘N",
+      "mac": "Shift Command N",
+      "windows": "Ctrl+Shift+N",
+      "windowsSpoken": "Control Shift N",
+      "scope": "Global",
+      "registered": true
+    },
+    {
       "id": "slate.file.importFilesAndFolders",
       "label": "Import Files and Folders…",
       "section": "Sidebar",
@@ -1579,6 +1591,20 @@
           "apps/slate-windows/tests/SlateWindows.Tests/ModalSurfaceTests.cs#ModalSurfaceTests",
           "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#SearchOverlay_OpensSearchesActivatesAndRestoresFocus_IsClean"
         ]
+      },
+      "templates": {
+        "implementation": [
+          "apps/slate-windows/src/SlateWindows/Templates/TemplatePickerViewModel.cs#TemplatePickerViewModel",
+          "apps/slate-windows/src/SlateWindows/Templates/TemplateFlowViewModel.cs#TemplateFlowViewModel",
+          "apps/slate-windows/src/SlateWindows/Templates/TemplateRules.cs#TemplateNameRules",
+          "apps/slate-windows/src/SlateWindows/WorkspaceViewModel.Templates.cs#CreateFromTemplate",
+          "apps/slate-windows/src/SlateWindows/MainWindow.Templates.cs#TryClearTheWayForTemplates"
+        ],
+        "tests": [
+          "apps/slate-windows/tests/SlateWindows.Tests/TemplateFlowTests.cs#TemplateFlowTests",
+          "apps/slate-windows/tests/SlateWindows.Tests/ModalSurfaceTests.cs#TheTemplateFlowSupersedesTheOverlaysAndDefersToEverySheet",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#Templates_PickerPromptsCreateAndCancel_AreClean"
+        ]
       }
     },
     "commands": {
@@ -1680,7 +1706,8 @@
       "slate.bases.whereAmI": "bases",
       "slate.history.showPanel": "history",
       "slate.diagnostics.refreshSync": "syncDiagnostics",
-      "slate.view.toggleSearch": "searchOverlay"
+      "slate.view.toggleSearch": "searchOverlay",
+      "slate.file.newFromTemplate": "templates"
     },
     "issues": {
       "#720": "vault",
@@ -1698,7 +1725,8 @@
       "#739": "history",
       "#740": "syncDiagnostics",
       "#741": "commandPalette",
-      "#742": "searchOverlay"
+      "#742": "searchOverlay",
+      "#743": "templates"
     }
   },
   "chordSurface": [

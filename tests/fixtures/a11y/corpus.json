@@ -1270,6 +1270,26 @@
     "text": "Group: Done, 12 rows. Summary: Count: 12"
   },
   {
+    "event": "TemplatePickerOpened { count: 0 }",
+    "priority": "medium",
+    "text": "Template picker opened. No templates found. Add a Markdown file to the configured template folder."
+  },
+  {
+    "event": "TemplatePickerOpened { count: 1 }",
+    "priority": "medium",
+    "text": "Template picker opened. 1 template available."
+  },
+  {
+    "event": "TemplatePickerOpened { count: 7 }",
+    "priority": "medium",
+    "text": "Template picker opened. 7 templates available."
+  },
+  {
+    "event": "TemplateNoteCreated { name: \"Meeting 2026-08-20.md\", template: \"Meeting\" }",
+    "priority": "high",
+    "text": "Created Meeting 2026-08-20.md from Meeting."
+  },
+  {
     "event": "HostComposed { text: \"Composed by a host engine.\", priority: High }",
     "priority": "high",
     "text": "Composed by a host engine."
