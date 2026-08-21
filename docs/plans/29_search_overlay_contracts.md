@@ -326,12 +326,18 @@ model rather than discovered gap by gap:
    (P9 invokes before dismissing, so a decision-aware guard would
    refuse every palette invocation — the transient in invariant 6),
    and the two W4-era sheet-opening chords (Ctrl+Shift+R,
-   Ctrl+Shift+J) predate admission entirely and can present a sheet
-   beneath a higher sheet — a pre-existing defect this wave found and
-   filed as [#1118](https://github.com/coryj627/slate/issues/1118),
-   not a gated path. (This entry originally claimed "the chord, the
-   menu, and command invocation are ALL gated paths"; the red team
-   falsified the universal.)
+   Ctrl+Shift+J) predated admission entirely and could present a
+   sheet beneath a higher sheet — a pre-existing defect this wave
+   found and filed as
+   [#1118](https://github.com/coryj627/slate/issues/1118). *Closed by
+   #1118:* both openers now consult a window admission
+   (`DecideBulkRenameOpen` / `DecideCitationSummaryOpen`, the
+   template flow's arms) inside the workspace's open, so the chord,
+   the menu item, and a palette row pass one gate; the Quick Open
+   deny-list answers every Window KeyBinding chord. (This entry
+   originally claimed "the chord, the menu, and command invocation
+   are ALL gated paths"; the red team falsified the universal, and
+   the fix made it true.)
 3. **Key routing is by OWNERSHIP (topmost), not openness** —
    `SearchOwnsKeys`; a hidden surface never takes keys.
 4. **Focus restore is a census with ordering**: every `Restore*Focus*`

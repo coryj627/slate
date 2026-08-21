@@ -8,6 +8,8 @@ using System.Windows.Input;
 using SlateWindows.Grids;
 using SlateWindows.Panels;
 
+using uniffi.slate_uniffi;
+
 namespace SlateWindows;
 
 /// <summary>
@@ -105,8 +107,17 @@ public partial class MainWindow
         },
     ];
 
+    /// <summary>W0.5-3 residue: dialog guidance for Ctrl+Shift+J refused
+    /// beneath a higher sheet (#1118) — the template flow's
+    /// dialog-busy partition, with this verb.</summary>
+    internal const string CitationSummaryDialogBusyReason =
+        "Finish or cancel the current dialog before opening the citation summary.";
+
     private void WireWorkspaceCitations(WorkspaceViewModel workspace)
     {
+        // #1118: the summary openers — chord, menu, palette row — pass
+        // one admission inside the workspace's open.
+        workspace.CitationSummaryOpenAdmission = TryClearTheWayForCitationSummary;
         workspace.PropertyChanged += Workspace_CitationSheetChanged;
         ObserveCitationPanels(workspace);
     }
@@ -114,7 +125,48 @@ public partial class MainWindow
     private void UnwireWorkspaceCitations(WorkspaceViewModel workspace)
     {
         workspace.PropertyChanged -= Workspace_CitationSheetChanged;
+        workspace.CitationSummaryOpenAdmission = null;
         ObserveCitationPanels(null);
+    }
+
+    /// <summary>
+    /// Applies <see cref="ModalSurfaces.DecideCitationSummaryOpen"/>,
+    /// performing the dismissal it calls for — the citation-summary
+    /// twin of <see cref="TryClearTheWayForTemplates"/> (#1118). Runs
+    /// INSIDE the workspace's open, so every opener passes one gate;
+    /// the sheet observer captures its restore token at presentation
+    /// (<c>_focusBeforeCitationSummary = CapturePreSheetFocus()</c>),
+    /// and the dismissal arms seed that capture with the picker's own
+    /// pre-open token so the end-of-sheet restore lands where the user
+    /// started, not on a collapsed overlay box.
+    /// </summary>
+    private bool TryClearTheWayForCitationSummary()
+    {
+        switch (ModalSurfaces.DecideCitationSummaryOpen(OpenModalSurface))
+        {
+            case PaletteOpenDecision.Open:
+                return true;
+            case PaletteOpenDecision.DismissQuickOpenThenOpen:
+                _focusBeforeCitationSummary ??= ConsumePreSwitcherFocus();
+                _viewModel.QuickSwitcher!.Dismiss();
+                return true;
+            case PaletteOpenDecision.DismissSearchThenOpen:
+                IInputElement? preSearch = ConsumePreSearchFocus();
+                _viewModel.Search.Supersede();
+                _focusBeforeCitationSummary ??= preSearch;
+                return true;
+            case PaletteOpenDecision.DismissPaletteThenOpen:
+                IInputElement? prePalette = ConsumePrePaletteFocus();
+                _viewModel.Palette.Dismiss();
+                _focusBeforeCitationSummary ??= prePalette;
+                return true;
+            default:
+                // A refusal must speak, never be a dead key (the
+                // template flow's three-way red-team finding).
+                _announcer.Post(new A11yEvent.HostComposed(
+                    CitationSummaryDialogBusyReason, A11yPriority.Medium));
+                return false;
+        }
     }
 
     /// <summary>The leaves outlive individual notes, so these
