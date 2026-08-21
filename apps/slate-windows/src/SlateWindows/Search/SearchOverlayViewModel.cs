@@ -550,9 +550,20 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
         // the Cancel arm keeps its deterministic restore. The overlay
         // is still CLOSED before the shell opens the hit (S9).
         CloseCore();
-        OpenRequested?.Invoke(
-            this, new SearchOpenRequest(row.Path, query, row.StrippedSnippet));
-        Dismissed?.Invoke(this, EventArgs.Empty);
+        try
+        {
+            OpenRequested?.Invoke(
+                this, new SearchOpenRequest(row.Path, query, row.StrippedSnippet));
+        }
+        finally
+        {
+            // The dismissal ALWAYS fires (codoki): the shell's focus
+            // restore hangs off it, so a throwing open subscriber would
+            // otherwise leave the overlay closed and keyboard focus
+            // stranded wherever the collapse left it — silent for a
+            // sighted user, a dead keyboard for an AT user.
+            Dismissed?.Invoke(this, EventArgs.Empty);
+        }
     }
 
     /// <summary>

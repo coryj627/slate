@@ -786,6 +786,32 @@ public sealed class SearchOverlayViewModelTests
         Assert.False(harness.Overlay.IsOpen);
     }
 
+    /// <summary>A throwing open subscriber still gets the dismissal: the
+    /// shell's focus restore hangs off it, so swallowing it would leave
+    /// the overlay closed with keyboard focus stranded (codoki on
+    /// #1121). The exception still propagates — the failure is the
+    /// caller's to see.</summary>
+    [Fact]
+    public async Task AThrowingOpenSubscriberStillGetsTheDismissal()
+    {
+        using var harness = new AsyncOverlayHarness();
+        harness.Source.OnSearch = (query, _) => Results(
+            $"summary for {query}",
+            Hit("alpha.md", "a"));
+        harness.Overlay.Open();
+        harness.Overlay.Query = "alpha";
+        await harness.CompletePipeline();
+
+        int dismissals = 0;
+        harness.Overlay.OpenRequested += (_, _) => throw new InvalidOperationException("boom");
+        harness.Overlay.Dismissed += (_, _) => dismissals++;
+
+        Assert.Throws<InvalidOperationException>(
+            () => harness.Overlay.ActivateRow(harness.Overlay.Rows[0]));
+        Assert.Equal(1, dismissals);
+        Assert.False(harness.Overlay.IsOpen);
+    }
+
     // ---- phase-2 view surface: chip, panels, selection ------------------
 
     [Fact]
