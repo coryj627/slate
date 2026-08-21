@@ -303,13 +303,15 @@ public sealed class W1SidebarAndRecentsTests
         Assert.Contains(sidebar.FilterResults, row => row.Path == "note0.md");
         sidebar.FilterText = string.Empty;
 
-        sidebar.MutationName = "Created";
+        // W5-4 F1: the auto-named untitled sequence — a second create
+        // advances past the occupied name instead of clobbering it.
         sidebar.CreateNoteCommand.Execute(null);
-        string created = Path.Combine(fixture.Root, "Created.md");
+        string created = Path.Combine(fixture.Root, "Untitled.md");
         Assert.True(File.Exists(created));
         File.WriteAllText(created, "must survive");
         sidebar.CreateNoteCommand.Execute(null);
         Assert.Equal("must survive", File.ReadAllText(created));
+        Assert.True(File.Exists(Path.Combine(fixture.Root, "Untitled 2.md")));
 
         session.CreateFolderExclusive("Folder");
         sidebar.Refresh();
@@ -412,9 +414,11 @@ public sealed class W1SidebarCompletionTests : IDisposable
     }
 
     [Fact]
-    public void Sidebar_DeleteRequiresConfirmation_AndImportUsesExclusiveCollisionNames()
+    public void Sidebar_NonEmptyFolderDeleteStagesARefusableConfirmation_AndImportUsesExclusiveCollisionNames()
     {
         using FixtureVault fixture = FixtureVault.Create(1, "sidebar-import");
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "full"));
+        File.WriteAllText(Path.Combine(fixture.Root, "full", "inner.md"), "kept\n");
         using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
         using var cancel = new CancelToken();
         session.ScanInitial(cancel);
@@ -424,13 +428,16 @@ public sealed class W1SidebarCompletionTests : IDisposable
             session,
             _ => { },
             vaultRoot: fixture.Root,
-            confirmDestructive: _ => false,
             pickImportSources: () => Task.FromResult<IReadOnlyList<string>>([source]),
             localAppDataRoot: Path.Combine(_scratch, "import-recents"));
 
-        sidebar.SelectedNode = sidebar.RootNodes.Single(node => node.Path == "note0.md");
+        // W5-4 F6: files and empty folders trash without confirmation
+        // (Finder parity); a NON-EMPTY folder stages the styled
+        // confirmation, and a refusal keeps it on disk.
+        sidebar.ConfirmRecycle = _ => false;
+        sidebar.SelectedNode = sidebar.RootNodes.Single(node => node.Path == "full");
         sidebar.DeleteCommand.Execute(null);
-        Assert.True(File.Exists(Path.Combine(fixture.Root, "note0.md")));
+        Assert.True(File.Exists(Path.Combine(fixture.Root, "full", "inner.md")));
 
         sidebar.SelectedNode = null;
         sidebar.ImportCommand.Execute(null);

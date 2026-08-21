@@ -907,6 +907,7 @@ internal sealed class VaultLifecycleViewModel
         if (FileSidebar is not null)
         {
             FileSidebar.OpenTargetRequested -= FileSidebar_OpenTargetRequested;
+            FileSidebar.PropertyChanged -= FileSidebar_SheetPresented;
         }
 
         if (Workspace is not null)
@@ -992,6 +993,12 @@ internal sealed class VaultLifecycleViewModel
         workspace.TemplateVaultNameProvider =
             () => Path.GetFileName(Path.TrimEndingDirectorySeparator(root));
         workspace.TemplateNoteWritten += Workspace_TemplateNoteWritten;
+        // W5-4 F9: structural reports retarget open tabs synchronously
+        // at the mutation site; the event-stream retarget stays wired
+        // and no-ops on already-retargeted tabs.
+        WorkspaceViewModel capturedWorkspace = workspace;
+        sidebar.RetargetRequested = (oldPath, newPath) =>
+            capturedWorkspace.RetargetPath(oldPath, newPath);
         sidebar.OpenTargetRequested += FileSidebar_OpenTargetRequested;
         switcher.OpenRequested += QuickSwitcher_OpenRequested;
         switcher.Dismissed += QuickSwitcher_Dismissed;
@@ -1011,6 +1018,8 @@ internal sealed class VaultLifecycleViewModel
         // the invariant's own example needs.
         workspace.RegisteredCommandStatesChanged = RaiseRegisteredCommandStates;
         FileSidebar = sidebar;
+        // The sidebar twin, same post-assignment ordering rationale.
+        sidebar.PropertyChanged += FileSidebar_SheetPresented;
         QuickSwitcher = switcher;
         WorkspaceReady?.Invoke(this, EventArgs.Empty);
     }
@@ -1210,8 +1219,15 @@ internal sealed class VaultLifecycleViewModel
     /// sidebar's own mutation paths, which refresh inline — this one
     /// refreshes the tree the same way so the new note is visible and
     /// selectable immediately.</summary>
-    private void Workspace_TemplateNoteWritten(object? sender, string path) =>
+    private void Workspace_TemplateNoteWritten(object? sender, string path)
+    {
+        // W5-4 F10: the template create is a CREATE — a structural
+        // history barrier exactly like newNote (mac's table; red team,
+        // contracts 1) — a stale inverse must never replay against a
+        // name the template note now owns.
+        FileSidebar?.StructuralHistoryBarrier();
         FileSidebar?.Refresh();
+    }
 
     private void Workspace_EditorTagActivated(object? sender, string tag) =>
         FileSidebar?.ActivateTag(tag);
@@ -1308,6 +1324,36 @@ internal sealed class VaultLifecycleViewModel
         // was never constructed should not construct it — in a
         // window-free host the Palette getter registers the whole
         // command catalog as a side effect of this dispatch.
+        _search?.Supersede();
+        QuickSwitcher?.Dismiss();
+        _palette?.Dismiss();
+    }
+
+    /// <summary>W5-4 (F4): the workspace observer's SIDEBAR twin —
+    /// the Move-To sheet lives on <see cref="FilesSidebarViewModel"/>,
+    /// and its presentation must close the pickers reactively exactly
+    /// as a workspace sheet's does. Census-pinned in
+    /// <c>ModalSurfaceTests</c>.</summary>
+    private void FileSidebar_SheetPresented(
+        object? sender, PropertyChangedEventArgs eventArgs)
+    {
+        if (sender is not FilesSidebarViewModel sidebar
+            || !ReferenceEquals(sidebar, FileSidebar))
+        {
+            return;
+        }
+
+        bool presented = eventArgs.PropertyName switch
+        {
+            nameof(FilesSidebarViewModel.MoveToSheet) =>
+                sidebar.MoveToSheet is not null,
+            _ => false,
+        };
+        if (!presented)
+        {
+            return;
+        }
+
         _search?.Supersede();
         QuickSwitcher?.Dismiss();
         _palette?.Dismiss();

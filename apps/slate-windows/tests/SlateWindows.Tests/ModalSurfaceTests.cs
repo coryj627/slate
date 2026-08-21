@@ -220,6 +220,7 @@ public sealed class ModalSurfaceTests
             ModalSurface.BaseQueryBuilder,
             ModalSurface.TemplatePicker,
             ModalSurface.TemplateFlow,
+            ModalSurface.MoveTo,
         ];
 
         Assert.Equal(
@@ -382,7 +383,8 @@ public sealed class ModalSurfaceTests
             DashboardEditor: surface == ModalSurface.DashboardEditor,
             BaseQueryBuilder: surface == ModalSurface.BaseQueryBuilder,
             TemplatePicker: surface == ModalSurface.TemplatePicker,
-            TemplateFlow: surface == ModalSurface.TemplateFlow);
+            TemplateFlow: surface == ModalSurface.TemplateFlow,
+            MoveTo: surface == ModalSurface.MoveTo);
 
     /// <summary>
     /// The topmost-open walk returns the LAST open surface in paint order,
@@ -546,6 +548,7 @@ public sealed class ModalSurfaceTests
             (ModalSurface.BaseQueryBuilder, "BaseQueryBuilderSheet"),
             (ModalSurface.TemplatePicker, "TemplatePickerSheet"),
             (ModalSurface.TemplateFlow, "TemplateFlowSheet"),
+            (ModalSurface.MoveTo, "MoveToSheet"),
         ];
 
         // Exhaustiveness (red team W5-3, tests finding 3): the two
@@ -594,6 +597,7 @@ public sealed class ModalSurfaceTests
             [ModalSurface.BaseQueryBuilder] = "Workspace.BaseQueryBuilderSheet",
             [ModalSurface.TemplatePicker] = "Workspace.TemplatePickerSheet",
             [ModalSurface.TemplateFlow] = "Workspace.TemplateFlowSheet",
+            [ModalSurface.MoveTo] = "FileSidebar.MoveToSheet",
         };
 
     /// <summary>
@@ -682,6 +686,7 @@ public sealed class ModalSurfaceTests
         ("MainWindow.Bases.cs", "RestoreBasesOverlayFocus"),
         ("MainWindow.Palette.cs", "RestoreFocusAfterPalette"),
         ("MainWindow.Templates.cs", "RestoreFocusAfterTemplates"),
+        ("MainWindow.MoveTo.cs", "RestoreFocusAfterMoveTo"),
         // Red team after codex round 11: this restore previously lived
         // anonymous inside the QuickSwitcher Dismissed handler, where
         // this census could not discover it — invariant 4 was true
@@ -1120,6 +1125,14 @@ public sealed class ModalSurfaceTests
         foreach (ModalSurface sheet in Enum.GetValues<ModalSurface>()
             .Where(surface => surface > ModalSurface.CommandPalette))
         {
+            // W5-4 (F4): the Move-To sheet lives on the SIDEBAR, not
+            // the workspace — its presentation rides the twin observer
+            // below, checked after this loop.
+            if (sheet == ModalSurface.MoveTo)
+            {
+                continue;
+            }
+
             string property = sheet switch
             {
                 ModalSurface.AddProperty => "AddPropertySheet",
@@ -1145,6 +1158,47 @@ public sealed class ModalSurfaceTests
                 + $"(WorkspaceViewModel.{property}) — that sheet can land "
                 + "over an open picker unnoticed.");
         }
+
+        // The sidebar twin (W5-4 F4): MoveToSheet presents from
+        // FilesSidebarViewModel, so its reactive dismissals live in
+        // FileSidebar_SheetPresented — same arm shape, same
+        // dismissals, subscribed at sidebar creation.
+        Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax sidebarHandler =
+            source.Method("FileSidebar_SheetPresented");
+        Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax sidebarPresented =
+            sidebarHandler
+                .DescendantNodes()
+                .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax>()
+                .Single();
+        Assert.True(
+            sidebarPresented.Arms.Any(arm =>
+                CSharpSource.Normalize(arm.Pattern)
+                    == "nameof(FilesSidebarViewModel.MoveToSheet)"
+                && CSharpSource.Normalize(arm.Expression)
+                    == "sidebar.MoveToSheetisnotnull"),
+            "FileSidebar_SheetPresented has no arm for MoveTo "
+            + "(FilesSidebarViewModel.MoveToSheet) — that sheet can land "
+            + "over an open picker unnoticed.");
+        foreach (string dismissal in new[]
+        {
+            "_search?.Supersede();",
+            "QuickSwitcher?.Dismiss();",
+            "_palette?.Dismiss();",
+        })
+        {
+            _ = Assert.Single(
+                sidebarHandler.DescendantNodes()
+                    .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionStatementSyntax>(),
+                candidate => CSharpSource.Normalize(candidate) == dismissal);
+        }
+
+        Assert.True(
+            source.Method("InitializeWorkspace").DescendantNodes()
+                .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax>()
+                .Any(assignment => CSharpSource.Normalize(assignment)
+                    == "sidebar.PropertyChanged+=FileSidebar_SheetPresented"),
+            "the sidebar twin is never subscribed at sidebar creation — "
+            + "its arms are unreachable.");
 
         // The dismissals exist and EVERY one is control-dependent on a
         // presented sheet (red team A2: the first draft ordered the
@@ -1527,7 +1581,8 @@ public sealed class ModalSurfaceTests
             DashboardEditor: first is ModalSurface.DashboardEditor || second is ModalSurface.DashboardEditor,
             BaseQueryBuilder: first is ModalSurface.BaseQueryBuilder || second is ModalSurface.BaseQueryBuilder,
             TemplatePicker: first is ModalSurface.TemplatePicker || second is ModalSurface.TemplatePicker,
-            TemplateFlow: first is ModalSurface.TemplateFlow || second is ModalSurface.TemplateFlow);
+            TemplateFlow: first is ModalSurface.TemplateFlow || second is ModalSurface.TemplateFlow,
+            MoveTo: first is ModalSurface.MoveTo || second is ModalSurface.MoveTo);
 
     [Fact]
     public void EveryMenuDisablePathResolvesAgainstTheLiveViewModels()

@@ -22,6 +22,7 @@ public partial class MainWindow : Window
     private IInputElement? _focusBeforeSwitcher;
     private QuickSwitcherViewModel? _observedQuickSwitcher;
     private WorkspaceViewModel? _observedWorkspace;
+    private FilesSidebarViewModel? _observedFileSidebar;
     private bool _quickSwitcherCommitted;
 
     public MainWindow()
@@ -234,6 +235,109 @@ public partial class MainWindow : Window
         {
             ObserveWorkspace(_viewModel.Workspace);
         }
+        else if (eventArgs.PropertyName == nameof(VaultLifecycleViewModel.FileSidebar))
+        {
+            ObserveFileSidebar(_viewModel.FileSidebar);
+        }
+    }
+
+    private void ObserveFileSidebar(FilesSidebarViewModel? sidebar)
+    {
+        if (ReferenceEquals(_observedFileSidebar, sidebar))
+        {
+            return;
+        }
+
+        if (_observedFileSidebar is not null)
+        {
+            _observedFileSidebar.InlineRenameRequested -= ArmSidebarRename;
+            _observedFileSidebar.TreeSelectionRestored -=
+                FileSidebar_TreeSelectionRestored;
+            _observedFileSidebar.PropertyChanged -= FileSidebar_MoveToSheetChanged;
+            _observedFileSidebar.MoveToOpenAdmission = null;
+        }
+
+        _observedFileSidebar = sidebar;
+        if (sidebar is not null)
+        {
+            // W5-4 F1/F2: a create's hand-off re-arms the F2 rename
+            // flow programmatically once the new node is selected.
+            sidebar.InlineRenameRequested += ArmSidebarRename;
+            // W5-4 (red team, a11y 2): a mutation's publication
+            // re-seats selection and asks the window to restore
+            // keyboard focus to the tree.
+            sidebar.TreeSelectionRestored += FileSidebar_TreeSelectionRestored;
+            // W5-4 F4: the Move-To sheet's admission and present/
+            // dismiss observation (the template sheets' shape).
+            sidebar.MoveToOpenAdmission = TryClearTheWayForMoveTo;
+            sidebar.PropertyChanged += FileSidebar_MoveToSheetChanged;
+        }
+
+        // A vault transition mid-pick never runs the restore (the sheet
+        // dies with the discarded sidebar), so the captured token must
+        // not leak into the next vault's first pick.
+        if (sidebar is null)
+        {
+            _focusBeforeMoveTo = null;
+        }
+    }
+
+    /// <summary>Restore keyboard focus to the files tree after a
+    /// mutation's publication discarded the focused container (red
+    /// team, a11y 2): WPF ejects focus to the WINDOW when the focused
+    /// TreeViewItem unloads, leaving every tree-scoped chord dead. A
+    /// modal surface or a real claim elsewhere (the editor, a sheet's
+    /// own restore target) wins — window-root/null focus is the
+    /// stranded state this repairs.</summary>
+    private void FileSidebar_TreeSelectionRestored()
+    {
+        _ = Dispatcher.InvokeAsync(
+            () =>
+            {
+                if (OpenModalSurface is not null)
+                {
+                    return;
+                }
+
+                if (Keyboard.FocusedElement is DependencyObject focused
+                    && !ReferenceEquals(focused, this)
+                    && !FilesTree.IsKeyboardFocusWithin)
+                {
+                    return;
+                }
+
+                _ = FilesTree.Focus();
+            },
+            DispatcherPriority.Input);
+    }
+
+    /// <summary>The F2 arm, shared by the chord and the create
+    /// hand-off: expander open, focus in the name field, stem
+    /// selected; focus refusal falls back to the tree.</summary>
+    private void ArmSidebarRename()
+    {
+        // The hand-off arrives at ASYNC tree publication (red team,
+        // a11y 3): if a modal surface opened between the create and
+        // its publication, grabbing the name field would pull focus
+        // out from behind the scrim and kill the sheet's Esc. The
+        // surface that owns the moment owns the focus story.
+        if (OpenModalSurface is not null)
+        {
+            return;
+        }
+
+        SidebarFileActionsExpander.IsExpanded = true;
+        _ = Dispatcher.InvokeAsync(() =>
+        {
+            if (SidebarMutationNameTextBox.Focus())
+            {
+                SelectSidebarRenameText();
+            }
+            else
+            {
+                FilesTree.Focus();
+            }
+        }, DispatcherPriority.Input);
     }
 
     private void ObserveWorkspace(WorkspaceViewModel? workspace)
@@ -695,10 +799,64 @@ public partial class MainWindow : Window
             return;
         }
 
+        // Red team (a11y 4): while a SHEET owns the keyboard, the
+        // underlying shell shortcuts must not act behind its scrim —
+        // Ctrl+Alt+F moved focus out of the modal (killing its Esc)
+        // and Ctrl+1..9 opened files beneath it. The pickers swallow
+        // these through their own routes; sheets get the same fence.
+        bool sheetOwnsKeys = OpenModalSurface
+            is not (null
+                or ModalSurface.QuickOpen
+                or ModalSurface.SearchOverlay
+                or ModalSurface.CommandPalette);
+
         if (e.Key == Key.F && modifiers == (ModifierKeys.Control | ModifierKeys.Alt))
         {
+            if (sheetOwnsKeys)
+            {
+                e.Handled = true;
+                return;
+            }
+
             SidebarFilterTextBox.Focus();
             SidebarFilterTextBox.SelectAll();
+            e.Handled = true;
+            return;
+        }
+
+        // W5-4 F10 (FD-1): structural undo/redo are TREE-SCOPED — the
+        // editor owns Ctrl+Z/Ctrl+Y everywhere else (mac's
+        // undoTargetsStructural focus gate translated). The inline
+        // rename field is inside the sidebar expander, not the tree,
+        // so IsKeyboardFocusWithin on the TREE already excludes it.
+        if (modifiers == ModifierKeys.Control
+            && e.Key is Key.Z or Key.Y
+            && FilesTree.IsKeyboardFocusWithin
+            && _viewModel.FileSidebar is FilesSidebarViewModel undoSidebar)
+        {
+            if (e.Key == Key.Z)
+            {
+                undoSidebar.UndoStructural();
+            }
+            else
+            {
+                undoSidebar.RedoStructural();
+            }
+
+            e.Handled = true;
+            return;
+        }
+
+        // W5-4 (F6, FD-4): tree-scoped Delete — the selection verb with
+        // Finder-parity confirmation staging. Imperative like F2-rename:
+        // a KeyBinding would eat Delete inside the editor and every
+        // text field.
+        if (e.Key == Key.Delete
+            && modifiers == ModifierKeys.None
+            && FilesTree.IsKeyboardFocusWithin
+            && _viewModel.FileSidebar?.DeleteCommand.CanExecute(null) == true)
+        {
+            _viewModel.FileSidebar.DeleteCommand.Execute(null);
             e.Handled = true;
             return;
         }
@@ -708,24 +866,19 @@ public partial class MainWindow : Window
             && _viewModel.FileSidebar?.SelectedNode is
             { IsPlaceholder: false, IsGroupHeader: false })
         {
-            SidebarFileActionsExpander.IsExpanded = true;
-            _ = Dispatcher.InvokeAsync(() =>
-            {
-                if (SidebarMutationNameTextBox.Focus())
-                {
-                    SelectSidebarRenameText();
-                }
-                else
-                {
-                    FilesTree.Focus();
-                }
-            }, DispatcherPriority.Input);
+            ArmSidebarRename();
             e.Handled = true;
             return;
         }
 
         if (modifiers == ModifierKeys.Control && ShortcutNumber(e.Key) is int shortcut)
         {
+            if (sheetOwnsKeys)
+            {
+                e.Handled = true;
+                return;
+            }
+
             _viewModel.FileSidebar?.OpenShortcut(shortcut);
             e.Handled = true;
         }
@@ -740,10 +893,13 @@ public partial class MainWindow : Window
         if (e.Key == Key.Enter && Keyboard.Modifiers == ModifierKeys.None)
         {
             SidebarMutationNameTextBox.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
-            ICommand? rename = _viewModel.FileSidebar?.RenameCommand;
-            if (rename?.CanExecute(null) == true)
+            // W5-4 F3: focus leaves the field only on SUCCESS — a
+            // failed rename keeps the field open with the reason in
+            // Status, so the user corrects in place instead of
+            // re-arming the whole flow.
+            if (_viewModel.FileSidebar?.RenameCommand.CanExecute(null) == true
+                && _viewModel.FileSidebar.TryRenameSelected())
             {
-                rename.Execute(null);
                 FilesTree.Focus();
             }
 
@@ -893,9 +1049,17 @@ public partial class MainWindow : Window
         object sender,
         RoutedPropertyChangedEventArgs<object> e)
     {
-        if (_viewModel.FileSidebar is not null)
+        // Non-null transitions only (red team, a11y 2d): a mutation's
+        // tree refresh discards the selected container and this event
+        // fires with null — propagating it wiped the view model's
+        // selection and left every selection-gated verb (F2, Delete,
+        // Ctrl+Z) dead until the user re-selected by hand. A TreeView
+        // offers no user gesture that deselects, so null here is only
+        // ever the refresh artifact.
+        if (_viewModel.FileSidebar is not null
+            && e.NewValue is FileTreeNodeViewModel node)
         {
-            _viewModel.FileSidebar.SelectedNode = e.NewValue as FileTreeNodeViewModel;
+            _viewModel.FileSidebar.SelectedNode = node;
         }
     }
 
@@ -1294,6 +1458,7 @@ public partial class MainWindow : Window
         _viewModel.PropertyChanged -= ViewModel_PropertyChanged;
         ObserveQuickSwitcher(null);
         ObserveWorkspace(null);
+        ObserveFileSidebar(null);
         _viewModel.Dispose();
     }
 

@@ -53,10 +53,15 @@ internal enum ModalSurface
     /// template flow, whose sheets are the newest paint.</summary>
     TemplatePicker,
 
-    /// <summary>W5-3 (#743): the prompt/name flow sheet. Last in paint
-    /// order — it follows the picker in the flow, so between the two it
-    /// must win the tie.</summary>
+    /// <summary>W5-3 (#743): the prompt/name flow sheet. Declared after
+    /// the picker — it follows the picker in the flow, so between the
+    /// two it must win the tie.</summary>
     TemplateFlow,
+
+    /// <summary>W5-4 (#744): the Move-To folder picker sheet. Newest
+    /// paint declared last, so a violated exclusivity degrades to
+    /// it.</summary>
+    MoveTo,
 }
 
 /// <summary>
@@ -128,7 +133,8 @@ internal readonly record struct ModalSurfaceState(
     bool DashboardEditor,
     bool BaseQueryBuilder,
     bool TemplatePicker,
-    bool TemplateFlow);
+    bool TemplateFlow,
+    bool MoveTo);
 
 /// <summary>
 /// The modal-surface precedence rules, as pure functions.
@@ -233,6 +239,7 @@ internal static class ModalSurfaces
             ModalSurface.BaseQueryBuilder => state.BaseQueryBuilder,
             ModalSurface.TemplatePicker => state.TemplatePicker,
             ModalSurface.TemplateFlow => state.TemplateFlow,
+            ModalSurface.MoveTo => state.MoveTo,
         };
 
     /// <summary>
@@ -321,6 +328,29 @@ internal static class ModalSurfaces
     /// worth more than a stale query. Every sheet refuses.
     /// </remarks>
     internal static PaletteOpenDecision DecideTemplateOpen(ModalSurface? topmost) =>
+        topmost switch
+        {
+            null => PaletteOpenDecision.Open,
+
+            ModalSurface.QuickOpen => PaletteOpenDecision.DismissQuickOpenThenOpen,
+
+            ModalSurface.SearchOverlay => PaletteOpenDecision.DismissSearchThenOpen,
+
+            ModalSurface.CommandPalette => PaletteOpenDecision.DismissPaletteThenOpen,
+
+            _ => PaletteOpenDecision.Refuse,
+        };
+
+    /// <summary>
+    /// Whether the Move-To picker may open, given what is already up
+    /// (W5-4, F4). The template flow's arms verbatim: overlays are
+    /// superseded (the caller performs the dismissal, lineage
+    /// included), the palette is RETIRED so a palette-invoked Move To…
+    /// works during P9's sanctioned transient, and every sheet —
+    /// including an already-open Move-To picker — refuses (no
+    /// re-entrant flow; a re-open would discard the typed
+    /// filter).</summary>
+    internal static PaletteOpenDecision DecideMoveToOpen(ModalSurface? topmost) =>
         topmost switch
         {
             null => PaletteOpenDecision.Open,

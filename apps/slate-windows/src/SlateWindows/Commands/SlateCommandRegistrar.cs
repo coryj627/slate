@@ -474,9 +474,20 @@ internal static class SlateCommandRegistrar
             [ChordTable.Ids.ImportFilesAndFolders] = host => host.FileSidebar?.ImportCommand,
             [ChordTable.Ids.CancelImport] = host => host.FileSidebar?.CancelImportCommand,
             [ChordTable.Ids.RenameEntry] = host => host.FileSidebar?.RenameCommand,
-            [ChordTable.Ids.MoveTo] = host => host.FileSidebar?.BatchMoveCommand,
-            [ChordTable.Ids.DeleteEntry] = host => host.FileSidebar?.BatchTrashCommand,
-            [ChordTable.Ids.SidebarTrashSelected] = host => host.FileSidebar?.DeleteCommand,
+            // W5-4 F4: the picker replaces the raw destination box —
+            // the verb targets checks-or-selection, so the old
+            // both-checks-and-typed-text CanExecute defect retires.
+            [ChordTable.Ids.MoveTo] = host => host.FileSidebar?.MoveToCommand,
+            // W5-4 F6 unified targeting: mac's slate.file.delete acts
+            // on the tree SELECTION (the previous inversion routed it
+            // at the batch checkboxes); the Windows-only trashSelected
+            // id now names the batch-checkbox flow, whose semantics
+            // are unchanged.
+            [ChordTable.Ids.DeleteEntry] = host => host.FileSidebar?.DeleteCommand,
+            [ChordTable.Ids.SidebarTrashSelected] = host => host.FileSidebar?.BatchTrashCommand,
+            [ChordTable.Ids.DuplicateEntry] = host => host.FileSidebar?.DuplicateCommand,
+            [ChordTable.Ids.CopyPath] = host => host.FileSidebar?.CopyPathCommand,
+            [ChordTable.Ids.RevealInFinder] = host => host.FileSidebar?.RevealCommand,
             [ChordTable.Ids.CopyWikilink] = host => host.FileSidebar?.CopyWikilinkCommand,
             [ChordTable.Ids.PinNote] = host => host.FileSidebar?.PinCommand,
             [ChordTable.Ids.UnpinNote] = host => host.FileSidebar?.UnpinCommand,

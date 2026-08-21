@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "commands": [
     {
       "id": "slate.vault.open",
@@ -915,13 +915,50 @@
       "id": "slate.file.delete",
       "label": "Move to Trash",
       "section": "Sidebar",
-      "hint": "Move the selected files or folders to the Trash.",
+      "hint": "Move the selected files or folders to the Recycle Bin.",
       "macChord": null,
       "mac": null,
       "windows": null,
       "windowsSpoken": null,
       "scope": "None",
       "registered": true
+    },
+    {
+      "id": "slate.file.duplicate",
+      "label": "Duplicate",
+      "section": "Sidebar",
+      "hint": "Duplicate the selected file as a copy next to it.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.file.copyPath",
+      "label": "Copy Path",
+      "section": "Sidebar",
+      "hint": "Copy the selected item's path.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.file.revealInFinder",
+      "label": "Reveal in File Explorer",
+      "section": "Sidebar",
+      "hint": "Show the selected file or folder in File Explorer.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true,
+      "labelDivergence": "FD-5: mac's label is \"Reveal in Finder\" — Finder does not exist on Windows, and the platform surface it names does. The id stays shared (the capability is the same verb); the label follows the OS. Recorded, never relabeled."
     },
     {
       "id": "slate.sidebar.copyWikilink",
@@ -1249,7 +1286,7 @@
       "id": "slate.sidebar.deleteFolderNote",
       "label": "Delete Folder Note",
       "section": "Sidebar",
-      "hint": "Move this folder's note to the Trash.",
+      "hint": "Move this folder's note to the Recycle Bin.",
       "macChord": null,
       "mac": null,
       "windows": null,
@@ -1295,9 +1332,9 @@
     },
     {
       "id": "slate.sidebar.trashSelected",
-      "label": "Move Selected Item to Trash",
+      "label": "Move Checked Items to the Recycle Bin",
       "section": "Sidebar",
-      "hint": "Move the focused sidebar item to the Recycle Bin after confirming.",
+      "hint": "Move every batch-checked item to the Recycle Bin.",
       "macChord": null,
       "mac": null,
       "windows": null,
@@ -1605,10 +1642,32 @@
           "apps/slate-windows/tests/SlateWindows.Tests/ModalSurfaceTests.cs#TheTemplateFlowSupersedesTheOverlaysAndDefersToEverySheet",
           "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#Templates_PickerPromptsCreateAndCancel_AreClean"
         ]
+      },
+      "fileManagement": {
+        "implementation": [
+          "apps/slate-windows/src/SlateWindows/FilesSidebarViewModel.FileManagement.cs#TryRenameSelected",
+          "apps/slate-windows/src/SlateWindows/FileManagement/StructuralUndoJournal.cs#StructuralUndoJournal",
+          "apps/slate-windows/src/SlateWindows/FileManagement/MoveToPickerViewModel.cs#MoveToPickerViewModel",
+          "apps/slate-windows/src/SlateWindows/FileManagement/RecycleBinCopy.cs#RecycleBinCopy",
+          "apps/slate-windows/src/SlateWindows/MainWindow.MoveTo.cs#TryClearTheWayForMoveTo"
+        ],
+        "tests": [
+          "apps/slate-windows/tests/SlateWindows.Tests/FileManagementTests.cs#FileManagementTests",
+          "apps/slate-windows/tests/SlateWindows.Tests/Censuses/MutationHarnessCensus.cs#MutationHarnessCensus",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#FileManagement_CreateRenameDuplicateMoveDelete_IsClean"
+        ]
       }
     },
     "commands": {
       "slate.file.cancelImport": "sidebar",
+      "slate.file.newNote": "fileManagement",
+      "slate.file.newFolder": "fileManagement",
+      "slate.file.rename": "fileManagement",
+      "slate.file.moveTo": "fileManagement",
+      "slate.file.delete": "fileManagement",
+      "slate.file.duplicate": "fileManagement",
+      "slate.file.copyPath": "fileManagement",
+      "slate.file.revealInFinder": "fileManagement",
       "slate.file.importFilesAndFolders": "sidebar",
       "slate.editor.save": "editorHost",
       "slate.editor.actualSize": "editorInteractions",
@@ -1726,7 +1785,8 @@
       "#740": "syncDiagnostics",
       "#741": "commandPalette",
       "#742": "searchOverlay",
-      "#743": "templates"
+      "#743": "templates",
+      "#744": "fileManagement"
     }
   },
   "chordSurface": [
@@ -2444,6 +2504,47 @@
       "scope": "QuickOpen",
       "registered": false,
       "reason": "PR-4: overlay-scoped interaction of an already-open surface (the arrow-keys-in-a-list rule), not an app command. Delivered by the Quick Open overlay's key handler (MainWindow.xaml.cs:543-555). PR-2 records its place in the Escape chain."
+    },
+    {
+      "id": "windows.sidebar.undoStructural",
+      "label": "Files tree: undo the last structural operation",
+      "section": "View",
+      "hint": null,
+      "macChord": "⌘Z",
+      "mac": "Command Z",
+      "windows": "Ctrl+Z",
+      "windowsSpoken": "Control Z",
+      "scope": "Global",
+      "registered": false,
+      "reason": "W5-4 (F10): tree-scoped structural undo — renames and moves re-run their inverse through the forward FFI; batch moves ride UndoBatchMove. Live only while the files tree owns focus; the editor keeps Ctrl+Z everywhere else (FD-1)."
+    },
+    {
+      "id": "windows.sidebar.redoStructural",
+      "label": "Files tree: redo the last undone structural operation",
+      "section": "View",
+      "hint": null,
+      "macChord": "⇧⌘Z",
+      "mac": "Shift Command Z",
+      "windows": "Ctrl+Y",
+      "windowsSpoken": "Control Y",
+      "scope": "Global",
+      "registered": false,
+      "divergence": "The rule maps ⇧⌘Z to Ctrl+Shift+Z, but Ctrl+Y is the platform redo convention (Notepad, Office, Explorer's rename field). Recorded as the deliberate Windows binding — W5-4 decision 12.",
+      "reason": "W5-4 (F10): tree-scoped structural redo. mac uses ⇧⌘Z; Ctrl+Y is the Windows redo convention (decision 12)."
+    },
+    {
+      "id": "windows.sidebar.deleteSelected",
+      "label": "Files tree: move the selection to the Recycle Bin",
+      "section": "View",
+      "hint": null,
+      "macChord": "⌘⌫",
+      "mac": "Command Delete",
+      "windows": "Delete",
+      "windowsSpoken": "Delete",
+      "scope": "Global",
+      "registered": false,
+      "divergence": "The rule maps ⌘⌫ to Ctrl+Backspace, but the bare Delete key is the platform deletion convention (Explorer, list views). Recorded as the deliberate Windows binding — W5-4 decision 12 / FD-4.",
+      "reason": "W5-4 (F6, FD-4): tree-scoped Delete riding the same imperative MainWindow delivery as F2-rename — the selection verb, with Finder-parity confirmation staging. mac scopes ⌘⌫ to its file tree identically."
     },
     {
       "id": "windows.view.showCommandPalette",

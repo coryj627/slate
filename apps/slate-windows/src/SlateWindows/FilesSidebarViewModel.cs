@@ -5,6 +5,7 @@ using System.Collections.ObjectModel;
 using System.IO;
 using System.Windows.Threading;
 using System.Windows.Input;
+using SlateWindows.FileManagement;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows;
@@ -32,6 +33,7 @@ internal sealed class FileTreeNodeViewModel : BindableBase
     private readonly FilesSidebarViewModel? _owner;
     private bool _isExpanded;
     private bool _isBatchSelected;
+    private bool _isSelected;
     private ObservableCollection<FileTreeNodeViewModel> _children = [];
     private FileTreeChildLoadState _childLoadState;
     private object? _treeIdentity;
@@ -169,9 +171,32 @@ internal sealed class FileTreeNodeViewModel : BindableBase
         {
             if (IsBatchSelectable && SetField(ref _isBatchSelected, value))
             {
-                _owner?.BatchSelectionChanged();
+                _owner?.BatchCheckChanged(this);
             }
         }
+    }
+
+    /// <summary>Whether this folder's children are COMPLETELY loaded
+    /// real rows — the signal the batch-check reconciliation uses to
+    /// distinguish "provably gone" from "merely unmaterialized"
+    /// (codex rounds 5-6): the load state must be Loaded AND no
+    /// placeholder of any shape may remain (Loading…, error, or
+    /// overflow rows all make the listing non-authoritative).</summary>
+    internal bool HasLoadedChildren =>
+        _childLoadState == FileTreeChildLoadState.Loaded
+        && Children.All(child => !child.IsPlaceholder);
+
+    /// <summary>W5-4 (verification 1): the VM→view selection channel.
+    /// The container style binds TreeViewItem.IsSelected TwoWay, so a
+    /// publication-time restore materializes as the REAL tree
+    /// selection (and the view's own selection moves keep the node
+    /// state honest). The container's resulting SelectedItemChanged
+    /// re-enters the sidebar's SelectedNode setter with the SAME node
+    /// and no-ops there.</summary>
+    public bool IsSelected
+    {
+        get => _isSelected;
+        set => SetField(ref _isSelected, value);
     }
 
     internal void RenameTo(string name)
@@ -186,6 +211,13 @@ internal sealed class FileTreeNodeViewModel : BindableBase
     {
         return SetField(ref _isExpanded, true, nameof(IsExpanded));
     }
+
+    /// <summary>Publication-time batch-check rebind (codex round 4):
+    /// no per-node announcement — the owner recomputes the count once
+    /// after the whole rebind.</summary>
+    internal bool MarkBatchSelectedSilently() =>
+        IsBatchSelectable
+        && SetField(ref _isBatchSelected, true, nameof(IsBatchSelected));
 
     internal bool PrepareChildLoad()
     {
@@ -256,6 +288,11 @@ internal sealed class FileTreeNodeViewModel : BindableBase
 
     internal void ReplaceChildren(ObservableCollection<FileTreeNodeViewModel> children)
     {
+        // No check projection HERE (codex round 7): the refresh-
+        // restore path calls this on the TREE WORKER, and the
+        // authoritative check set is UI-thread-confined — projection
+        // happens at each dispatcher publication boundary instead
+        // (ApplyTreeRefresh and the child-expansion applies).
         _childLoadState = FileTreeChildLoadState.Loaded;
         ReplaceChildrenCore(children);
     }
@@ -389,17 +426,44 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         ToggleDualPaneCommand = new RelayCommand(_ => IsDualPaneEnabled = !IsDualPaneEnabled, _ => true);
         AddTagCommand = new RelayCommand(_ => EditTag(add: true), _ => !IsImporting && BatchSelectionCount > 0 && TagInput.Length > 0);
         RemoveTagCommand = new RelayCommand(_ => EditTag(add: false), _ => !IsImporting && BatchSelectionCount > 0 && TagInput.Length > 0);
-        CreateFolderCommand = new RelayCommand(_ => CreateFolder(), _ => !IsImporting && MutationName.Length > 0);
-        CreateNoteCommand = new RelayCommand(_ => CreateNote(), _ => !IsImporting && MutationName.Length > 0);
+        // W5-4 F1/F2: the creates are auto-named and selection-
+        // independent — the MutationName text-box flow retired for
+        // these verbs.
+        CreateFolderCommand = new RelayCommand(_ => CreateFolder(), _ => !IsImporting);
+        CreateNoteCommand = new RelayCommand(_ => CreateNote(), _ => !IsImporting);
         RenameCommand = new RelayCommand(
-            _ => RenameSelected(),
+            _ => TryRenameSelected(),
             _ => !IsImporting
                 && SelectedNode is { IsPlaceholder: false, IsGroupHeader: false }
                 && MutationName.Length > 0);
-        DeleteCommand = new RelayCommand(_ => DeleteSelected(), _ => !IsImporting && SelectedNode is not null);
+        // Red team: placeholders and group headers are selectable rows
+        // with Path "" — Delete on one reached DeleteFile("") and spoke
+        // a spurious failure; the guard matches every sibling verb.
+        DeleteCommand = new RelayCommand(
+            _ => DeleteSelected(),
+            _ => !IsImporting
+                && SelectedNode is { IsPlaceholder: false, IsGroupHeader: false });
         CreateFolderNoteCommand = new RelayCommand(_ => CreateFolderNote(), _ => !IsImporting && SelectedNode?.IsDirectory == true && !SelectedNode.HasFolderNote);
         DeleteFolderNoteCommand = new RelayCommand(_ => DeleteFolderNote(), _ => !IsImporting && SelectedNode?.IsDirectory == true && SelectedNode.HasFolderNote);
         CopyWikilinkCommand = new RelayCommand(_ => CopyWikilink(), _ => SelectedNode is { IsDirectory: false });
+        // W5-4 Phase B (F5/F7/F8). Duplicate stays executable on a
+        // folder so the canonical DuplicateFilesOnly refusal can speak.
+        DuplicateCommand = new RelayCommand(
+            _ => DuplicateSelected(),
+            _ => !IsImporting && SelectedNode is { IsPlaceholder: false, IsGroupHeader: false });
+        CopyPathCommand = new RelayCommand(
+            _ => CopyPathSelected(),
+            _ => SelectedNode is { IsPlaceholder: false, IsGroupHeader: false });
+        RevealCommand = new RelayCommand(
+            _ => RevealSelected(),
+            _ => SelectedNode is { IsPlaceholder: false, IsGroupHeader: false });
+        // W5-4 Phase C (F4): batch checks win; otherwise the tree
+        // selection — the verb is live with either.
+        MoveToCommand = new RelayCommand(
+            _ => OpenMoveTo(),
+            _ => !IsImporting
+                && (BatchSelectionCount > 0
+                    || SelectedNode is { IsPlaceholder: false, IsGroupHeader: false }));
         PinCommand = new RelayCommand(_ => PinSelected(), _ => SelectedNode is { IsDirectory: false });
         UnpinCommand = new RelayCommand(_ => UnpinSelected(), _ => SelectedNode is { IsDirectory: false });
         UnpinAllCommand = new RelayCommand(_ => UnpinAllInFolder(), _ => _pinned.Count > 0);
@@ -509,6 +573,25 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 RequestOpen(value.Path);
             }
 
+            RaiseCommandStates();
+        }
+    }
+
+    /// <summary>W5-4 (red team, a11y 2): selection RESTORATION after a
+    /// mutation's tree publication — the setter's open-on-select and
+    /// selection announcements must not fire for a re-seat (the
+    /// mutation already spoke, and re-opening the just-renamed note
+    /// would churn recents/history for a gesture the user never
+    /// made).</summary>
+    private void SelectSilently(FileTreeNodeViewModel node)
+    {
+        if (SetField(ref _selectedNode, node, nameof(SelectedNode)))
+        {
+            // The view half (verification 1): without the container's
+            // IsSelected, the restore was invisible and the next arrow
+            // key jumped to the tree top and opened the first file.
+            node.IsSelected = true;
+            MutationName = node.Name;
             RaiseCommandStates();
         }
     }
@@ -640,9 +723,54 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     public ICommand HistoryBackCommand { get; }
     public ICommand HistoryForwardCommand { get; }
 
+    /// <summary>The AUTHORITATIVE batch-check set (codex round 5):
+    /// path → isDirectory. Node checkboxes are its projection — a
+    /// checked descendant inside a collapsed folder survives every
+    /// publication because the truth never lived on the discarded
+    /// node.</summary>
+    private readonly Dictionary<string, bool> _batchChecked =
+        new(StringComparer.Ordinal);
+
+    /// <summary>Project the authoritative checks onto a freshly
+    /// published subtree, RECURSIVELY (codex rounds 6-7) — silent
+    /// (the count did not change, only its visual projection), and
+    /// UI-thread-only: the check set is dispatcher-confined, so
+    /// callers are the publication boundaries, never the tree
+    /// worker.</summary>
+    private void ProjectBatchChecksOnto(
+        IEnumerable<FileTreeNodeViewModel> nodes)
+    {
+        if (_batchChecked.Count == 0)
+        {
+            return;
+        }
+
+        foreach (FileTreeNodeViewModel node in Flatten(nodes))
+        {
+            if (_batchChecked.ContainsKey(node.Path))
+            {
+                _ = node.MarkBatchSelectedSilently();
+            }
+        }
+    }
+
+    internal void BatchCheckChanged(FileTreeNodeViewModel node)
+    {
+        if (node.IsBatchSelected)
+        {
+            _batchChecked[node.Path] = node.IsDirectory;
+        }
+        else
+        {
+            _batchChecked.Remove(node.Path);
+        }
+
+        BatchSelectionChanged();
+    }
+
     public void BatchSelectionChanged()
     {
-        BatchSelectionCount = Flatten(RootNodes).Count(node => node.IsBatchSelected && node.IsBatchSelectable);
+        BatchSelectionCount = _batchChecked.Count;
         _announce(BatchSelectionCount == 0
             ? new A11yEvent.NoItemsSelected()
             : new A11yEvent.ItemsSelected((uint)BatchSelectionCount));
@@ -977,10 +1105,10 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
     private void EditTag(bool add)
     {
-        string[] paths = Flatten(RootNodes)
-            .Where(node => node.IsBatchSelected && !node.IsDirectory)
-            .Select(node => node.Path)
-            .ToArray();
+        string[] paths = [.. _batchChecked
+            .Where(pair => !pair.Value)
+            .Select(pair => pair.Key)
+            .OrderBy(path => path, StringComparer.Ordinal)];
         if (paths.Length == 0 || TagInput.Length == 0)
         {
             return;
@@ -1010,21 +1138,58 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
     private void CreateFolder()
     {
+        // W5-4 F2: auto-named untitled create — the MutationName
+        // text-box flow retired for this verb (F1's shape). The
+        // report-returning CreateFolder is the structural verb; its
+        // report is consumed per F9.
         string parent = CreationParentPath();
-        string path = CombineVaultPath(parent, MutationName);
+        string attempted = "Untitled Folder";
         try
         {
-            if (!TryRunSessionWork(() => _session.CreateFolderExclusive(path)))
+            string? created = null;
+            foreach (string candidate in UntitledCandidates(
+                parent, "Untitled Folder", string.Empty))
             {
+                attempted = System.IO.Path.GetFileName(candidate);
+                try
+                {
+                    StructuralReport? report = null;
+                    if (!TryRunSessionWork(() => report = _session.CreateFolder(candidate)))
+                    {
+                        return;
+                    }
+
+                    if (report is not null)
+                    {
+                        _ = ConsumeStructuralReport(report);
+                    }
+
+                    created = candidate;
+                    break;
+                }
+                catch (VaultException.DestinationExists)
+                {
+                    // The unique-untitled advance — typed, never a
+                    // pre-check (F1's CreateExclusive rule).
+                }
+            }
+
+            if (created is null)
+            {
+                ReportFailure($"Could not create folder {attempted}: no free name.");
                 return;
             }
 
-            ReportResult($"Created folder {path}.");
+            // W5-4 F10: creates are structural history barriers. The
+            // sentence reports AFTER Refresh (codex round 1).
+            StructuralHistoryBarrier();
+            RequestInlineRenameAt(created);
             Refresh();
+            ReportResult($"Created folder {System.IO.Path.GetFileName(created)}.");
         }
         catch (VaultException exception)
         {
-            ReportFailure($"Could not create folder: {exception.Message}");
+            ReportFailure($"Could not create folder {attempted}: {exception.Message}");
         }
     }
 
@@ -1037,108 +1202,121 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
     private void CreateNote()
     {
+        // W5-4 F1: mac's auto-named untitled flow — the unique-untitled
+        // sequence via CreateExclusive ONLY (typed DestinationExists,
+        // never a pre-check), open in the current tab, then hand off to
+        // inline rename with the stem selected.
         string parent = CreationParentPath();
-        string name = MutationName.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
-            ? MutationName
-            : $"{MutationName}.md";
-        string path = CombineVaultPath(parent, name);
+        string attempted = "Untitled.md";
         try
         {
-            if (!TryRunSessionWork(() => _session.CreateExclusive(path, string.Empty)))
+            string? created = null;
+            foreach (string candidate in UntitledCandidates(parent, "Untitled", ".md"))
             {
+                attempted = System.IO.Path.GetFileName(candidate);
+                try
+                {
+                    if (!TryRunSessionWork(
+                        () => _session.CreateExclusive(candidate, string.Empty)))
+                    {
+                        return;
+                    }
+
+                    created = candidate;
+                    break;
+                }
+                catch (VaultException.DestinationExists)
+                {
+                    // The unique-untitled advance signal.
+                }
+            }
+
+            if (created is null)
+            {
+                ReportFailure($"Could not create note {attempted}: no free name.");
                 return;
             }
 
-            ReportResult($"Created {path}.");
+            // W5-4 F10: a create is a structural history barrier (mac's
+            // table) — a stale inverse must never target this path.
+            // The sentence reports AFTER Refresh so it survives the
+            // "Loading files…" write (codex round 1).
+            StructuralHistoryBarrier();
+            RequestInlineRenameAt(created);
             Refresh();
-            RequestOpen(path);
+            ReportResult($"Created note {System.IO.Path.GetFileName(created)}.");
+            RequestOpen(created);
         }
         catch (VaultException exception)
         {
-            ReportFailure($"Could not create note: {exception.Message}");
+            ReportFailure($"Could not create note {attempted}: {exception.Message}");
         }
     }
 
-    private void RenameSelected()
+    // RenameSelected moved to FilesSidebarViewModel.FileManagement.cs
+    // as TryRenameSelected (W5-4 F3: report consumption, the
+    // unconditional RenameFolderWithNote, error-keeps-field).
+
+    private void DeleteSelected()
     {
-        if (SelectedNode is not FileTreeNodeViewModel node)
+        if (SelectedNode is not
+            { IsPlaceholder: false, IsGroupHeader: false } node)
         {
             return;
         }
 
+        // W5-4 F6 (mac #860/#852 semantics): files and EMPTY folders
+        // trash immediately — no confirmation (Finder parity). A
+        // non-empty folder stages the styled confirmation; the probe
+        // runs AT STAGE TIME, and an unreadable folder is fail-closed
+        // (confirmed like a non-empty one, with the folder-clause
+        // message because no count exists to speak).
+        BeginStructuralResult();
+        if (node.IsDirectory)
+        {
+            int? contents = CountFolderContents(node.Path);
+            if (contents is not 0)
+            {
+                string message = contents is int known
+                    ? RecycleBinCopy.SingleFolderMessage(node.DisplayName, known)
+                    : RecycleBinCopy.BatchMessage(1, 1);
+                if (!ConfirmRecycle(
+                    (RecycleBinCopy.SingleFolderTitle(node.DisplayName), message)))
+                {
+                    return;
+                }
+            }
+        }
+
         try
         {
-            string oldPath = node.Path;
-            string newPath = CombineVaultPath(ParentPath(oldPath), MutationName);
             if (!TryRunSessionWork(() =>
             {
                 if (node.IsDirectory)
                 {
-                    if (node.HasFolderNote)
-                    {
-                        _session.RenameFolderWithNote(node.Path, MutationName);
-                    }
-                    else
-                    {
-                        _session.RenameFolder(node.Path, MutationName);
-                    }
+                    _session.DeleteFolder(node.Path);
                 }
                 else
                 {
-                    _session.RenameFile(node.Path, MutationName);
+                    _session.DeleteFile(node.Path);
                 }
             }))
             {
                 return;
             }
 
-            TransformStoredPaths(oldPath, newPath, node.IsDirectory, deleted: false);
-            ReportResult($"Renamed {node.DisplayName} to {MutationName}.");
+            TransformStoredPaths(node.Path, node.Path, node.IsDirectory, deleted: true);
+            // W5-4 F10: trash is not undoable AND a history barrier
+            // (mac's rule — the bytes are in the Recycle Bin).
+            StructuralHistoryBarrier();
+            SelectedNode = null;
+            // F6: "focus returns to the tree" — the publication's
+            // container discard would otherwise eject keyboard focus
+            // to the window (red team, a11y 2a). The sentence reports
+            // AFTER Refresh (codex round 1).
+            RequestSelectionAt(null);
             Refresh();
-        }
-        catch (VaultException exception)
-        {
-            ReportFailure($"Rename failed: {exception.Message}");
-        }
-    }
-
-    private void DeleteSelected()
-    {
-        if (SelectedNode is not FileTreeNodeViewModel node)
-        {
-            return;
-        }
-
-        if (!_confirmDestructive(
-            $"Move {node.DisplayName} to the Recycle Bin? Links to this item may stop resolving."))
-        {
-            return;
-        }
-
-        try
-        {
-            if (!TryRunSessionWork(
-                () => _session.BatchTrash(new BatchTrashRequest(
-                    [new StructuralBatchItem(node.Path, node.IsDirectory)])),
-                out BatchTrashReport report))
-            {
-                return;
-            }
-
-            foreach (StructuralBatchItem trashed in report.Trashed)
-            {
-                TransformStoredPaths(trashed.Path, trashed.Path, trashed.IsDirectory, deleted: true);
-            }
-
-            Status = BatchTrashSummary(report);
-            // W0.5-3 residue: Windows single-item system-Recycle-Bin report copy.
-            _announce(new A11yEvent.HostComposed(Status, A11yPriority.Medium));
-            if (report.Trashed.Any(item => item.Path == node.Path))
-            {
-                SelectedNode = null;
-            }
-
-            Refresh();
+            ReportMutationResult($"Moved {node.DisplayName} to the Recycle Bin.");
         }
         catch (VaultException exception)
         {
@@ -1161,8 +1339,12 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 return;
             }
 
-            ReportResult($"Created folder note {path}.");
+            // W5-4 F10 (verification 4): a folder-note create is a
+            // CREATE — a structural history barrier like its siblings.
+            StructuralHistoryBarrier();
+            RequestSelectionAt(null);
             Refresh();
+            ReportResult($"Created folder note {path}.");
             RequestOpen(path);
         }
         catch (VaultException exception)
@@ -1190,8 +1372,12 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 return;
             }
 
-            ReportResult($"Deleted the {node.DisplayName} folder note.");
+            // W5-4 F10 (verification 4): trash is not undoable AND a
+            // barrier — the folder-note delete is a trash.
+            StructuralHistoryBarrier();
+            RequestSelectionAt(null);
             Refresh();
+            ReportResult($"Deleted the {node.DisplayName} folder note.");
         }
         catch (VaultException exception)
         {
@@ -1340,10 +1526,9 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         RequestOpen(node.IsDirectory ? FolderNotePath(node) : node.Path, target, trackHistory: true);
     }
 
-    private StructuralBatchItem[] SelectedBatchItems() => Flatten(RootNodes)
-        .Where(node => node.IsBatchSelected && node.IsBatchSelectable)
-        .Select(node => new StructuralBatchItem(node.Path, node.IsDirectory))
-        .ToArray();
+    private StructuralBatchItem[] SelectedBatchItems() => [.. _batchChecked
+        .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+        .Select(pair => new StructuralBatchItem(pair.Key, pair.Value))];
 
     private void BatchMove()
     {
@@ -1353,6 +1538,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             return;
         }
 
+        BeginStructuralResult();
         try
         {
             if (!TryRunSessionWork(
@@ -1364,13 +1550,28 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
             foreach (BatchPathChange change in report.Standing)
             {
+                RetargetRequested?.Invoke(change.OldPath, change.NewPath);
                 TransformStoredPaths(change.OldPath, change.NewPath, change.IsDirectory, deleted: false);
             }
 
-            Status = BatchMoveSummary(report, MoveDestination);
-            // W0.5-3 residue: Windows batch-move report copy.
-            _announce(new A11yEvent.HostComposed(Status, A11yPriority.Medium));
+            // W5-4 F10: a SUCCEEDED batch move is undoable through the
+            // dedicated endpoint; anything less than Succeeded is not a
+            // clean inverse and records nothing.
+            if (report.State == BatchMoveState.Succeeded && report.OpId is long opId)
+            {
+                _structuralUndo.Push(new StructuralUndoStep(
+                    StructuralUndoKind.BatchMove,
+                    Path: string.Empty,
+                    Argument: string.Empty,
+                    IsDirectory: false,
+                    Noun: $"{report.Standing.Length:N0} "
+                        + (report.Standing.Length == 1 ? "item" : "items"),
+                    BatchOpId: opId));
+            }
+
+            RequestSelectionAt(null);
             Refresh();
+            ReportMutationResult(BatchMoveSummary(report, MoveDestination));
         }
         catch (VaultException exception)
         {
@@ -1381,13 +1582,27 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     private void BatchTrash()
     {
         StructuralBatchItem[] items = SelectedBatchItems();
-        if (items.Length == 0
-            || !_confirmDestructive(
-                $"Move {items.Length:N0} selected {(items.Length == 1 ? "item" : "items")} to the Recycle Bin?"))
+        if (items.Length == 0)
         {
             return;
         }
 
+        // W5-4 F6: a batch confirms only when it carries a non-empty
+        // folder (Finder parity — files and empty folders go
+        // straight to the Recycle Bin). The probe runs at stage time;
+        // unreadable counts as non-empty (fail-closed). Emptiness
+        // only — one top-level read per directory, never a recursive
+        // walk (codex round 8).
+        int nonEmptyFolders = items.Count(
+            item => item.IsDirectory && FolderHasContents(item.Path) is not false);
+        if (nonEmptyFolders > 0 && !ConfirmRecycle((
+            RecycleBinCopy.BatchTitle(items.Length),
+            RecycleBinCopy.BatchMessage(items.Length, nonEmptyFolders))))
+        {
+            return;
+        }
+
+        BeginStructuralResult();
         try
         {
             if (!TryRunSessionWork(
@@ -1402,10 +1617,11 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 TransformStoredPaths(item.Path, item.Path, item.IsDirectory, deleted: true);
             }
 
-            Status = BatchTrashSummary(report);
-            // W0.5-3 residue: Windows system-Recycle-Bin report copy.
-            _announce(new A11yEvent.HostComposed(Status, A11yPriority.Medium));
+            // W5-4 F10: trash is not undoable AND a history barrier.
+            StructuralHistoryBarrier();
+            RequestSelectionAt(null);
             Refresh();
+            ReportMutationResult(BatchTrashSummary(report));
         }
         catch (VaultException exception)
         {
@@ -1661,6 +1877,12 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     private void ReportFailure(string message)
     {
         Status = message;
+        if (IsRefreshingTree)
+        {
+            // Codex round 2: same reassert discipline as results.
+            _statusToReassert = Status;
+        }
+
         // W0.5-3 residue: Windows sidebar availability/error copy.
         _announce(new A11yEvent.HostComposed(message, A11yPriority.High));
     }
@@ -1668,6 +1890,13 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     private void ReportResult(string message)
     {
         Status = message;
+        if (IsRefreshingTree)
+        {
+            // Codex round 2: the in-flight refresh's publication arms
+            // must not erase the result the user just heard.
+            _statusToReassert = Status;
+        }
+
         // W0.5-3 residue: Windows sidebar action-result copy.
         _announce(new A11yEvent.HostComposed(message, A11yPriority.Medium));
     }
@@ -1779,9 +2008,38 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             }
         }
 
+        // The authoritative batch checks follow renames/moves and drop
+        // with deletions exactly like the other stored paths (codex
+        // round 5). Silent — a rename must not speak selection.
+        var transformedChecked = new Dictionary<string, bool>(StringComparer.Ordinal);
+        foreach ((string path, bool isDir) in _batchChecked)
+        {
+            if (Transform(path) is string transformedPath)
+            {
+                transformedChecked[transformedPath] = isDir;
+            }
+        }
+
+        _batchChecked.Clear();
+        foreach ((string path, bool isDir) in transformedChecked)
+        {
+            _batchChecked[path] = isDir;
+        }
+
+        BatchSelectionCount = _batchChecked.Count;
+
         _historyIndex = Math.Clamp(_historyIndex, -1, _history.Count - 1);
-        _ = PersistPins();
-        _ = PersistShortcuts();
+        // Codex round 2: a failed settings write must not vanish under
+        // the mutation's success sentence — the detail composes into
+        // the FINAL status, so a restart-level pins/shortcuts
+        // divergence is announced when it is created, not discovered
+        // later.
+        bool pinsPersisted = PersistPins();
+        bool shortcutsPersisted = PersistShortcuts();
+        if (!pinsPersisted || !shortcutsPersisted)
+        {
+            RecordStoredPathPersistFailure();
+        }
     }
 
     private void RaiseCommandStates()
@@ -1798,6 +2056,10 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             CreateFolderNoteCommand,
             DeleteFolderNoteCommand,
             CopyWikilinkCommand,
+            DuplicateCommand,
+            CopyPathCommand,
+            RevealCommand,
+            MoveToCommand,
             PinCommand,
             UnpinCommand,
             UnpinAllCommand,

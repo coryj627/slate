@@ -39,6 +39,13 @@ internal static class HistoryConfirmationDialog
         }
         AutomationProperties.SetName(dialog, title);
         AutomationProperties.SetHelpText(dialog, message);
+        // W5-4 (red team, a11y 5): announce as a DIALOG and carry the
+        // message on the buttons' HelpText — NVDA speaks the window
+        // title and the focused button only, so without this the
+        // message (the child count, "Slate can't undo this action.")
+        // was never spoken and a blind user confirmed a non-empty
+        // folder trash unheard.
+        AutomationProperties.SetIsDialog(dialog, true);
         var body = new TextBlock
         {
             Text = message,
@@ -53,12 +60,14 @@ internal static class HistoryConfirmationDialog
             Margin = new Thickness(0, 0, 8, 0),
             Padding = new Thickness(10, 2, 10, 2),
         };
+        AutomationProperties.SetHelpText(cancel, message);
         var confirm = new Button
         {
             Content = confirmLabel,
             MinWidth = 80,
             Padding = new Thickness(10, 2, 10, 2),
         };
+        AutomationProperties.SetHelpText(confirm, message);
         confirm.Click += (_, _) =>
         {
             confirmed = true;
