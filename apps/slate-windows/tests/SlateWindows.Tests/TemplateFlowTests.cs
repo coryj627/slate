@@ -58,10 +58,19 @@ public sealed class TemplateFlowTests
                 "alpha. First line doubles as blurb..",
                 picker.Rows[0].AccessibleName);
             // The subtitle advertises the chord FROM THE TABLE (PINV-5)
-            // with mac's sentence shape around it.
+            // with mac's sentence shape around it — and degrades to the
+            // chordless sentence if the row ever loses its chord the
+            // way NewNote's did (codoki; the composition arms are
+            // pinned directly since the live table is static).
             Assert.Equal(
                 "Create in the vault root. Ctrl+Shift+N. Escape to cancel.",
                 picker.Subtitle);
+            Assert.Equal(
+                "Create in sub. Escape to cancel.",
+                TemplatePickerViewModel.ComposeSubtitle("sub", null));
+            Assert.Equal(
+                "Create in sub. Escape to cancel.",
+                TemplatePickerViewModel.ComposeSubtitle("sub", ""));
 
             A11yEvent opened = Assert.Single(
                 announced, item => item is A11yEvent.TemplatePickerOpened);

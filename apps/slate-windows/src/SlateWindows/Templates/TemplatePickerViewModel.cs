@@ -103,11 +103,23 @@ internal sealed class TemplatePickerViewModel : BindableBase
     /// decision 12 for the chord text; the sentence shape is mac's).
     /// The chord is READ FROM THE TABLE — a hardcoded copy here would
     /// be exactly the advertisement drift PINV-5 exists to stop
-    /// (red team, tests finding 13a).</summary>
-    public string Subtitle =>
-        $"Create in {DestinationDescription}. "
-        + $"{Commands.ChordTable.Find(Commands.ChordTable.Ids.NewFromTemplate)!.WindowsChord}. "
-        + "Escape to cancel.";
+    /// (red team, tests finding 13a) — and a chordless row degrades
+    /// to the sentence without the chord snippet (codoki: the
+    /// null-forgiving lookup would have turned a future
+    /// unbind-the-chord edit — NewNote's exact shipped shape — into
+    /// stray punctuation or a binding-time throw).</summary>
+    public string Subtitle => ComposeSubtitle(
+        DestinationDescription,
+        Commands.ChordTable.Find(Commands.ChordTable.Ids.NewFromTemplate)?.WindowsChord);
+
+    /// <summary>Pure composition seam so both chord arms are unit-
+    /// pinned — the live table lookup is static and cannot be made to
+    /// return a chordless row headless.</summary>
+    internal static string ComposeSubtitle(
+        string destinationDescription, string? windowsChord) =>
+        string.IsNullOrEmpty(windowsChord)
+            ? $"Create in {destinationDescription}. Escape to cancel."
+            : $"Create in {destinationDescription}. {windowsChord}. Escape to cancel.";
 
     /// <summary>mac `emptyStateDetail`, verbatim.</summary>
     public static string EmptyStateDetail =>
