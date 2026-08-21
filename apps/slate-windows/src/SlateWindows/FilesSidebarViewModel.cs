@@ -1590,9 +1590,11 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         // W5-4 F6: a batch confirms only when it carries a non-empty
         // folder (Finder parity — files and empty folders go
         // straight to the Recycle Bin). The probe runs at stage time;
-        // unreadable counts as non-empty (fail-closed).
+        // unreadable counts as non-empty (fail-closed). Emptiness
+        // only — one top-level read per directory, never a recursive
+        // walk (codex round 8).
         int nonEmptyFolders = items.Count(
-            item => item.IsDirectory && CountFolderContents(item.Path) is not 0);
+            item => item.IsDirectory && FolderHasContents(item.Path) is not false);
         if (nonEmptyFolders > 0 && !ConfirmRecycle((
             RecycleBinCopy.BatchTitle(items.Length),
             RecycleBinCopy.BatchMessage(items.Length, nonEmptyFolders))))

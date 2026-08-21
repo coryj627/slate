@@ -440,6 +440,14 @@ enforced by construction, not by review.
   window needs an identity-conditional core inverse (validate and
   mutate one opened object atomically) — grouped with FR-8's
   staged-token follow-up, filed at PR time.
+- **FR-11 — Staging probes are bounded but synchronous** (codex
+  round 8): the single-delete child count caps at 10,000 entries
+  (past the cap the count is UNKNOWN and the count-free message arm
+  stages), and batch staging probes emptiness with one top-level
+  read per directory — but a STALLED filesystem (a dead network
+  share) still stalls the probe, as it stalls every file operation
+  under FD-7's synchronous model. Async, cancellable staging is the
+  recorded upgrade path, grouped with FR-9's loader follow-up.
 
 ## Phase plan
 

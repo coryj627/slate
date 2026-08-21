@@ -882,6 +882,47 @@ internal sealed partial class FilesSidebarViewModel
     /// like a non-empty folder.</summary>
     private int? CountFolderContents(string vaultRelative)
     {
+        // Bounded (codex round 8): an unbounded recursive Count() on
+        // the dispatcher froze the shell before the confirmation
+        // could appear. Past the cap the count is UNKNOWN, not a
+        // number we did not finish — the caller stages with the
+        // count-free message arm, same as unreadable.
+        const int Cap = 10_000;
+        if (_vaultRoot is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            int count = 0;
+            foreach (string _ in System.IO.Directory.EnumerateFileSystemEntries(
+                AbsoluteVaultPath(vaultRelative),
+                "*",
+                System.IO.SearchOption.AllDirectories))
+            {
+                if (++count > Cap)
+                {
+                    return null;
+                }
+            }
+
+            return count;
+        }
+        catch (Exception exception)
+            when (exception is System.IO.IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Emptiness-only probe for batch staging (codex round
+    /// 8): the batch copy needs non-empty, never a count, and a
+    /// single top-level read answers it — no recursive walk per
+    /// selected directory. Null (unreadable) is fail-closed
+    /// non-empty.</summary>
+    private bool? FolderHasContents(string vaultRelative)
+    {
         if (_vaultRoot is null)
         {
             return null;
@@ -890,9 +931,7 @@ internal sealed partial class FilesSidebarViewModel
         try
         {
             return System.IO.Directory.EnumerateFileSystemEntries(
-                AbsoluteVaultPath(vaultRelative),
-                "*",
-                System.IO.SearchOption.AllDirectories).Count();
+                AbsoluteVaultPath(vaultRelative)).Any();
         }
         catch (Exception exception)
             when (exception is System.IO.IOException or UnauthorizedAccessException)
