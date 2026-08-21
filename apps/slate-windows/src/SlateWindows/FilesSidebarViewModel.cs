@@ -288,13 +288,13 @@ internal sealed class FileTreeNodeViewModel : BindableBase
 
     internal void ReplaceChildren(ObservableCollection<FileTreeNodeViewModel> children)
     {
+        // No check projection HERE (codex round 7): the refresh-
+        // restore path calls this on the TREE WORKER, and the
+        // authoritative check set is UI-thread-confined — projection
+        // happens at each dispatcher publication boundary instead
+        // (ApplyTreeRefresh and the child-expansion applies).
         _childLoadState = FileTreeChildLoadState.Loaded;
         ReplaceChildrenCore(children);
-        // Codex round 6: EVERY child materialization projects the
-        // authoritative checks — lazy expansion after a refresh
-        // otherwise showed a checked path as unchecked while the
-        // batch verbs still targeted it.
-        _owner?.ProjectBatchChecksOnto(children);
     }
 
     private void ReplaceChildrenCore(ObservableCollection<FileTreeNodeViewModel> children)
@@ -731,10 +731,13 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     private readonly Dictionary<string, bool> _batchChecked =
         new(StringComparer.Ordinal);
 
-    /// <summary>Project the authoritative checks onto freshly
-    /// materialized nodes (codex round 6) — silent; the count did not
-    /// change, only its visual projection.</summary>
-    internal void ProjectBatchChecksOnto(
+    /// <summary>Project the authoritative checks onto a freshly
+    /// published subtree, RECURSIVELY (codex rounds 6-7) — silent
+    /// (the count did not change, only its visual projection), and
+    /// UI-thread-only: the check set is dispatcher-confined, so
+    /// callers are the publication boundaries, never the tree
+    /// worker.</summary>
+    private void ProjectBatchChecksOnto(
         IEnumerable<FileTreeNodeViewModel> nodes)
     {
         if (_batchChecked.Count == 0)
@@ -742,7 +745,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             return;
         }
 
-        foreach (FileTreeNodeViewModel node in nodes)
+        foreach (FileTreeNodeViewModel node in Flatten(nodes))
         {
             if (_batchChecked.ContainsKey(node.Path))
             {

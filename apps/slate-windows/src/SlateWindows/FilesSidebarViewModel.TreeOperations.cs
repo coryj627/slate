@@ -573,6 +573,9 @@ internal sealed partial class FilesSidebarViewModel
                 // Expand Loaded is deliberately snapshot-based: children that
                 // materialize here are not recursively expanded in this run.
                 node.ReplaceChildren(level.Nodes);
+                // Dispatcher publication boundary (codex round 7):
+                // recursive check projection.
+                ProjectBatchChecksOnto(level.Nodes);
                 if (level.Truncated)
                 {
                     Status = DirectoryOverflowStatus(node.Path);

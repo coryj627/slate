@@ -211,6 +211,10 @@ internal sealed partial class FilesSidebarViewModel
             }
 
             node.ReplaceChildren(level.Nodes);
+            // Dispatcher publication boundary (codex round 7): the
+            // authoritative checks project over the whole published
+            // subtree, UI-thread-only.
+            ProjectBatchChecksOnto(level.Nodes);
             if (level.Truncated)
             {
                 Status = DirectoryOverflowStatus(node.Path);
@@ -300,6 +304,9 @@ internal sealed partial class FilesSidebarViewModel
                             token))
                         {
                             node.ReplaceChildren(outcome.Children);
+                            // Dispatcher publication boundary (codex
+                            // round 7): recursive check projection.
+                            ProjectBatchChecksOnto(outcome.Children);
                             if (outcome.Level.Truncated)
                             {
                                 Status = DirectoryOverflowStatus(node.Path);
