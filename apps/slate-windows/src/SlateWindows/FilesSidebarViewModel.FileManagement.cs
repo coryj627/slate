@@ -78,15 +78,50 @@ internal sealed partial class FilesSidebarViewModel
             .Count();
     }
 
+    /// <summary>Set when TransformStoredPaths could not persist the
+    /// rewritten pins/shortcuts (codex round 2) — composed into the
+    /// mutation's final status like the rewrite-failure
+    /// detail.</summary>
+    private bool _pendingStoredPathPersistFailure;
+
+    private void RecordStoredPathPersistFailure() =>
+        _pendingStoredPathPersistFailure = true;
+
     /// <summary>Compose the mutation's FINAL status: the success
-    /// sentence plus any consumed report's failure detail, so the
-    /// affected paths stay reachable after the command finishes
-    /// (codex round 1).</summary>
+    /// sentence plus any consumed report's failure detail and any
+    /// stored-path persistence failure, so nothing the user must act
+    /// on vanishes under the success sentence (codex rounds
+    /// 1-2).</summary>
     private string WithRewriteFailureDetail(string sentence)
     {
         string? detail = _pendingRewriteFailureDetail;
         _pendingRewriteFailureDetail = null;
-        return detail is null ? sentence : $"{sentence} {detail}";
+        string composed = detail is null ? sentence : $"{sentence} {detail}";
+        if (_pendingStoredPathPersistFailure)
+        {
+            _pendingStoredPathPersistFailure = false;
+            composed += " Sidebar pins and shortcuts could not be saved.";
+        }
+
+        return composed;
+    }
+
+    /// <summary>The status to re-assert after the in-flight refresh
+    /// publishes (codex round 2): ApplyTreeRefresh's own arms
+    /// (root overflow, settings notice, restored-expansion overflow)
+    /// write Status AFTER the mutation reported, erasing the only
+    /// inspectable failure detail. The mutation result wins the turn;
+    /// a persistent condition returns on the next organic
+    /// refresh.</summary>
+    private string? _statusToReassert;
+
+    private void ReassertStatusAfterPublication()
+    {
+        if (_statusToReassert is string reassert)
+        {
+            _statusToReassert = null;
+            Status = reassert;
+        }
     }
 
     /// <summary>The mutation result channel (codex round 1): Status
@@ -97,6 +132,11 @@ internal sealed partial class FilesSidebarViewModel
     private void ReportMutationResult(string sentence)
     {
         Status = WithRewriteFailureDetail(sentence);
+        if (IsRefreshingTree)
+        {
+            _statusToReassert = Status;
+        }
+
         // W0.5-3 residue: Windows sidebar action-result copy.
         _announce(new A11yEvent.HostComposed(sentence, A11yPriority.Medium));
     }
@@ -165,6 +205,7 @@ internal sealed partial class FilesSidebarViewModel
         }
 
         _pendingRewriteFailureDetail = null;
+        _pendingStoredPathPersistFailure = false;
         string oldPath = node.Path;
         string oldName = node.Name;
         string newName = MutationName;
@@ -190,7 +231,8 @@ internal sealed partial class FilesSidebarViewModel
                 Path: newPath,
                 Argument: oldName,
                 node.IsDirectory,
-                Noun: oldName));
+                Noun: oldName,
+                Identity: FileIdentity.TryGet(AbsoluteVaultPath(newPath))));
             // Refresh FIRST (codex round 1): Refresh() writes
             // "Loading files…" into Status synchronously, so a
             // sentence reported before it never survived the same
@@ -247,20 +289,34 @@ internal sealed partial class FilesSidebarViewModel
     private void ExecuteUndoStep(StructuralUndoStep step, bool redo)
     {
         _pendingRewriteFailureDetail = null;
+        _pendingStoredPathPersistFailure = false;
         string verb = redo ? "Redid" : "Undid";
         // The executability preflight (mac: drop suspect history
-        // rather than replay inverses against strangers). BatchMove
-        // preflights core-side — UndoBatchMove refuses typed when the
-        // latest journal row is not the batch.
-        if (step.Kind is not StructuralUndoKind.BatchMove
-            && !System.IO.File.Exists(AbsoluteVaultPath(step.Path))
-            && !System.IO.Directory.Exists(AbsoluteVaultPath(step.Path)))
+        // rather than replay inverses against strangers). Existence
+        // alone admits a REPLACEMENT at the recorded path (codex
+        // round 2: delete b.md, create an unrelated b.md, Ctrl+Z
+        // renames the stranger) — the filesystem identity captured at
+        // push must still match; a null token on either side degrades
+        // to the existence check. BatchMove preflights core-side —
+        // UndoBatchMove refuses typed when the latest journal row is
+        // not the batch.
+        if (step.Kind is not StructuralUndoKind.BatchMove)
         {
-            _structuralUndo.DropForChangedFiles();
-            AnnounceUndoResidue(redo
-                ? "Can't redo — the files have changed."
-                : "Can't undo — the files have changed.");
-            return;
+            string absolute = AbsoluteVaultPath(step.Path);
+            bool exists = System.IO.File.Exists(absolute)
+                || System.IO.Directory.Exists(absolute);
+            bool identityHolds = exists
+                && (step.Identity is not string recorded
+                    || FileIdentity.TryGet(absolute) is not string current
+                    || current == recorded);
+            if (!exists || !identityHolds)
+            {
+                _structuralUndo.DropForChangedFiles();
+                AnnounceUndoResidue(redo
+                    ? "Can't redo — the files have changed."
+                    : "Can't undo — the files have changed.");
+                return;
+            }
         }
 
         try
@@ -354,6 +410,18 @@ internal sealed partial class FilesSidebarViewModel
                     ? "Can't redo — the files have changed."
                     : "Can't undo — the files have changed.");
                 return;
+            }
+
+            // The re-inverse targets the entry's post-undo location;
+            // re-capture the identity there (the file ID survives the
+            // move, but a fresh read keeps the token honest on
+            // filesystems that rewrite it).
+            if (inverse.Kind is not StructuralUndoKind.BatchMove)
+            {
+                inverse = inverse with
+                {
+                    Identity = FileIdentity.TryGet(AbsoluteVaultPath(inverse.Path)),
+                };
             }
 
             if (redo)
@@ -655,6 +723,7 @@ internal sealed partial class FilesSidebarViewModel
     private void ExecuteMoveTo(StructuralBatchItem[] items, string destination)
     {
         _pendingRewriteFailureDetail = null;
+        _pendingStoredPathPersistFailure = false;
         MoveToSheet = null;
         if (items.Length == 1)
         {
@@ -682,7 +751,8 @@ internal sealed partial class FilesSidebarViewModel
                     Path: movedPath,
                     Argument: ParentPath(single.Path),
                     single.IsDirectory,
-                    Noun: leaf));
+                    Noun: leaf,
+                    Identity: FileIdentity.TryGet(AbsoluteVaultPath(movedPath))));
                 string destLeaf = destination.Length == 0
                     ? "vault root"
                     : System.IO.Path.GetFileName(destination.TrimEnd('/'));

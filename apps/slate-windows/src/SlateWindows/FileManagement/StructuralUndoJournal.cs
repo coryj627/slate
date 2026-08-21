@@ -25,7 +25,10 @@ internal enum StructuralUndoKind
 /// <c>BatchMove</c>, <c>BatchOpId</c> is the journal handle and
 /// <c>Path</c>/<c>Argument</c> are unused. <c>Noun</c> is the display
 /// name the undo announcement speaks (mac: "Undid rename to {y}." /
-/// "Undid move of {x}.").
+/// "Undid move of {x}."). <c>Identity</c> is the filesystem identity
+/// token captured at push (codex round 2): the preflight rejects a
+/// REPLACEMENT at the recorded path, not just an absence — null
+/// degrades to the existence check.
 /// </summary>
 internal sealed record StructuralUndoStep(
     StructuralUndoKind Kind,
@@ -33,7 +36,8 @@ internal sealed record StructuralUndoStep(
     string Argument,
     bool IsDirectory,
     string Noun,
-    long BatchOpId = 0);
+    long BatchOpId = 0,
+    string? Identity = null);
 
 /// <summary>
 /// The per-vault structural undo/redo journal (W5-4 F10) — mac's

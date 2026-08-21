@@ -1503,9 +1503,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
             RequestSelectionAt(null);
             Refresh();
-            Status = BatchMoveSummary(report, MoveDestination);
-            // W0.5-3 residue: Windows batch-move report copy.
-            _announce(new A11yEvent.HostComposed(Status, A11yPriority.Medium));
+            ReportMutationResult(BatchMoveSummary(report, MoveDestination));
         }
         catch (VaultException exception)
         {
@@ -1552,9 +1550,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             StructuralHistoryBarrier();
             RequestSelectionAt(null);
             Refresh();
-            Status = BatchTrashSummary(report);
-            // W0.5-3 residue: Windows system-Recycle-Bin report copy.
-            _announce(new A11yEvent.HostComposed(Status, A11yPriority.Medium));
+            ReportMutationResult(BatchTrashSummary(report));
         }
         catch (VaultException exception)
         {
@@ -1810,6 +1806,12 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     private void ReportFailure(string message)
     {
         Status = message;
+        if (IsRefreshingTree)
+        {
+            // Codex round 2: same reassert discipline as results.
+            _statusToReassert = Status;
+        }
+
         // W0.5-3 residue: Windows sidebar availability/error copy.
         _announce(new A11yEvent.HostComposed(message, A11yPriority.High));
     }
@@ -1817,6 +1819,13 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     private void ReportResult(string message)
     {
         Status = message;
+        if (IsRefreshingTree)
+        {
+            // Codex round 2: the in-flight refresh's publication arms
+            // must not erase the result the user just heard.
+            _statusToReassert = Status;
+        }
+
         // W0.5-3 residue: Windows sidebar action-result copy.
         _announce(new A11yEvent.HostComposed(message, A11yPriority.Medium));
     }
@@ -1929,8 +1938,17 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
 
         _historyIndex = Math.Clamp(_historyIndex, -1, _history.Count - 1);
-        _ = PersistPins();
-        _ = PersistShortcuts();
+        // Codex round 2: a failed settings write must not vanish under
+        // the mutation's success sentence — the detail composes into
+        // the FINAL status, so a restart-level pins/shortcuts
+        // divergence is announced when it is created, not discovered
+        // later.
+        bool pinsPersisted = PersistPins();
+        bool shortcutsPersisted = PersistShortcuts();
+        if (!pinsPersisted || !shortcutsPersisted)
+        {
+            RecordStoredPathPersistFailure();
+        }
     }
 
     private void RaiseCommandStates()

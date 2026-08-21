@@ -1015,6 +1015,60 @@ public sealed class FileManagementTests
                 .Select(item => SlateUniffiMethods.A11yRender(item).Text));
     }
 
+    [Fact]
+    public async Task UndoRefusesAReplacementAtTheRecordedPath()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "fm-undo-replacement");
+        File.WriteAllText(Path.Combine(fixture.Root, "a.md"), "Original.\n");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new List<A11yEvent>();
+        SidebarRig rig = await NewSidebar(session, fixture, announced);
+
+        rig.Sidebar.SelectedNode = Node(rig, "a.md");
+        rig.Sidebar.MutationName = "b.md";
+        Assert.True(rig.Sidebar.TryRenameSelected());
+
+        // A sync client deletes b.md and creates an UNRELATED b.md:
+        // existence alone would let Ctrl+Z rename the stranger (codex
+        // round 2) — the filesystem identity captured at push must
+        // refuse it.
+        File.Delete(Path.Combine(fixture.Root, "b.md"));
+        File.WriteAllText(Path.Combine(fixture.Root, "b.md"), "Stranger.\n");
+        announced.Clear();
+        rig.Sidebar.UndoStructural();
+        Assert.Contains(
+            "Can't undo — the files have changed.",
+            announced.OfType<A11yEvent.HostComposed>()
+                .Select(item => SlateUniffiMethods.A11yRender(item).Text));
+        Assert.Equal(
+            "Stranger.\n", File.ReadAllText(Path.Combine(fixture.Root, "b.md")));
+        Assert.False(File.Exists(Path.Combine(fixture.Root, "a.md")));
+    }
+
+    [Fact]
+    public async Task UndoStillSpansOrdinaryContentEdits()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "fm-undo-edited");
+        File.WriteAllText(Path.Combine(fixture.Root, "a.md"), "Original.\n");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new List<A11yEvent>();
+        SidebarRig rig = await NewSidebar(session, fixture, announced);
+
+        rig.Sidebar.SelectedNode = Node(rig, "a.md");
+        rig.Sidebar.MutationName = "b.md";
+        Assert.True(rig.Sidebar.TryRenameSelected());
+
+        // An in-place edit keeps the file's identity: undo must still
+        // apply (the identity check rejects replacements, never
+        // ordinary edits — mac's model).
+        File.AppendAllText(Path.Combine(fixture.Root, "b.md"), "Edited.\n");
+        rig.Sidebar.UndoStructural();
+        Assert.True(File.Exists(Path.Combine(fixture.Root, "a.md")));
+        Assert.Equal(
+            "Original.\nEdited.\n",
+            File.ReadAllText(Path.Combine(fixture.Root, "a.md")));
+    }
+
     // ---- Helpers ------------------------------------------------------
 
     private sealed record SidebarRig(FilesSidebarViewModel Sidebar)

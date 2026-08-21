@@ -401,6 +401,12 @@ internal sealed partial class FilesSidebarViewModel
         {
             Status = DirectoryOverflowStatus(overflowPath);
         }
+
+        // The mutation result wins the turn over this publication's
+        // own status arms (codex round 2) — a persistent condition
+        // (overflow, settings notice) returns on the next organic
+        // refresh.
+        ReassertStatusAfterPublication();
     }
 
     internal bool CancelTreeRefresh()
