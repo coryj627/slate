@@ -292,6 +292,22 @@ fn compound_undo_ids_are_the_journal_record_not_a_host_walk() {
         panic!("two journal rows: {report:?}");
     };
 
+    // Out of order FIRST, before any undo (codoki): the older id is
+    // refused with the same message and nothing moves — so a host that
+    // walked the recorded sequence backwards, or forwards, gets the same
+    // honest refusal rather than a half-undone pair.
+    let out_of_order = session.undo_structural(folder_move).unwrap_err();
+    assert!(
+        matches!(out_of_order, VaultError::InvalidArgument { ref message }
+            if message.contains("only the latest structural op is undoable")),
+        "got {out_of_order:?}"
+    );
+    assert!(
+        tmp.path().join("Q/Q.md").exists(),
+        "nothing moved on refusal"
+    );
+    assert!(!tmp.path().join("P").exists());
+
     // The newest row IS undoable — and its undo journals itself.
     session.undo_structural(note_hop).unwrap();
     assert!(
