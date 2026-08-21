@@ -3264,8 +3264,24 @@ public sealed class ShellAccessibilityTests
             Keyboard.Release(VirtualKeyShort.RETURN);
             Assert.True(
                 SpinWait.SpinUntil(
-                    () => File.ReadAllText(Path.Combine(vaultRoot, "alpha.md"))
-                        .Contains("status: todo-edited", StringComparison.Ordinal),
+                    () =>
+                    {
+                        // Tolerant of the app's atomic temp+rename
+                        // write racing this poll (the CI sharing
+                        // violation this journey tripped on PR #1124).
+                        try
+                        {
+                            return File.ReadAllText(
+                                    Path.Combine(vaultRoot, "alpha.md"))
+                                .Contains(
+                                    "status: todo-edited",
+                                    StringComparison.Ordinal);
+                        }
+                        catch (IOException)
+                        {
+                            return false;
+                        }
+                    },
                     TimeSpan.FromSeconds(15)),
                 "the committed cell edit never reached the file");
             // The committed edit's vault event re-executes every Bases
@@ -3635,16 +3651,42 @@ public sealed class ShellAccessibilityTests
             PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_S);
             Assert.True(
                 SpinWait.SpinUntil(
-                    () => File.ReadAllText(Path.Combine(vaultRoot, "alpha.md"))
-                        .Contains("first revision", StringComparison.Ordinal),
+                    () =>
+                    {
+                        // Tolerant of the atomic write racing the poll.
+                        try
+                        {
+                            return File.ReadAllText(
+                                    Path.Combine(vaultRoot, "alpha.md"))
+                                .Contains(
+                                    "first revision", StringComparison.Ordinal);
+                        }
+                        catch (IOException)
+                        {
+                            return false;
+                        }
+                    },
                     TimeSpan.FromSeconds(10)),
                 "the first in-app save never reached disk");
             Keyboard.Type("second revision ");
             PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_S);
             Assert.True(
                 SpinWait.SpinUntil(
-                    () => File.ReadAllText(Path.Combine(vaultRoot, "alpha.md"))
-                        .Contains("second revision", StringComparison.Ordinal),
+                    () =>
+                    {
+                        // Tolerant of the atomic write racing the poll.
+                        try
+                        {
+                            return File.ReadAllText(
+                                    Path.Combine(vaultRoot, "alpha.md"))
+                                .Contains(
+                                    "second revision", StringComparison.Ordinal);
+                        }
+                        catch (IOException)
+                        {
+                            return false;
+                        }
+                    },
                     TimeSpan.FromSeconds(10)),
                 "the second in-app save never reached disk");
 
@@ -3850,8 +3892,21 @@ public sealed class ShellAccessibilityTests
                 + "Cancel/Restore buttons never appeared");
             Assert.True(
                 SpinWait.SpinUntil(
-                    () => !File.ReadAllText(Path.Combine(vaultRoot, "alpha.md"))
-                        .Contains("second revision", StringComparison.Ordinal),
+                    () =>
+                    {
+                        // Tolerant of the atomic write racing the poll.
+                        try
+                        {
+                            return !File.ReadAllText(
+                                    Path.Combine(vaultRoot, "alpha.md"))
+                                .Contains(
+                                    "second revision", StringComparison.Ordinal);
+                        }
+                        catch (IOException)
+                        {
+                            return false;
+                        }
+                    },
                     TimeSpan.FromSeconds(15)),
                 "the restore never landed on disk");
             // Success returns focus to the NEW HEAD row — exactly
