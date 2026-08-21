@@ -970,11 +970,17 @@ internal sealed partial class FilesSidebarViewModel
             }
 
             string? created = null;
+            string? caveat = null;
             foreach (string candidate in DuplicateCandidates(node.Path))
             {
                 try
                 {
-                    if (!TryRunSessionWork(() => _session.CreateExclusive(candidate, text)))
+                    // #1123: a post-publish failure is a LANDED copy —
+                    // never the namer's advance signal.
+                    if (!TryRunSessionWork(
+                        () => CreateOutcomes.CreateReporting(
+                            _session, candidate, text, LeafName(candidate)),
+                        out caveat))
                     {
                         return;
                     }
@@ -999,11 +1005,20 @@ internal sealed partial class FilesSidebarViewModel
             StructuralHistoryBarrier();
             // Selection lands on the copy (Finder's shape), and focus
             // reconciles (verification 3); the sentence reports AFTER
-            // Refresh so it survives the "Loading files…" write.
-            RequestSelectionAt(created);
+            // Refresh so it survives the "Loading files…" write. A
+            // landed-but-unindexed copy has no node to land on yet.
+            if (caveat is null)
+            {
+                RequestSelectionAt(created);
+            }
+
             Refresh();
             ReportResult(
                 $"Duplicated {node.DisplayName} as {LeafName(created)}.");
+            if (caveat is not null)
+            {
+                ReportFailure(caveat);
+            }
         }
         catch (VaultException exception)
         {

@@ -462,7 +462,15 @@ both discarded with the workspace.
   note exists; a retry answers `DestinationExists` naming the
   existing path. No bytes are lost and nothing is clobbered; the
   cross-platform fix is a typed post-publish outcome from core,
-  filed as #1123.
+  filed as #1123. *Retired by #1123:* core's
+  `create_exclusive_reporting` returns `Committed` or
+  `PublishedUnindexed { path, content_hash, error }`, and every
+  Windows create funnel (this flow, the sidebar's untitled note and
+  folder note, duplicate, history Restore As…) finishes the landed arm
+  as a create — the created sentence, then a caveat, then the open —
+  and never retries under another name; the
+  `SLATE_TEST_FAULT_AFTER_WRITE` seam drives the arm. mac's adoption
+  is #1140.
 - **TR-6 — Case-alias identity is #1077's, inherited not forked**
   (codex round 2). A parked tab of a deleted `Ghost.md` plus a
   create of `ghost.md` addresses one physical file under two ordinal

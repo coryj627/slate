@@ -1133,6 +1133,24 @@ impl VaultSession {
         Ok(self.inner.create_exclusive(&path, &content)?.into())
     }
 
+    /// `create_exclusive` with the typed post-publish outcome (#1123):
+    /// `Err` is a REFUSAL (nothing landed); `PublishedUnindexed` means
+    /// the no-replace write landed and the index/commit then failed —
+    /// the bytes are on disk (the hash is reported) and the next scan
+    /// indexes them, so a host finishes its flow as a create and never
+    /// retries under another name. Additive: `create_exclusive` keeps
+    /// its one-error shape for callers that have not adopted this.
+    pub fn create_exclusive_reporting(
+        &self,
+        path: String,
+        content: String,
+    ) -> Result<CreateExclusiveOutcome, VaultError> {
+        Ok(self
+            .inner
+            .create_exclusive_reporting(&path, &content)?
+            .into())
+    }
+
     /// Create-if-absent BYTES write (#910): the binary / non-UTF-8 sibling
     /// of `create_exclusive`. Same no-clobber contract — an occupied
     /// destination (on disk or in the case-insensitive index) is
@@ -3747,6 +3765,42 @@ pub struct SaveReport {
     pub new_content_hash: String,
     pub new_size_bytes: u64,
     pub new_mtime_ms: i64,
+}
+
+/// The typed outcome of `create_exclusive_reporting` (#1123). `Committed`
+/// is the ordinary success; `PublishedUnindexed` is the post-publish
+/// failure — bytes on disk at `path` with `content_hash`, not indexed,
+/// `error_message` the failure core saw. The file is REAL: hosts must
+/// not recreate it or pick another name; the next scan indexes it.
+#[derive(uniffi::Enum)]
+pub enum CreateExclusiveOutcome {
+    Committed {
+        report: SaveReport,
+    },
+    PublishedUnindexed {
+        path: String,
+        content_hash: String,
+        error_message: String,
+    },
+}
+
+impl From<core::CreateExclusiveOutcome> for CreateExclusiveOutcome {
+    fn from(outcome: core::CreateExclusiveOutcome) -> Self {
+        match outcome {
+            core::CreateExclusiveOutcome::Committed(report) => Self::Committed {
+                report: report.into(),
+            },
+            core::CreateExclusiveOutcome::PublishedUnindexed {
+                path,
+                content_hash,
+                error,
+            } => Self::PublishedUnindexed {
+                path,
+                content_hash,
+                error_message: error.to_string(),
+            },
+        }
+    }
 }
 
 impl From<core::SaveReport> for SaveReport {
