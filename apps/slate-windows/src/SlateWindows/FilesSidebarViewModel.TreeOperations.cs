@@ -382,6 +382,10 @@ internal sealed partial class FilesSidebarViewModel
         }
 
         ScheduleFilter();
+        // W5-4 F1/F2: a create staged an inline-rename hand-off; the
+        // published tree is the first moment the new node exists to
+        // select.
+        ConsumePendingRenameArm();
         if (outcome.Level.Truncated)
         {
             Status = DirectoryOverflowStatus(string.Empty);

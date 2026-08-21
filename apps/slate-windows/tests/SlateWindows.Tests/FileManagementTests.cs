@@ -157,7 +157,6 @@ public sealed class FileManagementTests
         rig.Sidebar.SelectedNode = Node(rig, "a.md");
         rig.Sidebar.MutationName = "renamed.md";
         Assert.True(rig.Sidebar.TryRenameSelected());
-        rig.Sidebar.MutationName = "fresh.md";
         rig.Sidebar.CreateNoteCommand.Execute(null);
         rig.Sidebar.UndoStructural();
         Assert.Contains(
@@ -251,6 +250,278 @@ public sealed class FileManagementTests
                 .Select(item => SlateUniffiMethods.A11yRender(item).Text));
     }
 
+    [Fact]
+    public async Task ADuplicateWalksTheFinderNamerPastOccupiedNames()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "fm-duplicate");
+        File.WriteAllText(Path.Combine(fixture.Root, "a.md"), "The source bytes.\n");
+        File.WriteAllText(Path.Combine(fixture.Root, "b copy.md"), "Occupied.\n");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new List<A11yEvent>();
+        SidebarRig rig = await NewSidebar(session, fixture, announced);
+
+        // Arm the undo stack so the duplicate's BARRIER is observable.
+        rig.Sidebar.SelectedNode = Node(rig, "a.md");
+        rig.Sidebar.MutationName = "b.md";
+        Assert.True(rig.Sidebar.TryRenameSelected());
+        await rig.Settle();
+
+        rig.Sidebar.SelectedNode = Node(rig, "b.md");
+        rig.Sidebar.DuplicateCommand.Execute(null);
+
+        // F5: CreateExclusive advances on typed DestinationExists —
+        // never a pre-check — so the occupied "b copy.md" stays
+        // untouched and the copy lands on the next candidate.
+        Assert.Equal(
+            "Occupied.\n",
+            File.ReadAllText(Path.Combine(fixture.Root, "b copy.md")));
+        Assert.Equal(
+            "The source bytes.\n",
+            File.ReadAllText(Path.Combine(fixture.Root, "b copy 2.md")));
+        Assert.Contains(
+            "Duplicated b.md as b copy 2.md.",
+            announced.OfType<A11yEvent.HostComposed>()
+                .Select(item => SlateUniffiMethods.A11yRender(item).Text));
+
+        rig.Sidebar.UndoStructural();
+        Assert.Contains(
+            "Nothing to undo.",
+            announced.OfType<A11yEvent.HostComposed>()
+                .Select(item => SlateUniffiMethods.A11yRender(item).Text));
+        Assert.True(File.Exists(Path.Combine(fixture.Root, "b.md")));
+    }
+
+    [Theory]
+    [InlineData("a.md", "a copy.md", "a copy 2.md")]
+    [InlineData("a copy.md", "a copy.md", "a copy 2.md")]
+    [InlineData("b copy 3.md", "b copy.md", "b copy 2.md")]
+    [InlineData("sub/c.md", "sub/c copy.md", "sub/c copy 2.md")]
+    [InlineData("noext", "noext copy", "noext copy 2")]
+    public void TheNamerReusesAnExistingCopyStem(
+        string source, string first, string second)
+    {
+        // mac's duplicateName semantics verbatim: strip an existing
+        // " copy"/" copy N" suffix, then walk "{base} copy",
+        // "{base} copy 2", … — the LOWEST free name wins (a " copy"
+        // source's own slot is occupied by the source, so the walk
+        // advances past it via DestinationExists; never
+        // "a copy copy.md").
+        string[] candidates = [.. FilesSidebarViewModel
+            .DuplicateCandidates(source).Take(2)];
+        Assert.Equal([first, second], candidates);
+    }
+
+    [Fact]
+    public async Task AFolderSelectionSpeaksTheCanonicalDuplicateRefusal()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "fm-duplicate-folder");
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "sub"));
+        File.WriteAllText(Path.Combine(fixture.Root, "sub", "inner.md"), "I\n");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new List<A11yEvent>();
+        SidebarRig rig = await NewSidebar(session, fixture, announced);
+
+        rig.Sidebar.SelectedNode = Node(rig, "sub");
+        rig.Sidebar.DuplicateCommand.Execute(null);
+
+        // F5/F11: the canonical event — adopted on Windows here for
+        // the first time — not host-composed prose.
+        A11yEvent refusal = Assert.Single(
+            announced.OfType<A11yEvent.DuplicateFilesOnly>());
+        Assert.Equal(
+            "Duplicate applies to files only.",
+            SlateUniffiMethods.A11yRender(refusal).Text);
+        Assert.Equal("Duplicate applies to files only.", rig.Sidebar.Status);
+        Assert.False(Directory.Exists(Path.Combine(fixture.Root, "sub copy")));
+    }
+
+    [Fact]
+    public async Task CopyPathCopiesTheVaultRelativePathThroughTheSeam()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "fm-copypath");
+        File.WriteAllText(Path.Combine(fixture.Root, "note.md"), "N\n");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new List<A11yEvent>();
+        var copied = new List<string>();
+        SidebarRig rig = await NewSidebar(session, fixture, announced, copied.Add);
+
+        rig.Sidebar.SelectedNode = Node(rig, "note.md");
+        rig.Sidebar.CopyPathCommand.Execute(null);
+
+        // F7: the VAULT-RELATIVE tree path (mac's semantics), plus the
+        // canonical SelectionCopied — the CopyWikilink pattern.
+        Assert.Equal(["note.md"], copied);
+        Assert.Single(announced.OfType<A11yEvent.SelectionCopied>());
+    }
+
+    [Fact]
+    public async Task RevealRoutesTheResolvedAbsolutePathThroughTheSeam()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "fm-reveal");
+        File.WriteAllText(Path.Combine(fixture.Root, "note.md"), "N\n");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new List<A11yEvent>();
+        var revealed = new List<string>();
+        SidebarRig rig = await NewSidebar(session, fixture, announced);
+        rig.Sidebar.RevealRequested = revealed.Add;
+
+        rig.Sidebar.SelectedNode = Node(rig, "note.md");
+        int spokenBefore = announced.Count;
+        rig.Sidebar.RevealCommand.Execute(null);
+
+        // F8: the vault-resolved ABSOLUTE path, and no announcement —
+        // the OS surface change is the feedback.
+        Assert.Equal(
+            [Path.Combine(fixture.Root, "note.md")], revealed);
+        Assert.Equal(spokenBefore, announced.Count);
+    }
+
+    [Fact]
+    public async Task CreatesWalkTheUntitledSequenceAndHandOffToInlineRename()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "fm-create");
+        File.WriteAllText(Path.Combine(fixture.Root, "Untitled.md"), "Taken.\n");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new List<A11yEvent>();
+        SidebarRig rig = await NewSidebar(session, fixture, announced);
+        int renameArms = 0;
+        rig.Sidebar.InlineRenameRequested += () => renameArms++;
+        var opened = new List<string>();
+        rig.Sidebar.OpenTargetRequested += (_, request) => opened.Add(request.Path);
+
+        rig.Sidebar.CreateNoteCommand.Execute(null);
+        await rig.Settle();
+
+        // F1: the occupied "Untitled.md" advances the sequence (typed
+        // DestinationExists, no pre-check, nothing clobbered); the new
+        // note opens, the published node is selected, and the rename
+        // flow re-arms with the field carrying the new name.
+        Assert.Equal("Taken.\n", File.ReadAllText(Path.Combine(fixture.Root, "Untitled.md")));
+        Assert.True(File.Exists(Path.Combine(fixture.Root, "Untitled 2.md")));
+        Assert.Contains(
+            "Created note Untitled 2.md.",
+            announced.OfType<A11yEvent.HostComposed>()
+                .Select(item => SlateUniffiMethods.A11yRender(item).Text));
+        Assert.Contains("Untitled 2.md", opened);
+        Assert.Equal(1, renameArms);
+        Assert.Equal("Untitled 2.md", rig.Sidebar.SelectedNode?.Path);
+        Assert.Equal("Untitled 2.md", rig.Sidebar.MutationName);
+
+        // F2: the folder twin.
+        rig.Sidebar.SelectedNode = null;
+        rig.Sidebar.CreateFolderCommand.Execute(null);
+        await rig.Settle();
+        Assert.True(Directory.Exists(Path.Combine(fixture.Root, "Untitled Folder")));
+        Assert.Contains(
+            "Created folder Untitled Folder.",
+            announced.OfType<A11yEvent.HostComposed>()
+                .Select(item => SlateUniffiMethods.A11yRender(item).Text));
+        Assert.Equal(2, renameArms);
+        Assert.Equal("Untitled Folder", rig.Sidebar.SelectedNode?.Path);
+
+        // The folder sequence advances on a typed collision too —
+        // CreateFolder is the structural verb, not an idempotent
+        // mkdir: the occupied name is skipped, never silently reused.
+        rig.Sidebar.SelectedNode = null;
+        rig.Sidebar.CreateFolderCommand.Execute(null);
+        await rig.Settle();
+        Assert.True(
+            Directory.Exists(Path.Combine(fixture.Root, "Untitled Folder 2")));
+        Assert.Equal(3, renameArms);
+    }
+
+    [Fact]
+    public async Task DeleteIsImmediateForFilesAndEmptyFoldersAndStagedForFullOnes()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "fm-delete-parity");
+        File.WriteAllText(Path.Combine(fixture.Root, "note.md"), "N\n");
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "empty"));
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "full"));
+        File.WriteAllText(Path.Combine(fixture.Root, "full", "one.md"), "1\n");
+        File.WriteAllText(Path.Combine(fixture.Root, "full", "two.md"), "2\n");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new List<A11yEvent>();
+        SidebarRig rig = await NewSidebar(session, fixture, announced);
+        var staged = new List<(string Title, string Message)>();
+        rig.Sidebar.ConfirmRecycle = request =>
+        {
+            staged.Add(request);
+            return false;
+        };
+
+        // A FILE trashes immediately — the seam never fires (Finder
+        // parity, F6).
+        rig.Sidebar.SelectedNode = Node(rig, "note.md");
+        OnSta(() => rig.Sidebar.DeleteCommand.Execute(null));
+        Assert.Empty(staged);
+        Assert.False(File.Exists(Path.Combine(fixture.Root, "note.md")));
+        Assert.Contains(
+            "Moved note.md to the Recycle Bin.",
+            announced.OfType<A11yEvent.HostComposed>()
+                .Select(item => SlateUniffiMethods.A11yRender(item).Text));
+
+        // An EMPTY folder trashes immediately too.
+        await rig.Settle();
+        rig.Sidebar.SelectedNode = Node(rig, "empty");
+        OnSta(() => rig.Sidebar.DeleteCommand.Execute(null));
+        Assert.Empty(staged);
+        Assert.False(Directory.Exists(Path.Combine(fixture.Root, "empty")));
+
+        // A NON-EMPTY folder stages the mac-verbatim confirmation
+        // (Recycle Bin adaptation, curly quotes, recursive count) and
+        // a refusal keeps it.
+        await rig.Settle();
+        rig.Sidebar.SelectedNode = Node(rig, "full");
+        OnSta(() => rig.Sidebar.DeleteCommand.Execute(null));
+        (string title, string message) = Assert.Single(staged);
+        Assert.Equal("Move “full” to the Recycle Bin?", title);
+        Assert.Equal(
+            "Move “full” and its 2 items to the Recycle Bin. "
+            + "Slate can't undo this action.",
+            message);
+        Assert.True(File.Exists(Path.Combine(fixture.Root, "full", "one.md")));
+    }
+
+    [Fact]
+    public async Task ABatchWithANonEmptyFolderStagesTheBatchCopy()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "fm-batch-delete");
+        File.WriteAllText(Path.Combine(fixture.Root, "a.md"), "A\n");
+        File.WriteAllText(Path.Combine(fixture.Root, "b.md"), "B\n");
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "full"));
+        File.WriteAllText(Path.Combine(fixture.Root, "full", "inner.md"), "I\n");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new List<A11yEvent>();
+        SidebarRig rig = await NewSidebar(session, fixture, announced);
+        var staged = new List<(string Title, string Message)>();
+        rig.Sidebar.ConfirmRecycle = request =>
+        {
+            staged.Add(request);
+            return false;
+        };
+
+        // Files-only batch: straight to the Recycle Bin, no staging.
+        Node(rig, "a.md").IsBatchSelected = true;
+        Node(rig, "b.md").IsBatchSelected = true;
+        OnSta(() => rig.Sidebar.BatchTrashCommand.Execute(null));
+        Assert.Empty(staged);
+        Assert.False(File.Exists(Path.Combine(fixture.Root, "a.md")));
+        Assert.False(File.Exists(Path.Combine(fixture.Root, "b.md")));
+
+        // A batch carrying a non-empty folder stages the batch copy
+        // with the folder clause.
+        await rig.Settle();
+        Node(rig, "full").IsBatchSelected = true;
+        OnSta(() => rig.Sidebar.BatchTrashCommand.Execute(null));
+        (string title, string message) = Assert.Single(staged);
+        Assert.Equal("Move 1 item to the Recycle Bin?", title);
+        Assert.Equal(
+            "Move 1 item, including 1 folder with contents, to the "
+            + "Recycle Bin. Slate can't undo this action.",
+            message);
+        Assert.True(File.Exists(Path.Combine(fixture.Root, "full", "inner.md")));
+    }
+
     // ---- Helpers ------------------------------------------------------
 
     private sealed record SidebarRig(FilesSidebarViewModel Sidebar)
@@ -291,11 +562,15 @@ public sealed class FileManagementTests
         Assert.Single(rig.Sidebar.RootNodes, node => node.Path == path);
 
     private static async Task<SidebarRig> NewSidebar(
-        VaultSession session, FixtureVault fixture, List<A11yEvent> announced)
+        VaultSession session,
+        FixtureVault fixture,
+        List<A11yEvent> announced,
+        Action<string>? copyText = null)
     {
         var sidebar = new FilesSidebarViewModel(
             session,
             announced.Add,
+            copyText: copyText,
             vaultRoot: fixture.Root,
             localAppDataRoot: Path.Combine(fixture.Root, "device-state"),
             treeUiContext: new PumpSynchronizationContext());

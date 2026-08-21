@@ -390,8 +390,11 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         ToggleDualPaneCommand = new RelayCommand(_ => IsDualPaneEnabled = !IsDualPaneEnabled, _ => true);
         AddTagCommand = new RelayCommand(_ => EditTag(add: true), _ => !IsImporting && BatchSelectionCount > 0 && TagInput.Length > 0);
         RemoveTagCommand = new RelayCommand(_ => EditTag(add: false), _ => !IsImporting && BatchSelectionCount > 0 && TagInput.Length > 0);
-        CreateFolderCommand = new RelayCommand(_ => CreateFolder(), _ => !IsImporting && MutationName.Length > 0);
-        CreateNoteCommand = new RelayCommand(_ => CreateNote(), _ => !IsImporting && MutationName.Length > 0);
+        // W5-4 F1/F2: the creates are auto-named and selection-
+        // independent — the MutationName text-box flow retired for
+        // these verbs.
+        CreateFolderCommand = new RelayCommand(_ => CreateFolder(), _ => !IsImporting);
+        CreateNoteCommand = new RelayCommand(_ => CreateNote(), _ => !IsImporting);
         RenameCommand = new RelayCommand(
             _ => TryRenameSelected(),
             _ => !IsImporting
@@ -401,6 +404,17 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         CreateFolderNoteCommand = new RelayCommand(_ => CreateFolderNote(), _ => !IsImporting && SelectedNode?.IsDirectory == true && !SelectedNode.HasFolderNote);
         DeleteFolderNoteCommand = new RelayCommand(_ => DeleteFolderNote(), _ => !IsImporting && SelectedNode?.IsDirectory == true && SelectedNode.HasFolderNote);
         CopyWikilinkCommand = new RelayCommand(_ => CopyWikilink(), _ => SelectedNode is { IsDirectory: false });
+        // W5-4 Phase B (F5/F7/F8). Duplicate stays executable on a
+        // folder so the canonical DuplicateFilesOnly refusal can speak.
+        DuplicateCommand = new RelayCommand(
+            _ => DuplicateSelected(),
+            _ => !IsImporting && SelectedNode is { IsPlaceholder: false, IsGroupHeader: false });
+        CopyPathCommand = new RelayCommand(
+            _ => CopyPathSelected(),
+            _ => SelectedNode is { IsPlaceholder: false, IsGroupHeader: false });
+        RevealCommand = new RelayCommand(
+            _ => RevealSelected(),
+            _ => SelectedNode is { IsPlaceholder: false, IsGroupHeader: false });
         PinCommand = new RelayCommand(_ => PinSelected(), _ => SelectedNode is { IsDirectory: false });
         UnpinCommand = new RelayCommand(_ => UnpinSelected(), _ => SelectedNode is { IsDirectory: false });
         UnpinAllCommand = new RelayCommand(_ => UnpinAllInFolder(), _ => _pinned.Count > 0);
@@ -1011,23 +1025,57 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
     private void CreateFolder()
     {
+        // W5-4 F2: auto-named untitled create — the MutationName
+        // text-box flow retired for this verb (F1's shape). The
+        // report-returning CreateFolder is the structural verb; its
+        // report is consumed per F9.
         string parent = CreationParentPath();
-        string path = CombineVaultPath(parent, MutationName);
+        string attempted = "Untitled Folder";
         try
         {
-            if (!TryRunSessionWork(() => _session.CreateFolderExclusive(path)))
+            string? created = null;
+            foreach (string candidate in UntitledCandidates(
+                parent, "Untitled Folder", string.Empty))
             {
+                attempted = System.IO.Path.GetFileName(candidate);
+                try
+                {
+                    StructuralReport? report = null;
+                    if (!TryRunSessionWork(() => report = _session.CreateFolder(candidate)))
+                    {
+                        return;
+                    }
+
+                    if (report is not null)
+                    {
+                        _ = ConsumeStructuralReport(report);
+                    }
+
+                    created = candidate;
+                    break;
+                }
+                catch (VaultException.DestinationExists)
+                {
+                    // The unique-untitled advance — typed, never a
+                    // pre-check (F1's CreateExclusive rule).
+                }
+            }
+
+            if (created is null)
+            {
+                ReportFailure($"Could not create folder {attempted}: no free name.");
                 return;
             }
 
             // W5-4 F10: creates are structural history barriers.
             StructuralHistoryBarrier();
-            ReportResult($"Created folder {path}.");
+            ReportResult($"Created folder {System.IO.Path.GetFileName(created)}.");
+            RequestInlineRenameAt(created);
             Refresh();
         }
         catch (VaultException exception)
         {
-            ReportFailure($"Could not create folder: {exception.Message}");
+            ReportFailure($"Could not create folder {attempted}: {exception.Message}");
         }
     }
 
@@ -1040,28 +1088,52 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
     private void CreateNote()
     {
+        // W5-4 F1: mac's auto-named untitled flow — the unique-untitled
+        // sequence via CreateExclusive ONLY (typed DestinationExists,
+        // never a pre-check), open in the current tab, then hand off to
+        // inline rename with the stem selected.
         string parent = CreationParentPath();
-        string name = MutationName.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
-            ? MutationName
-            : $"{MutationName}.md";
-        string path = CombineVaultPath(parent, name);
+        string attempted = "Untitled.md";
         try
         {
-            if (!TryRunSessionWork(() => _session.CreateExclusive(path, string.Empty)))
+            string? created = null;
+            foreach (string candidate in UntitledCandidates(parent, "Untitled", ".md"))
             {
+                attempted = System.IO.Path.GetFileName(candidate);
+                try
+                {
+                    if (!TryRunSessionWork(
+                        () => _session.CreateExclusive(candidate, string.Empty)))
+                    {
+                        return;
+                    }
+
+                    created = candidate;
+                    break;
+                }
+                catch (VaultException.DestinationExists)
+                {
+                    // The unique-untitled advance signal.
+                }
+            }
+
+            if (created is null)
+            {
+                ReportFailure($"Could not create note {attempted}: no free name.");
                 return;
             }
 
             // W5-4 F10: a create is a structural history barrier (mac's
             // table) — a stale inverse must never target this path.
             StructuralHistoryBarrier();
-            ReportResult($"Created {path}.");
+            ReportResult($"Created note {System.IO.Path.GetFileName(created)}.");
+            RequestOpen(created);
+            RequestInlineRenameAt(created);
             Refresh();
-            RequestOpen(path);
         }
         catch (VaultException exception)
         {
-            ReportFailure($"Could not create note: {exception.Message}");
+            ReportFailure($"Could not create note {attempted}: {exception.Message}");
         }
     }
 
@@ -1076,38 +1148,51 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             return;
         }
 
-        if (!_confirmDestructive(
-            $"Move {node.DisplayName} to the Recycle Bin? Links to this item may stop resolving."))
+        // W5-4 F6 (mac #860/#852 semantics): files and EMPTY folders
+        // trash immediately — no confirmation (Finder parity). A
+        // non-empty folder stages the styled confirmation; the probe
+        // runs AT STAGE TIME, and an unreadable folder is fail-closed
+        // (confirmed like a non-empty one, with the folder-clause
+        // message because no count exists to speak).
+        if (node.IsDirectory)
         {
-            return;
+            int? contents = CountFolderContents(node.Path);
+            if (contents is not 0)
+            {
+                string message = contents is int known
+                    ? RecycleBinCopy.SingleFolderMessage(node.DisplayName, known)
+                    : RecycleBinCopy.BatchMessage(1, 1);
+                if (!ConfirmRecycle(
+                    (RecycleBinCopy.SingleFolderTitle(node.DisplayName), message)))
+                {
+                    return;
+                }
+            }
         }
 
         try
         {
-            if (!TryRunSessionWork(
-                () => _session.BatchTrash(new BatchTrashRequest(
-                    [new StructuralBatchItem(node.Path, node.IsDirectory)])),
-                out BatchTrashReport report))
+            if (!TryRunSessionWork(() =>
+            {
+                if (node.IsDirectory)
+                {
+                    _session.DeleteFolder(node.Path);
+                }
+                else
+                {
+                    _session.DeleteFile(node.Path);
+                }
+            }))
             {
                 return;
             }
 
-            foreach (StructuralBatchItem trashed in report.Trashed)
-            {
-                TransformStoredPaths(trashed.Path, trashed.Path, trashed.IsDirectory, deleted: true);
-            }
-
+            TransformStoredPaths(node.Path, node.Path, node.IsDirectory, deleted: true);
             // W5-4 F10: trash is not undoable AND a history barrier
             // (mac's rule — the bytes are in the Recycle Bin).
             StructuralHistoryBarrier();
-            Status = BatchTrashSummary(report);
-            // W0.5-3 residue: Windows single-item system-Recycle-Bin report copy.
-            _announce(new A11yEvent.HostComposed(Status, A11yPriority.Medium));
-            if (report.Trashed.Any(item => item.Path == node.Path))
-            {
-                SelectedNode = null;
-            }
-
+            ReportResult($"Moved {node.DisplayName} to the Recycle Bin.");
+            SelectedNode = null;
             Refresh();
         }
         catch (VaultException exception)
@@ -1367,9 +1452,20 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     private void BatchTrash()
     {
         StructuralBatchItem[] items = SelectedBatchItems();
-        if (items.Length == 0
-            || !_confirmDestructive(
-                $"Move {items.Length:N0} selected {(items.Length == 1 ? "item" : "items")} to the Recycle Bin?"))
+        if (items.Length == 0)
+        {
+            return;
+        }
+
+        // W5-4 F6: a batch confirms only when it carries a non-empty
+        // folder (Finder parity — files and empty folders go
+        // straight to the Recycle Bin). The probe runs at stage time;
+        // unreadable counts as non-empty (fail-closed).
+        int nonEmptyFolders = items.Count(
+            item => item.IsDirectory && CountFolderContents(item.Path) is not 0);
+        if (nonEmptyFolders > 0 && !ConfirmRecycle((
+            RecycleBinCopy.BatchTitle(items.Length),
+            RecycleBinCopy.BatchMessage(items.Length, nonEmptyFolders))))
         {
             return;
         }
@@ -1786,6 +1882,9 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             CreateFolderNoteCommand,
             DeleteFolderNoteCommand,
             CopyWikilinkCommand,
+            DuplicateCommand,
+            CopyPathCommand,
+            RevealCommand,
             PinCommand,
             UnpinCommand,
             UnpinAllCommand,

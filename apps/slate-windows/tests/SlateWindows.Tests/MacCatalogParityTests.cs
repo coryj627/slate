@@ -50,13 +50,32 @@ public sealed class MacCatalogParityTests
                     $"{row.Id} is shared with mac but no mac label could be "
                     + "parsed, so its label is unchecked. Extend the parser or "
                     + "record it in " + nameof(LabelNotMachineReadable) + ".");
+                Assert.True(
+                    row.LabelDivergence is null,
+                    $"{row.Id} records a label divergence but mac's label is "
+                    + "not comparable here — the disposition is unverifiable "
+                    + "and therefore stale.");
                 continue;
             }
 
             if (!string.Equals(macLabel, row.Label, StringComparison.Ordinal))
             {
-                divergences.Add(
-                    $"{row.Id}: windows={row.Label} mac={macLabel}");
+                // W5-4 FD-5: a divergence the row RECORDS is a
+                // disposition, not drift — and a recorded divergence
+                // whose labels match again is stale and fails below.
+                if (row.LabelDivergence is null)
+                {
+                    divergences.Add(
+                        $"{row.Id}: windows={row.Label} mac={macLabel}");
+                }
+            }
+            else
+            {
+                Assert.True(
+                    row.LabelDivergence is null,
+                    $"{row.Id} records a label divergence but its label "
+                    + "matches mac's — the disposition is stale and would "
+                    + "shield the next real divergence.");
             }
         }
 
@@ -147,8 +166,10 @@ public sealed class MacCatalogParityTests
             ["slate.sidebar.toggleTags"] =
                 "Windows-only sidebar tag-pane toggle.",
             ["slate.sidebar.trashSelected"] =
-                "The single-node trash verb; mac's slate.file.delete is the batch form, "
-                + "which Windows also registers.",
+                "The batch-checkbox trash verb (W5-4 F6 unified targeting: "
+                + "mac's slate.file.delete now acts on the tree selection, "
+                + "which Windows also registers; the checkbox flow is the "
+                + "Windows-only extra).",
         };
 
     /// <summary>

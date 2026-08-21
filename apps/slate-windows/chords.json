@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "commands": [
     {
       "id": "slate.vault.open",
@@ -924,6 +924,43 @@
       "registered": true
     },
     {
+      "id": "slate.file.duplicate",
+      "label": "Duplicate",
+      "section": "Sidebar",
+      "hint": "Duplicate the selected file as a copy next to it.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.file.copyPath",
+      "label": "Copy Path",
+      "section": "Sidebar",
+      "hint": "Copy the selected item's path.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.file.revealInFinder",
+      "label": "Reveal in File Explorer",
+      "section": "Sidebar",
+      "hint": "Show the selected file or folder in File Explorer.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true,
+      "labelDivergence": "FD-5: mac's label is \"Reveal in Finder\" — Finder does not exist on Windows, and the platform surface it names does. The id stays shared (the capability is the same verb); the label follows the OS. Recorded, never relabeled."
+    },
+    {
       "id": "slate.sidebar.copyWikilink",
       "label": "Copy Wikilink",
       "section": "Sidebar",
@@ -1295,9 +1332,9 @@
     },
     {
       "id": "slate.sidebar.trashSelected",
-      "label": "Move Selected Item to Trash",
+      "label": "Move Checked Items to Trash",
       "section": "Sidebar",
-      "hint": "Move the focused sidebar item to the Recycle Bin after confirming.",
+      "hint": "Move every batch-checked item to the Recycle Bin.",
       "macChord": null,
       "mac": null,
       "windows": null,
@@ -2471,6 +2508,20 @@
       "registered": false,
       "divergence": "The rule maps ⇧⌘Z to Ctrl+Shift+Z, but Ctrl+Y is the platform redo convention (Notepad, Office, Explorer's rename field). Recorded as the deliberate Windows binding — W5-4 decision 12.",
       "reason": "W5-4 (F10): tree-scoped structural redo. mac uses ⇧⌘Z; Ctrl+Y is the Windows redo convention (decision 12)."
+    },
+    {
+      "id": "windows.sidebar.deleteSelected",
+      "label": "Files tree: move the selection to the Recycle Bin",
+      "section": "View",
+      "hint": null,
+      "macChord": "⌘⌫",
+      "mac": "Command Delete",
+      "windows": "Delete",
+      "windowsSpoken": "Delete",
+      "scope": "Global",
+      "registered": false,
+      "divergence": "The rule maps ⌘⌫ to Ctrl+Backspace, but the bare Delete key is the platform deletion convention (Explorer, list views). Recorded as the deliberate Windows binding — W5-4 decision 12 / FD-4.",
+      "reason": "W5-4 (F6, FD-4): tree-scoped Delete riding the same imperative MainWindow delivery as F2-rename — the selection verb, with Finder-parity confirmation staging. mac scopes ⌘⌫ to its file tree identically."
     },
     {
       "id": "windows.view.showCommandPalette",

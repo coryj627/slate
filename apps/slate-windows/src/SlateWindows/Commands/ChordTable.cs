@@ -109,6 +109,12 @@ internal sealed record ChordTableEntry
     /// rebound.</summary>
     public string? Divergence { get; init; }
 
+    /// <summary>Why the shipped Windows LABEL differs from mac's
+    /// byte-identical catalog label (the P3 census's disposition —
+    /// W5-4 FD-5 is the first). Recorded, never relabeled; a stale
+    /// disposition (labels match again) fails the census.</summary>
+    public string? LabelDivergence { get; init; }
+
     /// <summary>Derived — never authored (mirror of mac's
     /// <c>HotkeySpoken.spoken(for:)</c>).</summary>
     public string? MacSpoken => MacHotkeySpoken.Spoken(MacChord);
@@ -259,6 +265,9 @@ internal static class ChordTable
         public const string RenameEntry = "slate.file.rename";
         public const string MoveTo = "slate.file.moveTo";
         public const string DeleteEntry = "slate.file.delete";
+        public const string DuplicateEntry = "slate.file.duplicate";
+        public const string CopyPath = "slate.file.copyPath";
+        public const string RevealInFinder = "slate.file.revealInFinder";
         public const string CopyWikilink = "slate.sidebar.copyWikilink";
         public const string PinNote = "slate.sidebar.pinNote";
         public const string UnpinNote = "slate.sidebar.unpinNote";
@@ -342,6 +351,9 @@ internal static class ChordTable
         Ids.ImportFilesAndFolders,
         Ids.RenameEntry,
         Ids.MoveTo,
+        Ids.DuplicateEntry,
+        Ids.RevealInFinder,
+        Ids.CopyPath,
         Ids.CopyWikilink,
         Ids.PinNote,
         Ids.UnpinNote,
@@ -381,11 +393,13 @@ internal static class ChordTable
     /// Bumped from 1 in W5-1: rows gained <c>label</c>, <c>section</c>,
     /// <c>hint</c>, <c>macChord</c>, <c>scope</c>, <c>registered</c>,
     /// <c>divergence</c>, and <c>reason</c>, and the file gained the
-    /// <c>chordSurface</c> array. <c>deliveryEvidence</c> is untouched —
+    /// <c>chordSurface</c> array. Bumped to 3 in W5-4: rows gained the
+    /// optional <c>labelDivergence</c> (FD-5's recorded label
+    /// disposition). <c>deliveryEvidence</c> is untouched —
     /// <c>scripts/generate-parity-matrix.py</c> performs twelve fatal
     /// validations on that object and its shape must survive unchanged.
     /// </remarks>
-    public const int SchemaVersion = 2;
+    public const int SchemaVersion = 3;
 
     /// <summary>
     /// Overwrite <paramref name="root"/>'s <c>schemaVersion</c>,
@@ -440,6 +454,11 @@ internal static class ChordTable
             node["divergence"] = row.Divergence;
         }
 
+        if (row.LabelDivergence is not null)
+        {
+            node["labelDivergence"] = row.LabelDivergence;
+        }
+
         if (row.Reason is not null)
         {
             node["reason"] = row.Reason;
@@ -456,7 +475,8 @@ internal static class ChordTable
         string? mac = null,
         string? win = null,
         ChordScope scope = ChordScope.Global,
-        string? divergence = null) =>
+        string? divergence = null,
+        string? labelDivergence = null) =>
         new()
         {
             Id = id,
@@ -468,6 +488,7 @@ internal static class ChordTable
             Scope = win is null ? ChordScope.None : scope,
             IsRegistered = true,
             Divergence = divergence,
+            LabelDivergence = labelDivergence,
         };
 
     private static ChordTableEntry Unreg(
@@ -818,6 +839,19 @@ internal static class ChordTable
                 "⇧⌘M", divergence: UnboundOnWindows),
             Reg(Ids.DeleteEntry, "Move to Trash", CommandSection.Sidebar,
                 "Move the selected files or folders to the Trash."),
+            // W5-4 (F5/F7/F8): the three verbs mac's sidebar catalog
+            // carries and W4-4's census dispositioned as gaps.
+            Reg(Ids.DuplicateEntry, "Duplicate", CommandSection.Sidebar,
+                "Duplicate the selected file as a copy next to it."),
+            Reg(Ids.CopyPath, "Copy Path", CommandSection.Sidebar,
+                "Copy the selected item's path."),
+            Reg(Ids.RevealInFinder, "Reveal in File Explorer", CommandSection.Sidebar,
+                "Show the selected file or folder in File Explorer.",
+                labelDivergence:
+                "FD-5: mac's label is \"Reveal in Finder\" — Finder does not "
+                + "exist on Windows, and the platform surface it names does. "
+                + "The id stays shared (the capability is the same verb); "
+                + "the label follows the OS. Recorded, never relabeled."),
             Reg(Ids.CopyWikilink, "Copy Wikilink", CommandSection.Sidebar,
                 "Copy a wikilink to the selected Markdown file."),
             Reg(Ids.PinNote, "Pin to Top of Folder", CommandSection.Sidebar,
@@ -890,9 +924,12 @@ internal static class ChordTable
                 "Clear the sidebar filter field and show every file again."),
             Reg(Ids.SidebarToggleTags, "Toggle Tag Column", CommandSection.Sidebar,
                 "Show or hide each file's tags in the sidebar tree."),
-            Reg(Ids.SidebarTrashSelected, "Move Selected Item to Trash",
+            // W5-4 F6: targeting unified — slate.file.delete now acts
+            // on the tree selection (mac parity), so this Windows-only
+            // id names the batch-checkbox flow it previously mirrored.
+            Reg(Ids.SidebarTrashSelected, "Move Checked Items to Trash",
                 CommandSection.Sidebar,
-                "Move the focused sidebar item to the Recycle Bin after confirming."),
+                "Move every batch-checked item to the Recycle Bin."),
         ]);
 
         // Mac's sort family. Windows ships the capability, but through a
@@ -1060,6 +1097,19 @@ internal static class ChordTable
                 + "platform redo convention (Notepad, Office, Explorer's "
                 + "rename field). Recorded as the deliberate Windows "
                 + "binding — W5-4 decision 12."),
+            Chord("windows.sidebar.deleteSelected",
+                "Files tree: move the selection to the Recycle Bin",
+                "Delete", ChordScope.Global,
+                "W5-4 (F6, FD-4): tree-scoped Delete riding the same "
+                + "imperative MainWindow delivery as F2-rename — the "
+                + "selection verb, with Finder-parity confirmation "
+                + "staging. mac scopes ⌘⌫ to its file tree identically.",
+                mac: "⌘⌫",
+                divergence:
+                "The rule maps ⌘⌫ to Ctrl+Backspace, but the bare Delete "
+                + "key is the platform deletion convention (Explorer, "
+                + "list views). Recorded as the deliberate Windows "
+                + "binding — W5-4 decision 12 / FD-4."),
             Chord("windows.view.showCommandPalette", "Show the command palette",
                 "Ctrl+Shift+P", ChordScope.Global,
                 "W5-1 (PD-2): the palette's own opening chord, delivered "

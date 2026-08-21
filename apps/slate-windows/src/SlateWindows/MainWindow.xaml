@@ -676,6 +676,11 @@
                                             <Button Margin="4,0,0,0" Content="Delete" Command="{Binding DeleteCommand}" />
                                         </WrapPanel>
                                         <WrapPanel Margin="0,4,0,0">
+                                            <Button Content="Duplicate" Command="{Binding DuplicateCommand}" />
+                                            <Button Margin="4,0,0,0" Content="Copy path" Command="{Binding CopyPathCommand}" />
+                                            <Button Margin="4,0,0,0" Content="Reveal in File Explorer" Command="{Binding RevealCommand}" />
+                                        </WrapPanel>
+                                        <WrapPanel Margin="0,4,0,0">
                                             <Button Content="Folder note" Command="{Binding CreateFolderNoteCommand}" />
                                             <Button Margin="4,0,0,0" Content="Delete folder note" Command="{Binding DeleteFolderNoteCommand}" />
                                             <Button Margin="4,0,0,0" Content="Copy link" Command="{Binding CopyWikilinkCommand}" />

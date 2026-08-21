@@ -22,6 +22,7 @@ public partial class MainWindow : Window
     private IInputElement? _focusBeforeSwitcher;
     private QuickSwitcherViewModel? _observedQuickSwitcher;
     private WorkspaceViewModel? _observedWorkspace;
+    private FilesSidebarViewModel? _observedFileSidebar;
     private bool _quickSwitcherCommitted;
 
     public MainWindow()
@@ -234,6 +235,50 @@ public partial class MainWindow : Window
         {
             ObserveWorkspace(_viewModel.Workspace);
         }
+        else if (eventArgs.PropertyName == nameof(VaultLifecycleViewModel.FileSidebar))
+        {
+            ObserveFileSidebar(_viewModel.FileSidebar);
+        }
+    }
+
+    private void ObserveFileSidebar(FilesSidebarViewModel? sidebar)
+    {
+        if (ReferenceEquals(_observedFileSidebar, sidebar))
+        {
+            return;
+        }
+
+        if (_observedFileSidebar is not null)
+        {
+            _observedFileSidebar.InlineRenameRequested -= ArmSidebarRename;
+        }
+
+        _observedFileSidebar = sidebar;
+        if (sidebar is not null)
+        {
+            // W5-4 F1/F2: a create's hand-off re-arms the F2 rename
+            // flow programmatically once the new node is selected.
+            sidebar.InlineRenameRequested += ArmSidebarRename;
+        }
+    }
+
+    /// <summary>The F2 arm, shared by the chord and the create
+    /// hand-off: expander open, focus in the name field, stem
+    /// selected; focus refusal falls back to the tree.</summary>
+    private void ArmSidebarRename()
+    {
+        SidebarFileActionsExpander.IsExpanded = true;
+        _ = Dispatcher.InvokeAsync(() =>
+        {
+            if (SidebarMutationNameTextBox.Focus())
+            {
+                SelectSidebarRenameText();
+            }
+            else
+            {
+                FilesTree.Focus();
+            }
+        }, DispatcherPriority.Input);
     }
 
     private void ObserveWorkspace(WorkspaceViewModel? workspace)
@@ -726,23 +771,26 @@ public partial class MainWindow : Window
             return;
         }
 
+        // W5-4 (F6, FD-4): tree-scoped Delete — the selection verb with
+        // Finder-parity confirmation staging. Imperative like F2-rename:
+        // a KeyBinding would eat Delete inside the editor and every
+        // text field.
+        if (e.Key == Key.Delete
+            && modifiers == ModifierKeys.None
+            && FilesTree.IsKeyboardFocusWithin
+            && _viewModel.FileSidebar?.DeleteCommand.CanExecute(null) == true)
+        {
+            _viewModel.FileSidebar.DeleteCommand.Execute(null);
+            e.Handled = true;
+            return;
+        }
+
         if (e.Key == Key.F2
             && FilesTree.IsKeyboardFocusWithin
             && _viewModel.FileSidebar?.SelectedNode is
             { IsPlaceholder: false, IsGroupHeader: false })
         {
-            SidebarFileActionsExpander.IsExpanded = true;
-            _ = Dispatcher.InvokeAsync(() =>
-            {
-                if (SidebarMutationNameTextBox.Focus())
-                {
-                    SelectSidebarRenameText();
-                }
-                else
-                {
-                    FilesTree.Focus();
-                }
-            }, DispatcherPriority.Input);
+            ArmSidebarRename();
             e.Handled = true;
             return;
         }
@@ -1320,6 +1368,7 @@ public partial class MainWindow : Window
         _viewModel.PropertyChanged -= ViewModel_PropertyChanged;
         ObserveQuickSwitcher(null);
         ObserveWorkspace(null);
+        ObserveFileSidebar(null);
         _viewModel.Dispose();
     }
 

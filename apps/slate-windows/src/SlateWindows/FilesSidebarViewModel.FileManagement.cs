@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Text.RegularExpressions;
 using SlateWindows.FileManagement;
 using uniffi.slate_uniffi;
 
@@ -15,6 +16,14 @@ namespace SlateWindows;
 internal sealed partial class FilesSidebarViewModel
 {
     private readonly StructuralUndoJournal _structuralUndo = new();
+
+    // W5-4 Phase B verbs (assigned with the other commands in the
+    // main-file constructor).
+    public System.Windows.Input.ICommand DuplicateCommand { get; }
+
+    public System.Windows.Input.ICommand CopyPathCommand { get; }
+
+    public System.Windows.Input.ICommand RevealCommand { get; }
 
     /// <summary>Lifecycle-supplied retarget seam (F9): the report's
     /// <c>Moved</c> pairs retarget open tabs SYNCHRONOUSLY at the
@@ -265,6 +274,251 @@ internal sealed partial class FilesSidebarViewModel
                 ? "Can't redo — the files have changed."
                 : "Can't undo — the files have changed.");
         }
+    }
+
+    /// <summary>Test-visible reveal seam (F8): defaults to
+    /// <c>explorer.exe /select,</c> on the vault-resolved absolute
+    /// path. No announcement (the OS surface change is the feedback),
+    /// no chord, no undo.</summary>
+    internal Action<string>? RevealRequested { get; set; }
+
+    /// <summary>F1/F2 hand-off: raised after a create's refresh has
+    /// published the new node and the sidebar has selected it — the
+    /// window arms the rename flow (expander open, focus in the name
+    /// field, stem selected: the F2 flow re-armed
+    /// programmatically).</summary>
+    internal event Action? InlineRenameRequested;
+
+    private string? _pendingRenameArmPath;
+
+    /// <summary>The unique-untitled sequence (F1/F2): "Untitled.md",
+    /// "Untitled 2.md", … / "Untitled Folder", "Untitled Folder 2", …
+    /// — the exclusive create's typed <c>DestinationExists</c> is the
+    /// advance signal, never a pre-check.</summary>
+    internal static IEnumerable<string> UntitledCandidates(
+        string parent, string baseName, string extension)
+    {
+        for (int i = 1; i <= 200; i++)
+        {
+            string stem = i == 1 ? baseName : $"{baseName} {i}";
+            yield return CombineVaultPath(parent, stem + extension);
+        }
+    }
+
+    private void RequestInlineRenameAt(string vaultPath) =>
+        _pendingRenameArmPath = vaultPath;
+
+    /// <summary>Consumed at tree publication: select the created node
+    /// and raise the hand-off. A node the refresh did not materialize
+    /// (a collapsed deep parent) drops the arm — the create already
+    /// spoke and opened; only the rename hand-off degrades.</summary>
+    private void ConsumePendingRenameArm()
+    {
+        if (_pendingRenameArmPath is not string pending)
+        {
+            return;
+        }
+
+        _pendingRenameArmPath = null;
+        FileTreeNodeViewModel? created = Flatten(RootNodes)
+            .FirstOrDefault(node => node.Path == pending);
+        if (created is null)
+        {
+            return;
+        }
+
+        SelectedNode = created;
+        InlineRenameRequested?.Invoke();
+    }
+
+    /// <summary>The F6 confirmation seam — the History seam pattern:
+    /// callers stage only the title and message; the destructive
+    /// button label is PINNED here ("Move to the Recycle Bin" /
+    /// "Cancel"), and the dialog focuses Cancel with no default
+    /// button, so bare Enter never confirms. Supersedes the bare
+    /// message-only <c>_confirmDestructive</c> for the trash
+    /// verbs.</summary>
+    internal Func<(string Title, string Message), bool> ConfirmRecycle { get; set; } =
+        request => HistoryConfirmationDialog.Confirm(
+            request.Title, request.Message,
+            confirmLabel: RecycleBinCopy.ActionLabel);
+
+    /// <summary>The F6 child-count probe, re-run AT STAGE TIME so a
+    /// stale zero can never bypass the confirmation. Null (an
+    /// unreadable folder) is fail-closed: it stages the confirmation
+    /// like a non-empty folder.</summary>
+    private int? CountFolderContents(string vaultRelative)
+    {
+        if (_vaultRoot is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return System.IO.Directory.EnumerateFileSystemEntries(
+                AbsoluteVaultPath(vaultRelative),
+                "*",
+                System.IO.SearchOption.AllDirectories).Count();
+        }
+        catch (Exception exception)
+            when (exception is System.IO.IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>F5: mac's Finder-parity duplicate — no new FFI, a
+    /// <c>ReadText</c> + <c>CreateExclusive</c> loop advancing on
+    /// typed <c>DestinationExists</c> (bounded at 200 candidates).
+    /// Files only: a folder selection announces the canonical
+    /// <c>DuplicateFilesOnly</c> — consumed here for the first time
+    /// on Windows. A duplicate is a history BARRIER (mac's rule for
+    /// creates).</summary>
+    internal void DuplicateSelected()
+    {
+        if (SelectedNode is not FileTreeNodeViewModel node)
+        {
+            return;
+        }
+
+        if (node.IsDirectory)
+        {
+            Status = "Duplicate applies to files only.";
+            _announce(new A11yEvent.DuplicateFilesOnly());
+            return;
+        }
+
+        try
+        {
+            if (!TryRunSessionWork(() => _session.ReadText(node.Path), out string? text)
+                || text is null)
+            {
+                return;
+            }
+
+            string? created = null;
+            foreach (string candidate in DuplicateCandidates(node.Path))
+            {
+                try
+                {
+                    if (!TryRunSessionWork(() => _session.CreateExclusive(candidate, text)))
+                    {
+                        return;
+                    }
+
+                    created = candidate;
+                    break;
+                }
+                catch (VaultException.DestinationExists)
+                {
+                    // The namer's advance signal — typed, never a
+                    // pre-check (F1's CreateExclusive rule).
+                }
+            }
+
+            if (created is null)
+            {
+                ReportFailure(
+                    $"Could not duplicate {node.DisplayName}: no free name.");
+                return;
+            }
+
+            StructuralHistoryBarrier();
+            ReportResult(
+                $"Duplicated {node.DisplayName} as {LeafName(created)}.");
+            Refresh();
+        }
+        catch (VaultException exception)
+        {
+            ReportFailure(
+                $"Could not duplicate {node.DisplayName}: {exception.Message}");
+        }
+    }
+
+    /// <summary>mac's Finder-parity namer (AppState.duplicateName,
+    /// verbatim semantics): strip an existing <c>" copy"</c>/<c>"
+    /// copy N"</c> suffix from the stem, then walk <c>{base} copy</c>,
+    /// <c>{base} copy 2</c>, <c>{base} copy 3</c>, … — the LOWEST
+    /// free name wins (the source itself occupies its own slot and
+    /// advances the walk via typed <c>DestinationExists</c>, which is
+    /// mac's taken-names set translated to core's exclusive
+    /// create).</summary>
+    internal static IEnumerable<string> DuplicateCandidates(string sourcePath)
+    {
+        string parent = ParentPath(sourcePath);
+        string leaf = LeafName(sourcePath);
+        int dot = leaf.LastIndexOf('.');
+        string stem = dot > 0 ? leaf[..dot] : leaf;
+        string extension = dot > 0 ? leaf[dot..] : string.Empty;
+
+        if (stem.EndsWith(" copy", StringComparison.Ordinal))
+        {
+            stem = stem[..^" copy".Length];
+        }
+        else
+        {
+            Match numbered = Regex.Match(stem, @" copy \d+$");
+            if (numbered.Success)
+            {
+                stem = stem[..numbered.Index];
+            }
+        }
+
+        for (int i = 0; i < 200; i++)
+        {
+            string candidateStem = i == 0 ? $"{stem} copy" : $"{stem} copy {i + 1}";
+            yield return CombineVaultPath(parent, candidateStem + extension);
+        }
+    }
+
+    /// <summary>F7: copy the VAULT-RELATIVE path (mac's semantics —
+    /// the tree path string) through the copy seam; the CopyWikilink
+    /// pattern with the canonical <c>SelectionCopied</c>.</summary>
+    internal void CopyPathSelected()
+    {
+        if (SelectedNode is not FileTreeNodeViewModel node)
+        {
+            return;
+        }
+
+        _copyText(node.Path);
+        ReportResult($"Copied path for {node.DisplayName}.");
+        _announce(new A11yEvent.SelectionCopied());
+    }
+
+    /// <summary>F8: "Reveal in File Explorer" (FD-5 records the label
+    /// divergence from mac's "Reveal in Finder").</summary>
+    internal void RevealSelected()
+    {
+        if (SelectedNode is not FileTreeNodeViewModel node)
+        {
+            return;
+        }
+
+        if (_vaultRoot is null)
+        {
+            return;
+        }
+
+        string absolute = AbsoluteVaultPath(node.Path);
+        if (RevealRequested is { } reveal)
+        {
+            reveal(absolute);
+            return;
+        }
+
+        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
+            "explorer.exe", $"/select,\"{absolute}\"")
+        {
+            UseShellExecute = false,
+        });
+    }
+
+    private static string LeafName(string vaultPath)
+    {
+        int slash = vaultPath.LastIndexOf('/');
+        return slash >= 0 ? vaultPath[(slash + 1)..] : vaultPath;
     }
 
     private string AbsoluteVaultPath(string vaultRelative) =>
