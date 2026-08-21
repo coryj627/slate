@@ -754,6 +754,38 @@ public sealed class SearchOverlayViewModelTests
         Assert.Equal("alpha", request.Query);
     }
 
+    /// <summary>
+    /// #1121: activation closes the overlay BEFORE handing the open to
+    /// the shell (S9) and raises its dismissal notification AFTER the
+    /// open resolves — Quick Open's exact shape. The shell queues its
+    /// focus restore on the dismissal; raised before the open, that
+    /// restore ran inside the dirty-navigation prompt's nested pump
+    /// against a disabled window (spending the pre-open token and
+    /// speaking a spurious pane announcement mid-dialog). Exactly one
+    /// dismissal, and it comes last.
+    /// </summary>
+    [Fact]
+    public async Task ActivationClosesBeforeTheOpenAndNotifiesDismissalAfterIt()
+    {
+        using var harness = new AsyncOverlayHarness();
+        harness.Source.OnSearch = (query, _) => Results(
+            $"summary for {query}",
+            Hit("alpha.md", "a"));
+        harness.Overlay.Open();
+        harness.Overlay.Query = "alpha";
+        await harness.CompletePipeline();
+
+        var order = new List<string>();
+        harness.Overlay.OpenRequested += (_, _) =>
+            order.Add(harness.Overlay.IsOpen ? "open-while-still-open" : "open");
+        harness.Overlay.Dismissed += (_, _) => order.Add("dismissed");
+
+        harness.Overlay.ActivateRow(harness.Overlay.Rows[0]);
+
+        Assert.Equal(new[] { "open", "dismissed" }, order);
+        Assert.False(harness.Overlay.IsOpen);
+    }
+
     // ---- phase-2 view surface: chip, panels, selection ------------------
 
     [Fact]

@@ -187,6 +187,13 @@ selection silently.)
 recent.** Enter on a row (or on the field, which activates the top result)
 opens the target and closes the overlay. Recents are recorded **only**
 here, never per keystroke (`AppState.swift:8614-8622`, `:9461`).
+*Amended (#1121):* the overlay is closed BEFORE the shell opens the hit,
+but its dismissal notification — the signal the shell queues its focus
+restore on — is raised AFTER the open resolves (Quick Open's exact
+shape). Raised before the open, the restore executed inside the
+dirty-navigation prompt's nested pump against a disabled window; raised
+after, it lands in an enabled window after any editor focus claim, and
+the prompt's Cancel arm keeps its deterministic restore.
 
 The query used for both the recent and the line lookup is the query that
 **produced the visible rows**, not the live field text — the debounce

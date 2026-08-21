@@ -336,6 +336,16 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
             return;
         }
 
+        CloseCore();
+        Dismissed?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>The teardown half of <see cref="Close"/> without the
+    /// dismissal notification — activation (<see cref="ActivateRow"/>)
+    /// closes the overlay, hands the open to the shell, and notifies
+    /// AFTERWARDS (#1121).</summary>
+    private void CloseCore()
+    {
         CancelDebounce();
         CancelInFlightSearch();
         // Rows are cleared while the overlay is still realised so UIA
@@ -347,7 +357,6 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
         State = SearchOverlayState.Idle;
         PublishSummary(string.Empty, null);
         IsOpen = false;
-        Dismissed?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>
@@ -529,9 +538,21 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
             _source.RecordRecent(query);
         }
 
-        Close();
+        // Close, open, THEN notify the dismissal — Quick Open's exact
+        // shape (#1121). The shell queues its focus restore on the
+        // dismissal; raised before the open, that restore ran inside
+        // the dirty-navigation prompt's nested pump when the current tab
+        // was dirty — against a disabled window, spending the pre-open
+        // focus token and speaking a spurious pane announcement
+        // mid-dialog. Raised after the open resolves, it runs in an
+        // enabled window after any editor focus claim, so the SD-2
+        // stand-down evaluates the activation's real focus outcome and
+        // the Cancel arm keeps its deterministic restore. The overlay
+        // is still CLOSED before the shell opens the hit (S9).
+        CloseCore();
         OpenRequested?.Invoke(
             this, new SearchOpenRequest(row.Path, query, row.StrippedSnippet));
+        Dismissed?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>
