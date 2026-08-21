@@ -486,6 +486,20 @@ public partial class MainWindow : Window
                 return;
             }
 
+            // W5-3 (red team, three-way convergence): without this
+            // carve-out the blanket swallow below ate Ctrl+Shift+N
+            // silently — neither mac's retire-and-open (its registry
+            // dispatch retires the palette, AppState.swift:1980-1989)
+            // nor a refusal announcement. The admission inside the
+            // workspace open takes the DismissPaletteThenOpen arm,
+            // which retires the palette with its focus lineage.
+            if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.N)
+            {
+                _viewModel.Workspace?.OpenTemplatePicker();
+                e.Handled = true;
+                return;
+            }
+
             // Swallow anything that would otherwise fire a shell command
             // underneath the open overlay — but NOT plain typing, and NOT
             // the chords that edit the search text. Marking every modified

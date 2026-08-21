@@ -202,6 +202,14 @@ internal sealed class TemplateFlowViewModel : BindableBase
         NoteName = retryName;
         ValidationError = error;
         Step = TemplateFlowStep.Name;
+        // The step is usually ALREADY Name here, so the setter's
+        // SetField no-ops and the window's Step observer never
+        // refocuses (red team, correctness finding 6). Raise it
+        // unconditionally: the re-present moves focus back to the name
+        // field with the seed selected, mac's re-presented-sheet
+        // onAppear behavior. A double raise on the prompts→Name arm is
+        // an idempotent second focus of the same field.
+        OnPropertyChanged(nameof(Step));
     }
 
     private void EnterNameStep()

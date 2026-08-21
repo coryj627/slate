@@ -5155,19 +5155,15 @@ public sealed class ShellAccessibilityTests
         string vaultRoot = Path.Combine(testRoot, "Template Vault");
         string logDirectory = Path.Combine(testRoot, "logs");
         string templatesDir = Path.Combine(vaultRoot, "Templates");
-        Directory.CreateDirectory(templatesDir);
+        // The vault starts with NO templates folder: the journey's
+        // first leg exercises the EMPTY picker state, then creates the
+        // template on disk and lands Try Again — the availability
+        // transition whose focus re-seat mac wires deliberately
+        // (red team, a11y finding 1).
+        Directory.CreateDirectory(vaultRoot);
         File.WriteAllText(
             Path.Combine(vaultRoot, "existing.md"),
             "# Existing\n\nAlready here.\n");
-        // One prompt to complete via the Value pattern, one deliberately
-        // left untouched (an empty answer substitutes EMPTY, T4), a
-        // multibyte char before {{cursor}} so the caret leg pins the
-        // UTF-8→UTF-16 conversion end to end, and a description for the
-        // picker row's composed accessible name.
-        File.WriteAllText(
-            Path.Combine(templatesDir, "Meeting.md"),
-            "---\ndescription: Journey fixture\n---\n# {{title}}\n\n"
-            + "Topic: {{prompt:Topic}}\nNotes: {{prompt:Extra}}\n\nCafé {{cursor}}end\n");
 
         Process? process = null;
         try
@@ -5200,9 +5196,10 @@ public sealed class ShellAccessibilityTests
             // Wait for the VAULT, not merely the window (the palette
             // journey's recorded trap): the chord needs a workspace.
             _ = WaitForElement(window, "RightPaneLeaves", TimeSpan.FromSeconds(30));
-            string[] filesBefore = VaultMarkdownFiles(vaultRoot);
+            string[] filesBefore = VaultUserFiles(vaultRoot);
 
-            // --- open by chord; focus lands on the first row ----------
+            // --- open by chord on a template-less vault: the EMPTY
+            // state, with focus on Try Again ---------------------------
             WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(10)).Focus();
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
             window.SetForeground();
@@ -5212,6 +5209,48 @@ public sealed class ShellAccessibilityTests
             AutomationElement picker = WaitForElement(
                 window, "TemplatePickerSheet", TimeSpan.FromSeconds(10));
             Assert.Equal("Choose a template", picker.Name);
+            // The destination subtitle is REAL UIA content — an AT user
+            // must be able to learn where the note will be created
+            // (red team, a11y finding 2).
+            AutomationElement subtitle = WaitForElement(
+                window, "TemplatePickerSubtitle", TimeSpan.FromSeconds(10));
+            Assert.Equal(
+                "Create in the vault root. Ctrl+Shift+N. Escape to cancel.",
+                subtitle.Name);
+            AutomationElement tryAgain = WaitForElement(
+                window, "TemplatePickerTryAgain", TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            return tryAgain.Properties.HasKeyboardFocus.ValueOrDefault;
+                        }
+                        catch (COMException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the empty picker did not focus Try Again (T3).");
+
+            // --- the template appears on disk; Try Again lands
+            // Available and RE-SEATS focus on the first row — the
+            // availability transition that evicted keyboard focus from
+            // the modal before the picker-state observer existed ------
+            // One prompt to complete via the Value pattern, one left
+            // untouched (an empty answer substitutes EMPTY, T4), a
+            // multibyte char before {{cursor}} so the caret leg pins
+            // the UTF-8→UTF-16 conversion end to end, and a description
+            // for the composed row name.
+            Directory.CreateDirectory(templatesDir);
+            File.WriteAllText(
+                Path.Combine(templatesDir, "Meeting.md"),
+                "---\ndescription: Journey fixture\n---\n# {{title}}\n\n"
+                + "Topic: {{prompt:Topic}}\nNotes: {{prompt:Extra}}\n\nCafé {{cursor}}end\n");
+            window.SetForeground();
+            PressKey(VirtualKeyShort.ENTER);
 
             AutomationElement pickerList = WaitForElement(
                 window, "TemplatePickerList", TimeSpan.FromSeconds(10));
@@ -5234,14 +5273,16 @@ public sealed class ShellAccessibilityTests
                         }
                     },
                     TimeSpan.FromSeconds(10)),
-                "the picker opened without focusing its first row (T3).");
+                "the Try Again landing did not re-seat focus on the first row "
+                + "(red team a11y finding 1 — focus was evicted from the modal).");
             // The composed row name: "{name}. {description}." (mac's
             // rowAccessibilityLabel, T3).
             Assert.Equal("Meeting. Journey fixture.", firstRow!.Name);
 
             AssertAxeClean(process, "template-picker");
 
-            // --- Esc cancels; nothing is written (T7, pinned) ---------
+            // --- Esc cancels the picker; nothing is written (T7) ------
+            string[] filesBeforeCancel = VaultUserFiles(vaultRoot);
             window.SetForeground();
             Keyboard.Press(VirtualKeyShort.ESCAPE);
             Assert.True(
@@ -5260,7 +5301,41 @@ public sealed class ShellAccessibilityTests
                     },
                     TimeSpan.FromSeconds(10)),
                 "Escape did not close the template picker");
-            Assert.Equal(filesBefore, VaultMarkdownFiles(vaultRoot));
+            Assert.Equal(filesBeforeCancel, VaultUserFiles(vaultRoot));
+            // The pre-template snapshot differs only by the template
+            // file this journey itself wrote — the app wrote nothing.
+            Assert.Equal(filesBefore.Length + 1, filesBeforeCancel.Length);
+
+            // --- Esc at the PROMPT STEP cancels the whole flow too
+            // (T7 promises Esc at every step; red team, tests
+            // finding 9) -----------------------------------------------
+            window.SetForeground();
+            PressChord(
+                VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_N);
+            _ = WaitForElement(window, "TemplatePickerSheet", TimeSpan.FromSeconds(10));
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+            window.SetForeground();
+            PressKey(VirtualKeyShort.ENTER);
+            _ = WaitForElement(window, "TemplateFlowSheet", TimeSpan.FromSeconds(10));
+            window.SetForeground();
+            Keyboard.Press(VirtualKeyShort.ESCAPE);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            return window.FindFirstDescendant(automation.ConditionFactory
+                                .ByAutomationId("TemplateFlowSheet")) is null;
+                        }
+                        catch (COMException)
+                        {
+                            return true;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "Escape did not cancel the flow from the prompt step");
+            Assert.Equal(filesBeforeCancel, VaultUserFiles(vaultRoot));
 
             // --- reopen, activate the row, complete a prompt ----------
             window.SetForeground();
@@ -5434,11 +5509,17 @@ public sealed class ShellAccessibilityTests
         }
     }
 
-    /// <summary>Every Markdown file with its content — the
-    /// nothing-was-written snapshot for the cancel leg.</summary>
-    private static string[] VaultMarkdownFiles(string vaultRoot) =>
+    /// <summary>Every user-visible vault file with its content — the
+    /// nothing-was-written snapshot for the cancel legs. ALL files,
+    /// not just Markdown; only the `.slate` index directory is carved
+    /// out (reads legitimately touch it), so the claim the cancel legs
+    /// make is honest (red team, tests finding 9).</summary>
+    private static string[] VaultUserFiles(string vaultRoot) =>
         [.. Directory
-            .EnumerateFiles(vaultRoot, "*.md", SearchOption.AllDirectories)
+            .EnumerateFiles(vaultRoot, "*", SearchOption.AllDirectories)
+            .Where(path => !path
+                .Replace('\\', '/')
+                .Contains("/.slate/", StringComparison.Ordinal))
             .OrderBy(path => path, StringComparer.Ordinal)
             .Select(path => $"{path}|{File.ReadAllText(path)}")];
 

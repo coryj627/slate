@@ -24,10 +24,13 @@ public sealed class TemplateFlowTests
         RunSta(() =>
         {
             using FixtureVault fixture = FixtureVault.Create(1, "tpl-picker");
+            // Names where core's case-insensitive order DIVERGES from
+            // ordinal ("Beta" < "alpha" ordinally) — so a host re-sort
+            // cannot survive this fact (red team, tests finding 10).
             WriteTemplate(
-                fixture.Root, "beta.md",
+                fixture.Root, "Beta.md",
                 "---\ndescription: Second one\n---\nBody.\n");
-            WriteTemplate(fixture.Root, "Alpha.md", "First line doubles as blurb.\n");
+            WriteTemplate(fixture.Root, "alpha.md", "First line doubles as blurb.\n");
             using VaultSession session = OpenScanned(fixture.Root);
             var announced = new List<A11yEvent>();
             using var workspace = new WorkspaceViewModel(
@@ -42,7 +45,7 @@ public sealed class TemplateFlowTests
             // Core's order (case-insensitive by name), consumed verbatim
             // — the host never re-sorts (T1).
             Assert.Equal(
-                ["Alpha", "beta"],
+                ["alpha", "Beta"],
                 picker.Rows.Select(row => row.Name).ToArray());
             Assert.Equal(
                 "First line doubles as blurb.",
@@ -52,8 +55,13 @@ public sealed class TemplateFlowTests
             // description that already ends with one doubles it — that
             // is the mac-verbatim composition, pinned as-is.
             Assert.Equal(
-                "Alpha. First line doubles as blurb..",
+                "alpha. First line doubles as blurb..",
                 picker.Rows[0].AccessibleName);
+            // The subtitle advertises the chord FROM THE TABLE (PINV-5)
+            // with mac's sentence shape around it.
+            Assert.Equal(
+                "Create in the vault root. Ctrl+Shift+N. Escape to cancel.",
+                picker.Subtitle);
 
             A11yEvent opened = Assert.Single(
                 announced, item => item is A11yEvent.TemplatePickerOpened);
@@ -81,8 +89,12 @@ public sealed class TemplateFlowTests
             Assert.Equal(TemplatePickerState.Empty, picker.State);
             A11yEvent reason = Assert.Single(
                 announced, item => item is A11yEvent.HostComposed);
+            // The LITERAL mac string, not the production constant — a
+            // constant-vs-constant compare could never catch wording
+            // drift (red team, tests finding 7).
             Assert.Equal(
-                TemplatePickerViewModel.EmptyReason,
+                "Add a Markdown file to this vault’s configured template "
+                + "folder to create from a template.",
                 SlateUniffiMethods.A11yRender(reason).Text);
 
             // A template created while the picker is up: Try Again
@@ -93,6 +105,81 @@ public sealed class TemplateFlowTests
             Assert.Equal("Fresh", Assert.Single(picker.Rows).Name);
             Assert.Contains(
                 announced, item => item is A11yEvent.TemplatePickerOpened);
+        });
+    }
+
+    [Fact]
+    public void AFailedEnumerationPresentsFailedAnnouncesTheReasonAndRetryRecovers()
+    {
+        // Constructed directly with a throwing enumeration — the seam
+        // exists for exactly this (T3's failed state had no gate at
+        // any level; red team, tests finding 7).
+        var announced = new List<A11yEvent>();
+        var activated = new List<TemplateSummary>();
+        bool fail = true;
+        var picker = new TemplatePickerViewModel(
+            () => fail
+                ? throw new VaultException.Io("the folder is unreadable")
+                : [new TemplateSummary("Templates/Fresh.md", "Fresh", null)],
+            "the vault root",
+            activated.Add,
+            () => { },
+            announced.Add);
+
+        picker.Load();
+        Assert.Equal(TemplatePickerState.Failed, picker.State);
+        Assert.Empty(picker.Rows);
+        A11yEvent reason = Assert.Single(announced);
+        // The LITERAL mac string (AppState.swift
+        // templateAvailabilityFailedReason), curly apostrophe included.
+        Assert.Equal(
+            "Slate couldn’t load templates. Check the configured template "
+            + "folder and try again.",
+            SlateUniffiMethods.A11yRender(reason).Text);
+
+        // Try Again from failed re-enumerates in place and lands
+        // available with the canonical count event.
+        fail = false;
+        picker.RetryCommand.Execute(null);
+        Assert.Equal(TemplatePickerState.Available, picker.State);
+        Assert.Equal("Fresh", Assert.Single(picker.Rows).Name);
+        Assert.Contains(announced, item => item is A11yEvent.TemplatePickerOpened);
+    }
+
+    [Fact]
+    public void ATemplateEditedBetweenSelectAndCreateDegradesToTheLiteralFallback()
+    {
+        RunSta(() =>
+        {
+            using FixtureVault fixture = FixtureVault.Create(1, "tpl-toctou");
+            WriteTemplate(
+                fixture.Root, "Drift.md", "Topic: {{prompt:Topic}}\n");
+            using VaultSession session = OpenScanned(fixture.Root);
+            using var workspace = new WorkspaceViewModel(
+                session, fixture.Root, () => [], _ => { },
+                startInteractionBackgroundWork: false);
+
+            OpenFlowFor(workspace, "Drift");
+            TemplateFlowViewModel flow = workspace.TemplateFlowSheet!;
+            flow.PromptFields.Single().Value = "Asked";
+
+            // The TOCTOU window (T5/TR-2): the template changes between
+            // the metadata read and the render's re-read. The unasked
+            // prompt survives literally (core's benign fallback), the
+            // asked one still substitutes, and nothing crashes.
+            WriteTemplate(
+                fixture.Root, "Drift.md",
+                "Topic: {{prompt:Topic}}\nExtra: {{prompt:Extra}}\n");
+            flow.NextCommand.Execute(null);
+            flow.CreateCommand.Execute(null);
+
+            Assert.Null(workspace.TemplateFlowSheet);
+            // The note is created at the vault root under the seeded
+            // default name "Drift.md" (the template lives under
+            // Templates/, so there is no collision).
+            Assert.Equal(
+                "Topic: Asked\nExtra: {{prompt:Extra}}\n",
+                File.ReadAllText(Path.Combine(fixture.Root, "Drift.md")));
         });
     }
 
@@ -190,9 +277,19 @@ public sealed class TemplateFlowTests
                 + "Café {{cursor}}tail\n");
             using VaultSession session = OpenScanned(fixture.Root);
             var announced = new List<A11yEvent>();
+            var sequence = new List<string>();
             using var workspace = new WorkspaceViewModel(
-                session, fixture.Root, () => [], announced.Add,
+                session, fixture.Root, () => [],
+                item =>
+                {
+                    announced.Add(item);
+                    if (item is A11yEvent.TemplateNoteCreated)
+                    {
+                        sequence.Add("created-announced");
+                    }
+                },
                 startInteractionBackgroundWork: false);
+            workspace.FileOpened += (_, _) => sequence.Add("opened");
 
             OpenFlowFor(workspace, "Meeting");
             TemplateFlowViewModel flow = workspace.TemplateFlowSheet!;
@@ -212,12 +309,16 @@ public sealed class TemplateFlowTests
                 "# Standup Café\nTopic: Q3 review\nNotes: \nCafé tail\n";
             Assert.Equal(expected, File.ReadAllText(createdPath));
 
-            // The created announcement, canonical and High (T10).
+            // The created announcement, canonical and High (T10) — and
+            // fired BEFORE the open (mac's order: High outlives the
+            // tab-switch announcement that follows; red team, tests
+            // finding 13b).
             A11yEvent created = Assert.Single(
                 announced, item => item is A11yEvent.TemplateNoteCreated);
             RenderedAnnouncement rendered = SlateUniffiMethods.A11yRender(created);
             Assert.Equal("Created Standup Café.md from Meeting.", rendered.Text);
             Assert.Equal(A11yPriority.High, rendered.Priority);
+            Assert.Equal(["created-announced", "opened"], sequence);
 
             // The note opened in the current tab and the caret sits at
             // the `{{cursor}}` site — after a multibyte char, so this
@@ -302,7 +403,22 @@ public sealed class TemplateFlowTests
             Assert.Same(flow, workspace.TemplateFlowSheet);
             Assert.Equal(TemplateFlowStep.Name, flow.Step);
             Assert.Equal("Taken", flow.NoteName);
-            Assert.NotNull(flow.ValidationError);
+            // VERBATIM, not merely present (red team, tests finding 8):
+            // the expected text is core's own message for the identical
+            // conflict, obtained independently of the code under test.
+            string expectedMessage;
+            try
+            {
+                _ = session.CreateExclusive("Taken.md", "probe");
+                throw new InvalidOperationException(
+                    "the probe create unexpectedly succeeded");
+            }
+            catch (VaultException expectedException)
+            {
+                expectedMessage = expectedException.Message;
+            }
+
+            Assert.Equal(expectedMessage, flow.ValidationError);
             Assert.Equal("Original stays.\n", File.ReadAllText(occupiedPath));
         });
     }
@@ -345,6 +461,41 @@ public sealed class TemplateFlowTests
             // The vault is byte-identical: the only write in the whole
             // flow is the explicit Create (T7, pinned).
             Assert.Equal(before, VaultFiles(fixture.Root));
+        });
+    }
+
+    [Fact]
+    public void TheOpenConsultsTheAdmissionExactlyOnceAndARefusalPresentsNothing()
+    {
+        RunSta(() =>
+        {
+            using FixtureVault fixture = FixtureVault.Create(1, "tpl-admission");
+            WriteTemplate(fixture.Root, "Plain.md", "Body.\n");
+            using VaultSession session = OpenScanned(fixture.Root);
+            using var workspace = new WorkspaceViewModel(
+                session, fixture.Root, () => [], _ => { },
+                startInteractionBackgroundWork: false);
+
+            // T9: one admission gate for every opener, consulted before
+            // any state or presentation side effect (mac's rule: a
+            // rejected invocation has none).
+            int consulted = 0;
+            bool admit = false;
+            workspace.TemplateOpenAdmission = () =>
+            {
+                consulted++;
+                return admit;
+            };
+
+            workspace.OpenTemplatePicker();
+            Assert.Equal(1, consulted);
+            Assert.Null(workspace.TemplatePickerSheet);
+            Assert.Null(workspace.TemplateFlowSheet);
+
+            admit = true;
+            workspace.OpenTemplatePicker();
+            Assert.Equal(2, consulted);
+            Assert.NotNull(workspace.TemplatePickerSheet);
         });
     }
 
@@ -393,8 +544,63 @@ public sealed class TemplateFlowTests
 
             Assert.Equal(
                 "Note name cannot contain `..` segments.", flow.ValidationError);
+            Assert.Equal(
+                "Validation error: Note name cannot contain `..` segments.",
+                flow.ValidationErrorAccessibleName);
             Assert.Same(flow, workspace.TemplateFlowSheet);
             Assert.Equal(announcedBefore, announced.Count);
+        });
+    }
+
+    [Fact]
+    public void TheRealLifecycleWiresTheDestinationTheVaultNameAndTheSidebarRefresh()
+    {
+        RunSta(() =>
+        {
+            using FixtureVault fixture = FixtureVault.Create(1, "tpl-lifecycle");
+            WriteTemplate(fixture.Root, "Vaulty.md", "In {{vault}}.\n");
+            Directory.CreateDirectory(Path.Combine(fixture.Root, "sub"));
+            using var lifecycle = new VaultLifecycleViewModel(
+                pickVault: () => Task.FromResult<string?>(fixture.Root),
+                enqueueUi: action => action(),
+                recentVaultsStore: new RecentVaultsStore(
+                    Path.Combine(fixture.Root, "device-state", "recent-vaults.json")));
+            lifecycle.OpenVaultAsync(fixture.Root).GetAwaiter().GetResult();
+            WorkspaceViewModel workspace = lifecycle.Workspace!;
+            FilesSidebarViewModel sidebar = lifecycle.FileSidebar!;
+
+            // T12 through the REAL wiring (red team, tests finding 11):
+            // the frozen destination is the sidebar's creation-parent
+            // rule — deleting the provider assignment in the lifecycle
+            // would land this create at the vault root instead.
+            sidebar.SelectedNode = Assert.Single(
+                sidebar.RootNodes, node => node.Path == "sub");
+            workspace.OpenTemplatePicker();
+            TemplatePickerViewModel picker = workspace.TemplatePickerSheet!;
+            picker.ActivateCommand.Execute(Assert.Single(picker.Rows));
+            workspace.TemplateFlowSheet!.NoteName = "First";
+            workspace.TemplateFlowSheet.CreateCommand.Execute(null);
+            string vaultName = Path.GetFileName(
+                Path.TrimEndingDirectorySeparator(fixture.Root));
+            // `{{vault}}` renders the root's basename through the real
+            // TemplateVaultNameProvider — every stubbed fixture renders
+            // it empty, so only this fact can catch the wiring.
+            Assert.Equal(
+                $"In {vaultName}.\n",
+                File.ReadAllText(Path.Combine(fixture.Root, "sub", "First.md")));
+
+            // A second create at the root: the sidebar tree must show
+            // it — the TemplateNoteWritten → Refresh wiring (the
+            // sidebar's own creates refresh inline; this one happens
+            // outside it).
+            sidebar.SelectedNode = null;
+            workspace.OpenTemplatePicker();
+            TemplatePickerViewModel second = workspace.TemplatePickerSheet!;
+            second.ActivateCommand.Execute(Assert.Single(second.Rows));
+            workspace.TemplateFlowSheet!.NoteName = "Second";
+            workspace.TemplateFlowSheet.CreateCommand.Execute(null);
+            Assert.Contains(
+                sidebar.RootNodes, node => node.Path == "Second.md");
         });
     }
 
@@ -580,7 +786,11 @@ public sealed class TemplateFlowTests
             // — the journey found the live caret at 0 while the VM-only
             // assertion above stayed green, so this is the regression
             // gate for whatever the view layer does to a parked caret
-            // during materialization.
+            // during materialization. Empirical record: pre-fix this
+            // fact fails (Expected 76 / Actual 0) — the queued
+            // document-change restore re-applies the poisoned DP after
+            // the Loaded-time pending-caret rescue, because caret
+            // publication stays suppressed until that restore runs.
             var editor = new SlateTextEditor();
             // DataContext FIRST, then the caret binding BEFORE the
             // document binding: each SetBinding then transfers
@@ -610,6 +820,12 @@ public sealed class TemplateFlowTests
             _ = editor.SetBinding(
                 SlateTextEditor.InteractionSessionProperty,
                 new System.Windows.Data.Binding("EditorInteractions"));
+            // The TwoWay-poison observable (red team, tests finding 1):
+            // with the old destructive clamp write-back, the caret
+            // transfer against the still-default document zeroed the
+            // SOURCE at the line above — asserting here means no
+            // later rescue (pending-caret at Loaded) can mask it.
+            Assert.Equal(expected, tab.EditorCaretOffset);
             var window = new System.Windows.Window
             {
                 Content = editor,

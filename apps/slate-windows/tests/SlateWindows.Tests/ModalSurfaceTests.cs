@@ -544,7 +544,18 @@ public sealed class ModalSurfaceTests
             (ModalSurface.FilesCiting, "FilesCitingSheet"),
             (ModalSurface.DashboardEditor, "DashboardEditorSheet"),
             (ModalSurface.BaseQueryBuilder, "BaseQueryBuilderSheet"),
+            (ModalSurface.TemplatePicker, "TemplatePickerSheet"),
+            (ModalSurface.TemplateFlow, "TemplateFlowSheet"),
         ];
+
+        // Exhaustiveness (red team W5-3, tests finding 3): the two
+        // template surfaces shipped ABSENT from this list, so swapping
+        // their XAML order — the exact key/paint divergence the enum
+        // exists to prevent — left the census green. A surface added
+        // to the enum without a row here now fails loudly.
+        Assert.Equal(
+            Enum.GetValues<ModalSurface>().OrderBy(surface => surface),
+            expected.Select(entry => entry.Surface).OrderBy(surface => surface));
 
         int previous = -1;
         foreach ((ModalSurface surface, string automationId) in expected)
@@ -565,7 +576,7 @@ public sealed class ModalSurfaceTests
     /// <summary>
     /// The binding path the Menu's disable trigger must read for each
     /// surface. The two overlays and the palette expose <c>IsOpen</c>
-    /// flags; the seven sheets are object properties (open == non-null)
+    /// flags; the nine sheets are object properties (open == non-null)
     /// and must route through <c>IsNotNullConverter</c>.
     /// </summary>
     private static readonly Dictionary<ModalSurface, string> MenuDisableBindings =
@@ -1298,6 +1309,105 @@ public sealed class ModalSurfaceTests
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Esc cancels from BOTH template sheets' key routes (red team,
+    /// tests finding 9): every unit fact drives CancelCommand directly
+    /// and the journey Escapes only the picker, so deleting either
+    /// Escape case left Esc dead on that sheet with the suite green.
+    /// T7 promises Esc at every step.
+    /// </summary>
+    [Theory]
+    [InlineData("TemplatePickerOverlay_PreviewKeyDown")]
+    [InlineData("TemplateFlowOverlay_PreviewKeyDown")]
+    public void TheTemplateSheetKeyRoutesCancelOnEscape(string handler)
+    {
+        string route = CSharpSource.Normalize(
+            CSharpSource.Load("MainWindow.Templates.cs").Method(handler));
+        Assert.Contains("caseKey.Escape:", route, StringComparison.Ordinal);
+        Assert.Contains(
+            "CancelCommand.Execute(null)", route, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The template flow's one-gate design is WIRED, not just designed
+    /// (red team W5-3, tests finding 2 — the milestone's exact defect
+    /// signature, again): the pure DecideTemplateOpen theory proves the
+    /// table, but nothing bound (a) the window handing the workspace
+    /// its admission, (b) the workspace consulting it before any
+    /// presentation, (c) the admission consulting the decision and
+    /// performing the dismissals, or (d) the chord reaching the guarded
+    /// open from BOTH branches — deleting any one left the suite green
+    /// while the flow presented beneath sheets or lost an opener.
+    /// </summary>
+    [Fact]
+    public void TheTemplateOpenersShareOneWiredAdmission()
+    {
+        // (a) The window wires the seam.
+        Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax wire =
+            CSharpSource.Load("MainWindow.Templates.cs").Method("WireWorkspaceTemplates");
+        Assert.Contains(
+            "workspace.TemplateOpenAdmission=TryClearTheWayForTemplates",
+            CSharpSource.Normalize(wire),
+            StringComparison.Ordinal);
+
+        // (b) The workspace consults the seam BEFORE any presentation:
+        // the refusal return precedes the sheet assignment in source.
+        Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax open =
+            CSharpSource.Load("WorkspaceViewModel.Templates.cs").Method("OpenTemplatePicker");
+        string openText = CSharpSource.Normalize(open);
+        int admissionAt = openText.IndexOf(
+            "TemplateOpenAdmission?.Invoke()==false", StringComparison.Ordinal);
+        int presentAt = openText.IndexOf(
+            "TemplatePickerSheet=picker", StringComparison.Ordinal);
+        Assert.True(
+            admissionAt >= 0 && presentAt > admissionAt,
+            "OpenTemplatePicker no longer consults TemplateOpenAdmission "
+            + "before presenting — a refused open would still present, or "
+            + "present first and refuse after.");
+
+        // (c) The admission consults the decision and can perform every
+        // dismissal arm plus the refusal announcement.
+        Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax admission =
+            CSharpSource.Load("MainWindow.Templates.cs").Method("TryClearTheWayForTemplates");
+        Assert.True(
+            CSharpSource.Invokes(admission, "ModalSurfaces.DecideTemplateOpen"),
+            "TryClearTheWayForTemplates no longer consults DecideTemplateOpen.");
+        string admissionText = CSharpSource.Normalize(admission);
+        foreach (string dismissal in new[]
+        {
+            "_viewModel.QuickSwitcher!.Dismiss",
+            "_viewModel.Search.Supersede",
+            "_viewModel.Palette.Dismiss",
+            "_announcer.Post",
+        })
+        {
+            Assert.Contains(dismissal, admissionText, StringComparison.Ordinal);
+        }
+
+        // (d) Both chord branches reach the guarded open: the ordinary
+        // branch, and the carve-out inside the palette-open block —
+        // without the latter, Ctrl+Shift+N under the palette is a
+        // silent dead key (three-way red-team convergence).
+        Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax route =
+            CSharpSource.Load("MainWindow.xaml.cs").Method("Window_PreviewKeyDown");
+        // A conditional access parses as a MemberBinding invocation
+        // (".OpenTemplatePicker"); match the whole ?.-chain instead.
+        var opens = route.DescendantNodes()
+            .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalAccessExpressionSyntax>()
+            .Where(access => CSharpSource.Normalize(access)
+                == "_viewModel.Workspace?.OpenTemplatePicker()")
+            .ToList();
+        Assert.Equal(2, opens.Count);
+        Microsoft.CodeAnalysis.CSharp.Syntax.IfStatementSyntax paletteBlock =
+            route.DescendantNodes()
+                .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.IfStatementSyntax>()
+                .Single(statement => CSharpSource.Normalize(statement.Condition)
+                    == "_viewModel.Palette.IsOpen");
+        Assert.Equal(
+            1,
+            opens.Count(call => call.Ancestors().Contains(paletteBlock.Statement)));
     }
 
     /// <summary>

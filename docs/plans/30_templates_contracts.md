@@ -214,11 +214,19 @@ char boundary (uniffi doc), first marker wins, all markers stripped.
   created announcement fired, but no caret is parked and no deferred
   landing is retained (TD-3 — mac defers across the prompt; the
   Windows sync model drops it, the S9 posture).
-- If a **parked/persisted tab already exists at the created path**
-  (possible only via workspace persistence of a previously deleted
-  file's tab), the open must land the **fresh disk read**, never a
-  restored stale buffer — mac's "authoritative template target load"
-  rule, which survives the sync translation.
+- If a **parked tab already exists at the created path** — via
+  workspace persistence of a previously deleted file's tab, OR the
+  mid-session `InvalidatePath` sweep after an external delete (the
+  red team's second provenance; the original text claimed persistence
+  was the only route) — the open must land the **fresh disk read**,
+  never a restored stale buffer: a CLEAN landed tab whose text is not
+  the rendered body reloads from disk before the park; a DIRTY tab is
+  never reloaded (the user's unsaved buffer outranks the render) and
+  the caret guard stands down for it. This is mac's "authoritative
+  template target load" rule surviving the sync translation, and it
+  needs explicit code — the same-group open arm activates an existing
+  tab with no read, and the cross-group arm mirrors the peer's buffer
+  over its fresh read.
 
 **T9 — Modal admission (the #1118 rule, done right).** Two new
 `ModalSurface` members, declared LAST in paint order:
@@ -226,20 +234,33 @@ char boundary (uniffi doc), first marker wins, all markers stripped.
 `OwnsTextField`: false for the picker (it hosts no text field — mac's
 has none either), true for the flow sheet.
 
-- The chord (and the File-menu item, and any programmatic opener)
+- Every opener — the chord, the File-menu item, the palette row —
+  reaches ONE admission: it runs INSIDE the workspace's open, and it
   consults `DecideTemplateOpen(topmost)`: `null` → Open; `QuickOpen` →
   DismissQuickOpenThenOpen; `SearchOverlay` → DismissSearchThenOpen
   (SD-5 supersession, focus lineage adopted exactly as the palette's
-  and search's arms do); `TemplatePicker`/`TemplateFlow` → **Refuse**
-  (no re-entrant flow; mac's `templateFlowBusyReason` moment); any
-  sheet or the palette → **Refuse**. Unlike #1118's Ctrl+Shift+R/J,
-  the chord NEVER presents beneath a higher surface.
-- A palette-invoked `newFromTemplate` rides P9 (invoke before dismiss,
-  the sanctioned transient) — the deliberate absence of a guard on the
-  registered command mirrors `toggleSearch`; the reactive
-  `Workspace_SheetPresented` observer (round-11 machinery) is the
-  backstop that retires the palette/Quick Open/search when the picker
-  presents, with search **Superseded**, not Closed.
+  and search's arms do); `CommandPalette` →
+  **DismissPaletteThenOpen** — mac's rule at its registry dispatch
+  (retire the action launcher, then stage the sheet;
+  AppState.swift:1980-1989) — consuming the palette's focus lineage;
+  `TemplatePicker`/`TemplateFlow` → **Refuse** (no re-entrant flow;
+  mac's `templateFlowBusyReason` moment); any sheet → **Refuse**.
+  Unlike #1118's Ctrl+Shift+R/J, the chord NEVER presents beneath a
+  higher surface. *(Amended after the red team: the original text
+  said palette → Refuse with an UNGUARDED registered command in
+  toggleSearch's mold. That pairing cannot serve the palette row —
+  P9 invokes before dismissing, so an unguarded command would present
+  beneath the open palette, and a Refuse arm would kill the row as an
+  opener. The shipped design guards the command once and retires the
+  palette, which is also what mac does.)*
+- A palette-invoked `newFromTemplate` therefore rides P9's transient
+  INTO the same admission, whose palette arm performs the retire; the
+  chord pressed while the palette is open takes a PD-2-style
+  carve-out in the palette's key branch to reach that same arm (the
+  blanket swallow would otherwise eat it silently). The reactive
+  `Workspace_SheetPresented` observer (round-11 machinery) remains
+  the backstop that retires the palette/Quick Open/search when the
+  picker presents, with search **Superseded**, not Closed.
 - The picker→flow transition happens while the flow owns the screen
   (picker closes in the same dispatcher turn the flow sheet opens);
   the observer arms cover both new properties.
@@ -277,13 +298,17 @@ availability and busy copy, mac strings verbatim — the empty-present
 announcement ("Add a Markdown file to this vault's configured template
 folder to create from a template."), the failed-present announcement
 ("Slate couldn't load templates. Check the configured template folder
-and try again."), and the chord-refused announcement under a higher
-surface (mac `templateDialogBusyReason`: "Finish or cancel the current
-dialog before creating from a template."). This is `a11y.rs`'s own
-carve-out (availability copy serving double duty as dialog/hint text),
-and it is the same class the owner already approved for the W5-1
-bridge. mac's window-admission copy (`templateOtherWindowReason`) has
-no Windows referent — single-window app — and is not ported.
+and try again."), and the refusal announcements, which keep mac's
+TWO-string partition (AppState.swift:7901-7904): a refusal whose
+topmost surface IS the template flow speaks `templateFlowBusyReason`
+("Finish or cancel the current template note before starting
+another."), any other sheet speaks `templateDialogBusyReason`
+("Finish or cancel the current dialog before creating from a
+template."). This is `a11y.rs`'s own carve-out (availability copy
+serving double duty as dialog/hint text), and it is the same class the
+owner already approved for the W5-1 bridge. mac's window-admission
+copy (`templateOtherWindowReason`) has no Windows referent —
+single-window app — and is not ported.
 
 Create-failure and name-validation errors are **inline focusable text,
 not announcements**, on both platforms (T6/T7).
@@ -296,12 +321,15 @@ divergence note (Ctrl+Shift+N is unclaimed in the table and in
 `chords.json`; the W5-1 collision scan holds). Scope Global. The
 registrar maps the id to the workspace-owned command; PINV-7's
 enumeration picks it up with no list edits. File menu gets the item
-with `InputGestureText` per the W4 convention, placed where mac's File
-menu places it (after New Note/New Folder). The command's `CanExecute`
-is "a vault is open with a workspace" — availability (empty/failed) is
-the picker's job (TD-2), and admission is the invoke-time
-`DecideTemplateOpen` (T9), not `CanExecute` (a stale `CanExecute`
-under WPF's requery timing would reintroduce #1118's class as a race).
+with `InputGestureText` per the W4 convention, after Quick Open —
+the Windows File menu has no New Note/New Folder items to sit after
+(those are sidebar actions; the original wording borrowed mac's menu
+geography). The command binding resolves against `Workspace.*`, so
+with no vault open the item is inert the way every workspace-bound
+menu item is — availability (empty/failed) is the picker's job
+(TD-2), and admission is the invoke-time `DecideTemplateOpen` (T9),
+not `CanExecute` (a stale `CanExecute` under WPF's requery timing
+would reintroduce #1118's class as a race).
 
 **T12 — Destination.** The creation destination is frozen when the
 picker opens, from the sidebar's creation-parent rule — the selected
@@ -317,11 +345,16 @@ mac's "Name relative to {destination}" copy.
 **T13 — Lifecycle.** Vault close/switch tears the whole flow down:
 sheets close, state resets, nothing is written. Because every step runs
 synchronously on the UI thread (finding 3), there is no mid-create or
-mid-enumeration interleave with a vault transition — the teardown is a
-plain sweep in the vault-transition path (the W5-2
-`ResetForVaultTransition` slot), not a generation protocol. The picker
-holds no session-derived state beyond the summaries list and the frozen
-destination string, both dropped by the sweep.
+mid-enumeration interleave with a vault transition — the teardown is
+**workspace disposal itself**: the sheet view models are properties of
+the per-vault `WorkspaceViewModel`, so they die with it, and the
+window's unwire clears its observers and the captured focus token.
+*(Amended after the red team: the original text named the W5-2
+`ResetForVaultTransition` slot, which is the search overlay's — the
+overlay outlives vaults; the template sheets do not, so their teardown
+mechanism is the workspace swap.)* The picker holds no session-derived
+state beyond the summaries list and the frozen destination string,
+both discarded with the workspace.
 
 ## Divergence register (owner-recorded; off-limits for re-litigation)
 
@@ -404,7 +437,10 @@ destination string, both dropped by the sweep.
   the empty present instead); the Windows event carries the arm anyway.
 - mac's picker subtitle hardcodes "Command-Shift-N." in UI copy rather
   than rendering the chord per platform (program decision 12 concerns
-  announcements, so this is a wording note, not a violation).
+  announcements, so this is a wording note, not a violation). The
+  Windows subtitle reads its chord FROM the chord table, and platform
+  KEY NAMES localize in ported UI copy the way the chord did: mac's
+  "Return." in the Next/Create hints renders as "Enter." on Windows.
 - mac's `announceTemplate` residue marker (`AppState.swift:23620`)
   makes the whole template family host-composed; conversion to the T10
   events is a mac follow-up candidate (file in the #1113 mold when the

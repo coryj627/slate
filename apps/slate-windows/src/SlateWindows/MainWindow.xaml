@@ -3266,9 +3266,16 @@
                                    FontSize="16"
                                    FontWeight="SemiBold"
                                    AutomationProperties.HeadingLevel="Level2" />
-                        <local:AutomationPresentationTextBlock Margin="0,4,0,8"
-                                Text="{Binding Subtitle}"
-                                Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
+                        <!-- A plain TextBlock, deliberately: the subtitle
+                             carries the DESTINATION, which an AT user can
+                             learn nowhere else on this sheet — mac exposes
+                             it (TemplatePicker.swift:75-80). Presentation
+                             suppression here was a red-team High. -->
+                        <TextBlock Margin="0,4,0,8"
+                                   Text="{Binding Subtitle}"
+                                   TextWrapping="Wrap"
+                                   AutomationProperties.AutomationId="TemplatePickerSubtitle"
+                                   Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                     </StackPanel>
                     <StackPanel DockPanel.Dock="Bottom"
                                 Margin="0,12,0,0"
@@ -3340,21 +3347,21 @@
                             </ListBox.ItemContainerStyle>
                             <ListBox.ItemTemplate>
                                 <DataTemplate>
+                                    <!-- Presentation text: the ListBoxItem
+                                         carries the composed accessible name;
+                                         plain TextBlocks would republish both
+                                         fragments as duplicate text peers
+                                         (AutomationLandmark.cs documents the
+                                         detached-peer hazard this prevents —
+                                         every other row template does this). -->
                                     <StackPanel>
-                                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
-                                        <TextBlock Text="{Binding Description}"
-                                                   TextWrapping="Wrap"
-                                                   Foreground="{DynamicResource Slate.SecondaryTextBrush}">
-                                            <TextBlock.Style>
-                                                <Style TargetType="TextBlock">
-                                                    <Style.Triggers>
-                                                        <Trigger Property="Text" Value="{x:Null}">
-                                                            <Setter Property="Visibility" Value="Collapsed" />
-                                                        </Trigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </TextBlock.Style>
-                                        </TextBlock>
+                                        <local:AutomationPresentationTextBlock
+                                                Text="{Binding Name}" FontWeight="SemiBold" />
+                                        <local:AutomationPresentationTextBlock
+                                                Text="{Binding Description}"
+                                                TextWrapping="Wrap"
+                                                Foreground="{DynamicResource Slate.SecondaryTextBrush}"
+                                                Visibility="{Binding Description, Converter={StaticResource NullToVisibilityConverter}}" />
                                     </StackPanel>
                                 </DataTemplate>
                             </ListBox.ItemTemplate>
@@ -3398,9 +3405,14 @@
                                        FontSize="16"
                                        FontWeight="SemiBold"
                                        AutomationProperties.HeadingLevel="Level2" />
-                            <local:AutomationPresentationTextBlock Margin="0,4,0,8"
-                                    Text="{Binding PromptStepSubtitle}"
-                                    Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
+                            <!-- Plain TextBlock: carries the template name
+                                 and destination, which AT can learn nowhere
+                                 else on this step (mac exposes it). -->
+                            <TextBlock Margin="0,4,0,8"
+                                       Text="{Binding PromptStepSubtitle}"
+                                       TextWrapping="Wrap"
+                                       AutomationProperties.AutomationId="TemplatePromptsSubtitle"
+                                       Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                         </StackPanel>
                         <StackPanel DockPanel.Dock="Bottom"
                                     Margin="0,12,0,0"
@@ -3416,14 +3428,18 @@
                                     Content="Next"
                                     Command="{Binding NextCommand}"
                                     AutomationProperties.AutomationId="TemplatePromptsNext"
-                                    AutomationProperties.HelpText="Continue to choose the new note's name. Return." />
+                                    AutomationProperties.HelpText="Continue to choose the new note's name. Enter." />
                         </StackPanel>
-                        <ScrollViewer VerticalScrollBarVisibility="Auto">
-                            <!-- Focusable=False: an ItemsControl is a Control,
-                                 whose Focusable default is TRUE — the journey's
-                                 axe scan caught it as a focusable unnamed List
-                                 (the W4-5 class). The prompt TextBoxes are the
-                                 tab stops; this host is pure layout. -->
+                        <!-- Focusable=False on BOTH layout hosts: ScrollViewer
+                             and ItemsControl are Controls, whose Focusable
+                             default is TRUE — the journey's axe scan caught
+                             the ItemsControl as a focusable unnamed List (the
+                             W4-5 class), and the red team caught the
+                             ScrollViewer as the same class one level up,
+                             where axe's Pane rules cannot see it. The prompt
+                             TextBoxes are the tab stops; these are layout. -->
+                        <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                      Focusable="False">
                             <ItemsControl x:Name="TemplateFlowPromptsList"
                                           Focusable="False"
                                           ItemsSource="{Binding PromptFields}">
@@ -3447,9 +3463,13 @@
                                        FontSize="16"
                                        FontWeight="SemiBold"
                                        AutomationProperties.HeadingLevel="Level2" />
-                            <local:AutomationPresentationTextBlock Margin="0,4,0,8"
-                                    Text="{Binding NameStepSubtitle}"
-                                    Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
+                            <!-- Plain TextBlock: the template name lives
+                                 here (mac exposes it). -->
+                            <TextBlock Margin="0,4,0,8"
+                                       Text="{Binding NameStepSubtitle}"
+                                       TextWrapping="Wrap"
+                                       AutomationProperties.AutomationId="TemplateNameSubtitle"
+                                       Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                         </StackPanel>
                         <StackPanel DockPanel.Dock="Bottom"
                                     Margin="0,12,0,0"
@@ -3465,7 +3485,7 @@
                                     Content="Create"
                                     Command="{Binding CreateCommand}"
                                     AutomationProperties.AutomationId="TemplateNameCreate"
-                                    AutomationProperties.HelpText="Render the template and open the new note. Return." />
+                                    AutomationProperties.HelpText="Render the template and open the new note. Enter." />
                         </StackPanel>
                         <StackPanel>
                             <local:AutomationPresentationTextBlock Margin="0,0,0,2" Text="New note name" />

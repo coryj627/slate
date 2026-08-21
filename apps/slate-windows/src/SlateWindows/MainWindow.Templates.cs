@@ -24,11 +24,20 @@ public partial class MainWindow
 {
     private IInputElement? _focusBeforeTemplates;
     private TemplateFlowViewModel? _observedTemplateFlow;
+    private TemplatePickerViewModel? _observedTemplatePicker;
 
     /// <summary>mac `templateDialogBusyReason`, verbatim — spoken when
-    /// the chord or menu asks for the flow beneath a higher sheet.</summary>
+    /// the chord or menu asks for the flow beneath an UNRELATED sheet.</summary>
     internal const string TemplateDialogBusyReason =
         "Finish or cancel the current dialog before creating from a template.";
+
+    /// <summary>mac `templateFlowBusyReason`, verbatim — spoken when the
+    /// refusing surface IS the template flow itself (re-entry). mac
+    /// partitions the two copies (AppState.swift:7901-7904); a single
+    /// dialog-busy string would tell the user to finish "the current
+    /// dialog" when that dialog is the create-from-template flow.</summary>
+    internal const string TemplateFlowBusyReason =
+        "Finish or cancel the current template note before starting another.";
 
     private void WireWorkspaceTemplates(WorkspaceViewModel workspace)
     {
@@ -40,6 +49,11 @@ public partial class MainWindow
     {
         workspace.PropertyChanged -= Workspace_TemplateSheetChanged;
         ObserveTemplateFlow(null);
+        ObserveTemplatePicker(null);
+        // A vault transition mid-flow never runs the restore (the sheet
+        // properties die with the discarded workspace), so the captured
+        // token must not leak into the next vault's first flow.
+        _focusBeforeTemplates = null;
     }
 
     /// <summary>
@@ -86,8 +100,14 @@ public partial class MainWindow
             default:
                 // W0.5-3 residue: template availability/busy copy serves
                 // double duty as dialog guidance (contracts doc T10).
+                // mac's two-string partition: re-entry over the flow's
+                // own surfaces speaks the flow-busy copy, any other
+                // sheet the dialog-busy copy.
+                bool refusedByOwnFlow = OpenModalSurface
+                    is ModalSurface.TemplatePicker or ModalSurface.TemplateFlow;
                 _announcer.Post(new A11yEvent.HostComposed(
-                    TemplateDialogBusyReason, A11yPriority.Medium));
+                    refusedByOwnFlow ? TemplateFlowBusyReason : TemplateDialogBusyReason,
+                    A11yPriority.Medium));
                 return false;
         }
     }
@@ -102,6 +122,7 @@ public partial class MainWindow
 
         if (eventArgs.PropertyName == nameof(WorkspaceViewModel.TemplatePickerSheet))
         {
+            ObserveTemplatePicker(workspace.TemplatePickerSheet);
             if (workspace.TemplatePickerSheet is not null)
             {
                 _focusBeforeTemplates ??= CapturePreSheetFocus();
@@ -126,6 +147,43 @@ public partial class MainWindow
             {
                 RestoreFocusAfterTemplates();
             }
+        }
+    }
+
+    private void ObserveTemplatePicker(TemplatePickerViewModel? picker)
+    {
+        if (ReferenceEquals(_observedTemplatePicker, picker))
+        {
+            return;
+        }
+
+        if (_observedTemplatePicker is not null)
+        {
+            _observedTemplatePicker.PropertyChanged -= TemplatePicker_PropertyChanged;
+        }
+
+        _observedTemplatePicker = picker;
+        if (picker is not null)
+        {
+            picker.PropertyChanged += TemplatePicker_PropertyChanged;
+        }
+    }
+
+    private void TemplatePicker_PropertyChanged(
+        object? sender, PropertyChangedEventArgs eventArgs)
+    {
+        // A Try Again landing collapses the state panel holding the
+        // focused button and seats a different one (red team, a11y
+        // finding 1): without re-running the per-state focus, keyboard
+        // focus is evicted from the collapsed element to the window —
+        // outside the sheet's tab cycle, where Esc no longer reaches
+        // the overlay's handler. mac wires exactly this observer
+        // (.onChange(of: templateAvailability) → updateFocus,
+        // TemplatePicker.swift:63-65).
+        if (eventArgs.PropertyName == nameof(TemplatePickerViewModel.State))
+        {
+            _ = Dispatcher.InvokeAsync(
+                FocusTemplatePicker, DispatcherPriority.Input);
         }
     }
 

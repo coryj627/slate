@@ -100,9 +100,14 @@ internal sealed class TemplatePickerViewModel : BindableBase
     public string DestinationDescription { get; }
 
     /// <summary>mac's picker subtitle with the Windows chord (program
-    /// decision 12 for the chord text; the sentence shape is mac's).</summary>
+    /// decision 12 for the chord text; the sentence shape is mac's).
+    /// The chord is READ FROM THE TABLE — a hardcoded copy here would
+    /// be exactly the advertisement drift PINV-5 exists to stop
+    /// (red team, tests finding 13a).</summary>
     public string Subtitle =>
-        $"Create in {DestinationDescription}. Ctrl+Shift+N. Escape to cancel.";
+        $"Create in {DestinationDescription}. "
+        + $"{Commands.ChordTable.Find(Commands.ChordTable.Ids.NewFromTemplate)!.WindowsChord}. "
+        + "Escape to cancel.";
 
     /// <summary>mac `emptyStateDetail`, verbatim.</summary>
     public static string EmptyStateDetail =>
