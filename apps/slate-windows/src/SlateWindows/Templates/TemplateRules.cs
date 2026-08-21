@@ -127,15 +127,22 @@ internal static class TemplateNameRules
     /// <summary>
     /// The vault-relative creation path: the frozen destination joined
     /// to the normalized name with a forward slash; the empty
-    /// destination is the vault root (contracts doc T12).
+    /// destination is the vault root (contracts doc T12). Trailing
+    /// separators on the destination are trimmed (codoki): the sidebar
+    /// rule never produces them, but the provider seam is an open
+    /// <c>Func</c>, and a <c>Notes//Foo.md</c> spelling would defeat
+    /// every downstream ordinal same-path comparison — the landed-tab
+    /// match, the reload sweep, mirroring — against the normalized
+    /// path the tab actually carries.
     /// </summary>
     public static string CreationPath(string destination, string normalizedName)
     {
         ArgumentNullException.ThrowIfNull(destination);
         ArgumentNullException.ThrowIfNull(normalizedName);
-        return destination.Length == 0
+        string trimmed = destination.TrimEnd('/');
+        return trimmed.Length == 0
             ? normalizedName
-            : $"{destination}/{normalizedName}";
+            : $"{trimmed}/{normalizedName}";
     }
 
     /// <summary>
@@ -188,10 +195,23 @@ internal static class TemplateCursor
         }
 
         int prefixBytes = (int)offset;
-        // A char-boundary offset decodes cleanly; a hostile offset
-        // (impossible per the FFI contract, clamped anyway) would
-        // produce replacement chars whose UTF-16 length still lands
-        // inside the string, never past it.
-        return Encoding.UTF8.GetString(bytes, 0, prefixBytes).Length;
+        // STRICT decode (codoki): a boundary-splitting offset —
+        // impossible per the FFI contract, which guarantees char
+        // boundaries — must clamp to the end as documented, not decode
+        // a replacement-char prefix to some interior index. The strict
+        // decoder makes the impossible case fail safe instead of fail
+        // subtle.
+        try
+        {
+            return new UTF8Encoding(
+                    encoderShouldEmitUTF8Identifier: false,
+                    throwOnInvalidBytes: true)
+                .GetString(bytes, 0, prefixBytes)
+                .Length;
+        }
+        catch (DecoderFallbackException)
+        {
+            return body.Length;
+        }
     }
 }

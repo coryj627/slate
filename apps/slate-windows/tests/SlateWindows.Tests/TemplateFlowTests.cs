@@ -664,6 +664,19 @@ public sealed class TemplateFlowTests
         }
     }
 
+    [Theory]
+    [InlineData("", "Foo.md", "Foo.md")]
+    [InlineData("Notes", "Foo.md", "Notes/Foo.md")]
+    // Trailing separators trim before the join (codoki): a
+    // "Notes//Foo.md" spelling would defeat every downstream ordinal
+    // same-path comparison against the tab's normalized path.
+    [InlineData("Notes/", "Foo.md", "Notes/Foo.md")]
+    [InlineData("Notes///", "Foo.md", "Notes/Foo.md")]
+    [InlineData("/", "Foo.md", "Foo.md")]
+    public void CreationPathJoinsWithoutDoubledSeparators(
+        string destination, string name, string expected) =>
+        Assert.Equal(expected, TemplateNameRules.CreationPath(destination, name));
+
     [Fact]
     public void CaretIndexConvertsUtf8BytesToUtf16Units()
     {
@@ -677,6 +690,12 @@ public sealed class TemplateFlowTests
         Assert.Equal(9, TemplateCursor.CaretIndex("Café tail", null));
         // Out of range clamps to the end rather than throwing.
         Assert.Equal(4, TemplateCursor.CaretIndex("abcd", 99));
+        // A boundary-SPLITTING offset (byte 4 lands inside the
+        // two-byte é) clamps to the end — the documented fail-safe for
+        // an offset the FFI contract says cannot occur (codoki: the
+        // old lenient decode placed the caret at an interior
+        // replacement-char index instead).
+        Assert.Equal(9, TemplateCursor.CaretIndex("Café tail", 4));
     }
 
     [Fact]
