@@ -21,7 +21,7 @@ public sealed class FileManagementTests
             Path.Combine(fixture.Root, "a.md"), "Points at [[b]] twice: [[b]].\n");
         File.WriteAllText(Path.Combine(fixture.Root, "b.md"), "# Target\n");
         using VaultSession session = OpenScanned(fixture.Root);
-        var announced = new List<A11yEvent>();
+        var announced = new SynchronizedAnnouncements();
         var retargets = new List<(string Old, string New)>();
         SidebarRig rig = await NewSidebar(session, fixture, announced);
         rig.Sidebar.RetargetRequested =
@@ -55,7 +55,7 @@ public sealed class FileManagementTests
         File.WriteAllText(Path.Combine(fixture.Root, "a.md"), "A\n");
         File.WriteAllText(Path.Combine(fixture.Root, "taken.md"), "Occupied\n");
         using VaultSession session = OpenScanned(fixture.Root);
-        var announced = new List<A11yEvent>();
+        var announced = new SynchronizedAnnouncements();
         SidebarRig rig = await NewSidebar(session, fixture, announced);
 
         rig.Sidebar.SelectedNode = Node(rig, "a.md");
@@ -96,7 +96,7 @@ public sealed class FileManagementTests
         using FixtureVault fixture = FixtureVault.Create(0, "fm-undo-rename");
         File.WriteAllText(Path.Combine(fixture.Root, "a.md"), "The bytes.\n");
         using VaultSession session = OpenScanned(fixture.Root);
-        var announced = new List<A11yEvent>();
+        var announced = new SynchronizedAnnouncements();
         SidebarRig rig = await NewSidebar(session, fixture, announced);
 
         rig.Sidebar.SelectedNode = Node(rig, "a.md");
@@ -129,7 +129,7 @@ public sealed class FileManagementTests
     {
         using FixtureVault fixture = FixtureVault.Create(1, "fm-undo-empty");
         using VaultSession session = OpenScanned(fixture.Root);
-        var announced = new List<A11yEvent>();
+        var announced = new SynchronizedAnnouncements();
         SidebarRig rig = await NewSidebar(session, fixture, announced);
 
         rig.Sidebar.UndoStructural();
@@ -149,7 +149,7 @@ public sealed class FileManagementTests
         File.WriteAllText(Path.Combine(fixture.Root, "a.md"), "A\n");
         File.WriteAllText(Path.Combine(fixture.Root, "victim.md"), "V\n");
         using VaultSession session = OpenScanned(fixture.Root);
-        var announced = new List<A11yEvent>();
+        var announced = new SynchronizedAnnouncements();
         SidebarRig rig = await NewSidebar(session, fixture, announced);
 
         // Arm the stack with a rename, then CREATE — the barrier must
@@ -191,7 +191,7 @@ public sealed class FileManagementTests
         using FixtureVault fixture = FixtureVault.Create(0, "fm-undo-changed");
         File.WriteAllText(Path.Combine(fixture.Root, "a.md"), "A\n");
         using VaultSession session = OpenScanned(fixture.Root);
-        var announced = new List<A11yEvent>();
+        var announced = new SynchronizedAnnouncements();
         SidebarRig rig = await NewSidebar(session, fixture, announced);
 
         rig.Sidebar.SelectedNode = Node(rig, "a.md");
@@ -224,7 +224,7 @@ public sealed class FileManagementTests
         File.WriteAllText(Path.Combine(fixture.Root, "two.md"), "2\n");
         Directory.CreateDirectory(Path.Combine(fixture.Root, "sub"));
         using VaultSession session = OpenScanned(fixture.Root);
-        var announced = new List<A11yEvent>();
+        var announced = new SynchronizedAnnouncements();
         SidebarRig rig = await NewSidebar(session, fixture, announced);
 
         Node(rig, "one.md").IsBatchSelected = true;
@@ -258,7 +258,7 @@ public sealed class FileManagementTests
         File.WriteAllText(Path.Combine(fixture.Root, "a.md"), "The source bytes.\n");
         File.WriteAllText(Path.Combine(fixture.Root, "b copy.md"), "Occupied.\n");
         using VaultSession session = OpenScanned(fixture.Root);
-        var announced = new List<A11yEvent>();
+        var announced = new SynchronizedAnnouncements();
         SidebarRig rig = await NewSidebar(session, fixture, announced);
 
         // Arm the undo stack so the duplicate's BARRIER is observable.
@@ -319,7 +319,7 @@ public sealed class FileManagementTests
         Directory.CreateDirectory(Path.Combine(fixture.Root, "sub"));
         File.WriteAllText(Path.Combine(fixture.Root, "sub", "inner.md"), "I\n");
         using VaultSession session = OpenScanned(fixture.Root);
-        var announced = new List<A11yEvent>();
+        var announced = new SynchronizedAnnouncements();
         SidebarRig rig = await NewSidebar(session, fixture, announced);
 
         rig.Sidebar.SelectedNode = Node(rig, "sub");
@@ -342,7 +342,7 @@ public sealed class FileManagementTests
         using FixtureVault fixture = FixtureVault.Create(0, "fm-copypath");
         File.WriteAllText(Path.Combine(fixture.Root, "note.md"), "N\n");
         using VaultSession session = OpenScanned(fixture.Root);
-        var announced = new List<A11yEvent>();
+        var announced = new SynchronizedAnnouncements();
         var copied = new List<string>();
         SidebarRig rig = await NewSidebar(session, fixture, announced, copied.Add);
 
@@ -361,7 +361,7 @@ public sealed class FileManagementTests
         using FixtureVault fixture = FixtureVault.Create(0, "fm-reveal");
         File.WriteAllText(Path.Combine(fixture.Root, "note.md"), "N\n");
         using VaultSession session = OpenScanned(fixture.Root);
-        var announced = new List<A11yEvent>();
+        var announced = new SynchronizedAnnouncements();
         var revealed = new List<string>();
         SidebarRig rig = await NewSidebar(session, fixture, announced);
         rig.Sidebar.RevealRequested = revealed.Add;
@@ -383,7 +383,7 @@ public sealed class FileManagementTests
         using FixtureVault fixture = FixtureVault.Create(0, "fm-create");
         File.WriteAllText(Path.Combine(fixture.Root, "Untitled.md"), "Taken.\n");
         using VaultSession session = OpenScanned(fixture.Root);
-        var announced = new List<A11yEvent>();
+        var announced = new SynchronizedAnnouncements();
         SidebarRig rig = await NewSidebar(session, fixture, announced);
         int renameArms = 0;
         rig.Sidebar.InlineRenameRequested += () => renameArms++;
@@ -441,7 +441,7 @@ public sealed class FileManagementTests
         File.WriteAllText(Path.Combine(fixture.Root, "full", "one.md"), "1\n");
         File.WriteAllText(Path.Combine(fixture.Root, "full", "two.md"), "2\n");
         using VaultSession session = OpenScanned(fixture.Root);
-        var announced = new List<A11yEvent>();
+        var announced = new SynchronizedAnnouncements();
         SidebarRig rig = await NewSidebar(session, fixture, announced);
         var staged = new List<(string Title, string Message)>();
         rig.Sidebar.ConfirmRecycle = request =>
@@ -492,7 +492,7 @@ public sealed class FileManagementTests
         Directory.CreateDirectory(Path.Combine(fixture.Root, "full"));
         File.WriteAllText(Path.Combine(fixture.Root, "full", "inner.md"), "I\n");
         using VaultSession session = OpenScanned(fixture.Root);
-        var announced = new List<A11yEvent>();
+        var announced = new SynchronizedAnnouncements();
         SidebarRig rig = await NewSidebar(session, fixture, announced);
         var staged = new List<(string Title, string Message)>();
         rig.Sidebar.ConfirmRecycle = request =>
@@ -536,7 +536,7 @@ public sealed class FileManagementTests
         Directory.CreateDirectory(Path.Combine(fixture.Root, "sub", "deep"));
         Directory.CreateDirectory(Path.Combine(fixture.Root, "other"));
         using VaultSession session = OpenScanned(fixture.Root);
-        var announced = new List<A11yEvent>();
+        var announced = new SynchronizedAnnouncements();
         SidebarRig rig = await NewSidebar(session, fixture, announced);
 
         rig.Sidebar.SelectedNode = Node(rig, "a.md");
@@ -588,7 +588,7 @@ public sealed class FileManagementTests
         Directory.CreateDirectory(Path.Combine(fixture.Root, "other"));
         File.WriteAllText(Path.Combine(fixture.Root, "sub", "inner.md"), "I\n");
         using VaultSession session = OpenScanned(fixture.Root);
-        var announced = new List<A11yEvent>();
+        var announced = new SynchronizedAnnouncements();
         SidebarRig rig = await NewSidebar(session, fixture, announced);
 
         rig.Sidebar.SelectedNode = Node(rig, "sub");
@@ -615,7 +615,7 @@ public sealed class FileManagementTests
         File.WriteAllText(Path.Combine(fixture.Root, "a.md"), "A\n");
         Directory.CreateDirectory(Path.Combine(fixture.Root, "decoy"));
         using VaultSession session = OpenScanned(fixture.Root);
-        var announced = new List<A11yEvent>();
+        var announced = new SynchronizedAnnouncements();
         SidebarRig rig = await NewSidebar(session, fixture, announced);
 
         rig.Sidebar.SelectedNode = Node(rig, "a.md");
@@ -650,7 +650,7 @@ public sealed class FileManagementTests
         File.WriteAllText(Path.Combine(fixture.Root, "two.md"), "2\n");
         Directory.CreateDirectory(Path.Combine(fixture.Root, "sub"));
         using VaultSession session = OpenScanned(fixture.Root);
-        var announced = new List<A11yEvent>();
+        var announced = new SynchronizedAnnouncements();
         SidebarRig rig = await NewSidebar(session, fixture, announced);
 
         Node(rig, "one.md").IsBatchSelected = true;
@@ -684,7 +684,7 @@ public sealed class FileManagementTests
         Directory.CreateDirectory(Path.Combine(fixture.Root, "alpha"));
         Directory.CreateDirectory(Path.Combine(fixture.Root, "beta"));
         using VaultSession session = OpenScanned(fixture.Root);
-        var announced = new List<A11yEvent>();
+        var announced = new SynchronizedAnnouncements();
         SidebarRig rig = await NewSidebar(session, fixture, announced);
 
         // T9's shape: the admission refused → no sheet.
@@ -718,7 +718,7 @@ public sealed class FileManagementTests
         File.WriteAllText(Path.Combine(fixture.Root, "two.md"), "2\n");
         Directory.CreateDirectory(Path.Combine(fixture.Root, "sub"));
         using VaultSession session = OpenScanned(fixture.Root);
-        var announced = new List<A11yEvent>();
+        var announced = new SynchronizedAnnouncements();
         SidebarRig rig = await NewSidebar(session, fixture, announced);
 
         Node(rig, "one.md").IsBatchSelected = true;
@@ -757,7 +757,7 @@ public sealed class FileManagementTests
         File.WriteAllText(Path.Combine(fixture.Root, "one.md"), "1\n");
         Directory.CreateDirectory(Path.Combine(fixture.Root, "sub"));
         using VaultSession session = OpenScanned(fixture.Root);
-        var announced = new List<A11yEvent>();
+        var announced = new SynchronizedAnnouncements();
         SidebarRig rig = await NewSidebar(session, fixture, announced);
 
         Node(rig, "one.md").IsBatchSelected = true;
@@ -795,7 +795,7 @@ public sealed class FileManagementTests
         File.WriteAllText(Path.Combine(fixture.Root, "docs", "docs.md"), "# docs\n");
         File.WriteAllText(Path.Combine(fixture.Root, "docs", "other.md"), "O\n");
         using VaultSession session = OpenScanned(fixture.Root);
-        var announced = new List<A11yEvent>();
+        var announced = new SynchronizedAnnouncements();
         SidebarRig rig = await NewSidebar(session, fixture, announced);
 
         FileTreeNodeViewModel docs = Node(rig, "docs");
@@ -838,7 +838,7 @@ public sealed class FileManagementTests
             Path.Combine(fixture.Root, "moving", "note.md"), "N\n");
         Directory.CreateDirectory(Path.Combine(fixture.Root, "elsewhere"));
         using VaultSession session = OpenScanned(fixture.Root);
-        var announced = new List<A11yEvent>();
+        var announced = new SynchronizedAnnouncements();
         SidebarRig rig = await NewSidebar(session, fixture, announced);
 
         rig.Sidebar.SelectedNode = Node(rig, "moving");
@@ -866,7 +866,7 @@ public sealed class FileManagementTests
     [Fact]
     public void TheVaultRootRowStaysPinnedUnderAFilter()
     {
-        var announced = new List<A11yEvent>();
+        var announced = new SynchronizedAnnouncements();
         var picker = new MoveToPickerViewModel(
             ["alpha", "beta"],
             rootIsLegal: true,
@@ -893,7 +893,7 @@ public sealed class FileManagementTests
     [Fact]
     public void ThePickerSpeaksItsSelectionAndItsFilterLandings()
     {
-        var announced = new List<A11yEvent>();
+        var announced = new SynchronizedAnnouncements();
         var picker = new MoveToPickerViewModel(
             ["alpha", "beta"],
             rootIsLegal: false,
@@ -929,7 +929,7 @@ public sealed class FileManagementTests
         using FixtureVault fixture = FixtureVault.Create(0, "fm-delete-guard");
         File.WriteAllText(Path.Combine(fixture.Root, "a.md"), "A\n");
         using VaultSession session = OpenScanned(fixture.Root);
-        var announced = new List<A11yEvent>();
+        var announced = new SynchronizedAnnouncements();
         SidebarRig rig = await NewSidebar(session, fixture, announced);
 
         rig.Sidebar.GroupByDate = true;
@@ -953,7 +953,7 @@ public sealed class FileManagementTests
         File.WriteAllText(Path.Combine(fixture.Root, "fold", "other.md"), "O\n");
         File.WriteAllText(Path.Combine(fixture.Root, "fold", "third.md"), "T\n");
         using VaultSession session = OpenScanned(fixture.Root);
-        var announced = new List<A11yEvent>();
+        var announced = new SynchronizedAnnouncements();
         var retargets = new List<(string Old, string New)>();
         SidebarRig rig = await NewSidebar(session, fixture, announced);
         rig.Sidebar.RetargetRequested =
@@ -981,7 +981,7 @@ public sealed class FileManagementTests
         File.WriteAllText(
             Path.Combine(fixture.Root, "linker.md"), "See [[a]].\n");
         using VaultSession session = OpenScanned(fixture.Root);
-        var announced = new List<A11yEvent>();
+        var announced = new SynchronizedAnnouncements();
         SidebarRig rig = await NewSidebar(session, fixture, announced);
 
         // Fault the linker's rewrite mid-save: the rename lands, the
@@ -1021,7 +1021,7 @@ public sealed class FileManagementTests
         using FixtureVault fixture = FixtureVault.Create(0, "fm-undo-replacement");
         File.WriteAllText(Path.Combine(fixture.Root, "a.md"), "Original.\n");
         using VaultSession session = OpenScanned(fixture.Root);
-        var announced = new List<A11yEvent>();
+        var announced = new SynchronizedAnnouncements();
         SidebarRig rig = await NewSidebar(session, fixture, announced);
 
         rig.Sidebar.SelectedNode = Node(rig, "a.md");
@@ -1051,7 +1051,7 @@ public sealed class FileManagementTests
         using FixtureVault fixture = FixtureVault.Create(0, "fm-undo-edited");
         File.WriteAllText(Path.Combine(fixture.Root, "a.md"), "Original.\n");
         using VaultSession session = OpenScanned(fixture.Root);
-        var announced = new List<A11yEvent>();
+        var announced = new SynchronizedAnnouncements();
         SidebarRig rig = await NewSidebar(session, fixture, announced);
 
         rig.Sidebar.SelectedNode = Node(rig, "a.md");
@@ -1078,7 +1078,7 @@ public sealed class FileManagementTests
         File.WriteAllText(Path.Combine(fixture.Root, "c.md"), "C\n");
         Directory.CreateDirectory(Path.Combine(fixture.Root, "sub"));
         using VaultSession session = OpenScanned(fixture.Root);
-        var announced = new List<A11yEvent>();
+        var announced = new SynchronizedAnnouncements();
         SidebarRig rig = await NewSidebar(session, fixture, announced);
 
         Node(rig, "a.md").IsBatchSelected = true;
@@ -1123,7 +1123,7 @@ public sealed class FileManagementTests
         File.WriteAllText(Path.Combine(fixture.Root, "c.md"), "C\n");
         Directory.CreateDirectory(Path.Combine(fixture.Root, "sub"));
         using VaultSession session = OpenScanned(fixture.Root);
-        var announced = new List<A11yEvent>();
+        var announced = new SynchronizedAnnouncements();
         SidebarRig rig = await NewSidebar(session, fixture, announced);
 
         FileTreeNodeViewModel folder = Node(rig, "folder");
@@ -1161,7 +1161,7 @@ public sealed class FileManagementTests
         File.WriteAllText(
             Path.Combine(fixture.Root, "linker.md"), "See [[a]].\n");
         using VaultSession session = OpenScanned(fixture.Root);
-        var announced = new List<A11yEvent>();
+        var announced = new SynchronizedAnnouncements();
         SidebarRig rig = await NewSidebar(session, fixture, announced);
 
         rig.Sidebar.FilterText = "linker";
@@ -1210,7 +1210,7 @@ public sealed class FileManagementTests
         File.WriteAllText(Path.Combine(fixture.Root, "folder", "a.md"), "A\n");
         File.WriteAllText(Path.Combine(fixture.Root, "folder", "b.md"), "B\n");
         using VaultSession session = OpenScanned(fixture.Root);
-        var announced = new List<A11yEvent>();
+        var announced = new SynchronizedAnnouncements();
         SidebarRig rig = await NewSidebar(session, fixture, announced);
 
         FileTreeNodeViewModel folder = Node(rig, "folder");
@@ -1251,7 +1251,7 @@ public sealed class FileManagementTests
         File.WriteAllText(Path.Combine(fixture.Root, "a.md"), "# A\n");
         File.WriteAllText(Path.Combine(fixture.Root, "other.md"), "O\n");
         using VaultSession session = OpenScanned(fixture.Root);
-        var announced = new List<A11yEvent>();
+        var announced = new SynchronizedAnnouncements();
         SidebarRig rig = await NewSidebar(session, fixture, announced);
 
         rig.Sidebar.FilterText = "other";
@@ -1275,6 +1275,59 @@ public sealed class FileManagementTests
     }
 
     // ---- Helpers ------------------------------------------------------
+
+    /// <summary>Announcement sink safe against the rig's ThreadPool
+    /// pump (CI caught "Collection was modified" — a publication's
+    /// selection announcement appended from a pool thread while a
+    /// fact enumerated). Adds lock; enumeration walks a
+    /// snapshot.</summary>
+    private sealed class SynchronizedAnnouncements
+        : System.Collections.Generic.IEnumerable<A11yEvent>
+    {
+        private readonly List<A11yEvent> _items = [];
+
+        public void Add(A11yEvent item)
+        {
+            lock (_items)
+            {
+                _items.Add(item);
+            }
+        }
+
+        public void Clear()
+        {
+            lock (_items)
+            {
+                _items.Clear();
+            }
+        }
+
+        public int Count
+        {
+            get
+            {
+                lock (_items)
+                {
+                    return _items.Count;
+                }
+            }
+        }
+
+        public System.Collections.Generic.IEnumerator<A11yEvent> GetEnumerator()
+        {
+            A11yEvent[] snapshot;
+            lock (_items)
+            {
+                snapshot = [.. _items];
+            }
+
+            return ((System.Collections.Generic.IEnumerable<A11yEvent>)snapshot)
+                .GetEnumerator();
+        }
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() =>
+            GetEnumerator();
+    }
 
     private sealed record SidebarRig(FilesSidebarViewModel Sidebar)
     {
@@ -1316,7 +1369,7 @@ public sealed class FileManagementTests
     private static async Task<SidebarRig> NewSidebar(
         VaultSession session,
         FixtureVault fixture,
-        List<A11yEvent> announced,
+        SynchronizedAnnouncements announced,
         Action<string>? copyText = null)
     {
         var sidebar = new FilesSidebarViewModel(
