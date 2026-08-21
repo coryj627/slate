@@ -388,6 +388,7 @@ internal sealed partial class FilesSidebarViewModel
         // reconciliation (red team, a11y 2).
         ConsumePendingRenameArm();
         ConsumePendingSelection();
+        ReconcileSelectionAfterPublication();
         if (outcome.Level.Truncated)
         {
             Status = DirectoryOverflowStatus(string.Empty);

@@ -431,6 +431,15 @@ enforced by construction, not by review.
   slow vault, FD-7's trade-off extended to a read. Accepted at the
   recorded bound; an async, cancellable destination loader is the
   recorded upgrade path, filed at PR time.
+- **FR-10 — The undo identity guard is a preflight, not an atomic
+  bind** (codex round 3): the inverse records the mutated object's
+  filesystem identity BEFORE the forward op and validates it before
+  the inverse runs, which closes the push-time window — but core's
+  rename/move are path-addressed, so a replacement landing between
+  the validation and the mutation can still be renamed. Closing that
+  window needs an identity-conditional core inverse (validate and
+  mutate one opened object atomically) — grouped with FR-8's
+  staged-token follow-up, filed at PR time.
 
 ## Phase plan
 

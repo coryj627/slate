@@ -1204,6 +1204,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         // runs AT STAGE TIME, and an unreadable folder is fail-closed
         // (confirmed like a non-empty one, with the folder-clause
         // message because no count exists to speak).
+        BeginStructuralResult();
         if (node.IsDirectory)
         {
             int? contents = CountFolderContents(node.Path);
@@ -1248,7 +1249,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             // AFTER Refresh (codex round 1).
             RequestSelectionAt(null);
             Refresh();
-            ReportResult($"Moved {node.DisplayName} to the Recycle Bin.");
+            ReportMutationResult($"Moved {node.DisplayName} to the Recycle Bin.");
         }
         catch (VaultException exception)
         {
@@ -1471,6 +1472,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             return;
         }
 
+        BeginStructuralResult();
         try
         {
             if (!TryRunSessionWork(
@@ -1532,6 +1534,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             return;
         }
 
+        BeginStructuralResult();
         try
         {
             if (!TryRunSessionWork(

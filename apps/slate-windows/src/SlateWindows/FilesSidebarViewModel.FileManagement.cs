@@ -87,6 +87,16 @@ internal sealed partial class FilesSidebarViewModel
     private void RecordStoredPathPersistFailure() =>
         _pendingStoredPathPersistFailure = true;
 
+    /// <summary>Every structural verb begins here (codex round 3):
+    /// the pending result details are PER-OPERATION — a leaked flag
+    /// from an aborted op must never be misattributed to the next
+    /// mutation's sentence.</summary>
+    private void BeginStructuralResult()
+    {
+        _pendingRewriteFailureDetail = null;
+        _pendingStoredPathPersistFailure = false;
+    }
+
     /// <summary>Compose the mutation's FINAL status: the success
     /// sentence plus any consumed report's failure detail and any
     /// stored-path persistence failure, so nothing the user must act
@@ -204,12 +214,16 @@ internal sealed partial class FilesSidebarViewModel
             return false;
         }
 
-        _pendingRewriteFailureDetail = null;
-        _pendingStoredPathPersistFailure = false;
+        BeginStructuralResult();
         string oldPath = node.Path;
         string oldName = node.Name;
         string newName = MutationName;
         string newPath = CombineVaultPath(ParentPath(oldPath), newName);
+        // Identity captured BEFORE the forward op (codex round 3): the
+        // file ID survives the rename, and capturing after it left a
+        // window where a replacement's identity got recorded as the
+        // mutated object's.
+        string? identity = FileIdentity.TryGet(AbsoluteVaultPath(oldPath));
         try
         {
             StructuralReport? report = null;
@@ -232,7 +246,7 @@ internal sealed partial class FilesSidebarViewModel
                 Argument: oldName,
                 node.IsDirectory,
                 Noun: oldName,
-                Identity: FileIdentity.TryGet(AbsoluteVaultPath(newPath))));
+                Identity: identity));
             // Refresh FIRST (codex round 1): Refresh() writes
             // "Loading files…" into Status synchronously, so a
             // sentence reported before it never survived the same
@@ -288,8 +302,7 @@ internal sealed partial class FilesSidebarViewModel
 
     private void ExecuteUndoStep(StructuralUndoStep step, bool redo)
     {
-        _pendingRewriteFailureDetail = null;
-        _pendingStoredPathPersistFailure = false;
+        BeginStructuralResult();
         string verb = redo ? "Redid" : "Undid";
         // The executability preflight (mac: drop suspect history
         // rather than replay inverses against strangers). Existence
@@ -412,16 +425,14 @@ internal sealed partial class FilesSidebarViewModel
                 return;
             }
 
-            // The re-inverse targets the entry's post-undo location;
-            // re-capture the identity there (the file ID survives the
-            // move, but a fresh read keeps the token honest on
-            // filesystems that rewrite it).
+            // The re-inverse carries the SAME identity — the file ID
+            // survives the undo's rename/move, and the validated
+            // pre-op capture is the honest token (re-reading at the
+            // new path would reopen the push-time window codex round
+            // 3 closed).
             if (inverse.Kind is not StructuralUndoKind.BatchMove)
             {
-                inverse = inverse with
-                {
-                    Identity = FileIdentity.TryGet(AbsoluteVaultPath(inverse.Path)),
-                };
+                inverse = inverse with { Identity = step.Identity };
             }
 
             if (redo)
@@ -536,6 +547,39 @@ internal sealed partial class FilesSidebarViewModel
         }
 
         TreeSelectionRestored?.Invoke();
+    }
+
+    /// <summary>Every publication reconciles the selection (codex
+    /// round 3): with the null-transition guard in place, an ORGANIC
+    /// refresh (an external change, a manual refresh) left
+    /// <c>SelectedNode</c> pointing at a detached stale node —
+    /// destructive verbs then targeted whatever now lives at that
+    /// path. Rebind to the fresh same-path node when it survived;
+    /// disarm (null) when it vanished.</summary>
+    private void ReconcileSelectionAfterPublication()
+    {
+        if (SelectedNode is not { } current)
+        {
+            return;
+        }
+
+        if (Flatten(RootNodes).Any(node => ReferenceEquals(node, current)))
+        {
+            return;
+        }
+
+        FileTreeNodeViewModel? fresh = Flatten(RootNodes)
+            .FirstOrDefault(node => node.Path == current.Path);
+        if (fresh is not null)
+        {
+            SelectSilently(fresh);
+            return;
+        }
+
+        if (SetField(ref _selectedNode, null, nameof(SelectedNode)))
+        {
+            RaiseCommandStates();
+        }
     }
 
     /// <summary>Consumed at tree publication: select the created node
@@ -722,13 +766,14 @@ internal sealed partial class FilesSidebarViewModel
     /// its one summary. Destination "" speaks "vault root".</summary>
     private void ExecuteMoveTo(StructuralBatchItem[] items, string destination)
     {
-        _pendingRewriteFailureDetail = null;
-        _pendingStoredPathPersistFailure = false;
+        BeginStructuralResult();
         MoveToSheet = null;
         if (items.Length == 1)
         {
             StructuralBatchItem single = items[0];
             string leaf = System.IO.Path.GetFileName(single.Path);
+            // Identity captured BEFORE the forward op (codex round 3).
+            string? identity = FileIdentity.TryGet(AbsoluteVaultPath(single.Path));
             try
             {
                 StructuralReport? report = null;
@@ -752,7 +797,7 @@ internal sealed partial class FilesSidebarViewModel
                     Argument: ParentPath(single.Path),
                     single.IsDirectory,
                     Noun: leaf,
-                    Identity: FileIdentity.TryGet(AbsoluteVaultPath(movedPath))));
+                    Identity: identity));
                 string destLeaf = destination.Length == 0
                     ? "vault root"
                     : System.IO.Path.GetFileName(destination.TrimEnd('/'));
