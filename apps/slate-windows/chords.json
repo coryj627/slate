@@ -1642,10 +1642,32 @@
           "apps/slate-windows/tests/SlateWindows.Tests/ModalSurfaceTests.cs#TheTemplateFlowSupersedesTheOverlaysAndDefersToEverySheet",
           "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#Templates_PickerPromptsCreateAndCancel_AreClean"
         ]
+      },
+      "fileManagement": {
+        "implementation": [
+          "apps/slate-windows/src/SlateWindows/FilesSidebarViewModel.FileManagement.cs#TryRenameSelected",
+          "apps/slate-windows/src/SlateWindows/FileManagement/StructuralUndoJournal.cs#StructuralUndoJournal",
+          "apps/slate-windows/src/SlateWindows/FileManagement/MoveToPickerViewModel.cs#MoveToPickerViewModel",
+          "apps/slate-windows/src/SlateWindows/FileManagement/RecycleBinCopy.cs#RecycleBinCopy",
+          "apps/slate-windows/src/SlateWindows/MainWindow.MoveTo.cs#TryClearTheWayForMoveTo"
+        ],
+        "tests": [
+          "apps/slate-windows/tests/SlateWindows.Tests/FileManagementTests.cs#FileManagementTests",
+          "apps/slate-windows/tests/SlateWindows.Tests/Censuses/MutationHarnessCensus.cs#MutationHarnessCensus",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#FileManagement_CreateRenameDuplicateMoveDelete_IsClean"
+        ]
       }
     },
     "commands": {
       "slate.file.cancelImport": "sidebar",
+      "slate.file.newNote": "fileManagement",
+      "slate.file.newFolder": "fileManagement",
+      "slate.file.rename": "fileManagement",
+      "slate.file.moveTo": "fileManagement",
+      "slate.file.delete": "fileManagement",
+      "slate.file.duplicate": "fileManagement",
+      "slate.file.copyPath": "fileManagement",
+      "slate.file.revealInFinder": "fileManagement",
       "slate.file.importFilesAndFolders": "sidebar",
       "slate.editor.save": "editorHost",
       "slate.editor.actualSize": "editorInteractions",
@@ -1763,7 +1785,8 @@
       "#740": "syncDiagnostics",
       "#741": "commandPalette",
       "#742": "searchOverlay",
-      "#743": "templates"
+      "#743": "templates",
+      "#744": "fileManagement"
     }
   },
   "chordSurface": [

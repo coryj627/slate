@@ -609,6 +609,25 @@ W5_3_DELIVERED_COMMANDS = {
     "slate.file.newFromTemplate",
 }
 
+# W5-4 (#744): file management — the verbs, the Move-To picker,
+# structural undo, and the two-platform mutation harness. Bulk
+# PROPERTY rename shipped in W4-4; the file verbs are this issue.
+W5_4_STATUS = (
+    "implemented; local gates green 2026-08-21; "
+    "interactive CI + human AT pending"
+)
+
+W5_4_DELIVERED_COMMANDS = {
+    "slate.file.newNote",
+    "slate.file.newFolder",
+    "slate.file.rename",
+    "slate.file.moveTo",
+    "slate.file.delete",
+    "slate.file.duplicate",
+    "slate.file.copyPath",
+    "slate.file.revealInFinder",
+}
+
 # W4 delivery, same per-command shape as W3.
 # slate.editor.togglePropertiesSource stays PENDING: YAML source mode
 # was scoped out of W4-4 (no set_frontmatter_source call site) — the
@@ -686,7 +705,7 @@ def load_delivery_evidence(
         cid for cid, _, _, _, issue in cmd_rows
         if issue.startswith(("#720", "#721", "#722", "#723", "#724", "#725"))
     } | W3_DELIVERED_COMMANDS | W4_DELIVERED_COMMANDS | W5_2_DELIVERED_COMMANDS \
-        | W5_3_DELIVERED_COMMANDS
+        | W5_3_DELIVERED_COMMANDS | W5_4_DELIVERED_COMMANDS
     mapped_commands = set(command_map)
     if mapped_commands != delivered_commands:
         missing = sorted(delivered_commands - mapped_commands)
@@ -699,7 +718,7 @@ def load_delivery_evidence(
 
     expected_issues = {
         "#381", "#720", "#721", "#722", "#723", "#724", "#725", "#728", "#735", "#736",
-        "#737", "#738", "#739", "#740", "#741", "#742", "#743",
+        "#737", "#738", "#739", "#740", "#741", "#742", "#743", "#744",
     }
     if set(issue_map) != expected_issues:
         fail(
@@ -730,6 +749,8 @@ def command_delivery_status(
         return W5_2_STATUS
     if command_id in W5_3_DELIVERED_COMMANDS:
         return W5_3_STATUS
+    if command_id in W5_4_DELIVERED_COMMANDS:
+        return W5_4_STATUS
     return (
         W2_IMPLEMENTED_STATUS
         if issue.startswith(("#381", "#724", "#725"))
@@ -888,7 +909,13 @@ def main() -> int:
     a(f"| Command palette | `CommandPaletteModel.swift` (core ranking, W0.5-1) | #741 (W5-1) | {issue_delivery_status('#741 (W5-1)', delivery_evidence)} |")
     a(f"| Search overlay | search UI over `full_text_search` | #742 (W5-2) | {issue_delivery_status('#742 (W5-2)', delivery_evidence)} |")
     a(f"| Templates picker + prompt flow | template views | #743 (W5-3) | {issue_delivery_status('#743 (W5-3)', delivery_evidence)} |")
-    a("| File management + bulk rename | sidebar/file commands | #744 (W5-4) | pending |")
+    a(
+        "| File management + bulk rename | sidebar/file commands | #744 (W5-4) | "
+        "implemented; local gates green 2026-08-21; interactive CI + human AT "
+        "pending (bulk PROPERTY rename shipped in W4-4; the W5-4 scope is the "
+        "file verbs, the Move-To picker, structural undo, and the mutation "
+        "harness) |"
+    )
     a("| Accessible canvas (T parity) | `Canvas/` | #745 (W6-1) | pending |")
     a("| Graph view (P parity, canonical textual representation) | `Graph/` | #746 (W6-2) | pending |")
     a("")

@@ -3570,7 +3570,13 @@
                                 AutomationProperties.AutomationId="MoveToCancel"
                                 AutomationProperties.HelpText="Closes the folder picker without moving anything." />
                     </StackPanel>
+                    <!-- MinHeight: an EMPTY destination list (a vault
+                         with no folders, or a filter with no matches)
+                         must keep UIA extent — a zero-size list is an
+                         axe BoundingRectangleNotNull violation (W5-4
+                         journey finding). -->
                     <ListBox x:Name="MoveToList"
+                             MinHeight="48"
                              Margin="0,8,0,0"
                              ItemsSource="{Binding Rows}"
                              SelectedItem="{Binding SelectedRow}"

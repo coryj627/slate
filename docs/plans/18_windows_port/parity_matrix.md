@@ -1,6 +1,6 @@
 # Milestone W parity matrix (§W-F row-level checklist)
 
-Generated 2026-08-20 at `fe2fe62` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
+Generated 2026-08-21 at `3c0c8dc8` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
 
 ## Entry-criteria snapshot (w0_spec §W0-4 item 3)
 
@@ -124,18 +124,18 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 | `slate.editor.zoomIn` | Editor: Zoom In | — | — | #725 (W2-3) | implemented; local gates green 2026-07-23; interactive CI + human AT pending |
 | `slate.editor.zoomOut` | Editor: Zoom Out | — | — | #725 (W2-3) | implemented; local gates green 2026-07-23; interactive CI + human AT pending |
 | `slate.file.cancelImport` | Cancel Import | ⌘. | Command Period | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
-| `slate.file.copyPath` | Copy Path | — | — | #744 (W5-4) | pending |
-| `slate.file.delete` | Move to Trash | — | — | #744 (W5-4) | pending |
-| `slate.file.duplicate` | Duplicate | — | — | #744 (W5-4) | pending |
+| `slate.file.copyPath` | Copy Path | — | — | #744 (W5-4) | implemented; local gates green 2026-08-21; interactive CI + human AT pending |
+| `slate.file.delete` | Move to Trash | — | — | #744 (W5-4) | implemented; local gates green 2026-08-21; interactive CI + human AT pending |
+| `slate.file.duplicate` | Duplicate | — | — | #744 (W5-4) | implemented; local gates green 2026-08-21; interactive CI + human AT pending |
 | `slate.file.importFilesAndFolders` | Import Files and Folders… | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
-| `slate.file.moveTo` | Move To… | ⇧⌘M | Shift Command M | #744 (W5-4) | pending |
+| `slate.file.moveTo` | Move To… | ⇧⌘M | Shift Command M | #744 (W5-4) | implemented; local gates green 2026-08-21; interactive CI + human AT pending |
 | `slate.file.newCanvas` | New Canvas | — | — | #745 (W6-1) | pending |
-| `slate.file.newFolder` | New Folder | — | — | #744 (W5-4) | pending |
+| `slate.file.newFolder` | New Folder | — | — | #744 (W5-4) | implemented; local gates green 2026-08-21; interactive CI + human AT pending |
 | `slate.file.newFromTemplate` | New Note from Template… | ⇧⌘N | Shift Command N | #743 (W5-3) | implemented; local gates green 2026-08-20; interactive CI + human AT pending |
-| `slate.file.newNote` | New Note | ⌘N | Command N | #744 (W5-4) | pending |
+| `slate.file.newNote` | New Note | ⌘N | Command N | #744 (W5-4) | implemented; local gates green 2026-08-21; interactive CI + human AT pending |
 | `slate.file.printNote` | Print… | ⌘P | Command P | #728 (W3-1) | **§W-F waiver** — out of W3-1 (owner, 2026-07-25); a second composition path, as mac shows by routing print through a separate `ReadingPrintComposer` that re-segments through core. Needs its own unit; tracked, not unshipped. |
-| `slate.file.rename` | Rename… | ⌥⌘R | Option Command R | #744 (W5-4) | pending |
-| `slate.file.revealInFinder` | Reveal in Finder | — | — | #744 (W5-4) | pending |
+| `slate.file.rename` | Rename… | ⌥⌘R | Option Command R | #744 (W5-4) | implemented; local gates green 2026-08-21; interactive CI + human AT pending |
+| `slate.file.revealInFinder` | Reveal in Finder | — | — | #744 (W5-4) | implemented; local gates green 2026-08-21; interactive CI + human AT pending |
 | `slate.graph.actualSize` | Graph: Actual Size | ⌘0 | Command 0 | #746 (W6-2) | pending |
 | `slate.graph.connectionsDeeper` | Connections: Deeper | — | — | #746 (W6-2) | pending |
 | `slate.graph.connectionsShallower` | Connections: Shallower | — | — | #746 (W6-2) | pending |
@@ -271,7 +271,7 @@ What `WorkspaceStore` round-trips — a **separate** inventory from the right-pa
 | Command palette | `CommandPaletteModel.swift` (core ranking, W0.5-1) | #741 (W5-1) | implemented; local gates green 2026-08-13; interactive CI + human AT pending |
 | Search overlay | search UI over `full_text_search` | #742 (W5-2) | implemented; local gates green 2026-08-16; interactive CI + human AT pending |
 | Templates picker + prompt flow | template views | #743 (W5-3) | implemented; local gates green 2026-08-20; interactive CI + human AT pending |
-| File management + bulk rename | sidebar/file commands | #744 (W5-4) | pending |
+| File management + bulk rename | sidebar/file commands | #744 (W5-4) | implemented; local gates green 2026-08-21; interactive CI + human AT pending (bulk PROPERTY rename shipped in W4-4; the W5-4 scope is the file verbs, the Move-To picker, structural undo, and the mutation harness) |
 | Accessible canvas (T parity) | `Canvas/` | #745 (W6-1) | pending |
 | Graph view (P parity, canonical textual representation) | `Graph/` | #746 (W6-2) | pending |
 

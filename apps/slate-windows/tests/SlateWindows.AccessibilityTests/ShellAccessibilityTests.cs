@@ -5564,6 +5564,318 @@ public sealed class ShellAccessibilityTests
         }
     }
 
+    /// <summary>
+    /// W5-4 (#744): file management end to end —
+    /// create → rename → duplicate → move → delete, with disk
+    /// verification at every step. The create hands off to inline
+    /// rename with the stem selected (F1); Duplicate walks the Finder
+    /// namer (F5); Move To… stages the picker sheet whose typed filter
+    /// IS the New Folder path — create-then-move in one gesture (F4);
+    /// the tree-scoped Delete key trashes a file with no confirmation
+    /// (F6, Finder parity). Axe scans the sidebar's file-actions
+    /// surface and the Move-To picker.
+    /// </summary>
+    [Fact]
+    public void FileManagement_CreateRenameDuplicateMoveDelete_IsClean()
+    {
+        string testRoot = Path.Combine(
+            Path.GetTempPath(), $"slate-filemgmt-{Guid.NewGuid():N}");
+        string vaultRoot = Path.Combine(testRoot, "File Management Vault");
+        string logDirectory = Path.Combine(testRoot, "logs");
+        Directory.CreateDirectory(vaultRoot);
+        File.WriteAllText(
+            Path.Combine(vaultRoot, "existing.md"),
+            "# Existing\n\nAlready here.\n");
+
+        Process? process = null;
+        try
+        {
+            var startInfo = new ProcessStartInfo(SlateWindowsExe())
+            {
+                UseShellExecute = false,
+            };
+            startInfo.ArgumentList.Add(vaultRoot);
+            startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
+                $"slate-filemgmt-{Guid.NewGuid():N}";
+            startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            process = Process.Start(startInfo)
+                ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+
+            if (!HasInteractiveDesktop(process, "file management"))
+            {
+                return;
+            }
+
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(
+                process,
+                automation,
+                Path.Combine(logDirectory, "slate-windows.log"),
+                TimeSpan.FromSeconds(30));
+            window.SetForeground();
+            window.Focus();
+            _ = WaitForElement(window, "RightPaneLeaves", TimeSpan.FromSeconds(30));
+
+            // --- create: chordless verb via the File actions button;
+            // the untitled note lands and the flow hands off to inline
+            // rename with the stem selected (F1) ----------------------
+            AutomationElement fileActions = WaitForElement(
+                window, "SidebarFileActions", TimeSpan.FromSeconds(10));
+            fileActions.Patterns.ExpandCollapse.Pattern.Expand();
+            AutomationElement newNote = WaitForButton(
+                fileActions, automation, "New note");
+            newNote.Patterns.Invoke.Pattern.Invoke();
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => File.Exists(Path.Combine(vaultRoot, "Untitled.md")),
+                    TimeSpan.FromSeconds(10)),
+                "the untitled create never reached the disk (F1).");
+
+            AutomationElement nameBox = WaitForElement(
+                window, "SidebarMutationName", TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            return nameBox.Properties.HasKeyboardFocus.ValueOrDefault;
+                        }
+                        catch (COMException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the create did not hand off to inline rename (F1).");
+
+            // The stem is selected; typing replaces it, keeping ".md".
+            Keyboard.Type("journey");
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+            PressKey(VirtualKeyShort.ENTER);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => File.Exists(Path.Combine(vaultRoot, "journey.md"))
+                        && !File.Exists(Path.Combine(vaultRoot, "Untitled.md")),
+                    TimeSpan.FromSeconds(10)),
+                "the inline-rename commit never landed on disk (F1/F3).");
+
+            AssertAxeClean(process, "file-management-sidebar");
+
+            // --- duplicate: the Finder namer (F5) --------------------
+            SelectTreeItem(window, automation, "journey.md");
+            AutomationElement duplicate = WaitForButton(
+                fileActions, automation, "Duplicate");
+            duplicate.Patterns.Invoke.Pattern.Invoke();
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => File.Exists(Path.Combine(vaultRoot, "journey copy.md")),
+                    TimeSpan.FromSeconds(10)),
+                "the duplicate never landed as 'journey copy.md' (F5).");
+
+            // --- move: the picker sheet; the typed filter IS the New
+            // Folder path — create then move, one gesture (F4) --------
+            SelectTreeItem(window, automation, "journey copy.md");
+            AutomationElement moveTo = WaitForButton(
+                fileActions, automation, "Move to…");
+            Assert.True(moveTo.IsEnabled, "the Move to… button is disabled.");
+            moveTo.Patterns.Invoke.Pattern.Invoke();
+            AutomationElement sheet;
+            try
+            {
+                sheet = WaitForElement(
+                    window, "MoveToSheet", TimeSpan.FromSeconds(10));
+            }
+            catch (Xunit.Sdk.XunitException)
+            {
+                // Tolerant read: the app holds the log open (the Bases
+                // journey's recorded sharing-violation pattern).
+                string log = Path.Combine(logDirectory, "slate-windows.log");
+                string tail = "(no log)";
+                try
+                {
+                    using var stream = new FileStream(
+                        log, FileMode.Open, FileAccess.Read,
+                        FileShare.ReadWrite | FileShare.Delete);
+                    using var reader = new StreamReader(stream);
+                    tail = string.Join(
+                        " | ",
+                        reader.ReadToEnd().Split('\n').TakeLast(8));
+                }
+                catch (IOException)
+                {
+                }
+
+                throw new Xunit.Sdk.XunitException(
+                    $"MoveToSheet never appeared; exited={process.HasExited}; "
+                    + $"log tail: {tail}");
+            }
+            Assert.Equal("Move to folder", sheet.Name);
+            AutomationElement filter = WaitForElement(
+                window, "MoveToFilter", TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            return filter.Properties.HasKeyboardFocus.ValueOrDefault;
+                        }
+                        catch (COMException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the Move-To sheet did not focus its filter box (F4).");
+
+            AssertAxeClean(process, "move-to-picker");
+
+            Keyboard.Type("arch");
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+            PressKey(VirtualKeyShort.ENTER);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => File.Exists(
+                        Path.Combine(vaultRoot, "arch", "journey copy.md")),
+                    TimeSpan.FromSeconds(10)),
+                "the create-then-move gesture never landed (F4).");
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            return window.FindFirstDescendant(
+                                automation.ConditionFactory
+                                    .ByAutomationId("MoveToSheet")) is null;
+                        }
+                        catch (COMException)
+                        {
+                            return true;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the Move-To sheet did not close after the move (F4).");
+
+            // --- delete: the tree-scoped Delete key; a FILE trashes
+            // immediately, no confirmation (F6, Finder parity) --------
+            AutomationElement journeyItem =
+                SelectTreeItem(window, automation, "journey.md");
+            journeyItem.Focus();
+            AssertEventuallyFocused(
+                journeyItem, "the journey.md TreeItem could not receive focus.");
+            PressKey(VirtualKeyShort.DELETE);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => !File.Exists(Path.Combine(vaultRoot, "journey.md")),
+                    TimeSpan.FromSeconds(10)),
+                "the Delete key never trashed the file (F6/FD-4).");
+
+            // Terminal disk state: the original, and the moved copy in
+            // its typed folder.
+            Assert.True(File.Exists(Path.Combine(vaultRoot, "existing.md")));
+            Assert.True(
+                File.Exists(Path.Combine(vaultRoot, "arch", "journey copy.md")));
+        }
+        finally
+        {
+            if (process is not null && !process.HasExited)
+            {
+                process.CloseMainWindow();
+                if (!process.WaitForExit(5_000))
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            try
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    /// <summary>Find a named Button under a root (the sidebar's
+    /// file-actions buttons carry no AutomationIds — their labels are
+    /// the accessible names).</summary>
+    private static AutomationElement WaitForButton(
+        AutomationElement root, UIA3Automation automation, string name)
+    {
+        AutomationElement? button = null;
+        if (!SpinWait.SpinUntil(
+            () =>
+            {
+                try
+                {
+                    button = root.FindAllDescendants(
+                            automation.ConditionFactory.ByControlType(ControlType.Button))
+                        .FirstOrDefault(candidate => candidate.Name == name);
+                    return button is not null;
+                }
+                catch (COMException)
+                {
+                    return false;
+                }
+            },
+            TimeSpan.FromSeconds(10)))
+        {
+            throw new Xunit.Sdk.XunitException($"button '{name}' never appeared.");
+        }
+
+        return button!;
+    }
+
+    /// <summary>Select a FilesTree item by name via the SelectionItem
+    /// pattern. The item is RE-FOUND each attempt and the selection is
+    /// verified to stick: a mutation's tree refresh republishes node
+    /// containers, and a Select() landing on a container the refresh
+    /// is about to replace registers on nothing (the journey's
+    /// recorded flake).</summary>
+    private static AutomationElement SelectTreeItem(
+        Window window, UIA3Automation automation, string name)
+    {
+        AutomationElement filesTree = WaitForElement(
+            window, "FilesTree", TimeSpan.FromSeconds(10));
+        AutomationElement? item = null;
+        if (!SpinWait.SpinUntil(
+            () =>
+            {
+                try
+                {
+                    item = filesTree.FindAllDescendants(
+                            automation.ConditionFactory
+                                .ByControlType(ControlType.TreeItem))
+                        .FirstOrDefault(candidate => candidate.Name.StartsWith(
+                            name, StringComparison.Ordinal));
+                    if (item is null)
+                    {
+                        return false;
+                    }
+
+                    item.Patterns.SelectionItem.Pattern.Select();
+                    Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(100));
+                    return item.Patterns.SelectionItem.Pattern.IsSelected;
+                }
+                catch (COMException)
+                {
+                    return false;
+                }
+            },
+            TimeSpan.FromSeconds(10)))
+        {
+            throw new Xunit.Sdk.XunitException(
+                $"tree item '{name}' never appeared or would not stay selected.");
+        }
+
+        return item!;
+    }
+
     /// <summary>Every user-visible vault file with its content — the
     /// nothing-was-written snapshot for the cancel legs. ALL files,
     /// not just Markdown; only the `.slate` index directory is carved
