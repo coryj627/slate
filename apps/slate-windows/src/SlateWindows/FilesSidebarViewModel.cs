@@ -1113,11 +1113,12 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 return;
             }
 
-            // W5-4 F10: creates are structural history barriers.
+            // W5-4 F10: creates are structural history barriers. The
+            // sentence reports AFTER Refresh (codex round 1).
             StructuralHistoryBarrier();
-            ReportResult($"Created folder {System.IO.Path.GetFileName(created)}.");
             RequestInlineRenameAt(created);
             Refresh();
+            ReportResult($"Created folder {System.IO.Path.GetFileName(created)}.");
         }
         catch (VaultException exception)
         {
@@ -1171,11 +1172,13 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
             // W5-4 F10: a create is a structural history barrier (mac's
             // table) — a stale inverse must never target this path.
+            // The sentence reports AFTER Refresh so it survives the
+            // "Loading files…" write (codex round 1).
             StructuralHistoryBarrier();
-            ReportResult($"Created note {System.IO.Path.GetFileName(created)}.");
-            RequestOpen(created);
             RequestInlineRenameAt(created);
             Refresh();
+            ReportResult($"Created note {System.IO.Path.GetFileName(created)}.");
+            RequestOpen(created);
         }
         catch (VaultException exception)
         {
@@ -1238,13 +1241,14 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             // W5-4 F10: trash is not undoable AND a history barrier
             // (mac's rule — the bytes are in the Recycle Bin).
             StructuralHistoryBarrier();
-            ReportResult($"Moved {node.DisplayName} to the Recycle Bin.");
             SelectedNode = null;
             // F6: "focus returns to the tree" — the publication's
             // container discard would otherwise eject keyboard focus
-            // to the window (red team, a11y 2a).
+            // to the window (red team, a11y 2a). The sentence reports
+            // AFTER Refresh (codex round 1).
             RequestSelectionAt(null);
             Refresh();
+            ReportResult($"Moved {node.DisplayName} to the Recycle Bin.");
         }
         catch (VaultException exception)
         {
@@ -1270,9 +1274,9 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             // W5-4 F10 (verification 4): a folder-note create is a
             // CREATE — a structural history barrier like its siblings.
             StructuralHistoryBarrier();
-            ReportResult($"Created folder note {path}.");
             RequestSelectionAt(null);
             Refresh();
+            ReportResult($"Created folder note {path}.");
             RequestOpen(path);
         }
         catch (VaultException exception)
@@ -1303,9 +1307,9 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             // W5-4 F10 (verification 4): trash is not undoable AND a
             // barrier — the folder-note delete is a trash.
             StructuralHistoryBarrier();
-            ReportResult($"Deleted the {node.DisplayName} folder note.");
             RequestSelectionAt(null);
             Refresh();
+            ReportResult($"Deleted the {node.DisplayName} folder note.");
         }
         catch (VaultException exception)
         {
@@ -1497,11 +1501,11 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                     BatchOpId: opId));
             }
 
+            RequestSelectionAt(null);
+            Refresh();
             Status = BatchMoveSummary(report, MoveDestination);
             // W0.5-3 residue: Windows batch-move report copy.
             _announce(new A11yEvent.HostComposed(Status, A11yPriority.Medium));
-            RequestSelectionAt(null);
-            Refresh();
         }
         catch (VaultException exception)
         {
@@ -1546,11 +1550,11 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
             // W5-4 F10: trash is not undoable AND a history barrier.
             StructuralHistoryBarrier();
+            RequestSelectionAt(null);
+            Refresh();
             Status = BatchTrashSummary(report);
             // W0.5-3 residue: Windows system-Recycle-Bin report copy.
             _announce(new A11yEvent.HostComposed(Status, A11yPriority.Medium));
-            RequestSelectionAt(null);
-            Refresh();
         }
         catch (VaultException exception)
         {

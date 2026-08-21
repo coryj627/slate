@@ -944,6 +944,77 @@ public sealed class FileManagementTests
         Assert.False(rig.Sidebar.DeleteCommand.CanExecute(null));
     }
 
+    [Fact]
+    public async Task AFolderRenameRetargetsEveryOpenDescendantSynchronously()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "fm-folder-retarget");
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "fold"));
+        File.WriteAllText(Path.Combine(fixture.Root, "fold", "fold.md"), "# note\n");
+        File.WriteAllText(Path.Combine(fixture.Root, "fold", "other.md"), "O\n");
+        File.WriteAllText(Path.Combine(fixture.Root, "fold", "third.md"), "T\n");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new List<A11yEvent>();
+        var retargets = new List<(string Old, string New)>();
+        SidebarRig rig = await NewSidebar(session, fixture, announced);
+        rig.Sidebar.RetargetRequested =
+            (oldPath, newPath) => retargets.Add((oldPath, newPath));
+
+        rig.Sidebar.SelectedNode = Node(rig, "fold");
+        rig.Sidebar.MutationName = "gold";
+        Assert.True(rig.Sidebar.TryRenameSelected());
+
+        // Codex round 1 (refuted, pinned): core's StructuralReport
+        // lists EVERY contained file for a folder move — "a folder
+        // move lists each contained file; the folder itself is
+        // implied" — so ordinary descendants retarget synchronously
+        // at the mutation site, not only the folder note.
+        Assert.Contains(("fold/fold.md", "gold/gold.md"), retargets);
+        Assert.Contains(("fold/other.md", "gold/other.md"), retargets);
+        Assert.Contains(("fold/third.md", "gold/third.md"), retargets);
+    }
+
+    [Fact]
+    public async Task RewriteFailureDetailSurvivesTheSuccessSentenceInStatus()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "fm-failed-detail");
+        File.WriteAllText(Path.Combine(fixture.Root, "a.md"), "# A\n");
+        File.WriteAllText(
+            Path.Combine(fixture.Root, "linker.md"), "See [[a]].\n");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new List<A11yEvent>();
+        SidebarRig rig = await NewSidebar(session, fixture, announced);
+
+        // Fault the linker's rewrite mid-save: the rename lands, the
+        // rewrite records a per-file failure (core's rule — never an
+        // abort).
+        using IDisposable envLock = EnvFaultLock.Acquire();
+        Environment.SetEnvironmentVariable(
+            "SLATE_TEST_FAULT_AFTER_WRITE", "linker");
+        try
+        {
+            rig.Sidebar.SelectedNode = Node(rig, "a.md");
+            rig.Sidebar.MutationName = "b.md";
+            Assert.True(rig.Sidebar.TryRenameSelected());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(
+                "SLATE_TEST_FAULT_AFTER_WRITE", null);
+        }
+
+        // Codex round 1: the success sentence must not bury the
+        // failure — the FINAL Status carries both halves with the
+        // affected path inspectable, while speech got the High
+        // warning plus the sentence.
+        Assert.StartsWith("Renamed a.md to b.md", rig.Sidebar.Status, StringComparison.Ordinal);
+        Assert.Contains("could not be updated", rig.Sidebar.Status, StringComparison.Ordinal);
+        Assert.Contains("linker.md", rig.Sidebar.Status, StringComparison.Ordinal);
+        Assert.Contains(
+            "Links in 1 note could not be updated.",
+            announced.OfType<A11yEvent.HostComposed>()
+                .Select(item => SlateUniffiMethods.A11yRender(item).Text));
+    }
+
     // ---- Helpers ------------------------------------------------------
 
     private sealed record SidebarRig(FilesSidebarViewModel Sidebar)

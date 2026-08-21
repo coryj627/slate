@@ -416,6 +416,21 @@ enforced by construction, not by review.
   state" are defined over per-file `ReadOplog`, the returned
   reports, and typed rejections — not over the `structural_ops`
   table, which no FFI exposes.
+- **FR-8 — Delete-staging TOCTOU** (codex round 1): the F6
+  child-count probe and the trash execute without a shared lock or
+  token — a concurrent writer (a sync client) can populate a folder
+  between the probe and the trash, so contents can exceed what the
+  confirmation named. Accepted: mac's staging has the identical
+  host-probe shape, the destination is the recoverable Recycle Bin,
+  and closing the window needs a core staged-confirmation token
+  validated under the structural lock — a core FFI follow-up, filed
+  at PR time, not host scope.
+- **FR-9 — The Move-To enumeration is synchronous on the UI thread**
+  (codex round 1): the paged walk (50k-folder bound, 1k-row pages)
+  blocks the dispatcher for its duration on a pathologically large or
+  slow vault, FD-7's trade-off extended to a read. Accepted at the
+  recorded bound; an async, cancellable destination loader is the
+  recorded upgrade path, filed at PR time.
 
 ## Phase plan
 

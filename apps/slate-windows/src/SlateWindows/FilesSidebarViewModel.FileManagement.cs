@@ -34,6 +34,13 @@ internal sealed partial class FilesSidebarViewModel
     /// construction — it matches on the old path).</summary>
     internal Action<string, string>? RetargetRequested { get; set; }
 
+    /// <summary>The pending failure detail from the last consumed
+    /// report — the caller's FINAL status composes it in (codex round
+    /// 1: setting Status here and letting the success sentence
+    /// overwrite it made the affected paths unreachable the moment
+    /// the command finished).</summary>
+    private string? _pendingRewriteFailureDetail;
+
     /// <summary>Consume a structural report (F9): retarget every
     /// moved pair, surface failed rewrites, and hand back the
     /// distinct rewritten count for the announcement suffix.</summary>
@@ -52,7 +59,8 @@ internal sealed partial class FilesSidebarViewModel
             // platform io-text, travel in the sentence.
             string paths = string.Join(
                 ", ", report.Failed.Select(failure => failure.Path));
-            Status = $"Links in {report.Failed.Length} "
+            _pendingRewriteFailureDetail =
+                $"Links in {report.Failed.Length} "
                 + $"{(report.Failed.Length == 1 ? "note" : "notes")} could not "
                 + $"be updated: {paths}";
             // W0.5-3 residue: structural-mutation announcement family
@@ -68,6 +76,29 @@ internal sealed partial class FilesSidebarViewModel
             .Select(outcome => outcome.Path)
             .Distinct(StringComparer.Ordinal)
             .Count();
+    }
+
+    /// <summary>Compose the mutation's FINAL status: the success
+    /// sentence plus any consumed report's failure detail, so the
+    /// affected paths stay reachable after the command finishes
+    /// (codex round 1).</summary>
+    private string WithRewriteFailureDetail(string sentence)
+    {
+        string? detail = _pendingRewriteFailureDetail;
+        _pendingRewriteFailureDetail = null;
+        return detail is null ? sentence : $"{sentence} {detail}";
+    }
+
+    /// <summary>The mutation result channel (codex round 1): Status
+    /// carries the sentence PLUS any failure detail (the paths stay
+    /// inspectable); speech carries the sentence only — the High
+    /// failure announcement already spoke, and reading a path list
+    /// aloud twice is noise.</summary>
+    private void ReportMutationResult(string sentence)
+    {
+        Status = WithRewriteFailureDetail(sentence);
+        // W0.5-3 residue: Windows sidebar action-result copy.
+        _announce(new A11yEvent.HostComposed(sentence, A11yPriority.Medium));
     }
 
     /// <summary>Red team (correctness 2): a compound folder+note
@@ -133,6 +164,7 @@ internal sealed partial class FilesSidebarViewModel
             return false;
         }
 
+        _pendingRewriteFailureDetail = null;
         string oldPath = node.Path;
         string oldName = node.Name;
         string newName = MutationName;
@@ -159,10 +191,15 @@ internal sealed partial class FilesSidebarViewModel
                 Argument: oldName,
                 node.IsDirectory,
                 Noun: oldName));
-            ReportResult(WithLinksSuffix(
-                $"Renamed {node.DisplayName} to {newName}.", rewritten));
+            // Refresh FIRST (codex round 1): Refresh() writes
+            // "Loading files…" into Status synchronously, so a
+            // sentence reported before it never survived the same
+            // dispatcher turn — the result must be the LAST Status
+            // writer.
             RequestSelectionAt(newPath);
             Refresh();
+            ReportMutationResult(WithLinksSuffix(
+                $"Renamed {node.DisplayName} to {newName}.", rewritten));
             return true;
         }
         catch (VaultException exception)
@@ -209,6 +246,7 @@ internal sealed partial class FilesSidebarViewModel
 
     private void ExecuteUndoStep(StructuralUndoStep step, bool redo)
     {
+        _pendingRewriteFailureDetail = null;
         string verb = redo ? "Redid" : "Undid";
         // The executability preflight (mac: drop suspect history
         // rather than replay inverses against strangers). BatchMove
@@ -310,11 +348,11 @@ internal sealed partial class FilesSidebarViewModel
                 // the suspect history and say so, never success. The
                 // failure leg reconciles focus too (verification 2).
                 _structuralUndo.DropForChangedFiles();
+                RequestSelectionAt(null);
+                Refresh();
                 AnnounceUndoResidue(redo
                     ? "Can't redo — the files have changed."
                     : "Can't undo — the files have changed.");
-                RequestSelectionAt(null);
-                Refresh();
                 return;
             }
 
@@ -327,17 +365,21 @@ internal sealed partial class FilesSidebarViewModel
                 _structuralUndo.PushRedo(inverse);
             }
 
-            AnnounceUndoResidue(step.Kind switch
+            // The undo's consumed report may carry rewrite failures
+            // too — same final-status composition (codex round 1),
+            // reported AFTER Refresh so it survives the "Loading
+            // files…" write. The re-inverse's Path is the entry's
+            // CURRENT location; batches have no single successor to
+            // name.
+            RequestSelectionAt(
+                step.Kind == StructuralUndoKind.BatchMove ? null : inverse.Path);
+            Refresh();
+            ReportMutationResult(step.Kind switch
             {
                 StructuralUndoKind.Rename => $"{verb} rename to {step.Argument}.",
                 StructuralUndoKind.Move => $"{verb} move of {step.Noun}.",
                 _ => $"{verb} move of {step.Noun}.",
             });
-            // The re-inverse's Path is the entry's CURRENT location;
-            // batches have no single successor to name.
-            RequestSelectionAt(
-                step.Kind == StructuralUndoKind.BatchMove ? null : inverse.Path);
-            Refresh();
         }
         catch (VaultException)
         {
@@ -612,6 +654,7 @@ internal sealed partial class FilesSidebarViewModel
     /// its one summary. Destination "" speaks "vault root".</summary>
     private void ExecuteMoveTo(StructuralBatchItem[] items, string destination)
     {
+        _pendingRewriteFailureDetail = null;
         MoveToSheet = null;
         if (items.Length == 1)
         {
@@ -643,20 +686,22 @@ internal sealed partial class FilesSidebarViewModel
                 string destLeaf = destination.Length == 0
                     ? "vault root"
                     : System.IO.Path.GetFileName(destination.TrimEnd('/'));
-                ReportResult(WithLinksSuffix(
-                    $"Moved {leaf} to {destLeaf}.", rewritten));
                 RequestSelectionAt(movedPath);
                 Refresh();
+                ReportMutationResult(WithLinksSuffix(
+                    $"Moved {leaf} to {destLeaf}.", rewritten));
             }
             catch (VaultException exception)
             {
-                ReportFailure($"Move failed: {exception.Message}");
                 // A create-then-move whose move half refused must not
                 // leave the created folder invisible until the next
                 // organic refresh (red team, correctness 4) — and the
                 // failure leg reconciles focus too (verification 2).
+                // The failure reports AFTER Refresh so its reason
+                // survives the "Loading files…" write.
                 RequestSelectionAt(null);
                 Refresh();
+                ReportFailure($"Move failed: {exception.Message}");
             }
 
             return;
@@ -791,12 +836,13 @@ internal sealed partial class FilesSidebarViewModel
             }
 
             StructuralHistoryBarrier();
-            ReportResult(
-                $"Duplicated {node.DisplayName} as {LeafName(created)}.");
             // Selection lands on the copy (Finder's shape), and focus
-            // reconciles (verification 3).
+            // reconciles (verification 3); the sentence reports AFTER
+            // Refresh so it survives the "Loading files…" write.
             RequestSelectionAt(created);
             Refresh();
+            ReportResult(
+                $"Duplicated {node.DisplayName} as {LeafName(created)}.");
         }
         catch (VaultException exception)
         {
