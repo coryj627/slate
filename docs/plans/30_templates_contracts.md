@@ -382,11 +382,18 @@ both discarded with the workspace.
   re-opening the created note later is a new navigation with no park —
   the S9 search-activation posture, and the honest observable under
   synchronous loads.
-- **TD-4 — Windows adds platform-absolute name validation.** mac's
-  pre-validation rejects only `/`-prefixed absolutes; on Windows
+- **TD-4 — Windows adds platform-absolute and separator validation.**
+  mac's pre-validation rejects only `/`-prefixed absolutes; on Windows
   `C:\…`, `\…`, and UNC forms are also refused with the same
-  "vault-relative, not absolute" message. Core would refuse them
-  anyway (`InvalidPath` at create); catching them inline is the same
+  "vault-relative, not absolute" message, and INTERIOR backslashes
+  (`sub\name`, including the `sub\..\name` traversal spelling that
+  slips a `/`-only segment split) are refused inline with "Note name
+  cannot contain `\` separators; use `/`." Core would refuse every
+  one of these anyway — `validate_save_path` rejects any backslash
+  outright precisely so one file can never carry two path spellings
+  (no alias identity is constructible; a codex round-1 claim that a
+  backslash name creates a file under a second workspace identity was
+  refuted against that gate) — catching them inline is the same
   courtesy mac extends to `/`.
 - **TD-5 — Two sheets, one surface each; mac's three.** mac presents
   picker, prompt sheet, and name sheet as three sequential sheets.

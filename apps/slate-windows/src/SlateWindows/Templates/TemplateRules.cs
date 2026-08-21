@@ -46,6 +46,19 @@ internal static class TemplateNameRules
             return "Note name must be vault-relative, not absolute.";
         }
 
+        // Interior backslashes (codex round 1, the residual truth of a
+        // refuted finding): core's validate_save_path refuses ANY
+        // backslash outright — one canonical spelling per file, so no
+        // alias identity can ever exist — but the refusal used to
+        // arrive as a LATE typed error instead of this inline arm.
+        // T6 promises the pre-validation mirrors core's rules. Ordered
+        // AFTER the absolute checks so `\abs` keeps its absolute
+        // message.
+        if (candidate.Contains('\\'))
+        {
+            return "Note name cannot contain `\\` separators; use `/`.";
+        }
+
         // Any segment equal to `..` is a path traversal. Block both
         // `../foo.md` and `foo/../bar.md` (mac's exact rule).
         foreach (string segment in candidate.Split('/'))

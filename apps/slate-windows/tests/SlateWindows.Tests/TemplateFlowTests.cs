@@ -643,6 +643,14 @@ public sealed class TemplateFlowTests
     [InlineData("c:\\abs", "Note name must be vault-relative, not absolute.")]
     [InlineData("../up", "Note name cannot contain `..` segments.")]
     [InlineData("a/../b", "Note name cannot contain `..` segments.")]
+    // Interior backslashes refuse INLINE (codex round 1): core's
+    // validate_save_path would refuse them anyway (one canonical
+    // spelling per file — no alias identity can exist), but the
+    // refusal must not arrive as a late typed error. The traversal
+    // spelling `sub\..\x` previously slipped the inline `..` split
+    // (which sees one `/`-segment) and reached core before refusing.
+    [InlineData("sub\\Alias", "Note name cannot contain `\\` separators; use `/`.")]
+    [InlineData("sub\\..\\Alias", "Note name cannot contain `\\` separators; use `/`.")]
     public void ValidateRejectsTheMacInvalidShapes(string candidate, string expected) =>
         Assert.Equal(expected, TemplateNameRules.Validate(candidate));
 
