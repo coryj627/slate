@@ -235,25 +235,29 @@ public sealed class ShellAccessibilityTests
                 WaitForElement(window, "SidebarBatchActions", TimeSpan.FromSeconds(10)),
                 automation,
                 "Add",
-                "Move selected",
-                "Remove",
-                "Trash selected");
+                "Move checked to Recycle Bin",
+                "Move to…",
+                "Remove");
             AssertActionButtonCensus(
                 WaitForElement(window, "SidebarFileActions", TimeSpan.FromSeconds(10)),
                 automation,
                 "Add shortcut",
                 "Cancel import",
                 "Copy link",
+                "Copy path",
                 "Delete",
                 "Delete folder note",
+                "Duplicate",
                 "Folder note",
                 "Import…",
+                "Move to…",
                 "New folder",
                 "New note",
                 "New tab",
                 "Open",
                 "Pin",
                 "Rename",
+                "Reveal in File Explorer",
                 "Split",
                 "Unpin");
             AssertActionButtonCensus(
