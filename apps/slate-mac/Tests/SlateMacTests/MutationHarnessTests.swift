@@ -159,9 +159,15 @@ final class MutationHarnessTests: XCTestCase {
         _ scenario: Scenario
     ) throws -> (artifact: String, terminal: [TreeEntry]) {
         let fm = FileManager.default
-        let vaultRoot = fm.temporaryDirectory
+        var vaultRoot = fm.temporaryDirectory
             .appendingPathComponent("mutation-harness-\(UUID().uuidString)")
         try fm.createDirectory(at: vaultRoot, withIntermediateDirectories: true)
+        // macOS's temporaryDirectory is /var/folders/…, a symlink to
+        // /private/var/… — the enumerator hands back RESOLVED urls,
+        // so the relative-path prefix check against the unresolved
+        // root matched nothing and every tree entry stayed absolute
+        // (the first CI run's "untouched file missing at 'pre'").
+        vaultRoot = vaultRoot.resolvingSymlinksInPath()
         defer {
             for name in faultNames { unsetenv("SLATE_TEST_FAULT_\(name)") }
             try? fm.removeItem(at: vaultRoot)
