@@ -992,6 +992,12 @@ internal sealed class VaultLifecycleViewModel
         workspace.TemplateVaultNameProvider =
             () => Path.GetFileName(Path.TrimEndingDirectorySeparator(root));
         workspace.TemplateNoteWritten += Workspace_TemplateNoteWritten;
+        // W5-4 F9: structural reports retarget open tabs synchronously
+        // at the mutation site; the event-stream retarget stays wired
+        // and no-ops on already-retargeted tabs.
+        WorkspaceViewModel capturedWorkspace = workspace;
+        sidebar.RetargetRequested = (oldPath, newPath) =>
+            capturedWorkspace.RetargetPath(oldPath, newPath);
         sidebar.OpenTargetRequested += FileSidebar_OpenTargetRequested;
         switcher.OpenRequested += QuickSwitcher_OpenRequested;
         switcher.Dismissed += QuickSwitcher_Dismissed;

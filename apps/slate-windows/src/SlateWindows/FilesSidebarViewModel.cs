@@ -5,6 +5,7 @@ using System.Collections.ObjectModel;
 using System.IO;
 using System.Windows.Threading;
 using System.Windows.Input;
+using SlateWindows.FileManagement;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows;
@@ -392,7 +393,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         CreateFolderCommand = new RelayCommand(_ => CreateFolder(), _ => !IsImporting && MutationName.Length > 0);
         CreateNoteCommand = new RelayCommand(_ => CreateNote(), _ => !IsImporting && MutationName.Length > 0);
         RenameCommand = new RelayCommand(
-            _ => RenameSelected(),
+            _ => TryRenameSelected(),
             _ => !IsImporting
                 && SelectedNode is { IsPlaceholder: false, IsGroupHeader: false }
                 && MutationName.Length > 0);
@@ -1019,6 +1020,8 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 return;
             }
 
+            // W5-4 F10: creates are structural history barriers.
+            StructuralHistoryBarrier();
             ReportResult($"Created folder {path}.");
             Refresh();
         }
@@ -1049,6 +1052,9 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 return;
             }
 
+            // W5-4 F10: a create is a structural history barrier (mac's
+            // table) — a stale inverse must never target this path.
+            StructuralHistoryBarrier();
             ReportResult($"Created {path}.");
             Refresh();
             RequestOpen(path);
@@ -1059,48 +1065,9 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
     }
 
-    private void RenameSelected()
-    {
-        if (SelectedNode is not FileTreeNodeViewModel node)
-        {
-            return;
-        }
-
-        try
-        {
-            string oldPath = node.Path;
-            string newPath = CombineVaultPath(ParentPath(oldPath), MutationName);
-            if (!TryRunSessionWork(() =>
-            {
-                if (node.IsDirectory)
-                {
-                    if (node.HasFolderNote)
-                    {
-                        _session.RenameFolderWithNote(node.Path, MutationName);
-                    }
-                    else
-                    {
-                        _session.RenameFolder(node.Path, MutationName);
-                    }
-                }
-                else
-                {
-                    _session.RenameFile(node.Path, MutationName);
-                }
-            }))
-            {
-                return;
-            }
-
-            TransformStoredPaths(oldPath, newPath, node.IsDirectory, deleted: false);
-            ReportResult($"Renamed {node.DisplayName} to {MutationName}.");
-            Refresh();
-        }
-        catch (VaultException exception)
-        {
-            ReportFailure($"Rename failed: {exception.Message}");
-        }
-    }
+    // RenameSelected moved to FilesSidebarViewModel.FileManagement.cs
+    // as TryRenameSelected (W5-4 F3: report consumption, the
+    // unconditional RenameFolderWithNote, error-keeps-field).
 
     private void DeleteSelected()
     {
@@ -1130,6 +1097,9 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 TransformStoredPaths(trashed.Path, trashed.Path, trashed.IsDirectory, deleted: true);
             }
 
+            // W5-4 F10: trash is not undoable AND a history barrier
+            // (mac's rule — the bytes are in the Recycle Bin).
+            StructuralHistoryBarrier();
             Status = BatchTrashSummary(report);
             // W0.5-3 residue: Windows single-item system-Recycle-Bin report copy.
             _announce(new A11yEvent.HostComposed(Status, A11yPriority.Medium));
@@ -1364,7 +1334,23 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
             foreach (BatchPathChange change in report.Standing)
             {
+                RetargetRequested?.Invoke(change.OldPath, change.NewPath);
                 TransformStoredPaths(change.OldPath, change.NewPath, change.IsDirectory, deleted: false);
+            }
+
+            // W5-4 F10: a SUCCEEDED batch move is undoable through the
+            // dedicated endpoint; anything less than Succeeded is not a
+            // clean inverse and records nothing.
+            if (report.State == BatchMoveState.Succeeded && report.OpId is long opId)
+            {
+                _structuralUndo.Push(new StructuralUndoStep(
+                    StructuralUndoKind.BatchMove,
+                    Path: string.Empty,
+                    Argument: string.Empty,
+                    IsDirectory: false,
+                    Noun: $"{report.Standing.Length:N0} "
+                        + (report.Standing.Length == 1 ? "item" : "items"),
+                    BatchOpId: opId));
             }
 
             Status = BatchMoveSummary(report, MoveDestination);
@@ -1402,6 +1388,8 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 TransformStoredPaths(item.Path, item.Path, item.IsDirectory, deleted: true);
             }
 
+            // W5-4 F10: trash is not undoable AND a history barrier.
+            StructuralHistoryBarrier();
             Status = BatchTrashSummary(report);
             // W0.5-3 residue: Windows system-Recycle-Bin report copy.
             _announce(new A11yEvent.HostComposed(Status, A11yPriority.Medium));

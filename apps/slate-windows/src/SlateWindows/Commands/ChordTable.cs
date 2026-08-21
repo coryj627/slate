@@ -1034,6 +1034,32 @@ internal static class ChordTable
                 "Escape", ChordScope.QuickOpen,
                 quickOpenReason + " PR-2 records its place in the Escape chain."),
 
+            // W5-4 (F10/FD-1): the structural undo domain. Delivered
+            // imperatively from Window_PreviewKeyDown, TREE-SCOPED —
+            // the editor owns Ctrl+Z/Ctrl+Y everywhere else (mac's
+            // undoTargetsStructural focus gate; mac routes ⌘Z through
+            // the responder chain, not the registry, so these are
+            // chord-only surface interactions on both platforms).
+            Chord("windows.sidebar.undoStructural",
+                "Files tree: undo the last structural operation",
+                "Ctrl+Z", ChordScope.Global,
+                "W5-4 (F10): tree-scoped structural undo — renames and "
+                + "moves re-run their inverse through the forward FFI; "
+                + "batch moves ride UndoBatchMove. Live only while the "
+                + "files tree owns focus; the editor keeps Ctrl+Z "
+                + "everywhere else (FD-1).",
+                mac: "⌘Z"),
+            Chord("windows.sidebar.redoStructural",
+                "Files tree: redo the last undone structural operation",
+                "Ctrl+Y", ChordScope.Global,
+                "W5-4 (F10): tree-scoped structural redo. mac uses ⇧⌘Z; "
+                + "Ctrl+Y is the Windows redo convention (decision 12).",
+                mac: "⇧⌘Z",
+                divergence:
+                "The rule maps ⇧⌘Z to Ctrl+Shift+Z, but Ctrl+Y is the "
+                + "platform redo convention (Notepad, Office, Explorer's "
+                + "rename field). Recorded as the deliberate Windows "
+                + "binding — W5-4 decision 12."),
             Chord("windows.view.showCommandPalette", "Show the command palette",
                 "Ctrl+Shift+P", ChordScope.Global,
                 "W5-1 (PD-2): the palette's own opening chord, delivered "

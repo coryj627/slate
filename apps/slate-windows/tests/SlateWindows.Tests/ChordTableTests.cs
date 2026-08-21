@@ -189,6 +189,9 @@ public sealed class ChordTableTests
                 "slate.sidebar.openShortcut9",
                 "slate.workspace.moveTabLeft",
                 "slate.workspace.moveTabRight",
+                // W5-4 (F10): mac's ⇧⌘Z predicts Ctrl+Shift+Z, but
+                // Ctrl+Y is the platform redo convention — decision 12.
+                "windows.sidebar.redoStructural",
             },
             divergent.OrderBy(id => id, System.StringComparer.Ordinal).ToArray());
     }
@@ -494,6 +497,16 @@ public sealed class ChordTableTests
                 + "palette invokes before dismissing (P9). Recorded here so the "
                 + "W5-1 red-team finding (an imperative chord shipping with no "
                 + "table row) cannot recur for search."),
+            ["windows.sidebar.undoStructural"] = new(
+                "W5-4 (F10): Ctrl+Z is delivered from Window_PreviewKeyDown, "
+                + "tree-scoped (FilesTree.IsKeyboardFocusWithin) — a KeyBinding "
+                + "would fire everywhere and steal the editor's own undo. mac "
+                + "routes its ⌘Z twin through the responder chain, not the "
+                + "registry, so this is a chord-only surface interaction on "
+                + "both platforms."),
+            ["windows.sidebar.redoStructural"] = new(
+                "W5-4 (F10): the Ctrl+Y redo twin of undoStructural, same "
+                + "tree-scoped imperative delivery."),
             [ChordTable.Ids.NewFromTemplate] = new(
                 "W5-3 (T9): Ctrl+Shift+N is delivered from Window_PreviewKeyDown, "
                 + "not a KeyBinding — a KeyBinding runs only for UNHANDLED key "

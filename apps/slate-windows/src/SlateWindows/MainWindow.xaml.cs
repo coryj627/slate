@@ -703,6 +703,29 @@ public partial class MainWindow : Window
             return;
         }
 
+        // W5-4 F10 (FD-1): structural undo/redo are TREE-SCOPED — the
+        // editor owns Ctrl+Z/Ctrl+Y everywhere else (mac's
+        // undoTargetsStructural focus gate translated). The inline
+        // rename field is inside the sidebar expander, not the tree,
+        // so IsKeyboardFocusWithin on the TREE already excludes it.
+        if (modifiers == ModifierKeys.Control
+            && e.Key is Key.Z or Key.Y
+            && FilesTree.IsKeyboardFocusWithin
+            && _viewModel.FileSidebar is FilesSidebarViewModel undoSidebar)
+        {
+            if (e.Key == Key.Z)
+            {
+                undoSidebar.UndoStructural();
+            }
+            else
+            {
+                undoSidebar.RedoStructural();
+            }
+
+            e.Handled = true;
+            return;
+        }
+
         if (e.Key == Key.F2
             && FilesTree.IsKeyboardFocusWithin
             && _viewModel.FileSidebar?.SelectedNode is
@@ -740,10 +763,13 @@ public partial class MainWindow : Window
         if (e.Key == Key.Enter && Keyboard.Modifiers == ModifierKeys.None)
         {
             SidebarMutationNameTextBox.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
-            ICommand? rename = _viewModel.FileSidebar?.RenameCommand;
-            if (rename?.CanExecute(null) == true)
+            // W5-4 F3: focus leaves the field only on SUCCESS — a
+            // failed rename keeps the field open with the reason in
+            // Status, so the user corrects in place instead of
+            // re-arming the whole flow.
+            if (_viewModel.FileSidebar?.RenameCommand.CanExecute(null) == true
+                && _viewModel.FileSidebar.TryRenameSelected())
             {
-                rename.Execute(null);
                 FilesTree.Focus();
             }
 
