@@ -18,6 +18,8 @@ using uniffi.slate_uniffi;
 
 string? fixtures = null;
 string? outDir = null;
+string? scenarios = null;
+bool mutations = args.Contains("--mutations");
 for (int i = 0; i < args.Length - 1; i++)
 {
     if (args[i] == "--fixtures")
@@ -28,7 +30,41 @@ for (int i = 0; i < args.Length - 1; i++)
     {
         outDir = args[i + 1];
     }
+    if (args[i] == "--scenarios")
+    {
+        scenarios = args[i + 1];
+    }
 }
+
+// W5-4 (#744) H1: the mutation mode — scenario scripts are data
+// (shared verbatim with the Swift twin); one artifact per scenario.
+//
+//   dotnet run --project apps/slate-windows/tools/ParityHarness -- \
+//     --mutations \
+//     --scenarios crates/slate-core/tests/fixtures/mutation_golden/scenarios.json \
+//     --out crates/slate-core/tests/fixtures/mutation_golden
+if (mutations)
+{
+    if (scenarios == null || outDir == null)
+    {
+        Console.Error.WriteLine(
+            "usage: ParityHarness --mutations --scenarios <scenarios.json> --out <dir>");
+        return 2;
+    }
+
+    Directory.CreateDirectory(outDir);
+    var produced = MutationDriver.RunAll(scenarios);
+    foreach ((string name, string artifact) in produced)
+    {
+        File.WriteAllBytes(
+            Path.Combine(outDir, name + ".json"),
+            System.Text.Encoding.UTF8.GetBytes(artifact));
+    }
+
+    Console.WriteLine($"mutation-harness: {produced.Count} artifacts -> {outDir}");
+    return 0;
+}
+
 if (fixtures == null || outDir == null)
 {
     Console.Error.WriteLine("usage: ParityHarness --fixtures <dir> --out <dir>");

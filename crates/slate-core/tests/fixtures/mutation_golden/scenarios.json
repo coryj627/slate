@@ -1,0 +1,146 @@
+{
+  "schemaVersion": 1,
+  "comment": "W5-4 (#744) H6: the mutation-harness scenario scripts ARE this data — the C# driver (apps/slate-windows/tools/ParityHarness) and the Swift twin (apps/slate-mac/Tests/SlateMacTests) both execute it verbatim, so 'identical sequences on both platforms' is enforced by construction. Op vocabulary: checkpoint(label), createExclusive(path,content), createFolder(path), renameFile(path,newName), renameFolderWithNote(path,newName), moveFile(path,newParent), moveFolder(path,newParent), batchMove(items,destination), deleteFile(path), undoReport(opRef), undoBatchMove(opRef), fault(name,value), reopen. 'expect' names the typed refusal kind the op must throw. 'assertEqual' pairs are checkpoint labels whose trees must be byte-identical (invariants 1/3/7). 'untouched' paths must be byte-identical across every checkpoint (invariant 1). 'terminalTreeMatches' names another scenario whose terminal tree must equal this one's (invariant 6).",
+  "scenarios": [
+    {
+      "name": "s1_occupied_destination",
+      "seed": [
+        { "path": "a.md", "content": "# A\n\nBody of a.\n" },
+        { "path": "taken.md", "content": "Occupied.\n" },
+        { "path": "Case.md", "content": "Case body.\n" },
+        { "path": "bystander.md", "content": "Untouched bystander.\n" },
+        { "path": "sub/a.md", "content": "Shadow occupant.\n" }
+      ],
+      "untouched": ["a.md", "taken.md", "Case.md", "bystander.md", "sub/a.md"],
+      "assertEqual": [["pre", "post"]],
+      "ops": [
+        { "op": "checkpoint", "label": "pre" },
+        { "op": "createExclusive", "path": "taken.md", "content": "clobber attempt\n", "expect": "DestinationExists" },
+        { "op": "renameFile", "path": "a.md", "newName": "taken.md", "expect": "DestinationExists" },
+        { "op": "renameFile", "path": "a.md", "newName": "CASE.md", "expect": "DestinationExists" },
+        { "op": "moveFile", "path": "a.md", "newParent": "sub", "expect": "DestinationExists" },
+        { "op": "checkpoint", "label": "post" }
+      ]
+    },
+    {
+      "name": "s2_retry_after_conflict",
+      "seed": [
+        { "path": "a.md", "content": "# A\n" },
+        { "path": "taken.md", "content": "Vacatable.\n" },
+        { "path": "bystander.md", "content": "Bystander.\n" }
+      ],
+      "untouched": ["bystander.md"],
+      "terminalTreeMatches": "s2_never_conflicted",
+      "ops": [
+        { "op": "renameFile", "path": "a.md", "newName": "taken.md", "expect": "DestinationExists" },
+        { "op": "renameFile", "path": "taken.md", "newName": "vacated.md" },
+        { "op": "renameFile", "path": "a.md", "newName": "taken.md" },
+        { "op": "checkpoint", "label": "terminal" }
+      ]
+    },
+    {
+      "name": "s2_never_conflicted",
+      "seed": [
+        { "path": "a.md", "content": "# A\n" },
+        { "path": "taken.md", "content": "Vacatable.\n" },
+        { "path": "bystander.md", "content": "Bystander.\n" }
+      ],
+      "untouched": ["bystander.md"],
+      "ops": [
+        { "op": "renameFile", "path": "taken.md", "newName": "vacated.md" },
+        { "op": "renameFile", "path": "a.md", "newName": "taken.md" },
+        { "op": "checkpoint", "label": "terminal" }
+      ]
+    },
+    {
+      "name": "s3_rewrite_interruption",
+      "seed": [
+        { "path": "target.md", "content": "# Target\n" },
+        { "path": "linker_ok.md", "content": "Link: [[target]].\n" },
+        { "path": "linker_faulted.md", "content": "Also: [[target]].\n" },
+        { "path": "bystander.md", "content": "Bystander.\n" }
+      ],
+      "untouched": ["bystander.md"],
+      "ops": [
+        { "op": "fault", "name": "AFTER_WRITE", "value": "linker_faulted" },
+        { "op": "renameFile", "path": "target.md", "newName": "renamed.md" },
+        { "op": "fault", "name": "AFTER_WRITE", "value": null },
+        { "op": "checkpoint", "label": "after_write_arm" },
+        { "op": "fault", "name": "PRE_WRITE", "value": "linker_faulted" },
+        { "op": "renameFile", "path": "renamed.md", "newName": "renamed2.md" },
+        { "op": "fault", "name": "PRE_WRITE", "value": null },
+        { "op": "checkpoint", "label": "pre_write_arm" },
+        { "op": "reopen" },
+        { "op": "checkpoint", "label": "after_recovery" }
+      ]
+    },
+    {
+      "name": "s4_undo_round_trips",
+      "seed": [
+        { "path": "a.md", "content": "# A body\n" },
+        { "path": "linker.md", "content": "See [[a]].\n" },
+        { "path": "one.md", "content": "1\n" },
+        { "path": "two.md", "content": "2\n" },
+        { "path": "sub/keep.md", "content": "keep\n" },
+        { "path": "fold/fold.md", "content": "# fold note\n" },
+        { "path": "bystander.md", "content": "Bystander.\n" }
+      ],
+      "untouched": ["bystander.md", "sub/keep.md"],
+      "assertEqual": [
+        ["pre_rename", "post_undo_rename"],
+        ["pre_move", "post_undo_move"],
+        ["pre_compound", "post_undo_compound"],
+        ["pre_batch", "post_undo_batch"],
+        ["pre_batch", "terminal"]
+      ],
+      "ops": [
+        { "op": "checkpoint", "label": "pre_rename" },
+        { "op": "renameFile", "path": "a.md", "newName": "b.md" },
+        { "op": "undoReport", "opRef": 1 },
+        { "op": "checkpoint", "label": "post_undo_rename" },
+        { "op": "checkpoint", "label": "pre_move" },
+        { "op": "moveFile", "path": "a.md", "newParent": "sub" },
+        { "op": "undoReport", "opRef": 5 },
+        { "op": "checkpoint", "label": "post_undo_move" },
+        { "op": "checkpoint", "label": "pre_compound" },
+        { "op": "renameFolderWithNote", "path": "fold", "newName": "gold" },
+        { "op": "renameFolderWithNote", "path": "gold", "newName": "fold" },
+        { "op": "checkpoint", "label": "post_undo_compound" },
+        { "op": "checkpoint", "label": "pre_batch" },
+        { "op": "batchMove", "items": ["one.md", "two.md"], "destination": "sub" },
+        { "op": "undoBatchMove", "opRef": 13 },
+        { "op": "checkpoint", "label": "post_undo_batch" },
+        { "op": "renameFile", "path": "a.md", "newName": "b.md" },
+        { "op": "renameFile", "path": "b.md", "newName": "c.md" },
+        { "op": "undoReport", "opRef": 16, "expect": "InvalidArgument" },
+        { "op": "undoBatchMove", "opRef": 13, "expect": "InvalidArgument" },
+        { "op": "undoReport", "opRef": 17 },
+        { "op": "renameFile", "path": "b.md", "newName": "a.md" },
+        { "op": "checkpoint", "label": "terminal" }
+      ]
+    },
+    {
+      "name": "s5_pre_mutation_abort",
+      "seed": [
+        { "path": "a.md", "content": "# A\n" },
+        { "path": "b.md", "content": "# B\n" },
+        { "path": "sub/keep.md", "content": "keep\n" },
+        { "path": "bystander.md", "content": "Bystander.\n" }
+      ],
+      "untouched": ["b.md", "sub/keep.md", "bystander.md"],
+      "assertEqual": [["pre", "post_abort"]],
+      "ops": [
+        { "op": "checkpoint", "label": "pre" },
+        { "op": "fault", "name": "PLANT_MARKERS", "value": "a.md" },
+        { "op": "moveFile", "path": "a.md", "newParent": "sub", "expect": "InvalidArgument" },
+        { "op": "batchMove", "items": ["a.md", "b.md"], "destination": "sub", "expect": "InvalidArgument" },
+        { "op": "deleteFile", "path": "a.md", "expect": "InvalidArgument" },
+        { "op": "fault", "name": "PLANT_MARKERS", "value": null },
+        { "op": "checkpoint", "label": "post_abort" },
+        { "op": "reopen" },
+        { "op": "moveFile", "path": "a.md", "newParent": "sub" },
+        { "op": "checkpoint", "label": "terminal" }
+      ]
+    }
+  ]
+}
