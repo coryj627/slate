@@ -216,6 +216,20 @@ internal sealed partial class WorkspaceViewModel
         if (tab is { IsMarkdown: true }
             && string.Equals(tab.Path, path, StringComparison.Ordinal))
         {
+            // The create-specific landing is EDITOR mode (codex round
+            // 3): a CurrentTab open inherits the landed tab's persisted
+            // mode, and a Reading-mode landing collapses the editor —
+            // the caret would park into a hidden control and T8's
+            // focus-follows-content could not be delivered. Normalized
+            // BEFORE the reload sweep so ReplaceItem does not
+            // reconstruct the reading projection it is about to drop.
+            // Same-path PEERS deliberately keep their mode: a reading
+            // peer re-projecting the fresh bytes is correct.
+            if (tab.IsReadingMode)
+            {
+                tab.ToggleViewMode();
+            }
+
             // T8's fresh-read rule (red team, correctness finding 1): a
             // same-path tab can land the open WITHOUT a disk read — the
             // same-group arm just activates the existing tab, and the

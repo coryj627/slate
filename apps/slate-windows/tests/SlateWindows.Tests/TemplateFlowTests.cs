@@ -721,6 +721,43 @@ public sealed class TemplateFlowTests
     }
 
     [Fact]
+    public void ACreateLandingInAReadingModeTabSwitchesToTheEditor()
+    {
+        RunSta(() =>
+        {
+            using FixtureVault fixture = FixtureVault.Create(1, "tpl-reading");
+            WriteTemplate(
+                fixture.Root, "Plain.md", "Body {{cursor}}tail\n");
+            using VaultSession session = OpenScanned(fixture.Root);
+            using var workspace = new WorkspaceViewModel(
+                session, fixture.Root, () => [], _ => { },
+                startInteractionBackgroundWork: false);
+
+            // The ordinary launch state codex round 3 named: a clean
+            // tab in READING mode. The CurrentTab open inherits the
+            // tab's persisted mode, and reading mode collapses the
+            // editor — the landing must normalize to editor mode or
+            // the caret parks into a hidden control.
+            workspace.OpenPath("note0.md");
+            WorkspaceTabViewModel current = workspace.ActiveGroup.ActiveTab!;
+            current.ToggleViewMode();
+            Assert.True(current.IsReadingMode);
+
+            OpenFlowFor(workspace, "Plain");
+            workspace.TemplateFlowSheet!.NoteName = "Landed";
+            workspace.TemplateFlowSheet.CreateCommand.Execute(null);
+
+            WorkspaceTabViewModel tab = workspace.ActiveGroup.ActiveTab!;
+            Assert.Equal("Landed.md", tab.Path);
+            Assert.False(tab.IsReadingMode);
+            Assert.True(tab.IsEditorVisible);
+            Assert.Equal(
+                tab.Text.IndexOf("tail", StringComparison.Ordinal),
+                tab.EditorCaretOffset);
+        });
+    }
+
+    [Fact]
     public void EveryCleanSamePathTabReloadsSoTheMirrorNeverDiverges()
     {
         RunSta(() =>

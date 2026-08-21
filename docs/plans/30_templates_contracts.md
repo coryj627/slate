@@ -209,6 +209,13 @@ char boundary (uniffi doc), first marker wins, all markers stripped.
   focus; the sheet-close focus restore **stands down** when focus was
   claimed outside the sheet (the SD-2 / `FocusClaimedOutside…`
   pattern, applied to the flow sheet's restore).
+- The create-specific landing is **editor mode** (codex round 3): a
+  CurrentTab open inherits the landed tab's persisted mode, so a
+  launch from a Reading-mode tab would land the new note in the
+  read-only projection with the editor collapsed. The landed tab
+  normalizes to editor mode before the reload/park; same-path PEERS
+  keep their mode (a reading peer re-projecting the fresh bytes is
+  correct).
 - The park applies only when the open actually landed: if the
   dirty-navigation prompt refuses the open, the note exists and the
   created announcement fired, but no caret is parked and no deferred
