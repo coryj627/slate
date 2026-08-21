@@ -382,22 +382,26 @@ final class MutationHarnessTests: XCTestCase {
     }
 
     private static func captureTree(_ vaultRoot: URL) throws -> [TreeEntry] {
+        // The STRING enumerator yields RELATIVE subpaths by
+        // construction — no prefix math against the root, which the
+        // /var vs /private/var symlink quirks defeated twice (the URL
+        // enumerator returns resolved paths while Foundation's
+        // resolvingSymlinksInPath deliberately leaves /var alone).
         let fm = FileManager.default
         var entries: [TreeEntry] = []
-        let enumerator = fm.enumerator(
-            at: vaultRoot,
-            includingPropertiesForKeys: [.isRegularFileKey],
-            options: [])!
-        for case let url as URL in enumerator {
-            let values = try url.resourceValues(forKeys: [.isRegularFileKey])
-            guard values.isRegularFile == true else { continue }
-            var relative = url.path
-            let prefix = vaultRoot.path + "/"
-            if relative.hasPrefix(prefix) {
-                relative = String(relative.dropFirst(prefix.count))
+        guard let enumerator = fm.enumerator(atPath: vaultRoot.path) else {
+            throw DriverError("could not enumerate \(vaultRoot.path)")
+        }
+        for case let relative as String in enumerator {
+            if relative == ".slate" || relative.hasPrefix(".slate/") {
+                continue
             }
-            if relative.hasPrefix(".slate/") { continue }
-            let bytes = try Data(contentsOf: url)
+            var isDirectory: ObjCBool = false
+            let full = vaultRoot.appendingPathComponent(relative)
+            guard fm.fileExists(atPath: full.path, isDirectory: &isDirectory),
+                !isDirectory.boolValue
+            else { continue }
+            let bytes = try Data(contentsOf: full)
             entries.append(
                 TreeEntry(
                     path: relative,
