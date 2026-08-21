@@ -28,23 +28,12 @@ namespace SlateWindows.Tests.Censuses;
 [Trait("census", "a11y-corpus")]
 public sealed class A11yCorpusCensus
 {
-    private static string RepoRoot
-    {
-        get
-        {
-            // tests/.../bin/<cfg>/net10.0-windows -> repo root is eight
-            // levels above (the MutationHarnessCensus shape).
-            string dir = AppContext.BaseDirectory;
-            for (int i = 0; i < 8; i++)
-            {
-                dir = Path.GetDirectoryName(dir)!;
-            }
-            return dir;
-        }
-    }
-
+    // The repo root is found by walking UP to the workspace Cargo.toml
+    // (SourceText.RepoRoot), never by counting directory hops: a hop
+    // count silently misses when the output layout changes — a TFM, a
+    // runtime identifier, a different runner (codoki on #1114).
     private static string CorpusPath =>
-        Path.Combine(RepoRoot, "tests", "fixtures", "a11y", "corpus.json");
+        Path.Combine(SourceText.RepoRoot(), "tests", "fixtures", "a11y", "corpus.json");
 
     private sealed record CorpusEntry(string Event, string Priority, string Text);
 
