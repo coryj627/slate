@@ -436,6 +436,34 @@ both discarded with the workspace.
   `defaultNewNoteName`). A user in UTC-8 creating a daily note at
   17:00 gets tomorrow's date. Cross-platform-identical and pinned by
   core tests; changing it is a product decision for another issue.
+- **TR-5 — A post-publish create failure re-presents as if nothing
+  was written** (codex round 2). `create_exclusive_binding`'s own
+  contract keeps the committed bytes on a post-write index failure
+  (never delete user bytes on an index error; the next scan indexes
+  them), but the FFI reports one exception kind, so the flow — like
+  mac's identical single-catch, and every other CreateExclusive
+  caller on both platforms — re-presents the name sheet while the
+  note exists; a retry answers `DestinationExists` naming the
+  existing path. No bytes are lost and nothing is clobbered; the
+  cross-platform fix is a typed post-publish outcome from core,
+  filed as #1123.
+- **TR-6 — Case-alias identity is #1077's, inherited not forked**
+  (codex round 2). A parked tab of a deleted `Ghost.md` plus a
+  create of `ghost.md` addresses one physical file under two ordinal
+  identities — the T8 sweep, mirroring, and save targeting all use
+  the workspace's single ordinal comparator, deliberately: making
+  ONE sweep case-aware while every sibling site stays ordinal
+  produces a half-aliased workspace. The class, with codex's
+  stale-overwrite scenario recorded on it, is #1077's to fix with
+  one provider-aware identity operation across every site.
+- **TR-7 — Sheet keyboard containment is the nine-sheet class of
+  #1118** (codex round 2). While any sheet is up, window-level
+  `InputBindings` and the Ctrl+Alt branches still act on the hidden
+  workspace; every sheet's key handler — the seven that shipped
+  before this issue and the two added by it — handles only
+  Esc/Enter. The template sheets ship at sibling parity; the central
+  modal-owner swallow belongs to #1118 (extended with the
+  InputBindings half and both new member surfaces).
 
 ## Mac details recorded while reading (not this issue's to fix)
 
