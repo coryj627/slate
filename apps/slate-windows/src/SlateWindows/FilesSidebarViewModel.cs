@@ -171,10 +171,17 @@ internal sealed class FileTreeNodeViewModel : BindableBase
         {
             if (IsBatchSelectable && SetField(ref _isBatchSelected, value))
             {
-                _owner?.BatchSelectionChanged();
+                _owner?.BatchCheckChanged(this);
             }
         }
     }
+
+    /// <summary>Whether this folder's children are REAL rows rather
+    /// than the "Loading…" placeholder — the signal the batch-check
+    /// reconciliation uses to distinguish "provably gone" from
+    /// "merely unmaterialized" (codex round 5).</summary>
+    internal bool HasLoadedChildren =>
+        !(Children.Count == 1 && Children[0].IsPlaceholder);
 
     /// <summary>W5-4 (verification 1): the VM→view selection channel.
     /// The container style binds TreeViewItem.IsSelected TwoWay, so a
@@ -708,9 +715,31 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     public ICommand HistoryBackCommand { get; }
     public ICommand HistoryForwardCommand { get; }
 
+    /// <summary>The AUTHORITATIVE batch-check set (codex round 5):
+    /// path → isDirectory. Node checkboxes are its projection — a
+    /// checked descendant inside a collapsed folder survives every
+    /// publication because the truth never lived on the discarded
+    /// node.</summary>
+    private readonly Dictionary<string, bool> _batchChecked =
+        new(StringComparer.Ordinal);
+
+    internal void BatchCheckChanged(FileTreeNodeViewModel node)
+    {
+        if (node.IsBatchSelected)
+        {
+            _batchChecked[node.Path] = node.IsDirectory;
+        }
+        else
+        {
+            _batchChecked.Remove(node.Path);
+        }
+
+        BatchSelectionChanged();
+    }
+
     public void BatchSelectionChanged()
     {
-        BatchSelectionCount = Flatten(RootNodes).Count(node => node.IsBatchSelected && node.IsBatchSelectable);
+        BatchSelectionCount = _batchChecked.Count;
         _announce(BatchSelectionCount == 0
             ? new A11yEvent.NoItemsSelected()
             : new A11yEvent.ItemsSelected((uint)BatchSelectionCount));
@@ -1045,10 +1074,10 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
     private void EditTag(bool add)
     {
-        string[] paths = Flatten(RootNodes)
-            .Where(node => node.IsBatchSelected && !node.IsDirectory)
-            .Select(node => node.Path)
-            .ToArray();
+        string[] paths = [.. _batchChecked
+            .Where(pair => !pair.Value)
+            .Select(pair => pair.Key)
+            .OrderBy(path => path, StringComparer.Ordinal)];
         if (paths.Length == 0 || TagInput.Length == 0)
         {
             return;
@@ -1466,10 +1495,9 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         RequestOpen(node.IsDirectory ? FolderNotePath(node) : node.Path, target, trackHistory: true);
     }
 
-    private StructuralBatchItem[] SelectedBatchItems() => Flatten(RootNodes)
-        .Where(node => node.IsBatchSelected && node.IsBatchSelectable)
-        .Select(node => new StructuralBatchItem(node.Path, node.IsDirectory))
-        .ToArray();
+    private StructuralBatchItem[] SelectedBatchItems() => [.. _batchChecked
+        .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+        .Select(pair => new StructuralBatchItem(pair.Key, pair.Value))];
 
     private void BatchMove()
     {
@@ -1946,6 +1974,26 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 _history[index] = transformed;
             }
         }
+
+        // The authoritative batch checks follow renames/moves and drop
+        // with deletions exactly like the other stored paths (codex
+        // round 5). Silent — a rename must not speak selection.
+        var transformedChecked = new Dictionary<string, bool>(StringComparer.Ordinal);
+        foreach ((string path, bool isDir) in _batchChecked)
+        {
+            if (Transform(path) is string transformedPath)
+            {
+                transformedChecked[transformedPath] = isDir;
+            }
+        }
+
+        _batchChecked.Clear();
+        foreach ((string path, bool isDir) in transformedChecked)
+        {
+            _batchChecked[path] = isDir;
+        }
+
+        BatchSelectionCount = _batchChecked.Count;
 
         _historyIndex = Math.Clamp(_historyIndex, -1, _history.Count - 1);
         // Codex round 2: a failed settings write must not vanish under

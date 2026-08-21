@@ -375,23 +375,13 @@ internal sealed partial class FilesSidebarViewModel
 
     private void ApplyTreeRefresh(TreeRefreshOutcome outcome, bool reportCount)
     {
-        // Snapshot the batch checks BEFORE the swap (codex round 4):
-        // the fresh nodes default IsBatchSelected to false while the
-        // incrementally maintained count kept its stale value — the
-        // UI then reported a batch that no longer existed and Move To
-        // silently fell back to the focused item.
-        var checkedPaths = Flatten(RootNodes)
-            .Where(node => node.IsBatchSelected)
-            .Select(node => node.Path)
-            .ToHashSet(StringComparer.Ordinal);
-
         RootNodes = outcome.RootNodes;
         if (outcome.TagGeneration == _tagGeneration)
         {
             ApplyTags(outcome.Tags);
         }
 
-        ScheduleFilter();
+        ScheduleFilter(automatic: true);
         // W5-4 F1/F2: a create staged an inline-rename hand-off; the
         // published tree is the first moment the new node exists to
         // select. Other mutations stage a plain selection/focus
@@ -400,21 +390,49 @@ internal sealed partial class FilesSidebarViewModel
         ConsumePendingSelection();
         ReconcileSelectionAfterPublication();
 
-        // Rebind surviving checks onto the fresh nodes, then recompute
-        // the count from the published tree — state and summary agree
-        // again, silently (nothing the user did changed; checks on
-        // vanished paths drop with their files).
-        if (checkedPaths.Count > 0)
+        // Project the AUTHORITATIVE checked set onto the published
+        // nodes (codex rounds 4-5): a fresh node whose path is
+        // checked re-checks silently; an entry is pruned only when
+        // its ABSENCE is provable (the parent's real children are
+        // materialized — or the root — and the path is not among
+        // them). A checked descendant inside a COLLAPSED folder is
+        // merely unmaterialized and survives. A truncated publication
+        // proves nothing and prunes nothing.
+        if (_batchChecked.Count > 0)
         {
-            foreach (FileTreeNodeViewModel node in Flatten(RootNodes)
-                .Where(node => checkedPaths.Contains(node.Path)))
+            var materialized = new Dictionary<string, FileTreeNodeViewModel>(
+                StringComparer.Ordinal);
+            foreach (FileTreeNodeViewModel node in Flatten(RootNodes))
             {
-                _ = node.MarkBatchSelectedSilently();
+                materialized[node.Path] = node;
+            }
+
+            foreach (string path in _batchChecked.Keys.ToList())
+            {
+                if (materialized.TryGetValue(path, out FileTreeNodeViewModel? node))
+                {
+                    _ = node.MarkBatchSelectedSilently();
+                    continue;
+                }
+
+                if (outcome.Level.Truncated)
+                {
+                    continue;
+                }
+
+                string parent = ParentPath(path);
+                bool absenceProvable = parent.Length == 0
+                    || (materialized.TryGetValue(
+                            parent, out FileTreeNodeViewModel? parentNode)
+                        && parentNode.HasLoadedChildren);
+                if (absenceProvable)
+                {
+                    _batchChecked.Remove(path);
+                }
             }
         }
 
-        BatchSelectionCount = Flatten(RootNodes)
-            .Count(node => node.IsBatchSelected && node.IsBatchSelectable);
+        BatchSelectionCount = _batchChecked.Count;
         if (outcome.Level.Truncated)
         {
             Status = DirectoryOverflowStatus(string.Empty);

@@ -1114,6 +1114,94 @@ public sealed class FileManagementTests
         Assert.False(Node(rig, "z.md").IsBatchSelected);
     }
 
+    [Fact]
+    public async Task ACollapsedCheckedDescendantSurvivesPublication()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "fm-collapsed-check");
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "folder"));
+        File.WriteAllText(Path.Combine(fixture.Root, "folder", "a.md"), "A\n");
+        File.WriteAllText(Path.Combine(fixture.Root, "c.md"), "C\n");
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "sub"));
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new List<A11yEvent>();
+        SidebarRig rig = await NewSidebar(session, fixture, announced);
+
+        FileTreeNodeViewModel folder = Node(rig, "folder");
+        folder.IsExpanded = true;
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => folder.Children.Any(child => child.Path == "folder/a.md"),
+                TimeSpan.FromSeconds(5)));
+        folder.Children.Single(child => child.Path == "folder/a.md")
+            .IsBatchSelected = true;
+        folder.IsExpanded = false;
+        Assert.Equal(1, rig.Sidebar.BatchSelectionCount);
+
+        // Codex round 5: the fresh tree holds only the collapsed
+        // folder's PLACEHOLDER — the checked descendant is merely
+        // unmaterialized, not gone; the authoritative set keeps it
+        // and Move To still targets the batch.
+        rig.Sidebar.Refresh();
+        await rig.Settle();
+        Assert.Equal(1, rig.Sidebar.BatchSelectionCount);
+
+        rig.Sidebar.SelectedNode = Node(rig, "c.md");
+        rig.Sidebar.MoveToCommand.Execute(null);
+        MoveToPickerViewModel picker = Assert.IsType<MoveToPickerViewModel>(
+            rig.Sidebar.MoveToSheet);
+        Assert.Equal("a.md", picker.ItemNoun);
+        picker.CancelCommand.Execute(null);
+    }
+
+    [Fact]
+    public async Task AnActiveFilterDoesNotEraseTheMutationStatus()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "fm-filtered-status");
+        File.WriteAllText(Path.Combine(fixture.Root, "a.md"), "# A\n");
+        File.WriteAllText(
+            Path.Combine(fixture.Root, "linker.md"), "See [[a]].\n");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new List<A11yEvent>();
+        SidebarRig rig = await NewSidebar(session, fixture, announced);
+
+        rig.Sidebar.FilterText = "linker";
+        await rig.Sidebar.FilterCompletion;
+
+        // A faulted rewrite under an ACTIVE filter: the automatic
+        // refilter the mutation's publication schedules must preserve
+        // the final status (the failed path stays inspectable) and
+        // must not speak a redundant count (codex round 5). The env
+        // lock releases BEFORE any await — Monitor.Exit must run on
+        // the acquiring thread, and the fault is already cleared by
+        // scope end.
+        using (EnvFaultLock.Acquire())
+        {
+            Environment.SetEnvironmentVariable(
+                "SLATE_TEST_FAULT_AFTER_WRITE", "linker");
+            try
+            {
+                rig.Sidebar.SelectedNode = Node(rig, "a.md");
+                rig.Sidebar.MutationName = "b.md";
+                Assert.True(rig.Sidebar.TryRenameSelected());
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable(
+                    "SLATE_TEST_FAULT_AFTER_WRITE", null);
+            }
+        }
+
+        await rig.Settle();
+        await rig.Sidebar.FilterCompletion;
+        int countsBefore = announced.OfType<A11yEvent.FileListCount>().Count();
+        Assert.StartsWith(
+            "Renamed a.md to b.md", rig.Sidebar.Status, StringComparison.Ordinal);
+        Assert.Contains("linker.md", rig.Sidebar.Status, StringComparison.Ordinal);
+        // Exactly the USER filter's one count — the automatic
+        // refilter stayed quiet.
+        Assert.Equal(1, countsBefore);
+    }
+
     // ---- Helpers ------------------------------------------------------
 
     private sealed record SidebarRig(FilesSidebarViewModel Sidebar)

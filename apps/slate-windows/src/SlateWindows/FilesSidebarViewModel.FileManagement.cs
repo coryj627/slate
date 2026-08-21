@@ -129,8 +129,15 @@ internal sealed partial class FilesSidebarViewModel
     {
         if (_statusToReassert is string reassert)
         {
-            _statusToReassert = null;
             Status = reassert;
+            // An active filter's AUTOMATIC refilter is still coming
+            // (this publication just scheduled it) and would stomp
+            // Status after the debounce — leave the value for
+            // ApplyFilterOutcome to consume (codex round 5).
+            if (!IsFilterActive || !IsFiltering)
+            {
+                _statusToReassert = null;
+            }
         }
     }
 
