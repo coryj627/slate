@@ -585,13 +585,27 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     /// made).</summary>
     private void SelectSilently(FileTreeNodeViewModel node)
     {
+        FileTreeNodeViewModel? previous = _selectedNode;
         if (SetField(ref _selectedNode, node, nameof(SelectedNode)))
         {
             // The view half (verification 1): without the container's
             // IsSelected, the restore was invisible and the next arrow
             // key jumped to the tree top and opened the first file.
             node.IsSelected = true;
-            MutationName = node.Name;
+            // A SAME-PATH re-seat — a publication replaced the node
+            // object beneath the selection (every refresh does) — keeps
+            // whatever the name field holds: the user may be mid-way
+            // through an inline rename, and the lifecycle's
+            // watcher-driven refresh lands ~150 ms after a create, inside
+            // the typing window (#1136 — the shell gate's FileManagement
+            // journey flaked on exactly this). Only a DIFFERENT logical
+            // node — a mutation's pending selection landing on its new
+            // path — carries its name into the field.
+            if (!string.Equals(previous?.Path, node.Path, StringComparison.Ordinal))
+            {
+                MutationName = node.Name;
+            }
+
             RaiseCommandStates();
         }
     }
