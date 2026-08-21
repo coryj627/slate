@@ -1069,6 +1069,51 @@ public sealed class FileManagementTests
             File.ReadAllText(Path.Combine(fixture.Root, "a.md")));
     }
 
+    [Fact]
+    public async Task BatchChecksSurviveAPublicationAndTheCountStaysTrue()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "fm-batch-refresh");
+        File.WriteAllText(Path.Combine(fixture.Root, "a.md"), "A\n");
+        File.WriteAllText(Path.Combine(fixture.Root, "b.md"), "B\n");
+        File.WriteAllText(Path.Combine(fixture.Root, "c.md"), "C\n");
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "sub"));
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new List<A11yEvent>();
+        SidebarRig rig = await NewSidebar(session, fixture, announced);
+
+        Node(rig, "a.md").IsBatchSelected = true;
+        Node(rig, "b.md").IsBatchSelected = true;
+        Assert.Equal(2, rig.Sidebar.BatchSelectionCount);
+
+        // Any refresh republished all-new nodes with every checkbox
+        // cleared while the count kept its stale value (codex round
+        // 4) — Move To then silently targeted only the focused item.
+        // Publication now rebinds surviving checks and recomputes.
+        rig.Sidebar.Refresh();
+        await rig.Settle();
+        Assert.Equal(2, rig.Sidebar.BatchSelectionCount);
+        Assert.True(Node(rig, "a.md").IsBatchSelected);
+        Assert.True(Node(rig, "b.md").IsBatchSelected);
+        Assert.False(Node(rig, "c.md").IsBatchSelected);
+
+        rig.Sidebar.SelectedNode = Node(rig, "c.md");
+        rig.Sidebar.MoveToCommand.Execute(null);
+        MoveToPickerViewModel picker = Assert.IsType<MoveToPickerViewModel>(
+            rig.Sidebar.MoveToSheet);
+        Assert.Equal("2 items", picker.ItemNoun);
+        picker.CancelCommand.Execute(null);
+
+        // Checks on vanished paths drop with their files: the count
+        // follows the published tree (vacate the checked path through
+        // core — a raw disk delete is invisible to the index until a
+        // rescan).
+        _ = session.RenameFile("b.md", "z.md");
+        rig.Sidebar.Refresh();
+        await rig.Settle();
+        Assert.Equal(1, rig.Sidebar.BatchSelectionCount);
+        Assert.False(Node(rig, "z.md").IsBatchSelected);
+    }
+
     // ---- Helpers ------------------------------------------------------
 
     private sealed record SidebarRig(FilesSidebarViewModel Sidebar)

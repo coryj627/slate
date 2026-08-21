@@ -375,6 +375,16 @@ internal sealed partial class FilesSidebarViewModel
 
     private void ApplyTreeRefresh(TreeRefreshOutcome outcome, bool reportCount)
     {
+        // Snapshot the batch checks BEFORE the swap (codex round 4):
+        // the fresh nodes default IsBatchSelected to false while the
+        // incrementally maintained count kept its stale value — the
+        // UI then reported a batch that no longer existed and Move To
+        // silently fell back to the focused item.
+        var checkedPaths = Flatten(RootNodes)
+            .Where(node => node.IsBatchSelected)
+            .Select(node => node.Path)
+            .ToHashSet(StringComparer.Ordinal);
+
         RootNodes = outcome.RootNodes;
         if (outcome.TagGeneration == _tagGeneration)
         {
@@ -389,6 +399,22 @@ internal sealed partial class FilesSidebarViewModel
         ConsumePendingRenameArm();
         ConsumePendingSelection();
         ReconcileSelectionAfterPublication();
+
+        // Rebind surviving checks onto the fresh nodes, then recompute
+        // the count from the published tree — state and summary agree
+        // again, silently (nothing the user did changed; checks on
+        // vanished paths drop with their files).
+        if (checkedPaths.Count > 0)
+        {
+            foreach (FileTreeNodeViewModel node in Flatten(RootNodes)
+                .Where(node => checkedPaths.Contains(node.Path)))
+            {
+                _ = node.MarkBatchSelectedSilently();
+            }
+        }
+
+        BatchSelectionCount = Flatten(RootNodes)
+            .Count(node => node.IsBatchSelected && node.IsBatchSelectable);
         if (outcome.Level.Truncated)
         {
             Status = DirectoryOverflowStatus(string.Empty);

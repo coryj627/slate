@@ -202,6 +202,13 @@ internal sealed class FileTreeNodeViewModel : BindableBase
         return SetField(ref _isExpanded, true, nameof(IsExpanded));
     }
 
+    /// <summary>Publication-time batch-check rebind (codex round 4):
+    /// no per-node announcement — the owner recomputes the count once
+    /// after the whole rebind.</summary>
+    internal bool MarkBatchSelectedSilently() =>
+        IsBatchSelectable
+        && SetField(ref _isBatchSelected, true, nameof(IsBatchSelected));
+
     internal bool PrepareChildLoad()
     {
         if (!IsDirectory || _childLoadState is FileTreeChildLoadState.Loading or FileTreeChildLoadState.Loaded)
