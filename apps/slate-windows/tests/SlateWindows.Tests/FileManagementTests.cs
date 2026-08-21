@@ -710,6 +710,240 @@ public sealed class FileManagementTests
             picker.Rows.Count(row => row.Kind == MoveToRowKind.Folder));
     }
 
+    [Fact]
+    public async Task ARejectedBatchUndoNeverAnnouncesSuccessOrInvertsTheStacks()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "fm-batch-undo-rejected");
+        File.WriteAllText(Path.Combine(fixture.Root, "one.md"), "1\n");
+        File.WriteAllText(Path.Combine(fixture.Root, "two.md"), "2\n");
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "sub"));
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new List<A11yEvent>();
+        SidebarRig rig = await NewSidebar(session, fixture, announced);
+
+        Node(rig, "one.md").IsBatchSelected = true;
+        Node(rig, "two.md").IsBatchSelected = true;
+        rig.Sidebar.MoveDestination = "sub";
+        rig.Sidebar.BatchMoveCommand.Execute(null);
+        Assert.True(File.Exists(Path.Combine(fixture.Root, "sub", "one.md")));
+
+        // An external collision at the undo's destination: core
+        // reports Rejected as a STATE, not an exception (red team,
+        // correctness 1) — the undo must drop the suspect history and
+        // say so, never announce success or record a redo.
+        File.WriteAllText(Path.Combine(fixture.Root, "one.md"), "intruder\n");
+        rig.Sidebar.UndoStructural();
+        string[] spoken = [.. announced
+            .OfType<A11yEvent.HostComposed>()
+            .Select(item => SlateUniffiMethods.A11yRender(item).Text)];
+        Assert.Contains("Can't undo — the files have changed.", spoken);
+        Assert.DoesNotContain("Undid move of 2 items.", spoken);
+        Assert.Equal(
+            "intruder\n", File.ReadAllText(Path.Combine(fixture.Root, "one.md")));
+
+        announced.Clear();
+        rig.Sidebar.RedoStructural();
+        Assert.Contains(
+            "Nothing to redo.",
+            announced.OfType<A11yEvent.HostComposed>()
+                .Select(item => SlateUniffiMethods.A11yRender(item).Text));
+    }
+
+    [Fact]
+    public async Task ANewerStepPurgesTheDeadBatchEntryInsteadOfLying()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "fm-batch-purge");
+        File.WriteAllText(Path.Combine(fixture.Root, "a.md"), "A\n");
+        File.WriteAllText(Path.Combine(fixture.Root, "one.md"), "1\n");
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "sub"));
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new List<A11yEvent>();
+        SidebarRig rig = await NewSidebar(session, fixture, announced);
+
+        Node(rig, "one.md").IsBatchSelected = true;
+        rig.Sidebar.MoveDestination = "sub";
+        rig.Sidebar.BatchMoveCommand.Execute(null);
+        await rig.Settle();
+
+        // A rename lands ON TOP of the batch entry: UndoBatchMove
+        // admits only the journal's latest row and every undo
+        // journals, so the batch entry is dead the moment the rename
+        // journals — reaching it later destroyed both stacks under a
+        // false "files have changed" (red team, correctness 3). The
+        // push purges it instead.
+        rig.Sidebar.SelectedNode = Node(rig, "a.md");
+        rig.Sidebar.MutationName = "b.md";
+        Assert.True(rig.Sidebar.TryRenameSelected());
+
+        rig.Sidebar.UndoStructural();
+        Assert.True(File.Exists(Path.Combine(fixture.Root, "a.md")));
+        announced.Clear();
+        rig.Sidebar.UndoStructural();
+        string[] spoken = [.. announced
+            .OfType<A11yEvent.HostComposed>()
+            .Select(item => SlateUniffiMethods.A11yRender(item).Text)];
+        Assert.Contains("Nothing to undo.", spoken);
+        Assert.DoesNotContain("Can't undo — the files have changed.", spoken);
+        Assert.True(File.Exists(Path.Combine(fixture.Root, "sub", "one.md")));
+    }
+
+    [Fact]
+    public async Task AFolderNoteRenameCorrectsStoredPathsBeyondPrefixMath()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "fm-fnote-stored");
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "docs"));
+        File.WriteAllText(Path.Combine(fixture.Root, "docs", "docs.md"), "# docs\n");
+        File.WriteAllText(Path.Combine(fixture.Root, "docs", "other.md"), "O\n");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new List<A11yEvent>();
+        SidebarRig rig = await NewSidebar(session, fixture, announced);
+
+        FileTreeNodeViewModel docs = Node(rig, "docs");
+        docs.IsExpanded = true;
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => docs.Children.Any(child => child.Path == "docs/docs.md"),
+                TimeSpan.FromSeconds(5)),
+            "the folder's children never materialized.");
+        rig.Sidebar.SelectedNode =
+            docs.Children.Single(child => child.Path == "docs/docs.md");
+        rig.Sidebar.PinCommand.Execute(null);
+        rig.Sidebar.SelectedNode =
+            docs.Children.Single(child => child.Path == "docs/other.md");
+        rig.Sidebar.PinCommand.Execute(null);
+
+        rig.Sidebar.SelectedNode = Node(rig, "docs");
+        rig.Sidebar.MutationName = "guide";
+        Assert.True(rig.Sidebar.TryRenameSelected());
+
+        // Red team (correctness 2): the compound rename moves the
+        // NOTE'S LEAF beyond prefix math — docs/docs.md lands at
+        // guide/guide.md, not guide/docs.md; every stored path must
+        // follow the report's real pair while siblings ride the
+        // prefix. The persisted pins are the observable store.
+        Assert.True(File.Exists(Path.Combine(fixture.Root, "guide", "guide.md")));
+        System.Collections.Generic.IReadOnlySet<string> pins =
+            new SidebarSettingsStore(fixture.Root).Load().Pins;
+        Assert.Contains("guide/guide.md", pins);
+        Assert.Contains("guide/other.md", pins);
+        Assert.DoesNotContain("guide/docs.md", pins);
+    }
+
+    [Fact]
+    public async Task TheTypedNewFolderRowObeysTheSameLegalityAsTheList()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "fm-newfolder-legality");
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "moving", "inner"));
+        File.WriteAllText(
+            Path.Combine(fixture.Root, "moving", "note.md"), "N\n");
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "elsewhere"));
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new List<A11yEvent>();
+        SidebarRig rig = await NewSidebar(session, fixture, announced);
+
+        rig.Sidebar.SelectedNode = Node(rig, "moving");
+        rig.Sidebar.MoveToCommand.Execute(null);
+        MoveToPickerViewModel picker = Assert.IsType<MoveToPickerViewModel>(
+            rig.Sidebar.MoveToSheet);
+
+        // Red team (correctness 4): the typed path must not resurface
+        // an illegal or existing destination as a "create" — a fresh
+        // path INSIDE the moving folder's own subtree, the current
+        // parent, and any known folder all hide the row.
+        picker.FilterText = "moving/new";
+        Assert.DoesNotContain(
+            picker.Rows, row => row.Kind == MoveToRowKind.NewFolder);
+        picker.FilterText = "moving/inner";
+        Assert.DoesNotContain(
+            picker.Rows, row => row.Kind == MoveToRowKind.NewFolder);
+        picker.FilterText = "elsewhere";
+        Assert.DoesNotContain(
+            picker.Rows, row => row.Kind == MoveToRowKind.NewFolder);
+        picker.FilterText = "fresh";
+        Assert.Single(picker.Rows, row => row.Kind == MoveToRowKind.NewFolder);
+    }
+
+    [Fact]
+    public void TheVaultRootRowStaysPinnedUnderAFilter()
+    {
+        var announced = new List<A11yEvent>();
+        var picker = new MoveToPickerViewModel(
+            ["alpha", "beta"],
+            rootIsLegal: true,
+            itemNoun: "a.md",
+            confirmed: _ => { },
+            createAndMove: _ => { },
+            cancelled: () => { },
+            newFolderPathAllowed: _ => true,
+            announce: announced.Add);
+
+        // Pinned (red team, contracts 6): a typed query must never
+        // make the root unreachable — and the DEFAULT selection under
+        // a query prefers the query's own first match, so Enter never
+        // silently retargets the root.
+        Assert.Contains(picker.Rows, row => row.Kind == MoveToRowKind.VaultRoot);
+        picker.FilterText = "alp";
+        Assert.Contains(picker.Rows, row => row.Kind == MoveToRowKind.VaultRoot);
+        Assert.Equal(MoveToRowKind.Folder, picker.SelectedRow?.Kind);
+        picker.FilterText = "zzz-no-match";
+        Assert.Contains(picker.Rows, row => row.Kind == MoveToRowKind.VaultRoot);
+        Assert.Equal(MoveToRowKind.NewFolder, picker.SelectedRow?.Kind);
+    }
+
+    [Fact]
+    public void ThePickerSpeaksItsSelectionAndItsFilterLandings()
+    {
+        var announced = new List<A11yEvent>();
+        var picker = new MoveToPickerViewModel(
+            ["alpha", "beta"],
+            rootIsLegal: false,
+            itemNoun: "a.md",
+            confirmed: _ => { },
+            createAndMove: _ => { },
+            cancelled: () => { },
+            newFolderPathAllowed: _ => true,
+            announce: announced.Add);
+
+        // Red team (a11y 1): arrow-driven selection speaks the row;
+        // each filter landing speaks the count — the quick-open
+        // pattern's two halves.
+        announced.Clear();
+        picker.SelectedRow = picker.Rows[1];
+        Assert.Single(announced.OfType<A11yEvent.RowSelected>());
+
+        announced.Clear();
+        picker.FilterText = "alp";
+        Assert.Contains(
+            announced.OfType<A11yEvent.HostComposed>()
+                .Select(item => SlateUniffiMethods.A11yRender(item).Text),
+            text => text.EndsWith("destinations.", StringComparison.Ordinal)
+                || text.EndsWith("destination.", StringComparison.Ordinal));
+        // The rebuild's own default selection stays silent (only the
+        // user's arrows speak rows).
+        Assert.Empty(announced.OfType<A11yEvent.RowSelected>());
+    }
+
+    [Fact]
+    public async Task DeleteRefusesPlaceholdersAndGroupHeaders()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "fm-delete-guard");
+        File.WriteAllText(Path.Combine(fixture.Root, "a.md"), "A\n");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new List<A11yEvent>();
+        SidebarRig rig = await NewSidebar(session, fixture, announced);
+
+        rig.Sidebar.GroupByDate = true;
+        await rig.Settle();
+        FileTreeNodeViewModel header = rig.Sidebar.RootNodes
+            .First(node => node.IsGroupHeader);
+        rig.Sidebar.SelectedNode = header;
+
+        // Red team: a selected date header reached DeleteFile("") and
+        // spoke a spurious failure; the guard matches the sibling
+        // verbs.
+        Assert.False(rig.Sidebar.DeleteCommand.CanExecute(null));
+    }
+
     // ---- Helpers ------------------------------------------------------
 
     private sealed record SidebarRig(FilesSidebarViewModel Sidebar)

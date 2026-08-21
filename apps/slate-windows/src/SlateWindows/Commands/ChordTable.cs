@@ -837,8 +837,13 @@ internal static class ChordTable
             Reg(Ids.MoveTo, "Move To…", CommandSection.Sidebar,
                 "Move the selected files or folders to another folder.",
                 "⇧⌘M", divergence: UnboundOnWindows),
+            // The LABEL stays mac-byte-identical (the P3 census
+            // admits no divergence for a shared id; FD-3's Recycle
+            // Bin rule governs sentences and Windows-authored text —
+            // the register records the carve-out). The HINT is
+            // Windows-authored, so it names the real destination.
             Reg(Ids.DeleteEntry, "Move to Trash", CommandSection.Sidebar,
-                "Move the selected files or folders to the Trash."),
+                "Move the selected files or folders to the Recycle Bin."),
             // W5-4 (F5/F7/F8): the three verbs mac's sidebar catalog
             // carries and W4-4's census dispositioned as gaps.
             Reg(Ids.DuplicateEntry, "Duplicate", CommandSection.Sidebar,
@@ -913,7 +918,7 @@ internal static class ChordTable
             Reg(Ids.CreateFolderNote, "Create Folder Note", CommandSection.Sidebar,
                 "Create and open this folder's note."),
             Reg(Ids.DeleteFolderNote, "Delete Folder Note", CommandSection.Sidebar,
-                "Move this folder's note to the Trash."),
+                "Move this folder's note to the Recycle Bin."),
 
             // Windows-only sidebar capabilities. Refresh and Clear Filter are
             // menu/UI-homed; Toggle Tags is a PR-4 orphan with no binding at
@@ -927,7 +932,9 @@ internal static class ChordTable
             // W5-4 F6: targeting unified — slate.file.delete now acts
             // on the tree selection (mac parity), so this Windows-only
             // id names the batch-checkbox flow it previously mirrored.
-            Reg(Ids.SidebarTrashSelected, "Move Checked Items to Trash",
+            // Windows-only id, so FD-3's Recycle Bin rule applies to
+            // the LABEL too (red team, contracts 4a).
+            Reg(Ids.SidebarTrashSelected, "Move Checked Items to the Recycle Bin",
                 CommandSection.Sidebar,
                 "Move every batch-checked item to the Recycle Bin."),
         ]);

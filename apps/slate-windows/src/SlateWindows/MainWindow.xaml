@@ -654,7 +654,7 @@
                                         </StackPanel>
                                         <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
                                             <Button Content="Move to…" Command="{Binding MoveToCommand}" />
-                                            <Button Margin="4,0,0,0" Content="Trash selected" Command="{Binding BatchTrashCommand}" />
+                                            <Button Margin="4,0,0,0" Content="Move checked to Recycle Bin" Command="{Binding BatchTrashCommand}" />
                                         </StackPanel>
                                     </StackPanel>
                                 </Expander>
@@ -3520,6 +3520,8 @@
                  first, drag-free move path. Filter-as-you-type; Enter
                  moves to the selected row; Esc cancels and nothing moves.
                  ========================================================== -->
+            <Border Background="Transparent"
+                    Visibility="{Binding FileSidebar.MoveToSheet, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
             <local:AutomationLandmarkBorder x:Name="MoveToOverlay"
                     Width="520"
                     MaxHeight="440"

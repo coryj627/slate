@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Windows.Input;
+using uniffi.slate_uniffi;
 
 namespace SlateWindows.FileManagement;
 
@@ -57,9 +58,9 @@ internal sealed class MoveToRowViewModel
 /// drag-free move path. The sidebar hands it the LEGAL destination set
 /// — illegal destinations (each moving item's current parent; a moving
 /// folder's own subtree) are filtered before the pick, never refused
-/// after it. Filter-as-you-type; a pinned "Vault root" row when the
-/// root is legal; a "New Folder…" row that creates the typed path and
-/// moves in one gesture.
+/// after it — and the typed "New Folder…" path obeys the same
+/// legality through the injected predicate. Filter-as-you-type; the
+/// "Vault root" row stays PINNED whenever the root is legal.
 /// </summary>
 internal sealed class MoveToPickerViewModel : BindableBase
 {
@@ -68,10 +69,13 @@ internal sealed class MoveToPickerViewModel : BindableBase
     private readonly Action<string> _confirmed;
     private readonly Action<string> _createAndMove;
     private readonly Action _cancelled;
+    private readonly Func<string, bool> _newFolderPathAllowed;
+    private readonly Action<A11yEvent> _announce;
 
     private string _filterText = string.Empty;
     private IReadOnlyList<MoveToRowViewModel> _rows = [];
     private MoveToRowViewModel? _selectedRow;
+    private bool _rebuilding;
     private ICommand? _activateCommand;
     private ICommand? _cancelCommand;
 
@@ -81,20 +85,26 @@ internal sealed class MoveToPickerViewModel : BindableBase
         string itemNoun,
         Action<string> confirmed,
         Action<string> createAndMove,
-        Action cancelled)
+        Action cancelled,
+        Func<string, bool> newFolderPathAllowed,
+        Action<A11yEvent> announce)
     {
         ArgumentNullException.ThrowIfNull(legalFolders);
         ArgumentNullException.ThrowIfNull(itemNoun);
         ArgumentNullException.ThrowIfNull(confirmed);
         ArgumentNullException.ThrowIfNull(createAndMove);
         ArgumentNullException.ThrowIfNull(cancelled);
+        ArgumentNullException.ThrowIfNull(newFolderPathAllowed);
+        ArgumentNullException.ThrowIfNull(announce);
         _folders = legalFolders;
         _rootIsLegal = rootIsLegal;
         ItemNoun = itemNoun;
         _confirmed = confirmed;
         _createAndMove = createAndMove;
         _cancelled = cancelled;
-        RebuildRows();
+        _newFolderPathAllowed = newFolderPathAllowed;
+        _announce = announce;
+        RebuildRows(announceCount: false);
     }
 
     /// <summary>What is moving, as prose — "a.md" or "3 items".</summary>
@@ -112,7 +122,7 @@ internal sealed class MoveToPickerViewModel : BindableBase
         {
             if (SetField(ref _filterText, value))
             {
-                RebuildRows();
+                RebuildRows(announceCount: true);
             }
         }
     }
@@ -123,10 +133,24 @@ internal sealed class MoveToPickerViewModel : BindableBase
         private set => SetField(ref _rows, value);
     }
 
+    /// <summary>Red team (a11y 1): selection driven from the filter
+    /// box announces the row — the quick-open pattern this picker
+    /// cites announces BOTH halves (count per filter landing, row per
+    /// selection move); without them the keyboard-first flow is
+    /// silent to AT and Enter moves files to an unheard
+    /// destination.</summary>
     public MoveToRowViewModel? SelectedRow
     {
         get => _selectedRow;
-        set => SetField(ref _selectedRow, value);
+        set
+        {
+            if (SetField(ref _selectedRow, value)
+                && !_rebuilding
+                && value is not null)
+            {
+                _announce(new A11yEvent.RowSelected(value.AccessibleName));
+            }
+        }
     }
 
     public ICommand ActivateCommand => _activateCommand ??= new RelayCommand(
@@ -151,11 +175,14 @@ internal sealed class MoveToPickerViewModel : BindableBase
     public ICommand CancelCommand => _cancelCommand ??= new RelayCommand(
         _ => _cancelled(), _ => true);
 
-    private void RebuildRows()
+    private void RebuildRows(bool announceCount)
     {
         string filter = FilterText.Trim();
         var rows = new List<MoveToRowViewModel>();
-        if (_rootIsLegal && filter.Length == 0)
+        // PINNED (F4): the root row survives any filter — a typed
+        // query must never make the root unreachable (red team,
+        // contracts 6).
+        if (_rootIsLegal)
         {
             rows.Add(new MoveToRowViewModel(
                 MoveToRowKind.VaultRoot, string.Empty, "Vault root"));
@@ -170,10 +197,12 @@ internal sealed class MoveToPickerViewModel : BindableBase
         // The create-then-move row: the typed filter IS the new
         // folder's vault-relative path, so the gesture stays
         // keyboard-first — type a name, pick the row. Hidden when the
-        // text already names a listed folder verbatim.
+        // path is illegal or already exists ANYWHERE (the legality
+        // predicate covers the filtered-out folders too — an existing
+        // destination must never resurface as a "create" that refuses
+        // typed).
         string typedPath = filter.Trim('/');
-        if (typedPath.Length > 0
-            && !_folders.Contains(typedPath, StringComparer.OrdinalIgnoreCase))
+        if (typedPath.Length > 0 && _newFolderPathAllowed(typedPath))
         {
             rows.Add(new MoveToRowViewModel(
                 MoveToRowKind.NewFolder,
@@ -181,8 +210,31 @@ internal sealed class MoveToPickerViewModel : BindableBase
                 $"New Folder “{typedPath}”"));
         }
 
-        Rows = rows;
-        SelectedRow = rows.FirstOrDefault();
+        _rebuilding = true;
+        try
+        {
+            Rows = rows;
+            // Default selection prefers the first row the QUERY
+            // produced: with text typed, the pinned root would
+            // otherwise steal Enter from the filtered match.
+            SelectedRow = filter.Length == 0
+                ? rows.FirstOrDefault()
+                : rows.FirstOrDefault(row => row.Kind != MoveToRowKind.VaultRoot)
+                    ?? rows.FirstOrDefault();
+        }
+        finally
+        {
+            _rebuilding = false;
+        }
+
+        if (announceCount)
+        {
+            int destinations = rows.Count;
+            // W0.5-3 residue: Move-To filter landing copy.
+            _announce(new A11yEvent.HostComposed(
+                $"{destinations:N0} {(destinations == 1 ? "destination" : "destinations")}.",
+                A11yPriority.Medium));
+        }
     }
 
     private static string LeafOf(string vaultPath)

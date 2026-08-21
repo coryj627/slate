@@ -400,7 +400,13 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             _ => !IsImporting
                 && SelectedNode is { IsPlaceholder: false, IsGroupHeader: false }
                 && MutationName.Length > 0);
-        DeleteCommand = new RelayCommand(_ => DeleteSelected(), _ => !IsImporting && SelectedNode is not null);
+        // Red team: placeholders and group headers are selectable rows
+        // with Path "" — Delete on one reached DeleteFile("") and spoke
+        // a spurious failure; the guard matches every sibling verb.
+        DeleteCommand = new RelayCommand(
+            _ => DeleteSelected(),
+            _ => !IsImporting
+                && SelectedNode is { IsPlaceholder: false, IsGroupHeader: false });
         CreateFolderNoteCommand = new RelayCommand(_ => CreateFolderNote(), _ => !IsImporting && SelectedNode?.IsDirectory == true && !SelectedNode.HasFolderNote);
         DeleteFolderNoteCommand = new RelayCommand(_ => DeleteFolderNote(), _ => !IsImporting && SelectedNode?.IsDirectory == true && SelectedNode.HasFolderNote);
         CopyWikilinkCommand = new RelayCommand(_ => CopyWikilink(), _ => SelectedNode is { IsDirectory: false });
@@ -531,6 +537,21 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 RequestOpen(value.Path);
             }
 
+            RaiseCommandStates();
+        }
+    }
+
+    /// <summary>W5-4 (red team, a11y 2): selection RESTORATION after a
+    /// mutation's tree publication — the setter's open-on-select and
+    /// selection announcements must not fire for a re-seat (the
+    /// mutation already spoke, and re-opening the just-renamed note
+    /// would churn recents/history for a gesture the user never
+    /// made).</summary>
+    private void SelectSilently(FileTreeNodeViewModel node)
+    {
+        if (SetField(ref _selectedNode, node, nameof(SelectedNode)))
+        {
+            MutationName = node.Name;
             RaiseCommandStates();
         }
     }
@@ -1150,7 +1171,8 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
     private void DeleteSelected()
     {
-        if (SelectedNode is not FileTreeNodeViewModel node)
+        if (SelectedNode is not
+            { IsPlaceholder: false, IsGroupHeader: false } node)
         {
             return;
         }
@@ -1200,6 +1222,10 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             StructuralHistoryBarrier();
             ReportResult($"Moved {node.DisplayName} to the Recycle Bin.");
             SelectedNode = null;
+            // F6: "focus returns to the tree" — the publication's
+            // container discard would otherwise eject keyboard focus
+            // to the window (red team, a11y 2a).
+            RequestSelectionAt(null);
             Refresh();
         }
         catch (VaultException exception)
@@ -1448,6 +1474,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             Status = BatchMoveSummary(report, MoveDestination);
             // W0.5-3 residue: Windows batch-move report copy.
             _announce(new A11yEvent.HostComposed(Status, A11yPriority.Medium));
+            RequestSelectionAt(null);
             Refresh();
         }
         catch (VaultException exception)
@@ -1496,6 +1523,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             Status = BatchTrashSummary(report);
             // W0.5-3 residue: Windows system-Recycle-Bin report copy.
             _announce(new A11yEvent.HostComposed(Status, A11yPriority.Medium));
+            RequestSelectionAt(null);
             Refresh();
         }
         catch (VaultException exception)

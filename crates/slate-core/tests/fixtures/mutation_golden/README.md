@@ -38,8 +38,11 @@ Host-side, both platforms (this directory):
   `_PRE_WRITE` leaves the faulted file byte-unchanged; a reopen
   reconciles.
 - **S4 undo round-trips** — byte-exact (hash-verified checkpoint
-  pairs) for single rename, single move, and batch move via
-  `UndoBatchMove`; plus the typed non-latest and wrong-endpoint
+  pairs) for single rename, single move, the compound folder-note
+  rename, and batch move via `UndoBatchMove`; each leg is UNDONE to
+  its pre-op tree AND REDONE to its post-op tree (redo = the forward
+  FFI re-run — the host model — with `UndoBatchMove` for the batch
+  redo's reversal); plus the typed non-latest and wrong-endpoint
   rejections.
 - **S5 pre-mutation abort** — `SLATE_TEST_FAULT_PLANT_MARKERS` aborts
   a move, a batch move, and a delete before ANY fs mutation (the

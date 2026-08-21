@@ -57,8 +57,24 @@ internal sealed class StructuralUndoJournal
     public void Push(StructuralUndoStep step)
     {
         ArgumentNullException.ThrowIfNull(step);
+        PurgeStaleBatchEntries();
         _undo.Add(step);
         _redo.Clear();
+    }
+
+    /// <summary>Red team (correctness 3): <c>UndoBatchMove</c> admits
+    /// only the LATEST journal row, and every op — including each
+    /// single-step undo's forward re-run — journals a new row. So the
+    /// moment ANY new step lands, every batch entry already in either
+    /// stack is permanently dead: reaching one later would throw the
+    /// typed not-latest refusal and destroy both stacks under a false
+    /// "files have changed". Purging them at push keeps the stacks
+    /// honest — a dead entry becomes "Nothing to undo." (mac's
+    /// post-barrier shape), never a lie.</summary>
+    private void PurgeStaleBatchEntries()
+    {
+        _undo.RemoveAll(entry => entry.Kind == StructuralUndoKind.BatchMove);
+        _redo.RemoveAll(entry => entry.Kind == StructuralUndoKind.BatchMove);
     }
 
     /// <summary>A history barrier (create/duplicate/trash): both
@@ -76,16 +92,21 @@ internal sealed class StructuralUndoJournal
 
     /// <summary>The executed step's re-inverse lands on the OPPOSITE
     /// stack (undo → redo and back), never through Push — a completed
-    /// undo must not clear the redo it just created.</summary>
+    /// undo must not clear the redo it just created. The executed step
+    /// itself journaled a row, so pre-existing batch entries purge
+    /// here too (the re-inverse being added is the fresh row's own
+    /// handle and survives).</summary>
     public void PushRedo(StructuralUndoStep step)
     {
         ArgumentNullException.ThrowIfNull(step);
+        PurgeStaleBatchEntries();
         _redo.Add(step);
     }
 
     public void PushUndoFromRedo(StructuralUndoStep step)
     {
         ArgumentNullException.ThrowIfNull(step);
+        PurgeStaleBatchEntries();
         _undo.Add(step);
     }
 

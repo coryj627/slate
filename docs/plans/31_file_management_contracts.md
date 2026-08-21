@@ -206,9 +206,17 @@ consumes its report at the call site:
 model, minus nothing the FFI supports:
 - A host-side LIFO stack of inverse operations per vault (rename ↔
   rename-back, move ↔ move-back — mac's re-run-the-forward-FFI
-  model; batch move → `UndoBatchMove(opId)`; compound folder-note
-  renames undo via their recorded two-op sequence in `UndoOpIds`
-  order).
+  model; batch move → `UndoBatchMove(opId)`). *Amended
+  (implementation finding, recorded in the mutation-golden README):*
+  compound folder-note renames also reverse by re-running
+  `RenameFolderWithNote` with inverse arguments — the recorded
+  `UndoOpIds` sequence is not host-executable as FL6-1 documents it,
+  because `undo_structural` admits only the LATEST journal row and
+  every undo journals itself; a core follow-up records the contract
+  contradiction. For the same reason a batch entry is undoable only
+  while its row is still the journal's latest — any newer step
+  purges recorded batch entries from both stacks rather than letting
+  them surface later as a false "files have changed".
 - Recording rules per verb (mac's exact table): rename & move =
   undoable; newNote/newFolder/duplicate (and W5-3's template create)
   = **history barrier** (stacks cleared); trash = not-undoable AND a
@@ -357,6 +365,13 @@ enforced by construction, not by review.
 - **FD-3 — "Recycle Bin"** replaces "Trash"/"the system Trash" in
   every user-visible string (established at W1-2; delete
   confirmation copy adapts mac's sentences verbatim otherwise).
+  *Carve-out (red team):* SHARED registry labels stay mac-byte-
+  identical — the P3 census admits no label divergence for a shared
+  id, so `slate.file.delete` keeps mac's "Move to Trash" label while
+  its Windows-authored hint, every sentence, every button, and every
+  Windows-only label say Recycle Bin. FD-5's `LabelDivergence`
+  mechanism is reserved for surfaces the OS itself names (Finder →
+  File Explorer), not word-preference relabels.
 - **FD-4 — Delete chord**: Delete key vs mac's ⌘⌫; tree-scoped on
   both.
 - **FD-5 — "Reveal in File Explorer"** label vs mac's "Reveal in

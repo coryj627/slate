@@ -1219,8 +1219,15 @@ internal sealed class VaultLifecycleViewModel
     /// sidebar's own mutation paths, which refresh inline — this one
     /// refreshes the tree the same way so the new note is visible and
     /// selectable immediately.</summary>
-    private void Workspace_TemplateNoteWritten(object? sender, string path) =>
+    private void Workspace_TemplateNoteWritten(object? sender, string path)
+    {
+        // W5-4 F10: the template create is a CREATE — a structural
+        // history barrier exactly like newNote (mac's table; red team,
+        // contracts 1) — a stale inverse must never replay against a
+        // name the template note now owns.
+        FileSidebar?.StructuralHistoryBarrier();
         FileSidebar?.Refresh();
+    }
 
     private void Workspace_EditorTagActivated(object? sender, string tag) =>
         FileSidebar?.ActivateTag(tag);

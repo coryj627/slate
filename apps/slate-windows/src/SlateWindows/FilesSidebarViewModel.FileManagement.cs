@@ -70,6 +70,43 @@ internal sealed partial class FilesSidebarViewModel
             .Count();
     }
 
+    /// <summary>Red team (correctness 2): a compound folder+note
+    /// rename moves the NOTE'S LEAF beyond prefix math
+    /// (<c>docs/docs.md → guide/guide.md</c>), so stored paths —
+    /// pins, shortcuts, recents, history — transformed by the folder
+    /// prefix still point at <c>guide/docs.md</c>, a path that does
+    /// not exist. The report's <c>Moved</c> pairs carry the truth:
+    /// correct every pair whose real destination differs from its
+    /// prefix image. Plain renames and moves no-op here (image ==
+    /// destination).</summary>
+    private void CorrectStoredPathsFromReport(
+        StructuralReport report, string oldPath, string newPath)
+    {
+        foreach (MovedPath moved in report.Moved)
+        {
+            string prefixImage;
+            if (moved.OldPath == oldPath)
+            {
+                prefixImage = newPath;
+            }
+            else if (moved.OldPath.StartsWith(
+                oldPath + "/", StringComparison.Ordinal))
+            {
+                prefixImage = newPath + moved.OldPath[oldPath.Length..];
+            }
+            else
+            {
+                continue;
+            }
+
+            if (prefixImage != moved.NewPath)
+            {
+                TransformStoredPaths(
+                    prefixImage, moved.NewPath, isDirectory: false, deleted: false);
+            }
+        }
+    }
+
     /// <summary>mac's mutation sentence with the links suffix: the
     /// suffix replaces the period — "Renamed a to b, updated links in
     /// N notes." (distinct-count; singular "note").</summary>
@@ -115,6 +152,7 @@ internal sealed partial class FilesSidebarViewModel
 
             int rewritten = ConsumeStructuralReport(report);
             TransformStoredPaths(oldPath, newPath, node.IsDirectory, deleted: false);
+            CorrectStoredPathsFromReport(report, oldPath, newPath);
             _structuralUndo.Push(new StructuralUndoStep(
                 StructuralUndoKind.Rename,
                 Path: newPath,
@@ -123,6 +161,7 @@ internal sealed partial class FilesSidebarViewModel
                 Noun: oldName));
             ReportResult(WithLinksSuffix(
                 $"Renamed {node.DisplayName} to {newName}.", rewritten));
+            RequestSelectionAt(newPath);
             Refresh();
             return true;
         }
@@ -163,8 +202,10 @@ internal sealed partial class FilesSidebarViewModel
 
     /// <summary>Creates, duplicates, and trash are history BARRIERS
     /// (mac's table): both stacks clear so a stale inverse can never
-    /// target a path a barrier op now owns.</summary>
-    private void StructuralHistoryBarrier() => _structuralUndo.Barrier();
+    /// target a path a barrier op now owns. Internal so the lifecycle
+    /// can barrier for W5-3's template create too (F10 lists it; red
+    /// team, contracts 1).</summary>
+    internal void StructuralHistoryBarrier() => _structuralUndo.Barrier();
 
     private void ExecuteUndoStep(StructuralUndoStep step, bool redo)
     {
@@ -188,7 +229,7 @@ internal sealed partial class FilesSidebarViewModel
         {
             StructuralUndoStep? inverse = null;
             var batchReport = default(BatchMoveReport);
-            if (!TryRunSessionWork(() =>
+            bool sessionRan = TryRunSessionWork(() =>
             {
                 switch (step.Kind)
                 {
@@ -203,6 +244,7 @@ internal sealed partial class FilesSidebarViewModel
                         _ = ConsumeStructuralReport(renamed);
                         TransformStoredPaths(
                             step.Path, restoredPath, step.IsDirectory, deleted: false);
+                        CorrectStoredPathsFromReport(renamed, step.Path, restoredPath);
                         inverse = step with
                         {
                             Path = restoredPath,
@@ -220,6 +262,7 @@ internal sealed partial class FilesSidebarViewModel
                         _ = ConsumeStructuralReport(movedReport);
                         TransformStoredPaths(
                             step.Path, movedPath, step.IsDirectory, deleted: false);
+                        CorrectStoredPathsFromReport(movedReport, step.Path, movedPath);
                         inverse = step with
                         {
                             Path = movedPath,
@@ -236,16 +279,40 @@ internal sealed partial class FilesSidebarViewModel
                                 change.IsDirectory, deleted: false);
                         }
 
-                        inverse = step with
+                        // Red team (correctness 1): the endpoint reports
+                        // failure as a STATE, not an exception — a
+                        // Rejected/RolledBack/Partial undo must never
+                        // announce success or push a re-inverse (the
+                        // OpId fallback inverted undo and redo). Only a
+                        // clean Succeeded round-trip records one.
+                        if (batchReport.State == BatchMoveState.Succeeded
+                            && batchReport.OpId is long inverseOpId)
                         {
-                            BatchOpId = batchReport.OpId ?? step.BatchOpId,
-                        };
+                            inverse = step with { BatchOpId = inverseOpId };
+                        }
+
                         break;
                 }
-            }) || inverse is null)
+            });
+            if (!sessionRan)
             {
                 // The shutdown lease refused; the step is consumed but
                 // the vault is closing — nothing to restore.
+                return;
+            }
+
+            if (inverse is null)
+            {
+                // The batch endpoint refused as a STATE (Rejected — the
+                // recorded destinations changed out from under the op —
+                // or a Partial/RolledBack residue, whose Standing pairs
+                // were retargeted above): the files DID change; drop
+                // the suspect history and say so, never success.
+                _structuralUndo.DropForChangedFiles();
+                AnnounceUndoResidue(redo
+                    ? "Can't redo — the files have changed."
+                    : "Can't undo — the files have changed.");
+                Refresh();
                 return;
             }
 
@@ -264,6 +331,10 @@ internal sealed partial class FilesSidebarViewModel
                 StructuralUndoKind.Move => $"{verb} move of {step.Noun}.",
                 _ => $"{verb} move of {step.Noun}.",
             });
+            // The re-inverse's Path is the entry's CURRENT location;
+            // batches have no single successor to name.
+            RequestSelectionAt(
+                step.Kind == StructuralUndoKind.BatchMove ? null : inverse.Path);
             Refresh();
         }
         catch (VaultException)
@@ -309,6 +380,51 @@ internal sealed partial class FilesSidebarViewModel
 
     private void RequestInlineRenameAt(string vaultPath) =>
         _pendingRenameArmPath = vaultPath;
+
+    /// <summary>Raised at tree publication after a mutation that asked
+    /// for selection/focus reconciliation — the window restores
+    /// keyboard focus to the tree unless another surface claimed the
+    /// moment (red team, a11y 2: the refresh discards the focused
+    /// container and WPF ejects keyboard focus to the window, leaving
+    /// every tree-scoped chord dead and silent).</summary>
+    internal event Action? TreeSelectionRestored;
+
+    private string? _pendingSelectPath;
+    private bool _pendingTreeFocusRestore;
+
+    /// <summary>Ask the NEXT publication to re-seat selection at
+    /// <paramref name="vaultPath"/> (null = no selection — just the
+    /// focus restore; deletes have no successor to name).</summary>
+    private void RequestSelectionAt(string? vaultPath)
+    {
+        _pendingSelectPath = vaultPath;
+        _pendingTreeFocusRestore = true;
+    }
+
+    /// <summary>Publication half of <see cref="RequestSelectionAt"/>:
+    /// re-seat the view-model selection on the FRESH node (silently —
+    /// the mutation already spoke; the setter's open-on-select must
+    /// not fire for a restoration) and raise the focus-restore
+    /// event.</summary>
+    private void ConsumePendingSelection()
+    {
+        if (!_pendingTreeFocusRestore)
+        {
+            return;
+        }
+
+        _pendingTreeFocusRestore = false;
+        string? pending = _pendingSelectPath;
+        _pendingSelectPath = null;
+        if (pending is not null
+            && Flatten(RootNodes).FirstOrDefault(node => node.Path == pending)
+                is { } fresh)
+        {
+            SelectSilently(fresh);
+        }
+
+        TreeSelectionRestored?.Invoke();
+    }
 
     /// <summary>Consumed at tree publication: select the created node
     /// and raise the hand-off. A node the refresh did not materialize
@@ -358,11 +474,15 @@ internal sealed partial class FilesSidebarViewModel
     internal void OpenMoveTo()
     {
         StructuralBatchItem[] items = MoveTargets();
-        if (items.Length == 0 || MoveToOpenAdmission?.Invoke() == false)
+        if (items.Length == 0)
         {
             return;
         }
 
+        // Enumerate BEFORE the admission (red team, a11y 7): the
+        // admission dismisses overlays and captures their focus
+        // lineage — a walk failure after it would strand the captured
+        // token with no sheet to restore it.
         IReadOnlyList<string> folders;
         try
         {
@@ -374,15 +494,33 @@ internal sealed partial class FilesSidebarViewModel
             return;
         }
 
+        if (MoveToOpenAdmission?.Invoke() == false)
+        {
+            return;
+        }
+
         var illegalParents = new HashSet<string>(
             items.Select(item => ParentPath(item.Path)), StringComparer.Ordinal);
         string[] movingFolders = [.. items
             .Where(item => item.IsDirectory)
             .Select(item => item.Path)];
+        var knownFolders = new HashSet<string>(
+            folders, StringComparer.OrdinalIgnoreCase);
         string[] legal = [.. folders.Where(folder =>
             !illegalParents.Contains(folder)
             && !movingFolders.Any(moving => folder == moving
                 || folder.StartsWith(moving + "/", StringComparison.Ordinal)))];
+
+        // Red team (correctness 4): the typed New Folder path obeys
+        // the SAME legality the folder list does — an item's current
+        // parent, a moving folder's own subtree, and any KNOWN folder
+        // (the legal ones are picked as rows; the filtered-illegal
+        // ones must not resurface as a "create" that refuses typed).
+        bool NewFolderPathAllowed(string typed) =>
+            !knownFolders.Contains(typed)
+            && !illegalParents.Contains(typed)
+            && !movingFolders.Any(moving => typed == moving
+                || typed.StartsWith(moving + "/", StringComparison.Ordinal));
 
         string noun = items.Length == 1
             ? System.IO.Path.GetFileName(items[0].Path)
@@ -393,7 +531,9 @@ internal sealed partial class FilesSidebarViewModel
             itemNoun: noun,
             confirmed: destination => ExecuteMoveTo(items, destination),
             createAndMove: path => CreateFolderThenMove(items, path),
-            cancelled: () => MoveToSheet = null);
+            cancelled: () => MoveToSheet = null,
+            newFolderPathAllowed: NewFolderPathAllowed,
+            announce: _announce);
         // W0.5-3 residue: Move-To presentation copy.
         _announce(new A11yEvent.HostComposed(
             $"Move {noun}: choose a destination folder.", A11yPriority.Medium));
@@ -479,6 +619,7 @@ internal sealed partial class FilesSidebarViewModel
                 int rewritten = ConsumeStructuralReport(report);
                 string movedPath = CombineVaultPath(destination, leaf);
                 TransformStoredPaths(single.Path, movedPath, single.IsDirectory, deleted: false);
+                CorrectStoredPathsFromReport(report, single.Path, movedPath);
                 _structuralUndo.Push(new StructuralUndoStep(
                     StructuralUndoKind.Move,
                     Path: movedPath,
@@ -490,11 +631,16 @@ internal sealed partial class FilesSidebarViewModel
                     : System.IO.Path.GetFileName(destination.TrimEnd('/'));
                 ReportResult(WithLinksSuffix(
                     $"Moved {leaf} to {destLeaf}.", rewritten));
+                RequestSelectionAt(movedPath);
                 Refresh();
             }
             catch (VaultException exception)
             {
                 ReportFailure($"Move failed: {exception.Message}");
+                // A create-then-move whose move half refused must not
+                // leave the created folder invisible until the next
+                // organic refresh (red team, correctness 4).
+                Refresh();
             }
 
             return;
@@ -529,6 +675,9 @@ internal sealed partial class FilesSidebarViewModel
             return;
         }
 
+        // F10: a create is a history barrier here exactly as the
+        // standalone verb is (red team, correctness 5).
+        StructuralHistoryBarrier();
         ExecuteMoveTo(items, folderPath);
     }
 
