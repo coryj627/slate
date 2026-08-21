@@ -251,6 +251,8 @@ public partial class MainWindow : Window
         if (_observedFileSidebar is not null)
         {
             _observedFileSidebar.InlineRenameRequested -= ArmSidebarRename;
+            _observedFileSidebar.PropertyChanged -= FileSidebar_MoveToSheetChanged;
+            _observedFileSidebar.MoveToOpenAdmission = null;
         }
 
         _observedFileSidebar = sidebar;
@@ -259,6 +261,18 @@ public partial class MainWindow : Window
             // W5-4 F1/F2: a create's hand-off re-arms the F2 rename
             // flow programmatically once the new node is selected.
             sidebar.InlineRenameRequested += ArmSidebarRename;
+            // W5-4 F4: the Move-To sheet's admission and present/
+            // dismiss observation (the template sheets' shape).
+            sidebar.MoveToOpenAdmission = TryClearTheWayForMoveTo;
+            sidebar.PropertyChanged += FileSidebar_MoveToSheetChanged;
+        }
+
+        // A vault transition mid-pick never runs the restore (the sheet
+        // dies with the discarded sidebar), so the captured token must
+        // not leak into the next vault's first pick.
+        if (sidebar is null)
+        {
+            _focusBeforeMoveTo = null;
         }
     }
 

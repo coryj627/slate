@@ -113,6 +113,9 @@
                         <DataTrigger Binding="{Binding Workspace.TemplateFlowSheet, Converter={StaticResource IsNotNullConverter}}" Value="True">
                             <Setter Property="IsEnabled" Value="False" />
                         </DataTrigger>
+                        <DataTrigger Binding="{Binding FileSidebar.MoveToSheet, Converter={StaticResource IsNotNullConverter}}" Value="True">
+                            <Setter Property="IsEnabled" Value="False" />
+                        </DataTrigger>
                     </Style.Triggers>
                 </Style>
             </Menu.Style>
@@ -649,12 +652,8 @@
                                             <Button Content="Add" Command="{Binding AddTagCommand}" />
                                             <Button Margin="4,0,0,0" Content="Remove" Command="{Binding RemoveTagCommand}" />
                                         </StackPanel>
-                                        <TextBox Margin="0,6,0,0"
-                                                 Text="{Binding MoveDestination, UpdateSourceTrigger=PropertyChanged}"
-                                                 AutomationProperties.Name="Move destination folder"
-                                                 ToolTip="Vault-relative destination folder" />
                                         <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
-                                            <Button Content="Move selected" Command="{Binding BatchMoveCommand}" />
+                                            <Button Content="Move to…" Command="{Binding MoveToCommand}" />
                                             <Button Margin="4,0,0,0" Content="Trash selected" Command="{Binding BatchTrashCommand}" />
                                         </StackPanel>
                                     </StackPanel>
@@ -677,6 +676,7 @@
                                         </WrapPanel>
                                         <WrapPanel Margin="0,4,0,0">
                                             <Button Content="Duplicate" Command="{Binding DuplicateCommand}" />
+                                            <Button Margin="4,0,0,0" Content="Move to…" Command="{Binding MoveToCommand}" />
                                             <Button Margin="4,0,0,0" Content="Copy path" Command="{Binding CopyPathCommand}" />
                                             <Button Margin="4,0,0,0" Content="Reveal in File Explorer" Command="{Binding RevealCommand}" />
                                         </WrapPanel>
@@ -3514,6 +3514,93 @@
                         </StackPanel>
                     </DockPanel>
                 </Grid>
+            </local:AutomationLandmarkBorder>
+            <!-- ==========================================================
+                 W5-4 (#744) F4: the Move-To folder picker — the keyboard-
+                 first, drag-free move path. Filter-as-you-type; Enter
+                 moves to the selected row; Esc cancels and nothing moves.
+                 ========================================================== -->
+            <local:AutomationLandmarkBorder x:Name="MoveToOverlay"
+                    Width="520"
+                    MaxHeight="440"
+                    Padding="16"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Background="{DynamicResource Slate.SurfaceBrush}"
+                    BorderBrush="{DynamicResource Slate.BorderBrush}"
+                    BorderThickness="1"
+                    Visibility="{Binding DataContext.FileSidebar.MoveToSheet, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}"
+                    DataContext="{Binding FileSidebar.MoveToSheet}"
+                    FocusManager.IsFocusScope="True"
+                    KeyboardNavigation.TabNavigation="Cycle"
+                    KeyboardNavigation.ControlTabNavigation="Cycle"
+                    PreviewKeyDown="MoveToOverlay_PreviewKeyDown"
+                    AutomationProperties.AutomationId="MoveToSheet"
+                    AutomationProperties.Name="Move to folder"
+                    AutomationProperties.IsDialog="True">
+                <local:AutomationLandmarkBorder.Effect>
+                    <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
+                </local:AutomationLandmarkBorder.Effect>
+                <DockPanel>
+                    <StackPanel DockPanel.Dock="Top">
+                        <TextBlock Text="{Binding Title}"
+                                   FontSize="16"
+                                   FontWeight="SemiBold"
+                                   AutomationProperties.HeadingLevel="Level2" />
+                        <TextBlock Margin="0,4,0,8"
+                                   Text="{Binding Subtitle}"
+                                   TextWrapping="Wrap"
+                                   AutomationProperties.AutomationId="MoveToSubtitle"
+                                   Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
+                        <TextBox x:Name="MoveToFilterTextBox"
+                                 Padding="6,4"
+                                 Text="{Binding FilterText, UpdateSourceTrigger=PropertyChanged}"
+                                 AutomationProperties.AutomationId="MoveToFilter"
+                                 AutomationProperties.Name="Filter folders"
+                                 AutomationProperties.HelpText="Type to filter destination folders, or type a new folder name." />
+                    </StackPanel>
+                    <StackPanel DockPanel.Dock="Bottom"
+                                Margin="0,12,0,0"
+                                HorizontalAlignment="Right"
+                                Orientation="Horizontal">
+                        <Button x:Name="MoveToCancelButton"
+                                Padding="10,4"
+                                Content="Cancel"
+                                Command="{Binding CancelCommand}"
+                                AutomationProperties.AutomationId="MoveToCancel"
+                                AutomationProperties.HelpText="Closes the folder picker without moving anything." />
+                    </StackPanel>
+                    <ListBox x:Name="MoveToList"
+                             Margin="0,8,0,0"
+                             ItemsSource="{Binding Rows}"
+                             SelectedItem="{Binding SelectedRow}"
+                             BorderThickness="0"
+                             Background="Transparent"
+                             MouseDoubleClick="MoveToList_MouseDoubleClick"
+                             AutomationProperties.AutomationId="MoveToList"
+                             AutomationProperties.Name="Destination folders">
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="AutomationProperties.Name" Value="{Binding AccessibleName}" />
+                                <Setter Property="AutomationProperties.HelpText" Value="Activate to move here." />
+                                <Setter Property="Padding" Value="8,6" />
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel>
+                                    <local:AutomationPresentationTextBlock
+                                            Text="{Binding Label}" FontWeight="SemiBold" />
+                                    <local:AutomationPresentationTextBlock
+                                            Text="{Binding Detail}"
+                                            TextWrapping="Wrap"
+                                            Foreground="{DynamicResource Slate.SecondaryTextBrush}"
+                                            Visibility="{Binding Detail, Converter={StaticResource NullToVisibilityConverter}}" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </DockPanel>
             </local:AutomationLandmarkBorder>
         </Grid>
     </DockPanel>

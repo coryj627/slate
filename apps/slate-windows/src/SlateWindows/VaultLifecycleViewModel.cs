@@ -907,6 +907,7 @@ internal sealed class VaultLifecycleViewModel
         if (FileSidebar is not null)
         {
             FileSidebar.OpenTargetRequested -= FileSidebar_OpenTargetRequested;
+            FileSidebar.PropertyChanged -= FileSidebar_SheetPresented;
         }
 
         if (Workspace is not null)
@@ -1017,6 +1018,8 @@ internal sealed class VaultLifecycleViewModel
         // the invariant's own example needs.
         workspace.RegisteredCommandStatesChanged = RaiseRegisteredCommandStates;
         FileSidebar = sidebar;
+        // The sidebar twin, same post-assignment ordering rationale.
+        sidebar.PropertyChanged += FileSidebar_SheetPresented;
         QuickSwitcher = switcher;
         WorkspaceReady?.Invoke(this, EventArgs.Empty);
     }
@@ -1314,6 +1317,36 @@ internal sealed class VaultLifecycleViewModel
         // was never constructed should not construct it — in a
         // window-free host the Palette getter registers the whole
         // command catalog as a side effect of this dispatch.
+        _search?.Supersede();
+        QuickSwitcher?.Dismiss();
+        _palette?.Dismiss();
+    }
+
+    /// <summary>W5-4 (F4): the workspace observer's SIDEBAR twin —
+    /// the Move-To sheet lives on <see cref="FilesSidebarViewModel"/>,
+    /// and its presentation must close the pickers reactively exactly
+    /// as a workspace sheet's does. Census-pinned in
+    /// <c>ModalSurfaceTests</c>.</summary>
+    private void FileSidebar_SheetPresented(
+        object? sender, PropertyChangedEventArgs eventArgs)
+    {
+        if (sender is not FilesSidebarViewModel sidebar
+            || !ReferenceEquals(sidebar, FileSidebar))
+        {
+            return;
+        }
+
+        bool presented = eventArgs.PropertyName switch
+        {
+            nameof(FilesSidebarViewModel.MoveToSheet) =>
+                sidebar.MoveToSheet is not null,
+            _ => false,
+        };
+        if (!presented)
+        {
+            return;
+        }
+
         _search?.Supersede();
         QuickSwitcher?.Dismiss();
         _palette?.Dismiss();

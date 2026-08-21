@@ -110,7 +110,8 @@ public partial class MainWindow
                 DashboardEditor: workspace?.DashboardEditorSheet is not null,
                 BaseQueryBuilder: workspace?.BaseQueryBuilderSheet is not null,
                 TemplatePicker: workspace?.TemplatePickerSheet is not null,
-                TemplateFlow: workspace?.TemplateFlowSheet is not null);
+                TemplateFlow: workspace?.TemplateFlowSheet is not null,
+                MoveTo: _viewModel.FileSidebar?.MoveToSheet is not null);
         }
     }
 

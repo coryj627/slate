@@ -415,6 +415,13 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         RevealCommand = new RelayCommand(
             _ => RevealSelected(),
             _ => SelectedNode is { IsPlaceholder: false, IsGroupHeader: false });
+        // W5-4 Phase C (F4): batch checks win; otherwise the tree
+        // selection — the verb is live with either.
+        MoveToCommand = new RelayCommand(
+            _ => OpenMoveTo(),
+            _ => !IsImporting
+                && (BatchSelectionCount > 0
+                    || SelectedNode is { IsPlaceholder: false, IsGroupHeader: false }));
         PinCommand = new RelayCommand(_ => PinSelected(), _ => SelectedNode is { IsDirectory: false });
         UnpinCommand = new RelayCommand(_ => UnpinSelected(), _ => SelectedNode is { IsDirectory: false });
         UnpinAllCommand = new RelayCommand(_ => UnpinAllInFolder(), _ => _pinned.Count > 0);
@@ -1885,6 +1892,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             DuplicateCommand,
             CopyPathCommand,
             RevealCommand,
+            MoveToCommand,
             PinCommand,
             UnpinCommand,
             UnpinAllCommand,

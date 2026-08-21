@@ -474,7 +474,10 @@ internal static class SlateCommandRegistrar
             [ChordTable.Ids.ImportFilesAndFolders] = host => host.FileSidebar?.ImportCommand,
             [ChordTable.Ids.CancelImport] = host => host.FileSidebar?.CancelImportCommand,
             [ChordTable.Ids.RenameEntry] = host => host.FileSidebar?.RenameCommand,
-            [ChordTable.Ids.MoveTo] = host => host.FileSidebar?.BatchMoveCommand,
+            // W5-4 F4: the picker replaces the raw destination box —
+            // the verb targets checks-or-selection, so the old
+            // both-checks-and-typed-text CanExecute defect retires.
+            [ChordTable.Ids.MoveTo] = host => host.FileSidebar?.MoveToCommand,
             // W5-4 F6 unified targeting: mac's slate.file.delete acts
             // on the tree SELECTION (the previous inversion routed it
             // at the batch checkboxes); the Windows-only trashSelected

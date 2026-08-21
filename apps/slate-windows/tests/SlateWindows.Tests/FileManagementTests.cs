@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using SlateWindows.FileManagement;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows.Tests;
@@ -520,6 +521,193 @@ public sealed class FileManagementTests
             + "Recycle Bin. Slate can't undo this action.",
             message);
         Assert.True(File.Exists(Path.Combine(fixture.Root, "full", "inner.md")));
+    }
+
+    [Fact]
+    public async Task TheMoveToPickerFiltersIllegalDestinationsAndMovesTheSelection()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "fm-moveto");
+        File.WriteAllText(Path.Combine(fixture.Root, "a.md"), "# A\n");
+        // Basename-resolving links survive a move UNREWRITTEN (core's
+        // no-churn rule, link_rewrite.rs — qualified and markdown-path
+        // forms rewrite, gated core-side); the suffix composition is
+        // shared with rename and suffix-gated there.
+        File.WriteAllText(Path.Combine(fixture.Root, "b.md"), "Points at [[a]].\n");
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "sub", "deep"));
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "other"));
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new List<A11yEvent>();
+        SidebarRig rig = await NewSidebar(session, fixture, announced);
+
+        rig.Sidebar.SelectedNode = Node(rig, "a.md");
+        rig.Sidebar.MoveToCommand.Execute(null);
+        MoveToPickerViewModel picker = Assert.IsType<MoveToPickerViewModel>(
+            rig.Sidebar.MoveToSheet);
+
+        // F4: a.md's current parent is the ROOT, so the pinned Vault
+        // root row is filtered before the pick; every real folder
+        // lists.
+        Assert.DoesNotContain(
+            picker.Rows, row => row.Kind == MoveToRowKind.VaultRoot);
+        Assert.Equal(
+            ["other", "sub", "sub/deep"],
+            picker.Rows.Where(row => row.Kind == MoveToRowKind.Folder)
+                .Select(row => row.Destination).OrderBy(path => path, StringComparer.Ordinal));
+
+        picker.ActivateCommand.Execute(
+            picker.Rows.Single(row => row.Destination == "sub"));
+
+        // The single-entry FFI with F9 consumption: the sheet closed,
+        // the inverse landed on the undo stack, and the still-
+        // resolving basename link stayed byte-identical (no suffix —
+        // nothing was rewritten).
+        Assert.Null(rig.Sidebar.MoveToSheet);
+        Assert.True(File.Exists(Path.Combine(fixture.Root, "sub", "a.md")));
+        Assert.Equal(
+            "Points at [[a]].\n",
+            File.ReadAllText(Path.Combine(fixture.Root, "b.md")));
+        Assert.Contains(
+            "Moved a.md to sub.",
+            announced.OfType<A11yEvent.HostComposed>()
+                .Select(item => SlateUniffiMethods.A11yRender(item).Text));
+
+        rig.Sidebar.UndoStructural();
+        Assert.True(File.Exists(Path.Combine(fixture.Root, "a.md")));
+        Assert.False(File.Exists(Path.Combine(fixture.Root, "sub", "a.md")));
+        Assert.Contains(
+            "Undid move of a.md.",
+            announced.OfType<A11yEvent.HostComposed>()
+                .Select(item => SlateUniffiMethods.A11yRender(item).Text));
+    }
+
+    [Fact]
+    public async Task AMovingFoldersOwnSubtreeNeverAppearsInThePick()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "fm-moveto-subtree");
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "sub", "deep"));
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "other"));
+        File.WriteAllText(Path.Combine(fixture.Root, "sub", "inner.md"), "I\n");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new List<A11yEvent>();
+        SidebarRig rig = await NewSidebar(session, fixture, announced);
+
+        rig.Sidebar.SelectedNode = Node(rig, "sub");
+        rig.Sidebar.MoveToCommand.Execute(null);
+        MoveToPickerViewModel picker = Assert.IsType<MoveToPickerViewModel>(
+            rig.Sidebar.MoveToSheet);
+
+        // F4: the folder itself, its whole subtree, and its current
+        // parent are all filtered BEFORE the pick.
+        Assert.Equal(
+            ["other"],
+            picker.Rows.Where(row => row.Kind == MoveToRowKind.Folder)
+                .Select(row => row.Destination));
+        Assert.DoesNotContain(
+            picker.Rows, row => row.Kind == MoveToRowKind.VaultRoot);
+        picker.CancelCommand.Execute(null);
+        Assert.Null(rig.Sidebar.MoveToSheet);
+    }
+
+    [Fact]
+    public async Task TheTypedNewFolderRowCreatesThenMovesInOneGesture()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "fm-moveto-newfolder");
+        File.WriteAllText(Path.Combine(fixture.Root, "a.md"), "A\n");
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "decoy"));
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new List<A11yEvent>();
+        SidebarRig rig = await NewSidebar(session, fixture, announced);
+
+        rig.Sidebar.SelectedNode = Node(rig, "a.md");
+        rig.Sidebar.MoveToCommand.Execute(null);
+        MoveToPickerViewModel picker = Assert.IsType<MoveToPickerViewModel>(
+            rig.Sidebar.MoveToSheet);
+
+        // The typed filter IS the new folder's path (one user
+        // gesture, two core ops); the row hides while the text names
+        // an existing folder verbatim.
+        picker.FilterText = "decoy";
+        Assert.DoesNotContain(
+            picker.Rows, row => row.Kind == MoveToRowKind.NewFolder);
+        picker.FilterText = "fresh";
+        MoveToRowViewModel create = Assert.Single(
+            picker.Rows, row => row.Kind == MoveToRowKind.NewFolder);
+        picker.ActivateCommand.Execute(create);
+
+        Assert.Null(rig.Sidebar.MoveToSheet);
+        Assert.True(File.Exists(Path.Combine(fixture.Root, "fresh", "a.md")));
+        Assert.Contains(
+            "Moved a.md to fresh.",
+            announced.OfType<A11yEvent.HostComposed>()
+                .Select(item => SlateUniffiMethods.A11yRender(item).Text));
+    }
+
+    [Fact]
+    public async Task ABatchPickRidesBatchMoveWithOneSummary()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "fm-moveto-batch");
+        File.WriteAllText(Path.Combine(fixture.Root, "one.md"), "1\n");
+        File.WriteAllText(Path.Combine(fixture.Root, "two.md"), "2\n");
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "sub"));
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new List<A11yEvent>();
+        SidebarRig rig = await NewSidebar(session, fixture, announced);
+
+        Node(rig, "one.md").IsBatchSelected = true;
+        Node(rig, "two.md").IsBatchSelected = true;
+        rig.Sidebar.MoveToCommand.Execute(null);
+        MoveToPickerViewModel picker = Assert.IsType<MoveToPickerViewModel>(
+            rig.Sidebar.MoveToSheet);
+        Assert.Equal("2 items", picker.ItemNoun);
+
+        picker.ActivateCommand.Execute(
+            picker.Rows.Single(row => row.Destination == "sub"));
+
+        Assert.Null(rig.Sidebar.MoveToSheet);
+        Assert.True(File.Exists(Path.Combine(fixture.Root, "sub", "one.md")));
+        Assert.True(File.Exists(Path.Combine(fixture.Root, "sub", "two.md")));
+        Assert.Contains(
+            "Moved 2 items to sub.",
+            announced.OfType<A11yEvent.HostComposed>()
+                .Select(item => SlateUniffiMethods.A11yRender(item).Text));
+
+        rig.Sidebar.UndoStructural();
+        Assert.True(File.Exists(Path.Combine(fixture.Root, "one.md")));
+        Assert.True(File.Exists(Path.Combine(fixture.Root, "two.md")));
+    }
+
+    [Fact]
+    public async Task TheAdmissionSeamGatesTheOpenAndTheFilterNarrowsRows()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "fm-moveto-admission");
+        File.WriteAllText(Path.Combine(fixture.Root, "a.md"), "A\n");
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "alpha"));
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "beta"));
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new List<A11yEvent>();
+        SidebarRig rig = await NewSidebar(session, fixture, announced);
+
+        // T9's shape: the admission refused → no sheet.
+        rig.Sidebar.MoveToOpenAdmission = () => false;
+        rig.Sidebar.SelectedNode = Node(rig, "a.md");
+        rig.Sidebar.MoveToCommand.Execute(null);
+        Assert.Null(rig.Sidebar.MoveToSheet);
+
+        rig.Sidebar.MoveToOpenAdmission = () => true;
+        rig.Sidebar.MoveToCommand.Execute(null);
+        MoveToPickerViewModel picker = Assert.IsType<MoveToPickerViewModel>(
+            rig.Sidebar.MoveToSheet);
+
+        // Filter-as-you-type narrows to substring matches.
+        picker.FilterText = "alp";
+        Assert.Equal(
+            ["alpha"],
+            picker.Rows.Where(row => row.Kind == MoveToRowKind.Folder)
+                .Select(row => row.Destination));
+        picker.FilterText = string.Empty;
+        Assert.Equal(
+            2,
+            picker.Rows.Count(row => row.Kind == MoveToRowKind.Folder));
     }
 
     // ---- Helpers ------------------------------------------------------

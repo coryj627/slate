@@ -17,13 +17,15 @@ internal sealed partial class FilesSidebarViewModel
 {
     private readonly StructuralUndoJournal _structuralUndo = new();
 
-    // W5-4 Phase B verbs (assigned with the other commands in the
+    // W5-4 Phase B/C verbs (assigned with the other commands in the
     // main-file constructor).
     public System.Windows.Input.ICommand DuplicateCommand { get; }
 
     public System.Windows.Input.ICommand CopyPathCommand { get; }
 
     public System.Windows.Input.ICommand RevealCommand { get; }
+
+    public System.Windows.Input.ICommand MoveToCommand { get; }
 
     /// <summary>Lifecycle-supplied retarget seam (F9): the report's
     /// <c>Moved</c> pairs retarget open tabs SYNCHRONOUSLY at the
@@ -329,6 +331,205 @@ internal sealed partial class FilesSidebarViewModel
 
         SelectedNode = created;
         InlineRenameRequested?.Invoke();
+    }
+
+    // ---- The Move-To picker (F4) ---------------------------------
+
+    private MoveToPickerViewModel? _moveToSheet;
+
+    /// <summary>The Move-To picker sheet, or null when closed. The
+    /// window observes this for present/dismiss (the template-sheet
+    /// shape) and the modal-surface state reads it.</summary>
+    public MoveToPickerViewModel? MoveToSheet
+    {
+        get => _moveToSheet;
+        private set => SetField(ref _moveToSheet, value);
+    }
+
+    /// <summary>The window's modal admission seam (T9's shape):
+    /// consulted BEFORE presenting, so the sheet never opens beneath a
+    /// higher surface. Null (headless tests) admits.</summary>
+    internal Func<bool>? MoveToOpenAdmission { get; set; }
+
+    /// <summary>F4: open the picker for the batch-checked items, or
+    /// the tree selection when no checks are active (the CanExecute
+    /// defect this retires: the verb was dead without both checks and
+    /// a typed destination).</summary>
+    internal void OpenMoveTo()
+    {
+        StructuralBatchItem[] items = MoveTargets();
+        if (items.Length == 0 || MoveToOpenAdmission?.Invoke() == false)
+        {
+            return;
+        }
+
+        IReadOnlyList<string> folders;
+        try
+        {
+            folders = EnumerateVaultFolders();
+        }
+        catch (VaultException exception)
+        {
+            ReportFailure($"Move failed: {exception.Message}");
+            return;
+        }
+
+        var illegalParents = new HashSet<string>(
+            items.Select(item => ParentPath(item.Path)), StringComparer.Ordinal);
+        string[] movingFolders = [.. items
+            .Where(item => item.IsDirectory)
+            .Select(item => item.Path)];
+        string[] legal = [.. folders.Where(folder =>
+            !illegalParents.Contains(folder)
+            && !movingFolders.Any(moving => folder == moving
+                || folder.StartsWith(moving + "/", StringComparison.Ordinal)))];
+
+        string noun = items.Length == 1
+            ? System.IO.Path.GetFileName(items[0].Path)
+            : $"{items.Length:N0} items";
+        MoveToSheet = new MoveToPickerViewModel(
+            legal,
+            rootIsLegal: !illegalParents.Contains(string.Empty),
+            itemNoun: noun,
+            confirmed: destination => ExecuteMoveTo(items, destination),
+            createAndMove: path => CreateFolderThenMove(items, path),
+            cancelled: () => MoveToSheet = null);
+        // W0.5-3 residue: Move-To presentation copy.
+        _announce(new A11yEvent.HostComposed(
+            $"Move {noun}: choose a destination folder.", A11yPriority.Medium));
+    }
+
+    /// <summary>Batch checks win; otherwise the tree selection (F4's
+    /// unified targeting).</summary>
+    private StructuralBatchItem[] MoveTargets()
+    {
+        StructuralBatchItem[] batch = SelectedBatchItems();
+        if (batch.Length > 0)
+        {
+            return batch;
+        }
+
+        return SelectedNode is { IsPlaceholder: false, IsGroupHeader: false } node
+            ? [new StructuralBatchItem(node.Path, node.IsDirectory)]
+            : [];
+    }
+
+    /// <summary>Every vault folder via the paged walk (F4): breadth-
+    /// first over <c>ListDirChildrenPage</c> with cursor continuation
+    /// (core caps a single page at 10,000 rows), bounded at 50,000
+    /// folders total.</summary>
+    private IReadOnlyList<string> EnumerateVaultFolders()
+    {
+        const int Cap = 50_000;
+        const uint PageLimit = 1_000;
+        var folders = new List<string>();
+        var queue = new Queue<string>();
+        queue.Enqueue(string.Empty);
+        using var cancel = new CancelToken();
+        while (queue.Count > 0 && folders.Count < Cap)
+        {
+            string parent = queue.Dequeue();
+            string? cursor = null;
+            do
+            {
+                DirListingPage page = _session.ListDirChildrenPage(
+                    parent, new Paging(cursor, PageLimit), cancel);
+                foreach (DirNodeSummary dir in page.Dirs)
+                {
+                    if (folders.Count >= Cap)
+                    {
+                        return folders;
+                    }
+
+                    folders.Add(dir.Path);
+                    queue.Enqueue(dir.Path);
+                }
+
+                cursor = page.NextCursor;
+            }
+            while (cursor is not null);
+        }
+
+        return folders;
+    }
+
+    /// <summary>F4 execution: one item rides the single-entry FFIs
+    /// with report consumption; multiple ride <c>BatchMove</c> with
+    /// its one summary. Destination "" speaks "vault root".</summary>
+    private void ExecuteMoveTo(StructuralBatchItem[] items, string destination)
+    {
+        MoveToSheet = null;
+        if (items.Length == 1)
+        {
+            StructuralBatchItem single = items[0];
+            string leaf = System.IO.Path.GetFileName(single.Path);
+            try
+            {
+                StructuralReport? report = null;
+                if (!TryRunSessionWork(() =>
+                {
+                    report = single.IsDirectory
+                        ? _session.MoveFolder(single.Path, destination)
+                        : _session.MoveFile(single.Path, destination);
+                }) || report is null)
+                {
+                    return;
+                }
+
+                int rewritten = ConsumeStructuralReport(report);
+                string movedPath = CombineVaultPath(destination, leaf);
+                TransformStoredPaths(single.Path, movedPath, single.IsDirectory, deleted: false);
+                _structuralUndo.Push(new StructuralUndoStep(
+                    StructuralUndoKind.Move,
+                    Path: movedPath,
+                    Argument: ParentPath(single.Path),
+                    single.IsDirectory,
+                    Noun: leaf));
+                string destLeaf = destination.Length == 0
+                    ? "vault root"
+                    : System.IO.Path.GetFileName(destination.TrimEnd('/'));
+                ReportResult(WithLinksSuffix(
+                    $"Moved {leaf} to {destLeaf}.", rewritten));
+                Refresh();
+            }
+            catch (VaultException exception)
+            {
+                ReportFailure($"Move failed: {exception.Message}");
+            }
+
+            return;
+        }
+
+        MoveDestination = destination;
+        BatchMove();
+    }
+
+    /// <summary>The "New Folder…" row (F4): create the typed folder,
+    /// then move — one user gesture, two core ops. A create failure
+    /// keeps the sheet open with the reason, so the gesture can be
+    /// corrected in place.</summary>
+    private void CreateFolderThenMove(StructuralBatchItem[] items, string folderPath)
+    {
+        try
+        {
+            StructuralReport? report = null;
+            if (!TryRunSessionWork(() => report = _session.CreateFolder(folderPath)))
+            {
+                return;
+            }
+
+            if (report is not null)
+            {
+                _ = ConsumeStructuralReport(report);
+            }
+        }
+        catch (VaultException exception)
+        {
+            ReportFailure($"Could not create folder {folderPath}: {exception.Message}");
+            return;
+        }
+
+        ExecuteMoveTo(items, folderPath);
     }
 
     /// <summary>The F6 confirmation seam — the History seam pattern:
