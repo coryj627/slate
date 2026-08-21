@@ -1370,7 +1370,8 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             string path = FolderNotePath(node);
             if (!TryRunSessionWork(
                 () => CreateOutcomes.CreateReporting(
-                    _session, path, $"# {node.Name}\n", path),
+                    _session, path, $"# {node.Name}\n",
+                    System.IO.Path.GetFileName(path)),
                 out string? caveat))
             {
                 return;

@@ -62,6 +62,51 @@ public sealed class CreateOutcomeTests
             () => CreateOutcomes.CreateReporting(session, "landed-outcome.md", "retry\n", "x"));
     }
 
+    /// <summary>Every funnel names the LEAF in its caveat, never a
+    /// vault-relative path (codoki on #1123): the folder-note flow is
+    /// the one whose natural handle is a path, so it is the one that
+    /// could drift.</summary>
+    [Fact]
+    public void EveryFunnelPassesALeafNameToTheCaveat()
+    {
+        string root = SourceText.ShellSourceRoot();
+        var offenders = new List<string>();
+        foreach (string file in Directory.GetFiles(root, "*.cs", SearchOption.AllDirectories))
+        {
+            if (file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}"))
+            {
+                continue;
+            }
+
+            string text = File.ReadAllText(file);
+            int at = 0;
+            while ((at = text.IndexOf("CreateOutcomes.CreateReporting(", at, StringComparison.Ordinal)) >= 0)
+            {
+                int end = text.IndexOf(';', at);
+                string call = text[at..(end < 0 ? text.Length : end)];
+                // The last argument is the display name; every call must
+                // derive it from a leaf (GetFileName / LeafName / a
+                // literal file name), never hand over a raw path
+                // variable that could carry directories.
+                bool leaf = call.Contains("GetFileName(", StringComparison.Ordinal)
+                    || call.Contains("LeafName(", StringComparison.Ordinal)
+                    || call.Contains("attempted", StringComparison.Ordinal)
+                    || call.Contains("\".md\"", StringComparison.Ordinal);
+                if (!leaf)
+                {
+                    offenders.Add($"{Path.GetFileName(file)}: {call.Split('\n')[0].Trim()}");
+                }
+
+                at = end < 0 ? text.Length : end;
+            }
+        }
+
+        Assert.True(
+            offenders.Count == 0,
+            "CreateReporting callers must pass a LEAF display name: "
+            + string.Join(" | ", offenders));
+    }
+
     /// <summary>Every create funnel in the shell consumes the typed
     /// outcome: the one-error <c>CreateExclusive(</c> call has no
     /// production caller left (the bytes sibling <c>CreateExclusiveBytes</c>

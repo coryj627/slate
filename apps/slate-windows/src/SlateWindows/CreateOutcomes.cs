@@ -26,7 +26,10 @@ internal static class CreateOutcomes
     /// <summary>Runs a create and separates the two landed arms from the
     /// refusal: returns the landed path's caveat (null when committed);
     /// a refusal throws its <see cref="VaultException"/> as before, so
-    /// the typed <c>DestinationExists</c> advance signal keeps working.</summary>
+    /// the typed <c>DestinationExists</c> advance signal keeps working.
+    /// <paramref name="displayName"/> is the LEAF the user sees — every
+    /// funnel passes a file name, never a vault-relative path, so the
+    /// caveat reads the same wherever it comes from.</summary>
     internal static string? CreateReporting(
         VaultSession session, string path, string content, string displayName)
     {
