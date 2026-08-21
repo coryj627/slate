@@ -3484,6 +3484,7 @@
                                     Padding="10,4"
                                     Content="Create"
                                     Command="{Binding CreateCommand}"
+                                    PreviewMouseLeftButtonDown="TemplateNameCreate_PreviewMouseLeftButtonDown"
                                     AutomationProperties.AutomationId="TemplateNameCreate"
                                     AutomationProperties.HelpText="Render the template and open the new note. Enter." />
                         </StackPanel>

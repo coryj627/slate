@@ -130,6 +130,15 @@ field focused on present. Footer: Cancel / Next; Next is the default
 button (Enter submits from inside a text field); no validation on
 prompt values — any string including empty is a valid answer.
 
+**One physical gesture, one step** (codex round 4): key REPEATS never
+advance the flow (a held Enter would otherwise cascade
+picker-activate → Next → Create in one press, each repeat landing in
+the next step's freshly focused field), and the Create button
+swallows any press whose click count exceeds one (the second click of
+a double-click on Next lands where Create appears — a TD-5 mechanics
+consequence mac's sequential sheets cannot have). Structurally
+pinned; the input state is view-layer and not headless-synthesizable.
+
 **T5 — Metadata/render coherence.** Metadata is extracted from a
 host-read snapshot of the source; the render re-reads by path at create
 time. A template edited in the gap can therefore carry prompts the user

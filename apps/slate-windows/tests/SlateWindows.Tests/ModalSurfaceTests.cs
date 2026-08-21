@@ -1366,6 +1366,50 @@ public sealed class ModalSurfaceTests
     }
 
     /// <summary>
+    /// One physical gesture, one flow step (codex round 4): a held
+    /// Enter's key repeats land in the NEXT step's freshly focused
+    /// field, collapsing picker-activate → Next → Create into a single
+    /// press; the second click of a double-click on Next lands on the
+    /// freshly revealed Create button (Next and Create share a footer
+    /// position across the step panels — a TD-5 mechanics consequence
+    /// mac's sequential sheets cannot have). Both fences are
+    /// view-layer input state a headless fact cannot synthesize, so
+    /// they are pinned structurally.
+    /// </summary>
+    [Fact]
+    public void TheFlowFencesOneGesturePerStep()
+    {
+        foreach (string handler in new[]
+        {
+            "TemplatePickerOverlay_PreviewKeyDown",
+            "TemplateFlowOverlay_PreviewKeyDown",
+        })
+        {
+            string route = CSharpSource.Normalize(
+                CSharpSource.Load("MainWindow.Templates.cs").Method(handler));
+            Assert.Contains(
+                "if(e.IsRepeat){e.Handled=true;return;}",
+                route,
+                StringComparison.Ordinal);
+        }
+
+        string fence = CSharpSource.Normalize(
+            CSharpSource.Load("MainWindow.Templates.cs")
+                .Method("TemplateNameCreate_PreviewMouseLeftButtonDown"));
+        Assert.Contains(
+            "if(e.ClickCount>1){e.Handled=true;}",
+            fence,
+            StringComparison.Ordinal);
+
+        string xaml = File.ReadAllText(
+            Path.Combine(SourceRoot(), "MainWindow.xaml"));
+        Assert.Contains(
+            "PreviewMouseLeftButtonDown=\"TemplateNameCreate_PreviewMouseLeftButtonDown\"",
+            xaml,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The template flow's one-gate design is WIRED, not just designed
     /// (red team W5-3, tests finding 2 — the milestone's exact defect
     /// signature, again): the pure DecideTemplateOpen theory proves the

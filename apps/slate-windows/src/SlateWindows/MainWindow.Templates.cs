@@ -393,6 +393,16 @@ public partial class MainWindow
                 e.Handled = true;
                 return;
             case Key.Enter:
+                // One physical press, one step (codex round 4): a HELD
+                // Enter's repeats would otherwise activate the row and
+                // then cascade through the flow sheet's freshly focused
+                // fields — Prompts, Name, Create — in a single gesture.
+                if (e.IsRepeat)
+                {
+                    e.Handled = true;
+                    return;
+                }
+
                 // A focused button — Try Again, Cancel — keeps its own
                 // Enter (the search overlay's guard).
                 if (Keyboard.FocusedElement is Button)
@@ -428,6 +438,24 @@ public partial class MainWindow
         }
     }
 
+    /// <summary>
+    /// The pointer half of the one-gesture fence (codex round 4): Next
+    /// and Create occupy the same footer position in mutually
+    /// exclusive step panels, so the SECOND click of a double-click on
+    /// Next lands on the freshly revealed Create button — mac's
+    /// separate sequential sheets can never overlap this way (TD-5's
+    /// mechanics). A press whose ClickCount exceeds one is the tail of
+    /// a multi-click gesture that already acted; swallow it.
+    /// </summary>
+    private void TemplateNameCreate_PreviewMouseLeftButtonDown(
+        object sender, MouseButtonEventArgs e)
+    {
+        if (e.ClickCount > 1)
+        {
+            e.Handled = true;
+        }
+    }
+
     private void TemplateFlowOverlay_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         TemplateFlowViewModel? flow = _viewModel.Workspace?.TemplateFlowSheet;
@@ -443,6 +471,16 @@ public partial class MainWindow
                 e.Handled = true;
                 return;
             case Key.Enter:
+                // One physical press, one step (codex round 4): key
+                // repeats from a held Enter land in the NEXT step's
+                // freshly focused field and would collapse Next and
+                // Create — separate confirmations — into one gesture.
+                if (e.IsRepeat)
+                {
+                    e.Handled = true;
+                    return;
+                }
+
                 // Buttons keep their own Enter; a text field's Enter is
                 // the step's default action (mac .defaultAction — bare
                 // Return activates the primary button from a field).
