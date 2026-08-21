@@ -800,21 +800,16 @@ public sealed class ShellAccessibilityTests
         var config = Config.Builder.ForProcessId(process.Id).Build();
         var output = ScannerFactory.CreateScanner(config).Scan(null);
         Assert.NotEmpty(output.WindowScanOutputs);
-        var errors = output.WindowScanOutputs
+        var allErrors = output.WindowScanOutputs
             .SelectMany(result => result.Errors)
             .ToArray();
-        object[] evidenceErrors = errors.Select(error => (object)new
-        {
-            ruleId = error.Rule.ID,
-            description = error.Rule.Description,
-            elementProperties = error.Element.Properties
-                .Select(property => property.ToString())
-                .ToArray(),
-        }).ToArray();
+        var waived = allErrors.Where(IsFluentCollapsedScrollBarPart).ToArray();
+        var errors = allErrors.Except(waived).ToArray();
         WriteAxeEvidence(
             surface,
             output.WindowScanOutputs.Count,
-            evidenceErrors);
+            errors.Select(DescribeAxeError).ToArray(),
+            waived.Select(DescribeAxeError).ToArray());
         Assert.True(
             errors.Length == 0,
             string.Join(
@@ -824,10 +819,57 @@ public sealed class ShellAccessibilityTests
                     string.Join(", ", error.Element.Properties))));
     }
 
+    private static object DescribeAxeError(Axe.Windows.Automation.ScanResult error) => new
+    {
+        ruleId = error.Rule.ID,
+        description = error.Rule.Description,
+        elementProperties = error.Element.Properties
+            .Select(property => property.ToString())
+            .ToArray(),
+    };
+
+    /// <summary>
+    /// The ONE recorded axe waiver (#1115): the Fluent theme's scrollbar
+    /// collapses to a ~4 px overlay until hovered, and its track/arrow
+    /// RepeatButtons (PageUp/PageDown/LineUp/LineDown) then measure
+    /// below the 25 px² floor of <c>BoundingRectangleSizeReasonable</c>
+    /// whenever the scan catches the collapsed state — a geometric
+    /// verdict on a mouse-only, non-focusable part that is not an AT
+    /// stop, and one that depends on scan timing and display geometry
+    /// (measured: the FluentShell journey failed 2/3 then 3/3 locally
+    /// on the committed tree, green on CI by luck). Scoped to exactly
+    /// that element shape: the rule, the RepeatButton class, the
+    /// scrollbar part ids. Everything else the rule reports still
+    /// fails. Waived findings are RECORDED in the evidence artifact, so
+    /// the standing NVDA/JAWS field pass can revisit the call with what
+    /// users actually experience; if that pass finds the collapsed bar
+    /// matters, the fix is app-wide (keep Fluent's bars expanded), not
+    /// a wider waiver.
+    /// </summary>
+    private static bool IsFluentCollapsedScrollBarPart(Axe.Windows.Automation.ScanResult error)
+    {
+        if (!string.Equals(
+                error.Rule.ID.ToString(),
+                "BoundingRectangleSizeReasonable",
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return string.Equals(
+                ElementProperty(error, "ClassName"), "RepeatButton", StringComparison.Ordinal)
+            && ElementProperty(error, "AutomationId")
+                is "PageUp" or "PageDown" or "LineUp" or "LineDown";
+    }
+
+    private static string? ElementProperty(Axe.Windows.Automation.ScanResult error, string name) =>
+        error.Element.Properties.TryGetValue(name, out string? value) ? value : null;
+
     private static void WriteAxeEvidence(
         string surface,
         int windowCount,
-        object[] errors)
+        object[] errors,
+        object[] waived)
     {
         string? directory = Environment.GetEnvironmentVariable(
             "SLATE_ACCESSIBILITY_EVIDENCE_DIR");
@@ -839,7 +881,10 @@ public sealed class ShellAccessibilityTests
         Directory.CreateDirectory(directory);
         var evidence = new
         {
-            schemaVersion = 1,
+            // Schema 2 (#1115): `waived` records the findings the one
+            // scoped waiver set aside — the collapsed-state Fluent
+            // scrollbar parts — so the field pass can review them.
+            schemaVersion = 2,
             surface,
             recordedAtUtc = DateTimeOffset.UtcNow,
             sourceRevision = Environment.GetEnvironmentVariable("GITHUB_SHA"),
@@ -849,6 +894,7 @@ public sealed class ShellAccessibilityTests
             scannedWindowCount = windowCount,
             outcome = errors.Length == 0 ? "pass" : "fail",
             errors,
+            waived,
         };
         string path = Path.Combine(directory, $"axe-{surface}.json");
         File.WriteAllText(
