@@ -846,20 +846,36 @@ public sealed class ShellAccessibilityTests
     /// matters, the fix is app-wide (keep Fluent's bars expanded), not
     /// a wider waiver.
     /// </summary>
-    private static bool IsFluentCollapsedScrollBarPart(Axe.Windows.Automation.ScanResult error)
+    private static bool IsFluentCollapsedScrollBarPart(Axe.Windows.Automation.ScanResult error) =>
+        IsFluentCollapsedScrollBarPart(
+            error.Rule.ID.ToString(),
+            ElementProperty(error, "ClassName"),
+            ElementProperty(error, "AutomationId"));
+
+    /// <summary>The waiver decision over the three properties that carry
+    /// it — a pure function so both directions are testable without
+    /// synthesizing a scan (<see cref="AxeWaiverTests"/>). Comparisons
+    /// are ordinal-ignore-case: UIA property casing is the provider's,
+    /// not ours, and the waiver must neither widen nor narrow on it.</summary>
+    internal static bool IsFluentCollapsedScrollBarPart(
+        string? ruleId, string? className, string? automationId)
     {
         if (!string.Equals(
-                error.Rule.ID.ToString(),
-                "BoundingRectangleSizeReasonable",
-                StringComparison.Ordinal))
+                ruleId, "BoundingRectangleSizeReasonable", StringComparison.OrdinalIgnoreCase))
         {
             return false;
         }
 
-        return string.Equals(
-                ElementProperty(error, "ClassName"), "RepeatButton", StringComparison.Ordinal)
-            && ElementProperty(error, "AutomationId")
-                is "PageUp" or "PageDown" or "LineUp" or "LineDown";
+        if (!string.Equals(className, "RepeatButton", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return automationId is not null
+            && (string.Equals(automationId, "PageUp", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(automationId, "PageDown", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(automationId, "LineUp", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(automationId, "LineDown", StringComparison.OrdinalIgnoreCase));
     }
 
     private static string? ElementProperty(Axe.Windows.Automation.ScanResult error, string name) =>
