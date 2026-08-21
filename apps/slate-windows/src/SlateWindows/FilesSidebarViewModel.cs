@@ -33,6 +33,7 @@ internal sealed class FileTreeNodeViewModel : BindableBase
     private readonly FilesSidebarViewModel? _owner;
     private bool _isExpanded;
     private bool _isBatchSelected;
+    private bool _isSelected;
     private ObservableCollection<FileTreeNodeViewModel> _children = [];
     private FileTreeChildLoadState _childLoadState;
     private object? _treeIdentity;
@@ -173,6 +174,19 @@ internal sealed class FileTreeNodeViewModel : BindableBase
                 _owner?.BatchSelectionChanged();
             }
         }
+    }
+
+    /// <summary>W5-4 (verification 1): the VM→view selection channel.
+    /// The container style binds TreeViewItem.IsSelected TwoWay, so a
+    /// publication-time restore materializes as the REAL tree
+    /// selection (and the view's own selection moves keep the node
+    /// state honest). The container's resulting SelectedItemChanged
+    /// re-enters the sidebar's SelectedNode setter with the SAME node
+    /// and no-ops there.</summary>
+    public bool IsSelected
+    {
+        get => _isSelected;
+        set => SetField(ref _isSelected, value);
     }
 
     internal void RenameTo(string name)
@@ -551,6 +565,10 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     {
         if (SetField(ref _selectedNode, node, nameof(SelectedNode)))
         {
+            // The view half (verification 1): without the container's
+            // IsSelected, the restore was invisible and the next arrow
+            // key jumped to the tree top and opened the first file.
+            node.IsSelected = true;
             MutationName = node.Name;
             RaiseCommandStates();
         }
@@ -1249,7 +1267,11 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 return;
             }
 
+            // W5-4 F10 (verification 4): a folder-note create is a
+            // CREATE — a structural history barrier like its siblings.
+            StructuralHistoryBarrier();
             ReportResult($"Created folder note {path}.");
+            RequestSelectionAt(null);
             Refresh();
             RequestOpen(path);
         }
@@ -1278,7 +1300,11 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 return;
             }
 
+            // W5-4 F10 (verification 4): trash is not undoable AND a
+            // barrier — the folder-note delete is a trash.
+            StructuralHistoryBarrier();
             ReportResult($"Deleted the {node.DisplayName} folder note.");
+            RequestSelectionAt(null);
             Refresh();
         }
         catch (VaultException exception)

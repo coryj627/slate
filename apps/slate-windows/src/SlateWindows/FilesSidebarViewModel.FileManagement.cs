@@ -307,11 +307,13 @@ internal sealed partial class FilesSidebarViewModel
                 // recorded destinations changed out from under the op —
                 // or a Partial/RolledBack residue, whose Standing pairs
                 // were retargeted above): the files DID change; drop
-                // the suspect history and say so, never success.
+                // the suspect history and say so, never success. The
+                // failure leg reconciles focus too (verification 2).
                 _structuralUndo.DropForChangedFiles();
                 AnnounceUndoResidue(redo
                     ? "Can't redo — the files have changed."
                     : "Can't undo — the files have changed.");
+                RequestSelectionAt(null);
                 Refresh();
                 return;
             }
@@ -442,6 +444,11 @@ internal sealed partial class FilesSidebarViewModel
             .FirstOrDefault(node => node.Path == pending);
         if (created is null)
         {
+            // The node did not materialize (a collapsed deep parent):
+            // the rename hand-off degrades, but the keyboard user must
+            // not stay stranded on a discarded container
+            // (verification 3).
+            TreeSelectionRestored?.Invoke();
             return;
         }
 
@@ -506,6 +513,8 @@ internal sealed partial class FilesSidebarViewModel
             .Select(item => item.Path)];
         var knownFolders = new HashSet<string>(
             folders, StringComparer.OrdinalIgnoreCase);
+        var illegalParentsTyped = new HashSet<string>(
+            illegalParents, StringComparer.OrdinalIgnoreCase);
         string[] legal = [.. folders.Where(folder =>
             !illegalParents.Contains(folder)
             && !movingFolders.Any(moving => folder == moving
@@ -516,11 +525,16 @@ internal sealed partial class FilesSidebarViewModel
         // parent, a moving folder's own subtree, and any KNOWN folder
         // (the legal ones are picked as rows; the filtered-illegal
         // ones must not resurface as a "create" that refuses typed).
+        // Every arm is case-INSENSITIVE against user-typed text
+        // (verification 5): "Docs/archive" under moving folder "docs"
+        // is the same subtree on this filesystem.
         bool NewFolderPathAllowed(string typed) =>
             !knownFolders.Contains(typed)
-            && !illegalParents.Contains(typed)
-            && !movingFolders.Any(moving => typed == moving
-                || typed.StartsWith(moving + "/", StringComparison.Ordinal));
+            && !illegalParentsTyped.Contains(typed)
+            && !movingFolders.Any(moving =>
+                string.Equals(typed, moving, StringComparison.OrdinalIgnoreCase)
+                || typed.StartsWith(
+                    moving + "/", StringComparison.OrdinalIgnoreCase));
 
         string noun = items.Length == 1
             ? System.IO.Path.GetFileName(items[0].Path)
@@ -639,7 +653,9 @@ internal sealed partial class FilesSidebarViewModel
                 ReportFailure($"Move failed: {exception.Message}");
                 // A create-then-move whose move half refused must not
                 // leave the created folder invisible until the next
-                // organic refresh (red team, correctness 4).
+                // organic refresh (red team, correctness 4) — and the
+                // failure leg reconciles focus too (verification 2).
+                RequestSelectionAt(null);
                 Refresh();
             }
 
@@ -777,6 +793,9 @@ internal sealed partial class FilesSidebarViewModel
             StructuralHistoryBarrier();
             ReportResult(
                 $"Duplicated {node.DisplayName} as {LeafName(created)}.");
+            // Selection lands on the copy (Finder's shape), and focus
+            // reconciles (verification 3).
+            RequestSelectionAt(created);
             Refresh();
         }
         catch (VaultException exception)

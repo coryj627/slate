@@ -745,6 +745,12 @@
                                         <TreeView.ItemContainerStyle>
                                             <Style TargetType="TreeViewItem">
                                                 <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
+                                                <!-- W5-4 verification: the VM→view selection
+                                                     channel — a mutation's publication re-seats
+                                                     selection on the FRESH node, and without this
+                                                     binding the restore was invisible and the
+                                                     next arrow key jumped to the tree top. -->
+                                                <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}" />
                                                 <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
                                             </Style>
                                         </TreeView.ItemContainerStyle>

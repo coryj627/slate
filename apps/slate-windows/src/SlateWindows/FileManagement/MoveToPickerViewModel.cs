@@ -229,7 +229,11 @@ internal sealed class MoveToPickerViewModel : BindableBase
 
         if (announceCount)
         {
-            int destinations = rows.Count;
+            // Real destinations only — the "New Folder…" pseudo-row is
+            // an action, not a place that exists yet (verification,
+            // residue note).
+            int destinations = rows.Count(
+                row => row.Kind != MoveToRowKind.NewFolder);
             // W0.5-3 residue: Move-To filter landing copy.
             _announce(new A11yEvent.HostComposed(
                 $"{destinations:N0} {(destinations == 1 ? "destination" : "destinations")}.",
