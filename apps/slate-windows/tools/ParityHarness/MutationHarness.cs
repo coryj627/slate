@@ -726,9 +726,13 @@ public static class MutationSerializer
         }
 
         // The referential-integrity oracle (H5-4): the read harness's
-        // links artifact re-emitted over the terminal vault.
+        // links artifact re-emitted over the terminal vault. Its own
+        // trailing newline is a TOP-LEVEL-artifact concern — embedded
+        // mid-document it violates the canonical no-whitespace rule
+        // (the Swift twin's first byte-diff caught exactly this).
         j.Raw("],\"links\":").Raw(
-            SurfaceSerializer.LinksArtifact(session, markdownFiles));
+            SurfaceSerializer.LinksArtifact(session, markdownFiles)
+                .TrimEnd('\n'));
 
         j.Raw("}\n");
         return j.ToString();
