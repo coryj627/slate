@@ -818,6 +818,65 @@ impl VaultProvider for FsVaultProvider {
         self.mutation_path_kind(relative).map(|kind| kind.is_some())
     }
 
+    /// #1077 contract I1: the stored spelling, from the filesystem.
+    ///
+    /// Windows and macOS are the aliasing platforms (case-insensitive
+    /// NTFS/APFS; APFS also normalization-insensitive); everything else
+    /// keeps the trait's identity default (divergence ID-1). The shape
+    /// is the `read_in_vault_with_cap` precedent — `fs::canonicalize`
+    /// on BOTH the entry and the root, so a symlinked vault root and an
+    /// 8.3 short-name temp directory (the CI runner's `RUNNER~1`) strip
+    /// cleanly — with two identity-specific rules:
+    ///
+    /// - **A link keeps its own spelling.** Identity never follows a
+    ///   symlink or reparse point (the W1 anchored-vault discipline);
+    ///   the link's own entry is the thing being mutated.
+    /// - **Outside the root fails closed (I7).** An ancestor reparse
+    ///   point that leads outside the vault leaves the entry with no
+    ///   in-vault identity to bind to; refusing beats binding to a
+    ///   spelling that is not this vault's.
+    #[cfg(any(windows, target_os = "macos"))]
+    fn canonical_path(&self, relative: &str) -> Result<Option<String>, VaultError> {
+        let path = self.resolve(relative)?;
+        match path.symlink_metadata() {
+            Ok(meta) if meta.file_type().is_symlink() => return Ok(Some(relative.to_string())),
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(VaultError::Io(error)),
+        }
+        let canonical = match fs::canonicalize(&path) {
+            Ok(canonical) => canonical,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(VaultError::Io(error)),
+        };
+        let canonical_root = fs::canonicalize(&self.root)?;
+        let Ok(rest) = canonical.strip_prefix(&canonical_root) else {
+            return Err(VaultError::InvalidPath {
+                path: relative.to_string(),
+                reason: format!(
+                    "canonical location {canonical:?} is not beneath the vault root \
+                     {canonical_root:?} (an ancestor reparse point leads outside the \
+                     vault); refusing to bind an identity"
+                ),
+            });
+        };
+        let mut spelling = String::new();
+        for component in rest.components() {
+            let part = component
+                .as_os_str()
+                .to_str()
+                .ok_or_else(|| VaultError::InvalidPath {
+                    path: relative.to_string(),
+                    reason: "canonical path is not valid UTF-8".into(),
+                })?;
+            if !spelling.is_empty() {
+                spelling.push('/');
+            }
+            spelling.push_str(part);
+        }
+        Ok(Some(spelling))
+    }
+
     fn stat(&self, relative: &str) -> Result<FileStat, VaultError> {
         let path = self.resolve(relative)?;
         // `metadata()` follows symlinks; the indexer wants the target's
@@ -2206,6 +2265,91 @@ mod tests {
         assert_eq!(
             after, 0o644,
             "overwrite must not downgrade existing-file permissions"
+        );
+    }
+
+    /// #1077 Phase 0 (contract I1): nothing there means `None` — the
+    /// caller keeps the requested spelling, which is how a CREATE
+    /// stores the name the user chose (I2).
+    #[test]
+    fn canonical_path_of_a_missing_entry_is_none() {
+        let (_tmp, p) = vault();
+        assert_eq!(p.canonical_path("nope.md").unwrap(), None);
+        assert_eq!(p.canonical_path("no/where.md").unwrap(), None);
+    }
+
+    /// #1077 Phase 0 (contract I1): the canonical spelling comes from
+    /// the filesystem. Volume-dependent BY DESIGN — the aliasing
+    /// assertions run only where the volume actually aliases (probed,
+    /// never assumed), so this fact is true on NTFS/APFS and vacuous on
+    /// ext4, and it never invents a normalization on either.
+    #[test]
+    fn canonical_path_returns_the_stored_spelling_on_an_aliasing_volume() {
+        let (_tmp, p) = vault();
+        p.write_file("Notes/Alpha.md", b"a").unwrap();
+        p.write_file("\u{00c4}rger.md", b"b").unwrap(); // Ärger
+        p.write_file("\u{65e5}\u{672c}.md", b"c").unwrap(); // 日本 — no case to fold
+
+        // Exact spellings resolve to themselves everywhere.
+        assert_eq!(
+            p.canonical_path("Notes/Alpha.md").unwrap().as_deref(),
+            Some("Notes/Alpha.md")
+        );
+        assert_eq!(
+            p.canonical_path("\u{65e5}\u{672c}.md").unwrap().as_deref(),
+            Some("\u{65e5}\u{672c}.md")
+        );
+
+        if p.stat("notes/alpha.md").is_err() {
+            // Case-sensitive volume: the alias does not exist, and saying
+            // so IS the per-volume truth — never invent (I1).
+            assert_eq!(p.canonical_path("notes/alpha.md").unwrap(), None);
+            assert_eq!(p.canonical_path("\u{00e4}rger.md").unwrap(), None);
+            return;
+        }
+
+        // Case-insensitive volume: every alias resolves to the ONE stored
+        // spelling — directory components included, and beyond ASCII
+        // (the pair the old `lower()` gate could not see, finding 1).
+        assert_eq!(
+            p.canonical_path("notes/alpha.md").unwrap().as_deref(),
+            Some("Notes/Alpha.md")
+        );
+        assert_eq!(
+            p.canonical_path("NOTES/ALPHA.MD").unwrap().as_deref(),
+            Some("Notes/Alpha.md")
+        );
+        assert_eq!(
+            p.canonical_path("\u{00e4}rger.md").unwrap().as_deref(),
+            Some("\u{00c4}rger.md")
+        );
+
+        // NFC vs NFD is a separate axis: NTFS keeps them distinct, APFS
+        // unifies them. Either way the answer is the volume's, not ours.
+        let nfc = "caf\u{00e9}.md";
+        let nfd = "cafe\u{0301}.md";
+        p.write_file(nfc, b"d").unwrap();
+        let expected = if p.stat(nfd).is_ok() {
+            Some(nfc.to_string())
+        } else {
+            None
+        };
+        assert_eq!(p.canonical_path(nfd).unwrap(), expected);
+    }
+
+    /// #1077 Phase 0: a link is never followed for identity — it keeps
+    /// its own spelling (the W1 anchored-vault discipline; the link's
+    /// entry is the thing being mutated).
+    #[cfg(unix)]
+    #[test]
+    fn canonical_path_keeps_a_symlinks_own_spelling() {
+        let (tmp, p) = vault();
+        p.write_file("Target.md", b"t").unwrap();
+        std::os::unix::fs::symlink(tmp.path().join("Target.md"), tmp.path().join("Link.md"))
+            .unwrap();
+        assert_eq!(
+            p.canonical_path("Link.md").unwrap().as_deref(),
+            Some("Link.md")
         );
     }
 }
