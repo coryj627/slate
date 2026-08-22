@@ -243,8 +243,22 @@ internal sealed partial class WorkspaceViewModel
     /// walk-through disabled and no re-read to correct it. Citation
     /// loads are gated on the seed, so the pre-publish window is a
     /// perfectly ordinary one at startup.</summary>
+    /// <summary>Window-supplied modal admission for the citation summary
+    /// (#1118, the TemplateOpenAdmission shape): consults
+    /// <c>ModalSurfaces.DecideCitationSummaryOpen</c> and performs any
+    /// dismissal it calls for, inside the open, so every opener passes
+    /// one gate. Consulted at the REQUEST — a parked request (loading
+    /// in flight) was admitted when the user asked and presents on
+    /// publish. Null (headless tests) admits.</summary>
+    internal Func<bool>? CitationSummaryOpenAdmission { get; set; }
+
     internal void OpenCitationSummary()
     {
+        if (CitationSummaryOpenAdmission?.Invoke() == false)
+        {
+            return;
+        }
+
         if (Citations.IsLoading)
         {
             // DEFER, never drop: a keypress that produces nothing reads

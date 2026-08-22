@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Collections.ObjectModel;
+using System.Runtime.ExceptionServices;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows.Search;
@@ -336,6 +337,16 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
             return;
         }
 
+        CloseCore();
+        Dismissed?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>The teardown half of <see cref="Close"/> without the
+    /// dismissal notification — activation (<see cref="ActivateRow"/>)
+    /// closes the overlay, hands the open to the shell, and notifies
+    /// AFTERWARDS (#1121).</summary>
+    private void CloseCore()
+    {
         CancelDebounce();
         CancelInFlightSearch();
         // Rows are cleared while the overlay is still realised so UIA
@@ -347,7 +358,6 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
         State = SearchOverlayState.Idle;
         PublishSummary(string.Empty, null);
         IsOpen = false;
-        Dismissed?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>
@@ -529,9 +539,51 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
             _source.RecordRecent(query);
         }
 
-        Close();
-        OpenRequested?.Invoke(
-            this, new SearchOpenRequest(row.Path, query, row.StrippedSnippet));
+        // Close, open, THEN notify the dismissal — Quick Open's exact
+        // shape (#1121). The shell queues its focus restore on the
+        // dismissal; raised before the open, that restore ran inside
+        // the dirty-navigation prompt's nested pump when the current tab
+        // was dirty — against a disabled window, spending the pre-open
+        // focus token and speaking a spurious pane announcement
+        // mid-dialog. Raised after the open resolves, it runs in an
+        // enabled window after any editor focus claim, so the SD-2
+        // stand-down evaluates the activation's real focus outcome and
+        // the Cancel arm keeps its deterministic restore. The overlay
+        // is still CLOSED before the shell opens the hit (S9).
+        CloseCore();
+        // The dismissal ALWAYS fires (codoki): the shell's focus restore
+        // hangs off it, so a throwing open subscriber would otherwise
+        // leave the overlay closed and keyboard focus stranded wherever
+        // the collapse left it — silent for a sighted user, a dead
+        // keyboard for an AT user.
+        //
+        // Not a `finally`, though (codoki again): an exception thrown
+        // from one REPLACES the in-flight exception, so a throwing
+        // dismissal handler would bury the open failure — the one that
+        // actually explains what went wrong. The open's exception is
+        // captured and rethrown with its original stack; a dismissal
+        // failure only surfaces when the open itself succeeded.
+        ExceptionDispatchInfo? openFailure = null;
+        try
+        {
+            OpenRequested?.Invoke(
+                this, new SearchOpenRequest(row.Path, query, row.StrippedSnippet));
+        }
+        catch (Exception exception)
+        {
+            openFailure = ExceptionDispatchInfo.Capture(exception);
+        }
+
+        try
+        {
+            Dismissed?.Invoke(this, EventArgs.Empty);
+        }
+        catch when (openFailure is not null)
+        {
+            // The open failure is the story; this one is noise on top.
+        }
+
+        openFailure?.Throw();
     }
 
     /// <summary>

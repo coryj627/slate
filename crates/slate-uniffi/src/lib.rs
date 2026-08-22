@@ -2332,9 +2332,13 @@ pub struct DirNodeSummary {
 #[derive(uniffi::Record)]
 pub struct StructuralReport {
     pub op_id: i64,
-    /// FL6-1: ordered ids that fully reverse this report (newest
-    /// first) — a compound folder+note rename journals two rows and
-    /// `op_id` alone cannot reverse it. Single ops carry `[op_id]`.
+    /// FL6-1: the journal rows this report wrote, newest first — a
+    /// compound folder+note rename journals two and single ops carry
+    /// `[op_id]`. The RECORD, not an executable sequence (#1127):
+    /// `undo_structural` admits only the latest row and journals
+    /// itself, so hosts reverse a compound by re-running the forward
+    /// FFI with inverse arguments; `undo_structural(undo_op_ids[0])`
+    /// is the single-op path.
     pub undo_op_ids: Vec<i64>,
     pub moved: Vec<MovedPath>,
     pub rewritten: Vec<RewriteOutcome>,

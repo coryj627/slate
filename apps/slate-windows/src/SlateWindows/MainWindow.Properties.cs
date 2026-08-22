@@ -8,6 +8,8 @@ using Microsoft.Win32;
 using SlateWindows.Grids;
 using SlateWindows.Panels;
 
+using uniffi.slate_uniffi;
+
 namespace SlateWindows;
 
 /// <summary>
@@ -47,18 +49,65 @@ public partial class MainWindow
         },
     ];
 
+    /// <summary>W0.5-3 residue: dialog guidance for Ctrl+Shift+R refused
+    /// beneath a higher sheet (#1118) — the template flow's
+    /// dialog-busy partition, with this verb.</summary>
+    internal const string BulkRenameDialogBusyReason =
+        "Finish or cancel the current dialog before renaming properties.";
+
     private void WireWorkspaceProperties(WorkspaceViewModel workspace)
     {
         workspace.PropertyDeleteConfirmation = ConfirmPropertyDelete;
         workspace.PropertyConflictDialog = ShowPropertyConflictDialog;
         workspace.WikilinkPicker = PickWikilinkTarget;
+        // #1118: the bulk-rename openers — chord, menu, palette row —
+        // pass one admission inside the workspace's open.
+        workspace.BulkRenameOpenAdmission = TryClearTheWayForBulkRename;
         workspace.PropertyChanged += Workspace_PropertySheetChanged;
     }
 
     private void UnwireWorkspaceProperties(WorkspaceViewModel workspace)
     {
         workspace.PropertyChanged -= Workspace_PropertySheetChanged;
+        workspace.BulkRenameOpenAdmission = null;
         ObserveBulkRenameSheet(null);
+    }
+
+    /// <summary>
+    /// Applies <see cref="ModalSurfaces.DecideBulkRenameOpen"/>,
+    /// performing the dismissal it calls for — the bulk-rename twin of
+    /// <see cref="TryClearTheWayForTemplates"/> (#1118). Runs INSIDE the
+    /// workspace's open, so every opener passes one gate; the sheet's
+    /// own focus capture (<c>_focusBeforeSheet ??=</c> at presentation)
+    /// keeps the lineage adopted here.
+    /// </summary>
+    private bool TryClearTheWayForBulkRename()
+    {
+        switch (ModalSurfaces.DecideBulkRenameOpen(OpenModalSurface))
+        {
+            case PaletteOpenDecision.Open:
+                return true;
+            case PaletteOpenDecision.DismissQuickOpenThenOpen:
+                _focusBeforeSheet ??= ConsumePreSwitcherFocus();
+                _viewModel.QuickSwitcher!.Dismiss();
+                return true;
+            case PaletteOpenDecision.DismissSearchThenOpen:
+                IInputElement? preSearch = ConsumePreSearchFocus();
+                _viewModel.Search.Supersede();
+                _focusBeforeSheet ??= preSearch;
+                return true;
+            case PaletteOpenDecision.DismissPaletteThenOpen:
+                IInputElement? prePalette = ConsumePrePaletteFocus();
+                _viewModel.Palette.Dismiss();
+                _focusBeforeSheet ??= prePalette;
+                return true;
+            default:
+                // A refusal must speak, never be a dead key (the
+                // template flow's three-way red-team finding).
+                _announcer.Post(new A11yEvent.HostComposed(
+                    BulkRenameDialogBusyReason, A11yPriority.Medium));
+                return false;
+        }
     }
 
     /// <summary>Cancel is the DEFAULT action and never deletes

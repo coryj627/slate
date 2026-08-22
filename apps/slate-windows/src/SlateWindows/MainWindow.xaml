@@ -633,7 +633,7 @@
                                     </TreeView.ItemContainerStyle>
                                 </TreeView>
                             </StackPanel>
-                            <ScrollViewer DockPanel.Dock="Bottom"
+                            <ScrollViewer Focusable="False" DockPanel.Dock="Bottom"
                                           MaxHeight="210"
                                           HorizontalScrollBarVisibility="Disabled"
                                           VerticalScrollBarVisibility="Auto">
@@ -1078,7 +1078,7 @@
                                 <TextBlock DockPanel.Dock="Top"
                                            Style="{StaticResource PanelEmptyMessage}"
                                            Text="{Binding Panels.EmbedsEmptyMessage}" />
-                                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto"
                                               HorizontalScrollBarVisibility="Disabled">
                                     <ItemsControl ItemsSource="{Binding Panels.Embeds}"
                                                   AutomationProperties.AutomationId="PanelEmbedsList"
@@ -1130,7 +1130,7 @@
                                 <TextBlock DockPanel.Dock="Bottom"
                                            Style="{StaticResource PanelEmptyMessage}"
                                            Text="{Binding Panels.TasksTruncationNotice}" />
-                                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto"
                                               HorizontalScrollBarVisibility="Disabled">
                                     <StackPanel>
                                         <TextBlock x:Name="PanelTasksOpenHeader"
@@ -1540,7 +1540,7 @@
                                             AutomationProperties.AutomationId="QueriesRefresh"
                                             Click="QueriesRefresh_Click" />
                                 </StackPanel>
-                                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto">
                                     <StackPanel>
                                         <TextBlock Margin="0,8,0,2" Text="SAVED QUERIES" FontSize="11"
                                                    Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
@@ -2219,7 +2219,7 @@
                                            AutomationProperties.Name="Recent Searches"
                                            AutomationProperties.HeadingLevel="Level2" />
                             </DockPanel>
-                            <ScrollViewer Grid.Row="1"
+                            <ScrollViewer Focusable="False" Grid.Row="1"
                                           Margin="0,4,0,0"
                                           VerticalScrollBarVisibility="Auto">
                                 <ItemsControl ItemsSource="{Binding Recents}"
@@ -2780,7 +2780,7 @@
                         <Expander.Header>
                             <TextBlock Text="{x:Static panels:CitationPhrase.FieldAbstract}" />
                         </Expander.Header>
-                        <ScrollViewer MaxHeight="160" VerticalScrollBarVisibility="Auto">
+                        <ScrollViewer Focusable="True" AutomationProperties.Name="{Binding AbstractText}" MaxHeight="160" VerticalScrollBarVisibility="Auto">
                             <local:AutomationPresentationTextBlock Text="{Binding AbstractText}"
                                                                    TextWrapping="Wrap" />
                         </ScrollViewer>
@@ -3080,7 +3080,7 @@
                                 AutomationProperties.AutomationId="BuilderDone"
                                 Click="BuilderDone_Click" />
                     </StackPanel>
-                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto">
                         <StackPanel>
                             <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
                                 <TextBlock Text="Match:" VerticalAlignment="Center" />
@@ -3103,7 +3103,7 @@
                                         AutomationProperties.AutomationId="BuilderAddGroup"
                                         Click="BuilderAddGroup_Click" />
                             </StackPanel>
-                            <ItemsControl ItemsSource="{Binding ConditionRows}"
+                            <ItemsControl Focusable="False" ItemsSource="{Binding ConditionRows}"
                                           Margin="0,6,0,0"
                                           AutomationProperties.AutomationId="BuilderConditions">
                                 <ItemsControl.Style>
@@ -3158,7 +3158,7 @@
                                                     </Style>
                                                 </TextBlock.Style>
                                             </TextBlock>
-                                            <ItemsControl ItemsSource="{Binding GroupMembers}" Margin="24,0,0,0">
+                                            <ItemsControl Focusable="False" ItemsSource="{Binding GroupMembers}" Margin="24,0,0,0">
                                                 <ItemsControl.Style>
                                                     <Style TargetType="ItemsControl">
                                                         <Style.Triggers>
