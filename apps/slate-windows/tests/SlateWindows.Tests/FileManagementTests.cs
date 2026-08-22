@@ -377,6 +377,47 @@ public sealed class FileManagementTests
         Assert.Equal(spokenBefore, announced.Count);
     }
 
+    /// <summary>
+    /// #1136: a publication landing while the rename is armed — the
+    /// lifecycle's watcher-driven refresh ~150 ms after a create, or any
+    /// refresh — re-seats the selection on the fresh SAME-PATH node. It
+    /// must not reset the name field the user is typing into: the shell
+    /// gate's FileManagement journey flaked on exactly this (the commit
+    /// renamed Untitled.md to itself and journey.md never landed). A
+    /// re-seat on a DIFFERENT node — the rename's own new path — does
+    /// carry that node's name into the field.
+    /// </summary>
+    [Fact]
+    public async Task APublicationDuringInlineRenameKeepsTheTypedName()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "fm-rename-draft");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new SynchronizedAnnouncements();
+        SidebarRig rig = await NewSidebar(session, fixture, announced);
+        rig.Sidebar.CreateNoteCommand.Execute(null);
+        await rig.Settle();
+        Assert.Equal("Untitled.md", rig.Sidebar.SelectedNode?.Path);
+        Assert.Equal("Untitled.md", rig.Sidebar.MutationName);
+
+        // The user types; then the watcher's refresh lands.
+        rig.Sidebar.MutationName = "journey.md";
+        rig.Sidebar.Refresh();
+        await rig.Settle();
+
+        Assert.Equal("Untitled.md", rig.Sidebar.SelectedNode?.Path);
+        Assert.Equal("journey.md", rig.Sidebar.MutationName);
+
+        // The commit renames to the draft, and the rename's own
+        // publication re-seats on the NEW path — whose name the field
+        // now carries.
+        Assert.True(rig.Sidebar.TryRenameSelected());
+        await rig.Settle();
+        Assert.True(File.Exists(Path.Combine(fixture.Root, "journey.md")));
+        Assert.False(File.Exists(Path.Combine(fixture.Root, "Untitled.md")));
+        Assert.Equal("journey.md", rig.Sidebar.SelectedNode?.Path);
+        Assert.Equal("journey.md", rig.Sidebar.MutationName);
+    }
+
     [Fact]
     public async Task CreatesWalkTheUntitledSequenceAndHandOffToInlineRename()
     {
