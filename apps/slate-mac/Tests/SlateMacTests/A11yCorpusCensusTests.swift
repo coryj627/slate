@@ -14,9 +14,10 @@ import XCTest
 /// `event` field (core's Debug identity, via `a11yEventIdentity`) is
 /// asserted too, so the mirror must construct the SAME semantic event —
 /// not merely one that happens to render identical text. The Windows
-/// census will consume the same file, which is what makes the corpus the
-/// cross-platform anchor: if this test and its Windows twin are green,
-/// both hosts speak identical announcements for identical events.
+/// census (`A11yCorpusCensus`, #1114) consumes the same file, which is
+/// what makes the corpus the cross-platform anchor: if this test and its
+/// Windows twin are green, both hosts speak identical announcements for
+/// identical events. The two mirrors are maintained in lockstep.
 ///
 /// Corpus changes are DELIBERATE: regenerate the artifact core-side
 /// (`SLATE_REGENERATE_FIXTURES=1 cargo test -p slate-core a11y` — that

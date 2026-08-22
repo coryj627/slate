@@ -18,7 +18,12 @@ internal static class SourceText
         System.IO.Path.Combine(
             RepoRoot(), "apps", "slate-windows", "src", "SlateWindows");
 
-    private static string RepoRoot()
+    /// <summary>The repository root, found by walking UP to the
+    /// workspace <c>Cargo.toml</c> — never by counting directory hops
+    /// from <c>AppContext.BaseDirectory</c>, which silently misses when
+    /// the output layout changes (a TFM, a runtime identifier, a
+    /// different runner).</summary>
+    internal static string RepoRoot()
     {
         var directory = new System.IO.DirectoryInfo(System.AppContext.BaseDirectory);
         while (directory is not null
