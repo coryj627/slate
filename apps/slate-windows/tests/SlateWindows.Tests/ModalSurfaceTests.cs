@@ -683,6 +683,10 @@ public sealed class ModalSurfaceTests
     [
         ("MainWindow.Properties.cs", "RestoreFocusAfterSheet"),
         ("MainWindow.Citations.cs", "RestoreFocusTo"),
+        // #1098: the republish focus restore — a publish can land while
+        // search is up (an external change, the watcher), so it routes
+        // through the shared rule like every sheet restore.
+        ("MainWindow.Citations.cs", "RestoreCitationFocus"),
         ("MainWindow.Bases.cs", "RestoreBasesOverlayFocus"),
         ("MainWindow.Palette.cs", "RestoreFocusAfterPalette"),
         ("MainWindow.Templates.cs", "RestoreFocusAfterTemplates"),

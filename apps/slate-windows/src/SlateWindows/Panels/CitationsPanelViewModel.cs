@@ -272,6 +272,11 @@ internal sealed class CitationsPanelViewModel : PanelWorkScheduler
         {
             return;
         }
+        // #1098: the pre-clear signal — the rows (and their containers)
+        // are still alive here, so a host can record whether the list
+        // owned keyboard focus BEFORE the rebuild destroys the focused
+        // container and WPF ejects focus to the window root.
+        RowsPublishing?.Invoke(this, EventArgs.Empty);
         Rows.Clear();
         if (loadError is null)
         {
@@ -302,6 +307,11 @@ internal sealed class CitationsPanelViewModel : PanelWorkScheduler
         }
         RowsPublished?.Invoke(this, EventArgs.Empty);
     }
+
+    /// <summary>Raised once per publish, BEFORE the rows are rebuilt —
+    /// the previous rows are still in place (#1098: the host samples
+    /// focus ownership here, while the focused container exists).</summary>
+    internal event EventHandler? RowsPublishing;
 
     /// <summary>Raised once per publish, after the rows and references
     /// are in place. Lets a caller that arrived mid-load wait for a
