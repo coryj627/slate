@@ -1,6 +1,8 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Windows.Threading;
+
 namespace SlateWindows.Panels;
 
 /// <summary>
@@ -32,7 +34,25 @@ internal abstract class PanelWorkScheduler : BindableBase
     /// — for the rare subclass step that must choose between inline
     /// and pool execution OUTSIDE StartWork (e.g. a post-shutdown
     /// handle close that must not block the dispatcher).</summary>
-    protected bool IsSynchronousForTests => _synchronous;
+    protected internal bool IsSynchronousForTests => _synchronous;
+
+    /// <summary>
+    /// Whether the CURRENT SynchronizationContext is WPF's dispatcher
+    /// context — the one UI context whose posts run on the thread
+    /// that constructs the panels, serialized with it. Nothing else
+    /// qualifies: a null context makes <see cref="Post"/> run the
+    /// publish inline on the WORKER, and a test host's context
+    /// (xunit wraps every test in one whose Post hands the callback
+    /// to the thread pool) runs it on an arbitrary pool thread. Either
+    /// way the publish races the constructing thread (#1129: a
+    /// history publish enumerated its loaded rows while the test
+    /// thread's tab switch cleared them — intermittent on CI). The
+    /// workspace consults this at construction: background
+    /// interaction work is started only under the dispatcher;
+    /// everywhere else it runs inline.
+    /// </summary>
+    internal static bool CurrentContextIsUiDispatcher() =>
+        SynchronizationContext.Current is DispatcherSynchronizationContext;
 
     /// <summary>Workspace teardown: refuse new work. Subclasses
     /// override to also invalidate their in-flight publishes.</summary>
