@@ -234,7 +234,8 @@ pub fn replace_bibliography_entries(
     source_path_for_key: &dyn Fn(&str) -> String,
     now_ms: i64,
 ) -> Result<(), VaultError> {
-    let tx = conn.transaction()?;
+    // #1078: a cache writer — fenced like every other (docs/plans/33 U1).
+    let tx = crate::db::begin_fenced(conn, rusqlite::TransactionBehavior::Deferred)?;
     tx.execute("DELETE FROM bibliography_entries", [])?;
     {
         let mut stmt = tx.prepare(
