@@ -812,6 +812,60 @@ public sealed class SearchOverlayViewModelTests
         Assert.False(harness.Overlay.IsOpen);
     }
 
+    /// <summary>When BOTH handlers throw, the OPEN failure survives —
+    /// it is the one that explains what went wrong, and an exception
+    /// from a finally/dismissal would otherwise replace it (codoki on
+    /// #1121). The dismissal still fires, so focus is never stranded.</summary>
+    [Fact]
+    public async Task WhenBothHandlersThrowTheOpenFailureIsThePreservedOne()
+    {
+        using var harness = new AsyncOverlayHarness();
+        harness.Source.OnSearch = (query, _) => Results(
+            $"summary for {query}",
+            Hit("alpha.md", "a"));
+        harness.Overlay.Open();
+        harness.Overlay.Query = "alpha";
+        await harness.CompletePipeline();
+
+        int dismissals = 0;
+        harness.Overlay.OpenRequested += (_, _) => throw new InvalidOperationException("open");
+        harness.Overlay.Dismissed += (_, _) =>
+        {
+            dismissals++;
+            throw new NotSupportedException("dismiss");
+        };
+
+        InvalidOperationException failure = Assert.Throws<InvalidOperationException>(
+            () => harness.Overlay.ActivateRow(harness.Overlay.Rows[0]));
+        Assert.Equal("open", failure.Message);
+        Assert.Equal(1, dismissals);
+        Assert.False(harness.Overlay.IsOpen);
+    }
+
+    /// <summary>A dismissal that throws on its OWN — the open having
+    /// succeeded — still propagates: nothing is silently swallowed, and
+    /// the overlay is closed either way.</summary>
+    [Fact]
+    public async Task AThrowingDismissalAloneStillPropagates()
+    {
+        using var harness = new AsyncOverlayHarness();
+        harness.Source.OnSearch = (query, _) => Results(
+            $"summary for {query}",
+            Hit("alpha.md", "a"));
+        harness.Overlay.Open();
+        harness.Overlay.Query = "alpha";
+        await harness.CompletePipeline();
+
+        int opens = 0;
+        harness.Overlay.OpenRequested += (_, _) => opens++;
+        harness.Overlay.Dismissed += (_, _) => throw new NotSupportedException("dismiss");
+
+        Assert.Throws<NotSupportedException>(
+            () => harness.Overlay.ActivateRow(harness.Overlay.Rows[0]));
+        Assert.Equal(1, opens);
+        Assert.False(harness.Overlay.IsOpen);
+    }
+
     // ---- phase-2 view surface: chip, panels, selection ------------------
 
     [Fact]

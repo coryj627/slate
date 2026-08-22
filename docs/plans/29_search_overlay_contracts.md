@@ -195,6 +195,15 @@ dirty-navigation prompt's nested pump against a disabled window; raised
 after, it lands in an enabled window after any editor focus claim, and
 the prompt's Cancel arm keeps its deterministic restore.
 
+The ordering carries an exception contract, because focus depends on it:
+**the dismissal is raised even when the open handler throws** (otherwise
+the overlay is closed with keyboard focus stranded — silent for a
+sighted user, a dead keyboard for an AT user), and **the open's
+exception is the one that propagates** when both throw. It is captured
+and rethrown with its original stack rather than left to a `finally`,
+whose own exception would replace it and bury the failure that actually
+explains the outcome. A dismissal failure on its own still propagates.
+
 The query used for both the recent and the line lookup is the query that
 **produced the visible rows**, not the live field text — the debounce
 window means they differ (`AppState.swift:9445-9453`, mac's `lastResultsQuery`).
