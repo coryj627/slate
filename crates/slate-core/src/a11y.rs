@@ -2521,7 +2521,11 @@ mod tests {
     /// vocabulary change — the regenerating run FAILS by design (so the
     /// variable can never mask drift, even exported in CI); review the diff
     /// as the §W-D delta, then re-run without the variable to prove the pin.
-    /// The Windows host consumes this same file for its parity census.
+    /// Both hosts consume this same file for their parity censuses —
+    /// mac's `A11yCorpusCensusTests` and Windows' `A11yCorpusCensus`
+    /// (#1114) — each constructing the mirrored events in corpus order
+    /// and rendering them through the FFI; with all three green, both
+    /// hosts speak identical announcements for identical events.
     #[test]
     fn committed_corpus_artifact_matches_the_vocabulary() {
         let rendered: Vec<serde_json::Value> = corpus()
