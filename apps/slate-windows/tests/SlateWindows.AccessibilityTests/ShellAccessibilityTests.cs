@@ -813,7 +813,7 @@ public sealed class ShellAccessibilityTests
                 + $"id='{focused.Properties.AutomationId.ValueOrDefault}' "
                 + $"class='{focused.Properties.ClassName.ValueOrDefault}'";
         }
-        catch (Exception exception) when (exception is COMException or FlaUI.Core.Exceptions.FlaUIException)
+        catch (Exception exception) when (IsTransientUiaFault(exception))
         {
             return $"(unreadable: {exception.GetType().Name})";
         }
@@ -2648,8 +2648,12 @@ public sealed class ShellAccessibilityTests
                             return republishedRow is not null
                                 && republishedRow.Properties.HasKeyboardFocus.ValueOrDefault;
                         }
-                        catch (COMException)
+                        catch (Exception exception) when (IsTransientUiaFault(exception))
                         {
+                            // The republish replaces every row container,
+                            // so the poll must tolerate an element going
+                            // away mid-read — through the shared filter,
+                            // since FlaUI wraps the COM fault (#1142).
                             return false;
                         }
                     },
