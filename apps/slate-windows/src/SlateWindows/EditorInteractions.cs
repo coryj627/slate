@@ -63,13 +63,14 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
 
     /// <summary>W3-2 MathPrefs vocabulary — storage keys and the
     /// enum-verbatim names the canonical announcements speak (mac
-    /// Settings parity; #1056 records that MathSpeak is unimplemented
-    /// upstream and speaks as ClearSpeak).</summary>
+    /// Settings parity). #1056: SimpleSpeak replaced MathSpeak, which
+    /// MathCAT never implemented; a stored "mathSpeak" migrates to
+    /// ClearSpeak in AppPreferencesStore.</summary>
     internal static readonly IReadOnlyDictionary<string, string> MathSpeechStyleNames =
         new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["clearSpeak"] = "ClearSpeak",
-            ["mathSpeak"] = "MathSpeak",
+            ["simpleSpeak"] = "SimpleSpeak",
         };
 
     internal static readonly IReadOnlyDictionary<string, string> MathVerbosityNames =
@@ -99,8 +100,8 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
     /// <summary>The current prefs in FFI shape (applied to the session
     /// at workspace construction and on every change).</summary>
     public MathPrefs CurrentMathPrefs => new(
-        _mathSpeechStyle == "mathSpeak"
-            ? MathSpeechStyle.MathSpeak
+        _mathSpeechStyle == "simpleSpeak"
+            ? MathSpeechStyle.SimpleSpeak
             : MathSpeechStyle.ClearSpeak,
         _mathVerbosity switch
         {
@@ -129,12 +130,11 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
             && CodeVerbosityNames.ContainsKey(verbosity)
                 ? verbosity
                 : "preambleOnly";
-        // "mathSpeak" is additionally rejected here (defense beyond the
-        // store normalization): while #1056 is open the style may never
-        // restore as active.
+        // A legacy "mathSpeak" never arrives here as active: the store
+        // migrates it to "clearSpeak" (#1056), and an unknown key falls
+        // to the default like every other field.
         _mathSpeechStyle =
             loaded?.MathSpeechStyle is string speechStyle
-            && speechStyle != "mathSpeak"
             && MathSpeechStyleNames.ContainsKey(speechStyle)
                 ? speechStyle
                 : "clearSpeak";
@@ -154,7 +154,7 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
                 MathSpeechStyleNames,
                 ref _mathSpeechStyle,
                 nameof(IsMathSpeechClearSpeak),
-                nameof(IsMathSpeechMathSpeak),
+                nameof(IsMathSpeechSimpleSpeak),
                 display => new A11yEvent.MathSpeechStyle(display),
                 value => Persist(state => state with { MathSpeechStyle = value })),
             _ => true);
@@ -403,14 +403,7 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
         Action<string> persist,
         string? boolC = null)
     {
-        // MathSpeak is NOT selectable (round-1 [medium], #1056): the
-        // upstream engine never implemented it, and confirming a
-        // speech convention that silently stays ClearSpeak is a lie
-        // to the exact users the setting serves. The stored key stays
-        // decodable for forward compatibility; the menu item is
-        // disabled. Re-enable when #1056 lands.
         if (parameter is not string key
-            || key == "mathSpeak"
             || !names.TryGetValue(key, out string? display)
             || string.Equals(field, key, StringComparison.Ordinal))
         {
@@ -450,7 +443,7 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
 
     public bool IsMathSpeechClearSpeak => _mathSpeechStyle == "clearSpeak";
 
-    public bool IsMathSpeechMathSpeak => _mathSpeechStyle == "mathSpeak";
+    public bool IsMathSpeechSimpleSpeak => _mathSpeechStyle == "simpleSpeak";
 
     public bool IsMathVerbosityTerse => _mathVerbosity == "terse";
 

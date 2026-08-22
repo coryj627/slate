@@ -43,12 +43,12 @@ final class MilestoneKIntegrationTests: XCTestCase {
     }
 
     /// Isolated UserDefaults suite per test run so the AppState's
-    /// preferences load doesn't pick up MathSpeak / UEB / etc. that
+    /// preferences load doesn't pick up SimpleSpeak / UEB / etc. that
     /// the user persisted from a prior real-app session. Without
     /// isolation, mathPrefs starts at whatever's in
     /// `UserDefaults.standard`, the session opens with those
     /// prefs (audit #259's openVault push), and the test's
-    /// `state.mathPrefs.speechStyle = .mathSpeak` becomes a no-op
+    /// `state.mathPrefs.speechStyle = .simpleSpeak` becomes a no-op
     /// because Equatable says it didn't change — leaving the test
     /// comparing MS-vs-MS, which is incorrectly identical.
     private func makeAppState() -> (AppState, UserDefaults, String) {
@@ -92,7 +92,7 @@ final class MilestoneKIntegrationTests: XCTestCase {
         //   RenderFailed without depending on the mermaid-rs
         //   renderer's strictness on syntactically-broken input.
 
-        // Display formula picked for the ClearSpeak ↔ MathSpeak
+        // Display formula picked for the ClearSpeak ↔ SimpleSpeak
         // diff: a sum with a fraction body. MathCAT's style
         // differences are most audible on layered constructs;
         // simple `\frac{a}{b}` reads identically across both
@@ -243,9 +243,9 @@ final class MilestoneKIntegrationTests: XCTestCase {
         // The actual speech / braille divergence assertion is
         // gated behind #269 — uncomment when that lands.
         let taskBeforeFlip = state.mathBlocksLoadTask
-        state.mathPrefs.speechStyle = .mathSpeak
+        state.mathPrefs.speechStyle = .simpleSpeak
         XCTAssertEqual(
-            state.mathPrefs.speechStyle, .mathSpeak,
+            state.mathPrefs.speechStyle, .simpleSpeak,
             "mathPrefs.speechStyle flip must actually take on the new value"
         )
         XCTAssertNotNil(
@@ -270,13 +270,16 @@ final class MilestoneKIntegrationTests: XCTestCase {
             state.currentNoteMathBlocks[1].speech.isEmpty,
             "post-flip speech must still be non-empty (MathCAT didn't crash)"
         )
-        // Audit #269 TODO: once the cross-thread MathCAT
-        // propagation is fixed, restore this assertion:
-        //
-        //   XCTAssertNotEqual(
-        //       state.currentNoteMathBlocks[1].speech, initialSpeech,
-        //       "MathSpeak should differ from ClearSpeak on this formula"
-        //   )
+        // #1056: the second style is SimpleSpeak, which MathCAT
+        // actually ships (MathSpeak never existed upstream — the
+        // audit #269 "propagation bug" was that style not existing).
+        // Core pins the property for exactly this fresh-thread shape
+        // (`render_math_speech_style_propagates_across_fresh_threads`),
+        // so the divergence #269 gated is asserted.
+        XCTAssertNotEqual(
+            state.currentNoteMathBlocks[1].speech, initialSpeech,
+            "SimpleSpeak should differ from ClearSpeak on this formula"
+        )
 
         // Same orchestration story for braille code — the flip
         // arms a fresh load task and the cache repopulates. The
