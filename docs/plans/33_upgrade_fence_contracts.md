@@ -59,23 +59,35 @@ mechanical; a per-site check that can be forgotten is not a fence.
 version is `MIGRATIONS.len()`; the cache's is `MAX(version) FROM
 schema_version`. The check is one indexed read.
 
+**7. A fence that READS before it writes must take the lock first (found
+by the full suite).** The first cut began `DEFERRED` writers with the
+version read; the compaction worker's event regeneration — racing the
+test's saves — then failed its first write with `SQLITE_BUSY_SNAPSHOT`
+and left its marker standing. The busy handler does not retry that
+code: it is not "busy", it is "your snapshot is stale". `IMMEDIATE`
+everywhere is the fix, and it is stronger, not merely safer.
+
 ## Contracts
 
 **U1 — Every cache-writer transaction is fenced.** A transaction that may
-write the cache is begun through ONE helper, `db::begin_fenced(conn,
-behavior)`, which begins the transaction and, inside it, refuses unless
+write the cache is begun through ONE helper, `db::begin_fenced(conn)`,
+which begins an IMMEDIATE transaction and, inside it, refuses unless
 the cache's schema version equals this build's. No other transaction
 constructor appears in a production cache writer (a source pin holds
 this). `db::migrate` is the deliberate exception — it IS the
 version-change path.
 
-**U2 — The refusal is before any mutation.** For `IMMEDIATE`
-transactions the check runs under the writer lock, so it is atomic with
-the write that follows (finding 3). For `DEFERRED` transactions the
-check is a snapshot read; a migration committing afterwards makes the
-first write fail with `SQLITE_BUSY_SNAPSHOT` — a failed CACHE write,
-never a filesystem mutation, because every filesystem mutation either
-rides an `IMMEDIATE` save transaction or the structural lock (finding 4).
+**U2 — The refusal is before any mutation, and every fenced transaction
+is `IMMEDIATE`.** The writer lock is taken first, then the version is
+read under it, then the writes follow — atomic by construction (finding
+3). No fenced transaction is `DEFERRED` (finding 7): a version read at
+the top of a deferred transaction pins a snapshot before the first
+write, and ANY concurrent commit in between fails that write with
+`SQLITE_BUSY_SNAPSHOT`, which the busy handler does not retry. Every one
+of the ~40 sites turned out to be a writer (each commits), so taking the
+lock first costs nothing a writer was not already going to pay, and it
+removes the read-then-write upgrade deadlock between two connections as
+a side effect.
 
 **U3 — The error is `VaultError::Db`, typed inside core.** Owner call:
 reuse the existing `Db` channel rather than adding an FFI variant. Core

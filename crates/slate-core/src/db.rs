@@ -438,23 +438,21 @@ pub fn build_schema_version() -> u32 {
 }
 
 /// #1078 (`docs/plans/33` U1/U2): begin a transaction that may WRITE the
-/// cache. Inside the transaction — under SQLite's writer lock for
-/// `Immediate`, so the check is atomic with the write that follows — refuse
-/// unless the cache's schema version is this build's. This is the
-/// same-protocol-version precondition of the write-intent protocol: an
-/// older session that stayed live while a newer process migrated the shared
-/// cache must not write pre-protocol rows under the new schema. For a
-/// `Deferred` transaction the check is a snapshot read; a migration that
-/// commits afterwards fails the first write with `SQLITE_BUSY_SNAPSHOT` — a
-/// failed cache write, never a filesystem mutation, because every
-/// filesystem mutation rides an `Immediate` save transaction or the
-/// structural lock (which `VaultSession::open` holds across `migrate`).
-/// Stateless by design (U6): there is no latch to reset.
-pub fn begin_fenced(
-    conn: &Connection,
-    behavior: rusqlite::TransactionBehavior,
-) -> Result<rusqlite::Transaction<'_>, DbError> {
-    let tx = rusqlite::Transaction::new_unchecked(conn, behavior)?;
+/// cache. ALWAYS `IMMEDIATE`: the writer lock is taken first, then — under
+/// it, so the check is atomic with every write that follows — the cache's
+/// schema version must be this build's. This is the same-protocol-version
+/// precondition of the write-intent protocol: an older session that stayed
+/// live while a newer process migrated the shared cache must not write
+/// pre-protocol rows under the new schema. Immediate is load-bearing, not a
+/// preference (contracts finding 7): a version READ at the top of a
+/// `DEFERRED` transaction pins a snapshot before the first write, and any
+/// concurrent commit in between then fails that write with
+/// `SQLITE_BUSY_SNAPSHOT`, which the busy handler does not retry — the
+/// compaction worker's regeneration hit exactly that under the full suite.
+/// Taking the lock first also removes the read-then-write upgrade deadlock
+/// between two connections. Stateless by design (U6): no latch to reset.
+pub fn begin_fenced(conn: &Connection) -> Result<rusqlite::Transaction<'_>, DbError> {
+    let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?;
     let db_version: i64 = tx.query_row(
         "SELECT COALESCE(MAX(version), 0) FROM schema_version",
         [],
@@ -573,8 +571,7 @@ mod tests {
         migrate(&mut conn).expect("migrate");
         let build = build_schema_version();
         {
-            let tx = begin_fenced(&conn, rusqlite::TransactionBehavior::Immediate)
-                .expect("a current cache proceeds");
+            let tx = begin_fenced(&conn).expect("a current cache proceeds");
             tx.commit().unwrap();
         }
         // Newer: another process migrated further.
@@ -583,7 +580,7 @@ mod tests {
             [build + 1],
         )
         .unwrap();
-        let err = begin_fenced(&conn, rusqlite::TransactionBehavior::Deferred).unwrap_err();
+        let err = begin_fenced(&conn).unwrap_err();
         assert!(
             matches!(err, DbError::SchemaVersionSkew { db_version, build_version }
                 if db_version == build + 1 && build_version == build),
@@ -593,7 +590,7 @@ mod tests {
         // Older: the cache was replaced by something behind this build.
         conn.execute("DELETE FROM schema_version WHERE version >= ?1", [build])
             .unwrap();
-        let err = begin_fenced(&conn, rusqlite::TransactionBehavior::Immediate).unwrap_err();
+        let err = begin_fenced(&conn).unwrap_err();
         assert!(
             matches!(err, DbError::SchemaVersionSkew { db_version, .. } if db_version == build - 1),
             "{err:?}"
