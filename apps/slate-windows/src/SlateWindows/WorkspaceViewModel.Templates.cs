@@ -182,10 +182,15 @@ internal sealed partial class WorkspaceViewModel
             PromptValues: flow.PromptValues());
 
         RenderedTemplate rendered;
+        string? caveat;
         try
         {
             rendered = _session.RenderTemplate(flow.Template.Path, context);
-            _ = _session.CreateExclusive(path, rendered.Body);
+            // #1123 (TR-5 retired): a post-publish failure is a LANDED
+            // create — the note is on disk and readable; only the index
+            // lags. A refusal still throws and presents inline.
+            caveat = CreateOutcomes.CreateReporting(
+                _session, path, rendered.Body, System.IO.Path.GetFileName(path));
         }
         catch (VaultException exception)
         {
@@ -199,6 +204,13 @@ internal sealed partial class WorkspaceViewModel
         // High so it outlives the tab-switch announcement that follows.
         _announce(new A11yEvent.TemplateNoteCreated(
             System.IO.Path.GetFileName(path), flow.Template.Name));
+        if (caveat is not null)
+        {
+            // W0.5-3 residue channel: the caveat follows the created
+            // event, never replaces it — the create happened.
+            _announce(new A11yEvent.HostComposed(caveat, A11yPriority.Medium));
+        }
+
         TemplateNoteWritten?.Invoke(this, path);
 
         // The open runs while the flow sheet is STILL UP (red team,

@@ -455,6 +455,53 @@ pub struct SaveReport {
     pub new_mtime_ms: i64,
 }
 
+/// The typed outcome of a create-if-absent write (#1123).
+///
+/// `create_exclusive` has two failure classes that a single `Err` could
+/// not tell apart: REFUSED before any byte landed (occupied destination,
+/// invalid path, too large, a lock/transaction failure before the
+/// publish), and FAILED AFTER PUBLISH — the no-replace write succeeded,
+/// then the index/commit failed, and the contract is to leave the user's
+/// bytes on disk for the next scan to index. Hosts that saw one `Err`
+/// for both treated a committed file as "nothing was written": the UI
+/// re-presented with copy promising no file exists, a retry reported
+/// `DestinationExists`, and choosing another name created a duplicate.
+#[derive(Debug)]
+pub enum CreateExclusiveOutcome {
+    /// Written, indexed, committed — the ordinary success.
+    Committed(SaveReport),
+    /// The bytes are on disk at `path` (hash `content_hash`); the index
+    /// did not record them. The file is real — do not recreate it, do
+    /// not choose another name; the next scan indexes it. `error` is
+    /// the post-publish failure.
+    PublishedUnindexed {
+        path: String,
+        content_hash: String,
+        error: VaultError,
+    },
+}
+
+/// Internal split of a create-if-absent failure at the write boundary.
+pub(crate) enum CreateFailure {
+    /// Nothing landed.
+    Refused(VaultError),
+    /// The no-replace write landed; a later step failed.
+    Published {
+        content_hash: String,
+        error: VaultError,
+    },
+}
+
+impl CreateFailure {
+    /// The pre-#1123 shape: one error either way (the bytes-create and
+    /// deleted-file-recovery paths keep it).
+    fn into_error(self) -> VaultError {
+        match self {
+            CreateFailure::Refused(error) | CreateFailure::Published { error, .. } => error,
+        }
+    }
+}
+
 // --- Rename report ---
 
 /// Outcome of a `rename_property_across_vault` call (dry-run or apply).
@@ -5064,13 +5111,15 @@ impl VaultSession {
                 reason: "deleted-file history failed integrity verification".into(),
             });
         }
-        let report = self.create_exclusive_binding(
-            destination,
-            content.as_bytes(),
-            &content,
-            Some(&content),
-            Some(&remnant.stem),
-        )?;
+        let report = self
+            .create_exclusive_binding(
+                destination,
+                content.as_bytes(),
+                &content,
+                Some(&content),
+                Some(&remnant.stem),
+            )
+            .map_err(CreateFailure::into_error)?;
         // The remnant is a remnant no more (one lock hold: retain +
         // generation bump are atomic together).
         {
@@ -5088,10 +5137,49 @@ impl VaultSession {
     /// convention) → [`VaultError::DestinationExists`]; else the
     /// standard atomic-write + index + op-log machinery.
     pub fn create_exclusive(&self, path: &str, content: &str) -> Result<SaveReport, VaultError> {
-        let report =
-            self.create_exclusive_binding(path, content.as_bytes(), content, Some(content), None)?;
-        self.notify_file_change(FileChangeKind::Created, path, None);
-        Ok(report)
+        match self.create_exclusive_reporting(path, content)? {
+            CreateExclusiveOutcome::Committed(report) => Ok(report),
+            CreateExclusiveOutcome::PublishedUnindexed { error, .. } => Err(error),
+        }
+    }
+
+    /// [`create_exclusive`] with the typed post-publish outcome (#1123):
+    /// `Err` is a REFUSAL (nothing landed — `DestinationExists`,
+    /// `InvalidPath`, `FileTooLarge`, a pre-publish lock/transaction
+    /// failure); `Ok(PublishedUnindexed { .. })` means the no-replace
+    /// write landed and the index/commit then failed — the bytes are on
+    /// disk and the next scan indexes them, so a host must finish its
+    /// flow as a create (open it, select it, do NOT retry under another
+    /// name) and may present the recoverable state honestly. The
+    /// file-change notification fires for both landed arms.
+    ///
+    /// Test seam: `SLATE_TEST_FAULT_AFTER_WRITE` (a path substring) trips
+    /// the post-publish failure exactly at the boundary, the same seam
+    /// `save_text` exposes, so both hosts' harnesses can drive it.
+    pub fn create_exclusive_reporting(
+        &self,
+        path: &str,
+        content: &str,
+    ) -> Result<CreateExclusiveOutcome, VaultError> {
+        match self.create_exclusive_binding(path, content.as_bytes(), content, Some(content), None)
+        {
+            Ok(report) => {
+                self.notify_file_change(FileChangeKind::Created, path, None);
+                Ok(CreateExclusiveOutcome::Committed(report))
+            }
+            Err(CreateFailure::Refused(error)) => Err(error),
+            Err(CreateFailure::Published {
+                content_hash,
+                error,
+            }) => {
+                self.notify_file_change(FileChangeKind::Created, path, None);
+                Ok(CreateExclusiveOutcome::PublishedUnindexed {
+                    path: path.to_string(),
+                    content_hash,
+                    error,
+                })
+            }
+        }
     }
 
     /// Create-if-absent BYTES write (#910): the binary / non-UTF-8 sibling
@@ -5113,8 +5201,9 @@ impl VaultSession {
         bytes: &[u8],
     ) -> Result<SaveReport, VaultError> {
         let index_contents = String::from_utf8_lossy(bytes);
-        let report =
-            self.create_exclusive_binding(path, bytes, index_contents.as_ref(), None, None)?;
+        let report = self
+            .create_exclusive_binding(path, bytes, index_contents.as_ref(), None, None)
+            .map_err(CreateFailure::into_error)?;
         self.notify_file_change(FileChangeKind::Created, path, None);
         Ok(report)
     }
@@ -5160,55 +5249,88 @@ impl VaultSession {
         index_contents: &str,
         oplog_contents: Option<&str>,
         bind_log: Option<&str>,
-    ) -> Result<SaveReport, VaultError> {
-        validate_save_path(path)?;
+    ) -> Result<SaveReport, CreateFailure> {
+        validate_save_path(path).map_err(CreateFailure::Refused)?;
         if bytes.len() as u64 > self.config.large_file_refuse_bytes {
-            return Err(VaultError::FileTooLarge {
+            return Err(CreateFailure::Refused(VaultError::FileTooLarge {
                 path: path.to_string(),
                 size: bytes.len() as u64,
-            });
+            }));
         }
         let mut conn = self.conn.lock().expect("session connection mutex");
-        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let tx = conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|e| CreateFailure::Refused(VaultError::from(e)))?;
 
         // Existence gates INSIDE the cross-process critical section:
         // the index (case-insensitive — the APFS-aware structural
         // convention) and the disk.
-        if let Some(existing) = index_entry_case_insensitive(&tx, path)? {
-            return Err(VaultError::DestinationExists { path: existing });
+        if let Some(existing) =
+            index_entry_case_insensitive(&tx, path).map_err(CreateFailure::Refused)?
+        {
+            return Err(CreateFailure::Refused(VaultError::DestinationExists {
+                path: existing,
+            }));
         }
         if self.provider.stat(path).is_ok() {
-            return Err(VaultError::DestinationExists {
+            return Err(CreateFailure::Refused(VaultError::DestinationExists {
                 path: path.to_string(),
-            });
+            }));
         }
 
         // No-replace publish: the point of no return for user bytes.
-        self.provider.write_file_if_absent(path, bytes)?;
+        self.provider
+            .write_file_if_absent(path, bytes)
+            .map_err(CreateFailure::Refused)?;
 
-        let new_stat = self.provider.stat(path)?;
+        // From here every failure is a POST-PUBLISH failure (#1123): the
+        // bytes are on disk, the transaction rolls back, and the next
+        // scan indexes the file — never delete user bytes on an index
+        // error. `published` carries the landed hash so a host can finish
+        // its flow against the committed file.
         let new_hash = crate::vault::content_hash(bytes);
+        let published = |error: VaultError| CreateFailure::Published {
+            content_hash: new_hash.clone(),
+            error,
+        };
+
+        // Test-only fault seam — THIS is the real partial-failure
+        // boundary (file written, index not yet committed): the same
+        // path-substring env var `save_text` exposes, so a host harness
+        // can drive the post-publish arm deterministically.
+        if let Some(trigger) = std::env::var_os("SLATE_TEST_FAULT_AFTER_WRITE")
+            && path.contains(trigger.to_string_lossy().as_ref())
+        {
+            return Err(published(VaultError::InvalidArgument {
+                message: "test fault: injected failure after write, before index commit".into(),
+            }));
+        }
+
+        let new_stat = self.provider.stat(path).map_err(&published)?;
         let now = now_ms();
         let mut graph_sink = self.graph_sink();
         // `existed = false` by construction: the case-insensitive index
         // gate above already rejected any pre-existing row.
-        let file_id = self.index_saved_file(
-            &tx,
-            path,
-            index_contents,
-            &new_stat,
-            &new_hash,
-            now,
-            false,
-            &mut graph_sink,
-        )?;
+        let file_id = self
+            .index_saved_file(
+                &tx,
+                path,
+                index_contents,
+                &new_stat,
+                &new_hash,
+                now,
+                false,
+                &mut graph_sink,
+            )
+            .map_err(&published)?;
         if let Some(stem) = bind_log {
             // Recovery re-binding, atomic with the row itself; the
             // partial UNIQUE index backstops double-binding.
             tx.execute(
                 "UPDATE files SET oplog_name = ?1 WHERE id = ?2 AND oplog_name IS NULL",
                 rusqlite::params![stem, file_id],
-            )?;
+            )
+            .map_err(|e| published(VaultError::from(e)))?;
             // O-6 (#544): the re-bound log carries the file's
             // pre-delete history, but its event rows died with the old
             // `files` row (the CASCADE). Repopulate inside the binding
@@ -5247,7 +5369,7 @@ impl VaultSession {
             Some(_) => self.ensure_oplog_name(&tx, file_id, path),
             None => None,
         };
-        tx.commit()?;
+        tx.commit().map_err(|e| published(VaultError::from(e)))?;
         self.graph_apply(graph_sink);
         self.bump_bases_generation();
 

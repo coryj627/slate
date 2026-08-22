@@ -1225,13 +1225,20 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         try
         {
             string? created = null;
+            string? caveat = null;
             foreach (string candidate in UntitledCandidates(parent, "Untitled", ".md"))
             {
                 attempted = System.IO.Path.GetFileName(candidate);
                 try
                 {
+                    // #1123: the typed outcome — a post-publish failure
+                    // is a LANDED create (bytes on disk, unindexed until
+                    // the next scan), never a reason to advance the
+                    // sequence and create a duplicate.
                     if (!TryRunSessionWork(
-                        () => _session.CreateExclusive(candidate, string.Empty)))
+                        () => CreateOutcomes.CreateReporting(
+                            _session, candidate, string.Empty, attempted),
+                        out caveat))
                     {
                         return;
                     }
@@ -1256,9 +1263,22 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             // The sentence reports AFTER Refresh so it survives the
             // "Loading files…" write (codex round 1).
             StructuralHistoryBarrier();
-            RequestInlineRenameAt(created);
+            if (caveat is null)
+            {
+                RequestInlineRenameAt(created);
+            }
+
             Refresh();
             ReportResult($"Created note {System.IO.Path.GetFileName(created)}.");
+            if (caveat is not null)
+            {
+                // The landed-but-unindexed arm: the note is real and
+                // opens (core reads from disk), but the tree cannot show
+                // it until the next scan, so the rename hand-off has no
+                // node to land on — say so, then open it.
+                ReportFailure(caveat);
+            }
+
             RequestOpen(created);
         }
         catch (VaultException exception)
@@ -1348,7 +1368,11 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         try
         {
             string path = FolderNotePath(node);
-            if (!TryRunSessionWork(() => _session.CreateExclusive(path, $"# {node.Name}\n")))
+            if (!TryRunSessionWork(
+                () => CreateOutcomes.CreateReporting(
+                    _session, path, $"# {node.Name}\n",
+                    System.IO.Path.GetFileName(path)),
+                out string? caveat))
             {
                 return;
             }
@@ -1359,6 +1383,13 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             RequestSelectionAt(null);
             Refresh();
             ReportResult($"Created folder note {path}.");
+            if (caveat is not null)
+            {
+                // #1123: landed but unindexed — real, readable, not yet
+                // in the tree.
+                ReportFailure(caveat);
+            }
+
             RequestOpen(path);
         }
         catch (VaultException exception)

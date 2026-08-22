@@ -289,10 +289,15 @@ internal sealed partial class WorkspaceViewModel
         {
             string? refusal = null;
             string? failure = null;
+            string? caveat = null;
             try
             {
                 string content = _session.VersionContent(path, versionHash);
-                _ = _session.CreateExclusive(trimmed, content);
+                // #1123: a post-publish failure is a LANDED restore —
+                // the bytes are at the destination and readable; only
+                // the index lags until the next scan.
+                caveat = CreateOutcomes.CreateReporting(
+                    _session, trimmed, content, System.IO.Path.GetFileName(trimmed));
             }
             catch (VaultException.DestinationExists)
             {
@@ -324,6 +329,14 @@ internal sealed partial class WorkspaceViewModel
                 _announce(new A11yEvent.RestoredFileAs(
                     $"version from {formattedDate}",
                     System.IO.Path.GetFileName(trimmed)));
+                if (caveat is not null)
+                {
+                    // Landed but unindexed (#1123): the restore happened
+                    // and the note opens; the panel's alert seam carries
+                    // the caveat so it is not mistaken for a failure.
+                    HistoryAlert("Restored, not yet indexed", caveat);
+                }
+
                 completed(true, null);
                 OpenPath(trimmed);
             });
