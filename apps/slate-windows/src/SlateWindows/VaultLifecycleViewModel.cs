@@ -720,6 +720,14 @@ internal sealed class VaultLifecycleViewModel
             {
                 Workspace?.InvalidateModifiedPath(@event.Path);
             }
+            // #1077 (contract I6): a Created or Renamed publication may be
+            // a missing tab's file coming back under ANOTHER spelling
+            // (`Ghost.md` → `ghost.md` on NTFS); re-seat those tabs once,
+            // here, rather than re-litigating identity per comparison.
+            if (@event.Kind is FileChangeKind.Created or FileChangeKind.Renamed)
+            {
+                Workspace?.ReseatMissingTabs();
+            }
 
             Workspace?.InvalidateAllInteractionStates();
             // Reading embed cards depend on OTHER files (W3-5): the

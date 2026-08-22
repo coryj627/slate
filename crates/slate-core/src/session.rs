@@ -3269,6 +3269,17 @@ impl VaultSession {
         get_file_metadata_impl(&conn, path)
     }
 
+    /// #1077 (contract I1/I6): the spelling the filesystem stores for an
+    /// EXISTING vault-relative entry, or `None` when nothing exists there.
+    /// Hosts use it to RE-SEAT a tab whose file vanished and came back
+    /// under another spelling (`Ghost.md` → `ghost.md` on NTFS/APFS): the
+    /// tab keeps ordinal comparisons everywhere and corrects its spelling
+    /// once, here, instead of re-litigating identity per comparison.
+    pub fn canonical_path(&self, path: &str) -> Result<Option<String>, VaultError> {
+        validate_save_path(path)?;
+        self.provider.canonical_path(path)
+    }
+
     /// Read a vault file's contents as UTF-8 text.
     ///
     /// - Refuses to read files larger than

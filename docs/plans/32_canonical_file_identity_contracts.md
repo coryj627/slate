@@ -325,8 +325,9 @@ full-width, and pure-CJK cases, and `A.md → a.md` succeeding.
 create/rename/external-create publications (I6); the hashless save
 through create-exclusive semantics (I8); the finding-6 stale-overwrite
 scenario as an end-to-end regression that FAILS without Phase 4 and
-passes with it; mac's half (re-resolution + I8) recorded as a
-follow-up, since Swift is not verifiable from the Windows side.
+passes with it (Windows: `CanonicalIdentityTests.cs`, mutation-verified);
+mac's half (re-resolution + I8) is #1147, since Swift is not verifiable
+from the Windows side — core's `canonical_path` is already on the FFI.
 
 ## Explicitly not in this document
 
