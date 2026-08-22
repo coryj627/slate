@@ -66,4 +66,4 @@ Left open deliberately (implementing dev's judgment, per the review): numeric va
 
 ---
 
-Considered and *not* adopted (with reasons): pattern-fills for color-blind users on the renderer (Increase Contrast + color-as-text already satisfy 1.4.1); z-order editing commands (JSON Canvas has no z-index; document-order tiebreak suffices); pop-out canvas windows (excluded by U1 scope); live URL embeds (interview decision 10 — divergence documented, may return as an evaluated enhancement).
+Considered and *not* adopted (with reasons): pattern-fills for color-blind users on the renderer (Increase Contrast + color-as-text already satisfy 1.4.1); z-order editing commands (JSON Canvas has no z-index *field* — array order is the normative z-order, which is why `CreateGroup` inserts a group beneath the nodes it contains, #960; document-order tiebreak suffices); pop-out canvas windows (excluded by U1 scope); live URL embeds (interview decision 10 — divergence documented, may return as an evaluated enhancement).
