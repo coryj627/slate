@@ -22,6 +22,7 @@
 //! `cache_dir` defaults to `<vault_root>/.slate`. Callers can override
 //! for tests or sandbox layouts.
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
@@ -3454,6 +3455,39 @@ impl VaultSession {
         }
     }
 
+    /// #1077 (contracts I2/I3): the spelling a mutation SOURCE binds to.
+    /// An existing target resolves to the filesystem's stored spelling; a
+    /// brand-new file keeps the LEAF the caller chose but takes its
+    /// parent's stored spelling — parent components are existing targets,
+    /// and a fresh row under `notes/…` beside the scanned `Notes/…` is
+    /// exactly the drift this exists to stop. A canonicalization failure
+    /// is the caller's failure (I7): proceeding on the unresolved spelling
+    /// is how the second index row appears.
+    fn bind_source_path<'p>(&self, path: &'p str) -> Result<Cow<'p, str>, VaultError> {
+        match self.provider.canonical_path(path)? {
+            Some(canonical) if canonical != path => Ok(Cow::Owned(canonical)),
+            Some(_) => Ok(Cow::Borrowed(path)),
+            None => self.bind_destination_path(path),
+        }
+    }
+
+    /// #1077 (contract I4): the spelling a mutation DESTINATION, or a
+    /// create, binds to. The leaf is NEVER canonicalized — that is how a
+    /// user creates `Ä.md`, and canonicalizing a destination leaf would
+    /// collapse the case-only rename `A.md → a.md` onto its own source.
+    /// Only the parent binds, for the reason `bind_source_path` gives.
+    fn bind_destination_path<'p>(&self, path: &'p str) -> Result<Cow<'p, str>, VaultError> {
+        let Some((parent, leaf)) = path.rsplit_once('/') else {
+            return Ok(Cow::Borrowed(path));
+        };
+        match self.provider.canonical_path(parent)? {
+            Some(canonical_parent) if canonical_parent != parent => {
+                Ok(Cow::Owned(format!("{canonical_parent}/{leaf}")))
+            }
+            _ => Ok(Cow::Borrowed(path)),
+        }
+    }
+
     fn save_text_locked(
         &self,
         conn: &mut Connection,
@@ -3462,6 +3496,10 @@ impl VaultSession {
         expected_content_hash: Option<&str>,
         annotations: &[crate::oplog::OpAnnotation],
     ) -> Result<SaveReport, VaultError> {
+        // #1077 (I2/I3): bind the stored spelling BEFORE anything keys on
+        // `path` — the intent marker below, the index row, the epoch.
+        let bound_path = self.bind_source_path(path)?;
+        let path: &str = &bound_path;
         // Cross-process critical section (#641 adversarial review).
         //
         // The expected-hash compare-and-swap below re-reads and re-hashes
@@ -5251,6 +5289,12 @@ impl VaultSession {
         bind_log: Option<&str>,
     ) -> Result<SaveReport, CreateFailure> {
         validate_save_path(path).map_err(CreateFailure::Refused)?;
+        // #1077 (I2/I4): a create keeps the leaf the user chose and binds
+        // its parent's stored spelling.
+        let bound_path = self
+            .bind_destination_path(path)
+            .map_err(CreateFailure::Refused)?;
+        let path: &str = &bound_path;
         if bytes.len() as u64 > self.config.large_file_refuse_bytes {
             return Err(CreateFailure::Refused(VaultError::FileTooLarge {
                 path: path.to_string(),
@@ -13814,6 +13858,10 @@ impl VaultSession {
         let _structural_operation = self.structural_operation_guard()?;
         validate_save_path(path)?;
         validate_leaf_component(leaf_name(path))?;
+        // #1077 (I2/I4): the new folder's leaf is verbatim; its parent
+        // binds to the stored spelling.
+        let bound_path = self.bind_destination_path(path)?;
+        let path: &str = &bound_path;
         let mut conn = self.conn.lock().expect("session connection mutex");
         ensure_structural_batch_idle(&conn)?;
         if let Some(existing) = index_entry_case_insensitive(&conn, path)? {
@@ -13851,6 +13899,10 @@ impl VaultSession {
         let _structural_operation = self.structural_operation_guard()?;
         validate_save_path(path)?;
         validate_leaf_component(leaf_name(path))?;
+        // #1077 (I2/I4): the new folder's leaf is verbatim; its parent
+        // binds to the stored spelling.
+        let bound_path = self.bind_destination_path(path)?;
+        let path: &str = &bound_path;
         let mut conn = self.conn.lock().expect("session connection mutex");
         ensure_structural_batch_idle(&conn)?;
         if let Some(existing) = index_entry_case_insensitive(&conn, path)? {
@@ -14117,6 +14169,9 @@ impl VaultSession {
         let vault_structural_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
         let structural_operation = self.structural_operation_guard()?;
         validate_save_path(path)?;
+        // #1077 (I2/I3): the row that goes is the stored spelling's.
+        let bound_path = self.bind_source_path(path)?;
+        let path: &str = &bound_path;
         let mut conn = self.conn.lock().expect("session connection mutex");
         ensure_structural_batch_idle(&conn)?;
         // Capture the op-log binding before the row goes: the journal
@@ -14217,6 +14272,9 @@ impl VaultSession {
         let vault_structural_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
         let structural_operation = self.structural_operation_guard()?;
         validate_save_path(path)?;
+        // #1077 (I2/I3): the subtree that goes is the stored spelling's.
+        let bound_path = self.bind_source_path(path)?;
+        let path: &str = &bound_path;
         let mut conn = self.conn.lock().expect("session connection mutex");
         ensure_structural_batch_idle(&conn)?;
         // Membership-fenced trash (final-confirmation review): every
@@ -14501,6 +14559,14 @@ impl VaultSession {
     ) -> Result<crate::structural::StructuralReport, VaultError> {
         validate_save_path(from)?;
         validate_save_path(to)?;
+        // #1077: the SOURCE binds to its stored spelling (I2/I3); the
+        // DESTINATION keeps its leaf verbatim and binds only its parent
+        // (I4). Bound BEFORE the equality check, so renaming an alias to
+        // the stored spelling is the no-op it is.
+        let bound_from = self.bind_source_path(from)?;
+        let from: &str = &bound_from;
+        let bound_to = self.bind_destination_path(to)?;
+        let to: &str = &bound_to;
         if to == from {
             return Err(VaultError::InvalidArgument {
                 message: "destination equals source".into(),
@@ -14583,6 +14649,14 @@ impl VaultSession {
     ) -> Result<crate::structural::StructuralReport, VaultError> {
         validate_save_path(from)?;
         validate_save_path(to)?;
+        // #1077: the SOURCE binds to its stored spelling (I2/I3); the
+        // DESTINATION keeps its leaf verbatim and binds only its parent
+        // (I4). Bound BEFORE the equality check, so renaming an alias to
+        // the stored spelling is the no-op it is.
+        let bound_from = self.bind_source_path(from)?;
+        let from: &str = &bound_from;
+        let bound_to = self.bind_destination_path(to)?;
+        let to: &str = &bound_to;
         if to == from {
             return Err(VaultError::InvalidArgument {
                 message: "destination equals source".into(),
@@ -19390,6 +19464,7 @@ mod tests {
     #[path = "properties.rs"]
     mod properties;
 
+    mod canonical_identity;
     #[path = "save.rs"]
     mod save;
 

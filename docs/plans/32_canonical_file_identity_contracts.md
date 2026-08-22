@@ -131,11 +131,19 @@ spelling when the path exists (`mutation_path_exists`) and `None`
 otherwise — so a case-sensitive volume and every in-memory test
 provider behave exactly as today, with no new cost (ID-1).
 
-**I2 — Only EXISTING targets are canonicalized.** A create keeps the
-caller's spelling verbatim: that is how a user legitimately creates
-`Ä.md`, and inventing a normalization there would corrupt the name the
-user chose. Resolution applies when the target already exists — the
-save, delete, rename-source, and move-source paths.
+**I2 — Only EXISTING targets are canonicalized; a new target's PARENT
+is an existing target.** A create keeps the caller's LEAF verbatim: that
+is how a user legitimately creates `Ä.md`, and inventing a normalization
+there would corrupt the name the user chose. But the parent components
+of a new path already exist and have a stored spelling of their own, and
+a fresh row under `notes/…` beside the scanned `Notes/…` is exactly the
+drift this document exists to stop — so a new target binds its parent's
+stored spelling and keeps only its leaf (found in Phase 1; `rename_file`
+derives the destination from the requested source spelling, which made
+the hole concrete). Resolution of the whole path applies when the target
+already exists — the save, delete, rename-source, and move-source paths;
+parent-only binding applies to saves of new files, creates, and every
+rename/move destination.
 
 **I3 — One physical file, one index row, one marker key.** Once
 resolved, the canonical spelling is what binds: the `files`/`dirs` row,
@@ -147,11 +155,14 @@ second one.
 `A.md → a.md` is the sharp edge: source and destination alias each
 other, so canonicalizing the DESTINATION would collapse it onto the
 source and turn a legal rename into a no-op or a false
-`DestinationExists`. The rename path resolves the SOURCE only. The
-collision gate (I5) exempts a destination whose fold key equals the
-resolved source's fold key — that is the legal case-only rename, not a
-collision. Today the gate refuses it (finding 7); after this document
-it succeeds, and the index row moves to the new spelling.
+`DestinationExists`. The rename path resolves the SOURCE only; the
+destination binds its parent (I2) and keeps its leaf verbatim — a
+destination leaf is NEVER canonicalized, because canonicalizing it
+would collapse the case-only rename onto its own source and make it a
+no-op. The collision gate (I5) exempts a destination whose fold key
+equals the resolved source's fold key — that is the legal case-only
+rename, not a collision. Today the gate refuses it (finding 7); after
+this document it succeeds, and the index row moves to the new spelling.
 
 **I5 — The collision gate is EXTENDED to Unicode, not retired.** The
 gate keeps its purpose (finding 7: portability across volumes) and
