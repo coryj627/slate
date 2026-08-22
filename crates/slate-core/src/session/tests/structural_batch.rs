@@ -14,6 +14,19 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak, mpsc};
 use std::time::Duration;
 
+/// #1146: the liveness budget for a thread that MUST complete — a barrier
+/// reached, a release honoured, an independent vault finishing, a child
+/// process signalling ready. Every property these tests assert is about
+/// INDEPENDENCE or ORDERING, never latency; the old 2 s budgets were a
+/// latency bound smuggled into liveness waits, and a loaded CI runner —
+/// the full lib suite in parallel, a thread spawn plus a `batch_move` of
+/// filesystem + SQLite + op-log inside the window — blew one. Generous
+/// enough that only a genuine deadlock fails, short enough that one still
+/// does in bounded time. The NEGATIVE probes below ("must still be
+/// blocked", `recv_timeout(from_millis(..))`) deliberately keep their
+/// short windows: a slow runner can only make those more convincing.
+const LIVENESS: Duration = Duration::from_secs(30);
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ProviderCall {
     PreflightRename(String, String),
@@ -81,7 +94,7 @@ impl StructuralBatchFaultHook for BlockingBatchFault {
         self.release
             .lock()
             .unwrap()
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(LIVENESS)
             .map_err(|_| FaultInjectingProvider::injected("batch test release timed out"))?;
         Ok(())
     }
@@ -112,7 +125,7 @@ impl StructuralBatchFaultHook for BlockingRecoveryBarrierFault {
         self.release
             .lock()
             .unwrap()
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(LIVENESS)
             .map_err(|_| FaultInjectingProvider::injected("barrier test release timed out"))?;
         Err(FaultInjectingProvider::injected(
             "injected recovery barrier failure after blocking",
@@ -560,7 +573,7 @@ fn two_sessions_serialize_child_and_parent_moves_before_preflight() {
         let _ = child_tx.send(result);
     });
     entered_rx
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(LIVENESS)
         .expect("child move reached the post-rename barrier");
 
     let (folder_tx, folder_rx) = mpsc::channel();
@@ -576,13 +589,13 @@ fn two_sessions_serialize_child_and_parent_moves_before_preflight() {
     let serialized = early_folder.is_err();
     release_tx.send(()).unwrap();
     let child_report = child_rx
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(LIVENESS)
         .expect("child move completed after release")
         .unwrap();
     let folder_report = match early_folder {
         Ok(result) => result.unwrap(),
         Err(_) => folder_rx
-            .recv_timeout(Duration::from_secs(2))
+            .recv_timeout(LIVENESS)
             .expect("folder move completed after child")
             .unwrap(),
     };
@@ -633,7 +646,7 @@ fn two_sessions_serialize_batch_and_legacy_folder_move_before_preflight() {
         let _ = batch_tx.send(result);
     });
     entered_rx
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(LIVENESS)
         .expect("batch reached the post-rename barrier");
 
     let (legacy_tx, legacy_rx) = mpsc::channel();
@@ -644,19 +657,12 @@ fn two_sessions_serialize_batch_and_legacy_folder_move_before_preflight() {
     let serialized = early_legacy.is_err();
     release_tx.send(()).unwrap();
     assert_eq!(
-        batch_rx
-            .recv_timeout(Duration::from_secs(2))
-            .unwrap()
-            .unwrap()
-            .state,
+        batch_rx.recv_timeout(LIVENESS).unwrap().unwrap().state,
         BatchMoveState::Succeeded
     );
     let legacy_report = match early_legacy {
         Ok(report) => report.unwrap(),
-        Err(_) => legacy_rx
-            .recv_timeout(Duration::from_secs(2))
-            .unwrap()
-            .unwrap(),
+        Err(_) => legacy_rx.recv_timeout(LIVENESS).unwrap().unwrap(),
     };
 
     assert!(
@@ -696,7 +702,7 @@ fn structural_operations_in_different_vaults_remain_independent() {
         let _ = first_tx.send(result);
     });
     entered_rx
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(LIVENESS)
         .expect("first vault reached its barrier");
 
     let (second_tx, second_rx) = mpsc::channel();
@@ -707,7 +713,7 @@ fn structural_operations_in_different_vaults_remain_independent() {
         }));
     });
     let second_report = second_rx
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(LIVENESS)
         .expect("a different vault must not wait on the first vault's sidecar")
         .unwrap();
     assert_eq!(second_report.state, BatchMoveState::Succeeded);
@@ -715,11 +721,7 @@ fn structural_operations_in_different_vaults_remain_independent() {
 
     release_tx.send(()).unwrap();
     assert_eq!(
-        first_rx
-            .recv_timeout(Duration::from_secs(2))
-            .unwrap()
-            .unwrap()
-            .state,
+        first_rx.recv_timeout(LIVENESS).unwrap().unwrap().state,
         BatchMoveState::Succeeded
     );
 }
@@ -750,7 +752,7 @@ fn two_sessions_serialize_conflicting_batch_undo_latest_checks() {
         let _ = first_tx.send(result);
     });
     entered_rx
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(LIVENESS)
         .expect("first inverse reached the post-rename barrier");
 
     let (second_tx, second_rx) = mpsc::channel();
@@ -761,13 +763,13 @@ fn two_sessions_serialize_conflicting_batch_undo_latest_checks() {
     let serialized = early_second.is_err();
     release_tx.send(()).unwrap();
     let first_report = first_rx
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(LIVENESS)
         .expect("first inverse completed after release")
         .unwrap();
     let second_result = match early_second {
         Ok(result) => result,
         Err(_) => second_rx
-            .recv_timeout(Duration::from_secs(2))
+            .recv_timeout(LIVENESS)
             .expect("second inverse completed after the latest row changed"),
     };
 
@@ -828,7 +830,7 @@ fn spawned_process_waits_for_same_vault_structural_operation() {
         let _ = move_tx.send(result);
     });
     entered_rx
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(LIVENESS)
         .expect("parent process reached the post-rename barrier");
 
     let ready = tmp.path().join("child-ready");
@@ -839,7 +841,7 @@ fn spawned_process_waits_for_same_vault_structural_operation() {
         .env("SLATE_STRUCTURAL_LOCK_CHILD_READY", &ready)
         .spawn()
         .unwrap();
-    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    let deadline = std::time::Instant::now() + LIVENESS;
     while !ready.exists() && std::time::Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -852,7 +854,7 @@ fn spawned_process_waits_for_same_vault_structural_operation() {
 
     release_tx.send(()).unwrap();
     let parent_report = move_rx
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(LIVENESS)
         .expect("parent move completed after release")
         .unwrap();
     let status = child.wait().unwrap();
@@ -2706,7 +2708,7 @@ fn structural_undo_waits_for_failed_recovery_barrier_then_fails_closed() {
         let _ = failed_tx.send(result);
     });
     entered_rx
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(LIVENESS)
         .expect("recovery reached the blocked barrier");
 
     let undo_session = Arc::clone(&session);
@@ -2722,7 +2724,7 @@ fn structural_undo_waits_for_failed_recovery_barrier_then_fails_closed() {
 
     release_tx.send(()).unwrap();
     let failed = failed_rx
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(LIVENESS)
         .expect("failing batch completed")
         .unwrap();
     assert_eq!(failed.state, BatchMoveState::RollbackIncomplete);
@@ -2733,7 +2735,7 @@ fn structural_undo_waits_for_failed_recovery_barrier_then_fails_closed() {
             .any(|failure| failure.stage == crate::BatchFailureStage::RecoveryBarrier)
     );
     let undo_error = undo_rx
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(LIVENESS)
         .expect("waiting undo completed after recovery")
         .unwrap_err();
     assert!(undo_error.to_string().contains("history is unavailable"));
@@ -2751,7 +2753,7 @@ fn legacy_move_undo_completes_while_holding_structural_serialization() {
     });
 
     let undo = result_rx
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(LIVENESS)
         .expect("legacy inverse must not recursively acquire the structural mutex")
         .unwrap();
     assert_eq!(undo.moved, vec![("dest/a.md".into(), "a.md".into())]);
@@ -2778,7 +2780,7 @@ fn batch_final_rename_callback_runs_after_structural_guard_is_released() {
     });
 
     let report = result_rx
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(LIVENESS)
         .expect("final structural notification must run after its guard is released")
         .unwrap();
     assert_eq!(report.state, BatchMoveState::Succeeded);
