@@ -250,10 +250,10 @@ is the gate's stated intent. Pure-CJK names are unaffected (finding 1).
 
 ## Owner calls
 
-**Call 1 — gate semantics (I5, IR-4): recommended, pending
-confirmation.** Extend to Unicode via the existing
-`slate_tree_sort_key` rule. Behavior change is confined to names
-containing caseable letters; kanji/kana/width are untouched.
+**Call 1 — gate semantics (I5, IR-4): decided 2026-08-22.** Extend to
+Unicode via the existing `slate_tree_sort_key` rule (NFC + Unicode
+lowercase, not NFKC). Behavior change is confined to names containing
+caseable letters; kanji/kana/width are untouched (finding 1).
 
 **Call 2 — the hashless-save rule (I8): decided 2026-08-22.** Host-side
 create-exclusive semantics; core's `None = unconditional` contract is
