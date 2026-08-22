@@ -273,3 +273,71 @@ fn compound_case_only_rename_is_refused_like_the_plain_structural_path() {
     );
     assert!(tmp.path().join("notes/notes.md").exists());
 }
+
+#[test]
+fn compound_undo_ids_are_the_journal_record_not_a_host_walk() {
+    // #1127: `undo_op_ids` lists the rows the compound wrote, newest
+    // first — the journal RECORD. It is not an executable sequence:
+    // `undo_structural` admits only the latest row and journals itself,
+    // so after the note hop is undone the folder row is no longer the
+    // latest and the second call is refused. Hosts reverse a compound by
+    // re-running the forward FFI with inverse arguments (mac #871,
+    // Windows W5-4 F10; the mutation harness's S4 scripts exactly that).
+    let tmp = tempfile::tempdir().unwrap();
+    write(tmp.path(), "P/P.md", "folder note\n");
+    write(tmp.path(), "R/R.md", "another folder note\n");
+    let session = open(tmp.path());
+    let report = session.rename_folder_with_note("P", "Q").unwrap();
+    let [note_hop, folder_move] = report.undo_op_ids[..] else {
+        panic!("two journal rows: {report:?}");
+    };
+
+    // Out of order FIRST, before any undo (codoki): the older id is
+    // refused with the same message and nothing moves — so a host that
+    // walked the recorded sequence backwards, or forwards, gets the same
+    // honest refusal rather than a half-undone pair.
+    let out_of_order = session.undo_structural(folder_move).unwrap_err();
+    assert!(
+        matches!(out_of_order, VaultError::InvalidArgument { ref message }
+            if message.contains("only the latest structural op is undoable")),
+        "got {out_of_order:?}"
+    );
+    assert!(
+        tmp.path().join("Q/Q.md").exists(),
+        "nothing moved on refusal"
+    );
+    assert!(!tmp.path().join("P").exists());
+
+    // The newest row IS undoable — and its undo journals itself.
+    session.undo_structural(note_hop).unwrap();
+    assert!(
+        tmp.path().join("Q/P.md").exists(),
+        "the note hop is reversed"
+    );
+    assert!(!tmp.path().join("Q/Q.md").exists());
+
+    // The older row is now two rows from the top: refused, by the
+    // latest-only gate, with the message the hosts key on.
+    let err = session.undo_structural(folder_move).unwrap_err();
+    assert!(
+        matches!(err, VaultError::InvalidArgument { ref message }
+            if message.contains("only the latest structural op is undoable")),
+        "got {err:?}"
+    );
+    // Nothing moved on refusal: the folder rename still stands.
+    assert!(tmp.path().join("Q").is_dir());
+    assert!(!tmp.path().join("P").exists());
+
+    // The host model, on a fresh compound: reverse by re-running the
+    // forward operation with inverse arguments — itself a compound
+    // (two rows; the journal stays append-only) — which restores the
+    // pre-operation state the recorded ids could not.
+    let forward = session.rename_folder_with_note("R", "S").unwrap();
+    assert_eq!(forward.undo_op_ids.len(), 2);
+    assert!(tmp.path().join("S/S.md").exists());
+    let inverse = session.rename_folder_with_note("S", "R").unwrap();
+    assert_eq!(inverse.undo_op_ids.len(), 2);
+    assert!(tmp.path().join("R/R.md").exists());
+    assert!(!tmp.path().join("S").exists());
+    assert!(dir_flags(&session, "").contains(&("R".to_string(), true)));
+}

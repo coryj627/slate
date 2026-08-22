@@ -19,12 +19,23 @@ use serde_json::{Value, json};
 pub struct StructuralReport {
     /// Journal row id — the handle `undo_structural` takes.
     ///
-    /// FL6-1: a COMPOUND operation journals more than one row; this
-    /// field alone cannot reverse it. `undo_op_ids` is the complete
-    /// ordered sequence (`undo_structural` each, in order) — a single
-    /// op reports `[op_id]`.
+    /// FL6-1: a COMPOUND operation (the folder+note rename) journals
+    /// more than one row, and this field alone does not describe it;
+    /// `undo_op_ids` carries every row it wrote.
     pub op_id: i64,
-    /// Ordered ids that fully reverse this report (newest first).
+    /// The journal rows this report wrote, newest first — a single op
+    /// reports `[op_id]`, the compound rename `[note_hop, folder_move]`.
+    ///
+    /// This is the journal RECORD, not an executable undo sequence
+    /// (#1127): `undo_structural` admits only the LATEST row and
+    /// journals itself, so after the first id is undone the second is
+    /// no longer the latest and is refused. Hosts reverse a compound by
+    /// re-running the forward operation with inverse arguments
+    /// (`rename_folder_with_note(new, old)`) — the model both shipped
+    /// hosts use (mac #871, Windows W5-4 F10) and the one the mutation
+    /// harness's S4 scripts; `undo_structural(undo_op_ids[0])` remains
+    /// the single-op path. Pinned by
+    /// `compound_undo_ids_are_the_journal_record_not_a_host_walk`.
     pub undo_op_ids: Vec<i64>,
     /// Every path that changed, `(old, new)`, files only (a folder move
     /// lists each contained file; the folder itself is implied).

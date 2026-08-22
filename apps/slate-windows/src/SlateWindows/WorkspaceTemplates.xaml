@@ -370,7 +370,7 @@
                                AutomationProperties.Name="{Binding Properties.EmptyStateText}" />
                     <!-- Hugs small sets, scrolls internally past
                          ~280px (mac parity). -->
-                    <ScrollViewer MaxHeight="280"
+                    <ScrollViewer Focusable="False" MaxHeight="280"
                                   VerticalScrollBarVisibility="Auto"
                                   HorizontalScrollBarVisibility="Disabled"
                                   Visibility="{Binding Properties.HasRows, Converter={StaticResource BooleanToVisibilityConverter}}">
@@ -610,7 +610,7 @@
     <DataTemplate x:Key="WorkspaceNodeChildTemplate"
                   DataType="{x:Type local:WorkspacePaneNodeViewModel}">
         <Grid>
-            <ContentControl Content="{Binding}"
+            <ContentControl Focusable="False" Content="{Binding}"
                             ContentTemplate="{DynamicResource WorkspaceNodeTemplate}" />
             <!-- UI Automation migration contract:
                  WorkspaceSplitHandleHorizontal -> WorkspaceSplitHandle
@@ -678,7 +678,7 @@
     <DataTemplate x:Key="WorkspaceNodeTemplate"
                   DataType="{x:Type local:WorkspacePaneNodeViewModel}">
         <Grid>
-            <ContentControl Content="{Binding Group}"
+            <ContentControl Focusable="False" Content="{Binding Group}"
                             ContentTemplate="{StaticResource WorkspaceGroupTemplate}"
                             Visibility="{Binding IsGroup, Converter={StaticResource BooleanToVisibilityConverter}}" />
             <ItemsControl ItemsSource="{Binding Children}"

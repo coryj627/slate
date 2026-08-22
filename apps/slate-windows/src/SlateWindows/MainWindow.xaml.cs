@@ -1019,6 +1019,14 @@ public partial class MainWindow : Window
                 ModifierKeys.Control | ModifierKeys.Alt or ModifierKeys.Control | ModifierKeys.Alt | ModifierKeys.Shift) => true,
             (Key.OemPlus or Key.OemMinus or Key.I or Key.F,
                 ModifierKeys.Control | ModifierKeys.Alt) => true,
+            // #1118: the W4 chords the list never tracked — under Quick
+            // Open they fell through to the Window KeyBindings and fired
+            // beneath the picker (the palette and search swallow them by
+            // the text-editing allow-list; Quick Open relies on this
+            // list alone). Ctrl+J/Ctrl+R jump and open leaves,
+            // Ctrl+Shift+J/R open sheets, Ctrl+Shift+E toggles reading.
+            (Key.J or Key.R, ModifierKeys.Control or ModifierKeys.Control | ModifierKeys.Shift) => true,
+            (Key.E, ModifierKeys.Control | ModifierKeys.Shift) => true,
             _ => false,
         };
     }

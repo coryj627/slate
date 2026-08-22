@@ -363,6 +363,65 @@ internal static class ModalSurfaces
 
             _ => PaletteOpenDecision.Refuse,
         };
+
+    /// <summary>
+    /// Whether the bulk-rename sheet may open, given what is already up
+    /// (#1118). Ctrl+Shift+R rode a bare <c>Window.InputBindings</c>
+    /// KeyBinding with no admission, so it presented BENEATH every
+    /// higher sheet and its queued focus grab pulled the keyboard into
+    /// an invisible surface (the repro: Base Query Builder →
+    /// Ctrl+Shift+R → typing lands in a hidden TextBox; the first Escape
+    /// closes a sheet the user cannot see). The template flow's arms
+    /// verbatim: the overlays are superseded (the caller performs the
+    /// dismissal, focus lineage included), the palette is RETIRED so a
+    /// palette-invoked row works during P9's sanctioned transient, and
+    /// every sheet refuses — the bulk-rename sheet itself included,
+    /// which holds typed keys worth more than a restart.
+    /// </summary>
+    internal static PaletteOpenDecision DecideBulkRenameOpen(ModalSurface? topmost) =>
+        topmost switch
+        {
+            null => PaletteOpenDecision.Open,
+
+            ModalSurface.QuickOpen => PaletteOpenDecision.DismissQuickOpenThenOpen,
+
+            ModalSurface.SearchOverlay => PaletteOpenDecision.DismissSearchThenOpen,
+
+            ModalSurface.CommandPalette => PaletteOpenDecision.DismissPaletteThenOpen,
+
+            _ => PaletteOpenDecision.Refuse,
+        };
+
+    /// <summary>
+    /// Whether the citation summary may open (#1118, the Ctrl+Shift+J
+    /// twin). The same arms, with the one stacking W4-5 designed kept:
+    /// the summary paints ABOVE the citation details sheet and opens
+    /// over it, and re-opening over itself is a refresh — the sheet
+    /// holds no input, and its counts are read on appear. Every other
+    /// sheet refuses: beneath FilesCiting, DashboardEditor,
+    /// BaseQueryBuilder, the template sheets, and Move To the summary
+    /// would paint invisibly; over the two property sheets it would
+    /// steal focus from typed input. Ctrl+J (jump to bibliography) is
+    /// deliberately NOT routed here — it is live under the details
+    /// sheet by design (SR-4) and opens no sheet.
+    /// </summary>
+    internal static PaletteOpenDecision DecideCitationSummaryOpen(ModalSurface? topmost) =>
+        topmost switch
+        {
+            null => PaletteOpenDecision.Open,
+
+            ModalSurface.CitationDetails => PaletteOpenDecision.Open,
+
+            ModalSurface.CitationSummary => PaletteOpenDecision.Open,
+
+            ModalSurface.QuickOpen => PaletteOpenDecision.DismissQuickOpenThenOpen,
+
+            ModalSurface.SearchOverlay => PaletteOpenDecision.DismissSearchThenOpen,
+
+            ModalSurface.CommandPalette => PaletteOpenDecision.DismissPaletteThenOpen,
+
+            _ => PaletteOpenDecision.Refuse,
+        };
 }
 
 /// <summary>

@@ -187,6 +187,22 @@ selection silently.)
 recent.** Enter on a row (or on the field, which activates the top result)
 opens the target and closes the overlay. Recents are recorded **only**
 here, never per keystroke (`AppState.swift:8614-8622`, `:9461`).
+*Amended (#1121):* the overlay is closed BEFORE the shell opens the hit,
+but its dismissal notification — the signal the shell queues its focus
+restore on — is raised AFTER the open resolves (Quick Open's exact
+shape). Raised before the open, the restore executed inside the
+dirty-navigation prompt's nested pump against a disabled window; raised
+after, it lands in an enabled window after any editor focus claim, and
+the prompt's Cancel arm keeps its deterministic restore.
+
+The ordering carries an exception contract, because focus depends on it:
+**the dismissal is raised even when the open handler throws** (otherwise
+the overlay is closed with keyboard focus stranded — silent for a
+sighted user, a dead keyboard for an AT user), and **the open's
+exception is the one that propagates** when both throw. It is captured
+and rethrown with its original stack rather than left to a `finally`,
+whose own exception would replace it and bury the failure that actually
+explains the outcome. A dismissal failure on its own still propagates.
 
 The query used for both the recent and the line lookup is the query that
 **produced the visible rows**, not the live field text — the debounce
@@ -326,12 +342,18 @@ model rather than discovered gap by gap:
    (P9 invokes before dismissing, so a decision-aware guard would
    refuse every palette invocation — the transient in invariant 6),
    and the two W4-era sheet-opening chords (Ctrl+Shift+R,
-   Ctrl+Shift+J) predate admission entirely and can present a sheet
-   beneath a higher sheet — a pre-existing defect this wave found and
-   filed as [#1118](https://github.com/coryj627/slate/issues/1118),
-   not a gated path. (This entry originally claimed "the chord, the
-   menu, and command invocation are ALL gated paths"; the red team
-   falsified the universal.)
+   Ctrl+Shift+J) predated admission entirely and could present a
+   sheet beneath a higher sheet — a pre-existing defect this wave
+   found and filed as
+   [#1118](https://github.com/coryj627/slate/issues/1118). *Closed by
+   #1118:* both openers now consult a window admission
+   (`DecideBulkRenameOpen` / `DecideCitationSummaryOpen`, the
+   template flow's arms) inside the workspace's open, so the chord,
+   the menu item, and a palette row pass one gate; the Quick Open
+   deny-list answers every Window KeyBinding chord. (This entry
+   originally claimed "the chord, the menu, and command invocation
+   are ALL gated paths"; the red team falsified the universal, and
+   the fix made it true.)
 3. **Key routing is by OWNERSHIP (topmost), not openness** —
    `SearchOwnsKeys`; a hidden surface never takes keys.
 4. **Focus restore is a census with ordering**: every `Restore*Focus*`
