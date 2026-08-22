@@ -45,7 +45,7 @@ fn set_math_prefs_takes_effect_on_next_get_math_blocks() {
 
     session
         .set_math_prefs(crate::math::MathPrefs {
-            speech_style: crate::math::MathSpeechStyle::MathSpeak,
+            speech_style: crate::math::MathSpeechStyle::SimpleSpeak,
             verbosity: crate::math::MathVerbosity::Verbose,
             braille_code: crate::math::BrailleCode::Ueb,
         })

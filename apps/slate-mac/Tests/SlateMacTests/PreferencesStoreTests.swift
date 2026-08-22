@@ -33,7 +33,7 @@ final class PreferencesStoreTests: XCTestCase {
     func testMathPrefsRoundTripThroughUserDefaults() {
         let store = PreferencesStore(defaults: defaults)
         var prefs = MathPrefs()
-        prefs.speechStyle = .mathSpeak
+        prefs.speechStyle = .simpleSpeak
         prefs.verbosity = .verbose
         prefs.brailleCode = .ueb
 
@@ -41,7 +41,7 @@ final class PreferencesStoreTests: XCTestCase {
 
         let store2 = PreferencesStore(defaults: defaults)
         let loaded = store2.loadMathPrefs()
-        XCTAssertEqual(loaded.speechStyle, .mathSpeak)
+        XCTAssertEqual(loaded.speechStyle, .simpleSpeak)
         XCTAssertEqual(loaded.verbosity, .verbose)
         XCTAssertEqual(loaded.brailleCode, .ueb)
     }
@@ -134,8 +134,17 @@ final class PreferencesStoreTests: XCTestCase {
     func testMathSpeechStylePersistenceTagsAreStable() throws {
         let clearSpeakEncoded = try JSONEncoder().encode(MathSpeechStyle.clearSpeak)
         XCTAssertEqual(String(data: clearSpeakEncoded, encoding: .utf8), "\"clearSpeak\"")
-        let mathSpeakEncoded = try JSONEncoder().encode(MathSpeechStyle.mathSpeak)
-        XCTAssertEqual(String(data: mathSpeakEncoded, encoding: .utf8), "\"mathSpeak\"")
+        let simpleSpeakEncoded = try JSONEncoder().encode(MathSpeechStyle.simpleSpeak)
+        XCTAssertEqual(String(data: simpleSpeakEncoded, encoding: .utf8), "\"simpleSpeak\"")
+    }
+
+    /// #1056 migration: a persisted "mathSpeak" (a prior build's tag)
+    /// decodes to ClearSpeak — what that user was already hearing,
+    /// since MathCAT never implemented MathSpeak — instead of failing
+    /// the whole prefs load.
+    func testLegacyMathSpeakTagDecodesToClearSpeak() throws {
+        let legacy = Data("\"mathSpeak\"".utf8)
+        XCTAssertEqual(try JSONDecoder().decode(MathSpeechStyle.self, from: legacy), .clearSpeak)
     }
 
     func testMathVerbosityPersistenceTagsAreStable() throws {
@@ -171,7 +180,7 @@ final class PreferencesStoreTests: XCTestCase {
     func testAppStateLoadsPersistedPrefsOnInit() throws {
         let store = PreferencesStore(defaults: defaults)
         var seeded = MathPrefs()
-        seeded.speechStyle = .mathSpeak
+        seeded.speechStyle = .simpleSpeak
         store.saveMathPrefs(seeded)
 
         let appState = AppState(
@@ -179,7 +188,7 @@ final class PreferencesStoreTests: XCTestCase {
             externalOpener: { _ in true },
             preferencesStore: store
         )
-        XCTAssertEqual(appState.mathPrefs.speechStyle, .mathSpeak)
+        XCTAssertEqual(appState.mathPrefs.speechStyle, .simpleSpeak)
     }
 
     /// Changing AppState.mathPrefs persists through the store.

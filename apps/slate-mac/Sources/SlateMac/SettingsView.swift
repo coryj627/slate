@@ -428,7 +428,7 @@ struct MathSettingsTab: View {
         localized: """
             Changes apply immediately to math in the read pane. \
             Speech style controls how math is read aloud (ClearSpeak: \
-            intuitive; MathSpeak: precise / verbatim). Verbosity sets \
+            intuitive; SimpleSpeak: brief). Verbosity sets \
             how detailed the spoken math is. Braille code switches \
             between Nemeth and UEB encodings.
             """
@@ -450,7 +450,7 @@ struct MathLivePreview: View {
 
     /// Sample formula. Picked for its mix of structure (sum, fraction,
     /// scripted identifier) so the speech style differences between
-    /// ClearSpeak and MathSpeak are audible.
+    /// ClearSpeak and SimpleSpeak are audible.
     private let sampleSource = "\\sum_{i=0}^{n} \\frac{i^2}{2}"
 
     private var sampleBlock: MathBlock {
@@ -478,7 +478,7 @@ struct MathLivePreview: View {
 
     /// Style-derived placeholder speech so the live preview actually
     /// changes when the user flips the picker. Full ClearSpeak /
-    /// MathSpeak strings differ in cadence + identifier expansion;
+    /// SimpleSpeak strings differ in structural words and cadence;
     /// this short rendering hints at that without invoking MathCAT
     /// from the UI thread.
     private var previewSpeech: String {
@@ -486,9 +486,12 @@ struct MathLivePreview: View {
         switch appState.mathPrefs.speechStyle {
         case .clearSpeak:
             head = String(localized: "The sum from i equals 0 to n of i squared over 2")
-        case .mathSpeak:
+        case .simpleSpeak:
+            // MathCAT's actual SimpleSpeak phrasing for this formula at
+            // medium verbosity (#1056 probe), so the hint carries the
+            // real cadence rather than an invented one.
             head = String(
-                localized: "sum from i equals 0 to n of fraction i squared over 2 end fraction"
+                localized: "the sum from i is equal to 0, to n of; fraction, i squared, over 2, end fraction"
             )
         }
         switch appState.mathPrefs.verbosity {

@@ -7587,7 +7587,7 @@ final class AppState: ObservableObject {
     /// Compose a brief diff announcement for `mathPrefs` changes.
     /// Only one of the three fields can change per Picker selection
     /// (UI surface uses three separate Pickers), so the announcement
-    /// reads like "Speech style: MathSpeak" — short, focused,
+    /// reads like "Speech style: SimpleSpeak" — short, focused,
     /// announces what the user just did. (Audit #261 H1.)
     private func announceMathPrefsDiff(from old: MathPrefs, to new: MathPrefs) {
         if old.speechStyle != new.speechStyle {
@@ -9702,8 +9702,8 @@ final class AppState: ObservableObject {
         do {
             let session = try VaultSession.openFilesystem(rootPath: url.path)
             // Audit #259: push the persisted math prefs into the
-            // fresh session so a user who set ClearSpeak → MathSpeak
-            // in a prior run gets MathSpeak from the very first
+            // fresh session so a user who set ClearSpeak → SimpleSpeak
+            // in a prior run gets SimpleSpeak from the very first
             // `get_math_blocks` call. The Rust-side session opens
             // with defaults; without this the prefs would only take
             // effect after the first Picker interaction.
