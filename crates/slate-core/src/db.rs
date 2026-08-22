@@ -44,6 +44,16 @@ pub enum DbError {
          upgrade Slate or restore the vault from a backup"
     )]
     UnsupportedVersion { db_version: u32, runner_max: u32 },
+
+    /// #1078 (`docs/plans/33` U3/U4): a live session found the cache at a
+    /// schema version other than the one it was opened at — another Slate
+    /// process upgraded it (the common case) or replaced it (a backup
+    /// restored under a live session). Refused before any mutation; flows
+    /// to hosts through `VaultError::Db` exactly like every other refusal.
+    #[error(
+        "the vault cache is at schema version {db_version} but this Slate was opened at {build_version}: another Slate process upgraded or replaced it — restart Slate to continue"
+    )]
+    SchemaVersionSkew { db_version: u32, build_version: u32 },
 }
 
 /// A single migration step.
@@ -421,6 +431,44 @@ pub(crate) fn migrate_up_to(conn: &mut Connection, version: u32) -> Result<(), D
 /// Safe to call on a fresh database that has never been migrated:
 /// `ensure_version_table` is invoked first so the underlying query
 /// always has a table to read from.
+/// The schema version THIS build migrates a cache to — `MIGRATIONS.len()`.
+/// The fence (`begin_fenced`) compares every writer transaction against it.
+pub fn build_schema_version() -> u32 {
+    MIGRATIONS.len() as u32
+}
+
+/// #1078 (`docs/plans/33` U1/U2): begin a transaction that may WRITE the
+/// cache. ALWAYS `IMMEDIATE`: the writer lock is taken first, then — under
+/// it, so the check is atomic with every write that follows — the cache's
+/// schema version must be this build's. This is the same-protocol-version
+/// precondition of the write-intent protocol: an older session that stayed
+/// live while a newer process migrated the shared cache must not write
+/// pre-protocol rows under the new schema. Immediate is load-bearing, not a
+/// preference (contracts finding 7): a version READ at the top of a
+/// `DEFERRED` transaction pins a snapshot before the first write, and any
+/// concurrent commit in between then fails that write with
+/// `SQLITE_BUSY_SNAPSHOT`, which the busy handler does not retry — the
+/// compaction worker's regeneration hit exactly that under the full suite.
+/// Taking the lock first also removes the read-then-write upgrade deadlock
+/// between two connections. Stateless by design (U6): no latch to reset.
+pub fn begin_fenced(conn: &Connection) -> Result<rusqlite::Transaction<'_>, DbError> {
+    let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?;
+    let db_version: i64 = tx.query_row(
+        "SELECT COALESCE(MAX(version), 0) FROM schema_version",
+        [],
+        |row| row.get(0),
+    )?;
+    let db_version = u32::try_from(db_version).unwrap_or(u32::MAX);
+    let build_version = build_schema_version();
+    if db_version != build_version {
+        return Err(DbError::SchemaVersionSkew {
+            db_version,
+            build_version,
+        });
+    }
+    Ok(tx)
+}
+
 pub fn current_version(conn: &Connection) -> Result<u32, DbError> {
     ensure_version_table(conn)?;
     let value: i64 = conn.query_row(
@@ -513,6 +561,40 @@ mod tests {
                 "{table} gate predicate must use {index}: {plan}"
             );
         }
+    }
+
+    /// #1078 Phase 0: the fence proceeds on a current cache and refuses
+    /// skew in EITHER direction (U4), before anything is written.
+    #[test]
+    fn begin_fenced_proceeds_on_a_current_cache_and_refuses_skew_either_way() {
+        let mut conn = fresh_db();
+        migrate(&mut conn).expect("migrate");
+        let build = build_schema_version();
+        {
+            let tx = begin_fenced(&conn).expect("a current cache proceeds");
+            tx.commit().unwrap();
+        }
+        // Newer: another process migrated further.
+        conn.execute(
+            "INSERT INTO schema_version(version, applied_at_ms, description) VALUES (?1, 0, 'test')",
+            [build + 1],
+        )
+        .unwrap();
+        let err = begin_fenced(&conn).unwrap_err();
+        assert!(
+            matches!(err, DbError::SchemaVersionSkew { db_version, build_version }
+                if db_version == build + 1 && build_version == build),
+            "{err:?}"
+        );
+        assert!(err.to_string().contains("restart Slate"), "{err}");
+        // Older: the cache was replaced by something behind this build.
+        conn.execute("DELETE FROM schema_version WHERE version >= ?1", [build])
+            .unwrap();
+        let err = begin_fenced(&conn).unwrap_err();
+        assert!(
+            matches!(err, DbError::SchemaVersionSkew { db_version, .. } if db_version == build - 1),
+            "{err:?}"
+        );
     }
 
     #[test]

@@ -124,11 +124,19 @@ delete and the index transaction. Two classes are scope preconditions:
   key per exact spelling; case-insensitive and Unicode-normalizing volumes
   can still alias two spellings to one physical file, affecting links, rows,
   and search alike. Tracked as its own work item; the protocol adopts
-  whatever canonical identity the platform layer establishes.
+  whatever canonical identity the platform layer establishes. **Satisfied
+  by #1077** (`docs/plans/32_canonical_file_identity_contracts.md`): every
+  mutation target binds to the filesystem's stored spelling, and the
+  markers, rows, and epochs key on it.
 - **Same-protocol-version precondition.** All coordinated actors sharing a
   cache must run this protocol version. Sessions older than migration 035/036
   must not stay live across an upgrade; enforcement (open-time fencing of
   stale sessions) is an upgrade-machinery item, moot until W4-3 ships.
+  **Enforced by #1078** (`docs/plans/33_upgrade_fence_contracts.md`): every
+  cache-writer transaction begins through `db::begin_fenced`, which refuses
+  — under the writer lock, before any mutation — unless the cache is at the
+  schema version this build was opened at; the fence ships in the first
+  release so every later schema bump inherits it.
 
 ## Final-confirmation review resolutions (2026-08-03, third pass)
 

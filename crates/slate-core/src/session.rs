@@ -1340,7 +1340,7 @@ fn regen_events_after_compaction(
     }
     let entries = crate::oplog::read_oplog(cache_dir, log_name).map_err(VaultError::Io)?;
     let events = crate::oplog_events::derive_events_for_log(&entries);
-    let tx = conn.transaction()?;
+    let tx = db::begin_fenced(conn)?;
     tx.execute(
         "DELETE FROM oplog_events WHERE file_id = ?1",
         rusqlite::params![file_id],
@@ -2302,7 +2302,7 @@ impl VaultSession {
         // this transaction) and the next open re-runs recovery to
         // this same point and retries.
         let finalize = (|| -> Result<(), VaultError> {
-            let tx = conn.transaction()?;
+            let tx = db::begin_fenced(&conn)?;
             // Test-only seam (round 40): a transient finalization
             // failure — the journal must survive it.
             if let Some(trigger) = std::env::var_os("SLATE_TEST_FAULT_RECOVERY_FINALIZE")
@@ -2336,7 +2336,7 @@ impl VaultSession {
         cause: VaultError,
     ) -> Result<(), VaultError> {
         let barrier = (|| -> Result<(), VaultError> {
-            let tx = conn.transaction()?;
+            let tx = db::begin_fenced(conn)?;
             journal_append(
                 &tx,
                 crate::structural::StructuralOpKind::RecoveryBarrier,
@@ -2465,7 +2465,7 @@ impl VaultSession {
         }
 
         if indexed_truth == StructuralBatchTruth::Forward {
-            let tx = conn.transaction()?;
+            let tx = db::begin_fenced(conn)?;
             apply_batch_move_index_direction(&tx, self.provider.as_ref(), &plans, false)?;
             tx.commit()?;
         } else {
@@ -2921,7 +2921,7 @@ impl VaultSession {
         // processed log, a mutator can take that lock but blocks on this
         // transaction's DB writer before changing log bytes. Commit releases
         // the writer; the mutator then publishes a new obligation and proceeds.
-        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let tx = db::begin_fenced(conn)?;
         let bound: Vec<(i64, String)> = tx
             .prepare(
                 "SELECT id, oplog_name
@@ -3072,7 +3072,7 @@ impl VaultSession {
 
         // One-writer discipline from the start (#787): binding updates
         // below write `files.oplog_name`.
-        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let tx = db::begin_fenced(conn)?;
 
         struct LiveFile {
             id: i64,
@@ -3607,10 +3607,7 @@ impl VaultSession {
         // wrapper's borrow spans the whole match under current
         // borrowck. Exclusivity is already held — the session mutex
         // serializes every writer on this connection.
-        let mut tx = match rusqlite::Transaction::new_unchecked(
-            conn,
-            rusqlite::TransactionBehavior::Immediate,
-        ) {
+        let mut tx = match db::begin_fenced(conn) {
             Ok(tx) => tx,
             Err(e) => {
                 self.clear_own_intent_registration(conn, path, intent_token);
@@ -3683,10 +3680,7 @@ impl VaultSession {
                 self.clear_own_intent_registration(conn, path, intent_token);
                 return Err(e);
             }
-            tx = match rusqlite::Transaction::new_unchecked(
-                conn,
-                rusqlite::TransactionBehavior::Immediate,
-            ) {
+            tx = match db::begin_fenced(conn) {
                 Ok(tx) => tx,
                 Err(e) => {
                     self.clear_own_intent_registration(conn, path, intent_token);
@@ -4630,7 +4624,7 @@ impl VaultSession {
         // log either way, so nothing is lost, only deferred.
         let events =
             crate::oplog_events::derive_events(&entry, ops_in_hand.as_deref(), old_contents);
-        let inserted = conn.unchecked_transaction().and_then(|tx| {
+        let inserted = db::begin_fenced(conn).and_then(|tx| {
             insert_oplog_events(
                 &tx,
                 file_id,
@@ -4643,7 +4637,8 @@ impl VaultSession {
                     rusqlite::params![rowid],
                 )?;
             }
-            tx.commit()
+            tx.commit()?;
+            Ok::<(), db::DbError>(())
         });
         if let Err(e) = inserted {
             // Rows rolled back; the marker stays behind and the next
@@ -5312,10 +5307,9 @@ impl VaultSession {
                 size: bytes.len() as u64,
             }));
         }
-        let mut conn = self.conn.lock().expect("session connection mutex");
-        let tx = conn
-            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-            .map_err(|e| CreateFailure::Refused(VaultError::from(e)))?;
+        let conn = self.conn.lock().expect("session connection mutex");
+        let tx =
+            db::begin_fenced(&conn).map_err(|e| CreateFailure::Refused(VaultError::from(e)))?;
 
         // Existence gates INSIDE the cross-process critical section:
         // the index (case-insensitive — the APFS-aware structural
@@ -6459,7 +6453,7 @@ impl VaultSession {
         path: &str,
         epoch_before_attempt: Option<i64>,
     ) -> Result<bool, VaultError> {
-        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let tx = db::begin_fenced(conn)?;
         let current_epoch: Option<i64> = tx
             .query_row(
                 "SELECT index_epoch FROM files WHERE path = ?1",
@@ -6592,7 +6586,7 @@ impl VaultSession {
         let mut planted: Vec<(String, i64)> = Vec::new();
         let mut marked: std::collections::HashSet<String> = std::collections::HashSet::new();
         for _attempt in 0..4 {
-            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            let tx = db::begin_fenced(conn)?;
             let members: Vec<String> = {
                 let mut stmt =
                     tx.prepare("SELECT path FROM files WHERE path >= ?1 AND path < ?2")?;
@@ -6643,7 +6637,7 @@ impl VaultSession {
         // commit below must survive a power cut that the upcoming
         // filesystem mutation also survives.
         Self::commit_durably(conn, || {
-            let tx = conn.unchecked_transaction()?;
+            let tx = db::begin_fenced(conn)?;
             let mut planted = Vec::new();
             for path in paths {
                 // Test-only seam (adversarial round 37): a transient
@@ -7091,7 +7085,7 @@ impl VaultSession {
                 rusqlite::params![path],
             );
         }
-        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let tx = db::begin_fenced(conn)?;
         // Ownership + supersession fence (rounds 29-31), re-derived
         // from durable state under this writer lock. A selected
         // registration that is GONE was resolved by its own writer.
@@ -7237,7 +7231,7 @@ impl VaultSession {
         // IMMEDIATE (round 22): the repair reads and conditionally
         // clears intent state - taking the writer lock up front
         // serializes it against every save's own intent lifecycle.
-        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let tx = db::begin_fenced(conn)?;
         // Poison the cached stat tuple FIRST (adversarial round 13):
         // `index_file`'s fast path trusts a matching (mtime, size,
         // ctime) and skips the read entirely — but a checkbox toggle
@@ -9076,7 +9070,7 @@ fn scan_vault(
     // snapshot also serializes simultaneous cold scans: a second process
     // cannot snapshot an empty cache and then lose the deferred lock
     // upgrade while indexing, returning a misleading partial scan.
-    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let tx = db::begin_fenced(conn)?;
 
     // Snapshot vault-relative paths for link resolution. Built once
     // up-front so per-file scanning doesn't re-query SQLite for every
@@ -11950,7 +11944,7 @@ impl VaultSession {
         let mut graph_sink = self.graph_sink();
         let index_result = (|| -> Result<(), VaultError> {
             faults.check(BatchFaultPoint::MoveIndex)?;
-            let tx = conn.transaction()?;
+            let tx = db::begin_fenced(&conn)?;
             // Round 36: sweep-eligible atomically with this commit —
             // see age_move_markers_in_tx.
             Self::age_move_markers_in_tx(&tx, &planted_markers)?;
@@ -12123,7 +12117,7 @@ impl VaultSession {
         }
         let journal_result = (|| -> Result<i64, VaultError> {
             faults.check(BatchFaultPoint::MoveJournal)?;
-            let tx = conn.transaction()?;
+            let tx = db::begin_fenced(&conn)?;
             let op_id = journal_append(
                 &tx,
                 crate::structural::StructuralOpKind::MoveBatch,
@@ -12481,7 +12475,7 @@ impl VaultSession {
         if !reconciliation_plans.is_empty() {
             let reconciled = (|| -> Result<(), VaultError> {
                 faults.check(BatchFaultPoint::MoveReconciliation)?;
-                let tx = conn.transaction()?;
+                let tx = db::begin_fenced(conn)?;
                 apply_batch_move_index_direction(
                     &tx,
                     self.provider.as_ref(),
@@ -12613,7 +12607,7 @@ impl VaultSession {
         if recovery_incomplete {
             let barrier = (|| -> Result<(), VaultError> {
                 faults.check(BatchFaultPoint::RecoveryBarrier)?;
-                let tx = conn.transaction()?;
+                let tx = db::begin_fenced(conn)?;
                 journal_append(
                     &tx,
                     crate::structural::StructuralOpKind::RecoveryBarrier,
@@ -12831,7 +12825,7 @@ impl VaultSession {
         let mut graph_sink = self.graph_sink();
         let index_result = (|| -> Result<(), VaultError> {
             faults.check(BatchFaultPoint::MoveIndex)?;
-            let tx = conn.transaction()?;
+            let tx = db::begin_fenced(&conn)?;
             // Round 36: sweep-eligible atomically with this commit —
             // see age_move_markers_in_tx.
             Self::age_move_markers_in_tx(&tx, &planted_markers)?;
@@ -13075,7 +13069,7 @@ impl VaultSession {
 
         let journal_result = (|| -> Result<i64, VaultError> {
             faults.check(BatchFaultPoint::MoveJournal)?;
-            let tx = conn.transaction()?;
+            let tx = db::begin_fenced(&conn)?;
             let id = journal_append(
                 &tx,
                 crate::structural::StructuralOpKind::MoveBatch,
@@ -13510,7 +13504,7 @@ impl VaultSession {
                 drop(graph);
                 let barrier = (|| -> Result<(), VaultError> {
                     faults.check(BatchFaultPoint::RecoveryBarrier)?;
-                    let tx = conn.transaction()?;
+                    let tx = db::begin_fenced(&conn)?;
                     journal_append(
                         &tx,
                         crate::structural::StructuralOpKind::RecoveryBarrier,
@@ -13577,7 +13571,7 @@ impl VaultSession {
         // reconciliation keep theirs — the orphan sweep's real reads
         // converge whatever state was left. Best-effort: an
         // uncleared marker costs one extra read, never correctness.
-        if let Ok(tx) = conn.transaction() {
+        if let Ok(tx) = db::begin_fenced(&conn) {
             let clear = |item_path: &str| {
                 if let Some(tokens) = plan_markers.get(item_path) {
                     for (marker_path, token) in tokens {
@@ -13608,7 +13602,7 @@ impl VaultSession {
 
         let journal_result = (|| -> Result<i64, VaultError> {
             faults.check(BatchFaultPoint::TrashJournal)?;
-            let tx = conn.transaction()?;
+            let tx = db::begin_fenced(&conn)?;
             let op_id = journal_append(
                 &tx,
                 crate::structural::StructuralOpKind::TrashBatch,
@@ -13641,7 +13635,7 @@ impl VaultSession {
                 ));
                 let barrier = (|| -> Result<(), VaultError> {
                     faults.check(BatchFaultPoint::RecoveryBarrier)?;
-                    let tx = conn.transaction()?;
+                    let tx = db::begin_fenced(&conn)?;
                     journal_append(
                         &tx,
                         crate::structural::StructuralOpKind::RecoveryBarrier,
@@ -13705,7 +13699,7 @@ impl VaultSession {
         faults.check(fault_point)?;
         let mut graph_sink = self.graph_sink();
         let result = (|| -> Result<(), VaultError> {
-            let tx = conn.transaction()?;
+            let tx = db::begin_fenced(conn)?;
             for plan in plans {
                 for file in &plan.deleted_files {
                     graph_sink.stage_with(|| {
@@ -14813,7 +14807,7 @@ impl VaultSession {
     ) -> Result<crate::structural::StructuralReport, VaultError> {
         let mut graph_sink = self.graph_sink();
         let tx1 = (|| -> Result<(), VaultError> {
-            let tx = conn.transaction()?;
+            let tx = db::begin_fenced(&conn)?;
             // Round 36: the move's own markers become sweep-eligible
             // atomically with this commit — see age_move_markers_in_tx.
             Self::age_move_markers_in_tx(&tx, &planted_markers)?;
@@ -14863,7 +14857,7 @@ impl VaultSession {
             // stand in the common case; this restores any a sweep
             // consumed during a long-running failed move and makes
             // the compensated state re-read on the next query).
-            if let Ok(tx) = conn.transaction() {
+            if let Ok(tx) = db::begin_fenced(&conn) {
                 let _ = Self::age_move_markers_in_tx(&tx, &planted_markers)
                     .and_then(|()| tx.commit().map_err(Into::into));
             }
@@ -14897,7 +14891,7 @@ impl VaultSession {
         }
 
         let journal_result = (|| -> Result<i64, VaultError> {
-            let tx = conn.transaction()?;
+            let tx = db::begin_fenced(&conn)?;
             let journal_kind = if rewrite_health.physical_unknown {
                 crate::structural::StructuralOpKind::RecoveryBarrier
             } else {
@@ -15547,7 +15541,7 @@ impl VaultSession {
         conn: &mut Connection,
         body: impl FnOnce(&rusqlite::Transaction) -> Result<T, VaultError>,
     ) -> Result<T, VaultError> {
-        let tx = conn.transaction()?;
+        let tx = db::begin_fenced(conn)?;
         let out = body(&tx)?;
         tx.commit()?;
         Ok(out)
@@ -16498,7 +16492,7 @@ impl VaultSession {
     /// on the scanner fast path; a missing files row or file_meta projection
     /// pays the targeted read and Bases-index update below.
     fn ensure_open_base_indexed(&self, path: &str) -> Result<(), VaultError> {
-        let mut conn = self.conn.lock().expect("session connection mutex");
+        let conn = self.conn.lock().expect("session connection mutex");
         let indexed_with_meta = conn
             .query_row(
                 "SELECT 1
@@ -16514,7 +16508,7 @@ impl VaultSession {
             return Ok(());
         }
 
-        let tx = conn.transaction()?;
+        let tx = db::begin_fenced(&conn)?;
         let mut indexed_paths = tx
             .prepare("SELECT path FROM files")?
             .query_map([], |row| row.get::<_, String>(0))?
@@ -16658,8 +16652,8 @@ impl VaultSession {
         validate_saved_name("saved query", name)?;
         let envelope = normalize_saved_query_envelope_for_save(query_json)?;
         let now = now_ms();
-        let mut conn = self.conn.lock().expect("session connection mutex");
-        let tx = conn.transaction()?;
+        let conn = self.conn.lock().expect("session connection mutex");
+        let tx = db::begin_fenced(&conn)?;
         ensure_name_available(&tx, NameTable::SavedQueries, name, None)?;
         let id = sqlite_uuid(&tx)?;
         tx.execute(
@@ -16699,8 +16693,8 @@ impl VaultSession {
     pub fn rename_saved_query(&self, id: &str, name: &str) -> Result<(), VaultError> {
         validate_saved_name("saved query", name)?;
         let now = now_ms();
-        let mut conn = self.conn.lock().expect("session connection mutex");
-        let tx = conn.transaction()?;
+        let conn = self.conn.lock().expect("session connection mutex");
+        let tx = db::begin_fenced(&conn)?;
         ensure_name_available(&tx, NameTable::SavedQueries, name, Some(id))?;
         let changed = tx.execute(
             "UPDATE saved_queries SET name = ?1, modified_at_ms = ?2 WHERE id = ?3",
@@ -16755,8 +16749,8 @@ impl VaultSession {
         validate_saved_name("dashboard", name)?;
         let sections_json = dashboard_sections_json(&sections)?;
         let now = now_ms();
-        let mut conn = self.conn.lock().expect("session connection mutex");
-        let tx = conn.transaction()?;
+        let conn = self.conn.lock().expect("session connection mutex");
+        let tx = db::begin_fenced(&conn)?;
         ensure_name_available(&tx, NameTable::Dashboards, name, None)?;
         let id = sqlite_uuid(&tx)?;
         tx.execute(
@@ -16812,8 +16806,8 @@ impl VaultSession {
         validate_saved_name("dashboard", name)?;
         let sections_json = dashboard_sections_json(&sections)?;
         let now = now_ms();
-        let mut conn = self.conn.lock().expect("session connection mutex");
-        let tx = conn.transaction()?;
+        let conn = self.conn.lock().expect("session connection mutex");
+        let tx = db::begin_fenced(&conn)?;
         ensure_name_available(&tx, NameTable::Dashboards, name, Some(id))?;
         let changed = tx.execute(
             "UPDATE dashboards SET name = ?1 WHERE id = ?2",
@@ -16832,8 +16826,8 @@ impl VaultSession {
     pub fn rename_dashboard(&self, id: &str, name: &str) -> Result<(), VaultError> {
         validate_saved_name("dashboard", name)?;
         let now = now_ms();
-        let mut conn = self.conn.lock().expect("session connection mutex");
-        let tx = conn.transaction()?;
+        let conn = self.conn.lock().expect("session connection mutex");
+        let tx = db::begin_fenced(&conn)?;
         ensure_name_available(&tx, NameTable::Dashboards, name, Some(id))?;
         let changed = tx.execute(
             "UPDATE dashboards SET name = ?1, modified_at_ms = ?2 WHERE id = ?3",
@@ -18886,8 +18880,8 @@ impl VaultSession {
     /// canvas is read-only.
     pub fn open_canvas(&self, path: &str) -> Result<CanvasOpenInfo, VaultError> {
         let text = self.read_text(path)?;
-        let mut conn = self.conn.lock().expect("session connection mutex");
-        let tx = conn.transaction()?;
+        let conn = self.conn.lock().expect("session connection mutex");
+        let tx = db::begin_fenced(&conn)?;
 
         // Ensure a files row and its required empty non-Markdown metadata row
         // exist (open-before-first-scan and migration-replay gaps both heal).
@@ -19240,7 +19234,7 @@ impl VaultSession {
         )?;
 
         // Refresh the handle: new parse-equivalent state + model.
-        let tx = conn.transaction()?;
+        let tx = db::begin_fenced(&conn)?;
         let model = crate::canvas::model::derive_with(&working, &DbTitleSource { conn: &tx });
         drop(tx);
         // The save above allocated/resolved the binding; read it before
@@ -19507,6 +19501,7 @@ mod tests {
     mod canonical_identity;
     #[path = "save.rs"]
     mod save;
+    mod upgrade_fence;
 
     #[path = "oplog_identity.rs"]
     mod oplog_identity;
