@@ -13983,10 +13983,21 @@ impl VaultSession {
                 // filesystem-equivalence beyond the exact name keeps the
                 // os-rename failure + rollback as the belt).
                 let collision_probe = format!("{path}/{new_name}.md");
-                if let Some(existing) = index_entry_case_insensitive(&conn, &collision_probe)? {
+                if let Some(existing) = index_entry_case_insensitive(&conn, &collision_probe)?
+                    && existing != old_note
+                {
+                    // The old note's own row under the new name's fold is
+                    // the case-only folder+note rename (#1077 I4), legal.
                     return Err(VaultError::DestinationExists { path: existing });
                 }
-                if collision_probe != old_note && self.provider.stat(&collision_probe).is_ok() {
+                // #1077 (I4): on an aliasing volume the probe path may BE
+                // the old note under its new spelling — that is the
+                // case-only folder+note rename, not an occupant.
+                if collision_probe != old_note
+                    && self.provider.stat(&collision_probe).is_ok()
+                    && self.provider.canonical_path(&collision_probe)?.as_deref()
+                        != Some(&*old_note)
+                {
                     return Err(VaultError::DestinationExists {
                         path: collision_probe,
                     });
@@ -14592,7 +14603,11 @@ impl VaultSession {
                 reason: "no such folder in the index".into(),
             });
         }
-        if let Some(existing) = index_entry_case_insensitive(&conn, to)? {
+        if let Some(existing) = index_entry_case_insensitive(&conn, to)?
+            && existing != from
+        {
+            // `existing == from` is the source's OWN row under the
+            // destination's fold: the case-only rename (#1077 I4), legal.
             return Err(VaultError::DestinationExists { path: existing });
         }
 
@@ -14677,7 +14692,11 @@ impl VaultSession {
                 reason: "no such file in the index".into(),
             });
         }
-        if let Some(existing) = index_entry_case_insensitive(&conn, to)? {
+        if let Some(existing) = index_entry_case_insensitive(&conn, to)?
+            && existing != from
+        {
+            // `existing == from` is the source's OWN row under the
+            // destination's fold: the case-only rename (#1077 I4), legal.
             return Err(VaultError::DestinationExists { path: existing });
         }
 
@@ -15762,21 +15781,31 @@ fn validate_leaf_component(name: &str) -> Result<(), VaultError> {
     Ok(())
 }
 
-/// Case-insensitive existence check across BOTH index tables (APFS default
-/// is case-insensitive; a differing-case collision would shadow on disk).
-/// Returns the existing entry's exact path for the error message.
+/// Filesystem-equivalence collision gate across BOTH index tables (#1077
+/// contract I5; `docs/plans/32` finding 7). A PORTABILITY guard that runs
+/// on every volume: APFS and NTFS default to case-insensitive, so a name
+/// differing only in case — or Unicode normalization — would shadow an
+/// existing one the moment the vault lands there. Folds with the
+/// registered `slate_tree_sort_key` (NFC + full-Unicode lowercase, the
+/// rule the tree already sorts by; migration 037 indexes it) rather than
+/// SQLite's `lower()`, which folds ASCII only — `Ä.md` beside `ä.md`
+/// slipped through while APFS and NTFS treat them as one file. Kanji,
+/// kana, and width are untouched by the fold (no case; NFC keeps
+/// full-width distinct). Returns the existing entry's stored path for the
+/// error message — callers renaming a path onto its OWN alias (the
+/// case-only rename, contract I4) compare that path against their source.
 fn index_entry_case_insensitive(
     conn: &Connection,
     path: &str,
 ) -> Result<Option<String>, VaultError> {
-    let lowered = path.to_lowercase();
+    let folded = crate::db::tree_sort_key(path);
     let hit: Option<String> = conn
         .query_row(
-            "SELECT path FROM files WHERE lower(path) = ?1
+            "SELECT path FROM files WHERE slate_tree_sort_key(path) = ?1
              UNION ALL
-             SELECT path FROM dirs WHERE lower(path) = ?1
+             SELECT path FROM dirs WHERE slate_tree_sort_key(path) = ?1
              LIMIT 1",
-            rusqlite::params![lowered],
+            rusqlite::params![folded],
             |row| row.get(0),
         )
         .optional()?;

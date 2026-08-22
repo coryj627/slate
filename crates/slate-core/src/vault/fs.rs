@@ -746,15 +746,20 @@ impl VaultProvider for FsVaultProvider {
         // check in `structural_move_file` misses. This is the fast early-out
         // (and the only guard on platforms without an atomic no-replace rename);
         // the atomic primitive below closes the check-to-rename TOCTOU race.
-        match to_path.symlink_metadata() {
+        let destination_is_source = match to_path.symlink_metadata() {
+            // #1077 (contract I4): on an aliasing volume the destination
+            // may BE the source under another spelling — the case-only
+            // rename `A.md → a.md`. The same real entry is nothing to
+            // clobber, so only then is the rename admissible.
+            Ok(_) if same_entry(&from_path, &to_path) => true,
             Ok(_) => {
                 return Err(VaultError::DestinationExists {
                     path: to.to_string(),
                 });
             }
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => false,
             Err(e) => return Err(VaultError::Io(e)),
-        }
+        };
         if let Some(parent) = to_path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -769,6 +774,14 @@ impl VaultProvider for FsVaultProvider {
             // EEXIST (std maps it there) — referenced instead of `libc::EEXIST`
             // so this arm compiles on Windows, where `libc` is not a dependency
             // (#871 Codex round 5).
+            // The no-replace primitive may report the source's own alias
+            // as occupied (macOS `RENAME_EXCL`); with the same-entry proof
+            // above, a plain rename is the case change the filesystem
+            // applies to ONE entry — there is nothing to replace (the
+            // residual race is contracts IR-5, #1077).
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists && destination_is_source => {
+                fs::rename(&from_path, &to_path).map_err(VaultError::Io)
+            }
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
                 Err(VaultError::DestinationExists {
                     path: to.to_string(),
@@ -785,6 +798,8 @@ impl VaultProvider for FsVaultProvider {
         self.require_mutation_parent_access(&from_path)?;
         self.require_mutation_parent_access(&to_path)?;
         match to_path.symlink_metadata() {
+            // #1077 (I4): the source's own alias is not an occupant.
+            Ok(_) if same_entry(&from_path, &to_path) => Ok(()),
             Ok(_) => Err(VaultError::DestinationExists {
                 path: to.to_string(),
             }),
@@ -976,6 +991,27 @@ impl VaultProvider for FsVaultProvider {
         handle.read_to_end(&mut buf)?;
         Ok(buf)
     }
+}
+
+/// #1077 (contract I4): are two mutation paths ONE real filesystem entry?
+/// True only when neither leaf is a symlink (a link onto its own target is
+/// never "the same entry" — replacing the target with the link would lose
+/// the file) and both resolve to the same canonical location: the
+/// case-only or normalization-only alias an NTFS/APFS volume keeps for one
+/// entry. A path that cannot be inspected is never the same entry.
+fn same_entry(a: &Path, b: &Path) -> bool {
+    let leaf_is_link = |path: &Path| {
+        path.symlink_metadata()
+            .map(|meta| meta.file_type().is_symlink())
+            .unwrap_or(true)
+    };
+    if leaf_is_link(a) || leaf_is_link(b) {
+        return false;
+    }
+    matches!(
+        (fs::canonicalize(a), fs::canonicalize(b)),
+        (Ok(x), Ok(y)) if x == y
+    )
 }
 
 /// Read-only `File::open` that refuses to follow a symlink on the
@@ -2351,5 +2387,45 @@ mod tests {
             p.canonical_path("Link.md").unwrap().as_deref(),
             Some("Link.md")
         );
+    }
+
+    /// #1077 (contract I4): the case-only rename — the destination IS the
+    /// source under the volume's other spelling — is admissible for files
+    /// and directories, and the directory entry carries the new spelling;
+    /// a destination that is a DIFFERENT entry stays refused. The refusal
+    /// is volume-probed (on a case-sensitive volume `b.md` beside `B.md`
+    /// is simply a new name).
+    #[test]
+    fn rename_admits_the_sources_own_alias_and_refuses_any_other_occupant() {
+        let (tmp, p) = vault();
+        p.write_file("A.md", b"a").unwrap();
+        p.write_file("B.md", b"b").unwrap();
+        p.create_dir("Docs").unwrap();
+        p.write_file("Docs/Note.md", b"n").unwrap();
+        let aliasing = p.stat("a.md").is_ok();
+
+        if aliasing {
+            assert!(matches!(
+                p.rename("A.md", "b.md"),
+                Err(VaultError::DestinationExists { .. })
+            ));
+            assert!(matches!(
+                p.preflight_rename("A.md", "b.md"),
+                Err(VaultError::DestinationExists { .. })
+            ));
+        }
+        p.preflight_rename("A.md", "a.md").unwrap();
+        p.rename("A.md", "a.md").unwrap();
+        p.rename("Docs", "docs").unwrap();
+
+        let names: Vec<String> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(names.contains(&"a.md".to_string()), "{names:?}");
+        assert!(names.contains(&"docs".to_string()), "{names:?}");
+        assert!(!names.contains(&"A.md".to_string()), "{names:?}");
+        assert!(!names.contains(&"Docs".to_string()), "{names:?}");
+        assert_eq!(p.read_file("docs/Note.md").unwrap(), b"n");
     }
 }

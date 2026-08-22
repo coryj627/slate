@@ -199,6 +199,10 @@ const MIGRATIONS: &[Migration] = &[
         description: "files: per-file index epoch for write-intent supersession (W4-3)",
         sql: include_str!("../migrations/036_files_index_epoch.sql"),
     },
+    Migration {
+        description: "paths: Unicode fold indexes for the collision gate (#1077)",
+        sql: include_str!("../migrations/037_path_fold_indexes.sql"),
+    },
 ];
 
 /// Open or create a SQLite database at `path` with Slate's standard PRAGMAs.
@@ -472,6 +476,45 @@ mod tests {
         open_in_memory(512).expect("open in-memory db")
     }
 
+    /// #1077 Phase 3: migration 037 gives the collision gate its fold
+    /// indexes, and the gate's predicate actually uses them.
+    #[test]
+    fn migration_037_indexes_the_unicode_fold_of_every_path() {
+        let mut conn = fresh_db();
+        migrate(&mut conn).expect("migrate");
+        let mut stmt = conn
+            .prepare(
+                "SELECT name FROM sqlite_master WHERE type = 'index' \
+                 AND name IN ('idx_files_path_fold', 'idx_dirs_path_fold') ORDER BY name",
+            )
+            .unwrap();
+        let names: Vec<String> = stmt
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(|row| row.unwrap())
+            .collect();
+        assert_eq!(names, ["idx_dirs_path_fold", "idx_files_path_fold"]);
+        for (table, index) in [
+            ("files", "idx_files_path_fold"),
+            ("dirs", "idx_dirs_path_fold"),
+        ] {
+            let plan: String = conn
+                .query_row(
+                    &format!(
+                        "EXPLAIN QUERY PLAN SELECT path FROM {table} \
+                         WHERE slate_tree_sort_key(path) = ?1"
+                    ),
+                    ["x"],
+                    |row| row.get(3),
+                )
+                .unwrap();
+            assert!(
+                plan.contains(index),
+                "{table} gate predicate must use {index}: {plan}"
+            );
+        }
+    }
+
     #[test]
     fn migrate_from_empty_lands_at_latest_version() {
         let mut conn = fresh_db();
@@ -513,8 +556,9 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        // extension + mtime (001) + birthtime (030, #801) + parent tree order (033).
-        assert_eq!(indexes, 4);
+        // extension + mtime (001) + birthtime (030, #801) + parent tree order (033)
+        // + Unicode path fold for the collision gate (037, #1077).
+        assert_eq!(indexes, 5);
     }
 
     #[test]

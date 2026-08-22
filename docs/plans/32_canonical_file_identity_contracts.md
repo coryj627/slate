@@ -259,6 +259,16 @@ beside `a.md`, which it already refuses today). That is a real loss of
 expressiveness on Linux for the portability guarantee it buys, and it
 is the gate's stated intent. Pure-CJK names are unaffected (finding 1).
 
+**IR-5 — The case-only rename's same-entry fallback has a residual race
+on macOS.** The no-replace rename primitive may report the source's own
+alias as occupied (`RENAME_EXCL`); the provider then proves same-entry
+(both leaves non-symlink, identical canonical location) and applies a
+plain rename — the case change the filesystem makes to ONE entry. Between
+that proof and the rename, an attacker with write access to the parent
+could swap the destination for a different file: the same privilege as
+dropping a file directly, the residual class the read path already
+records. Windows and Linux never take the fallback.
+
 ## Owner calls
 
 **Call 1 — gate semantics (I5, IR-4): decided 2026-08-22.** Extend to

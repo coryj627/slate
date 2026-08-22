@@ -198,3 +198,122 @@ fn a_marker_planted_through_an_alias_is_keyed_by_the_stored_spelling() {
         "the stranded marker is keyed by the stored spelling, not the alias the save came through"
     );
 }
+
+// ---- Phase 3: the collision gate (contract I5) and the case-only rename (I4) ----
+
+/// I5: the gate is a PORTABILITY guard — it runs on EVERY volume, so these
+/// refusals hold on ext4 too (deliberately not volume-probed).
+#[test]
+fn the_gate_refuses_a_collision_beyond_ascii() {
+    let (_tmp, session) = make_vault(|provider| {
+        provider.write_file("\u{00c4}rger.md", b"a").unwrap(); // Ärger
+        provider.create_dir("\u{00dc}bung").unwrap(); // Übung
+        provider.write_file("caf\u{00e9}.md", b"c").unwrap(); // NFC
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    // Case beyond ASCII — the pair the old lower() gate could not see.
+    assert!(matches!(
+        session.create_exclusive("\u{00e4}rger.md", "x"),
+        Err(VaultError::DestinationExists { path }) if path == "\u{00c4}rger.md"
+    ));
+    assert!(matches!(
+        session.create_folder("\u{00fc}bung"),
+        Err(VaultError::DestinationExists { path }) if path == "\u{00dc}bung"
+    ));
+    // Normalization: NFD beside NFC is one name on APFS.
+    assert!(matches!(
+        session.create_exclusive("cafe\u{0301}.md", "x"),
+        Err(VaultError::DestinationExists { path }) if path == "caf\u{00e9}.md"
+    ));
+}
+
+/// I5: kanji, kana, and width are NOT folded — the gate leaves them alone
+/// (finding 1: no case to fold; NFC keeps full-width distinct, as the
+/// volumes do).
+#[test]
+fn the_gate_leaves_cjk_and_width_alone() {
+    let (_tmp, session) = make_vault(|provider| {
+        provider.write_file("\u{65e5}\u{672c}.md", b"a").unwrap(); // 日本
+        provider.write_file("ABC.md", b"b").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    session
+        .create_exclusive("\u{65e5}\u{672c}\u{8a9e}.md", "x") // 日本語
+        .unwrap();
+    session
+        .create_exclusive("\u{ff21}\u{ff22}\u{ff23}.md", "x") // ＡＢＣ
+        .unwrap();
+}
+
+/// I4: the case-only rename BECOMES expressible — file and folder — and
+/// moves the row; a rename onto a DIFFERENT file's alias stays refused.
+/// Holds on every volume (on a case-sensitive one it is simply a rename).
+#[test]
+fn a_case_only_rename_succeeds_and_moves_the_row() {
+    let (tmp, session) = make_vault(|provider| {
+        provider.write_file("A.md", b"a").unwrap();
+        provider.write_file("B.md", b"b").unwrap();
+        provider.create_dir("Docs").unwrap();
+        provider.write_file("Docs/Note.md", b"n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let report = session.rename_file("A.md", "a.md").unwrap();
+    assert_eq!(report.moved, vec![("A.md".to_string(), "a.md".to_string())]);
+    let report = session.rename_folder("Docs", "docs").unwrap();
+    assert!(
+        report
+            .moved
+            .contains(&("Docs/Note.md".to_string(), "docs/Note.md".to_string())),
+        "{:?}",
+        report.moved
+    );
+    assert_eq!(
+        index_paths(&session, "files"),
+        strings(&["B.md", "a.md", "docs/Note.md"])
+    );
+    assert_eq!(index_paths(&session, "dirs"), strings(&["docs"]));
+
+    // The directory entries carry the new spelling.
+    let names: Vec<String> = std::fs::read_dir(tmp.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name != ".slate")
+        .collect();
+    assert!(names.contains(&"a.md".to_string()), "{names:?}");
+    assert!(names.contains(&"docs".to_string()), "{names:?}");
+    assert!(!names.contains(&"A.md".to_string()), "{names:?}");
+    assert!(!names.contains(&"Docs".to_string()), "{names:?}");
+
+    // Onto a DIFFERENT file's alias: refused, and nothing moved.
+    assert!(matches!(
+        session.rename_file("a.md", "b.md"),
+        Err(VaultError::DestinationExists { path }) if path == "B.md"
+    ));
+    assert_eq!(
+        index_paths(&session, "files"),
+        strings(&["B.md", "a.md", "docs/Note.md"])
+    );
+}
+
+/// I4 for the folder+note pair: `rename_folder_with_note` renames the
+/// folder AND its same-named note, and a case-only rename of both is legal
+/// (the collision probe finds the old note's own row).
+#[test]
+fn a_case_only_folder_note_rename_succeeds() {
+    let (_tmp, session) = make_vault(|provider| {
+        provider.create_dir("Docs").unwrap();
+        provider.write_file("Docs/Docs.md", b"n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let report = session.rename_folder_with_note("Docs", "docs").unwrap();
+    assert!(
+        report
+            .moved
+            .contains(&("Docs/Docs.md".to_string(), "docs/docs.md".to_string())),
+        "{:?}",
+        report.moved
+    );
+    assert_eq!(index_paths(&session, "files"), strings(&["docs/docs.md"]));
+    assert_eq!(index_paths(&session, "dirs"), strings(&["docs"]));
+}
