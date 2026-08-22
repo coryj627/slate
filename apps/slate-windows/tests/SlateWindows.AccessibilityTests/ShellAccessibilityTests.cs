@@ -4841,7 +4841,7 @@ public sealed class ShellAccessibilityTests
                         {
                             return search.Properties.HasKeyboardFocus.ValueOrDefault;
                         }
-                        catch (COMException)
+                        catch (Exception exception) when (IsTransientUiaFault(exception))
                         {
                             return false;
                         }
@@ -4872,7 +4872,7 @@ public sealed class ShellAccessibilityTests
                                     .ByControlType(ControlType.ListItem));
                             return rows.Length == 2;
                         }
-                        catch (COMException)
+                        catch (Exception exception) when (IsTransientUiaFault(exception))
                         {
                             return false;
                         }
@@ -4940,7 +4940,7 @@ public sealed class ShellAccessibilityTests
                             return window.FindFirstDescendant(automation.ConditionFactory
                                 .ByAutomationId("SearchOverlay")) is null;
                         }
-                        catch (COMException)
+                        catch (Exception exception) when (IsTransientUiaFault(exception))
                         {
                             return true;
                         }
@@ -4975,7 +4975,7 @@ public sealed class ShellAccessibilityTests
                             focusedBefore = automation.FocusedElement();
                             return focusedBefore is not null;
                         }
-                        catch (COMException)
+                        catch (Exception exception) when (IsTransientUiaFault(exception))
                         {
                             return false;
                         }
@@ -4999,7 +4999,7 @@ public sealed class ShellAccessibilityTests
                             return reopenedSearch.Properties
                                 .HasKeyboardFocus.ValueOrDefault;
                         }
-                        catch (COMException)
+                        catch (Exception exception) when (IsTransientUiaFault(exception))
                         {
                             return false;
                         }
@@ -5019,7 +5019,7 @@ public sealed class ShellAccessibilityTests
                             return window.FindFirstDescendant(automation.ConditionFactory
                                 .ByAutomationId("SearchOverlay")) is null;
                         }
-                        catch (COMException)
+                        catch (Exception exception) when (IsTransientUiaFault(exception))
                         {
                             return true;
                         }
@@ -5039,7 +5039,7 @@ public sealed class ShellAccessibilityTests
                             return runtimeIdAfter is not null
                                 && runtimeIdAfter.SequenceEqual(runtimeIdBefore);
                         }
-                        catch (COMException)
+                        catch (Exception exception) when (IsTransientUiaFault(exception))
                         {
                             return false;
                         }
@@ -5069,7 +5069,7 @@ public sealed class ShellAccessibilityTests
                             return window.FindFirstDescendant(automation.ConditionFactory
                                 .ByAutomationId("SearchOverlay")) is null;
                         }
-                        catch (COMException)
+                        catch (Exception exception) when (IsTransientUiaFault(exception))
                         {
                             return true;
                         }
@@ -5116,7 +5116,7 @@ public sealed class ShellAccessibilityTests
                         {
                             return paletteBox.Properties.HasKeyboardFocus.ValueOrDefault;
                         }
-                        catch (COMException)
+                        catch (Exception exception) when (IsTransientUiaFault(exception))
                         {
                             return false;
                         }
@@ -5132,7 +5132,7 @@ public sealed class ShellAccessibilityTests
                             return window.FindFirstDescendant(automation.ConditionFactory
                                 .ByAutomationId("SearchOverlay")) is null;
                         }
-                        catch (COMException)
+                        catch (Exception exception) when (IsTransientUiaFault(exception))
                         {
                             return true;
                         }
@@ -5154,7 +5154,7 @@ public sealed class ShellAccessibilityTests
                             return window.FindFirstDescendant(automation.ConditionFactory
                                 .ByAutomationId("CommandPalette")) is null;
                         }
-                        catch (COMException)
+                        catch (Exception exception) when (IsTransientUiaFault(exception))
                         {
                             return true;
                         }
@@ -5177,7 +5177,7 @@ public sealed class ShellAccessibilityTests
                             return focusedId is not null
                                 && focusedId.SequenceEqual(parkedRuntimeId);
                         }
-                        catch (COMException)
+                        catch (Exception exception) when (IsTransientUiaFault(exception))
                         {
                             return false;
                         }
@@ -5227,7 +5227,7 @@ public sealed class ShellAccessibilityTests
                                     automation.ConditionFactory
                                         .ByAutomationId(id)) is null;
                             }
-                            catch (COMException)
+                            catch (Exception exception) when (IsTransientUiaFault(exception))
                             {
                                 return true;
                             }
@@ -5348,7 +5348,7 @@ public sealed class ShellAccessibilityTests
                         {
                             return tryAgain.Properties.HasKeyboardFocus.ValueOrDefault;
                         }
-                        catch (COMException)
+                        catch (Exception exception) when (IsTransientUiaFault(exception))
                         {
                             return false;
                         }
@@ -5388,7 +5388,7 @@ public sealed class ShellAccessibilityTests
                             return firstRow?.Properties
                                 .HasKeyboardFocus.ValueOrDefault == true;
                         }
-                        catch (COMException)
+                        catch (Exception exception) when (IsTransientUiaFault(exception))
                         {
                             return false;
                         }
@@ -5415,7 +5415,7 @@ public sealed class ShellAccessibilityTests
                             return window.FindFirstDescendant(automation.ConditionFactory
                                 .ByAutomationId("TemplatePickerSheet")) is null;
                         }
-                        catch (COMException)
+                        catch (Exception exception) when (IsTransientUiaFault(exception))
                         {
                             return true;
                         }
@@ -5449,7 +5449,7 @@ public sealed class ShellAccessibilityTests
                             return window.FindFirstDescendant(automation.ConditionFactory
                                 .ByAutomationId("TemplateFlowSheet")) is null;
                         }
-                        catch (COMException)
+                        catch (Exception exception) when (IsTransientUiaFault(exception))
                         {
                             return true;
                         }
@@ -5489,7 +5489,7 @@ public sealed class ShellAccessibilityTests
                             return topicBox?.Properties
                                 .HasKeyboardFocus.ValueOrDefault == true;
                         }
-                        catch (COMException)
+                        catch (Exception exception) when (IsTransientUiaFault(exception))
                         {
                             return false;
                         }
@@ -5515,7 +5515,7 @@ public sealed class ShellAccessibilityTests
                             return nameBox.Properties
                                 .HasKeyboardFocus.ValueOrDefault;
                         }
-                        catch (COMException)
+                        catch (Exception exception) when (IsTransientUiaFault(exception))
                         {
                             return false;
                         }
@@ -5540,7 +5540,7 @@ public sealed class ShellAccessibilityTests
                             return window.FindFirstDescendant(automation.ConditionFactory
                                 .ByAutomationId("TemplateFlowSheet")) is null;
                         }
-                        catch (COMException)
+                        catch (Exception exception) when (IsTransientUiaFault(exception))
                         {
                             return true;
                         }
@@ -5563,7 +5563,7 @@ public sealed class ShellAccessibilityTests
                         {
                             return editor.Properties.HasKeyboardFocus.ValueOrDefault;
                         }
-                        catch (COMException)
+                        catch (Exception exception) when (IsTransientUiaFault(exception))
                         {
                             return false;
                         }
@@ -5707,7 +5707,7 @@ public sealed class ShellAccessibilityTests
                         {
                             return nameBox.Properties.HasKeyboardFocus.ValueOrDefault;
                         }
-                        catch (COMException)
+                        catch (Exception exception) when (IsTransientUiaFault(exception))
                         {
                             return false;
                         }
@@ -5787,7 +5787,7 @@ public sealed class ShellAccessibilityTests
                         {
                             return filter.Properties.HasKeyboardFocus.ValueOrDefault;
                         }
-                        catch (COMException)
+                        catch (Exception exception) when (IsTransientUiaFault(exception))
                         {
                             return false;
                         }
@@ -5816,7 +5816,7 @@ public sealed class ShellAccessibilityTests
                                 automation.ConditionFactory
                                     .ByAutomationId("MoveToSheet")) is null;
                         }
-                        catch (COMException)
+                        catch (Exception exception) when (IsTransientUiaFault(exception))
                         {
                             return true;
                         }
@@ -5884,7 +5884,7 @@ public sealed class ShellAccessibilityTests
                         .FirstOrDefault(candidate => candidate.Name == name);
                     return button is not null;
                 }
-                catch (COMException)
+                catch (Exception exception) when (IsTransientUiaFault(exception))
                 {
                     return false;
                 }
@@ -5896,6 +5896,31 @@ public sealed class ShellAccessibilityTests
 
         return button!;
     }
+
+    /// <summary>
+    /// Whether an exception is the transient "the element went away
+    /// underneath me" fault every tolerant poll in this file means to
+    /// retry on.
+    /// </summary>
+    /// <remarks>
+    /// UIA reports a vanished provider as <see cref="COMException"/>,
+    /// but FlaUI WRAPS it: <c>Com.Call</c> converts the underlying
+    /// <c>0x80040201</c> into
+    /// <c>FlaUI.Core.Exceptions.ElementNotAvailableException</c>, which
+    /// does not derive from <see cref="COMException"/> at all. Every
+    /// poll here was written as <c>catch (COMException)</c> and so
+    /// missed the wrapper — the exact condition it existed for escaped
+    /// the retry and failed the run. Measured as the second, distinct
+    /// FileManagement journey flake on CI (the first being #1136):
+    /// <c>SelectTreeItem</c>'s <c>Select()</c> landing on a container
+    /// the tree refresh had just replaced.
+    /// </remarks>
+    private static bool IsTransientUiaFault(Exception exception) =>
+        exception is COMException
+            or FlaUI.Core.Exceptions.ElementNotAvailableException
+            or FlaUI.Core.Exceptions.PropertyNotSupportedException
+        || (exception is FlaUI.Core.Exceptions.FlaUIException
+            && exception.InnerException is COMException);
 
     /// <summary>Select a FilesTree item by name via the SelectionItem
     /// pattern. The item is RE-FOUND each attempt and the selection is
@@ -5928,7 +5953,7 @@ public sealed class ShellAccessibilityTests
                     Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(100));
                     return item.Patterns.SelectionItem.Pattern.IsSelected;
                 }
-                catch (COMException)
+                catch (Exception exception) when (IsTransientUiaFault(exception))
                 {
                     return false;
                 }
