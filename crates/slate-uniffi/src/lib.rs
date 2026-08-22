@@ -920,6 +920,14 @@ impl VaultSession {
         Ok(self.inner.read_text(&path)?)
     }
 
+    /// #1077: the spelling the filesystem stores for an EXISTING
+    /// vault-relative entry, or null when nothing exists there. Hosts
+    /// re-seat a missing-from-disk tab with it when its file comes back
+    /// under another spelling (`Ghost.md` → `ghost.md`).
+    pub fn canonical_path(&self, path: String) -> Result<Option<String>, VaultError> {
+        Ok(self.inner.canonical_path(&path)?)
+    }
+
     /// Save UTF-8 text to a vault path, refresh the index, and append a
     /// fine-grained `EditBatch` (or a `WholeFileReplace` snapshot) to the
     /// file's op-log (#378).

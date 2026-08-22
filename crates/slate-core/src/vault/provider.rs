@@ -123,6 +123,29 @@ pub trait VaultProvider: Send + Sync {
         self.mutation_path_kind(path).map(|kind| kind.is_some())
     }
 
+    /// The spelling the filesystem actually stores for an EXISTING entry
+    /// at a vault-relative path, or `None` when nothing exists there
+    /// (#1077, contract I1 — `docs/plans/32`). On volumes that alias
+    /// distinct spellings — case-insensitive NTFS and APFS,
+    /// normalization-insensitive APFS — `Notes/A.md` and `notes/a.md`
+    /// name ONE physical file; the index, the write-intent markers, and
+    /// the epoch rows must bind to one of those spellings, and only the
+    /// filesystem knows which one it keeps. Never invents a
+    /// normalization: a global lowercase rule would merge genuinely
+    /// distinct files on case-sensitive volumes and make case-only
+    /// renames unexpressible.
+    ///
+    /// The default is identity — the requested spelling when the entry
+    /// exists — so case-sensitive volumes, in-memory test doubles, and
+    /// any future provider behave exactly as before at no new cost
+    /// (divergence ID-1). Filesystem-backed providers on aliasing volumes
+    /// override it. A provider that cannot answer returns the requested
+    /// spelling, never a guess; an IO failure is an error the caller
+    /// must not proceed past (contract I7).
+    fn canonical_path(&self, path: &str) -> Result<Option<String>, VaultError> {
+        Ok(self.mutation_path_exists(path)?.then(|| path.to_string()))
+    }
+
     /// Create a directory (and any missing parents) at a vault-relative
     /// path. Idempotent: an already-existing directory is Ok — the caller
     /// (U2-2 `create_folder`) enforces its own collision policy against

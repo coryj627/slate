@@ -558,22 +558,61 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         bool leaseSettled = false;
         try
         {
-            SaveReport report = _session.SaveText(Path, saveText, _contentHash);
-            repairs?.EndMutation(Path, indexConsistent: true);
+            string newContentHash;
+            string? caveat = null;
+            if (_contentHash is null)
+            {
+                // #1077 (contract I8): a tab with no content hash has never
+                // loaded bytes from the path it names — it has no basis to
+                // overwrite whatever sits there now (the parked tab of a
+                // deleted note whose name came back under another spelling
+                // is the case that loses data). Its save is a CREATE:
+                // success when the path is free, DestinationExists — the
+                // conflict arm below — when it is not; never a silent
+                // overwrite. Core's documented "null hash = unconditional"
+                // save is unchanged; this is the host's rule. A post-publish
+                // index failure is a LANDED write (#1123): the bytes are on
+                // disk, so the tab is saved and says so with the caveat.
+                switch (_session.CreateExclusiveReporting(Path, saveText))
+                {
+                    case CreateExclusiveOutcome.Committed committed:
+                        newContentHash = committed.Report.NewContentHash;
+                        break;
+                    case CreateExclusiveOutcome.PublishedUnindexed published:
+                        newContentHash = published.ContentHash;
+                        caveat = CreateOutcomes.PublishedUnindexedCaveat(
+                            System.IO.Path.GetFileName(Path), published.ErrorMessage);
+                        break;
+                    default:
+                        throw new InvalidOperationException("unknown create outcome");
+                }
+            }
+            else
+            {
+                newContentHash = _session.SaveText(Path, saveText, _contentHash).NewContentHash;
+            }
+            repairs?.EndMutation(Path, indexConsistent: caveat is null);
             leaseSettled = true;
-            _contentHash = report.NewContentHash;
+            _contentHash = newContentHash;
             IsExternallyStale = false;
             _text = saveText;
             _editorSession?.MarkSaved(saveText);
             IsDirty = false;
-            Status = $"Saved {System.IO.Path.GetFileName(Path)}.";
+            Status = caveat is null
+                ? $"Saved {System.IO.Path.GetFileName(Path)}."
+                : $"Saved {System.IO.Path.GetFileName(Path)}. {caveat}";
             _documentChanged?.Invoke(this, null);
             return true;
         }
         catch (VaultException exception)
         {
+            // A refused create wrote nothing: the index is as consistent as
+            // it was, the same as a WriteConflict refusal.
             repairs?.EndMutation(
-                Path, indexConsistent: exception is VaultException.WriteConflict);
+                Path,
+                indexConsistent: exception
+                    is VaultException.WriteConflict
+                    or VaultException.DestinationExists);
             leaseSettled = true;
             Status = $"Save blocked: {exception.Message}";
             _documentChanged?.Invoke(this, null);
@@ -1930,6 +1969,60 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             // Silent re-dock at the new path: the target moved, the
             // user did nothing — no announcement (INV-4).
             RedockBaseFileSilently(dockPath);
+        }
+    }
+
+    /// <summary>#1077 (contract I6): after a Created or Renamed
+    /// publication, a tab whose file vanished may find it back under
+    /// ANOTHER spelling — <c>Ghost.md</c> deleted, <c>ghost.md</c>
+    /// created, one physical file on NTFS/APFS — which every ordinal
+    /// comparison in this class rightly cannot see. Identity is
+    /// corrected ONCE, here, by asking core for the filesystem's stored
+    /// spelling: the tab is retargeted to it and, when clean, reloaded
+    /// through the same-path reload (the templates precedent) so its
+    /// missing-status and content hash stop being stale bookkeeping. A
+    /// DIRTY tab keeps its buffer — it is retargeted so its save names
+    /// the right identity, and that save is hashless, which contract I8
+    /// routes through create-exclusive: a conflict, never an overwrite.
+    /// Comparators stay ordinal everywhere; nothing here re-litigates
+    /// identity per comparison.</summary>
+    public void ReseatMissingTabs()
+    {
+        foreach (WorkspaceTabViewModel tab in Groups
+            .SelectMany(group => group.Tabs)
+            .Where(candidate => candidate.IsMissingFromDisk
+                && !string.IsNullOrEmpty(candidate.Path))
+            .ToList())
+        {
+            string? stored;
+            try
+            {
+                stored = _session.CanonicalPath(tab.Path);
+            }
+            catch (VaultException)
+            {
+                // An identity we cannot read is left as it is (fail
+                // closed, contract I7): the tab stays missing.
+                continue;
+            }
+            if (stored is null)
+            {
+                continue;
+            }
+            bool respelled = !string.Equals(stored, tab.Path, StringComparison.Ordinal);
+            if (tab.IsDirty)
+            {
+                if (respelled)
+                {
+                    tab.RetargetPath(stored);
+                }
+                continue;
+            }
+            if (respelled)
+            {
+                tab.RetargetPath(stored);
+            }
+            tab.ReplaceItem(tab.Item);
         }
     }
 

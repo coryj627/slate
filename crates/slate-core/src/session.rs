@@ -22,6 +22,7 @@
 //! `cache_dir` defaults to `<vault_root>/.slate`. Callers can override
 //! for tests or sandbox layouts.
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
@@ -3268,6 +3269,17 @@ impl VaultSession {
         get_file_metadata_impl(&conn, path)
     }
 
+    /// #1077 (contract I1/I6): the spelling the filesystem stores for an
+    /// EXISTING vault-relative entry, or `None` when nothing exists there.
+    /// Hosts use it to RE-SEAT a tab whose file vanished and came back
+    /// under another spelling (`Ghost.md` → `ghost.md` on NTFS/APFS): the
+    /// tab keeps ordinal comparisons everywhere and corrects its spelling
+    /// once, here, instead of re-litigating identity per comparison.
+    pub fn canonical_path(&self, path: &str) -> Result<Option<String>, VaultError> {
+        validate_save_path(path)?;
+        self.provider.canonical_path(path)
+    }
+
     /// Read a vault file's contents as UTF-8 text.
     ///
     /// - Refuses to read files larger than
@@ -3454,6 +3466,39 @@ impl VaultSession {
         }
     }
 
+    /// #1077 (contracts I2/I3): the spelling a mutation SOURCE binds to.
+    /// An existing target resolves to the filesystem's stored spelling; a
+    /// brand-new file keeps the LEAF the caller chose but takes its
+    /// parent's stored spelling — parent components are existing targets,
+    /// and a fresh row under `notes/…` beside the scanned `Notes/…` is
+    /// exactly the drift this exists to stop. A canonicalization failure
+    /// is the caller's failure (I7): proceeding on the unresolved spelling
+    /// is how the second index row appears.
+    fn bind_source_path<'p>(&self, path: &'p str) -> Result<Cow<'p, str>, VaultError> {
+        match self.provider.canonical_path(path)? {
+            Some(canonical) if canonical != path => Ok(Cow::Owned(canonical)),
+            Some(_) => Ok(Cow::Borrowed(path)),
+            None => self.bind_destination_path(path),
+        }
+    }
+
+    /// #1077 (contract I4): the spelling a mutation DESTINATION, or a
+    /// create, binds to. The leaf is NEVER canonicalized — that is how a
+    /// user creates `Ä.md`, and canonicalizing a destination leaf would
+    /// collapse the case-only rename `A.md → a.md` onto its own source.
+    /// Only the parent binds, for the reason `bind_source_path` gives.
+    fn bind_destination_path<'p>(&self, path: &'p str) -> Result<Cow<'p, str>, VaultError> {
+        let Some((parent, leaf)) = path.rsplit_once('/') else {
+            return Ok(Cow::Borrowed(path));
+        };
+        match self.provider.canonical_path(parent)? {
+            Some(canonical_parent) if canonical_parent != parent => {
+                Ok(Cow::Owned(format!("{canonical_parent}/{leaf}")))
+            }
+            _ => Ok(Cow::Borrowed(path)),
+        }
+    }
+
     fn save_text_locked(
         &self,
         conn: &mut Connection,
@@ -3462,6 +3507,10 @@ impl VaultSession {
         expected_content_hash: Option<&str>,
         annotations: &[crate::oplog::OpAnnotation],
     ) -> Result<SaveReport, VaultError> {
+        // #1077 (I2/I3): bind the stored spelling BEFORE anything keys on
+        // `path` — the intent marker below, the index row, the epoch.
+        let bound_path = self.bind_source_path(path)?;
+        let path: &str = &bound_path;
         // Cross-process critical section (#641 adversarial review).
         //
         // The expected-hash compare-and-swap below re-reads and re-hashes
@@ -5251,6 +5300,12 @@ impl VaultSession {
         bind_log: Option<&str>,
     ) -> Result<SaveReport, CreateFailure> {
         validate_save_path(path).map_err(CreateFailure::Refused)?;
+        // #1077 (I2/I4): a create keeps the leaf the user chose and binds
+        // its parent's stored spelling.
+        let bound_path = self
+            .bind_destination_path(path)
+            .map_err(CreateFailure::Refused)?;
+        let path: &str = &bound_path;
         if bytes.len() as u64 > self.config.large_file_refuse_bytes {
             return Err(CreateFailure::Refused(VaultError::FileTooLarge {
                 path: path.to_string(),
@@ -13814,6 +13869,10 @@ impl VaultSession {
         let _structural_operation = self.structural_operation_guard()?;
         validate_save_path(path)?;
         validate_leaf_component(leaf_name(path))?;
+        // #1077 (I2/I4): the new folder's leaf is verbatim; its parent
+        // binds to the stored spelling.
+        let bound_path = self.bind_destination_path(path)?;
+        let path: &str = &bound_path;
         let mut conn = self.conn.lock().expect("session connection mutex");
         ensure_structural_batch_idle(&conn)?;
         if let Some(existing) = index_entry_case_insensitive(&conn, path)? {
@@ -13851,6 +13910,10 @@ impl VaultSession {
         let _structural_operation = self.structural_operation_guard()?;
         validate_save_path(path)?;
         validate_leaf_component(leaf_name(path))?;
+        // #1077 (I2/I4): the new folder's leaf is verbatim; its parent
+        // binds to the stored spelling.
+        let bound_path = self.bind_destination_path(path)?;
+        let path: &str = &bound_path;
         let mut conn = self.conn.lock().expect("session connection mutex");
         ensure_structural_batch_idle(&conn)?;
         if let Some(existing) = index_entry_case_insensitive(&conn, path)? {
@@ -13931,10 +13994,21 @@ impl VaultSession {
                 // filesystem-equivalence beyond the exact name keeps the
                 // os-rename failure + rollback as the belt).
                 let collision_probe = format!("{path}/{new_name}.md");
-                if let Some(existing) = index_entry_case_insensitive(&conn, &collision_probe)? {
+                if let Some(existing) = index_entry_case_insensitive(&conn, &collision_probe)?
+                    && existing != old_note
+                {
+                    // The old note's own row under the new name's fold is
+                    // the case-only folder+note rename (#1077 I4), legal.
                     return Err(VaultError::DestinationExists { path: existing });
                 }
-                if collision_probe != old_note && self.provider.stat(&collision_probe).is_ok() {
+                // #1077 (I4): on an aliasing volume the probe path may BE
+                // the old note under its new spelling — that is the
+                // case-only folder+note rename, not an occupant.
+                if collision_probe != old_note
+                    && self.provider.stat(&collision_probe).is_ok()
+                    && self.provider.canonical_path(&collision_probe)?.as_deref()
+                        != Some(&*old_note)
+                {
                     return Err(VaultError::DestinationExists {
                         path: collision_probe,
                     });
@@ -14117,6 +14191,9 @@ impl VaultSession {
         let vault_structural_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
         let structural_operation = self.structural_operation_guard()?;
         validate_save_path(path)?;
+        // #1077 (I2/I3): the row that goes is the stored spelling's.
+        let bound_path = self.bind_source_path(path)?;
+        let path: &str = &bound_path;
         let mut conn = self.conn.lock().expect("session connection mutex");
         ensure_structural_batch_idle(&conn)?;
         // Capture the op-log binding before the row goes: the journal
@@ -14217,6 +14294,9 @@ impl VaultSession {
         let vault_structural_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
         let structural_operation = self.structural_operation_guard()?;
         validate_save_path(path)?;
+        // #1077 (I2/I3): the subtree that goes is the stored spelling's.
+        let bound_path = self.bind_source_path(path)?;
+        let path: &str = &bound_path;
         let mut conn = self.conn.lock().expect("session connection mutex");
         ensure_structural_batch_idle(&conn)?;
         // Membership-fenced trash (final-confirmation review): every
@@ -14501,6 +14581,14 @@ impl VaultSession {
     ) -> Result<crate::structural::StructuralReport, VaultError> {
         validate_save_path(from)?;
         validate_save_path(to)?;
+        // #1077: the SOURCE binds to its stored spelling (I2/I3); the
+        // DESTINATION keeps its leaf verbatim and binds only its parent
+        // (I4). Bound BEFORE the equality check, so renaming an alias to
+        // the stored spelling is the no-op it is.
+        let bound_from = self.bind_source_path(from)?;
+        let from: &str = &bound_from;
+        let bound_to = self.bind_destination_path(to)?;
+        let to: &str = &bound_to;
         if to == from {
             return Err(VaultError::InvalidArgument {
                 message: "destination equals source".into(),
@@ -14526,7 +14614,11 @@ impl VaultSession {
                 reason: "no such folder in the index".into(),
             });
         }
-        if let Some(existing) = index_entry_case_insensitive(&conn, to)? {
+        if let Some(existing) = index_entry_case_insensitive(&conn, to)?
+            && existing != from
+        {
+            // `existing == from` is the source's OWN row under the
+            // destination's fold: the case-only rename (#1077 I4), legal.
             return Err(VaultError::DestinationExists { path: existing });
         }
 
@@ -14583,6 +14675,14 @@ impl VaultSession {
     ) -> Result<crate::structural::StructuralReport, VaultError> {
         validate_save_path(from)?;
         validate_save_path(to)?;
+        // #1077: the SOURCE binds to its stored spelling (I2/I3); the
+        // DESTINATION keeps its leaf verbatim and binds only its parent
+        // (I4). Bound BEFORE the equality check, so renaming an alias to
+        // the stored spelling is the no-op it is.
+        let bound_from = self.bind_source_path(from)?;
+        let from: &str = &bound_from;
+        let bound_to = self.bind_destination_path(to)?;
+        let to: &str = &bound_to;
         if to == from {
             return Err(VaultError::InvalidArgument {
                 message: "destination equals source".into(),
@@ -14603,7 +14703,11 @@ impl VaultSession {
                 reason: "no such file in the index".into(),
             });
         }
-        if let Some(existing) = index_entry_case_insensitive(&conn, to)? {
+        if let Some(existing) = index_entry_case_insensitive(&conn, to)?
+            && existing != from
+        {
+            // `existing == from` is the source's OWN row under the
+            // destination's fold: the case-only rename (#1077 I4), legal.
             return Err(VaultError::DestinationExists { path: existing });
         }
 
@@ -15688,21 +15792,31 @@ fn validate_leaf_component(name: &str) -> Result<(), VaultError> {
     Ok(())
 }
 
-/// Case-insensitive existence check across BOTH index tables (APFS default
-/// is case-insensitive; a differing-case collision would shadow on disk).
-/// Returns the existing entry's exact path for the error message.
+/// Filesystem-equivalence collision gate across BOTH index tables (#1077
+/// contract I5; `docs/plans/32` finding 7). A PORTABILITY guard that runs
+/// on every volume: APFS and NTFS default to case-insensitive, so a name
+/// differing only in case — or Unicode normalization — would shadow an
+/// existing one the moment the vault lands there. Folds with the
+/// registered `slate_tree_sort_key` (NFC + full-Unicode lowercase, the
+/// rule the tree already sorts by; migration 037 indexes it) rather than
+/// SQLite's `lower()`, which folds ASCII only — `Ä.md` beside `ä.md`
+/// slipped through while APFS and NTFS treat them as one file. Kanji,
+/// kana, and width are untouched by the fold (no case; NFC keeps
+/// full-width distinct). Returns the existing entry's stored path for the
+/// error message — callers renaming a path onto its OWN alias (the
+/// case-only rename, contract I4) compare that path against their source.
 fn index_entry_case_insensitive(
     conn: &Connection,
     path: &str,
 ) -> Result<Option<String>, VaultError> {
-    let lowered = path.to_lowercase();
+    let folded = crate::db::tree_sort_key(path);
     let hit: Option<String> = conn
         .query_row(
-            "SELECT path FROM files WHERE lower(path) = ?1
+            "SELECT path FROM files WHERE slate_tree_sort_key(path) = ?1
              UNION ALL
-             SELECT path FROM dirs WHERE lower(path) = ?1
+             SELECT path FROM dirs WHERE slate_tree_sort_key(path) = ?1
              LIMIT 1",
-            rusqlite::params![lowered],
+            rusqlite::params![folded],
             |row| row.get(0),
         )
         .optional()?;
@@ -19390,6 +19504,7 @@ mod tests {
     #[path = "properties.rs"]
     mod properties;
 
+    mod canonical_identity;
     #[path = "save.rs"]
     mod save;
 

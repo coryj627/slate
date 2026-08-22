@@ -251,27 +251,57 @@ fn compound_second_step_failure_rolls_the_folder_rename_back() {
 }
 
 #[test]
-fn compound_case_only_rename_is_refused_like_the_plain_structural_path() {
-    // Parity: the shipped folder-rename preflight refuses a
-    // case-insensitive self-collision (case-preserving filesystems);
-    // the compound inherits exactly that semantics rather than
-    // inventing a second rename dialect.
+fn compound_case_only_rename_succeeds_like_the_plain_structural_path() {
+    // Parity: the compound inherits the plain folder rename's semantics
+    // rather than inventing a second rename dialect. Those semantics
+    // changed with #1077 (contract I4, owner call): a case-only rename
+    // used to be refused as a self-collision — the gate found the
+    // source's own row under the destination's fold — and is now legal
+    // on every volume. Both paths agree on the new rule.
     let tmp = tempfile::tempdir().unwrap();
-    write(tmp.path(), "notes/notes.md", "folder note\n");
+    write(
+        tmp.path(),
+        "notes/notes.md",
+        "folder note
+",
+    );
+    write(
+        tmp.path(),
+        "other/other.md",
+        "another folder note
+",
+    );
     let session = open(tmp.path());
     let compound = session
         .rename_folder_with_note("notes", "Notes")
-        .unwrap_err();
+        .expect("#1077 I4: the compound case-only rename is legal");
     assert!(
-        matches!(compound, VaultError::DestinationExists { .. }),
-        "got {compound:?}"
+        compound
+            .moved
+            .contains(&("notes/notes.md".to_string(), "Notes/Notes.md".to_string())),
+        "{:?}",
+        compound.moved
     );
-    let plain = session.rename_folder("notes", "Notes").unwrap_err();
+    assert!(tmp.path().join("Notes/Notes.md").exists());
+    let plain = session
+        .rename_folder("other", "Other")
+        .expect("#1077 I4: the plain case-only rename is legal");
     assert!(
-        matches!(plain, VaultError::DestinationExists { .. }),
-        "got {plain:?}"
+        plain
+            .moved
+            .contains(&("other/other.md".to_string(), "Other/other.md".to_string())),
+        "{:?}",
+        plain.moved
     );
-    assert!(tmp.path().join("notes/notes.md").exists());
+    assert!(tmp.path().join("Other/other.md").exists());
+    // And the index carries the new spellings. The compound kept its
+    // folder note (Notes/Notes.md); the plain rename left other.md
+    // under Other/, which is no longer that folder's note — the very
+    // reason the compound verb exists.
+    assert_eq!(
+        dir_flags(&session, ""),
+        vec![("Notes".into(), true), ("Other".into(), false)]
+    );
 }
 
 #[test]
