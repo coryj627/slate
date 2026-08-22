@@ -113,7 +113,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         Action<string>? activateTagFromReading = null,
         Action<A11yEvent>? announce = null,
         EditorPreferencesViewModel? editorPreferences = null,
-        bool startInteractionBackgroundWork = true,
+        bool? startInteractionBackgroundWork = null,
         Func<string, string, string, uint?>? anchorResolver = null,
         Func<EditorInteractionWorkerKind, Exception?>?
             interactionBackgroundFaultForTests = null)
@@ -125,7 +125,14 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         _activateTagFromReading = activateTagFromReading;
         _announce = announce ?? (_ => { });
         _ownsEditorPreferences = editorPreferences is null;
-        _startInteractionBackgroundWork = startInteractionBackgroundWork;
+        // Unspecified = the host decides (#1129): background work
+        // needs a UI thread to come back to, and only the dispatcher
+        // context serializes publishes with this thread, so a headless
+        // host runs the work inline. The workspace resolves the same
+        // way and hands its answer down; a tab built directly (the
+        // tab-level facts) resolves here. An EXPLICIT value is honored.
+        _startInteractionBackgroundWork = startInteractionBackgroundWork
+            ?? SlateWindows.Panels.PanelWorkScheduler.CurrentContextIsUiDispatcher();
         _anchorResolver = anchorResolver ?? SlateUniffiMethods.LinkAnchorByteOffset;
         _interactionBackgroundFaultForTests = interactionBackgroundFaultForTests;
         EditorPreferences = editorPreferences ?? new EditorPreferencesViewModel(_announce);
@@ -1358,7 +1365,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             dirtyNavigationDecision = null,
         Func<WorkspaceTabViewModel, WorkspaceDirtyNavigationDecision>?
             dirtyCloseDecision = null,
-        bool startInteractionBackgroundWork = true,
+        bool? startInteractionBackgroundWork = null,
         AppPreferencesStore? preferencesStore = null,
         Func<string, bool>? externalOpener = null)
     {
@@ -1366,7 +1373,21 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         _persistence = new WorkspacePersistence(vaultRoot);
         _expandedDirectoryPaths = expandedDirectoryPaths;
         _announce = announce;
-        _startInteractionBackgroundWork = startInteractionBackgroundWork;
+        // Unspecified = the host decides (#1129). Background
+        // interaction work needs a UI thread to come back to: every
+        // panel's publish posts to the SynchronizationContext captured
+        // at construction, and only WPF's dispatcher context serializes
+        // those posts with this thread. Headless — a null context, or a
+        // test host's pool-dispatching one — runs the work INLINE
+        // instead; otherwise publishes race the constructing thread
+        // (HistoryViewModel's reload publish enumerated _loaded while a
+        // tab switch on the test thread cleared it — intermittent on
+        // CI, in a fact that never touched the panel). An EXPLICIT
+        // value is honored either way: a fact that wants production
+        // scheduling headlessly says so (the citation interleaving
+        // suite) and owns the drain/seam discipline that makes it safe.
+        _startInteractionBackgroundWork = startInteractionBackgroundWork
+            ?? SlateWindows.Panels.PanelWorkScheduler.CurrentContextIsUiDispatcher();
         _dirtyNavigationDecision = dirtyNavigationDecision
             ?? ((_, _) => WorkspaceDirtyNavigationDecision.Cancel);
         _dirtyCloseDecision = dirtyCloseDecision
@@ -1419,7 +1440,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             TogglePanelTask,
             ScrollToPanelTaskIfCurrent,
             repairs: _taskIndexRepairs,
-            synchronousForTests: !startInteractionBackgroundWork);
+            synchronousForTests: !_startInteractionBackgroundWork);
         // The vault-wide Tasks Review leaf (W4-3): vault-lifetime
         // state, deliberately NOT keyed on the active note.
         TasksReview = new Panels.TasksReviewViewModel(
@@ -1428,7 +1449,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             TryActivateTaskRow,
             TryToggleTaskInOpenTab,
             repairs: _taskIndexRepairs,
-            synchronousForTests: !startInteractionBackgroundWork);
+            synchronousForTests: !_startInteractionBackgroundWork);
         // Round 3: a tab can open for a file BETWEEN the review's
         // NoOpenTab route decision and its direct write landing —
         // the workspace re-checks at write completion. Round 17:
@@ -1448,9 +1469,9 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         // on rail reveal. Both must exist before Restore/SyncPanels so
         // the first note selection can publish into them.
         Citations = new Panels.CitationsPanelViewModel(
-            session, announce, synchronousForTests: !startInteractionBackgroundWork);
+            session, announce, synchronousForTests: !_startInteractionBackgroundWork);
         Bibliography = new Panels.BibliographyViewModel(
-            session, synchronousForTests: !startInteractionBackgroundWork);
+            session, synchronousForTests: !_startInteractionBackgroundWork);
         // W4-7: the history document — note-scoped (fed by SyncPanels),
         // silent on its own (HINV-4); flows live in the History
         // coordinator partial. The compare-vs-current hash: a markdown
@@ -1460,7 +1481,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         // special-casing, so per-row Compare works on .canvas/.base
         // histories too.
         History = new Panels.HistoryViewModel(
-            session, synchronousForTests: !startInteractionBackgroundWork);
+            session, synchronousForTests: !_startInteractionBackgroundWork);
         History.CurrentContentHashProvider = () =>
             ActiveGroup.ActiveTab is { } historyTab
             && IsPathBacked(historyTab.Item)
@@ -1481,7 +1502,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         // requires arm-then-probe, so the vault lifecycle fires the
         // first Reload after the marker watcher is live.
         SyncDiagnostics = new Panels.SyncDiagnosticsViewModel(
-            session, synchronousForTests: !startInteractionBackgroundWork);
+            session, synchronousForTests: !_startInteractionBackgroundWork);
         InstallSyncDiagnosticsSeams();
         // Both leaves read through the session's bibliography sources,
         // so neither may query before seeding SETTLES — and the
@@ -1495,7 +1516,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         // note selection can start a citation render. Silent on both
         // success and failure — the leaf's notice region is the
         // surface (W4-5 contract 5).
-        SeedBibliographySources(synchronousForTests: !startInteractionBackgroundWork);
+        SeedBibliographySources(synchronousForTests: !_startInteractionBackgroundWork);
         (_root, _activeGroup) = Restore(_persistence.Load());
         SyncPanels();
 
@@ -1582,6 +1603,12 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
 
     /// <summary>The W4-2 link/structure leaf data (backlinks, outgoing
     /// links, outline, embeds).</summary>
+    /// <summary>Whether interaction work runs in the background (the
+    /// dispatcher-hosted app) or inline (every headless host) — the
+    /// #1129 rule, pinned by PanelThreadingDisciplineTests.</summary>
+    internal bool StartsInteractionBackgroundWorkForTests =>
+        _startInteractionBackgroundWork;
+
     public Panels.RightPanePanelsViewModel Panels { get; }
 
     public Panels.TasksReviewViewModel TasksReview { get; }

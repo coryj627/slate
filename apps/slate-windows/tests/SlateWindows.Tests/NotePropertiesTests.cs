@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Collections.Concurrent;
 using System.Runtime.ExceptionServices;
 using SlateWindows.Panels;
 using uniffi.slate_uniffi;
@@ -87,20 +88,27 @@ public sealed class NotePropertiesTests
     /// was missing, so this asserts what the view was TOLD.
     /// </summary>
     [Fact]
-    public async Task ThePropertiesHeaderDoesNotClaimEmptinessWhileLoading()
+    public void ThePropertiesHeaderDoesNotClaimEmptinessWhileLoading()
     {
         using FixtureVault fixture = MakeVault("props-loading-state");
         using VaultSession session = OpenScanned(fixture.Root);
-        using var workspace = new WorkspaceViewModel(
-            session, fixture.Root, () => [], _ => { }, startInteractionBackgroundWork: true);
-        workspace.OpenPath("props.md");
-        NotePropertiesViewModel properties =
-            workspace.EnsureActiveTabProperties(synchronousForTests: false)!;
-        for (int round = 0; round < 40; round++)
-        {
-            await properties.DrainForTests();
-            await Task.Delay(2);
-        }
+        // Production scheduling under a QUEUING context: the publish
+        // posts to the context captured at construction and cannot run
+        // until this test drains it — the held publish IS the loading
+        // window under test. (A workspace-owned header is synchronous
+        // here — a headless workspace runs its panels inline, #1129 —
+        // and the test host's own context hands posts to the pool,
+        // which made the earlier workspace-shaped version of this fact
+        // a timing bet.)
+        var queue = new QueueingSynchronizationContext();
+        NotePropertiesViewModel properties = UnderContext(
+            queue,
+            () => new NotePropertiesViewModel(
+                session, _ => { }, _ => { }, _ => { }, synchronousForTests: false));
+        properties.Load("props.md");
+        properties.DrainForTests().GetAwaiter().GetResult();
+        queue.Drain();
+        Assert.NotEmpty(properties.Rows);
 
         bool? lastToldShowEmpty = null;
         properties.PropertyChanged += (_, e) =>
@@ -113,11 +121,47 @@ public sealed class NotePropertiesTests
 
         properties.RefreshProperties();
 
-        // Deterministic: the publish is posted to this thread's context
-        // and cannot run until the test yields.
+        // Deterministic: the completion publish is queued, not run.
         Assert.True(properties.IsLoading);
         Assert.False(properties.ShowEmptyState);
         Assert.False(lastToldShowEmpty ?? true);
+
+        properties.DrainForTests().GetAwaiter().GetResult();
+        queue.Drain();
+        Assert.False(properties.IsLoading);
+        properties.Shutdown();
+    }
+
+    private static T UnderContext<T>(SynchronizationContext context, Func<T> create)
+    {
+        SynchronizationContext? previous = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(context);
+        try
+        {
+            return create();
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previous);
+        }
+    }
+
+    /// <summary>Posts queue until drained — the W1HardeningTests
+    /// shape: a publish held at the caller's discretion.</summary>
+    private sealed class QueueingSynchronizationContext : SynchronizationContext
+    {
+        private readonly ConcurrentQueue<(SendOrPostCallback Callback, object? State)> _queue = [];
+
+        public override void Post(SendOrPostCallback callback, object? state) =>
+            _queue.Enqueue((callback, state));
+
+        public void Drain()
+        {
+            while (_queue.TryDequeue(out var work))
+            {
+                work.Callback(work.State);
+            }
+        }
     }
 
     [Fact]
