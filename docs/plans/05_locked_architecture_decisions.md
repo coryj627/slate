@@ -106,7 +106,7 @@ Reasons:
 |---|---|---|
 | Markdown parsing | [`pulldown-cmark`](https://github.com/raphlinus/pulldown-cmark) | With custom extensions for Obsidian wikilinks, embeds, callouts |
 | LaTeX → MathML | [`pulldown-latex`](https://docs.rs/pulldown-latex) | MathML Core compliant; pull-parser style matches `pulldown-cmark` |
-| Math → speech + braille | [`MathCAT`](https://github.com/NSoiffer/MathCAT) | **Same library NVDA uses.** ClearSpeak / MathSpeak speech styles; Nemeth + UEB braille. Pure Rust |
+| Math → speech + braille | [`MathCAT`](https://github.com/NSoiffer/MathCAT) | **Same library NVDA uses.** ClearSpeak / SimpleSpeak speech styles (the two MathCAT ships — #1056 retired the never-implemented MathSpeak); Nemeth + UEB braille. Pure Rust |
 | Mermaid → SVG | [`mermaid-rs-renderer`](https://github.com/1jehuang/mermaid-rs-renderer) | Pure Rust; 13 diagram types; early-stage but viable |
 | Citations / bibliography | [`hayagriva`](https://github.com/typst/hayagriva) | CSL processor, supports 2,600+ styles, BibTeX/BibLaTeX/CSL-JSON |
 | Syntax highlighting (primary) | [`tree-sitter`](https://crates.io/crates/tree-sitter) | Incremental parsing; parse trees enable semantic spans for AT |
@@ -549,7 +549,7 @@ Stored as `MathBlock` with all four representations: `source`, `mathml`, `speech
 
 User preferences exposed in settings:
 
-- **Speech style:** ClearSpeak / MathSpeak
+- **Speech style:** ClearSpeak / SimpleSpeak (#1056: MathSpeak was never implemented by MathCAT and silently spoke ClearSpeak; a stored `mathSpeak` migrates to ClearSpeak)
 - **Verbosity:** short / medium / long
 - **Braille code:** Nemeth / UEB
 - **Math explorer keybindings** (for navigating math expressions element-by-element)

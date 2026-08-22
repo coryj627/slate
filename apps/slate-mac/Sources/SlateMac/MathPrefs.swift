@@ -9,7 +9,7 @@ import Foundation
 // `slate_uniffi.swift` (Record). This file adds the Swift-side
 // niceties on top:
 // - A default-arguments init so callers can write `MathPrefs()` /
-//   `MathPrefs(speechStyle: .mathSpeak)` without spelling out every
+//   `MathPrefs(speechStyle: .simpleSpeak)` without spelling out every
 //   field.
 // - `Codable` for the `PreferencesStore` JSON persistence chain.
 // - `Equatable` is implied by uniffi's `Record` derivation.
@@ -76,20 +76,20 @@ extension MathPrefs: Codable {
 
 extension MathSpeechStyle: Codable, CaseIterable {
     public static var allCases: [MathSpeechStyle] {
-        [.clearSpeak, .mathSpeak]
+        [.clearSpeak, .simpleSpeak]
     }
 
     var displayName: String {
         switch self {
         case .clearSpeak: return "ClearSpeak"
-        case .mathSpeak: return "MathSpeak"
+        case .simpleSpeak: return "SimpleSpeak"
         }
     }
 
     private var persistenceTag: String {
         switch self {
         case .clearSpeak: return "clearSpeak"
-        case .mathSpeak: return "mathSpeak"
+        case .simpleSpeak: return "simpleSpeak"
         }
     }
 
@@ -97,7 +97,14 @@ extension MathSpeechStyle: Codable, CaseIterable {
         let value = try decoder.singleValueContainer().decode(String.self)
         switch value {
         case "clearSpeak": self = .clearSpeak
-        case "mathSpeak": self = .mathSpeak
+        case "simpleSpeak": self = .simpleSpeak
+        // #1056 migration: MathCAT never implemented MathSpeak, so a
+        // user who stored it was hearing ClearSpeak — decode the
+        // legacy tag to what they heard rather than failing the whole
+        // prefs load (this file's rule: read the old tag first, never
+        // just bump). SimpleSpeak is never inferred from it; that
+        // would change the speech without the user asking.
+        case "mathSpeak": self = .clearSpeak
         default:
             throw DecodingError.dataCorruptedError(
                 in: try decoder.singleValueContainer(),

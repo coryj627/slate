@@ -4842,17 +4842,21 @@ impl From<core::math::MathDisplayStyle> for MathDisplayStyle {
     }
 }
 
+/// The two speech styles MathCAT actually implements (#1056). The
+/// `MathSpeak` variant this enum carried before was never shipped
+/// upstream and silently produced ClearSpeak; hosts migrate a stored
+/// `mathSpeak` tag to `ClearSpeak` — what those users were hearing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum MathSpeechStyle {
     ClearSpeak,
-    MathSpeak,
+    SimpleSpeak,
 }
 
 impl From<MathSpeechStyle> for core::math::MathSpeechStyle {
     fn from(v: MathSpeechStyle) -> Self {
         match v {
             MathSpeechStyle::ClearSpeak => core::math::MathSpeechStyle::ClearSpeak,
-            MathSpeechStyle::MathSpeak => core::math::MathSpeechStyle::MathSpeak,
+            MathSpeechStyle::SimpleSpeak => core::math::MathSpeechStyle::SimpleSpeak,
         }
     }
 }

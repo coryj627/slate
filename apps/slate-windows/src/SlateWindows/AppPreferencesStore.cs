@@ -73,10 +73,13 @@ internal sealed class AppPreferencesStore
             if (state.MathSpeechStyle is null
                 || state.MathSpeechStyle == "mathSpeak")
             {
-                // MathSpeak normalizes away while #1056 is open: the
-                // upstream engine never implemented it, and restoring
-                // it as the checked style would falsely confirm a
-                // speech convention that silently stays ClearSpeak.
+                // Legacy "mathSpeak" migrates to ClearSpeak (#1056): the
+                // upstream engine never implemented MathSpeak, so
+                // ClearSpeak is what that user was already hearing —
+                // the migration changes nothing audible. SimpleSpeak
+                // replaced the variant and is never inferred from a
+                // stored MathSpeak, which would change the speech
+                // without the user asking.
                 state = state with { MathSpeechStyle = "clearSpeak" };
             }
             if (state.MathVerbosity is null)
