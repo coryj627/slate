@@ -31,6 +31,26 @@ treat them as one physical file. The gate is narrower than #1077
 describes: the hole is not merely "exact string keys" but "the
 mitigation itself only covers ASCII."
 
+The fix for that is already in the codebase and the gate simply does
+not use it: `db.rs` registers `slate_tree_sort_key(name)` =
+`name.nfc().to_lowercase()` as a deterministic SQL function, persisted
+in expression indexes by migration 033, and its doc comment records
+that changing its semantics needs a schema migration that rebuilds
+those indexes. It is the rule the file tree already sorts and filters
+by. Its behavior on the scripts that matter:
+
+- CJK ideographs, hiragana, and katakana have no case, so
+  `to_lowercase` is the identity on them — `日本.md` collides only with
+  a byte-identical `日本.md`. Pure-CJK names are untouched.
+- NFC (not NFKC) keeps full-width and half-width forms distinct:
+  `ＡＢＣ.md` ≠ `ABC.md`, `ｱ` ≠ `ア` — which is also how NTFS and APFS
+  treat them. Width is a display property, not identity.
+- The only CJK code points NFC changes are the compatibility
+  ideographs (U+F900 block), which normalize to their unified forms —
+  and APFS already unifies those on disk.
+- Full-width Latin folds within its own block (`Ａ` ↔ `ａ`), matching
+  NTFS's `$UpCase` table.
+
 **2. That gate is a refusal, not an identity.** It answers "is some
 row already here under another spelling?" and is used to REJECT a
 create or rename. Nothing resolves a requested path to the row that
@@ -70,6 +90,29 @@ retargeted — and its failed load left no content hash, so saving takes
 the hashless unconditional-save path and **overwrites the newly created
 note**. That scenario is this issue's acceptance test.
 
+**Core-boundary canonicalization alone does NOT close it** (the
+reassessment finding). The tab's save is
+`_session.SaveText(Path, text, _contentHash)` with a null hash — an
+unconditional write. Canonicalizing `Ghost.md` → `ghost.md` in core
+routes that write squarely onto the new note: same data loss, one index
+row instead of two. A tab whose spelling was captured BEFORE the file
+was recreated cannot be retargeted by anything that happens at the
+point its stale spelling enters core. Closing the scenario needs the
+host half (I6) and the hashless-save rule (I8).
+
+**7. The gate is a PORTABILITY guard, and it refuses case-only renames
+today.** Its doc comment: *"APFS default is case-insensitive; a
+differing-case collision would shadow on disk."* It runs on every
+volume — including case-sensitive ones — so a vault cannot grow names
+that collide the moment it lands on a Mac. Retiring it in favour of a
+filesystem-truthful probe would silently drop that protection on Linux
+and case-sensitive APFS. Separately, `rename_file`/`rename_folder`
+probe `index_entry_case_insensitive(to)`, which for `A.md → a.md` finds
+the SOURCE's own row under `lower(to)` and refuses with
+`DestinationExists { A.md }` — so a case-only rename is not merely
+fragile today, it is impossible (for ASCII; `Ä.md → ä.md` slips past
+the ASCII gate and works).
+
 ## Contracts
 
 **I1 — Canonical identity comes from the filesystem, never from a case
@@ -100,37 +143,65 @@ resolved, the canonical spelling is what binds: the `files`/`dirs` row,
 through an alias updates the canonical row rather than inserting a
 second one.
 
-**I4 — A case-only rename stays expressible.** `A.md → a.md` is the
-sharp edge: source and destination alias each other, so canonicalizing
-the DESTINATION would collapse it onto the source and turn a legal
-rename into a no-op or a false `DestinationExists`. The rename path
-resolves the SOURCE only, and treats a destination that canonicalizes
-to the resolved source as the legal case-only rename it is — not a
-collision.
+**I4 — A case-only rename BECOMES expressible (a behavior change).**
+`A.md → a.md` is the sharp edge: source and destination alias each
+other, so canonicalizing the DESTINATION would collapse it onto the
+source and turn a legal rename into a no-op or a false
+`DestinationExists`. The rename path resolves the SOURCE only. The
+collision gate (I5) exempts a destination whose fold key equals the
+resolved source's fold key — that is the legal case-only rename, not a
+collision. Today the gate refuses it (finding 7); after this document
+it succeeds, and the index row moves to the new spelling.
 
-**I5 — The ASCII `lower()` gate is superseded, not extended.** Once
-resolution exists, `index_entry_case_insensitive`'s job (refuse a
-colliding create) is answered by the canonical resolver plus the
-existing `provider.stat` probe, both of which are Unicode-complete
-because the filesystem answers them. Leaving an ASCII-only SQL gate
-beside a filesystem-truthful resolver would be two identity rules
-disagreeing — the exact shape this issue exists to remove.
+**I5 — The collision gate is EXTENDED to Unicode, not retired.** The
+gate keeps its purpose (finding 7: portability across volumes) and
+gains the fold rule the tree already uses: `index_entry_case_
+insensitive` compares `slate_tree_sort_key(path)` instead of
+`lower(path)`, backed by expression indexes on `files(path)` and
+`dirs(path)` added by a schema migration (the discipline migration 033
+already records for that function). The rule is NFC + Unicode
+lowercase — deliberately NOT NFKC, so width and compatibility forms
+stay distinct as they do on disk (finding 1). The gate remains a
+REFUSAL on every volume, including case-sensitive ones: that is the
+portability intent, and being slightly more conservative than a
+particular filesystem is the correct side for a refusal to err on. It
+is not an identity — identity still comes from the filesystem (I1);
+the gate only says "do not create a second name that would alias this
+one somewhere."
 
-**I6 — Host comparators keep their ordinal comparisons.** Windows and
-mac compare paths with `StringComparison.Ordinal` / `==` in dozens of
-places (tab reuse, same-path mirroring, save targeting, invalidation).
-None of those change. They become correct because BOTH sides of every
-comparison are canonical spellings — identity is fixed at the boundary
-where a path enters core, not re-litigated at each comparison site.
-This is deliberate: a half-aliased host (some sites case-insensitive,
-some ordinal) is worse than a consistently ordinal one, which is
-exactly why W5-3 declined to fork one sweep and routed the fix here.
+**I6 — Equivalence reaches the host; comparators stay ordinal, and the
+host RE-SEATS spellings instead.** `canonical_path` is exposed over FFI
+(`VaultSession::canonical_path`). Hosts keep `StringComparison.Ordinal`
+/ `==` at every comparison site — a half-aliased host (some sites
+case-insensitive, some ordinal) is worse than a consistently ordinal
+one, which is exactly why W5-3 declined to fork one sweep. What
+changes is a single re-resolution step: after every create, rename, or
+external-create publication, a path-backed tab that is
+missing-from-disk (or whose path failed to load) asks core for
+`canonical_path(tab.Path)`; a non-null answer that differs ordinally
+means the file came back under another spelling, and the tab is
+retargeted to that spelling and reloaded through the existing
+same-path reload machinery. Identity is fixed at the boundary where a
+path enters the host's state, re-asserted when the filesystem changes
+under it, and never re-litigated per comparison.
 
 **I7 — Failure is honest and closed.** A provider that cannot answer
 canonicalization returns the requested spelling (I1's default), never a
 guess. A canonicalization that fails with an IO error fails the
 mutation rather than silently proceeding on the unresolved spelling —
 proceeding is precisely how the second index row appears.
+
+**I8 — A hashless save never lands on an existing file (host-side,
+owner-decided).** A tab with no content hash has never loaded bytes
+from the path it names; it has no basis to overwrite whatever is there
+now. Its save goes through create-exclusive semantics
+(`write_file_if_absent`): success when the path is empty, otherwise
+`DestinationExists` → the existing conflict flow, never a silent
+overwrite. This is a HOST rule: core's documented `expected_hash =
+None` → unconditional save is unchanged. It closes the finding-6
+scenario even if the I6 re-resolution has not yet run — an external
+recreate between the sweep and the save (the TOCTOU I6 cannot cover)
+meets the same refusal.
 
 ## Divergence register (owner-recorded; off-limits for re-litigation)
 
@@ -171,14 +242,47 @@ canonicalization probes. Bounded by the existing
 `MAX_STRUCTURAL_BATCH_ITEMS` cap and cheap relative to the mutations
 themselves, but it is real, and it is why ID-2 keeps reads out.
 
+**IR-4 — The gate is more conservative than some filesystems.** Under
+I5 a case-sensitive volume refuses `Ä.md` beside `ä.md` (and `A.md`
+beside `a.md`, which it already refuses today). That is a real loss of
+expressiveness on Linux for the portability guarantee it buys, and it
+is the gate's stated intent. Pure-CJK names are unaffected (finding 1).
+
+## Owner calls
+
+**Call 1 — gate semantics (I5, IR-4): recommended, pending
+confirmation.** Extend to Unicode via the existing
+`slate_tree_sort_key` rule. Behavior change is confined to names
+containing caseable letters; kanji/kana/width are untouched.
+
+**Call 2 — the hashless-save rule (I8): decided 2026-08-22.** Host-side
+create-exclusive semantics; core's `None = unconditional` contract is
+unchanged.
+
 ## Phase plan
 
 **Phase 0 — the provider surface.** `canonical_path` on
-`VaultProvider` with the identity default (I1); real implementations on
-the filesystem providers (Windows: the final-path/handle query;
-macOS: `F_GETPATH` on an opened descriptor, which returns the stored
-form); unit facts per platform including the ASCII, non-ASCII, and
-NFC/NFD cases from finding 1.
+`VaultProvider` with the identity default (I1); the real implementation
+on `FsVaultProvider` (one struct, `cfg`-split internals). Known risks,
+to be settled by facts before Phase 1:
+
+- **Symlinks/junctions.** `GetFinalPathNameByHandle` and `F_GETPATH`
+  both resolve them, but `FsVaultProvider::new` only extended-path-
+  prefixes the root on Windows and never canonicalizes it — so a vault
+  rooted through a symlink would resolve outside its own prefix and,
+  under I7, become un-mutable. Either canonicalize the root once at
+  construction by the same call, or resolve per-component (readdir the
+  parent, match the leaf under the filesystem's own rule), which is
+  symlink-safe at O(depth) readdirs.
+- **Unix already pins a descriptor** for mutations
+  (`PinnedMutationTarget` = parent fd + leaf), so `F_GETPATH` on that
+  fd plus a readdir match for the leaf is nearly free. The Windows pin
+  is path-only.
+- **The watcher** is a second ingestion source (finding 4 covers the
+  scan only); verify per platform that event paths carry on-disk
+  spellings.
+- Unit facts per platform: the ASCII, non-ASCII, NFC/NFD, and
+  pure-CJK cases from finding 1.
 
 **Phase 1 — bind the mutation entry points.** Resolve the source on
 `save_text`, `delete_file`, `delete_folder`, `rename_*`, `move_*`, and
@@ -189,13 +293,18 @@ creates on the requested spelling.
 epoch rows key on the canonical spelling (I3), so a marker planted
 through one spelling is cleared through any alias.
 
-**Phase 3 — the collision gate.** Retire the ASCII `lower()` gate in
-favour of the resolver + `stat` probe (I5), with facts covering the
-non-ASCII and NFC/NFD collisions the old gate missed.
+**Phase 3 — the collision gate (gated on call 1).** Migration adding
+expression indexes on `slate_tree_sort_key(path)` for `files` and
+`dirs`; `index_entry_case_insensitive` compares through it (I5); the
+case-only-rename exemption (I4); facts covering the non-ASCII, NFC/NFD,
+full-width, and pure-CJK cases, and `A.md → a.md` succeeding.
 
-**Phase 4 — the acceptance scenario and close-out.** The finding-6
-stale-overwrite scenario as an end-to-end regression; the Windows host
-comparators verified unchanged (I6); mac's half recorded as a
+**Phase 4 — the host half and the acceptance scenario.**
+`canonical_path` over FFI; the Windows re-resolution step after
+create/rename/external-create publications (I6); the hashless save
+through create-exclusive semantics (I8); the finding-6 stale-overwrite
+scenario as an end-to-end regression that FAILS without Phase 4 and
+passes with it; mac's half (re-resolution + I8) recorded as a
 follow-up, since Swift is not verifiable from the Windows side.
 
 ## Explicitly not in this document
