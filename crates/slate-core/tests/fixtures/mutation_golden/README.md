@@ -68,8 +68,11 @@ FR-2 records the future FFI cancellation seam that would upgrade S5):
   (folder+note rename) sequence, and any multi-step LIFO walk over
   recorded ids, always fails the gate. Hosts (mac #871, Windows F10)
   reverse compounds by re-running the forward FFI with inverse
-  arguments; S4 scripts exactly that. Filed as a follow-up against
-  core's FL6-1 contract text.
+  arguments; S4 scripts exactly that. Resolved by #1127: the FL6-1
+  contract text (`StructuralReport::undo_op_ids`, core and FFI) now
+  records the field as the journal record and the forward-inverse
+  model as the host consumption, pinned by
+  `compound_undo_ids_are_the_journal_record_not_a_host_walk`.
 - A structural-op abort under `PLANT_MARKERS` leaves held write-intent
   markers that refuse further structural ops on the same paths until a
   reconcile (S5's reopen-before-retry).
