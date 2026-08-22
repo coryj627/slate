@@ -133,8 +133,22 @@ internal sealed partial class WorkspaceViewModel
         sheet.SheetShown();
     }
 
+    /// <summary>Window-supplied modal admission for the bulk-rename
+    /// sheet (#1118, the TemplateOpenAdmission shape): consults
+    /// <c>ModalSurfaces.DecideBulkRenameOpen</c> and performs any
+    /// dismissal it calls for, so the chord, the menu item, and a
+    /// palette row all pass one gate INSIDE the open. Null (headless
+    /// tests) admits — the rule lives in the window layer where the
+    /// surface state is.</summary>
+    internal Func<bool>? BulkRenameOpenAdmission { get; set; }
+
     internal void OpenBulkRenameSheet(bool synchronousForTests = false)
     {
+        if (BulkRenameOpenAdmission?.Invoke() == false)
+        {
+            return;
+        }
+
         var sheet = CreateBulkRename(synchronousForTests);
         sheet.CloseSettled += () =>
         {
