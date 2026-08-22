@@ -775,11 +775,12 @@ public sealed class ReadingMathTests
         });
     }
 
-    /// <summary>W3-2 round 2 [medium]: a persisted "mathSpeak" (older
-    /// build or hand-edited file) must restore as ClearSpeak — the
-    /// disabled style may never come back checked (#1056).</summary>
+    /// <summary>#1056: a persisted "mathSpeak" (a prior build's tag)
+    /// migrates to ClearSpeak — MathCAT never implemented MathSpeak, so
+    /// ClearSpeak is what that user was already hearing; the migration
+    /// changes nothing audible and never infers SimpleSpeak.</summary>
     [Fact]
-    public void PersistedMathSpeakRestoresAsClearSpeak()
+    public void PersistedMathSpeakMigratesToClearSpeak()
     {
         string directory = Path.Combine(
             Path.GetTempPath(), $"slate-mathspeak-{Guid.NewGuid():N}");
@@ -796,7 +797,7 @@ public sealed class ReadingMathTests
                 new FakeEditorSpellingService(),
                 preferencesStore: store);
             Assert.True(preferences.IsMathSpeechClearSpeak);
-            Assert.False(preferences.IsMathSpeechMathSpeak);
+            Assert.False(preferences.IsMathSpeechSimpleSpeak);
             Assert.Equal(
                 MathSpeechStyle.ClearSpeak,
                 preferences.CurrentMathPrefs.SpeechStyle);
@@ -807,11 +808,11 @@ public sealed class ReadingMathTests
         }
     }
 
-    /// <summary>W3-2 round 1 [medium]: MathSpeak is unimplemented
-    /// upstream (#1056) — selecting it is rejected with no false
-    /// confirmation, and the style stays ClearSpeak.</summary>
+    /// <summary>#1056: SimpleSpeak — the second style MathCAT actually
+    /// ships — is selectable, announced by its enum-verbatim name, and
+    /// reaches the FFI prefs the session re-projects from.</summary>
     [Fact]
-    public void MathSpeakIsNotSelectable()
+    public void SimpleSpeakIsSelectableAndAnnounced()
     {
         var announced = new List<A11yEvent>();
         using var preferences = new EditorPreferencesViewModel(
@@ -819,10 +820,45 @@ public sealed class ReadingMathTests
             new FakeEditorSpellingService());
         Assert.True(preferences.IsMathSpeechClearSpeak);
 
-        preferences.SetMathSpeechStyleCommand.Execute("mathSpeak");
-        Assert.True(preferences.IsMathSpeechClearSpeak);
-        Assert.False(preferences.IsMathSpeechMathSpeak);
-        Assert.Empty(announced);
+        preferences.SetMathSpeechStyleCommand.Execute("simpleSpeak");
+        Assert.True(preferences.IsMathSpeechSimpleSpeak);
+        Assert.False(preferences.IsMathSpeechClearSpeak);
+        Assert.Equal(
+            MathSpeechStyle.SimpleSpeak,
+            preferences.CurrentMathPrefs.SpeechStyle);
+        A11yEvent.MathSpeechStyle announcement =
+            Assert.IsType<A11yEvent.MathSpeechStyle>(Assert.Single(announced));
+        Assert.Equal("SimpleSpeak", announcement.Name);
+    }
+
+    /// <summary>#1056: a persisted "simpleSpeak" restores as the active
+    /// style — the round trip the menu's persist writes.</summary>
+    [Fact]
+    public void PersistedSimpleSpeakRestores()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(), $"slate-simplespeak-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            string path = Path.Combine(directory, "preferences.json");
+            File.WriteAllText(path, "{\"mathSpeechStyle\":\"simpleSpeak\"}");
+            var store = new AppPreferencesStore(path);
+            Assert.Equal("simpleSpeak", store.Load().MathSpeechStyle);
+
+            using var preferences = new EditorPreferencesViewModel(
+                _ => { },
+                new FakeEditorSpellingService(),
+                preferencesStore: store);
+            Assert.True(preferences.IsMathSpeechSimpleSpeak);
+            Assert.Equal(
+                MathSpeechStyle.SimpleSpeak,
+                preferences.CurrentMathPrefs.SpeechStyle);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 
     private static IEnumerable<ReadingMathElement> FindMathElements(

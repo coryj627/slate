@@ -45,13 +45,22 @@ pub enum MathDisplayStyle {
 /// MathCAT speech style preference (`05` §6.2).
 ///
 /// ClearSpeak (default) reads math intuitively for general audiences;
-/// MathSpeak is more verbose and formally precise — preferred by users
-/// who already know LaTeX or want unambiguous, reproducible reading.
+/// SimpleSpeak is MathCAT's briefer style — fewer structural words,
+/// preferred by users who already know the notation and want a terser
+/// read.
+///
+/// These are the two styles MathCAT actually ships (`ClearSpeak_Rules`
+/// and `SimpleSpeak_Rules`, through `0.7.6-rc.2`). The variant this enum
+/// carried before #1056 — `MathSpeak` — was never implemented upstream:
+/// `set_preference("SpeechStyle", "MathSpeak")` was accepted and ignored,
+/// so the option silently produced ClearSpeak. It is gone rather than
+/// relabelled; hosts migrate a stored `mathSpeak` to ClearSpeak, which is
+/// what those users were already hearing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MathSpeechStyle {
     #[default]
     ClearSpeak,
-    MathSpeak,
+    SimpleSpeak,
 }
 
 /// MathCAT verbosity.
@@ -670,7 +679,7 @@ fn mathml_to_speech_and_braille(
 fn apply_prefs(prefs: MathPrefs) -> Result<(), MathCatError> {
     let speech_style = match prefs.speech_style {
         MathSpeechStyle::ClearSpeak => "ClearSpeak",
-        MathSpeechStyle::MathSpeak => "MathSpeak",
+        MathSpeechStyle::SimpleSpeak => "SimpleSpeak",
     };
     let verbosity = match prefs.verbosity {
         MathVerbosity::Terse => "Terse",
@@ -799,34 +808,20 @@ mod tests {
         );
     }
 
-    /// Audit #269: ClearSpeak vs MathSpeak prefs *should* produce
-    /// different speech even when calls cross thread boundaries.
-    /// The dedicated MathCAT worker thread architecture routes
-    /// every render onto a single OS thread so swaps happen
-    /// sequentially on the same `libmathcat` thread-local state —
-    /// the shape we proved works in same-thread probes.
+    /// Audit #269 / #1056: ClearSpeak vs SimpleSpeak must produce
+    /// different speech when each `render_math` call runs on its own
+    /// fresh thread (the shape mac's `Task.detached` produces).
     ///
-    /// **Ignored:** when this test runs in the full lib suite, the
-    /// worker has already processed renders from other tests
-    /// (which use default `SpeechStyle = ClearSpeak`). Switching
-    /// to MathSpeak via `set_preference` on the same worker thread
-    /// then silently fails — `set_preference` returns Ok, but
-    /// `get_spoken_text` still produces ClearSpeak phrasing. We
-    /// confirmed this via debug prints inside the worker loop
-    /// (worker sees the right prefs going in, gets the wrong
-    /// rules out). The remaining issue is upstream in
-    /// `mathcat-0.7.6-beta.4`'s `set_string_pref` /
-    /// `invalidate_speech_style_caches` interaction with
-    /// `SPEECH_RULES.rule_files` — there's no public reset API
-    /// we can call from outside the library to clear the stale
-    /// pointer. Tracked for a future MathCAT upgrade or upstream
-    /// patch.
-    ///
-    /// Kept in source as documentation of the desired behavior;
-    /// the BrailleCode counterpart below DOES pass and validates
-    /// that the worker architecture itself is sound.
+    /// History. This test spent a year `#[ignore]`d as "upstream
+    /// MathCAT: SpeechStyle swap on the worker thread silently no-ops
+    /// after a prior render" — with MathSpeak as the second style.
+    /// #1056 established that MathCAT has never shipped MathSpeak (the
+    /// crate carries exactly `ClearSpeak_Rules.yaml` and
+    /// `SimpleSpeak_Rules.yaml`, through `0.7.6-rc.2`), so
+    /// `set_preference("SpeechStyle", "MathSpeak")` was accepted and
+    /// ignored and the "no-op" was the style not existing. With a real
+    /// second style the property holds, and this test is the proof.
     #[test]
-    #[ignore = "upstream MathCAT 0.7.6-beta.4: SpeechStyle swap on the worker thread silently no-ops after a prior render. See audit #269 for the smoking-gun debug trace."]
     fn render_math_speech_style_propagates_across_fresh_threads() {
         let formula = r"\sum_{i=0}^{n} \frac{i^2}{2}";
         let raw_cs = RawMathBlock {
@@ -835,46 +830,80 @@ mod tests {
             line: 1,
             byte_offset: 0,
         };
-        let raw_ms = raw_cs.clone();
+        let raw_ss = raw_cs.clone();
         let prefs_cs = MathPrefs {
             speech_style: MathSpeechStyle::ClearSpeak,
             verbosity: MathVerbosity::Medium,
             braille_code: BrailleCode::Nemeth,
         };
-        let prefs_ms = MathPrefs {
-            speech_style: MathSpeechStyle::MathSpeak,
+        let prefs_ss = MathPrefs {
+            speech_style: MathSpeechStyle::SimpleSpeak,
             verbosity: MathVerbosity::Medium,
             braille_code: BrailleCode::Nemeth,
         };
 
-        // We render MS *first* on a fresh thread, then CS on a
-        // second fresh thread. With this ordering the per-render
-        // `set_rules_dir` (audit #269 fix) reliably swaps
-        // SpeechStyle rules across threads. CS-first / MS-second
-        // hits a deeper MathCAT init-order quirk (the FIRST
-        // SpeechStyle on a fresh process effectively "locks in"
-        // for subsequent threads' first call) which can't be
-        // fixed from outside libmathcat — short of routing every
-        // MathCAT call through a dedicated worker thread, which
-        // is a larger refactor. The fix as shipped resolves the
-        // common Mac-UI shape (Settings flip while the read pane
-        // is open: an existing worker thread re-applies prefs).
-        let ms_speech = thread::spawn(move || render_math(&raw_ms, prefs_ms).speech)
+        let ss_speech = thread::spawn(move || render_math(&raw_ss, prefs_ss).speech)
             .join()
-            .expect("MS render thread joined");
+            .expect("SimpleSpeak render thread joined");
         let cs_speech = thread::spawn(move || render_math(&raw_cs, prefs_cs).speech)
             .join()
-            .expect("CS render thread joined");
+            .expect("ClearSpeak render thread joined");
 
         assert!(
-            !cs_speech.is_empty() && !ms_speech.is_empty(),
+            !cs_speech.is_empty() && !ss_speech.is_empty(),
             "MathCAT init must produce non-empty speech on each thread"
         );
         assert_ne!(
-            cs_speech, ms_speech,
-            "audit #269: ClearSpeak vs MathSpeak speech must differ when each \
-             render_math call runs on its own fresh thread (the shape \
-             `Task.detached` produces). CS = {cs_speech:?}, MS = {ms_speech:?}"
+            cs_speech, ss_speech,
+            "#1056: ClearSpeak vs SimpleSpeak speech must differ when each \
+             render_math call runs on its own fresh thread. \
+             CS = {cs_speech:?}, SS = {ss_speech:?}"
+        );
+    }
+
+    /// #1056: the style swap must also take effect on ONE thread that
+    /// has already rendered — the shape the Windows host produces (a
+    /// Settings flip re-applies prefs on an existing worker) and the
+    /// shape audit #269 originally diagnosed as a MathCAT cache bug.
+    /// CS → SS → CS on a single thread: the two CS renders agree and
+    /// the SS render differs from both.
+    #[test]
+    fn render_math_speech_style_swaps_on_the_same_thread() {
+        let formula = r"\sum_{i=0}^{n} \frac{i^2}{2}";
+        let raw = RawMathBlock {
+            source: formula.to_string(),
+            display_style: MathDisplayStyle::Block,
+            line: 1,
+            byte_offset: 0,
+        };
+        let cs = MathPrefs {
+            speech_style: MathSpeechStyle::ClearSpeak,
+            verbosity: MathVerbosity::Medium,
+            braille_code: BrailleCode::Nemeth,
+        };
+        let ss = MathPrefs {
+            speech_style: MathSpeechStyle::SimpleSpeak,
+            ..cs
+        };
+
+        let (first_cs, then_ss, back_to_cs) = thread::spawn(move || {
+            let first_cs = render_math(&raw, cs).speech;
+            let then_ss = render_math(&raw, ss).speech;
+            let back_to_cs = render_math(&raw, cs).speech;
+            (first_cs, then_ss, back_to_cs)
+        })
+        .join()
+        .expect("swap thread joined");
+
+        assert!(!first_cs.is_empty() && !then_ss.is_empty());
+        assert_ne!(
+            first_cs, then_ss,
+            "#1056: switching ClearSpeak → SimpleSpeak on a thread that already \
+             rendered must change the speech. CS = {first_cs:?}, SS = {then_ss:?}"
+        );
+        assert_eq!(
+            first_cs, back_to_cs,
+            "switching back must restore the ClearSpeak phrasing exactly"
         );
     }
 
@@ -1103,7 +1132,7 @@ mod tests {
     fn prefs_fingerprint_changes_on_each_field() {
         let base = MathPrefs::default();
         let style_change = MathPrefs {
-            speech_style: MathSpeechStyle::MathSpeak,
+            speech_style: MathSpeechStyle::SimpleSpeak,
             ..base
         };
         let verb_change = MathPrefs {
