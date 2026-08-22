@@ -690,6 +690,30 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     private long _mathRangeRefreshCountForTests;
     internal long MathRangeRefreshCountForTests =>
         Interlocked.Read(ref _mathRangeRefreshCountForTests);
+
+    /// <summary>#1152: true when no math refresh is pending, running, or
+    /// queued to re-run. A test that reasons about
+    /// <see cref="MathRangeRefreshCountForTests"/> must establish this
+    /// (together with <see cref="MathRangesCurrentForTests"/>) BEFORE it
+    /// samples or asserts — the worker is asynchronous, and a count read
+    /// while it is in flight asserts a race, not a property.</summary>
+    internal bool MathRefreshIdleForTests
+    {
+        get
+        {
+            lock (_mathRefreshGate)
+            {
+                return _mathRefreshDelay is null && !_mathWorkerRunning && !_mathRerunPending;
+            }
+        }
+    }
+
+    /// <summary>#1152: true once the published math ranges match the
+    /// editor session's current revision — the worker publishes through
+    /// the dispatcher, so "idle" alone can precede the publication landing.
+    /// Dispatcher-thread read, like every other math-range accessor.</summary>
+    internal bool MathRangesCurrentForTests =>
+        _tab.EditorSession is { } session && _mathRangesRevision == session.Revision;
     internal long ArtifactCacheLoadCountForTests =>
         Interlocked.Read(ref _artifactCacheLoadCountForTests);
     internal long CitationCacheLoadCountForTests =>

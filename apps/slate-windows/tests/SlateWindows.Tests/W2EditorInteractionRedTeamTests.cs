@@ -173,6 +173,15 @@ public sealed class W2EditorInteractionRedTeamTests
         Assert.False(source.EditorInteractions.IsPopoverOpen);
     }
 
+    /// <summary>#1152: hover reuses the math classification while the
+    /// window revision is unchanged, and an edit — which changes it — makes
+    /// the NEXT hover refresh (asynchronously, through the worker) rather
+    /// than reuse; once that refresh lands, hovering reuses again. Every
+    /// sample waits for the worker to be idle AND published first: the
+    /// earlier shape asserted the count immediately after a hover that had
+    /// just queued a zero-delay refresh, i.e. it asserted the assertion
+    /// would win a race against <c>Task.Run</c> — which it lost on a loaded
+    /// CI runner.</summary>
     [Fact]
     public void RepeatedHover_ReusesMathClassificationUntilTheWindowRevisionChanges()
     {
@@ -182,18 +191,35 @@ public sealed class W2EditorInteractionRedTeamTests
         EditorInteractionCoordinator interactions = tab.EditorInteractions!;
         int citation = Inside(tab.Text, "[@doe]");
 
+        WaitForMathRefreshToSettle(interactions);
         long baseline = interactions.MathRangeRefreshCountForTests;
         interactions.HoverAt(citation);
+        WaitForMathRefreshToSettle(interactions);
         Assert.Equal(baseline, interactions.MathRangeRefreshCountForTests);
         interactions.HoverAt(citation);
+        WaitForMathRefreshToSettle(interactions);
         Assert.Equal(baseline, interactions.MathRangeRefreshCountForTests);
 
+        // The edit changes the window revision: the next hover refreshes
+        // (its zero-delay queue supersedes the edit's debounced one), and
+        // only after that lands is the classification reused again.
         tab.Text += "\nEdit invalidates the canonical window.\n";
         interactions.HoverAt(citation);
-        Assert.Equal(baseline, interactions.MathRangeRefreshCountForTests);
-        interactions.RefreshMathRangesForTests();
-        Assert.True(interactions.MathRangeRefreshCountForTests >= baseline + 1);
+        WaitForMathRefreshToSettle(interactions);
+        long refreshed = interactions.MathRangeRefreshCountForTests;
+        Assert.True(
+            refreshed >= baseline + 1,
+            $"a window-revision change must refresh: {refreshed} after baseline {baseline}");
+        interactions.HoverAt(citation);
+        WaitForMathRefreshToSettle(interactions);
+        Assert.Equal(refreshed, interactions.MathRangeRefreshCountForTests);
     }
+
+    /// <summary>Pumps the dispatcher until the math refresh worker is idle
+    /// AND its publication has landed for the current revision — the
+    /// premise every <c>MathRangeRefreshCountForTests</c> sample needs.</summary>
+    private static void WaitForMathRefreshToSettle(EditorInteractionCoordinator interactions) =>
+        WaitForUi(() => interactions.MathRefreshIdleForTests && interactions.MathRangesCurrentForTests);
 
     [Fact]
     public void CitationHover_DoesNotRequestFocusAndMathClassificationKeepsWholeDocumentContext()
