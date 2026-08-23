@@ -211,8 +211,8 @@ panel heading) stays §W-C label class and is NOT in this vocabulary.
 
 **0a-14 — Every render arm is TOTAL over its payload domain.** An arm
 may not assume a cardinality its payload admits. If a `u32` count or a
-`Vec` length reaches a template, the template renders correctly at
-**0, 1 and n** — singular/plural through `plural` / `plural_len` /
+`Vec` length reaches a template, the template renders **grammatically at
+0, 1 and n** — singular/plural through `plural` / `plural_len` /
 `counted` (the one definition of the rule), and an optional clause
 omitted rather than emitted empty. There is **no caller-side cardinality
 invariant**: a host may construct `CanvasBulkMoved { count: 1 }` or
@@ -220,64 +220,62 @@ invariant**: a host may construct `CanvasBulkMoved { count: 1 }` or
 in the type says it may not, and PR A's Windows host will not inherit
 mac's incidental guards.
 
-The corpus samples the BOUNDARY, not just the comfortable value:
-**every arm that speaks a count or a collection length has a count-one
-witness in `corpus()`**, and the one arm that speaks a collection length
-also has an EMPTY-collection witness — so an arm that hardcodes `cards`
-fails the golden instead of shipping `1 cards`.
+**Exception, by design: the two templates CR-3 pins.** `1 card match.`
+and `1 unsupported item are preserved …` are shipped mac defects
+migrated verbatim under the copy rule; they are preserved at every count
+and are NOT fixed by this contract. They are byte-listed in the test
+below, which also fails if either ever stops being produced — so the
+carve-out cannot rot into a blanket excuse.
 
-Ten arms already carried a count-one witness before 0a-2:
-`CanvasMovedTo` and `CanvasWhereAmI` (connection counts),
-`CanvasGroupEntered` (`Solo`), `CanvasModeCancelled`
-(`CardsReturned { count: 1 }`), `CanvasDeleted`
-(`CanvasDeleteTarget::Cards { count: 1 }`), `CanvasBulkColorSet`,
-`CanvasMarkToggled`, `CanvasFilterCount`, `CanvasFilterCleared`,
-`CanvasLoadedDegraded`.
+**The invariant is a test, not a paragraph.**
+`canvas_count_speaking_arms_have_boundary_witnesses_and_agreement`
+(`a11y.rs`) holds it in four parts:
 
-**Seven arms did not**, and they are what the **cardinality boundary
-witness** block at the end of `canvas_corpus()` exists for:
-`CanvasTracePathEnd`, `CanvasBulkMoved`, `CanvasBulkDuplicated`,
-`CanvasModeEntered`, `CanvasModeCommitted`, `CanvasGrouped`,
-`CanvasMarksCleared`. The block holds **eight entries**, not seven: seven
-count-one witnesses plus `CanvasTracePathEnd { titles: [] }`, which is the
-empty-collection witness rather than an eighth arm. (`CanvasModeEntered`
-and `CanvasModeCommitted` are two arms sharing one `CanvasModeObject::Cards`
-clause; each needs its own witness because the corpus is per-event.)
+1. an **exhaustive** classifier, `spoken_cardinality`, says for every
+   `CanvasA11yEvent` whether it speaks a count or a collection length —
+   the compiler refuses it when a variant is added, so a new arm cannot
+   join the family without that declaration;
+2. every arm it classifies as count-speaking must have a `corpus()`
+   witness at exactly one, and an arm that speaks a collection length
+   must have an empty-collection witness too;
+3. those singular renderings must carry no plural noun or plural
+   agreement, except the CR-3 pair above;
+4. a source scan of this module's canvas render section: no template may
+   interpolate a count immediately before a hardcoded plural noun.
 
-Two of those seven — `CanvasGrouped` and `CanvasMarksCleared` — already
-rendered correctly through `counted`; their witnesses exist so the claim
-above is TRUE rather than nearly true, and so a later edit cannot regress
-them unseen. The block is appended rather than filed beside its siblings
-so no pre-existing corpus index moves (0a-2).
+**The list of count-speaking arms lives in that test**, not here. This
+paragraph deliberately states no counts: three consecutive adversarial
+rounds each found a different miscount in the hand-written enumeration
+that used to stand in this space (round record, rule 4), which is what a
+quantified claim over a machine-enumerable corpus is worth. Parts 2–3
+are retroactive — they catch a regression in an arm that HAS a witness —
+while part 4 catches the new arm that has none; the pair is why the
+witnesses are appended in one labelled block at the end of
+`canvas_corpus()` (appended, so no pre-existing corpus index moves,
+0a-2).
 
 Hosts mirror the rule where they compose the same clause for a LABEL:
 mac's M3 inspectable value and its undo-action names route through
 `CountCopy`, which is the host's one pluralization source and, like the
 templates here, leaves the count ungrouped (CD-6). (Adopted after the
-codex adversarial round found four arms hardcoding the plural; CD-15.)
+codex adversarial round found arms hardcoding the plural; CD-15.)
 
-**What pins this today, and what will.** Totality is currently held by
-this contract plus the boundary witnesses: an arm that hardcodes a plural
-fails `corpus_renders_the_shipped_strings` *because a witness exists for
-it*. That is retroactive, not structural — a NEW arm added with a
-hardcoded plural and no count-one witness still ships, because nothing
-forces the witness. The structural closure is a **parser guard**: read
-this module's canvas render arms, and fail when an arm interpolates a
-count or a `len()` without reaching `plural` / `plural_len` / `counted`.
-It is deliberately NOT landed here — it wants a design (which
-interpolations are countable nouns? how does it see through helper
-calls?) rather than a patch at the end of a fix round, and it is the same
-shape as the Rust-parses-Swift coalescing-class tripwire already queued.
-**Both land in PR 0b**; carried in the SDD ledger (the 0a-2 codex
-round-1 entry, "Recorded for 0b: structural parser guard enforcing
-0a-14") so the deferral is tracked rather than remembered.
+**What is deferred.** Part 4's source scan is the minimal, canvas-scoped
+form of the parser guard: it recognizes the one shape the defect
+actually took (`{…} cards`) rather than reasoning about which
+interpolations are countable nouns or seeing through helper calls. The
+general version — every count interpolation anywhere in the vocabulary
+proved to reach `plural` / `plural_len` / `counted` — is PR 0b's,
+alongside the Rust-parses-Swift coalescing-class tripwire already queued
+there; carried in the SDD ledger (the 0a-2 codex round-1 entry,
+"Recorded for 0b: structural parser guard enforcing 0a-14").
 
 ### The event enumeration (the PR's contract)
 
 51 variants of `CanvasA11yEvent`, all reached through the single
 `A11yEvent::Canvas { event }` wrapper (0a-1b); **173** corpus entries,
 artifact 259 → **432** (0a-1 landed 165; 0a-2's cardinality boundary
-witnesses added eight, contract 0a-14). `V` = the `CanvasVerbosity`
+witnesses added eight ENTRIES, contract 0a-14). `V` = the `CanvasVerbosity`
 parameter.
 Coalescing class: `nav` / `filter` / `—` (immediate). All priorities
 `Medium` unless marked **High**.
@@ -867,5 +865,47 @@ adding a residue site of its own — the count is 29, not 30.
 
 Per `24_red_team_protocol.md` §Per-round record.
 
-*(No rounds yet — PR 0a's implementation landed 2026-08-22; review
-follows.)*
+**Red team round 1** (2026-08-22) — SAFE TO MOVE FORWARD. 0 blockers,
+2 majors, 7 minors. M1: 0a-10 over-claimed the card-reference collapse
+(two label-class spellings survive; amended with a scope table citing
+§W-G row L). M2: the poster layer was an unguarded canvas-funnel bypass
+(`AppKitAnnouncementPoster` added to the funnel guard's scanned
+symbols). m6 promoted to CD-14; m-F closed by making the guard's walk
+recursive.
+
+**Codex adversarial round 1** — NOT SAFE, 1 blocker: four render arms
+hardcoded a plural while their payloads admitted `count: 1` and an empty
+`Vec`, and every lockstep place agreed with them because the corpus only
+sampled plural values. Fixed as a class (0a-14, CD-15); boundary
+witnesses added.
+
+**Codex adversarial round 2** — NOT SAFE, 1 blocker: the implementation
+verified clean, but the enumeration table still carried the pre-fix
+plural-only formulas and 0a-14's witness claim was false for two arms.
+Table rows corrected after a full re-scan against the artifact; the two
+missing witnesses added.
+
+**Codex adversarial round 3** — NOT SAFE, 1 blocker: 0a-14 conflated the
+eight appended boundary ENTRIES with eight ARMS. Enumeration rewritten
+as ten / seven / eight.
+
+**Codex adversarial round 4 — PROTOCOL RULE 4.** Three consecutive
+blockers in one subsystem: 0a-14's hand-written quantified prose. The
+class was never the individual sentence — it was **prose making
+hand-counted claims over a machine-enumerable corpus**, where each fix
+corrected the named sentence and left the next miscount in place. Per
+rule 4 the patching stopped and the invariant was implemented:
+`canvas_count_speaking_arms_have_boundary_witnesses_and_agreement`
+carries it in four parts (exhaustive classifier, boundary witnesses,
+agreement-at-one with the CR-3 carve-out byte-listed, source scan), and
+0a-14's prose de-quantified to name the invariant and point at the test.
+Round 4's other finding — that 0a-14's blanket "renders correctly at
+0/1/n" contradicted CR-3 — is settled by the explicit exception
+paragraph and the allow-list; CR-3 itself is not re-litigated.
+
+Mutation-verified, four ways: deleting a count-one witness fails part 2;
+re-hardcoding a plural fails part 3; the same mutation with the string
+excused in the allow-list still fails part 4 (so parts 3 and 4 are
+independent); a stale allow-list entry fails the anti-rot assertion; and
+adding a variant to `CanvasA11yEvent` fails to COMPILE at
+`spoken_cardinality`, which is the property the hand list never had.

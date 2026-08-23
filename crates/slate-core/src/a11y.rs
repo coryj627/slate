@@ -5283,6 +5283,301 @@ mod tests {
         assert_eq!(listed.len(), 18, "the canvas family carries 18 closed sets");
     }
 
+    /// What a canvas event says about CARDINALITY, if anything.
+    ///
+    /// Exhaustive on purpose. The compiler refuses this match the moment
+    /// a variant joins `CanvasA11yEvent`, so a new arm cannot enter the
+    /// family without its author declaring whether it speaks a count.
+    /// That declaration is what the test below turns into coverage —
+    /// and it is the property that three review rounds of
+    /// hand-maintained, hand-counted prose could not hold (contract
+    /// 0a-14, round record: rule 4).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum SpokenCardinality {
+        /// A `u32` count reaches the template.
+        Count(u32),
+        /// A collection LENGTH reaches the template, so the arm has an
+        /// empty case as well as a singular one.
+        Length(usize),
+    }
+
+    fn spoken_cardinality(event: &CanvasA11yEvent) -> Option<SpokenCardinality> {
+        use CanvasA11yEvent::*;
+        use SpokenCardinality::{Count, Length};
+        match event {
+            CanvasMovedTo {
+                connection_count, ..
+            }
+            | CanvasWhereAmI {
+                connection_count, ..
+            } => Some(Count(*connection_count)),
+            CanvasGroupEntered { count, .. } => Some(Count(*count)),
+            CanvasTracePathEnd { titles } => Some(Length(titles.len())),
+            // The mode object is a shared clause, so BOTH arms speak
+            // its count and both need their own witness — the corpus is
+            // per event, not per clause.
+            CanvasModeEntered { object, .. } | CanvasModeCommitted { object, .. } => match object {
+                CanvasModeObject::Cards { count } => Some(Count(*count)),
+                CanvasModeObject::Card { .. } => None,
+            },
+            CanvasModeCancelled { restoration, .. } => match restoration {
+                // The count is not interpolated here — only the noun
+                // agrees with it ("card returned" / "cards returned") —
+                // which is exactly the disagreement this test hunts.
+                CanvasModeRestoration::CardsReturned { count } => Some(Count(*count)),
+                _ => None,
+            },
+            CanvasDeleted { target, .. } => match target {
+                CanvasDeleteTarget::Cards { count } => Some(Count(*count)),
+                _ => None,
+            },
+            CanvasBulkMoved { count, .. }
+            | CanvasBulkColorSet { count, .. }
+            | CanvasGrouped { count, .. }
+            | CanvasBulkDuplicated { count }
+            | CanvasMarkToggled { count, .. }
+            | CanvasMarksCleared { count } => Some(Count(*count)),
+            CanvasFilterCount { matched } => Some(Count(*matched)),
+            CanvasFilterCleared { total } => Some(Count(*total)),
+            CanvasLoadedDegraded { skipped } => Some(Count(*skipped)),
+
+            // Speaks no cardinality. `CanvasMoveRelative` carries a
+            // `Vec` but never says how long it is (it joins the
+            // descriptions), and `CanvasStatus`'s `NoConnection`
+            // ordinal is a position, not a count of anything.
+            CanvasGroupLeft { .. }
+            | CanvasConnectionTraversed { .. }
+            | CanvasMoveRelative { .. }
+            | CanvasResizeGeometry { .. }
+            | CanvasResizeClamped
+            | CanvasModeRejected { .. }
+            | CanvasModeEndedWithoutEffect { .. }
+            | CanvasCreated { .. }
+            | CanvasFileCreated { .. }
+            | CanvasConnectedCardCreated { .. }
+            | CanvasConnected { .. }
+            | CanvasConnectionUpdated { .. }
+            | CanvasMovedIntoGroup { .. }
+            | CanvasRemovedFromGroup { .. }
+            | CanvasColorSet { .. }
+            | CanvasRenamedGroup { .. }
+            | CanvasCardUpdated { .. }
+            | CanvasCardRetargeted { .. }
+            | CanvasCardPlaced { .. }
+            | CanvasCardAligned { .. }
+            | CanvasConvertedToNote { .. }
+            | CanvasZoom { .. }
+            | CanvasFollowSelectionToggled { .. }
+            | CanvasSurfaceShown { .. }
+            | CanvasHistoryApplied { .. }
+            | CanvasUndoMenuTitle { .. }
+            | CanvasStatus { .. }
+            | CanvasBlocked { .. }
+            | CanvasActionFailed { .. }
+            | CanvasSaveConflict
+            | CanvasFileNotFound { .. }
+            | CanvasOpened { .. }
+            | CanvasMutationRefused { .. }
+            | CanvasEmptyOnboarding { .. } => None,
+        }
+    }
+
+    /// Contract 0a-14, mechanically.
+    ///
+    /// Totality used to be pinned by a paragraph that counted arms and
+    /// witnesses by hand. Three consecutive adversarial rounds found
+    /// three different miscounts in it (protocol rule 4), so the
+    /// invariant lives here instead and the paragraph points at this
+    /// test. Four halves:
+    ///
+    /// **(a)** the record — the canvas arms that speak a cardinality,
+    /// derived from an EXHAUSTIVE classifier so a new arm cannot slip
+    /// past, and cross-checked against a written list so the change is
+    /// legible in a diff.
+    /// **(b)** every one of them has a corpus witness at exactly one,
+    /// and the arm that speaks a collection length also has an empty
+    /// one — a guard that only ever sees 3 cannot see "1 cards".
+    /// **(c)** those singular renderings agree grammatically, EXCEPT
+    /// the two templates CR-3 pins as shipped defects, which are
+    /// byte-listed here and asserted to still be produced (so fixing
+    /// CR-3 upstream makes this test ask for the entry to be removed).
+    /// **(d)** a source scan: no canvas template interpolates a count
+    /// next to a hardcoded plural noun. (b) and (c) are retroactive —
+    /// they catch a regression in an arm that HAS a witness — while
+    /// (d) catches the new arm that has none. PR 0b generalizes the
+    /// scan beyond canvas.
+    #[test]
+    fn canvas_count_speaking_arms_have_boundary_witnesses_and_agreement() {
+        // (a) --------------------------------------------------------
+        let listed: std::collections::BTreeSet<&str> = [
+            "CanvasBulkColorSet",
+            "CanvasBulkDuplicated",
+            "CanvasBulkMoved",
+            "CanvasDeleted",
+            "CanvasFilterCleared",
+            "CanvasFilterCount",
+            "CanvasGroupEntered",
+            "CanvasGrouped",
+            "CanvasLoadedDegraded",
+            "CanvasMarkToggled",
+            "CanvasMarksCleared",
+            "CanvasModeCancelled",
+            "CanvasModeCommitted",
+            "CanvasModeEntered",
+            "CanvasMovedTo",
+            "CanvasTracePathEnd",
+            "CanvasWhereAmI",
+        ]
+        .into_iter()
+        .collect();
+
+        let mut speaking: std::collections::BTreeMap<String, Vec<(SpokenCardinality, String)>> =
+            std::collections::BTreeMap::new();
+        for entry in corpus() {
+            let A11yEvent::Canvas { ref event } = entry else {
+                continue;
+            };
+            if let Some(cardinality) = spoken_cardinality(event) {
+                let name = canvas_variant_of(&entry).expect("canvas variant name");
+                speaking
+                    .entry(name)
+                    .or_default()
+                    .push((cardinality, entry.render()));
+            }
+        }
+        let derived: std::collections::BTreeSet<&str> =
+            speaking.keys().map(String::as_str).collect();
+        assert_eq!(
+            derived, listed,
+            "the written list of count-speaking canvas arms is out of step with what \
+             `spoken_cardinality` classifies over corpus() — add the arm here, then \
+             give it the witnesses below"
+        );
+
+        // (b) --------------------------------------------------------
+        for (arm, samples) in &speaking {
+            assert!(
+                samples.iter().any(|(c, _)| matches!(
+                    c,
+                    SpokenCardinality::Count(1) | SpokenCardinality::Length(1)
+                )),
+                "{arm} speaks a count but corpus() has no witness at ONE, so nothing \
+                 pins its singular rendering (contract 0a-14)"
+            );
+            if samples
+                .iter()
+                .any(|(c, _)| matches!(c, SpokenCardinality::Length(_)))
+            {
+                assert!(
+                    samples
+                        .iter()
+                        .any(|(c, _)| matches!(c, SpokenCardinality::Length(0))),
+                    "{arm} speaks a collection LENGTH, so it also needs an \
+                     empty-collection witness (contract 0a-14)"
+                );
+            }
+        }
+
+        // (c) --------------------------------------------------------
+        // The two shipped English defects CR-3 pins as verbatim. They
+        // are byte-listed, not pattern-excused: the noun is already
+        // singular in both, and it is the VERB that disagrees.
+        const CR3_VERBATIM_DEFECTS: &[&str] = &[
+            // `CanvasFilterCount` — the plural rule is applied to the
+            // noun but the verb is fixed.
+            "1 card match.",
+            // `CanvasLoadedDegraded` — "item" is singular, "are" is not.
+            "Canvas loaded. 1 unsupported item are preserved in the file but not shown.",
+        ];
+        // A plural noun, or a plural verb agreeing with one, has no
+        // business in a rendering whose count is one.
+        const PLURAL_AT_ONE: &[&str] =
+            &["cards", "marks", "items", "connections", " are ", " match."];
+
+        let mut singular_renderings: Vec<&str> = Vec::new();
+        for (arm, samples) in &speaking {
+            for (cardinality, text) in samples {
+                if !matches!(
+                    cardinality,
+                    SpokenCardinality::Count(1) | SpokenCardinality::Length(1)
+                ) {
+                    continue;
+                }
+                singular_renderings.push(text);
+                if CR3_VERBATIM_DEFECTS.contains(&text.as_str()) {
+                    continue;
+                }
+                for token in PLURAL_AT_ONE {
+                    assert!(
+                        !text.contains(token),
+                        "{arm} renders {text:?} at a count of one, which carries the \
+                         plural form {token:?} — route the noun through \
+                         plural()/plural_len()/counted() (contract 0a-14), or, if this \
+                         is a deliberately preserved shipped defect, add the exact \
+                         string to CR3_VERBATIM_DEFECTS with a citation"
+                    );
+                }
+            }
+        }
+        for defect in CR3_VERBATIM_DEFECTS {
+            assert!(
+                singular_renderings.contains(defect),
+                "CR3_VERBATIM_DEFECTS lists {defect:?}, but no arm renders it at a \
+                 count of one any more — if the defect was fixed, delete the entry \
+                 (and CR-3's record) rather than leaving a stale carve-out"
+            );
+        }
+
+        // (d) --------------------------------------------------------
+        // The canvas templates and the helpers they call: from the
+        // family's own impl block down to `corpus()`.
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/a11y.rs");
+        let source = std::fs::read_to_string(&path).expect("a11y source");
+        let begin = source
+            .find("impl CanvasA11yEvent {")
+            .expect("canvas render impl");
+        let end = source[begin..]
+            .find("pub fn corpus()")
+            .expect("corpus() terminates the render section")
+            + begin;
+        let mut offenders: Vec<String> = Vec::new();
+        for (offset, line) in source[begin..end].lines().enumerate() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("//") {
+                continue;
+            }
+            for noun in ["cards", "marks", "items", "connections"] {
+                let mut from = 0usize;
+                while let Some(at) = line[from..].find(noun) {
+                    let at = from + at;
+                    from = at + noun.len();
+                    // Whole word only — never `placards`, `Cards`.
+                    if line[from..].starts_with(|c: char| c.is_ascii_alphanumeric()) {
+                        continue;
+                    }
+                    // The defect shape: a format placeholder, then
+                    // whitespace, then the hardcoded plural. A noun
+                    // reached through a helper is an ARGUMENT (preceded
+                    // by a quote) and a fixed phrase is preceded by a
+                    // word, so neither trips this.
+                    if line[..at].trim_end().ends_with('}') {
+                        offenders.push(format!(
+                            "a11y.rs:{}: {}",
+                            source[..begin].lines().count() + offset,
+                            trimmed
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "a canvas template interpolates a count immediately before a hardcoded \
+             plural noun, so it cannot render at one — route it through \
+             plural()/plural_len()/counted() (contract 0a-14): {offenders:#?}"
+        );
+    }
+
     /// The family is reached through exactly one top-level variant, and
     /// no canvas variant leaked back out to the top level (the whole
     /// point of the nesting — uniffi's 256-variant ceiling).
