@@ -58,11 +58,18 @@ extension AppState {
                 handle: handle, anchor: origin,
                 width: 260, height: 140,
                 directionHint: direction, exclude: [])
-            let newNode = CanvasSceneNode(
-                nodeId: id, kind: "text", title: "Untitled",
-                x: placement.x, y: placement.y, width: 260, height: 140,
-                color: nil, colorName: nil, subpath: nil)
-            let sides = Self.canvasAutoSides(from: originNode, to: newNode)
+            // §W-G row C / CD-16: `canvas_auto_sides` is keyed by
+            // RECTS, which is why this site could not have used an
+            // id-keyed query — the card it connects to does not exist
+            // in the model yet. The synthetic `CanvasSceneNode` that
+            // used to be built here purely to satisfy the old
+            // node-keyed helper is gone with it.
+            let sides = canvasAutoSides(
+                from: CanvasRect(
+                    x: originNode.x, y: originNode.y,
+                    width: originNode.width, height: originNode.height),
+                to: CanvasRect(
+                    x: placement.x, y: placement.y, width: 260, height: 140))
             let ok = canvasApply(
                 CanvasAction(
                     name: "create connected card",

@@ -579,24 +579,34 @@ final class CanvasRendererNSView: NSView {
         }
     }
 
+    /// The anchor for ONE endpoint. A stored side wins; `nil` means
+    /// auto, and the auto rule is core's — §W-G row C, contract 0b-3.
+    /// `canvas_auto_sides(thisRect, otherRect).from` is the side for
+    /// THIS end, so a per-endpoint `nil` needs no second entry point
+    /// and this view needs no second copy of the centre-delta
+    /// comparison (CD-16). Rects are canvas-space here; the caller
+    /// converts the RESULT to view space.
     private func anchorPoint(on rect: CGRect, side: CanvasSide?, toward other: CGRect) -> CGRect {
+        let resolved =
+            side
+            ?? canvasAutoSides(
+                from: Self.canvasRect(rect),
+                to: Self.canvasRect(other)
+            ).from
         let point: CGPoint
-        switch side {
+        switch resolved {
         case .top: point = CGPoint(x: rect.midX, y: rect.minY)
         case .bottom: point = CGPoint(x: rect.midX, y: rect.maxY)
         case .left: point = CGPoint(x: rect.minX, y: rect.midY)
         case .right: point = CGPoint(x: rect.maxX, y: rect.midY)
-        case nil:
-            // Auto: nearest side toward the other card's center.
-            let dx = other.midX - rect.midX
-            let dy = other.midY - rect.midY
-            if abs(dx) > abs(dy) {
-                point = CGPoint(x: dx > 0 ? rect.maxX : rect.minX, y: rect.midY)
-            } else {
-                point = CGPoint(x: rect.midX, y: dy > 0 ? rect.maxY : rect.minY)
-            }
         }
         return CGRect(origin: point, size: .zero)
+    }
+
+    private static func canvasRect(_ rect: CGRect) -> CanvasRect {
+        CanvasRect(
+            x: Double(rect.origin.x), y: Double(rect.origin.y),
+            width: Double(rect.width), height: Double(rect.height))
     }
 
     private func addArrowHead(to path: CGMutablePath, from startRect: CGRect, at endRect: CGRect) {

@@ -19,19 +19,6 @@ import Foundation
 /// Existing-connection edit (label/direction) and delete live on the
 /// #362 connection rows and the palette.
 extension AppState {
-    /// Auto-side pair: nearest edges by center geometry (t4 pin —
-    /// mirrors the renderer's anchor choice so lines look right).
-    static func canvasAutoSides(
-        from: CanvasSceneNode, to: CanvasSceneNode
-    ) -> (from: CanvasSide, to: CanvasSide) {
-        let dx = (to.x + to.width / 2) - (from.x + from.width / 2)
-        let dy = (to.y + to.height / 2) - (from.y + from.height / 2)
-        if abs(dx) > abs(dy) {
-            return dx > 0 ? (.right, .left) : (.left, .right)
-        }
-        return dy > 0 ? (.bottom, .top) : (.top, .bottom)
-    }
-
     /// Create one connection origin→target with auto sides + default
     /// direction; announced per t0 §1.3.
     func canvasConnect(from originId: String, to targetId: String, label: String?) {
@@ -44,7 +31,16 @@ extension AppState {
             canvasAnnouncer.announce(.canvasStatus(note: .pickDifferentTarget))
             return
         }
-        let sides = Self.canvasAutoSides(from: origin, to: target)
+        // §W-G row C: the nearest-edges-by-centre rule is core's
+        // (`canvas_auto_sides`, contract 0b-3), keyed by RECTS rather
+        // than node ids (CD-16) and handle-free, so the same call
+        // serves this site, create-connected-card's not-yet-real card,
+        // and the renderer's per-endpoint auto arm.
+        let sides = canvasAutoSides(
+            from: CanvasRect(
+                x: origin.x, y: origin.y, width: origin.width, height: origin.height),
+            to: CanvasRect(
+                x: target.x, y: target.y, width: target.width, height: target.height))
         let cleanLabel = (label?.isEmpty == true) ? nil : label
         let ok = canvasApply(
             CanvasAction(
