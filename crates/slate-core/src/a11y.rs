@@ -4313,6 +4313,16 @@ fn canvas_corpus() -> Vec<CanvasA11yEvent> {
             verb: CanvasTransientVerb::Move,
             object: CanvasModeObject::Cards { count: 1 },
         },
+        // These two already rendered correctly (they route through
+        // `counted`); the witnesses exist so the claim "every
+        // count-speaking arm has a count-one witness" is TRUE rather
+        // than nearly true, and so a later edit cannot regress them
+        // unseen.
+        CanvasGrouped {
+            count: 1,
+            label: "Q3".into(),
+        },
+        CanvasMarksCleared { count: 1 },
     ]
 }
 
@@ -4954,6 +4964,8 @@ mod tests {
                 "Move mode — 1 card. Arrows to move, Shift for big steps, Return to place, Escape to cancel.",
             ),
             (Medium, "Placed 1 card."),
+            (Medium, "Grouped 1 card into \"Q3\"."),
+            (Medium, "Cleared 1 mark."),
         ];
 
         let corpus = corpus();

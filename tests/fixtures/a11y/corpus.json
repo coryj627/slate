@@ -2148,5 +2148,15 @@
     "event": "Canvas { event: CanvasModeCommitted { verb: Move, object: Cards { count: 1 } } }",
     "priority": "medium",
     "text": "Placed 1 card."
+  },
+  {
+    "event": "Canvas { event: CanvasGrouped { count: 1, label: \"Q3\" } }",
+    "priority": "medium",
+    "text": "Grouped 1 card into \"Q3\"."
+  },
+  {
+    "event": "Canvas { event: CanvasMarksCleared { count: 1 } }",
+    "priority": "medium",
+    "text": "Cleared 1 mark."
   }
 ]

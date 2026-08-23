@@ -221,11 +221,20 @@ in the type says it may not, and PR A's Windows host will not inherit
 mac's incidental guards.
 
 The corpus samples the BOUNDARY, not just the comfortable value:
-`canvas_corpus()` ends with a **cardinality boundary witness** block —
-count = 1 for every arm that speaks a count, plus the single-title and
-empty trace path — so an arm that hardcodes `cards` fails the golden
-instead of shipping `1 cards`. They are appended rather than filed beside
-their siblings so no pre-existing corpus index moves (0a-2).
+**every arm that speaks a count or a collection length has a count-one
+witness in `corpus()`**, plus the single-title and the empty trace path,
+so an arm that hardcodes `cards` fails the golden instead of shipping
+`1 cards`. Most arms already carried one (`CanvasGroupEntered`'s `Solo`,
+`CardsReturned`, `CanvasDeleteTarget::Cards`, `CanvasBulkColorSet`,
+`CanvasMarkToggled`, `CanvasFilterCount`, `CanvasFilterCleared`,
+`CanvasLoadedDegraded`, and the connection counts on `CanvasMovedTo` /
+`CanvasWhereAmI`); the eight that did not are grouped in a **cardinality
+boundary witness** block at the end of `canvas_corpus()`. Two of those
+eight — `CanvasGrouped` and `CanvasMarksCleared` — already rendered
+correctly through `counted`; their witnesses exist so the claim above is
+TRUE rather than nearly true, and so a later edit cannot regress them
+unseen. The block is appended rather than filed beside its siblings so no
+pre-existing corpus index moves (0a-2).
 
 Hosts mirror the rule where they compose the same clause for a LABEL:
 mac's M3 inspectable value and its undo-action names route through
@@ -233,12 +242,28 @@ mac's M3 inspectable value and its undo-action names route through
 templates here, leaves the count ungrouped (CD-6). (Adopted after the
 codex adversarial round found four arms hardcoding the plural; CD-15.)
 
+**What pins this today, and what will.** Totality is currently held by
+this contract plus the boundary witnesses: an arm that hardcodes a plural
+fails `corpus_renders_the_shipped_strings` *because a witness exists for
+it*. That is retroactive, not structural — a NEW arm added with a
+hardcoded plural and no count-one witness still ships, because nothing
+forces the witness. The structural closure is a **parser guard**: read
+this module's canvas render arms, and fail when an arm interpolates a
+count or a `len()` without reaching `plural` / `plural_len` / `counted`.
+It is deliberately NOT landed here — it wants a design (which
+interpolations are countable nouns? how does it see through helper
+calls?) rather than a patch at the end of a fix round, and it is the same
+shape as the Rust-parses-Swift coalescing-class tripwire already queued.
+**Both land in PR 0b**; carried in the SDD ledger (the 0a-2 codex
+round-1 entry, "Recorded for 0b: structural parser guard enforcing
+0a-14") so the deferral is tracked rather than remembered.
+
 ### The event enumeration (the PR's contract)
 
 51 variants of `CanvasA11yEvent`, all reached through the single
-`A11yEvent::Canvas { event }` wrapper (0a-1b); **171** corpus entries,
-artifact 259 → **430** (0a-1 landed 165; 0a-2's cardinality boundary
-witnesses added six, contract 0a-14). `V` = the `CanvasVerbosity`
+`A11yEvent::Canvas { event }` wrapper (0a-1b); **173** corpus entries,
+artifact 259 → **432** (0a-1 landed 165; 0a-2's cardinality boundary
+witnesses added eight, contract 0a-14). `V` = the `CanvasVerbosity`
 parameter.
 Coalescing class: `nav` / `filter` / `—` (immediate). All priorities
 `Medium` unless marked **High**.
@@ -249,13 +274,13 @@ Coalescing class: `nav` / `filter` / `—` (immediate). All priorities
 | `CanvasGroupEntered` | `label, count` | `Entering group "⟨label⟩", ⟨n⟩ card[s]` | | nav | `CanvasAnnouncer.swift:51,172`; `AppState+CanvasNavigation.swift:181`; `CanvasOutlineView.swift:393–394` |
 | `CanvasGroupLeft` | `label` | `Leaving group "⟨label⟩"` | | nav | `CanvasAnnouncer.swift:52,173`; `AppState+CanvasNavigation.swift:183`; `CanvasOutlineView.swift:396` |
 | `CanvasConnectionTraversed` | `direction, kind_label, title, label?` | `⟨Connects to‖Connected from‖Linked with⟩ ⟨card⟩[, labelled "⟨label⟩"]` | | nav | `CanvasAnnouncer.swift:55–57,175–184`; `AppState+CanvasNavigation.swift:119–123`; deletes `CanvasOutlineView.swift:335–347` |
-| `CanvasTracePathEnd` | `titles[]` | `Path: A, then B. End of path — ⟨n⟩ cards visited.` | | — | `AppState+CanvasNavigation.swift:152–155` |
+| `CanvasTracePathEnd` | `titles[]` | `Path: A, then B. End of path — ⟨n⟩ card[s] visited.` · empty `titles` omits the `Path: …` clause: `End of path — 0 cards visited.` | | — | `AppState+CanvasNavigation.swift:152–155` |
 | `CanvasMoveRelative` | `descs[], overlap?` | `Alone on the canvas` ‖ `Below "X", right of "Y"` [+ `. Overlapping another card` ‖ `. Clear of overlaps`] | | nav | `AppState+CanvasModes.swift:192–194,299–339,286–290` |
 | `CanvasResizeGeometry` | `preset?, width, height, overlap?` | `⟨w⟩ by ⟨h⟩` ‖ `Resized to default size: ⟨w⟩ by ⟨h⟩` ‖ `Resized to fit to content: …` [+ overlap clause] | | nav | `AppState+CanvasModes.swift:179–181,229–233,286–290` |
 | `CanvasResizeClamped` | — | `Minimum size.` | | — | `AppState+CanvasModes.swift:172` |
-| `CanvasModeEntered` | `mode, object` | `⟨Mode⟩ mode — ⟨"title"‖N cards⟩. ⟨exits⟩` | | — | `CanvasModeController.swift:78`; `AppState+CanvasModes.swift:57–65,100–103`; `AppState+CanvasConnect.swift:96–98` |
+| `CanvasModeEntered` | `mode, object` | `⟨Mode⟩ mode — ⟨object⟩. ⟨exits⟩`, where `⟨object⟩` = `"⟨title⟩"` ‖ `⟨n⟩ card[s]` | | — | `CanvasModeController.swift:78`; `AppState+CanvasModes.swift:57–65,100–103`; `AppState+CanvasConnect.swift:96–98` |
 | `CanvasModeRejected` | `active_mode` | `⟨Mode⟩ mode is active. Return to commit or Escape to cancel first.` | **High** | — | `CanvasModeController.swift:73–74` |
-| `CanvasModeCommitted` | `verb, object` | `Placed ⟨object⟩.` ‖ `Resized ⟨object⟩.` | | — | `AppState+CanvasModes.swift:261` |
+| `CanvasModeCommitted` | `verb, object` | `Placed ⟨object⟩.` ‖ `Resized ⟨object⟩.` — same `⟨object⟩` clause as `CanvasModeEntered`, `⟨n⟩ card[s]` included | | — | `AppState+CanvasModes.swift:261` |
 | `CanvasModeEndedWithoutEffect` | `mode` | `⟨Move‖Resize⟩ ended — nothing changed.` ‖ `Connect ended — no target chosen.` | | — | `AppState+CanvasModes.swift:256`; `AppState+CanvasConnect.swift:103` |
 | `CanvasModeCancelled` | `mode, restoration` | `⟨Verb⟩ cancelled.` [+ ` — card[s] returned.` ‖ ` — size restored.` ‖ ` — back at "X".`] | | — | `AppState+CanvasModes.swift:71–75,110–112`; `AppState+CanvasConnect.swift:110–112` |
 | `CanvasCreated` | `kind_label, title, relative` | `Created ⟨lowercased card⟩ ⟨relative⟩` (no period) | | — | `CanvasAnnouncer.swift:198–208`; `AppState+CanvasActions.swift:101–105,141–144`; `AppState+CanvasCreate.swift:220–224` |
@@ -273,10 +298,10 @@ Coalescing class: `nav` / `filter` / `—` (immediate). All priorities
 | `CanvasCardAligned` | `title, target_title` | `Aligned "⟨a⟩" with "⟨b⟩".` | | — | `AppState+CanvasActions.swift:608–610` |
 | `CanvasConvertedToNote` | `path` | `Converted to note ⟨path⟩. The card now points at it.` | | — | `AppState+CanvasExtras.swift:353–355` |
 | `CanvasDeleted` | `target, V, undo_chord` | `Deleted ⟨card⟩` ‖ `Ungrouped Group "⟨l⟩" — cards kept` ‖ `Deleted ⟨n⟩ card[s]` ‖ `Deleted connection ⟨to‖from‖with⟩ "⟨t⟩"[, labelled "⟨l⟩"]`; **+ ` — ⟨undo_chord⟩ to undo` at standard+** | | — | `CanvasAnnouncer.swift:63,189–192`; `AppState+CanvasActions.swift:325–329,751–753`; `AppState+CanvasConnect.swift:127–131,148–149` |
-| `CanvasBulkMoved` | `count, relative` | `Moved ⟨n⟩ cards ⟨relative⟩.` | | — | `AppState+CanvasActions.swift:563–566` |
+| `CanvasBulkMoved` | `count, relative` | `Moved ⟨n⟩ card[s] ⟨relative⟩.` | | — | `AppState+CanvasActions.swift:563–566` |
 | `CanvasBulkColorSet` | `count, color?` | `Set ⟨n⟩ card[s] to ⟨color‖no color⟩.` | | — | `AppState+CanvasActions.swift:766,776–777` |
 | `CanvasGrouped` | `count, label` | `Grouped ⟨n⟩ card[s] into "⟨label⟩".` | | — | `AppState+CanvasActions.swift:817–821` |
-| `CanvasBulkDuplicated` | `count` | `Duplicated ⟨n⟩ cards — one undo restores.` | | — | `AppState+CanvasExtras.swift:202–203` |
+| `CanvasBulkDuplicated` | `count` | `Duplicated ⟨n⟩ card[s] — one undo restores.` | | — | `AppState+CanvasExtras.swift:202–203` |
 | `CanvasMarkToggled` | `marked, title, count` | `⟨Marked‖Unmarked⟩ "⟨title⟩". ⟨n⟩ marked.` | | — | `AppState+CanvasActions.swift:698–703` |
 | `CanvasMarksCleared` | `count` | `No marks.` (0) ‖ `Cleared ⟨n⟩ mark[s].` | | — | `AppState+CanvasActions.swift:711–712` |
 | `CanvasFilterCount` | `matched` | `⟨n⟩ card[s] match.` | | filter | `AppState+CanvasExtras.swift:398–399` |
@@ -336,9 +361,9 @@ cancel first.` — Canvas 553/591/621, Extras 266–269 — four copies) ·
 ### Tests that pin PR 0a
 
 `crates/slate-core/src/a11y.rs`: `corpus_renders_the_shipped_strings`
-(the golden table — 171 new rows),
+(the golden table — 173 new rows),
 `committed_corpus_artifact_matches_the_vocabulary` (artifact round-trip,
-430 entries), `every_canvas_variant_and_arm_is_represented_in_the_corpus`,
+432 entries), `every_canvas_variant_and_arm_is_represented_in_the_corpus`,
 `every_canvas_parameter_enum_is_listed_for_coverage` (0a-2),
 `the_canvas_family_occupies_one_top_level_variant`,
 `canvas_verbosity_matrix_pins_every_level`,
@@ -351,7 +376,7 @@ cancel first.` — Canvas 553/591/621, Extras 266–269 — four copies) ·
 `apps/slate-windows/.../A11yCorpusCensus.cs`:
 `EveryCorpusEventRendersTheCommittedIdentityTextAndPriority`,
 `TheMirrorHasNoDuplicateEntries`.
-`apps/slate-mac/Tests/SlateMacTests/`: `A11yCorpusCensusTests` (all 171
+`apps/slate-mac/Tests/SlateMacTests/`: `A11yCorpusCensusTests` (all 173
 canvas entries through the real FFI), `CanvasAnnouncerTests`
 (coalescing, the flush/supersede rule, the priority relay, and the
 WIDENED funnel guard), `A11yResidueCensusTests` (`pinnedResidueSites`

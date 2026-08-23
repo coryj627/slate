@@ -480,6 +480,8 @@ public sealed class A11yCorpusCensus
         new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasBulkDuplicated(Count: 1)),
         new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasModeEntered(Mode: CanvasMode.Move, Object: new CanvasModeObject.Cards(Count: 1))),
         new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasModeCommitted(Verb: CanvasTransientVerb.Move, Object: new CanvasModeObject.Cards(Count: 1))),
+        new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasGrouped(Count: 1, Label: "Q3")),
+        new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasMarksCleared(Count: 1)),
     ];
 
     [Fact]

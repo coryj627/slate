@@ -492,6 +492,8 @@ final class A11yCorpusCensusTests: XCTestCase {
             .canvas(event: .canvasBulkDuplicated(count: 1)),
             .canvas(event: .canvasModeEntered(mode: .move, object: .cards(count: 1))),
             .canvas(event: .canvasModeCommitted(verb: .move, object: .cards(count: 1))),
+            .canvas(event: .canvasGrouped(count: 1, label: "Q3")),
+            .canvas(event: .canvasMarksCleared(count: 1)),
         ]
     }
 
