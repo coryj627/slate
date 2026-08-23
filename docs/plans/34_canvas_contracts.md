@@ -148,11 +148,26 @@ Standard, "Ctrl+Z" }` exercises it deliberately.
 helper (`a11y.rs::card_ref`) used by every template that names a card;
 the placement phrase is `a11y.rs::relative_phrase` over core's OWN
 `canvas::placement::RelativeDesc`, which the host passes straight
-through (R-D: no host re-derivation). Mac had three spellings of the
-card reference (`CanvasAnnouncer.swift:37–39`,
-`CanvasRendererView.swift:403,447` unquoted,
-`CanvasOutlineView.swift:335–347` with a hardcoded `kind: "text"`);
-they collapse to this one.
+through (R-D: no host re-derivation).
+
+**Scope of the collapse (amended after round 1, M1 — the original
+wording over-claimed).** The normative invariant is *every TEMPLATE that
+names a card uses the one core helper*, and that holds across all 51
+variants. Mac had three spellings; PR 0a deletes the two on the
+ANNOUNCEMENT path and leaves the two label-class ones standing:
+
+| Mac spelling | Class | State after 0a |
+|---|---|---|
+| `CanvasAnnouncer.swift:37–39` (`CanvasCardRef.phrase`, quoted) | speech | **deleted** — every announcement renders `card_ref` |
+| `CanvasOutlineView.swift:335–347` (connection rows, hardcoded `kind: "text"`, title-only) | label | **deleted** — the row renders the same `CanvasConnectionTraversed` the navigator speaks, which changes the row's text (**CD-14**) |
+| `CanvasOutlineView.swift:220` (the row's `accessibilityLabel`) | label | **survives** — `CanvasCardRef` moved into that file; §W-C label class (0a-13), and no vocabulary event renders a bare card reference |
+| `CanvasRendererView.swift:403,447` (`node.kind == "group" ? "Group \(speakable)" : speakable`, UNQUOTED) | label | **survives, untouched by this PR** — it is the peer-name/uniqueness surface of **§W-G row L** (`CardSummary.speakable_name`, Tier 2, open until PR 0b), so deleting it here would mean inventing half of 0b's algorithm |
+
+So: **one spelling on every announcement path, two label-class spellings
+left, both with a named owner.** A PR-A implementer should expect a core
+accessor for spoken card references and NOT for label-class peer names —
+that arrives with §W-G row L in 0b, which is also where the outline's
+surviving `CanvasCardRef` collapses.
 
 **0a-11 — Colour names come from core.** No template embeds a preset
 dictionary. `None` speaks the literal `no color` (the clear-colour
@@ -502,6 +517,30 @@ defect. (Decided per the authority chain in Task 0a-2; the alternative —
 adding a `visited` count parameter — would have preserved the ability to
 disagree.)
 
+**CD-14 — The outline's connection ROW now reads the traversal
+sentence.** `CanvasOutlineView.swift:335–347` composed its own direction
+phrase and printed the bare title, with `kind` hardcoded to `"text"`:
+`Connects to "Ideas"`. It now renders the very
+`CanvasConnectionTraversed` event the navigator speaks when it follows
+that connection, so the row reads `Connects to Text card "Ideas"` — and
+`Linked with Group "Q3"` where it used to mislabel a group as a text
+card. The row's `Text` and its `accessibilityLabel` are the same string,
+as before.
+
+This is a **label-class text change**, the only one PR 0a makes, and it
+is deliberate on two counts. (1) It is 0a-10's second deletion: a second
+copy of a phrase table is the failure mode this contract exists to
+prevent, and this copy had already drifted from the announcer's (no
+card reference, no real kind, no `towardOther` flip). (2) t0 §3's
+inspectability rule wants the pull-readable row and the spoken line to
+agree; they did not. The cost is that the row is longer, and that a
+sighted user reading the outline sees the kind word repeated from the
+parent row — accepted, because a braille user reading only the
+connection row previously could not tell what kind of card it pointed
+at. No test pinned the old string. Cross-referenced from 0a-10's scope
+table. (Promoted from a round-1 minor at the controller's direction —
+it was recorded in prose but not in this register.)
+
 ---
 
 ## Accepted risks (owner-recorded; off-limits for re-litigation)
@@ -704,6 +743,8 @@ adding a residue site of its own — the count is 29, not 30.
   `CanvasConnectionTraversed` event the navigator announces, so the row
   now reads `Connects to Text card "Ideas"` rather than
   `Connects to "Ideas"` (it also stops hardcoding `kind: "text"`).
+  Both facts are contract-level, not just notes: the surviving helper
+  is in 0a-10's scope table and the row's text change is **CD-14**.
 - **`canvas_color_name` is a new FFI export.** Without it the third
   preset-name copy (`CanvasPromptSheet.swift:227`, the picker's button
   labels) could not die: it is label class, so no announcement event

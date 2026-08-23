@@ -117,6 +117,18 @@ final class CanvasAnnouncerTests: XCTestCase {
     /// announcements (contracts doc 0a-12). They construct
     /// `CanvasMutationRefused` events now; the guard makes the hole
     /// impossible to reopen.
+    ///
+    /// `AppKitAnnouncementPoster` is scanned for the same reason (round
+    /// 1, M2): the announcer's default `post` closure had to move onto
+    /// the poster layer to satisfy the residue census's
+    /// string-primitive rule, which handed every other canvas file a
+    /// bypass no test named — `AppKitAnnouncementPoster().post("prose",
+    /// priority: .high)` would trip neither this guard's old list, nor
+    /// the residue census (no `.hostComposed(`), nor the
+    /// string-primitive test (a different symbol). Zero such call sites
+    /// exist; this keeps it that way. `CanvasAnnouncer.swift` stays the
+    /// one exempted file — it is the single legal posting seam — which
+    /// is the same exemption the two names above already rely on.
     func testNoDirectAnnouncementsUnderCanvas() throws {
         let testsDir = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
         let canvasDir =
@@ -135,7 +147,10 @@ final class CanvasAnnouncerTests: XCTestCase {
                 .split(separator: "\n", omittingEmptySubsequences: false)
                 .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
                 .joined(separator: "\n")
-            for bypass in ["postAccessibilityAnnouncement", "postMutationAnnouncement"] {
+            for bypass in [
+                "postAccessibilityAnnouncement", "postMutationAnnouncement",
+                "AppKitAnnouncementPoster",
+            ] {
                 if source.contains(bypass) {
                     offenders.append("\(file.lastPathComponent): \(bypass)")
                 }
