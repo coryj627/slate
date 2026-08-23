@@ -357,7 +357,7 @@ extension AppState {
                 mode: canvasModeControllers[doc.path]?.active?.mode,
                 filter: doc.filterActive
                     ? .active(
-                        matched: UInt32(clamping: doc.filteredOutline.count),
+                        matched: UInt32(clamping: doc.filteredOutline(session: session).count),
                         total: UInt32(clamping: doc.outline.count))
                     : .inactive)
             // The panel shows the SAME string the announcement speaks —

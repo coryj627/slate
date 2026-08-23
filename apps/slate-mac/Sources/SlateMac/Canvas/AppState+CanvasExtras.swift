@@ -405,7 +405,8 @@ extension AppState {
         guard doc.filterActive else { return }
         canvasAnnouncer.announce(
             .canvasFilterCount(
-                matched: UInt32(clamping: doc.filteredOutline.count)))
+                matched: UInt32(
+                    clamping: doc.filteredOutline(session: currentSession).count)))
     }
 
     // MARK: `#heading` subpath open-to-anchor (t5)

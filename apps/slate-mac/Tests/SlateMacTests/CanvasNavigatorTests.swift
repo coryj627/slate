@@ -1646,8 +1646,12 @@ extension CanvasNavigatorTests {
 extension CanvasNavigatorTests {
     func testFilterNarrowsOutlineAndTableAndNavigatorHonorsIt() async throws {
         let (state, doc) = try await normalizedState()
+        // The MATCH is core's `canvas_filter` (§W-G row K), so the
+        // filtered rows are asked for with the session that owns the
+        // handle — the same shape as `neighbors(of:session:)`.
+        let session = state.currentSession
         doc.filterText = "gamma"
-        XCTAssertEqual(doc.filteredOutline.map(\.title), ["Gamma"])
+        XCTAssertEqual(doc.filteredOutline(session: session).map(\.title), ["Gamma"])
 
         // Navigator walks ONLY matches while active.
         doc.selection.selected = nil
@@ -1661,11 +1665,13 @@ extension CanvasNavigatorTests {
         // Kind + group-label matches work; the file stays untouched
         // (a view, never a mutation).
         doc.filterText = "group"
-        XCTAssertEqual(doc.filteredOutline.map(\.nodeId), ["g1"])
+        XCTAssertEqual(doc.filteredOutline(session: session).map(\.nodeId), ["g1"])
         doc.filterText = "zone"
-        XCTAssertTrue(Set(doc.filteredOutline.map(\.nodeId)).isSuperset(of: ["g1", "a", "b"]))
+        XCTAssertTrue(
+            Set(doc.filteredOutline(session: session).map(\.nodeId))
+                .isSuperset(of: ["g1", "a", "b"]))
         doc.filterText = ""
-        XCTAssertEqual(doc.filteredOutline.count, doc.outline.count)
+        XCTAssertEqual(doc.filteredOutline(session: session).count, doc.outline.count)
     }
 
     func testFilterCountAnnouncesAndClearRestores() async throws {

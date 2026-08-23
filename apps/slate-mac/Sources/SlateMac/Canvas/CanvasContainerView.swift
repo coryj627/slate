@@ -345,10 +345,9 @@ struct CanvasContainerView: View {
                 if document.filterActive {
                     // t0 §3: the result summary is pull-readable.
                     Text(
-                        "\(document.filteredOutline.count) of "
+                        "\(matchedCount) of "
                             + "\(CountCopy.counted(document.outline.count, "card", "cards")) "
-                            + CountCopy.verb(
-                                document.filteredOutline.count, "matches", "match"))
+                            + CountCopy.verb(matchedCount, "matches", "match"))
                         .font(Tokens.Typography.caption)
                         .foregroundStyle(Tokens.ColorRole.textSecondary)
                     Button("Clear") { clearFilter() }
@@ -374,6 +373,13 @@ struct CanvasContainerView: View {
         }
         .padding(.horizontal, Tokens.Spacing.md)
         .padding(.vertical, Tokens.Spacing.xs)
+    }
+
+    /// Matches for the live filter, from core (§W-G row K). Read once
+    /// per summary rather than twice: the count and its verb agreement
+    /// must describe the same answer.
+    private var matchedCount: Int {
+        document.filteredOutline(session: appState.currentSession).count
     }
 
     private var filterBinding: Binding<String> {

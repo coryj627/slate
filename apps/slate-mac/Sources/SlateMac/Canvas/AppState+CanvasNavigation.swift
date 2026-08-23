@@ -27,7 +27,7 @@ extension AppState {
         guard let doc = activeCanvasDocument else { return }
         // #373: movement walks the FILTERED set while a filter is on
         // (a view, never a mutation — Esc restores the full canvas).
-        let rows = doc.filteredOutline
+        let rows = doc.filteredOutline(session: currentSession)
         guard !rows.isEmpty else {
             if doc.filterActive {
                 canvasAnnouncer.announce(.canvasStatus(note: .noCardsMatchFilter))

@@ -206,6 +206,10 @@ final class CanvasDocument: ObservableObject {
     /// cached (invalidated on reload).
     private var neighborsCache: [String: [CanvasNeighbor]] = [:]
 
+    /// `canvas_filter`'s answer for the needle it was asked about —
+    /// same lifetime rules as `neighborsCache`.
+    private var filterMatchCache: (needle: String, ids: Set<String>)?
+
     /// The row whose activation opened a card — focus restoration
     /// target when the user returns (WCAG 2.4.3, #362).
     var lastActivatedNode: String?
@@ -234,27 +238,51 @@ final class CanvasDocument: ObservableObject {
     /// (the t0 M5 ladder rung between mode and surface).
     @Published var filterText: String = ""
 
-    /// True when a non-empty filter narrows the surfaces.
+    /// True when a non-empty filter narrows the surfaces. This is UI
+    /// state — whether to show the Clear button, the result summary and
+    /// the Esc rung — not the match rule, which is core's. It keeps
+    /// Foundation's `.whitespaces` (newlines NOT trimmed), where core
+    /// trims all Unicode whitespace; a needle of nothing but a newline
+    /// therefore reads as active and matches everything, which CD-22
+    /// records among the trimming differences.
     var filterActive: Bool {
         !filterText.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
-    /// Rows matching the filter (title / kind / group / target — the
-    /// quick-open-style contains match). Full outline when inactive.
-    var filteredOutline: [CanvasOutlineRow] {
-        guard filterActive else { return outline }
-        return outline.filter(matchesFilter)
+    /// Rows matching the filter, in reading order. The MATCH is core's
+    /// `canvas_filter` (§W-G row K, contracts 0b-13 / 0b-14): title,
+    /// the `kind` type word, any ONE element of the group path, and the
+    /// activation target — the same four fields, and the same
+    /// consequences (typing `group` selects every group; a needle
+    /// spanning the group separator matches nothing). The
+    /// `localizedCaseInsensitiveContains` chain that lived here is
+    /// gone, and with it its dependence on the current locale (CD-22).
+    ///
+    /// The needle goes over UNTRIMMED: core trims it and an empty
+    /// needle matches everything, so whitespace answers the full
+    /// outline exactly as `filterActive` says it should.
+    func filteredOutline(session: VaultSession?) -> [CanvasOutlineRow] {
+        guard filterActive, let matches = filterMatches(session: session) else {
+            return outline
+        }
+        return outline.filter { matches.contains($0.nodeId) }
     }
 
-    func matchesFilter(_ row: CanvasOutlineRow) -> Bool {
-        let needle = filterText.trimmingCharacters(in: .whitespaces)
-        guard !needle.isEmpty else { return true }
-        if row.title.localizedCaseInsensitiveContains(needle) { return true }
-        if row.kind.localizedCaseInsensitiveContains(needle) { return true }
-        if row.groupPath.contains(where: { $0.localizedCaseInsensitiveContains(needle) }) {
-            return true
+    /// Memoized per needle: SwiftUI reads the filtered rows several
+    /// times per body pass, and at the §K 2,000-node budget each read
+    /// is another `canvas_filter` round trip. Invalidated wherever
+    /// `neighborsCache` is, because the ids can move under the same
+    /// needle.
+    private func filterMatches(session: VaultSession?) -> Set<String>? {
+        if let cached = filterMatchCache, cached.needle == filterText {
+            return cached.ids
         }
-        return target(of: row.nodeId).localizedCaseInsensitiveContains(needle)
+        guard let session, let handle,
+            let matched = try? session.canvasFilter(handle: handle, query: filterText)
+        else { return nil }
+        let ids = Set(matched)
+        filterMatchCache = (needle: filterText, ids: ids)
+        return ids
     }
 
     /// Hypothetical geometry while a move/resize mode is active
@@ -364,6 +392,7 @@ final class CanvasDocument: ObservableObject {
             targets = Dictionary(
                 uniqueKeysWithValues: preparedTableRows.map { ($0.nodeId, $0.target) })
             neighborsCache = [:]
+            filterMatchCache = nil
             state = .ready
             retargetPreparationPending = false
         case .degraded(_, let message):
@@ -420,6 +449,7 @@ final class CanvasDocument: ObservableObject {
             targets = Dictionary(
                 uniqueKeysWithValues: tableRows.map { ($0.nodeId, $0.target) })
             neighborsCache = [:]
+            filterMatchCache = nil
             state = .ready
         } catch {
             handle = nil
@@ -429,6 +459,7 @@ final class CanvasDocument: ObservableObject {
             scene = CanvasScene(nodes: [], edges: [])
             targets = [:]
             neighborsCache = [:]
+            filterMatchCache = nil
             state = .failed(Self.friendlyMessage(path: path, for: error))
         }
     }
@@ -483,6 +514,7 @@ final class CanvasDocument: ObservableObject {
             state = .failed(message)
         }
         neighborsCache = [:]
+        filterMatchCache = nil
     }
 
     /// Returns true while activation must trust the background-prepared state.
@@ -519,6 +551,7 @@ final class CanvasDocument: ObservableObject {
         undoStack = []
         redoStack = []
         neighborsCache = [:]
+        filterMatchCache = nil
         filterText = ""
         transientRects = nil
         viewport.scale = 1.0
@@ -536,6 +569,7 @@ final class CanvasDocument: ObservableObject {
         targets = Dictionary(
             uniqueKeysWithValues: tableRows.map { ($0.nodeId, $0.target) })
         neighborsCache = [:]
+        filterMatchCache = nil
     }
 
     /// Release the FFI handle (idempotent).
