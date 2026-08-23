@@ -375,9 +375,10 @@ struct CanvasContainerView: View {
         .padding(.vertical, Tokens.Spacing.xs)
     }
 
-    /// Matches for the live filter, from core (§W-G row K). Read once
-    /// per summary rather than twice: the count and its verb agreement
-    /// must describe the same answer.
+    /// Matches for the live filter, from core (§W-G row K). Named once
+    /// so the summary's number and its verb agreement cannot come from
+    /// two different reads; the document memoizes `canvas_filter` per
+    /// needle, so the second read costs nothing.
     private var matchedCount: Int {
         document.filteredOutline(session: appState.currentSession).count
     }

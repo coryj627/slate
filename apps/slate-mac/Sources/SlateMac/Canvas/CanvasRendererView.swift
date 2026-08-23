@@ -565,8 +565,8 @@ final class CanvasRendererNSView: NSView {
         let resolved =
             side
             ?? canvasAutoSides(
-                from: Self.canvasRect(rect),
-                to: Self.canvasRect(other)
+                from: Self.coreRect(rect),
+                to: Self.coreRect(other)
             ).from
         let point: CGPoint
         switch resolved {
@@ -578,7 +578,7 @@ final class CanvasRendererNSView: NSView {
         return CGRect(origin: point, size: .zero)
     }
 
-    private static func canvasRect(_ rect: CGRect) -> CanvasRect {
+    private static func coreRect(_ rect: CGRect) -> CanvasRect {
         CanvasRect(
             x: Double(rect.origin.x), y: Double(rect.origin.y),
             width: Double(rect.width), height: Double(rect.height))
