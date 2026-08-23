@@ -52,7 +52,7 @@ extension AppState {
             canvasAnnouncer.announce(.canvasStatus(note: .nothingSelected))
             return
         }
-        let id = Self.newCanvasEntityID()
+        let id = canvasNewId()
         let geometry = Self.canvasGeometry
         do {
             let placement = try session.canvasPlaceNew(
@@ -82,7 +82,7 @@ extension AppState {
                             width: geometry.defaultCardW, height: geometry.defaultCardH,
                             color: nil),
                         .addEdge(
-                            id: Self.newCanvasEntityID(),
+                            id: canvasNewId(),
                             fromNode: origin, fromSide: sides.from,
                             toNode: id, toSide: sides.to,
                             fromEnd: .none, toEnd: .arrow,
@@ -167,7 +167,7 @@ extension AppState {
                 if node.kind == "group" {
                     ops.append(
                         .createGroup(
-                            id: Self.newCanvasEntityID(),
+                            id: canvasNewId(),
                             label: node.title,
                             x: origin.x, y: origin.y,
                             width: node.width, height: node.height,
@@ -187,7 +187,7 @@ extension AppState {
                     }
                     ops.append(
                         .createNode(
-                            id: Self.newCanvasEntityID(), content: content,
+                            id: canvasNewId(), content: content,
                             x: origin.x, y: origin.y,
                             width: node.width, height: node.height,
                             color: node.color))

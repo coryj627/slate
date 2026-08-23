@@ -47,7 +47,7 @@ extension AppState {
                 name: "connect \"\(origin.title)\" to \"\(target.title)\"",
                 ops: [
                     .addEdge(
-                        id: Self.newCanvasEntityID(),
+                        id: canvasNewId(),
                         fromNode: originId, fromSide: sides.from,
                         toNode: targetId, toSide: sides.to,
                         fromEnd: .none, toEnd: .arrow,

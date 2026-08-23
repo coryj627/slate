@@ -63,13 +63,6 @@ enum CanvasPrompt: Identifiable, Equatable {
 }
 
 extension AppState {
-    /// Stable, collision-free node/edge ids (JSON Canvas convention:
-    /// 16 hex chars).
-    static func newCanvasEntityID() -> String {
-        String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(16))
-            .lowercased()
-    }
-
     /// New Card (⌥⌘N): text card auto-placed adjacent to the selection
     /// (interview decision 1), announced relatively, selected, and
     /// landed in edit mode (G22) via the #368 card editor.
@@ -79,7 +72,7 @@ extension AppState {
             let session = currentSession,
             let handle = doc.handle
         else { return }
-        let id = Self.newCanvasEntityID()
+        let id = canvasNewId()
         let geometry = Self.canvasGeometry
         do {
             let placement = try session.canvasPlaceNew(
@@ -122,7 +115,7 @@ extension AppState {
             let session = currentSession,
             let handle = doc.handle
         else { return }
-        let id = Self.newCanvasEntityID()
+        let id = canvasNewId()
         let geometry = Self.canvasGeometry
         do {
             let placement = try session.canvasPlaceNew(
@@ -858,7 +851,7 @@ extension AppState {
                 name: "group \(CountCopy.counted(marked.count, "card", "cards"))",
                 ops: [
                     .createGroup(
-                        id: Self.newCanvasEntityID(),
+                        id: canvasNewId(),
                         label: label.isEmpty ? nil : label,
                         x: frame.x, y: frame.y,
                         width: frame.width, height: frame.height,

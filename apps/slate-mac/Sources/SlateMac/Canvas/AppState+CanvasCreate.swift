@@ -198,7 +198,7 @@ extension AppState {
             let session = currentSession,
             let handle = doc.handle
         else { return }
-        let id = Self.newCanvasEntityID()
+        let id = canvasNewId()
         let geometry = Self.canvasGeometry
         do {
             let placement = try session.canvasPlaceNew(
