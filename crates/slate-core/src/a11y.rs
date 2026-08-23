@@ -461,6 +461,17 @@ pub enum CanvasStatusNote {
     /// one is reached by a user who changed nothing and is told when to
     /// try again instead.
     Reopening,
+    /// The same read verbs, on a canvas that is still LOADING — a first
+    /// open, or a prepared replacement installed over an already-open
+    /// tab (`beginPreparedReplacement`). `LoadState` has four cases and
+    /// this is the fourth; the window `Reopening` names is a REopen, so
+    /// its copy would be false the first time a canvas is opened.
+    ///
+    /// Same shape as its sibling for the same reason (W6-1 0b-2, codex
+    /// round 1): distinct from `CanvasMutationRefusal::Opening`, which
+    /// covers this state for WRITES and keeps its "before making
+    /// changes" tail.
+    Loading,
 }
 
 /// The assertive refusals and failures that are not the
@@ -2603,6 +2614,9 @@ impl CanvasA11yEvent {
                 CanvasStatusNote::Reopening => {
                     "This canvas is reopening. Try again in a moment.".to_owned()
                 }
+                CanvasStatusNote::Loading => {
+                    "This canvas is loading. Try again in a moment.".to_owned()
+                }
             },
             CanvasBlocked { reason } => match reason {
                 CanvasBlockedReason::ModeBusy => {
@@ -4389,6 +4403,9 @@ fn canvas_corpus() -> Vec<CanvasA11yEvent> {
         CanvasStatus {
             note: CanvasStatusNote::Reopening,
         },
+        CanvasStatus {
+            note: CanvasStatusNote::Loading,
+        },
     ]
 }
 
@@ -5047,6 +5064,8 @@ mod tests {
             ),
             // Read-verb refusal during the reopening window.
             (Medium, "This canvas is reopening. Try again in a moment."),
+            // …and during a first load or a prepared replacement.
+            (Medium, "This canvas is loading. Try again in a moment."),
         ];
 
         let corpus = corpus();
@@ -5631,7 +5650,8 @@ mod tests {
                 | CanvasStatusNote::NoOutgoingPath { .. }
                 | CanvasStatusNote::NotInAGroup { .. }
                 | CanvasStatusNote::NoConnection { .. }
-                | CanvasStatusNote::Reopening => None,
+                | CanvasStatusNote::Reopening
+                | CanvasStatusNote::Loading => None,
             },
             CanvasBlocked { reason } => match reason {
                 CanvasBlockedReason::ModeBusy
@@ -6004,6 +6024,28 @@ mod tests {
                 .any(|lit| lit.text.contains("in the file but not shown.")),
             "the lexer did not join a `\\`-continued template the way rustc does"
         );
+        // The escape witness, for the same reason: a literal the lexer
+        // decodes differently from rustc is a literal this guard cannot
+        // see. `card\x73` and `card\u{73}` are both `cards` to rustc,
+        // and were `cardx73` / `cardu{73}` here until codex 0b round 1
+        // — an evasion any author could reach for by accident. The
+        // probes are lexed directly rather than planted in the render
+        // section, so proving the decoder does not require shipping an
+        // escaped noun in shipped copy.
+        //
+        // Written with escaped quotes rather than as raw strings
+        // BECAUSE the noun derivation above lexes this whole file, and
+        // the lexer refuses raw strings by design.
+        for probe in ["\"{count} card\\x73\"", "\"{count} card\\u{73}\""] {
+            assert_eq!(
+                string_literals(probe)
+                    .first()
+                    .map(|literal| literal.text.as_str()),
+                Some("{count} cards"),
+                "the lexer must decode {probe} the way rustc does, or an escaped \
+                 hardcoded plural is invisible to every check below"
+            );
+        }
         let line_of = |literal: &SourceLiteral| source[..begin].lines().count() + literal.line - 1;
 
         let mut offenders: Vec<String> = Vec::new();
@@ -6194,6 +6236,51 @@ mod tests {
                                     while matches!(bytes.get(index), Some(b' ' | b'\t')) {
                                         index += 1;
                                     }
+                                    continue;
+                                }
+                                // `\xNN` and `\u{…}` are DECODED, not
+                                // copied through. Pushing the escape's
+                                // letters made `"{count} card\x73"` lex
+                                // as `card` + `x73`, so a hardcoded
+                                // plural spelled with escapes was
+                                // invisible to every downstream check —
+                                // a guard-evasion hole, and the one
+                                // shape a hand-rolled lexer is most
+                                // likely to get wrong.
+                                Some(b'x') => {
+                                    let hex = std::str::from_utf8(
+                                        &bytes[index + 1..(index + 3).min(bytes.len())],
+                                    )
+                                    .expect("source is UTF-8");
+                                    text.push(
+                                        u8::from_str_radix(hex, 16)
+                                            .expect("`\\x` takes two hex digits"),
+                                    );
+                                    index += 3;
+                                    continue;
+                                }
+                                Some(b'u') => {
+                                    assert_eq!(
+                                        bytes.get(index + 1),
+                                        Some(&b'{'),
+                                        "`\\u` takes a braced scalar"
+                                    );
+                                    let close = index
+                                        + bytes[index..]
+                                            .iter()
+                                            .position(|byte| *byte == b'}')
+                                            .expect("unterminated `\\u{`");
+                                    let hex = std::str::from_utf8(&bytes[index + 2..close])
+                                        .expect("source is UTF-8");
+                                    let scalar = u32::from_str_radix(hex, 16)
+                                        .expect("`\\u{}` takes hex digits");
+                                    let character = char::from_u32(scalar)
+                                        .expect("`\\u{}` takes a scalar value");
+                                    let mut buffer = [0u8; 4];
+                                    text.extend_from_slice(
+                                        character.encode_utf8(&mut buffer).as_bytes(),
+                                    );
+                                    index = close + 1;
                                     continue;
                                 }
                                 Some(other) => text.push(*other),

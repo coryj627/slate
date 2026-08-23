@@ -7666,6 +7666,7 @@ pub enum CanvasStatusNote {
     NotInAGroup { title: String },
     NoConnection { forward: bool, ordinal: Option<u32> },
     Reopening,
+    Loading,
 }
 
 impl From<CanvasStatusNote> for core::a11y::CanvasStatusNote {
@@ -7700,6 +7701,7 @@ impl From<CanvasStatusNote> for core::a11y::CanvasStatusNote {
             F::NotInAGroup { title } => C::NotInAGroup { title },
             F::NoConnection { forward, ordinal } => C::NoConnection { forward, ordinal },
             F::Reopening => C::Reopening,
+            F::Loading => C::Loading,
         }
     }
 }

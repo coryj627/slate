@@ -502,6 +502,8 @@ final class A11yCorpusCensusTests: XCTestCase {
             .canvas(event: .canvasWhereAmI(kindLabel: "text", title: "Loose", groupPath: [], ordinalN: 1, totalM: 1, connectionCount: 0, inCount: 0, outCount: 0, colorName: nil, marked: false, mode: nil, filter: .inactive)),
             // Read-verb refusal during the reopening window (W6-1 0b-2).
             .canvas(event: .canvasStatus(note: .reopening)),
+            // …and during a first load or a prepared replacement.
+            .canvas(event: .canvasStatus(note: .loading)),
         ]
     }
 

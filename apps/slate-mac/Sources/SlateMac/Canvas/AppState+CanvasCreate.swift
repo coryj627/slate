@@ -302,8 +302,20 @@ extension AppState {
         // gone, and with it mac's equal-area tie-break: core keeps the
         // LATER document order (CD-18), observable only for exactly
         // coincident group rects.
-        let parentLookup = try? session.canvasParentOf(handle: handle, nodeId: selected)
-        guard let parentId = parentLookup ?? nil,
+        // `do`/`catch`, not `try?`: SE-0230 flattens `try?` on an
+        // optional-returning call, so `try?` here would report a THROWN
+        // query as "not in a group" — a fact the query never returned.
+        // Same collapse as the one codex found at exit-group, in a verb
+        // where it was previously recorded as an unreachable exclusion;
+        // removing it is cheaper than keeping the exclusion true.
+        let parentId: String?
+        do {
+            parentId = try session.canvasParentOf(handle: handle, nodeId: selected)
+        } catch {
+            canvasAnnouncer.announce(.canvasStatus(note: .nothingSelected))
+            return
+        }
+        guard let parentId,
             let parent = doc.scene.nodes.first(where: { $0.nodeId == parentId })
         else {
             canvasAnnouncer.announce(

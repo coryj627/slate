@@ -468,8 +468,10 @@ final class CanvasRendererNSView: NSView {
                 width: toTransient?.width ?? to.width,
                 height: toTransient?.height ?? to.height)
             guard window.intersects(fromRect) || window.intersects(toRect) else { continue }
-            let start = canvasToView(anchorPoint(on: fromRect, side: edge.fromSide, toward: toRect))
-            let end = canvasToView(anchorPoint(on: toRect, side: edge.toSide, toward: fromRect))
+            let sides = Self.resolvedSides(
+                fromSide: edge.fromSide, toSide: edge.toSide, from: fromRect, to: toRect)
+            let start = canvasToView(anchorPoint(on: fromRect, side: sides.from))
+            let end = canvasToView(anchorPoint(on: toRect, side: sides.to))
             // #370: colored connections stroke in their own layer.
             let target: CGMutablePath
             if let raw = edge.color, !raw.isEmpty {
@@ -554,22 +556,29 @@ final class CanvasRendererNSView: NSView {
         }
     }
 
-    /// The anchor for ONE endpoint. A stored side wins; `nil` means
-    /// auto, and the auto rule is core's — §W-G row C, contract 0b-3.
-    /// `canvas_auto_sides(thisRect, otherRect).from` is the side for
-    /// THIS end, so a per-endpoint `nil` needs no second entry point
-    /// and this view needs no second copy of the centre-delta
-    /// comparison (CD-16). Rects are canvas-space here; the caller
-    /// converts the RESULT to view space.
-    private func anchorPoint(on rect: CGRect, side: CanvasSide?, toward other: CGRect) -> CGRect {
-        let resolved =
-            side
-            ?? canvasAutoSides(
-                from: Self.coreRect(rect),
-                to: Self.coreRect(other)
-            ).from
+    /// Both endpoints' sides for ONE edge — §W-G row C, contract 0b-3.
+    ///
+    /// **One `canvas_auto_sides` call per edge, consuming BOTH halves of
+    /// the pair.** Resolving each endpoint with its own call and taking
+    /// `.from` twice looks equivalent and is not: `auto_sides` answers a
+    /// PAIR, and at a tie — coincident centres, or a self-loop, where
+    /// `|dx| == |dy| == 0` — the pair is `(Top, Bottom)` while two
+    /// `.from` reads give `(Top, Top)` and draw a zero-length line into
+    /// one corner. A stored side still wins per endpoint; auto is only
+    /// consulted for the ends that have none.
+    static func resolvedSides(
+        fromSide: CanvasSide?, toSide: CanvasSide?, from: CGRect, to: CGRect
+    ) -> CanvasSidePair {
+        let auto = canvasAutoSides(from: coreRect(from), to: coreRect(to))
+        return CanvasSidePair(from: fromSide ?? auto.from, to: toSide ?? auto.to)
+    }
+
+    /// The anchor point for one endpoint, given its resolved side.
+    /// Rects are canvas-space here; the caller converts the RESULT to
+    /// view space.
+    private func anchorPoint(on rect: CGRect, side: CanvasSide) -> CGRect {
         let point: CGPoint
-        switch resolved {
+        switch side {
         case .top: point = CGPoint(x: rect.midX, y: rect.minY)
         case .bottom: point = CGPoint(x: rect.midX, y: rect.maxY)
         case .left: point = CGPoint(x: rect.minX, y: rect.midY)

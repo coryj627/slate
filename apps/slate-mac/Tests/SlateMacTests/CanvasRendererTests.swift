@@ -106,6 +106,43 @@ final class CanvasRendererTests: XCTestCase {
         XCTAssertTrue(labels.contains("Group Zone"))
     }
 
+    /// Edge anchors take BOTH halves of one `canvas_auto_sides` pair.
+    ///
+    /// Resolving each endpoint with its own call and reading `.from`
+    /// twice is the tempting shape and is wrong at every tie: the pair
+    /// is `(Top, Bottom)`, two `.from` reads give `(Top, Top)`, and the
+    /// edge collapses to a zero-length line in one corner. A self-loop
+    /// and two coincident centres are exactly those ties (contract
+    /// 0b-3: `|dx| > |dy|` is STRICT, so a tie resolves vertical and
+    /// `dy > 0` is false at zero).
+    func testEdgeSidesComeFromOnePairNotTwoFromReads() {
+        let card = CGRect(x: 0, y: 0, width: 200, height: 100)
+
+        let selfLoop = CanvasRendererNSView.resolvedSides(
+            fromSide: nil, toSide: nil, from: card, to: card)
+        XCTAssertEqual(selfLoop, CanvasSidePair(from: .top, to: .bottom))
+
+        // Different rects, same centre — the other tie.
+        let concentric = CGRect(x: 50, y: 25, width: 100, height: 50)
+        let coincident = CanvasRendererNSView.resolvedSides(
+            fromSide: nil, toSide: nil, from: card, to: concentric)
+        XCTAssertEqual(coincident, CanvasSidePair(from: .top, to: .bottom))
+
+        // A plain horizontal pair still faces each other.
+        let right = CGRect(x: 500, y: 0, width: 200, height: 100)
+        XCTAssertEqual(
+            CanvasRendererNSView.resolvedSides(
+                fromSide: nil, toSide: nil, from: card, to: right),
+            CanvasSidePair(from: .right, to: .left))
+
+        // A stored side wins per endpoint; the other still comes from
+        // the pair, not from a second call.
+        XCTAssertEqual(
+            CanvasRendererNSView.resolvedSides(
+                fromSide: .left, toSide: nil, from: card, to: right),
+            CanvasSidePair(from: .left, to: .left))
+    }
+
     func testPanMaterializesTheNextWindow() async throws {
         let (_, doc, view) = try await makeView()
         XCTAssertNil(view.visibleCardFramesForTesting()["far"])

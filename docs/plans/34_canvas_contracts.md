@@ -1038,6 +1038,38 @@ priority or text touched. The uniffi mirror gained the arm; the
 coalescing class list did not change, because `CanvasStatus` is
 "everything else, posts immediately".
 
+**VA-2 — `CanvasStatusNote::Loading`** (W6-1 0b-2, codex round 1).
+*"This canvas is loading. Try again in a moment."* — Medium, status
+family, uncoalesced. VA-1's sibling, same membership, different state.
+
+`LoadState` has FOUR cases and VA-1 only ever answered for one of them.
+`.loading` is reachable two ways: a first open, and a prepared
+replacement installed over an already-open tab
+(`beginPreparedReplacement`), where the previous snapshot stays on
+screen while the state flips. **VA-1's copy would be false there** — a
+first open is not a REopen — so the state gets its own sentence rather
+than a stretched one. That is the same decision VA-1 made against
+`CanvasMutationRefusal::Reopening`, applied one level down.
+
+`CanvasMutationRefusal::Opening` covers `.loading` for WRITES and keeps
+its *"Wait for it to finish before making changes."* tail, untouched.
+
+**The gate is shared.** `canvasReadTarget()` is the one place a
+structural read verb resolves its document: `.ready` yields it,
+`.loading` announces VA-2, and `.degraded` / `.failed` /
+`.retargetFailed` stay silent — the pre-existing t0 §5 gap filed in
+"Mac details recorded while reading", which PR 0b neither caused nor
+closes. Where-am-I reaches the same decision through its own
+`.notReadable` guard, because "not readable" is false for a canvas that
+simply has not finished opening.
+
+Arrow movement and the viewport verbs are deliberately NOT members of
+either VA: they read the published snapshot rather than a core query,
+so they have no handle to be missing.
+
+Same five-place lockstep as VA-1, and the §W-D artifact diff is again
+**five lines, purely additive**.
+
 ---
 
 ## Recorded divergences (owner-recorded; off-limits for re-litigation)
@@ -1899,6 +1931,26 @@ every deleted symbol was re-grepped to zero afterwards.
   another way, and safety invariants that depend on every caller
   remembering a guard are the ones that fail quietly. (Controller
   ruling, W6-1 0b-2 fix round 2.)
+- **`try?` on an optional-returning FFI call FLATTENS (SE-0230), and a
+  scoped review blessed the shape anyway.** `canvas_parent_of` returns
+  `String?`, so `try? session.canvasParentOf(…)` is `String?`, NOT
+  `String??`. Two consequences, and 0b-2 hit both: the two-step
+  `guard let` shape it was written with does not COMPILE, and — the
+  reason it matters after the compile error is fixed — a throw and a
+  `nil` result arrive as the same `nil`, erasing exactly the
+  distinction VA-1's throw-arm table exists to make. The scoped
+  re-review looked at this hunk and recorded that "the trap was
+  avoided"; it was not. Every such site now uses `do`/`catch` where the
+  distinction is load-bearing, and the sites where it is NOT (CD-24's
+  group-rect silence, VA-1's recorded `canvas_bounds` exclusion) carry
+  a comment saying so instead of a `?? nil` that implies a second level
+  of optionality that never existed.
+
+  **For future Swift reviews:** check every `try?` against its
+  function's RETURN type, not against the call's shape. The optional
+  the reviewer expects to see is not always there, and the failure is
+  silent in prose review because the code reads as if it distinguishes
+  what it cannot.
 - **One row-F caller is not behind admission, and the cost is
   cosmetic.** `canvasInReadingOrder` answers `[]` without a handle, and
   its first doc comment claimed every caller was behind

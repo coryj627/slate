@@ -22,6 +22,40 @@ extension AppState {
         return doc
     }
 
+    /// The document a structural READ verb may work from, or `nil`
+    /// after announcing what its state owes the user.
+    ///
+    /// `LoadState` has FOUR cases, and each answers differently:
+    ///
+    /// - `.ready` — the document, for the verb to use;
+    /// - `.loading` — **VA-2**. Reachable as a first open, and as a
+    ///   prepared replacement installed over an already-open tab
+    ///   (`beginPreparedReplacement`), where the old snapshot is still
+    ///   on screen. VA-1's copy says "reopening", which is false the
+    ///   first time a canvas is opened, so this is its own sentence;
+    /// - `.degraded` / `.failed` / `.retargetFailed` — silent, and
+    ///   that is the PRE-EXISTING t0 §5 gap filed in the contracts'
+    ///   mac-details register. PR 0b neither caused it nor changes it
+    ///   here; closing it is its own piece of work.
+    ///
+    /// Membership is VA-1's membership: the same verbs that say
+    /// "reopening" for a detached handle say "loading" for a document
+    /// that has not finished opening. Arrow movement and the viewport
+    /// verbs are deliberately NOT members — they read the published
+    /// snapshot rather than a core query, so they have no handle to be
+    /// missing.
+    func canvasReadTarget() -> CanvasDocument? {
+        guard let tab = workspace.activeTab, case .canvas(let path) = tab.item else {
+            return nil
+        }
+        let doc = canvasDocument(for: path)
+        if case .ready = doc.state { return doc }
+        if case .loading = doc.state {
+            canvasAnnouncer.announce(.canvasStatus(note: .loading))
+        }
+        return nil
+    }
+
     /// VA-1's one trigger, so every member reaches the sentence the
     /// same way. Its members are the structural read verbs — enter
     /// group, exit group, trace path, fit canvas, Where-am-I,
@@ -114,7 +148,7 @@ extension AppState {
     /// selected" answers the same way in every state — the reopening
     /// window must not turn a selection question into a reopening one.
     func canvasEnterGroup() {
-        guard let doc = activeCanvasDocument else { return }
+        guard let doc = canvasReadTarget() else { return }
         guard let selected = doc.selection.selected,
             let row = doc.outline.first(where: { $0.nodeId == selected })
         else {
@@ -149,7 +183,7 @@ extension AppState {
     /// `canvas_parent_of` (contract 0b-8) answers it, and `nil` — no
     /// parent — is exactly "at canvas level".
     func canvasExitGroup() {
-        guard let doc = activeCanvasDocument else { return }
+        guard let doc = canvasReadTarget() else { return }
         guard let selected = doc.selection.selected else {
             return canvasAnnounceSelectionUnresolvable()
         }
@@ -159,11 +193,21 @@ extension AppState {
         // A THROW is not "at canvas level" — a card the canvas cannot
         // resolve has no level. Only a successful query returning no
         // parent may say that.
-        guard let parentLookup = try? session.canvasParentOf(handle: handle, nodeId: selected)
-        else {
+        //
+        // `do`/`catch`, NOT `try?`: this call returns `String?`, and
+        // `try?` on an optional-returning throwing call FLATTENS
+        // (SE-0230), so `try?` would collapse "the query threw" and
+        // "there is no parent" into one `nil` — erasing the very
+        // distinction the two arms below exist to make. The flattening
+        // also makes the two-step `guard let` shape fail to compile,
+        // which is how it was caught.
+        let parent: String?
+        do {
+            parent = try session.canvasParentOf(handle: handle, nodeId: selected)
+        } catch {
             return canvasAnnounceSelectionUnresolvable()
         }
-        guard let parent = parentLookup else {
+        guard let parent else {
             canvasAnnouncer.announce(.canvasStatus(note: .atCanvasLevel))
             return
         }
@@ -181,8 +225,15 @@ extension AppState {
     /// VA-1's table instead: the sentence for the state, never a
     /// dead-end phrase nothing returned.
     func canvasFollowConnection(forward: Bool, ordinal: Int = 1) {
-        guard let doc = activeCanvasDocument, let selected = doc.selection.selected else {
-            return
+        // Split, not combined: the document gate and the selection are
+        // different questions with different answers, and folding them
+        // into one `guard … else { return }` made a plain
+        // nothing-selected press SILENT on an ordinary ready canvas —
+        // palette-reachable, and out of step with the three sibling
+        // verbs that answer it.
+        guard let doc = canvasReadTarget() else { return }
+        guard let selected = doc.selection.selected else {
+            return canvasAnnounceSelectionUnresolvable()
         }
         guard let neighbors = doc.neighborsIfKnown(of: selected, session: currentSession)
         else {
@@ -230,7 +281,7 @@ extension AppState {
     /// ended it. The hops EXCLUDE the start card, so an empty list is
     /// the dead end mac spelled as `visited.count == 1`.
     func canvasTracePath() {
-        guard let doc = activeCanvasDocument else { return }
+        guard let doc = canvasReadTarget() else { return }
         guard let start = doc.selection.selected else {
             return canvasAnnounceSelectionUnresolvable()
         }
@@ -325,11 +376,16 @@ extension AppState {
         // node including group frames, exactly what the union loop that
         // stood here covered. `nil` is the empty canvas, which is the
         // `!doc.scene.nodes.isEmpty` guard it replaces.
-        guard let doc = activeCanvasDocument else { return }
+        guard let doc = canvasReadTarget() else { return }
         guard let session = currentSession, let handle = doc.handle else {
             return canvasAnnounceStructuralQueryUnavailable(for: doc)
         }
-        guard let bounds = (try? session.canvasBounds(handle: handle)) ?? nil
+        // One `?`, not two (SE-0230 flattens): an empty canvas and a
+        // thrown query arrive as the same `nil`, and both stay silent —
+        // the empty case was silent before PR 0b, and `canvas_bounds`
+        // has no `bad_node` path to distinguish (contracts doc, VA-1's
+        // recorded exclusions).
+        guard let bounds = try? session.canvasBounds(handle: handle)
         else { return }
         doc.viewport.fit(
             rect: CGRect(

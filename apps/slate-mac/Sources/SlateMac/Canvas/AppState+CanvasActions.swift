@@ -877,8 +877,13 @@ extension AppState {
         // mac's `guard minX.isFinite else { return }` silent no-op,
         // typed now (CD-24); what a host SAYS there is PR G's call, not
         // this migration's, so the silence is preserved deliberately.
-        let frameLookup = try? session.canvasGroupRectAround(handle: handle, members: marked)
-        guard let frame = frameLookup ?? nil else { return }
+        // One `?`, not two: SE-0230 flattens `try?` on this
+        // optional-returning call, so a throw and "no member resolved"
+        // arrive as the same `nil`. That is what CD-24 preserves here —
+        // mac's silent no-op — and this verb is a write behind
+        // `admitCanvasMutation`, so VA-1's table does not reach it.
+        guard let frame = try? session.canvasGroupRectAround(handle: handle, members: marked)
+        else { return }
         let ok = canvasApply(
             CanvasAction(
                 // CD-6/CD-26, as above: `CanvasGrouped` groups.

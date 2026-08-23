@@ -277,6 +277,67 @@ final class CanvasNavigatorTests: XCTestCase {
             "a cached adjacency answer survives the window: \(posted)")
     }
 
+    /// `LoadState` has FOUR cases and each is materialized here through
+    /// the real lifecycle methods and DRIVEN, because "what happens in
+    /// this state" is a claim about pressing the key, not about a state
+    /// enum. The earlier version of this test said "all three" — the
+    /// drift that let `.loading` go unexamined.
+    ///
+    /// `.loading` announces VA-2; the other three are silent, which is
+    /// the pre-existing t0 §5 gap filed in the contracts.
+    func testNonReadyCanvasesAnswerPerStateNotAllTheSame() async throws {
+        let state = try await makeState()
+        let doc = try XCTUnwrap(state.activeCanvasDocument)
+        doc.selection.selected = "g1"
+
+        // `.loading` — a prepared replacement installed over an open
+        // tab keeps the snapshot on screen while the state flips.
+        _ = doc.beginPreparedReplacement()
+        guard case .loading = doc.state else {
+            return XCTFail("expected .loading, got \(doc.state)")
+        }
+        XCTAssertNil(state.activeCanvasDocument, "`.ready` is still the gate for the verbs")
+
+        func assertAnnouncesLoading(_ label: String, _ verb: () -> Void) {
+            self.posted = []
+            verb()
+            state.canvasAnnouncer.flushForTests()
+            XCTAssertEqual(
+                self.posted, ["This canvas is loading. Try again in a moment."],
+                "\(label) in `.loading` must speak VA-2, not VA-1 and not silence")
+        }
+        assertAnnouncesLoading("enter group") { state.canvasEnterGroup() }
+        assertAnnouncesLoading("exit group") { state.canvasExitGroup() }
+        assertAnnouncesLoading("trace path") { state.canvasTracePath() }
+        assertAnnouncesLoading("fit canvas") { state.canvasFitCanvas() }
+        assertAnnouncesLoading("where am I") { state.canvasWhereAmI() }
+        assertAnnouncesLoading("follow connection") {
+            state.canvasFollowConnection(forward: true)
+        }
+    }
+
+    /// B4: the document gate and the selection are different questions.
+    /// On an ordinary READY canvas with nothing selected, follow
+    /// connection answers like its three siblings instead of going
+    /// silent — it is palette-reachable, so the press is real.
+    func testFollowConnectionWithoutASelectionAnswersLikeItsSiblings() async throws {
+        let state = try await makeState()
+        let doc = try XCTUnwrap(state.activeCanvasDocument)
+        doc.selection.selected = nil
+
+        for (label, verb) in [("follow forward", true), ("follow back", false)] {
+            posted = []
+            state.canvasFollowConnection(forward: verb)
+            state.canvasAnnouncer.flushForTests()
+            XCTAssertEqual(posted, ["Nothing selected."], "\(label): \(posted)")
+        }
+
+        posted = []
+        state.canvasEnterGroup()
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertEqual(posted, ["Nothing selected."], "the sibling it must match")
+    }
+
     /// The counterpart: the states 0b-2's report wrongly named are gated
     /// out one level higher, so no navigator verb has ever run in them.
     /// All three are materialized through the real lifecycle methods and

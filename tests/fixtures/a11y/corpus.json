@@ -2193,5 +2193,10 @@
     "event": "Canvas { event: CanvasStatus { note: Reopening } }",
     "priority": "medium",
     "text": "This canvas is reopening. Try again in a moment."
+  },
+  {
+    "event": "Canvas { event: CanvasStatus { note: Loading } }",
+    "priority": "medium",
+    "text": "This canvas is loading. Try again in a moment."
   }
 ]

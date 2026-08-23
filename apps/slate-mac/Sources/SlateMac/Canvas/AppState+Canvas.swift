@@ -336,7 +336,14 @@ extension AppState {
         // pull surface, and a pull that yields silence is the failure
         // it exists to prevent).
         guard case .ready = doc.state else {
-            canvasAnnouncer.announce(.canvasStatus(note: .notReadable))
+            // `.loading` is VA-2, not "not readable": a canvas that has
+            // not finished opening is not a canvas that cannot be read.
+            // The other three non-ready states keep `.notReadable`.
+            if case .loading = doc.state {
+                canvasAnnouncer.announce(.canvasStatus(note: .loading))
+            } else {
+                canvasAnnouncer.announce(.canvasStatus(note: .notReadable))
+            }
             return
         }
         // Ready but handle-less is the reopening window. Through VA-1's
