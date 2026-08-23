@@ -18895,6 +18895,15 @@ fn bad_node(node_id: &str) -> VaultError {
     }
 }
 
+/// The node exists but is not a container — distinct from [`bad_node`]
+/// on purpose, because "no such card" and "that card is not a group"
+/// send a caller to different fixes (W6-1 0b-12).
+fn not_a_group(node_id: &str) -> VaultError {
+    VaultError::InvalidArgument {
+        message: format!("canvas node {node_id:?} is not a group"),
+    }
+}
+
 impl VaultSession {
     /// Open a `.canvas` file: tolerant parse, model derivation, index
     /// refresh (one transaction), and a session-scoped handle for all
@@ -19022,16 +19031,17 @@ impl VaultSession {
         )?;
         let rows = stmt.query_map(rusqlite::params![file_id], |row| {
             let node_id: String = row.get(0)?;
+            let title: String = row.get(3)?;
             Ok(CanvasOutlineRow {
                 depth: row.get::<_, i64>(1)? as u32,
                 kind: row.get(2)?,
-                title: row.get(3)?,
                 group_path: parse_group_path(&row.get::<_, String>(4)?),
                 ordinal_n: row.get::<_, i64>(5)? as u32,
                 total_m: row.get::<_, i64>(6)? as u32,
                 connection_count: row.get::<_, i64>(7)? as u32,
                 color_name: row.get(8)?,
-                speakable_name: speakable.get(&node_id).cloned().unwrap_or_default(),
+                speakable_name: speakable_for(&speakable, &node_id, &title),
+                title,
                 node_id,
             })
         })?;
@@ -19049,14 +19059,15 @@ impl VaultSession {
         )?;
         let rows = stmt.query_map(rusqlite::params![file_id], |row| {
             let node_id: String = row.get(0)?;
+            let title: String = row.get(2)?;
             Ok(CanvasTableRow {
                 kind: row.get(1)?,
-                title: row.get(2)?,
                 group_path: parse_group_path(&row.get::<_, String>(3)?),
                 target: row.get(4)?,
                 connection_count: row.get::<_, i64>(5)? as u32,
                 color_name: row.get(6)?,
-                speakable_name: speakable.get(&node_id).cloned().unwrap_or_default(),
+                speakable_name: speakable_for(&speakable, &node_id, &title),
+                title,
                 node_id,
             })
         })?;
@@ -19256,6 +19267,11 @@ impl VaultSession {
     /// A free slot for a card of `width × height` INSIDE the group
     /// (0b-12) — or a typed "too small" / "full" outcome, never a point
     /// outside the group.
+    ///
+    /// `group_id` must name a GROUP. A card's rect is not a container,
+    /// and answering geometry for one would hand the caller a position
+    /// "inside" something that cannot hold it — so a non-group id is
+    /// refused rather than answered (PR E is the first consumer).
     pub fn canvas_place_inside_group(
         &self,
         handle: u64,
@@ -19272,6 +19288,9 @@ impl VaultSession {
             .spatial
             .rect_of(&id)
             .ok_or_else(|| bad_node(group_id))?;
+        if state.model.summaries.get(&id).map(|s| s.kind_label) != Some("group") {
+            return Err(not_a_group(group_id));
+        }
         let exclude: Vec<crate::canvas::NodeId> =
             exclude.into_iter().map(crate::canvas::NodeId).collect();
         Ok(crate::canvas::placement::place_inside_group(
@@ -19593,10 +19612,17 @@ impl VaultSession {
 
     /// The handle's file id together with its `node_id → speakable_name`
     /// map — the in-memory join contract 0b-6 chose over a derived
-    /// column. Both come out of ONE registry lock, and the lock is
-    /// released before the SQLite read: the established order in this
-    /// module is canvases → conn (see `canvas_apply`), so a query
-    /// holding the connection must never reach back for the registry.
+    /// column.
+    ///
+    /// The map is BUILT PER CALL: two `String` clones per node, so one
+    /// linear pass and 2N allocations before the query runs. That is
+    /// the same order as the row materialization it feeds and keeps the
+    /// §K budget, but it is a copy, not a borrow — the alternative
+    /// (holding the registry lock across the SQLite read) would invert
+    /// this module's lock order. Both values come out of ONE registry
+    /// lock which is released before the connection is taken: the order
+    /// here is canvases → conn (see `canvas_apply`), so a query holding
+    /// the connection must never reach back for the registry.
     fn canvas_rows_context(
         &self,
         handle: u64,
@@ -19615,6 +19641,30 @@ impl VaultSession {
 
 fn parse_group_path(json: &str) -> Vec<String> {
     serde_json::from_str(json).unwrap_or_default()
+}
+
+/// The joined speakable name for one indexed row (W6-1 0b-6).
+///
+/// The map comes from the handle's OPEN-TIME model and the row comes
+/// from `canvas_nodes`, which a rescan rewrites while the handle is
+/// still open. Holding a handle therefore guarantees a model, but NOT
+/// that the model and the rows agree about which nodes exist: an
+/// external edit plus a rescan leaves rows whose ids the snapshot never
+/// had. Falling back to the row's own title keeps the name non-empty,
+/// which is what Voice Control addressability needs — an empty
+/// speakable name is a card that cannot be spoken to at all. The
+/// fallback gives up UNIQUENESS for those rows, not addressability;
+/// the host recovers both by reopening the handle, which is what it
+/// already does on the change event.
+fn speakable_for(
+    names: &std::collections::HashMap<String, String>,
+    node_id: &str,
+    title: &str,
+) -> String {
+    match names.get(node_id) {
+        Some(name) => name.clone(),
+        None => title.to_owned(),
+    }
 }
 
 /// A model rect as the FFI's origin+size record (W6-1 0b-11).

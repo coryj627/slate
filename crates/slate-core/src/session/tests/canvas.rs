@@ -797,3 +797,92 @@ fn speakable_names_join_onto_the_indexed_rows() {
         assert_eq!(where_am_i.speakable_name, expected);
     }
 }
+
+/// Contract 0b-6's join reads the handle's OPEN-TIME model, and a
+/// rescan rewrites `canvas_nodes` underneath it. Holding a handle
+/// therefore guarantees a model, but not that the model and the rows
+/// agree about which nodes exist — so the join can miss, and a missing
+/// name must not leave a card unaddressable.
+#[test]
+fn speakable_name_falls_back_to_the_title_when_the_rows_outrun_the_handle() {
+    let (tmp, session) = make_vault(|p| {
+        p.write_file(
+            "board.canvas",
+            br#"{"nodes":[
+                {"id":"before","type":"text","text":"Original","x":0,"y":0,"width":10,"height":10}
+            ],"edges":[]}"#,
+        )
+        .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let info = session.open_canvas("board.canvas").unwrap();
+    let h = info.handle;
+    assert_eq!(
+        session.canvas_outline(h).unwrap()[0].speakable_name,
+        "Original"
+    );
+
+    // An external writer replaces the card with one carrying a
+    // DIFFERENT id, and a rescan re-derives the index rows. The open
+    // handle's model still knows only `before`.
+    let provider = FsVaultProvider::new(tmp.path().to_path_buf());
+    provider
+        .write_file(
+            "board.canvas",
+            br#"{"nodes":[
+                {"id":"after","type":"text","text":"Replaced","x":0,"y":0,"width":10,"height":10}
+            ],"edges":[]}"#,
+        )
+        .unwrap();
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let outline = session.canvas_outline(h).unwrap();
+    assert_eq!(outline.len(), 1);
+    assert_eq!(outline[0].node_id, "after", "the rows moved on");
+    assert_eq!(
+        outline[0].speakable_name, "Replaced",
+        "a joined name that misses falls back to the row's own title, never to \
+         the empty string — an empty speakable name is a card Voice Control \
+         cannot address at all"
+    );
+    let table = session.canvas_table_rows(h).unwrap();
+    assert_eq!(table[0].speakable_name, "Replaced");
+
+    // Reopening reconciles both halves, which is the host's recovery.
+    let reopened = session.open_canvas("board.canvas").unwrap();
+    assert_eq!(
+        session.canvas_outline(reopened.handle).unwrap()[0].speakable_name,
+        "Replaced"
+    );
+}
+
+/// A card's rect is not a container: `canvas_place_inside_group`
+/// refuses a non-group id rather than answering geometry "inside"
+/// something that cannot hold it (0b-12; PR E is the first consumer).
+#[test]
+fn place_inside_group_refuses_a_node_that_is_not_a_group() {
+    let (_tmp, session) = canvas_vault();
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let info = session.open_canvas("board.canvas").unwrap();
+
+    let refused = session
+        .canvas_place_inside_group(info.handle, "card-question", 10.0, 10.0, Vec::new())
+        .expect_err("a text card is not a group");
+    match refused {
+        VaultError::InvalidArgument { ref message } => {
+            assert!(message.contains("not a group"), "{message}");
+            // Distinct from the unknown-node message: the two send a
+            // caller to different fixes.
+            assert!(!message.contains("not found"), "{message}");
+        }
+        other => panic!("expected InvalidArgument, got {other:?}"),
+    }
+
+    // The real group still answers.
+    assert!(matches!(
+        session
+            .canvas_place_inside_group(info.handle, "grp-inspiration", 20.0, 20.0, Vec::new())
+            .unwrap(),
+        crate::canvas::placement::InsideGroupPlacement::Placed { .. }
+    ));
+}
