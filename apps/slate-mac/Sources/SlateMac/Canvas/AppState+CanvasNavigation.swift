@@ -52,8 +52,17 @@ extension AppState {
 
     /// Enter the selected group (select its first child), or announce
     /// that the selection isn't a group.
+    ///
+    /// §W-G row E: the "next outline row one level deeper" walk was a
+    /// re-derivation of `GroupTree.children` off the flattened depth
+    /// column. It asks core directly now (`canvas_children_of`,
+    /// contract 0b-8), whose sibling order `(y, x, document index)` is
+    /// the order the outline's depth-first walk emits — so the first
+    /// child is the same card it always was.
     func canvasEnterGroup() {
         guard let doc = activeCanvasDocument,
+            let session = currentSession,
+            let handle = doc.handle,
             let selected = doc.selection.selected,
             let row = doc.outline.first(where: { $0.nodeId == selected })
         else { return }
@@ -61,32 +70,39 @@ extension AppState {
             canvasAnnouncer.announce(.canvasStatus(note: .notAGroup))
             return
         }
-        // First child = the next outline row one level deeper.
-        guard let index = doc.outline.firstIndex(where: { $0.nodeId == selected }),
-            index + 1 < doc.outline.count,
-            doc.outline[index + 1].depth == row.depth + 1
-        else {
+        let children = (try? session.canvasChildrenOf(handle: handle, groupId: selected)) ?? []
+        guard let firstChild = children.first else {
             canvasAnnouncer.announce(.canvasStatus(note: .groupIsEmpty(label: row.title)))
             return
         }
-        canvasSelect(nodeId: doc.outline[index + 1].nodeId, in: doc)
+        canvasSelect(nodeId: firstChild, in: doc)
     }
 
     /// Exit to the containing group (select the group row), or announce
     /// canvas level.
+    ///
+    /// §W-G row E: the backwards scan for the nearest preceding row at
+    /// `depth − 1` is `GroupTree.parent` spelled in outline indices.
+    /// `canvas_parent_of` (contract 0b-8) answers it, and `nil` — no
+    /// parent — is exactly "at canvas level".
     func canvasExitGroup() {
         guard let doc = activeCanvasDocument,
+            let session = currentSession,
+            let handle = doc.handle,
             let selected = doc.selection.selected,
-            let row = doc.outline.first(where: { $0.nodeId == selected })
+            // A selection the canvas no longer holds returns SILENTLY,
+            // as it did when the outline row lookup failed: core would
+            // refuse that id with `bad_node`, and reporting "at canvas
+            // level" for a card that is not on the canvas would be a
+            // new sentence, not a migration.
+            doc.outline.contains(where: { $0.nodeId == selected })
         else { return }
-        guard row.depth > 0,
-            let index = doc.outline.firstIndex(where: { $0.nodeId == selected }),
-            let parent = doc.outline[..<index].last(where: { $0.depth == row.depth - 1 })
-        else {
+        let parentLookup = try? session.canvasParentOf(handle: handle, nodeId: selected)
+        guard let parent = parentLookup ?? nil else {
             canvasAnnouncer.announce(.canvasStatus(note: .atCanvasLevel))
             return
         }
-        canvasSelect(nodeId: parent.nodeId, in: doc)
+        canvasSelect(nodeId: parent, in: doc)
     }
 
     /// Follow the selected card's Nth connection (1-based) in the given
@@ -128,34 +144,33 @@ extension AppState {
 
     /// Trace the outgoing chain from the selected card (cycle-safe),
     /// announcing each hop, ending with the visited count (t3).
+    ///
+    /// §W-G row E: the greedy first-unseen walk is core's
+    /// (`canvas_trace_path`, contract 0b-9) — `Outgoing` and
+    /// `Bidirectional` are traversable, `Undirected` is not, neighbours
+    /// come in edge document order, and the seen set is keyed by node,
+    /// so a cycle or a self-loop ends the walk exactly where mac's loop
+    /// ended it. The hops EXCLUDE the start card, so an empty list is
+    /// the dead end mac spelled as `visited.count == 1`.
     func canvasTracePath() {
-        guard let doc = activeCanvasDocument, let start = doc.selection.selected else { return }
-        var visited: [String] = [start]
-        var seen: Set<String> = [start]
-        var current = start
-        while true {
-            let outgoing = doc.neighbors(of: current, session: currentSession)
-                .filter { $0.direction == .outgoing || $0.direction == .bidirectional }
-            guard let next = outgoing.first(where: { !seen.contains($0.otherNode) }) else {
-                break
-            }
-            visited.append(next.otherNode)
-            seen.insert(next.otherNode)
-            current = next.otherNode
-        }
-        let titles = visited.compactMap { id in
-            doc.outline.first { $0.nodeId == id }?.title
-        }
-        if visited.count == 1 {
+        guard let doc = activeCanvasDocument,
+            let session = currentSession,
+            let handle = doc.handle,
+            let start = doc.selection.selected,
+            let hops = try? session.canvasTracePath(handle: handle, nodeId: start)
+        else { return }
+        let startTitle = doc.outline.first { $0.nodeId == start }?.title
+        guard let last = hops.last else {
             canvasAnnouncer.announce(
-                .canvasStatus(note: .noOutgoingPath(title: titles.first ?? "")))
+                .canvasStatus(note: .noOutgoingPath(title: startTitle ?? "")))
             return
         }
-        canvasSelect(nodeId: current, in: doc, announce: false)
+        canvasSelect(nodeId: last.nodeId, in: doc, announce: false)
         // The event carries the TITLES only; core speaks their count as
         // the sentence's tail, so the list and the number it claims can
         // never disagree (contracts doc CD-13 — mac spoke
         // `visited.count` while listing `titles`).
+        let titles = (startTitle.map { [$0] } ?? []) + hops.map(\.title)
         canvasAnnouncer.announce(.canvasTracePathEnd(titles: titles))
     }
 
