@@ -1293,5 +1293,830 @@
     "event": "HostComposed { text: \"Composed by a host engine.\", priority: High }",
     "priority": "high",
     "text": "Composed by a host engine."
+  },
+  {
+    "event": "CanvasMovedTo { verbosity: Terse, kind_label: \"text\", title: \"Research\", ordinal_n: 2, total_m: 5, container: Some(\"Q3\"), connection_count: 3, color_name: Some(\"red\"), marked: true }",
+    "priority": "medium",
+    "text": "Research"
+  },
+  {
+    "event": "CanvasMovedTo { verbosity: Standard, kind_label: \"text\", title: \"Research\", ordinal_n: 2, total_m: 5, container: Some(\"Q3\"), connection_count: 3, color_name: Some(\"red\"), marked: true }",
+    "priority": "medium",
+    "text": "Text card \"Research\", 2 of 5 in Q3"
+  },
+  {
+    "event": "CanvasMovedTo { verbosity: Verbose, kind_label: \"text\", title: \"Research\", ordinal_n: 2, total_m: 5, container: Some(\"Q3\"), connection_count: 3, color_name: Some(\"red\"), marked: true }",
+    "priority": "medium",
+    "text": "Text card \"Research\", 2 of 5 in Q3, 3 connections, red, marked"
+  },
+  {
+    "event": "CanvasMovedTo { verbosity: Standard, kind_label: \"group\", title: \"Q3\", ordinal_n: 1, total_m: 3, container: None, connection_count: 0, color_name: None, marked: false }",
+    "priority": "medium",
+    "text": "Group \"Q3\", 1 of 3 in canvas"
+  },
+  {
+    "event": "CanvasMovedTo { verbosity: Verbose, kind_label: \"file\", title: \"Notes.md\", ordinal_n: 1, total_m: 1, container: None, connection_count: 1, color_name: None, marked: false }",
+    "priority": "medium",
+    "text": "File card \"Notes.md\", 1 of 1 in canvas, 1 connection"
+  },
+  {
+    "event": "CanvasGroupEntered { label: \"Q3\", count: 4 }",
+    "priority": "medium",
+    "text": "Entering group \"Q3\", 4 cards"
+  },
+  {
+    "event": "CanvasGroupEntered { label: \"Solo\", count: 1 }",
+    "priority": "medium",
+    "text": "Entering group \"Solo\", 1 card"
+  },
+  {
+    "event": "CanvasGroupLeft { label: \"Q3\" }",
+    "priority": "medium",
+    "text": "Leaving group \"Q3\""
+  },
+  {
+    "event": "CanvasConnectionTraversed { direction: Outgoing, kind_label: \"text\", title: \"Ideas\", label: Some(\"supports\") }",
+    "priority": "medium",
+    "text": "Connects to Text card \"Ideas\", labelled \"supports\""
+  },
+  {
+    "event": "CanvasConnectionTraversed { direction: Incoming, kind_label: \"text\", title: \"Research\", label: None }",
+    "priority": "medium",
+    "text": "Connected from Text card \"Research\""
+  },
+  {
+    "event": "CanvasConnectionTraversed { direction: Undirected, kind_label: \"group\", title: \"Q3\", label: None }",
+    "priority": "medium",
+    "text": "Linked with Group \"Q3\""
+  },
+  {
+    "event": "CanvasConnectionTraversed { direction: Bidirectional, kind_label: \"link\", title: \"example.com\", label: None }",
+    "priority": "medium",
+    "text": "Linked with Link card \"example.com\""
+  },
+  {
+    "event": "CanvasTracePathEnd { titles: [\"Research\", \"Ideas\", \"Draft\"] }",
+    "priority": "medium",
+    "text": "Path: Research, then Ideas, then Draft. End of path — 3 cards visited."
+  },
+  {
+    "event": "CanvasMoveRelative { descs: [], overlap: None }",
+    "priority": "medium",
+    "text": "Alone on the canvas"
+  },
+  {
+    "event": "CanvasMoveRelative { descs: [Below(\"Research\")], overlap: None }",
+    "priority": "medium",
+    "text": "Below \"Research\""
+  },
+  {
+    "event": "CanvasMoveRelative { descs: [Below(\"Research\"), RightOf(\"Ideas\")], overlap: Some(Onset) }",
+    "priority": "medium",
+    "text": "Below \"Research\", right of \"Ideas\". Overlapping another card"
+  },
+  {
+    "event": "CanvasMoveRelative { descs: [Above(\"Ideas\")], overlap: Some(Cleared) }",
+    "priority": "medium",
+    "text": "Above \"Ideas\". Clear of overlaps"
+  },
+  {
+    "event": "CanvasResizeGeometry { preset: None, width: 320, height: 200, overlap: None }",
+    "priority": "medium",
+    "text": "320 by 200"
+  },
+  {
+    "event": "CanvasResizeGeometry { preset: Some(DefaultSize), width: 260, height: 140, overlap: None }",
+    "priority": "medium",
+    "text": "Resized to default size: 260 by 140"
+  },
+  {
+    "event": "CanvasResizeGeometry { preset: Some(FitToContent), width: 260, height: 88, overlap: Some(Onset) }",
+    "priority": "medium",
+    "text": "Resized to fit to content: 260 by 88. Overlapping another card"
+  },
+  {
+    "event": "CanvasResizeClamped",
+    "priority": "medium",
+    "text": "Minimum size."
+  },
+  {
+    "event": "CanvasModeEntered { mode: Move, object: Card { title: \"Research\" } }",
+    "priority": "medium",
+    "text": "Move mode — \"Research\". Arrows to move, Shift for big steps, Return to place, Escape to cancel."
+  },
+  {
+    "event": "CanvasModeEntered { mode: Move, object: Cards { count: 3 } }",
+    "priority": "medium",
+    "text": "Move mode — 3 cards. Arrows to move, Shift for big steps, Return to place, Escape to cancel."
+  },
+  {
+    "event": "CanvasModeEntered { mode: Resize, object: Card { title: \"Research\" } }",
+    "priority": "medium",
+    "text": "Resize mode — \"Research\". Left and Right arrows change width, Up and Down change height, Return to apply, Escape to cancel."
+  },
+  {
+    "event": "CanvasModeEntered { mode: Connect, object: Card { title: \"Research\" } }",
+    "priority": "medium",
+    "text": "Connect mode — \"Research\". Navigate to the target with the usual movements, Return to connect, Escape to cancel."
+  },
+  {
+    "event": "CanvasModeRejected { active_mode: Move }",
+    "priority": "high",
+    "text": "Move mode is active. Return to commit or Escape to cancel first."
+  },
+  {
+    "event": "CanvasModeCommitted { verb: Move, object: Card { title: \"Research\" } }",
+    "priority": "medium",
+    "text": "Placed \"Research\"."
+  },
+  {
+    "event": "CanvasModeCommitted { verb: Move, object: Cards { count: 3 } }",
+    "priority": "medium",
+    "text": "Placed 3 cards."
+  },
+  {
+    "event": "CanvasModeCommitted { verb: Resize, object: Card { title: \"Research\" } }",
+    "priority": "medium",
+    "text": "Resized \"Research\"."
+  },
+  {
+    "event": "CanvasModeEndedWithoutEffect { mode: Move }",
+    "priority": "medium",
+    "text": "Move ended — nothing changed."
+  },
+  {
+    "event": "CanvasModeEndedWithoutEffect { mode: Resize }",
+    "priority": "medium",
+    "text": "Resize ended — nothing changed."
+  },
+  {
+    "event": "CanvasModeEndedWithoutEffect { mode: Connect }",
+    "priority": "medium",
+    "text": "Connect ended — no target chosen."
+  },
+  {
+    "event": "CanvasModeCancelled { mode: Move, restoration: Unstated }",
+    "priority": "medium",
+    "text": "Move cancelled."
+  },
+  {
+    "event": "CanvasModeCancelled { mode: Move, restoration: CardsReturned { count: 1 } }",
+    "priority": "medium",
+    "text": "Move cancelled — card returned."
+  },
+  {
+    "event": "CanvasModeCancelled { mode: Move, restoration: CardsReturned { count: 3 } }",
+    "priority": "medium",
+    "text": "Move cancelled — cards returned."
+  },
+  {
+    "event": "CanvasModeCancelled { mode: Resize, restoration: Unstated }",
+    "priority": "medium",
+    "text": "Resize cancelled."
+  },
+  {
+    "event": "CanvasModeCancelled { mode: Resize, restoration: SizeRestored }",
+    "priority": "medium",
+    "text": "Resize cancelled — size restored."
+  },
+  {
+    "event": "CanvasModeCancelled { mode: Connect, restoration: Unstated }",
+    "priority": "medium",
+    "text": "Connect cancelled."
+  },
+  {
+    "event": "CanvasModeCancelled { mode: Connect, restoration: BackAt { title: \"Research\" } }",
+    "priority": "medium",
+    "text": "Connect cancelled — back at \"Research\"."
+  },
+  {
+    "event": "CanvasCreated { kind_label: \"text\", title: \"New idea\", relative: Below(\"Research\") }",
+    "priority": "medium",
+    "text": "Created text card \"New idea\" below \"Research\""
+  },
+  {
+    "event": "CanvasCreated { kind_label: \"group\", title: \"Q3\", relative: RightOf(\"Research\") }",
+    "priority": "medium",
+    "text": "Created group \"Q3\" right of \"Research\""
+  },
+  {
+    "event": "CanvasCreated { kind_label: \"file\", title: \"Notes.md\", relative: Above(\"Research\") }",
+    "priority": "medium",
+    "text": "Created file card \"Notes.md\" above \"Research\""
+  },
+  {
+    "event": "CanvasCreated { kind_label: \"link\", title: \"example.com\", relative: LeftOf(\"Research\") }",
+    "priority": "medium",
+    "text": "Created link card \"example.com\" left of \"Research\""
+  },
+  {
+    "event": "CanvasCreated { kind_label: \"text\", title: \"Untitled\", relative: AtOrigin }",
+    "priority": "medium",
+    "text": "Created text card \"Untitled\" at the canvas origin"
+  },
+  {
+    "event": "CanvasFileCreated { name: \"Roadmap\" }",
+    "priority": "medium",
+    "text": "Created canvas \"Roadmap\"."
+  },
+  {
+    "event": "CanvasConnectedCardCreated { relative: Below(\"Research\"), origin_title: \"Research\" }",
+    "priority": "medium",
+    "text": "Created connected card below \"Research\" — connected from \"Research\"."
+  },
+  {
+    "event": "CanvasConnected { from_title: \"Research\", to_title: \"Ideas\", label: Some(\"supports\") }",
+    "priority": "medium",
+    "text": "Connected \"Research\" to \"Ideas\", labelled \"supports\"."
+  },
+  {
+    "event": "CanvasConnected { from_title: \"Research\", to_title: \"Ideas\", label: None }",
+    "priority": "medium",
+    "text": "Connected \"Research\" to \"Ideas\"."
+  },
+  {
+    "event": "CanvasConnectionUpdated { label: Some(\"supports\") }",
+    "priority": "medium",
+    "text": "Connection updated, labelled \"supports\"."
+  },
+  {
+    "event": "CanvasConnectionUpdated { label: None }",
+    "priority": "medium",
+    "text": "Connection updated."
+  },
+  {
+    "event": "CanvasMovedIntoGroup { label: \"Q3\" }",
+    "priority": "medium",
+    "text": "Moved into group \"Q3\"."
+  },
+  {
+    "event": "CanvasRemovedFromGroup { label: \"Q3\" }",
+    "priority": "medium",
+    "text": "Removed from group \"Q3\"."
+  },
+  {
+    "event": "CanvasColorSet { title: \"Research\", color_name: Some(\"red\") }",
+    "priority": "medium",
+    "text": "Set \"Research\" to red."
+  },
+  {
+    "event": "CanvasColorSet { title: \"Research\", color_name: None }",
+    "priority": "medium",
+    "text": "Set \"Research\" to no color."
+  },
+  {
+    "event": "CanvasRenamedGroup { label: \"Q3\" }",
+    "priority": "medium",
+    "text": "Renamed group to \"Q3\"."
+  },
+  {
+    "event": "CanvasCardUpdated { title: \"Research\" }",
+    "priority": "medium",
+    "text": "Updated \"Research\"."
+  },
+  {
+    "event": "CanvasCardRetargeted { title: \"Research\", path: \"notes/research.md\" }",
+    "priority": "medium",
+    "text": "\"Research\" now points at notes/research.md."
+  },
+  {
+    "event": "CanvasCardPlaced { verb: Moved, title: \"Research\", relative: Below(\"Ideas\") }",
+    "priority": "medium",
+    "text": "Moved \"Research\" below \"Ideas\"."
+  },
+  {
+    "event": "CanvasCardPlaced { verb: Duplicated, title: \"Research\", relative: RightOf(\"Research\") }",
+    "priority": "medium",
+    "text": "Duplicated \"Research\" right of \"Research\"."
+  },
+  {
+    "event": "CanvasCardAligned { title: \"Research\", target_title: \"Ideas\" }",
+    "priority": "medium",
+    "text": "Aligned \"Research\" with \"Ideas\"."
+  },
+  {
+    "event": "CanvasConvertedToNote { path: \"notes/research.md\" }",
+    "priority": "medium",
+    "text": "Converted to note notes/research.md. The card now points at it."
+  },
+  {
+    "event": "CanvasDeleted { target: Card { kind_label: \"text\", title: \"Research\" }, verbosity: Standard, undo_chord: \"⌘Z\" }",
+    "priority": "medium",
+    "text": "Deleted Text card \"Research\" — ⌘Z to undo"
+  },
+  {
+    "event": "CanvasDeleted { target: Card { kind_label: \"text\", title: \"Research\" }, verbosity: Terse, undo_chord: \"⌘Z\" }",
+    "priority": "medium",
+    "text": "Deleted Text card \"Research\""
+  },
+  {
+    "event": "CanvasDeleted { target: Group { label: \"Q3\" }, verbosity: Standard, undo_chord: \"⌘Z\" }",
+    "priority": "medium",
+    "text": "Ungrouped Group \"Q3\" — cards kept — ⌘Z to undo"
+  },
+  {
+    "event": "CanvasDeleted { target: Cards { count: 3 }, verbosity: Standard, undo_chord: \"Ctrl+Z\" }",
+    "priority": "medium",
+    "text": "Deleted 3 cards — Ctrl+Z to undo"
+  },
+  {
+    "event": "CanvasDeleted { target: Cards { count: 1 }, verbosity: Verbose, undo_chord: \"⌘Z\" }",
+    "priority": "medium",
+    "text": "Deleted 1 card — ⌘Z to undo"
+  },
+  {
+    "event": "CanvasDeleted { target: Connection { direction: Outgoing, other_title: \"Ideas\", label: Some(\"supports\") }, verbosity: Standard, undo_chord: \"⌘Z\" }",
+    "priority": "medium",
+    "text": "Deleted connection to \"Ideas\", labelled \"supports\" — ⌘Z to undo"
+  },
+  {
+    "event": "CanvasDeleted { target: Connection { direction: Incoming, other_title: \"Research\", label: None }, verbosity: Terse, undo_chord: \"⌘Z\" }",
+    "priority": "medium",
+    "text": "Deleted connection from \"Research\""
+  },
+  {
+    "event": "CanvasDeleted { target: Connection { direction: Undirected, other_title: \"Q3\", label: None }, verbosity: Standard, undo_chord: \"⌘Z\" }",
+    "priority": "medium",
+    "text": "Deleted connection with \"Q3\" — ⌘Z to undo"
+  },
+  {
+    "event": "CanvasBulkMoved { count: 3, relative: Below(\"Research\") }",
+    "priority": "medium",
+    "text": "Moved 3 cards below \"Research\"."
+  },
+  {
+    "event": "CanvasBulkColorSet { count: 3, color_name: Some(\"cyan\") }",
+    "priority": "medium",
+    "text": "Set 3 cards to cyan."
+  },
+  {
+    "event": "CanvasBulkColorSet { count: 1, color_name: None }",
+    "priority": "medium",
+    "text": "Set 1 card to no color."
+  },
+  {
+    "event": "CanvasGrouped { count: 3, label: \"Q3\" }",
+    "priority": "medium",
+    "text": "Grouped 3 cards into \"Q3\"."
+  },
+  {
+    "event": "CanvasBulkDuplicated { count: 2 }",
+    "priority": "medium",
+    "text": "Duplicated 2 cards — one undo restores."
+  },
+  {
+    "event": "CanvasMarkToggled { marked: true, title: \"Research\", count: 2 }",
+    "priority": "medium",
+    "text": "Marked \"Research\". 2 marked."
+  },
+  {
+    "event": "CanvasMarkToggled { marked: false, title: \"Research\", count: 1 }",
+    "priority": "medium",
+    "text": "Unmarked \"Research\". 1 marked."
+  },
+  {
+    "event": "CanvasMarksCleared { count: 0 }",
+    "priority": "medium",
+    "text": "No marks."
+  },
+  {
+    "event": "CanvasMarksCleared { count: 3 }",
+    "priority": "medium",
+    "text": "Cleared 3 marks."
+  },
+  {
+    "event": "CanvasFilterCount { matched: 3 }",
+    "priority": "medium",
+    "text": "3 cards match."
+  },
+  {
+    "event": "CanvasFilterCount { matched: 1 }",
+    "priority": "medium",
+    "text": "1 card match."
+  },
+  {
+    "event": "CanvasFilterCleared { total: 40 }",
+    "priority": "medium",
+    "text": "Filter cleared — 40 cards."
+  },
+  {
+    "event": "CanvasFilterCleared { total: 1 }",
+    "priority": "medium",
+    "text": "Filter cleared — 1 card."
+  },
+  {
+    "event": "CanvasZoom { context: None, percent: 100 }",
+    "priority": "medium",
+    "text": "Zoom 100 percent."
+  },
+  {
+    "event": "CanvasZoom { context: Some(FitCanvas), percent: 80 }",
+    "priority": "medium",
+    "text": "Fit canvas. Zoom 80 percent."
+  },
+  {
+    "event": "CanvasZoom { context: Some(ZoomedToSelection), percent: 150 }",
+    "priority": "medium",
+    "text": "Zoomed to selection. Zoom 150 percent."
+  },
+  {
+    "event": "CanvasFollowSelectionToggled { following: true }",
+    "priority": "medium",
+    "text": "Viewport follows selection."
+  },
+  {
+    "event": "CanvasFollowSelectionToggled { following: false }",
+    "priority": "medium",
+    "text": "Viewport stays put."
+  },
+  {
+    "event": "CanvasSurfaceShown { surface: Outline }",
+    "priority": "medium",
+    "text": "Canvas outline view."
+  },
+  {
+    "event": "CanvasSurfaceShown { surface: Table }",
+    "priority": "medium",
+    "text": "Canvas table view."
+  },
+  {
+    "event": "CanvasSurfaceShown { surface: Visual }",
+    "priority": "medium",
+    "text": "Canvas visual view."
+  },
+  {
+    "event": "CanvasHistoryApplied { verb: Undo, name: \"move \\\"Research\\\"\" }",
+    "priority": "medium",
+    "text": "Undid: move \"Research\""
+  },
+  {
+    "event": "CanvasHistoryApplied { verb: Redo, name: \"move \\\"Research\\\"\" }",
+    "priority": "medium",
+    "text": "Redid: move \"Research\""
+  },
+  {
+    "event": "CanvasUndoMenuTitle { verb: Undo, name: \"delete \\\"My Card\\\"\" }",
+    "priority": "medium",
+    "text": "Undo Delete \"My Card\""
+  },
+  {
+    "event": "CanvasUndoMenuTitle { verb: Redo, name: \"\" }",
+    "priority": "medium",
+    "text": "Redo"
+  },
+  {
+    "event": "CanvasStatus { note: NothingSelected }",
+    "priority": "medium",
+    "text": "Nothing selected."
+  },
+  {
+    "event": "CanvasStatus { note: NoMarks }",
+    "priority": "medium",
+    "text": "No marks."
+  },
+  {
+    "event": "CanvasStatus { note: NotAGroup }",
+    "priority": "medium",
+    "text": "Not a group."
+  },
+  {
+    "event": "CanvasStatus { note: NotATextCard }",
+    "priority": "medium",
+    "text": "Not a text card."
+  },
+  {
+    "event": "CanvasStatus { note: NotAFileCard }",
+    "priority": "medium",
+    "text": "Not a file card."
+  },
+  {
+    "event": "CanvasStatus { note: NoGroups }",
+    "priority": "medium",
+    "text": "This canvas has no groups."
+  },
+  {
+    "event": "CanvasStatus { note: NoNotesInVault }",
+    "priority": "medium",
+    "text": "This vault has no notes yet."
+  },
+  {
+    "event": "CanvasStatus { note: NoMediaInVault }",
+    "priority": "medium",
+    "text": "This vault has no media files."
+  },
+  {
+    "event": "CanvasStatus { note: NoFilesToPointAt }",
+    "priority": "medium",
+    "text": "This vault has no files to point at."
+  },
+  {
+    "event": "CanvasStatus { note: OnlyTextCardsConvert }",
+    "priority": "medium",
+    "text": "Only text cards convert to notes."
+  },
+  {
+    "event": "CanvasStatus { note: NoConnections }",
+    "priority": "medium",
+    "text": "The selected card has no connections."
+  },
+  {
+    "event": "CanvasStatus { note: PickOutsideMovingSet }",
+    "priority": "medium",
+    "text": "Pick a card outside the moving set."
+  },
+  {
+    "event": "CanvasStatus { note: PickDifferentTarget }",
+    "priority": "medium",
+    "text": "Pick a different card to connect to."
+  },
+  {
+    "event": "CanvasStatus { note: NoChanges }",
+    "priority": "medium",
+    "text": "No changes."
+  },
+  {
+    "event": "CanvasStatus { note: NotReadable }",
+    "priority": "medium",
+    "text": "Canvas is not readable."
+  },
+  {
+    "event": "CanvasStatus { note: Empty }",
+    "priority": "medium",
+    "text": "Canvas is empty."
+  },
+  {
+    "event": "CanvasStatus { note: EndOfCanvas }",
+    "priority": "medium",
+    "text": "End of canvas."
+  },
+  {
+    "event": "CanvasStatus { note: StartOfCanvas }",
+    "priority": "medium",
+    "text": "Start of canvas."
+  },
+  {
+    "event": "CanvasStatus { note: AtCanvasLevel }",
+    "priority": "medium",
+    "text": "At canvas level."
+  },
+  {
+    "event": "CanvasStatus { note: NoCardsMatchFilter }",
+    "priority": "medium",
+    "text": "No cards match the filter."
+  },
+  {
+    "event": "CanvasStatus { note: NothingToUndo }",
+    "priority": "medium",
+    "text": "Nothing to undo."
+  },
+  {
+    "event": "CanvasStatus { note: NothingToRedo }",
+    "priority": "medium",
+    "text": "Nothing to redo."
+  },
+  {
+    "event": "CanvasStatus { note: GroupIsEmpty { label: \"Q3\" } }",
+    "priority": "medium",
+    "text": "Group \"Q3\" is empty."
+  },
+  {
+    "event": "CanvasStatus { note: NoOutgoingPath { title: \"Research\" } }",
+    "priority": "medium",
+    "text": "No outgoing path from \"Research\"."
+  },
+  {
+    "event": "CanvasStatus { note: NotInAGroup { title: \"Research\" } }",
+    "priority": "medium",
+    "text": "\"Research\" is not in a group."
+  },
+  {
+    "event": "CanvasStatus { note: NoConnection { forward: true, ordinal: None } }",
+    "priority": "medium",
+    "text": "No outgoing connection."
+  },
+  {
+    "event": "CanvasStatus { note: NoConnection { forward: true, ordinal: Some(2) } }",
+    "priority": "medium",
+    "text": "No outgoing connection 2."
+  },
+  {
+    "event": "CanvasStatus { note: NoConnection { forward: false, ordinal: None } }",
+    "priority": "medium",
+    "text": "No incoming connection."
+  },
+  {
+    "event": "CanvasBlocked { reason: ModeBusy }",
+    "priority": "high",
+    "text": "A move or resize is in progress. Return to place it or Escape to cancel first."
+  },
+  {
+    "event": "CanvasBlocked { reason: UndoBlocked }",
+    "priority": "high",
+    "text": "Undo blocked: the canvas changed on disk. Reload it and try again."
+  },
+  {
+    "event": "CanvasBlocked { reason: RedoBlocked }",
+    "priority": "high",
+    "text": "Redo blocked: the canvas changed on disk. Reload it and try again."
+  },
+  {
+    "event": "CanvasBlocked { reason: LinkOpenFailed }",
+    "priority": "high",
+    "text": "The link could not be opened."
+  },
+  {
+    "event": "CanvasBlocked { reason: AlignWouldOverlap }",
+    "priority": "high",
+    "text": "Aligning would overlap another card — not moved."
+  },
+  {
+    "event": "CanvasBlocked { reason: NotAUrl }",
+    "priority": "high",
+    "text": "That doesn't look like a URL."
+  },
+  {
+    "event": "CanvasBlocked { reason: CardTextUnreadable }",
+    "priority": "high",
+    "text": "The card's text could not be read."
+  },
+  {
+    "event": "CanvasBlocked { reason: NotePathMustEndInMd }",
+    "priority": "high",
+    "text": "The note path must end in .md."
+  },
+  {
+    "event": "CanvasBlocked { reason: NoFreeSpaceInGroup { label: \"Q3\" } }",
+    "priority": "high",
+    "text": "No free space inside \"Q3\"."
+  },
+  {
+    "event": "CanvasBlocked { reason: NotePathExists { path: \"notes/research.md\", on_disk: false } }",
+    "priority": "high",
+    "text": "notes/research.md already exists. Pick another name."
+  },
+  {
+    "event": "CanvasBlocked { reason: NotePathExists { path: \"notes/research.md\", on_disk: true } }",
+    "priority": "high",
+    "text": "notes/research.md already exists on disk. Pick another name."
+  },
+  {
+    "event": "CanvasBlocked { reason: NoteReadFailed { message: \"The card text is unavailable.\" } }",
+    "priority": "high",
+    "text": "Could not read the card text: The card text is unavailable."
+  },
+  {
+    "event": "CanvasBlocked { reason: NoteCreateFailed { path: \"notes/research.md\", message: \"io error\" } }",
+    "priority": "high",
+    "text": "Could not create notes/research.md: io error"
+  },
+  {
+    "event": "CanvasBlocked { reason: NoteRetargetFailed { path: \"notes/research.md\", message: \"io error\" } }",
+    "priority": "high",
+    "text": "Created notes/research.md, but could not retarget the card: io error"
+  },
+  {
+    "event": "CanvasBlocked { reason: HeadingNotFound { heading: \"Roadmap\", filename: \"notes.md\" } }",
+    "priority": "high",
+    "text": "Heading Roadmap was not found in notes.md."
+  },
+  {
+    "event": "CanvasBlocked { reason: ReopenFailed { message: \"The file moved.\" } }",
+    "priority": "high",
+    "text": "Canvas could not be reopened. The previous snapshot is read-only. The file moved."
+  },
+  {
+    "event": "CanvasActionFailed { action: NewCard, detail: \"the file is read-only\" }",
+    "priority": "high",
+    "text": "New card failed: the file is read-only"
+  },
+  {
+    "event": "CanvasActionFailed { action: NewGroup, detail: \"the file is read-only\" }",
+    "priority": "high",
+    "text": "New group failed: the file is read-only"
+  },
+  {
+    "event": "CanvasActionFailed { action: NewCanvas, detail: \"the file is read-only\" }",
+    "priority": "high",
+    "text": "New canvas failed: the file is read-only"
+  },
+  {
+    "event": "CanvasActionFailed { action: MoveIntoGroup, detail: \"the file is read-only\" }",
+    "priority": "high",
+    "text": "Move failed: the file is read-only"
+  },
+  {
+    "event": "CanvasActionFailed { action: Placement, detail: \"the file is read-only\" }",
+    "priority": "high",
+    "text": "Placement failed: the file is read-only"
+  },
+  {
+    "event": "CanvasActionFailed { action: Align, detail: \"the file is read-only\" }",
+    "priority": "high",
+    "text": "Align failed: the file is read-only"
+  },
+  {
+    "event": "CanvasActionFailed { action: Create, detail: \"the file is read-only\" }",
+    "priority": "high",
+    "text": "Create failed: the file is read-only"
+  },
+  {
+    "event": "CanvasActionFailed { action: RemoveFromGroup, detail: \"the file is read-only\" }",
+    "priority": "high",
+    "text": "Remove failed: the file is read-only"
+  },
+  {
+    "event": "CanvasActionFailed { action: Duplicate, detail: \"the file is read-only\" }",
+    "priority": "high",
+    "text": "Duplicate failed: the file is read-only"
+  },
+  {
+    "event": "CanvasActionFailed { action: CreateConnectedCard, detail: \"the file is read-only\" }",
+    "priority": "high",
+    "text": "Create connected card failed: the file is read-only"
+  },
+  {
+    "event": "CanvasActionFailed { action: CanvasAction, detail: \"the file is read-only\" }",
+    "priority": "high",
+    "text": "Canvas action failed: the file is read-only"
+  },
+  {
+    "event": "CanvasActionFailed { action: WhereAmI, detail: \"the file is read-only\" }",
+    "priority": "high",
+    "text": "Where am I failed: the file is read-only"
+  },
+  {
+    "event": "CanvasSaveConflict",
+    "priority": "high",
+    "text": "The canvas changed on disk. Reload it to continue — your action was not applied."
+  },
+  {
+    "event": "CanvasFileNotFound { target: \"media/diagram.png\" }",
+    "priority": "high",
+    "text": "media/diagram.png is missing from the vault. Use Locate File to repoint this card."
+  },
+  {
+    "event": "CanvasOpened { title: \"Notes.md\", target: DefaultApp }",
+    "priority": "medium",
+    "text": "Opened Notes.md in its default app."
+  },
+  {
+    "event": "CanvasOpened { title: \"example.com\", target: Browser }",
+    "priority": "medium",
+    "text": "Opened example.com in your browser."
+  },
+  {
+    "event": "CanvasMutationRefused { reason: Opening }",
+    "priority": "medium",
+    "text": "This canvas is still opening. Wait for it to finish before making changes."
+  },
+  {
+    "event": "CanvasMutationRefused { reason: Reopening }",
+    "priority": "medium",
+    "text": "This canvas is reopening. Wait for it to finish before making changes."
+  },
+  {
+    "event": "CanvasMutationRefused { reason: RetargetFailed }",
+    "priority": "medium",
+    "text": "This canvas could not be reopened. Choose Retry before making changes."
+  },
+  {
+    "event": "CanvasMutationRefused { reason: Unavailable }",
+    "priority": "medium",
+    "text": "This canvas is no longer available. Copy any draft before closing."
+  },
+  {
+    "event": "CanvasMutationRefused { reason: ReadOnly }",
+    "priority": "medium",
+    "text": "This canvas is read-only because it could not be opened safely."
+  },
+  {
+    "event": "CanvasMutationRefused { reason: CardEditorUnavailable }",
+    "priority": "medium",
+    "text": "This canvas is no longer available. Copy your draft before closing the editor."
+  },
+  {
+    "event": "CanvasLoadedDegraded { skipped: 3 }",
+    "priority": "medium",
+    "text": "Canvas loaded. 3 unsupported items are preserved in the file but not shown."
+  },
+  {
+    "event": "CanvasLoadedDegraded { skipped: 1 }",
+    "priority": "medium",
+    "text": "Canvas loaded. 1 unsupported item are preserved in the file but not shown."
+  },
+  {
+    "event": "CanvasEmptyOnboarding { new_card_chord: \"Option Command N\", palette_chord: \"Command Shift P\" }",
+    "priority": "medium",
+    "text": "Canvas is empty. Press Option Command N to create your first card. Every other canvas action is in the Command Palette, Command Shift P."
+  },
+  {
+    "event": "CanvasWhereAmI { kind_label: \"text\", title: \"Research\", group_path: [\"Quarter\", \"Q3\"], ordinal_n: 2, total_m: 5, connection_count: 3, in_count: 1, out_count: 2, color_name: Some(\"red\"), marked: true, mode: Some(Move), filter: Active { matched: 3, total: 40 } }",
+    "priority": "medium",
+    "text": "Text card \"Research\", in Quarter › Q3, 2 of 5, 3 connections (1 in, 2 out), red, marked, Move mode, 3 of 40 shown"
+  },
+  {
+    "event": "CanvasWhereAmI { kind_label: \"text\", title: \"Loose\", group_path: [], ordinal_n: 1, total_m: 1, connection_count: 1, in_count: 1, out_count: 0, color_name: None, marked: false, mode: None, filter: Inactive }",
+    "priority": "medium",
+    "text": "Text card \"Loose\", at canvas level, 1 of 1, 1 connection (1 in, 0 out)"
   }
 ]
