@@ -485,6 +485,13 @@ final class A11yCorpusCensusTests: XCTestCase {
             .canvas(event: .canvasEmptyOnboarding(newCardChord: "Option Command N", paletteChord: "Command Shift P")),
             .canvas(event: .canvasWhereAmI(kindLabel: "text", title: "Research", groupPath: ["Quarter", "Q3"], ordinalN: 2, totalM: 5, connectionCount: 3, inCount: 1, outCount: 2, colorName: "red", marked: true, mode: .move, filter: .active(matched: 3, total: 40))),
             .canvas(event: .canvasWhereAmI(kindLabel: "text", title: "Loose", groupPath: [], ordinalN: 1, totalM: 1, connectionCount: 1, inCount: 1, outCount: 0, colorName: nil, marked: false, mode: nil, filter: .inactive)),
+            // Cardinality boundary witnesses (contract 0a-14).
+            .canvas(event: .canvasTracePathEnd(titles: ["Research"])),
+            .canvas(event: .canvasTracePathEnd(titles: [])),
+            .canvas(event: .canvasBulkMoved(count: 1, relative: .below(anchorTitle: "Research"))),
+            .canvas(event: .canvasBulkDuplicated(count: 1)),
+            .canvas(event: .canvasModeEntered(mode: .move, object: .cards(count: 1))),
+            .canvas(event: .canvasModeCommitted(verb: .move, object: .cards(count: 1))),
         ]
     }
 

@@ -88,7 +88,11 @@ final class CanvasModeController: ObservableObject {
     private static func label(of object: CanvasModeObject) -> String {
         switch object {
         case .card(let title): return "\"\(title)\""
-        case .cards(let count): return "\(count) cards"
+        // `CountCopy` is the host's ONE pluralization source and, like
+        // core's `mode_object`, interpolates the count ungrouped — so
+        // this label matches the spoken clause at every count,
+        // singular included (contract 0a-14).
+        case .cards(let count): return CountCopy.counted(count, "card", "cards")
         }
     }
 

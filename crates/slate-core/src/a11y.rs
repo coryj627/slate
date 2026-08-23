@@ -2257,11 +2257,25 @@ impl CanvasA11yEvent {
                     None => format!("{phrase} {reference}"),
                 }
             }
-            CanvasTracePathEnd { titles } => format!(
-                "Path: {}. End of path — {} cards visited.",
-                titles.join(", then "),
-                titles.len()
-            ),
+            CanvasTracePathEnd { titles } => {
+                let tail = format!(
+                    "End of path — {} {} visited.",
+                    titles.len(),
+                    plural_len(titles.len(), "card", "cards")
+                );
+                if titles.is_empty() {
+                    // The `Path: …` clause is omitted when it has no
+                    // content, like every other optional clause here —
+                    // `Path: . End of path — 0 cards visited.` is not a
+                    // sentence. Unreachable from mac (the walk always
+                    // seeds with the selected card and returns
+                    // `NoOutgoingPath` below two), but the arm is total
+                    // over the payload (contract 0a-14).
+                    tail
+                } else {
+                    format!("Path: {}. {tail}", titles.join(", then "))
+                }
+            }
 
             CanvasMoveRelative { descs, overlap } => {
                 let fix = if descs.is_empty() {
@@ -2441,9 +2455,11 @@ impl CanvasA11yEvent {
                 }
             }
 
-            CanvasBulkMoved { count, relative } => {
-                format!("Moved {count} cards {}.", relative_phrase(relative))
-            }
+            CanvasBulkMoved { count, relative } => format!(
+                "Moved {count} {} {}.",
+                plural(*count, "card", "cards"),
+                relative_phrase(relative)
+            ),
             CanvasBulkColorSet { count, color } => format!(
                 "Set {} to {}.",
                 counted(*count, "card", "cards"),
@@ -2453,9 +2469,10 @@ impl CanvasA11yEvent {
                 "Grouped {} into \"{label}\".",
                 counted(*count, "card", "cards")
             ),
-            CanvasBulkDuplicated { count } => {
-                format!("Duplicated {count} cards — one undo restores.")
-            }
+            CanvasBulkDuplicated { count } => format!(
+                "Duplicated {count} {} — one undo restores.",
+                plural(*count, "card", "cards")
+            ),
 
             CanvasMarkToggled {
                 marked,
@@ -2743,6 +2760,14 @@ fn plural<'a>(count: u32, one: &'a str, many: &'a str) -> &'a str {
     crate::sidebar_filter::noun(count as u64, one, many)
 }
 
+/// The same rule over a COLLECTION LENGTH. Every count payload in this
+/// vocabulary is a `u32`, but the arms that speak the size of a `Vec`
+/// hold a `usize`; routing them here keeps the singular/plural rule at
+/// one definition instead of casting (or hand-branching) at the site.
+fn plural_len<'a>(len: usize, one: &'a str, many: &'a str) -> &'a str {
+    crate::sidebar_filter::noun(len as u64, one, many)
+}
+
 /// The spoken name of a colour a host just wrote, or the literal
 /// `no color` for the clear-colour arm. One line, but it is the whole
 /// point of the typed `Option<CanvasColor>` payload: the preset table
@@ -2823,7 +2848,9 @@ fn overlap_clause(overlap: &Option<CanvasOverlapTransition>) -> &'static str {
 fn mode_object(object: &CanvasModeObject) -> String {
     match object {
         CanvasModeObject::Card { title } => format!("\"{title}\""),
-        CanvasModeObject::Cards { count } => format!("{count} cards"),
+        CanvasModeObject::Cards { count } => {
+            format!("{count} {}", plural(*count, "card", "cards"))
+        }
     }
 }
 
@@ -4261,6 +4288,31 @@ fn canvas_corpus() -> Vec<CanvasA11yEvent> {
             mode: None,
             filter: CanvasFilterState::Inactive,
         },
+        // --- Cardinality boundary witnesses (contract 0a-14) ---
+        // Every arm above that interpolates a count or a collection
+        // length is sampled at its PLURAL value; these sample the
+        // singular and the empty collection, so an arm that hardcodes
+        // "cards" fails the golden instead of shipping "1 cards". They
+        // are appended rather than filed beside their siblings so no
+        // pre-existing corpus index moves (contract 0a-2), and grouped
+        // so the reason they exist is legible in one block.
+        CanvasTracePathEnd {
+            titles: vec!["Research".into()],
+        },
+        CanvasTracePathEnd { titles: Vec::new() },
+        CanvasBulkMoved {
+            count: 1,
+            relative: RelativeDesc::Below("Research".into()),
+        },
+        CanvasBulkDuplicated { count: 1 },
+        CanvasModeEntered {
+            mode: CanvasMode::Move,
+            object: CanvasModeObject::Cards { count: 1 },
+        },
+        CanvasModeCommitted {
+            verb: CanvasTransientVerb::Move,
+            object: CanvasModeObject::Cards { count: 1 },
+        },
     ]
 }
 
@@ -4892,6 +4944,16 @@ mod tests {
                 Medium,
                 "Text card \"Loose\", at canvas level, 1 of 1, 1 connection (1 in, 0 out)",
             ),
+            // --- Cardinality boundary witnesses (contract 0a-14) ---
+            (Medium, "Path: Research. End of path — 1 card visited."),
+            (Medium, "End of path — 0 cards visited."),
+            (Medium, "Moved 1 card below \"Research\"."),
+            (Medium, "Duplicated 1 card — one undo restores."),
+            (
+                Medium,
+                "Move mode — 1 card. Arrows to move, Shift for big steps, Return to place, Escape to cancel.",
+            ),
+            (Medium, "Placed 1 card."),
         ];
 
         let corpus = corpus();

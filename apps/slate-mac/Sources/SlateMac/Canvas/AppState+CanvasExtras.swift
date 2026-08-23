@@ -189,7 +189,7 @@ extension AppState {
             let name =
                 single
                 ? "duplicate \"\(doc.outline.first { $0.nodeId == expanded[0] }?.title ?? "card")\""
-                : "duplicate \(expanded.count) cards"
+                : "duplicate \(CountCopy.counted(expanded.count, "card", "cards"))"
             let ok = canvasApply(CanvasAction(name: name, ops: ops), to: doc)
             guard ok else { return }
             if single {

@@ -571,7 +571,9 @@ extension AppState {
                             width: node.width, height: node.height))
                 }
                 let ok = canvasApply(
-                    CanvasAction(name: "move \(moving.count) cards", ops: ops), to: doc)
+                    CanvasAction(
+                        name: "move \(CountCopy.counted(moving.count, "card", "cards"))",
+                        ops: ops), to: doc)
                 guard ok else { return }
                 canvasAnnouncer.announce(
                     .canvasBulkMoved(

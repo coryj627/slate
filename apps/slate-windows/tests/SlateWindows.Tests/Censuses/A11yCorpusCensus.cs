@@ -473,6 +473,13 @@ public sealed class A11yCorpusCensus
         new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasEmptyOnboarding(NewCardChord: "Option Command N", PaletteChord: "Command Shift P")),
         new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasWhereAmI(KindLabel: "text", Title: "Research", GroupPath: ["Quarter", "Q3"], OrdinalN: 2, TotalM: 5, ConnectionCount: 3, InCount: 1, OutCount: 2, ColorName: "red", Marked: true, Mode: CanvasMode.Move, Filter: new CanvasFilterState.Active(Matched: 3, Total: 40))),
         new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasWhereAmI(KindLabel: "text", Title: "Loose", GroupPath: [], OrdinalN: 1, TotalM: 1, ConnectionCount: 1, InCount: 1, OutCount: 0, ColorName: null, Marked: false, Mode: null, Filter: new CanvasFilterState.Inactive())),
+        // Cardinality boundary witnesses (contract 0a-14).
+        new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasTracePathEnd(Titles: ["Research"])),
+        new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasTracePathEnd(Titles: [])),
+        new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasBulkMoved(Count: 1, Relative: new CanvasRelativeDesc.Below(AnchorTitle: "Research"))),
+        new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasBulkDuplicated(Count: 1)),
+        new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasModeEntered(Mode: CanvasMode.Move, Object: new CanvasModeObject.Cards(Count: 1))),
+        new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasModeCommitted(Verb: CanvasTransientVerb.Move, Object: new CanvasModeObject.Cards(Count: 1))),
     ];
 
     [Fact]

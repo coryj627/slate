@@ -209,11 +209,37 @@ announcements. Every other canvas label (the filter summary
 renderer's peer names, the degraded-state message, the "Where am I?"
 panel heading) stays §W-C label class and is NOT in this vocabulary.
 
+**0a-14 — Every render arm is TOTAL over its payload domain.** An arm
+may not assume a cardinality its payload admits. If a `u32` count or a
+`Vec` length reaches a template, the template renders correctly at
+**0, 1 and n** — singular/plural through `plural` / `plural_len` /
+`counted` (the one definition of the rule), and an optional clause
+omitted rather than emitted empty. There is **no caller-side cardinality
+invariant**: a host may construct `CanvasBulkMoved { count: 1 }` or
+`CanvasTracePathEnd { titles: [] }` and get a sentence, because nothing
+in the type says it may not, and PR A's Windows host will not inherit
+mac's incidental guards.
+
+The corpus samples the BOUNDARY, not just the comfortable value:
+`canvas_corpus()` ends with a **cardinality boundary witness** block —
+count = 1 for every arm that speaks a count, plus the single-title and
+empty trace path — so an arm that hardcodes `cards` fails the golden
+instead of shipping `1 cards`. They are appended rather than filed beside
+their siblings so no pre-existing corpus index moves (0a-2).
+
+Hosts mirror the rule where they compose the same clause for a LABEL:
+mac's M3 inspectable value and its undo-action names route through
+`CountCopy`, which is the host's one pluralization source and, like the
+templates here, leaves the count ungrouped (CD-6). (Adopted after the
+codex adversarial round found four arms hardcoding the plural; CD-15.)
+
 ### The event enumeration (the PR's contract)
 
 51 variants of `CanvasA11yEvent`, all reached through the single
-`A11yEvent::Canvas { event }` wrapper (0a-1b); 165 corpus entries,
-artifact 259 → **424**. `V` = the `CanvasVerbosity` parameter.
+`A11yEvent::Canvas { event }` wrapper (0a-1b); **171** corpus entries,
+artifact 259 → **430** (0a-1 landed 165; 0a-2's cardinality boundary
+witnesses added six, contract 0a-14). `V` = the `CanvasVerbosity`
+parameter.
 Coalescing class: `nav` / `filter` / `—` (immediate). All priorities
 `Medium` unless marked **High**.
 
@@ -310,9 +336,9 @@ cancel first.` — Canvas 553/591/621, Extras 266–269 — four copies) ·
 ### Tests that pin PR 0a
 
 `crates/slate-core/src/a11y.rs`: `corpus_renders_the_shipped_strings`
-(the golden table — 165 new rows),
+(the golden table — 171 new rows),
 `committed_corpus_artifact_matches_the_vocabulary` (artifact round-trip,
-424 entries), `every_canvas_variant_and_arm_is_represented_in_the_corpus`,
+430 entries), `every_canvas_variant_and_arm_is_represented_in_the_corpus`,
 `every_canvas_parameter_enum_is_listed_for_coverage` (0a-2),
 `the_canvas_family_occupies_one_top_level_variant`,
 `canvas_verbosity_matrix_pins_every_level`,
@@ -325,7 +351,7 @@ cancel first.` — Canvas 553/591/621, Extras 266–269 — four copies) ·
 `apps/slate-windows/.../A11yCorpusCensus.cs`:
 `EveryCorpusEventRendersTheCommittedIdentityTextAndPriority`,
 `TheMirrorHasNoDuplicateEntries`.
-`apps/slate-mac/Tests/SlateMacTests/`: `A11yCorpusCensusTests` (all 165
+`apps/slate-mac/Tests/SlateMacTests/`: `A11yCorpusCensusTests` (all 171
 canvas entries through the real FFI), `CanvasAnnouncerTests`
 (coalescing, the flush/supersede rule, the priority relay, and the
 WIDENED funnel guard), `A11yResidueCensusTests` (`pinnedResidueSites`
@@ -540,6 +566,39 @@ connection row previously could not tell what kind of card it pointed
 at. No test pinned the old string. Cross-referenced from 0a-10's scope
 table. (Promoted from a round-1 minor at the controller's direction —
 it was recorded in prose but not in this register.)
+
+**CD-15 — Four templates stop hardcoding the plural.** Migration turned
+mac's cardinality assumptions into TYPE-level lies: the payloads admit
+`count: 1` and an empty `Vec`, four arms rendered `cards`
+unconditionally, and all five lockstep places agreed with them because
+the corpus only ever sampled a plural value. The arms are
+`CanvasTracePathEnd`, `CanvasBulkMoved`, `CanvasBulkDuplicated`, and the
+`CanvasModeObject::Cards` clause shared by `CanvasModeEntered` and
+`CanvasModeCommitted`. They are total now (0a-14), which changes what is
+spoken at exactly one shipped mac site and adds correct renderings for
+states mac could not reach:
+
+| Payload | Was | Now | Reachable on mac? |
+|---|---|---|---|
+| `CanvasBulkMoved { count: 1 }` | `Moved 1 cards below "X".` | `Moved 1 card below "X".` | **yes** — `canvasPlaceRelative`'s bulk branch takes one moving card when the scene-node lookup misses (`AppState+CanvasActions.swift:563–566`) |
+| `CanvasBulkDuplicated { count: 1 }` | `Duplicated 1 cards — one undo restores.` | `Duplicated 1 card — …` | no — the `single` branch guards it |
+| `CanvasModeEntered`/`Committed` + `Cards { count: 1 }` | `Move mode — 1 cards. …` / `Placed 1 cards.` | `… 1 card. …` / `Placed 1 card.` | no — mac's ternary picks `Card { title }` at one |
+| `CanvasTracePathEnd { titles: [t] }` | `Path: t. End of path — 1 cards visited.` | `… 1 card visited.` | only through CD-13's title/visited skew |
+| `CanvasTracePathEnd { titles: [] }` | `Path: . End of path — 0 cards visited.` | `End of path — 0 cards visited.` | no — the walk seeds with the selected card |
+
+The grammar fix is t0 §1.3-conformant and the same class as CD-4, CD-5
+and CD-7: the shipped mac string was the defect, not the template. The
+empty trace path omits the `Path: …` clause rather than emitting it
+empty, which is how every other optional clause in this vocabulary
+behaves; it is pinned because the arm must be total, not because a host
+produces it.
+
+Mac's host-side mirrors of the same clause moved with it — the M3
+inspectable value (`CanvasModeController`) and three undo-action names
+(`AppState+CanvasModes`, `+CanvasActions`, `+CanvasExtras`) now use
+`CountCopy`, so `move 1 cards` becomes `move 1 card` in the undo stack
+and the Edit-menu title. No test pinned any `1 cards` string (checked
+across the mac, Windows and Rust suites).
 
 ---
 

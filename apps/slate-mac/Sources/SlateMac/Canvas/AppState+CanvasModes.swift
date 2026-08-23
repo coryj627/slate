@@ -393,7 +393,7 @@ extension AppState {
     private static func canvasActionObject(_ object: CanvasModeObject) -> String {
         switch object {
         case .card(let title): return "\"\(title)\""
-        case .cards(let count): return "\(count) cards"
+        case .cards(let count): return CountCopy.counted(count, "card", "cards")
         }
     }
 }
