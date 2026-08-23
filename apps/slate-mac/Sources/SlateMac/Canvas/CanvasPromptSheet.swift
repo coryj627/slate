@@ -222,14 +222,18 @@ struct CanvasPromptSheet: View {
             case .setColor:
                 Text("Set Color").font(Tokens.Typography.body.weight(.semibold))
                 // Color is never color-alone: named buttons (1.4.1).
+                // The NAMES come from core (`canvas::color_name` through
+                // the FFI) — the literal preset list that stood here was
+                // the third Swift copy of the backend's table
+                // (contracts doc 0a-11).
                 HStack(spacing: Tokens.Spacing.xs) {
-                    ForEach(
-                        Array(["red", "orange", "yellow", "green", "cyan", "purple"].enumerated()),
-                        id: \.offset
-                    ) { index, name in
-                        Button(name.capitalized) {
+                    ForEach(1...6, id: \.self) { preset in
+                        Button(
+                            canvasColorName(color: .preset(preset: UInt8(preset)))
+                                .capitalized
+                        ) {
                             commitMutation {
-                                appState.canvasSetColor(preset: index + 1)
+                                appState.canvasSetColor(preset: preset)
                             }
                         }
                         .disabled(mutationDisabledReason != nil)

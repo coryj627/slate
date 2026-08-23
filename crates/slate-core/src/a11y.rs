@@ -17,7 +17,7 @@
 //! execution time) migrates in treatment classes. Literal, templated,
 //! and simple-builder announcements are typed variants below — their
 //! Swift string originals are deleted. A minority of sites relay text
-//! composed by dedicated engines (the canvas/graph announcers' verbosity
+//! composed by dedicated engines (the GRAPH announcer's verbosity
 //! machinery, Bases result summaries, filename advisories) or by
 //! availability logic whose copy serves double duty in dialogs/hints;
 //! those post [`A11yEvent::HostComposed`] carrying their text verbatim,
@@ -26,6 +26,16 @@
 //! count so residue shrinks deliberately (engine-level vocabularies are
 //! follow-on batches) and keeps direct string-primitive calls at zero,
 //! so no NEW announcement can bypass the vocabulary.
+//!
+//! The CANVAS announcer was such an engine and is no longer: W6-1 PR 0a
+//! gave it the typed family below and Task 0a-2 moved the mac host onto
+//! it, so `CanvasAnnouncer` posts rendered events and its residue site
+//! is gone (the mac census drops 30 → 29). The graph announcer is the
+//! remaining named engine, and W6-2 does for it what 0a did here. One
+//! shared residue site survives that the canvas migration could not
+//! delete: the structural-mutation builder the mac reaches through
+//! `postMutationAnnouncement`, which serves every authoring surface —
+//! the canvas call sites left it, the marker stays.
 //!
 //! ## Copy rules
 //!

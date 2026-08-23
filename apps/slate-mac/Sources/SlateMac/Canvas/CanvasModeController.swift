@@ -30,23 +30,26 @@ import Foundation
 ///   depends on the keyboard path).
 /// - **M7** entering a mode while one is active is rejected with an
 ///   announcement naming the active mode; nothing commits.
+///
+/// Since W6-1 PR 0a the SENTENCES are core's: a spec carries the typed
+/// `CanvasMode` and `CanvasModeObject`, and the mode name, the exit
+/// instructions and every lifecycle phrasing come from
+/// `slate_core::a11y`. This controller owns the stack, not the copy.
 @MainActor
 final class CanvasModeController: ObservableObject {
     /// One modal interaction (move / resize / connect …).
     struct ModeSpec {
-        /// Mode name for announcements and the AX value ("Move mode").
-        let name: String
-        /// The object being acted on (display title).
-        let object: String
-        /// The exit instructions appended to the entry announcement,
-        /// e.g. "Arrows to move, Return to place, Escape to cancel."
-        let exits: String
-        /// Commit side effect; returns the confirmation announcement
+        /// The mode. Core owns its spoken name and its exit
+        /// instructions (t0 §2 M1).
+        let mode: CanvasMode
+        /// What the mode acts on — one titled card or a count.
+        let object: CanvasModeObject
+        /// Commit side effect; returns the confirmation EVENT
         /// (t0 §1.3), or nil to stay silent (the action announces).
-        let onCommit: () -> String?
-        /// Cancel side effect (restore prior state); returns the
-        /// restoration announcement, e.g. "Move cancelled — card returned."
-        let onCancel: () -> String
+        let onCommit: () -> CanvasA11yEvent?
+        /// Cancel side effect (restore prior state); returns what was
+        /// put back, which core phrases (`… — card returned.`).
+        let onCancel: () -> CanvasModeRestoration
     }
 
     @Published private(set) var active: ModeSpec?
@@ -55,27 +58,49 @@ final class CanvasModeController: ObservableObject {
     /// the filter rung: return true when the rung consumed the press.
     var escapeRungs: [() -> Bool] = []
 
-    private let announce: (CanvasEvent) -> Void
+    private let announce: (CanvasA11yEvent) -> Void
 
-    init(announce: @escaping (CanvasEvent) -> Void) {
+    init(announce: @escaping (CanvasA11yEvent) -> Void) {
         self.announce = announce
     }
 
     /// The M3 inspectable state for the canvas container's AX value.
+    ///
+    /// This is §W-C LABEL class, never spoken (contracts doc 0a-13:
+    /// the vocabulary carries announcements plus exactly two
+    /// label-grade events, and the M3 value is neither), so it is
+    /// composed here from the SAME typed fields the spoken entry
+    /// carries. It is the one host-side spelling of the mode names
+    /// that survives PR 0a; a label-grade accessor on PR 0b's query
+    /// surface is where it would collapse.
     var containerAXValue: String? {
-        active.map { "\($0.name): \($0.object)" }
+        active.map { "\(Self.label(of: $0.mode)): \(Self.label(of: $0.object))" }
+    }
+
+    private static func label(of mode: CanvasMode) -> String {
+        switch mode {
+        case .move: return "Move mode"
+        case .resize: return "Resize mode"
+        case .connect: return "Connect mode"
+        }
+    }
+
+    private static func label(of object: CanvasModeObject) -> String {
+        switch object {
+        case .card(let title): return "\"\(title)\""
+        case .cards(let count): return "\(count) cards"
+        }
     }
 
     /// M1 + M7. Returns false when rejected because a mode is active.
     @discardableResult
     func enter(_ spec: ModeSpec) -> Bool {
         if let current = active {
-            announce(
-                .error("\(current.name) is active. Return to commit or Escape to cancel first."))
+            announce(.canvasModeRejected(activeMode: current.mode))
             return false
         }
         active = spec
-        announce(.mode("\(spec.name) — \(spec.object). \(spec.exits)"))
+        announce(.canvasModeEntered(mode: spec.mode, object: spec.object))
         return true
     }
 
@@ -85,7 +110,7 @@ final class CanvasModeController: ObservableObject {
         guard let spec = active else { return false }
         active = nil
         if let confirmation = spec.onCommit() {
-            announce(.confirmation(confirmation))
+            announce(confirmation)
         }
         return true
     }
@@ -95,7 +120,8 @@ final class CanvasModeController: ObservableObject {
     func cancel() -> Bool {
         guard let spec = active else { return false }
         active = nil
-        announce(.mode(spec.onCancel()))
+        announce(
+            .canvasModeCancelled(mode: spec.mode, restoration: spec.onCancel()))
         return true
     }
 

@@ -5,9 +5,25 @@ import XCTest
 
 @testable import SlateMac
 
-/// #518 acceptance: grammar strings per verbosity × event (table-driven
-/// from t0 §1.2/§1.3), coalescing, priorities, Where-am-I assembly, and
-/// the DoD §H funnel guard (no direct announcements under Canvas/).
+/// #518 acceptance for what the HOST still owns after W6-1 PR 0a:
+/// coalescing (t0 §1.5), the error flush/supersede rule, the priority
+/// relay, and the DoD §H funnel guard.
+///
+/// The GRAMMAR is pinned in `slate_core::a11y`, not here — this suite
+/// used to hold a second, partial copy of the tables:
+/// - `corpus_renders_the_shipped_strings` — every shipped canvas
+///   string, complete (replaces `testGroupAndConnectionPhrases`; the
+///   `towardOther` inversion it exercised is gone, CD-9).
+/// - `canvas_verbosity_matrix_pins_every_level` — the t0 §1.2/§1.3
+///   matrix (replaces `testMovedToMatrixPerVerbosity` and
+///   `testDestructiveConfirmationCarriesUndoHintAtStandardPlus`).
+/// - `canvas_where_am_i_is_always_verbose_grade` (replaces
+///   `testWhereAmIIsAlwaysVerboseGrade`).
+/// - `canvas_priorities_pin_the_error_tier` — the High membership.
+///
+/// The mac half of those pins is `A11yCorpusCensusTests`, which renders
+/// all 165 canvas entries through this exact FFI path and asserts text,
+/// priority AND event identity against the committed artifact.
 @MainActor
 final class CanvasAnnouncerTests: XCTestCase {
     private var posted: [(text: String, priority: NSAccessibilityPriorityLevel)] = []
@@ -22,152 +38,85 @@ final class CanvasAnnouncerTests: XCTestCase {
         }
     }
 
-    private static let research = CanvasCardRef(kind: "text", title: "Research")
-
-    func testMovedToMatrixPerVerbosity() {
-        // t0 §1.2: terse | standard | verbose rows.
-        let cases: [(CanvasVerbosity, String)] = [
-            (.terse, "Research"),
-            (.standard, "Text card \"Research\", 2 of 5 in Q3"),
-            (
-                .verbose,
-                "Text card \"Research\", 2 of 5 in Q3, 3 connections, red, marked"
-            ),
-        ]
-        for (verbosity, expected) in cases {
-            let announcer = makeAnnouncer(verbosity: verbosity)
-            announcer.announce(
-                .movedTo(
-                    card: Self.research, ordinal: 2, total: 5, container: "Q3",
-                    connectionCount: 3, colorName: "red", marked: true))
-            announcer.flushForTests()
-            XCTAssertEqual(posted.map(\.text), [expected], "\(verbosity)")
-            XCTAssertEqual(posted.first?.priority, .medium)
-        }
-
-        // Root-level container phrases as "canvas"; group cards phrase
-        // as Group "label".
-        let announcer = makeAnnouncer(verbosity: .standard)
-        announcer.announce(
-            .movedTo(
-                card: CanvasCardRef(kind: "group", title: "Q3"), ordinal: 1, total: 3,
-                container: nil, connectionCount: 0, colorName: nil, marked: false))
-        announcer.flushForTests()
-        XCTAssertEqual(posted.map(\.text), ["Group \"Q3\", 1 of 3 in canvas"])
-    }
-
-    func testGroupAndConnectionPhrases() {
-        let announcer = makeAnnouncer(verbosity: .standard)
-        announcer.announce(.groupEntered(label: "Q3", cardCount: 4))
-        announcer.flushForTests()
-        announcer.announce(.groupLeft(label: "Q3"))
-        announcer.flushForTests()
-        announcer.announce(
-            .connectionTraversed(
-                direction: .outgoing, other: CanvasCardRef(kind: "text", title: "Ideas"),
-                label: "supports", towardOther: true))
-        announcer.flushForTests()
-        announcer.announce(
-            .connectionTraversed(
-                direction: .outgoing, other: Self.research, label: nil, towardOther: false))
-        announcer.flushForTests()
-        announcer.announce(
-            .connectionTraversed(
-                direction: .undirected, other: Self.research, label: nil, towardOther: true))
-        announcer.flushForTests()
-
-        XCTAssertEqual(
-            posted.map(\.text),
-            [
-                "Entering group \"Q3\", 4 cards",
-                "Leaving group \"Q3\"",
-                "Connects to Text card \"Ideas\", labelled \"supports\"",
-                "Connected from Text card \"Research\"",
-                "Linked with Text card \"Research\"",
-            ])
-    }
-
-    func testDestructiveConfirmationCarriesUndoHintAtStandardPlus() {
-        for (verbosity, expected) in [
-            (CanvasVerbosity.terse, "Deleted 3 cards"),
-            (.standard, "Deleted 3 cards — ⌘Z to undo"),
-            (.verbose, "Deleted 3 cards — ⌘Z to undo"),
-        ] {
-            let announcer = makeAnnouncer(verbosity: verbosity)
-            announcer.announce(.destructiveConfirmation("Deleted 3 cards"))
-            XCTAssertEqual(posted.map(\.text), [expected], "\(verbosity)")
-        }
+    /// A terse move, which renders to the bare title — the cheapest
+    /// event whose text names the step it came from.
+    private func movedTo(_ title: String) -> CanvasA11yEvent {
+        .canvasMovedTo(
+            verbosity: .terse, kindLabel: "text", title: title,
+            ordinalN: 1, totalM: 5, container: nil, connectionCount: 0,
+            colorName: nil, marked: false)
     }
 
     func testCoalescingCollapsesRapidNavigationFinalStateWins() {
         let announcer = makeAnnouncer(verbosity: .terse)
         // A held arrow: five rapid moves — exactly one post, the LAST.
         for title in ["A", "B", "C", "D", "E"] {
-            announcer.announce(
-                .movedTo(
-                    card: CanvasCardRef(kind: "text", title: title), ordinal: 1, total: 5,
-                    container: nil, connectionCount: 0, colorName: nil, marked: false))
+            announcer.announce(movedTo(title))
         }
         XCTAssertTrue(posted.isEmpty, "still inside the coalescing window")
         announcer.flushForTests()
         XCTAssertEqual(posted.map(\.text), ["E"])
+        XCTAssertEqual(posted.first?.priority, .medium)
 
         // Confirmations are immediate (never debounced).
-        announcer.announce(.confirmation("Created text card below \"E\""))
+        announcer.announce(
+            .canvasCreated(
+                kindLabel: "text", title: "New idea",
+                relative: .below(anchorTitle: "E")))
         XCTAssertEqual(posted.count, 2)
+        XCTAssertEqual(posted.last?.text, "Created text card \"New idea\" below \"E\"")
+    }
+
+    /// The two classes are independent: a filter burst must not cancel
+    /// a pending navigation line (t0 §1.5, contracts doc 0a-8).
+    func testNavigationAndFilterCoalesceIndependently() {
+        let announcer = makeAnnouncer(verbosity: .standard)
+        announcer.announce(movedTo("A"))
+        announcer.announce(.canvasFilterCount(matched: 2))
+        announcer.announce(.canvasFilterCount(matched: 3))
+        XCTAssertTrue(posted.isEmpty)
+        announcer.flushForTests()
+        XCTAssertEqual(Set(posted.map(\.text)), ["A", "3 cards match."])
     }
 
     func testErrorsAreAssertiveAndSupersedePendingNavigation() {
         let announcer = makeAnnouncer(verbosity: .terse)
-        announcer.announce(
-            .movedTo(
-                card: Self.research, ordinal: 1, total: 1, container: nil,
-                connectionCount: 0, colorName: nil, marked: false))
-        announcer.announce(.error("Save conflict: the file changed on disk."))
+        announcer.announce(movedTo("Research"))
+        announcer.announce(.canvasSaveConflict)
         XCTAssertEqual(posted.count, 1, "pending navigation dropped, error posted")
         XCTAssertEqual(posted.first?.priority, .high)
+        XCTAssertEqual(
+            posted.first?.text,
+            "The canvas changed on disk. Reload it to continue — your action was "
+                + "not applied.")
         announcer.flushForTests()
         XCTAssertEqual(posted.count, 1, "stale navigation never resurfaces")
     }
 
-    func testWhereAmIIsAlwaysVerboseGrade() {
-        let announcer = makeAnnouncer(verbosity: .terse)
-        let ctx = CanvasWhereAmI(
-            nodeId: "n1", title: "Research", kind: "text",
-            groupPath: ["Quarter", "Q3"], ordinalN: 2, totalM: 5,
-            connectionCount: 3, inCount: 1, outCount: 2, colorName: "red")
-        let text = announcer.whereAmIText(
-            ctx, marked: true, activeMode: "Move mode", filterSummary: "3 of 40 shown")
-        XCTAssertEqual(
-            text,
-            "Text card \"Research\", in Quarter › Q3, 2 of 5, "
-                + "3 connections (1 in, 2 out), red, marked, Move mode, 3 of 40 shown")
-
-        // Root-level, minimal context.
-        let bare = announcer.whereAmIText(
-            CanvasWhereAmI(
-                nodeId: "n2", title: "Loose", kind: "text", groupPath: [],
-                ordinalN: 1, totalM: 1, connectionCount: 1, inCount: 1, outCount: 0,
-                colorName: nil),
-            marked: false, activeMode: nil, filterSummary: nil)
-        XCTAssertEqual(
-            bare, "Text card \"Loose\", at canvas level, 1 of 1, 1 connection (1 in, 0 out)")
+    /// The canvas table hands the shared data grid's OWN events to the
+    /// funnel. Both the text and the priority must come from the
+    /// render: unwrapping the text and re-wrapping it as a status
+    /// silently demoted every assertive grid event to polite.
+    func testRelayCarriesTheCorePriorityOfANonCanvasEvent() {
+        let announcer = makeAnnouncer(verbosity: .standard)
+        announcer.relay(.gridSorted(column: "Status", ascending: true))
+        announcer.relay(.commandPaletteNeedsVault)
+        XCTAssertEqual(posted.count, 2)
+        XCTAssertEqual(posted[0].priority, .medium)
+        XCTAssertEqual(posted[1].text, "Open a vault to use the command palette.")
+        XCTAssertEqual(posted[1].priority, .high, "core's High must survive the relay")
     }
 
-    func testCreatedAndUndoBuilders() {
-        XCTAssertEqual(
-            CanvasAnnouncer.createdText(
-                card: CanvasCardRef(kind: "text", title: "New idea"),
-                relative: .below(anchorTitle: "Research")),
-            "Created text card \"New idea\" below \"Research\"")
-        XCTAssertEqual(
-            CanvasAnnouncer.relativePhrase(.atOrigin), "at the canvas origin")
-        XCTAssertEqual(CanvasAnnouncer.undidText(actionName: "move 'Research'"), "Undid: move 'Research'")
-    }
-
-    /// DoD §H guard: no canvas source calls postAccessibilityAnnouncement
-    /// directly — everything routes through the announcer. Source-scan
-    /// lint (the announcer itself is the single allowed caller).
+    /// DoD §H guard: no canvas source announces on its own — everything
+    /// routes through the announcer. Source-scan lint (the announcer
+    /// itself is the single allowed caller).
+    ///
+    /// WIDENED for W6-1 PR 0a: `postMutationAnnouncement` is scanned
+    /// too. It lives in `AppState.swift`, so five canvas admission
+    /// sites used to bypass this guard entirely while posting real
+    /// announcements (contracts doc 0a-12). They construct
+    /// `CanvasMutationRefused` events now; the guard makes the hole
+    /// impossible to reopen.
     func testNoDirectAnnouncementsUnderCanvas() throws {
         let testsDir = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
         let canvasDir =
@@ -180,9 +129,16 @@ final class CanvasAnnouncerTests: XCTestCase {
         var offenders: [String] = []
         for file in files where file.pathExtension == "swift" {
             if file.lastPathComponent == "CanvasAnnouncer.swift" { continue }
+            // Comment-only lines dropped, like the residue census does,
+            // so prose NAMING the bypasses cannot trip the guard.
             let source = try String(contentsOf: file, encoding: .utf8)
-            if source.contains("postAccessibilityAnnouncement") {
-                offenders.append(file.lastPathComponent)
+                .split(separator: "\n", omittingEmptySubsequences: false)
+                .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+                .joined(separator: "\n")
+            for bypass in ["postAccessibilityAnnouncement", "postMutationAnnouncement"] {
+                if source.contains(bypass) {
+                    offenders.append("\(file.lastPathComponent): \(bypass)")
+                }
             }
         }
         XCTAssertEqual(

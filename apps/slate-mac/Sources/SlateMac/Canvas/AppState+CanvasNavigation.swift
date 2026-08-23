@@ -30,7 +30,7 @@ extension AppState {
         let rows = doc.filteredOutline
         guard !rows.isEmpty else {
             if doc.filterActive {
-                canvasAnnouncer.announce(.status("No cards match the filter."))
+                canvasAnnouncer.announce(.canvasStatus(note: .noCardsMatchFilter))
             }
             return
         }
@@ -41,7 +41,7 @@ extension AppState {
             target = max(0, min(order.count - 1, currentIndex + offset))
             if target == currentIndex {
                 canvasAnnouncer.announce(
-                    .status(offset > 0 ? "End of canvas." : "Start of canvas."))
+                    .canvasStatus(note: offset > 0 ? .endOfCanvas : .startOfCanvas))
                 return
             }
         } else {
@@ -58,7 +58,7 @@ extension AppState {
             let row = doc.outline.first(where: { $0.nodeId == selected })
         else { return }
         guard row.kind == "group" else {
-            canvasAnnouncer.announce(.status("Not a group."))
+            canvasAnnouncer.announce(.canvasStatus(note: .notAGroup))
             return
         }
         // First child = the next outline row one level deeper.
@@ -66,7 +66,7 @@ extension AppState {
             index + 1 < doc.outline.count,
             doc.outline[index + 1].depth == row.depth + 1
         else {
-            canvasAnnouncer.announce(.status("Group \"\(row.title)\" is empty."))
+            canvasAnnouncer.announce(.canvasStatus(note: .groupIsEmpty(label: row.title)))
             return
         }
         canvasSelect(nodeId: doc.outline[index + 1].nodeId, in: doc)
@@ -83,7 +83,7 @@ extension AppState {
             let index = doc.outline.firstIndex(where: { $0.nodeId == selected }),
             let parent = doc.outline[..<index].last(where: { $0.depth == row.depth - 1 })
         else {
-            canvasAnnouncer.announce(.status("At canvas level."))
+            canvasAnnouncer.announce(.canvasStatus(note: .atCanvasLevel))
             return
         }
         canvasSelect(nodeId: parent.nodeId, in: doc)
@@ -106,9 +106,11 @@ extension AppState {
             }
         }
         guard candidates.indices.contains(ordinal - 1) else {
-            let base = forward ? "No outgoing connection" : "No incoming connection"
             canvasAnnouncer.announce(
-                .status(candidates.isEmpty ? "\(base)." : "\(base) \(ordinal)."))
+                .canvasStatus(
+                    note: .noConnection(
+                        forward: forward,
+                        ordinal: candidates.isEmpty ? nil : UInt32(clamping: ordinal))))
             return
         }
         let neighbor = candidates[ordinal - 1]
@@ -117,10 +119,10 @@ extension AppState {
         let otherKind =
             doc.outline.first { $0.nodeId == neighbor.otherNode }?.kind ?? "text"
         canvasAnnouncer.announce(
-            .connectionTraversed(
+            .canvasConnectionTraversed(
                 direction: neighbor.direction,
-                other: CanvasCardRef(kind: otherKind, title: neighbor.otherTitle),
-                label: neighbor.label, towardOther: true))
+                kindLabel: otherKind, title: neighbor.otherTitle,
+                label: neighbor.label))
         canvasSelect(nodeId: neighbor.otherNode, in: doc, announce: false)
     }
 
@@ -145,14 +147,16 @@ extension AppState {
             doc.outline.first { $0.nodeId == id }?.title
         }
         if visited.count == 1 {
-            canvasAnnouncer.announce(.status("No outgoing path from \"\(titles.first ?? "")\"."))
+            canvasAnnouncer.announce(
+                .canvasStatus(note: .noOutgoingPath(title: titles.first ?? "")))
             return
         }
         canvasSelect(nodeId: current, in: doc, announce: false)
-        canvasAnnouncer.announce(
-            .status(
-                "Path: \(titles.joined(separator: ", then ")). "
-                    + "End of path — \(visited.count) cards visited."))
+        // The event carries the TITLES only; core speaks their count as
+        // the sentence's tail, so the list and the number it claims can
+        // never disagree (contracts doc CD-13 — mac spoke
+        // `visited.count` while listing `titles`).
+        canvasAnnouncer.announce(.canvasTracePathEnd(titles: titles))
     }
 
     /// The one selection mutation used by every navigator movement:
@@ -168,25 +172,24 @@ extension AppState {
             .flatMap { prev in doc.outline.first { $0.nodeId == prev } }?.groupPath ?? []
         if row.groupPath != previousPath {
             if let entered = row.groupPath.last, !previousPath.contains(entered) {
-                // The entered group's row is the nearest PRECEDING
-                // outline row one level up — title lookups miscount
-                // when labels repeat (Codoki #613).
-                let count = doc.outline.firstIndex { $0.nodeId == nodeId }
-                    .flatMap { idx in
-                        doc.outline[..<idx].last {
-                            $0.kind == "group" && $0.depth == row.depth - 1
-                        }
-                    }
-                    .map { Int($0.totalM) }
-                canvasAnnouncer.announce(.groupEntered(label: entered, cardCount: count ?? 0))
+                // CD-4: the ENTERED GROUP's own card count, which is
+                // exactly `row.totalM` — the arrived-at row's container
+                // size, straight from core. mac walked back to the
+                // group's own outline row and spoke ITS `totalM`, i.e.
+                // how many siblings the GROUP has, a different number.
+                // There is no lookup left at all, so Codoki #613's
+                // repeated-label miscount cannot recur either.
+                canvasAnnouncer.announce(
+                    .canvasGroupEntered(label: entered, count: row.totalM))
             } else if let left = previousPath.last, !row.groupPath.contains(left) {
-                canvasAnnouncer.announce(.groupLeft(label: left))
+                canvasAnnouncer.announce(.canvasGroupLeft(label: left))
             }
         }
         canvasAnnouncer.announce(
-            .movedTo(
-                card: CanvasCardRef(kind: row.kind, title: row.title),
-                ordinal: row.ordinalN, total: row.totalM,
+            .canvasMovedTo(
+                verbosity: canvasAnnouncer.verbosity,
+                kindLabel: row.kind, title: row.title,
+                ordinalN: row.ordinalN, totalM: row.totalM,
                 container: row.groupPath.last,
                 connectionCount: row.connectionCount,
                 colorName: row.colorName,
@@ -196,7 +199,8 @@ extension AppState {
     // MARK: Viewport commands (#520)
 
     private func announceZoom(_ doc: CanvasDocument) {
-        canvasAnnouncer.announce(.status("Zoom \(doc.viewport.zoomPercent) percent."))
+        canvasAnnouncer.announce(
+            .canvasZoom(context: nil, percent: UInt32(clamping: doc.viewport.zoomPercent)))
     }
 
     func canvasZoomIn() {
@@ -226,7 +230,8 @@ extension AppState {
         }
         doc.viewport.fit(rect: rect)
         canvasAnnouncer.announce(
-            .status("Fit canvas. Zoom \(doc.viewport.zoomPercent) percent."))
+            .canvasZoom(
+                context: .fitCanvas, percent: UInt32(clamping: doc.viewport.zoomPercent)))
     }
 
     func canvasZoomToSelection() {
@@ -234,14 +239,16 @@ extension AppState {
         guard let selected = doc.selection.selected,
             let node = doc.scene.nodes.first(where: { $0.nodeId == selected })
         else {
-            canvasAnnouncer.announce(.status("Nothing selected."))
+            canvasAnnouncer.announce(.canvasStatus(note: .nothingSelected))
             return
         }
         doc.viewport.fit(
             rect: CGRect(x: node.x, y: node.y, width: node.width, height: node.height),
             padding: 120)
         canvasAnnouncer.announce(
-            .status("Zoomed to selection. Zoom \(doc.viewport.zoomPercent) percent."))
+            .canvasZoom(
+                context: .zoomedToSelection,
+                percent: UInt32(clamping: doc.viewport.zoomPercent)))
     }
 
     /// Viewport-follows-selection toggle (default ON; the auto-pan
@@ -250,9 +257,7 @@ extension AppState {
         guard let doc = activeCanvasDocument else { return }
         doc.viewport.followSelection.toggle()
         canvasAnnouncer.announce(
-            .status(
-                doc.viewport.followSelection
-                    ? "Viewport follows selection." : "Viewport stays put."))
+            .canvasFollowSelectionToggled(following: doc.viewport.followSelection))
     }
 
     /// The per-document mode controller (t0 §2), created on first use.

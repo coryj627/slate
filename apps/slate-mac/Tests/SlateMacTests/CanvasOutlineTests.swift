@@ -117,9 +117,10 @@ final class CanvasOutlineTests: XCTestCase {
         // Simulate the selection path the binding drives.
         doc.selection.selected = "q"
         announcer.announce(
-            .movedTo(
-                card: CanvasCardRef(kind: "text", title: "Core question"),
-                ordinal: 1, total: 4, container: "Research",
+            .canvasMovedTo(
+                verbosity: announcer.verbosity,
+                kindLabel: "text", title: "Core question",
+                ordinalN: 1, totalM: 4, container: "Research",
                 connectionCount: 2, colorName: "red", marked: false))
         announcer.flushForTests()
         XCTAssertEqual(posted, ["Text card \"Core question\", 1 of 4 in Research"])
@@ -325,7 +326,7 @@ extension CanvasOutlineTests {
             summary: "test",
             accessibilityLabel: "Canvas table",
             announce: { [weak state] event in
-                state?.canvasAnnouncer.announce(.status(a11yRender(event: event).text))
+                state?.canvasAnnouncer.relay(event)
             })
     }
 

@@ -227,15 +227,20 @@ final class CanvasNavigatorTests: XCTestCase {
 
     // MARK: Mode controller (t0 §2 M1–M7, against a test mode)
 
+    /// The spec is TYPED since W6-1 PR 0a: the mode's spoken name,
+    /// its exit instructions and every lifecycle sentence are core's,
+    /// so a test spec carries `CanvasMode` + `CanvasModeObject` and the
+    /// expectations below are the real shipped strings rather than
+    /// invented ones.
     private func makeMode(
-        name: String = "Move mode", object: String = "'Research'",
-        onCommit: @escaping () -> String? = { "Moved 'Research'" },
-        onCancel: @escaping () -> String = { "Move cancelled — card returned." }
+        mode: CanvasMode = .move,
+        object: CanvasModeObject = .card(title: "Research"),
+        onCommit: @escaping () -> CanvasA11yEvent? = {
+            .canvasModeCommitted(verb: .move, object: .card(title: "Research"))
+        },
+        onCancel: @escaping () -> CanvasModeRestoration = { .cardsReturned(count: 1) }
     ) -> CanvasModeController.ModeSpec {
-        .init(
-            name: name, object: object,
-            exits: "Arrows to move, Return to place, Escape to cancel.",
-            onCommit: onCommit, onCancel: onCancel)
+        .init(mode: mode, object: object, onCommit: onCommit, onCancel: onCancel)
     }
 
     private func makeController() -> (CanvasModeController, () -> [String]) {
@@ -255,7 +260,10 @@ final class CanvasNavigatorTests: XCTestCase {
         XCTAssertTrue(controller.enter(makeMode()))
         XCTAssertEqual(
             events(),
-            ["Move mode — 'Research'. Arrows to move, Return to place, Escape to cancel."])
+            [
+                "Move mode — \"Research\". Arrows to move, Shift for big steps, "
+                    + "Return to place, Escape to cancel."
+            ])
     }
 
     func testM2CommitAndCancelAnnouncements() {
@@ -263,7 +271,7 @@ final class CanvasNavigatorTests: XCTestCase {
         controller.enter(makeMode())
         XCTAssertTrue(controller.commit())
         XCTAssertNil(controller.active)
-        XCTAssertTrue(events().contains("Moved 'Research'"))
+        XCTAssertTrue(events().contains("Placed \"Research\"."))
 
         controller.enter(makeMode())
         XCTAssertTrue(controller.cancel())
@@ -275,7 +283,7 @@ final class CanvasNavigatorTests: XCTestCase {
         let (controller, _) = makeController()
         XCTAssertNil(controller.containerAXValue)
         controller.enter(makeMode())
-        XCTAssertEqual(controller.containerAXValue, "Move mode: 'Research'")
+        XCTAssertEqual(controller.containerAXValue, "Move mode: \"Research\"")
         controller.commit()
         XCTAssertNil(controller.containerAXValue)
     }
@@ -283,7 +291,7 @@ final class CanvasNavigatorTests: XCTestCase {
     func testM4FocusDepartureAutoCancels() {
         let (controller, events) = makeController()
         var cancelled = false
-        controller.enter(makeMode(onCancel: { cancelled = true; return "Move cancelled." }))
+        controller.enter(makeMode(onCancel: { cancelled = true; return .unstated }))
         controller.handleFocusDeparture()
         XCTAssertTrue(cancelled, "prior state restored on focus departure")
         XCTAssertNil(controller.active)
@@ -311,11 +319,11 @@ final class CanvasNavigatorTests: XCTestCase {
         controller.enter(makeMode())
         var committed = false
         let second = makeMode(
-            name: "Resize mode", object: "'Ideas'",
+            mode: .resize, object: .card(title: "Ideas"),
             onCommit: { committed = true; return nil })
         XCTAssertFalse(controller.enter(second))
         XCTAssertFalse(committed, "rejection commits nothing")
-        XCTAssertEqual(controller.active?.name, "Move mode")
+        XCTAssertEqual(controller.active?.mode, .move)
         XCTAssertTrue(
             events().contains {
                 $0.contains("Move mode is active")
@@ -1689,7 +1697,10 @@ extension CanvasNavigatorTests {
         doc.filterText = "alpha"
         state.canvasWhereAmI()
         let readback = try XCTUnwrap(state.canvasWhereAmIReadback)
-        XCTAssertTrue(
-            readback.contains("Filter active: 1 of 5 cards matches."), readback)
+        // CD-5: ONE spelling — t0's `⟨matched⟩ of ⟨total⟩ shown`, joined
+        // like every other Where-am-I clause. mac appended a second,
+        // differently-worded sentence here on top of the tested form.
+        XCTAssertTrue(readback.contains(", 1 of 5 shown"), readback)
+        XCTAssertFalse(readback.contains("Filter active:"), readback)
     }
 }

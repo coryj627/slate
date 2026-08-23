@@ -99,15 +99,16 @@ extension AppState {
             guard ok else { return }
             canvasSelect(nodeId: id, in: doc, announce: false)
             canvasAnnouncer.announce(
-                .confirmation(
-                    CanvasAnnouncer.createdText(
-                        card: CanvasCardRef(kind: "text", title: "Untitled"),
-                        relative: placement.relative)))
+                .canvasCreated(
+                    kindLabel: "text", title: "Untitled",
+                    relative: placement.relative))
             // G22: a new text card lands in edit mode.
             canvasCardEditor = CanvasCardEditorRequest(
                 nodeId: id, title: "Untitled", initialText: "")
         } catch {
-            canvasAnnouncer.announce(.error("New card failed: \(error.localizedDescription)"))
+            canvasAnnouncer.announce(
+                .canvasActionFailed(
+                    action: .newCard, detail: error.localizedDescription))
         }
     }
 
@@ -138,12 +139,18 @@ extension AppState {
                 to: doc)
             guard ok else { return }
             canvasSelect(nodeId: id, in: doc, announce: false)
+            // One template for cards and groups: core's `CanvasCreated`
+            // group rendering is byte-identical to the string this site
+            // hand-rolled (contracts doc, "Verified during
+            // implementation").
             canvasAnnouncer.announce(
-                .confirmation(
-                    "Created group \"\(label.isEmpty ? "Untitled" : label)\" "
-                        + CanvasAnnouncer.relativePhrase(placement.relative)))
+                .canvasCreated(
+                    kindLabel: "group", title: label.isEmpty ? "Untitled" : label,
+                    relative: placement.relative))
         } catch {
-            canvasAnnouncer.announce(.error("New group failed: \(error.localizedDescription)"))
+            canvasAnnouncer.announce(
+                .canvasActionFailed(
+                    action: .newGroup, detail: error.localizedDescription))
         }
     }
 
@@ -218,7 +225,8 @@ extension AppState {
                     continue
                 case .failure(let error):
                     self.canvasAnnouncer.announce(
-                        .error("New canvas failed: \(error.localizedDescription)"))
+                        .canvasActionFailed(
+                            action: .newCanvas, detail: error.localizedDescription))
                     return
                 }
                 break
@@ -228,7 +236,8 @@ extension AppState {
                 let error = VaultError.Io(
                     message: "could not find a free canvas name after 200 attempts")
                 self.canvasAnnouncer.announce(
-                    .error("New canvas failed: \(error.localizedDescription)"))
+                    .canvasActionFailed(
+                        action: .newCanvas, detail: error.localizedDescription))
                 return
             }
 
@@ -299,8 +308,7 @@ extension AppState {
                 target: .newTab,
                 advancesSidebarSelectionRevision: false)
             self.canvasAnnouncer.announce(
-                .confirmation(
-                    "Created canvas \"\((name as NSString).deletingPathExtension)\"."))
+                .canvasFileCreated(name: (name as NSString).deletingPathExtension))
         }
         recordPendingStructuralTask(task)
         return task
@@ -315,7 +323,6 @@ extension AppState {
             let selected = doc.selection.selected,
             let row = doc.outline.first(where: { $0.nodeId == selected })
         else { return }
-        let ref = CanvasCardRef(kind: row.kind, title: row.title)
         let op: CanvasOp =
             row.kind == "group" ? .ungroup(id: selected) : .deleteNode(id: selected)
         let name = row.kind == "group" ? "ungroup \"\(row.title)\"" : "delete \"\(row.title)\""
@@ -323,10 +330,12 @@ extension AppState {
         guard ok else { return }
         doc.selection.selected = nil
         canvasAnnouncer.announce(
-            .destructiveConfirmation(
-                row.kind == "group"
-                    ? "Ungrouped \(ref.phrase) — cards kept"
-                    : "Deleted \(ref.phrase)"))
+            .canvasDeleted(
+                target: row.kind == "group"
+                    ? .group(label: row.title)
+                    : .card(kindLabel: row.kind, title: row.title),
+                verbosity: canvasAnnouncer.verbosity,
+                undoChord: Self.canvasUndoChord))
     }
 
     /// Set the selected card's color (named preset or nil to clear),
@@ -337,16 +346,17 @@ extension AppState {
             let selected = doc.selection.selected,
             let row = doc.outline.first(where: { $0.nodeId == selected })
         else { return }
-        let names = [1: "red", 2: "orange", 3: "yellow", 4: "green", 5: "cyan", 6: "purple"]
-        let name = preset.flatMap { names[$0] } ?? "no color"
         let ok = canvasApply(
             CanvasAction(
                 name: "set color of \"\(row.title)\"",
                 ops: [.setNodeColor(id: selected, color: preset.map(String.init))]),
             to: doc)
         guard ok else { return }
+        // The colour goes over TYPED; core names it through
+        // `canvas::color_name` (contracts doc 0a-11). The preset-name
+        // dictionary that used to live here is gone.
         canvasAnnouncer.announce(
-            .confirmation("Set \"\(row.title)\" to \(name)."))
+            .canvasColorSet(title: row.title, color: Self.canvasColor(preset: preset)))
     }
 
     /// Rename the selected group's label — the skeleton of the reading
@@ -358,7 +368,7 @@ extension AppState {
             let row = doc.outline.first(where: { $0.nodeId == selected }),
             row.kind == "group"
         else {
-            canvasAnnouncer.announce(.status("Not a group."))
+            canvasAnnouncer.announce(.canvasStatus(note: .notAGroup))
             return
         }
         let ok = canvasApply(
@@ -368,7 +378,7 @@ extension AppState {
             to: doc)
         guard ok else { return }
         canvasAnnouncer.announce(
-            .confirmation("Renamed group to \"\(label.isEmpty ? "Untitled" : label)\"."))
+            .canvasRenamedGroup(label: label.isEmpty ? "Untitled" : label))
     }
 
     // MARK: Prompt openers (the container renders the sheets)
@@ -386,7 +396,7 @@ extension AppState {
             let row = doc.outline.first(where: { $0.nodeId == selected }),
             row.kind == "group"
         else {
-            canvasAnnouncer.announce(.status("Not a group."))
+            canvasAnnouncer.announce(.canvasStatus(note: .notAGroup))
             return
         }
         guard admitCanvasMutation(for: doc) else { return }
@@ -397,13 +407,13 @@ extension AppState {
         guard let doc = activeCanvasDocument,
             doc.selection.selected != nil
         else {
-            canvasAnnouncer.announce(.status("Nothing selected."))
+            canvasAnnouncer.announce(.canvasStatus(note: .nothingSelected))
             return
         }
         let groups = doc.outline.filter { $0.kind == "group" }
             .map { (id: $0.nodeId, title: $0.title) }
         guard !groups.isEmpty else {
-            canvasAnnouncer.announce(.status("This canvas has no groups."))
+            canvasAnnouncer.announce(.canvasStatus(note: .noGroups))
             return
         }
         guard admitCanvasMutation(for: doc) else { return }
@@ -412,7 +422,7 @@ extension AppState {
 
     func canvasPromptSetColor() {
         guard let doc = activeCanvasDocument, doc.selection.selected != nil else {
-            canvasAnnouncer.announce(.status("Nothing selected."))
+            canvasAnnouncer.announce(.canvasStatus(note: .nothingSelected))
             return
         }
         guard admitCanvasMutation(for: doc) else { return }
@@ -454,7 +464,8 @@ extension AppState {
                         width: node.width, height: node.height),
                     exclude: [selected])
                 guard overlaps.isEmpty else {
-                    canvasAnnouncer.announce(.error("No free space inside \"\(group.title)\"."))
+                    canvasAnnouncer.announce(
+                        .canvasBlocked(reason: .noFreeSpaceInGroup(label: group.title)))
                     return
                 }
                 target = (group.x + 20, group.y + 40)
@@ -469,9 +480,11 @@ extension AppState {
                     ]),
                 to: doc)
             guard ok else { return }
-            canvasAnnouncer.announce(.confirmation("Moved into group \"\(group.title)\"."))
+            canvasAnnouncer.announce(.canvasMovedIntoGroup(label: group.title))
         } catch {
-            canvasAnnouncer.announce(.error("Move failed: \(error.localizedDescription)"))
+            canvasAnnouncer.announce(
+                .canvasActionFailed(
+                    action: .moveIntoGroup, detail: error.localizedDescription))
         }
     }
 }
@@ -485,7 +498,7 @@ extension AppState {
         guard let doc = activeCanvasDocument else { return }
         guard admitCanvasMutation(for: doc) else { return }
         guard doc.selection.selected != nil else {
-            canvasAnnouncer.announce(.status("Nothing selected."))
+            canvasAnnouncer.announce(.canvasStatus(note: .nothingSelected))
             return
         }
         canvasCardPicker = CanvasCardPickerRequest(purpose: purpose)
@@ -513,7 +526,7 @@ extension AppState {
         else { return }
         let moving = canvasMovingSet(in: doc)
         guard !moving.isEmpty, !moving.contains(target) else {
-            canvasAnnouncer.announce(.status("Pick a card outside the moving set."))
+            canvasAnnouncer.announce(.canvasStatus(note: .pickOutsideMovingSet))
             return
         }
         let nodesById = Dictionary(
@@ -536,9 +549,9 @@ extension AppState {
                     to: doc)
                 guard ok else { return }
                 canvasAnnouncer.announce(
-                    .confirmation(
-                        "Moved \"\(row?.title ?? id)\" "
-                            + CanvasAnnouncer.relativePhrase(placement.relative) + "."))
+                    .canvasCardPlaced(
+                        verb: .moved, title: row?.title ?? id,
+                        relative: placement.relative))
             } else {
                 // Rigid unit: pairwise offsets preserved by the engine.
                 let boxes = moving.compactMap { id -> CanvasRect? in
@@ -561,12 +574,14 @@ extension AppState {
                     CanvasAction(name: "move \(moving.count) cards", ops: ops), to: doc)
                 guard ok else { return }
                 canvasAnnouncer.announce(
-                    .bulk(
-                        "Moved \(moving.count) cards "
-                            + CanvasAnnouncer.relativePhrase(placement.relative) + "."))
+                    .canvasBulkMoved(
+                        count: UInt32(clamping: moving.count),
+                        relative: placement.relative))
             }
         } catch {
-            canvasAnnouncer.announce(.error("Placement failed: \(error.localizedDescription)"))
+            canvasAnnouncer.announce(
+                .canvasActionFailed(
+                    action: .placement, detail: error.localizedDescription))
         }
     }
 
@@ -589,8 +604,7 @@ extension AppState {
                     x: node.x, y: targetNode.y, width: node.width, height: node.height),
                 exclude: [selected])
             guard overlaps.isEmpty else {
-                canvasAnnouncer.announce(
-                    .error("Aligning would overlap another card — not moved."))
+                canvasAnnouncer.announce(.canvasBlocked(reason: .alignWouldOverlap))
                 return
             }
             let row = doc.outline.first { $0.nodeId == selected }
@@ -606,11 +620,12 @@ extension AppState {
                 to: doc)
             guard ok else { return }
             canvasAnnouncer.announce(
-                .confirmation(
-                    "Aligned \"\(row?.title ?? selected)\" with \"\(targetRow?.title ?? target)\"."
-                ))
+                .canvasCardAligned(
+                    title: row?.title ?? selected,
+                    targetTitle: targetRow?.title ?? target))
         } catch {
-            canvasAnnouncer.announce(.error("Align failed: \(error.localizedDescription)"))
+            canvasAnnouncer.announce(
+                .canvasActionFailed(action: .align, detail: error.localizedDescription))
         }
     }
 
@@ -640,7 +655,7 @@ extension AppState {
         else { return }
         let choices = canvasConnectionChoices()
         guard !choices.isEmpty else {
-            canvasAnnouncer.announce(.status("The selected card has no connections."))
+            canvasAnnouncer.announce(.canvasStatus(note: .noConnections))
             return
         }
         if choices.count == 1 {
@@ -656,7 +671,7 @@ extension AppState {
         else { return }
         let choices = canvasConnectionChoices()
         guard !choices.isEmpty else {
-            canvasAnnouncer.announce(.status("The selected card has no connections."))
+            canvasAnnouncer.announce(.canvasStatus(note: .noConnections))
             return
         }
         if choices.count == 1 {
@@ -690,26 +705,26 @@ extension AppState {
             let selected = doc.selection.selected,
             let row = doc.outline.first(where: { $0.nodeId == selected })
         else {
-            canvasAnnouncer.announce(.status("Nothing selected."))
+            canvasAnnouncer.announce(.canvasStatus(note: .nothingSelected))
             return
         }
-        if doc.selection.marked.contains(selected) {
-            doc.selection.marked.remove(selected)
-            canvasAnnouncer.announce(
-                .status("Unmarked \"\(row.title)\". \(doc.selection.marked.count) marked."))
-        } else {
+        let marking = !doc.selection.marked.contains(selected)
+        if marking {
             doc.selection.marked.insert(selected)
-            canvasAnnouncer.announce(
-                .status("Marked \"\(row.title)\". \(doc.selection.marked.count) marked."))
+        } else {
+            doc.selection.marked.remove(selected)
         }
+        canvasAnnouncer.announce(
+            .canvasMarkToggled(
+                marked: marking, title: row.title,
+                count: UInt32(clamping: doc.selection.marked.count)))
     }
 
     func canvasClearMarks() {
         guard let doc = activeCanvasDocument else { return }
         let count = doc.selection.marked.count
         doc.selection.marked = []
-        canvasAnnouncer.announce(
-            .status(count == 0 ? "No marks." : "Cleared \(CountCopy.counted(count, "mark", "marks"))."))
+        canvasAnnouncer.announce(.canvasMarksCleared(count: UInt32(clamping: count)))
     }
 
     /// The marks list (t0 §3: the pull-based counterpart to mark
@@ -717,7 +732,7 @@ extension AppState {
     func canvasShowMarksList() {
         guard let doc = activeCanvasDocument else { return }
         guard !doc.selection.marked.isEmpty else {
-            canvasAnnouncer.announce(.status("No marks."))
+            canvasAnnouncer.announce(.canvasStatus(note: .noMarks))
             return
         }
         presentCanvasPrompt(.marksList)
@@ -735,7 +750,7 @@ extension AppState {
         else { return }
         let marked = canvasMarkedInOrder(doc)
         guard !marked.isEmpty else {
-            canvasAnnouncer.announce(.status("No marks."))
+            canvasAnnouncer.announce(.canvasStatus(note: .noMarks))
             return
         }
         let ops = marked.map { CanvasOp.deleteNode(id: $0) }
@@ -749,8 +764,10 @@ extension AppState {
             doc.selection.selected = nil
         }
         canvasAnnouncer.announce(
-            .destructiveConfirmation(
-                "Deleted \(CountCopy.counted(marked.count, "card", "cards"))"))
+            .canvasDeleted(
+                target: .cards(count: UInt32(clamping: marked.count)),
+                verbosity: canvasAnnouncer.verbosity,
+                undoChord: Self.canvasUndoChord))
     }
 
     /// Bulk color: one action, one summary.
@@ -760,11 +777,9 @@ extension AppState {
         else { return }
         let marked = canvasMarkedInOrder(doc)
         guard !marked.isEmpty else {
-            canvasAnnouncer.announce(.status("No marks."))
+            canvasAnnouncer.announce(.canvasStatus(note: .noMarks))
             return
         }
-        let names = [1: "red", 2: "orange", 3: "yellow", 4: "green", 5: "cyan", 6: "purple"]
-        let name = preset.flatMap { names[$0] } ?? "no color"
         let ops = marked.map {
             CanvasOp.setNodeColor(id: $0, color: preset.map(String.init))
         }
@@ -773,8 +788,10 @@ extension AppState {
                 name: "color \(CountCopy.counted(marked.count, "card", "cards"))",
                 ops: ops), to: doc)
         guard ok else { return }
-        canvasAnnouncer.announce(.bulk(
-                "Set \(CountCopy.counted(marked.count, "card", "cards")) to \(name)."))
+        canvasAnnouncer.announce(
+            .canvasBulkColorSet(
+                count: UInt32(clamping: marked.count),
+                color: Self.canvasColor(preset: preset)))
     }
 
     /// Group the marked set: one group sized to the set's padded
@@ -785,7 +802,7 @@ extension AppState {
         else { return }
         let marked = canvasMarkedInOrder(doc)
         guard marked.count >= 1 else {
-            canvasAnnouncer.announce(.status("No marks."))
+            canvasAnnouncer.announce(.canvasStatus(note: .noMarks))
             return
         }
         var minX = Double.infinity, minY = Double.infinity
@@ -815,15 +832,14 @@ extension AppState {
         guard ok else { return }
         doc.selection.marked = []
         canvasAnnouncer.announce(
-            .bulk(
-                "Grouped \(CountCopy.counted(marked.count, "card", "cards")) into "
-                    + "\"\(label.isEmpty ? "Untitled" : label)\"."
-            ))
+            .canvasGrouped(
+                count: UInt32(clamping: marked.count),
+                label: label.isEmpty ? "Untitled" : label))
     }
 
     func canvasPromptGroupMarked() {
         guard let doc = activeCanvasDocument, !doc.selection.marked.isEmpty else {
-            canvasAnnouncer.announce(.status("No marks."))
+            canvasAnnouncer.announce(.canvasStatus(note: .noMarks))
             return
         }
         guard admitCanvasMutation(for: doc) else { return }

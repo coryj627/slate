@@ -3909,7 +3909,7 @@ final class AppState: ObservableObject {
     var undoMenuItemTitle: String {
         if undoTargetsCanvas {
             return Self.canvasUndoRedoMenuTitle(
-                base: "Undo", actionName: activeCanvasDocument?.undoStack.last?.name)
+                verb: .undo, actionName: activeCanvasDocument?.undoStack.last?.name)
         }
         // #871: the structural (file-op) domain — same composer as canvas,
         // the action name describing the pending op read from the stack top
@@ -3917,7 +3917,7 @@ final class AppState: ObservableObject {
         // stack composes to the bare "Undo".
         if undoTargetsStructural {
             return Self.canvasUndoRedoMenuTitle(
-                base: "Undo",
+                verb: .undo,
                 actionName: structuralUndoStack.last.map(Self.structuralUndoActionName))
         }
         return Self.responderUndoMenuTitle(responderChainUndoManager)
@@ -3927,11 +3927,11 @@ final class AppState: ObservableObject {
     var redoMenuItemTitle: String {
         if undoTargetsCanvas {
             return Self.canvasUndoRedoMenuTitle(
-                base: "Redo", actionName: activeCanvasDocument?.redoStack.last?.name)
+                verb: .redo, actionName: activeCanvasDocument?.redoStack.last?.name)
         }
         if undoTargetsStructural {
             return Self.canvasUndoRedoMenuTitle(
-                base: "Redo",
+                verb: .redo,
                 actionName: structuralRedoStack.last.map(Self.structuralUndoActionName))
         }
         return Self.responderRedoMenuTitle(responderChainUndoManager)
@@ -3978,15 +3978,26 @@ final class AppState: ObservableObject {
         return manager.canRedo
     }
 
-    /// Pure title composer (#867), extracted for direct testing:
-    /// "Undo" + a canvas action name — "delete \"My Card\"" becomes
-    /// "Undo Delete \"My Card\"". Only the LEADING character is
-    /// uppercased: the t3 action names embed user-typed card titles
-    /// that must pass through verbatim, so full Title Case is off the
-    /// table. Nil/empty (empty stack) falls back to the bare verb.
-    static func canvasUndoRedoMenuTitle(base: String, actionName: String?) -> String {
-        guard let name = actionName, !name.isEmpty else { return base }
-        return "\(base) \(name.prefix(1).uppercased())\(name.dropFirst())"
+    /// Title composer (#867): "Undo" + a canvas action name —
+    /// "delete \"My Card\"" becomes "Undo Delete \"My Card\"". Only the
+    /// LEADING character is uppercased: the t3 action names embed
+    /// user-typed card titles that must pass through verbatim, so full
+    /// Title Case is off the table. Nil/empty (empty stack) falls back
+    /// to the bare verb.
+    ///
+    /// The composition is core's since W6-1 PR 0a
+    /// (`CanvasUndoMenuTitle` — LABEL grade, never spoken, contracts
+    /// doc 0a-13/§W-G row G), so both hosts build the menu title
+    /// identically from the same action name. The structural (file-op)
+    /// domain shares the composer, exactly as it shared the string
+    /// version.
+    static func canvasUndoRedoMenuTitle(
+        verb: CanvasHistoryVerb, actionName: String?
+    ) -> String {
+        a11yRender(
+            event: .canvas(
+                event: .canvasUndoMenuTitle(verb: verb, name: actionName ?? ""))
+        ).text
     }
 
     /// Pure title composer (#867) for the responder path: NSUndoManager
@@ -16269,10 +16280,26 @@ final class AppState: ObservableObject {
     /// `.medium` priority (the politeness floor that survives — see the palette
     /// / search precedent) and records it for the verbatim-string tests.
     func postMutationAnnouncement(_ message: String) {
+        postAccessibilityAnnouncement(mutationAnnouncementEvent(message))
+    }
+
+    /// The same sentence as an EVENT, for a funnel that owns its own
+    /// posting and must not be bypassed — today the canvas announcer,
+    /// which coalesces and prioritises (DoD §H). Recording stays here
+    /// so §U2-6's verbatim-string tests and the focus token behave
+    /// identically whichever route the sentence takes.
+    func mutationAnnouncementEvent(_ message: String) -> A11yEvent {
         lastMutationAnnouncement = message
         // W0.5-3 residue: structural-mutation announcement builders (U2-6 wrappers via postMutationAnnouncement)
-        postAccessibilityAnnouncement(
-            .hostComposed(text: message, priority: .medium))
+        return .hostComposed(text: message, priority: .medium)
+    }
+
+    /// Record a mutation refusal that a dedicated vocabulary already
+    /// spoke through its own funnel, without posting it a second time.
+    /// The structural-mutation ledger and its focus token are the same
+    /// contract either way.
+    func recordMutationAnnouncement(_ message: String) {
+        lastMutationAnnouncement = message
     }
 
     // MARK: Create

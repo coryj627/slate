@@ -401,18 +401,18 @@ final class MenusObservabilityTests: XCTestCase {
         // title passes through verbatim (no Title Case mangling).
         XCTAssertEqual(
             AppState.canvasUndoRedoMenuTitle(
-                base: "Undo", actionName: "delete \"my Card\""),
+                verb: .undo, actionName: "delete \"my Card\""),
             "Undo Delete \"my Card\""
         )
         XCTAssertEqual(
-            AppState.canvasUndoRedoMenuTitle(base: "Redo", actionName: "create card"),
+            AppState.canvasUndoRedoMenuTitle(verb: .redo, actionName: "create card"),
             "Redo Create card"
         )
         // Empty stack → bare verb.
         XCTAssertEqual(
-            AppState.canvasUndoRedoMenuTitle(base: "Undo", actionName: nil), "Undo")
+            AppState.canvasUndoRedoMenuTitle(verb: .undo, actionName: nil), "Undo")
         XCTAssertEqual(
-            AppState.canvasUndoRedoMenuTitle(base: "Redo", actionName: ""), "Redo")
+            AppState.canvasUndoRedoMenuTitle(verb: .redo, actionName: ""), "Redo")
     }
 
     /// The responder path defers to NSUndoManager's own composed,

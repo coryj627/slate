@@ -4,19 +4,65 @@
 import AppKit
 import Foundation
 
-/// Canvas verbosity levels (t0 §1.2 matrix). Persisted via
-/// `PreferencesStore`; live-switchable from Settings.
-enum CanvasVerbosity: String, Codable, CaseIterable {
-    case terse
-    case standard
-    case verbose
+// MARK: - CanvasVerbosity (FFI enum + Swift-side niceties)
+//
+// `CanvasVerbosity` is now the FFI-generated enum in
+// `slate_uniffi.swift` (W6-1 PR 0a moved the canvas grammar to core,
+// where verbosity is a PARAMETER on the two families whose template
+// varies — contracts doc 0a-5). The host used to declare its own
+// three-case copy; two same-named enums in one module do not compile,
+// and the host copy had nothing left to do once core owned the
+// matrix. This file adds the Swift-side niceties on top, exactly like
+// `MathPrefs.swift` does for `MathVerbosity`:
+// - `CaseIterable` for the Settings picker,
+// - `title` for its labels,
+// - `Codable` over a stable persistence tag for `PreferencesStore`.
+//
+// **Persistence-tag stability — DO NOT RENAME.** The literals in
+// `persistenceTag` are written into users' UserDefaults through
+// `PreferencesStore`; they are the same three strings the previous
+// `String`-raw-valued host enum encoded, so stored prefs decode
+// unchanged. Renaming one silently resets the user's choice.
 
+extension CanvasVerbosity: Codable, CaseIterable {
+    public static var allCases: [CanvasVerbosity] {
+        [.terse, .standard, .verbose]
+    }
+
+    /// Settings picker label (t0 §1.2 level names).
     var title: String {
         switch self {
         case .terse: return "Terse"
         case .standard: return "Standard"
         case .verbose: return "Verbose"
         }
+    }
+
+    private var persistenceTag: String {
+        switch self {
+        case .terse: return "terse"
+        case .standard: return "standard"
+        case .verbose: return "verbose"
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let value = try decoder.singleValueContainer().decode(String.self)
+        switch value {
+        case "terse": self = .terse
+        case "standard": self = .standard
+        case "verbose": self = .verbose
+        default:
+            throw DecodingError.dataCorruptedError(
+                in: try decoder.singleValueContainer(),
+                debugDescription: "Unknown CanvasVerbosity: \(value)"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(persistenceTag)
     }
 }
 
@@ -25,68 +71,30 @@ struct CanvasPrefs: Codable, Equatable {
     var verbosity: CanvasVerbosity = .standard
 }
 
-/// A card reference for phrasing (t0 §1.1): backend-derived kind word
-/// + display title. The announcer never re-derives titles or geometry —
-/// every payload arrives from backend rows/summaries.
-struct CanvasCardRef: Equatable {
-    /// "text" | "file" | "image" | "link" | "group" (backend kind_label).
-    var kind: String
-    var title: String
-
-    /// `⟨Type⟩ card "title"`; groups phrase as `Group "label"`.
-    var phrase: String {
-        kind == "group" ? "Group \"\(title)\"" : "\(kind.capitalized) card \"\(title)\""
-    }
-}
-
-/// Everything canvas code may say out loud (t0 §1 grammars). No canvas
-/// code calls `postAccessibilityAnnouncement` directly — DoD §H,
-/// enforced by `CanvasAnnouncerTests.testNoDirectAnnouncementsUnderCanvas`.
-enum CanvasEvent: Equatable {
-    /// Selection moved to a card (§1.2 verbosity matrix).
-    case movedTo(
-        card: CanvasCardRef, ordinal: UInt32, total: UInt32,
-        container: String?, connectionCount: UInt32,
-        colorName: String?, marked: Bool)
-    case groupEntered(label: String, cardCount: Int)
-    case groupLeft(label: String)
-    /// Following a connection (§1.2 direction phrases). `towardOther`
-    /// is true when traversing from the current card to `other`.
-    case connectionTraversed(
-        direction: CanvasEdgeDirection, other: CanvasCardRef,
-        label: String?, towardOther: Bool)
-    /// `⟨Verb past⟩ ⟨object⟩ ⟨relative detail⟩` (§1.3), pre-assembled
-    /// by the typed builders below — never ad-hoc caller prose.
-    case confirmation(String)
-    /// A destructive confirmation: carries the undo hint at standard+
-    /// verbosity (§1.3).
-    case destructiveConfirmation(String)
-    /// Exactly one summary for an action over N marked cards (§1.5).
-    case bulk(String)
-    /// Mode lifecycle strings (t0 §2 — #364/#521/#523 consume).
-    case mode(String)
-    /// Move/resize transient narration (#521): coalesced like
-    /// navigation so a held arrow announces the resting position.
-    case transientGeometry(String)
-    /// Filter narration (#373 consumes; coalesced).
-    case filter(String)
-    /// Errors and conflicts: assertive (§1.5 priority rule).
-    case error(String)
-    /// Container-level statements (surface switches, load summaries).
-    case status(String)
-}
-
-/// The one announcement funnel for every canvas surface (#518, DoD §H):
-/// assembles t0 §1 grammar strings per verbosity, coalesces rapid
-/// same-class events (~200 ms, final state wins), and posts with the
-/// right priority (navigation polite; errors assertive).
+/// The one announcement funnel for every canvas surface (#518, DoD §H).
+///
+/// Since W6-1 PR 0a the GRAMMAR is core's: callers hand over a typed
+/// `CanvasA11yEvent` from `slate_core::a11y` and this class renders it
+/// through the FFI, so the spoken text AND the priority both come from
+/// the vocabulary — never composed here, never re-classified here.
+/// What stays host-side is exactly what a pure render cannot own: the
+/// ~200 ms same-class coalescing window (t0 §1.5 — a render has no
+/// clock) and the persisted, live-switchable verbosity preference that
+/// the two verbosity-varying families take as a parameter.
+///
+/// No canvas code calls `postAccessibilityAnnouncement` directly —
+/// DoD §H, enforced by
+/// `CanvasAnnouncerTests.testNoDirectAnnouncementsUnderCanvas`.
 @MainActor
 final class CanvasAnnouncer: ObservableObject {
-    /// Live-switchable verbosity (§1.2); persisted by the owner.
+    /// Live-switchable verbosity (§1.2); persisted by the owner and
+    /// passed per event (core holds no "current verbosity").
     @Published var verbosity: CanvasVerbosity
 
     /// Event classes for coalescing (§1.5): same-class events within
-    /// the window collapse to the latest.
+    /// the window collapse to the latest. The MEMBERSHIP is pinned
+    /// core-side in one doc comment on the canvas family so both hosts
+    /// copy one list (contracts doc 0a-8); only the timing is ours.
     private enum EventClass: Hashable {
         case navigation
         case filter
@@ -97,13 +105,18 @@ final class CanvasAnnouncer: ObservableObject {
     private var pending:
         [EventClass: (work: DispatchWorkItem, text: String, priority: NSAccessibilityPriorityLevel)] = [:]
 
+    /// The seam is `(text, priority)` rather than an event because the
+    /// coalescer holds a RENDERED line: the window's winner is decided
+    /// after the render, and the loser is dropped without being spoken.
+    /// The default posts through the poster layer — never the string
+    /// primitive, which belongs to `AnnouncementPosting.swift` alone
+    /// (`A11yResidueCensusTests.testNoInteractionSiteCallsTheStringPrimitiveDirectly`).
     init(
         verbosity: CanvasVerbosity = .standard,
         coalesceWindow: TimeInterval = 0.2,
-        post: @escaping (String, NSAccessibilityPriorityLevel) -> Void = {
-            // W0.5-3 residue: canvas announcer engine
-            postAccessibilityAnnouncement(
-                .hostComposed(text: $0, priority: $1 == .high ? .high : .medium))
+        post: @escaping (String, NSAccessibilityPriorityLevel) -> Void = { text, priority in
+            let level: AnnouncementPriority = priority == .high ? .high : .medium
+            AppKitAnnouncementPoster().post(text, priority: level)
         }
     ) {
         self.verbosity = verbosity
@@ -112,105 +125,48 @@ final class CanvasAnnouncer: ObservableObject {
     }
 
     /// The only announcement API canvas code may use.
-    func announce(_ event: CanvasEvent) {
-        let text = phrase(event)
-        guard !text.isEmpty else { return }
+    func announce(_ event: CanvasA11yEvent) {
+        emit(.canvas(event: event), coalescing: Self.coalescingClass(of: event))
+    }
+
+    /// Relay a core event that is NOT canvas vocabulary — the shared
+    /// data grid raises its own sort/filter events, and the canvas
+    /// table must pass their rendered text AND priority through rather
+    /// than re-wrapping them at a priority of its own choosing.
+    func relay(_ event: A11yEvent) {
+        emit(event, coalescing: nil)
+    }
+
+    private func emit(_ event: A11yEvent, coalescing eventClass: EventClass?) {
+        let rendered = a11yRender(event: event)
+        guard !rendered.text.isEmpty else { return }
+        let priority = AnnouncementPriority(rendered.priority)
+        if let eventClass {
+            debounce(eventClass, text: rendered.text, priority: priority.nsPriority)
+            return
+        }
+        // §1.5: an assertive event supersedes queued navigation
+        // context — re-derivable by moving again — so both pending
+        // classes are cancelled and DROPPED, never posted.
+        if case .high = priority { flushAllPending() }
+        post(rendered.text, priority.nsPriority)
+    }
+
+    /// The coalescing class of a canvas event, per the list pinned on
+    /// the canvas family core-side (contracts doc 0a-8): `navigation`
+    /// for movement and transient geometry, `filter` for the two
+    /// filter events, immediate for everything else.
+    private static func coalescingClass(of event: CanvasA11yEvent) -> EventClass? {
         switch event {
-        case .movedTo, .groupEntered, .groupLeft, .connectionTraversed, .transientGeometry:
-            debounce(.navigation, text: text, priority: .medium)
-        case .filter:
-            debounce(.filter, text: text, priority: .medium)
-        case .error:
-            flushAllPending()
-            post(text, .high)
-        case .confirmation, .destructiveConfirmation, .bulk, .mode, .status:
-            post(text, .medium)
+        case .canvasMovedTo, .canvasGroupEntered, .canvasGroupLeft,
+            .canvasConnectionTraversed, .canvasMoveRelative, .canvasResizeGeometry:
+            return .navigation
+        case .canvasFilterCount, .canvasFilterCleared:
+            return .filter
+        default:
+            return nil
         }
     }
-
-    /// t0 §1.4: the ⌃⌘I readback — always verbose-grade regardless of
-    /// the setting. Mark/mode/filter context is UI-owned and merged
-    /// here (pull-based; the panel shows the same string).
-    func whereAmIText(
-        _ ctx: CanvasWhereAmI, marked: Bool,
-        activeMode: String?, filterSummary: String?
-    ) -> String {
-        let card = CanvasCardRef(kind: ctx.kind, title: ctx.title)
-        var parts: [String] = [card.phrase]
-        parts.append(
-            ctx.groupPath.isEmpty
-                ? "at canvas level" : "in \(ctx.groupPath.joined(separator: " › "))")
-        parts.append("\(ctx.ordinalN) of \(ctx.totalM)")
-        parts.append(
-            "\(ctx.connectionCount) connection\(ctx.connectionCount == 1 ? "" : "s") (\(ctx.inCount) in, \(ctx.outCount) out)"
-        )
-        if let color = ctx.colorName { parts.append(color) }
-        if marked { parts.append("marked") }
-        if let activeMode { parts.append(activeMode) }
-        if let filterSummary { parts.append(filterSummary) }
-        return parts.joined(separator: ", ")
-    }
-
-    // MARK: Grammar assembly (t0 §1.1–§1.3)
-
-    private func phrase(_ event: CanvasEvent) -> String {
-        switch event {
-        case .movedTo(let card, let n, let m, let container, let connections, let color, let marked):
-            switch verbosity {
-            case .terse:
-                return card.title
-            case .standard:
-                return "\(card.phrase), \(n) of \(m) in \(container ?? "canvas")"
-            case .verbose:
-                var text = "\(card.phrase), \(n) of \(m) in \(container ?? "canvas")"
-                text += ", \(connections) connection\(connections == 1 ? "" : "s")"
-                if let color { text += ", \(color)" }
-                if marked { text += ", marked" }
-                return text
-            }
-        case .groupEntered(let label, let count):
-            return "Entering group \"\(label)\", \(count) card\(count == 1 ? "" : "s")"
-        case .groupLeft(let label):
-            return "Leaving group \"\(label)\""
-        case .connectionTraversed(let direction, let other, let label, let towardOther):
-            let phrase: String
-            switch direction {
-            case .outgoing: phrase = towardOther ? "Connects to" : "Connected from"
-            case .incoming: phrase = towardOther ? "Connected from" : "Connects to"
-            case .bidirectional, .undirected: phrase = "Linked with"
-            }
-            var text = "\(phrase) \(other.phrase)"
-            if let label { text += ", labelled \"\(label)\"" }
-            return text
-        case .confirmation(let text), .bulk(let text), .mode(let text),
-            .filter(let text), .error(let text), .status(let text),
-            .transientGeometry(let text):
-            return text
-        case .destructiveConfirmation(let text):
-            // The undo hint rides at standard+ (§1.3); terse users
-            // asked for minimum chrome.
-            return verbosity == .terse ? text : "\(text) — ⌘Z to undo"
-        }
-    }
-
-    // MARK: Typed confirmation builders (§1.3 patterns)
-
-    static func createdText(card: CanvasCardRef, relative: CanvasRelativeDesc) -> String {
-        "Created \(card.phrase.prefix(1).lowercased() + card.phrase.dropFirst()) \(relativePhrase(relative))"
-    }
-
-    static func relativePhrase(_ relative: CanvasRelativeDesc) -> String {
-        switch relative {
-        case .below(let anchor): return "below \"\(anchor)\""
-        case .rightOf(let anchor): return "right of \"\(anchor)\""
-        case .above(let anchor): return "above \"\(anchor)\""
-        case .leftOf(let anchor): return "left of \"\(anchor)\""
-        case .atOrigin: return "at the canvas origin"
-        }
-    }
-
-    static func undidText(actionName: String) -> String { "Undid: \(actionName)" }
-    static func redidText(actionName: String) -> String { "Redid: \(actionName)" }
 
     // MARK: Coalescing (§1.5)
 

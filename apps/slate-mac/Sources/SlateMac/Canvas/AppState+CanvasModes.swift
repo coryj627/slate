@@ -45,7 +45,7 @@ extension AppState {
         guard admitCanvasMutation(for: doc) else { return }
         let moving = canvasMovingSet(in: doc)
         guard !moving.isEmpty else {
-            canvasAnnouncer.announce(.status("Nothing selected."))
+            canvasAnnouncer.announce(.canvasStatus(note: .nothingSelected))
             return
         }
         var originals: [String: CanvasRect] = [:]
@@ -53,26 +53,27 @@ extension AppState {
             guard let node = doc.scene.nodes.first(where: { $0.nodeId == id }) else { continue }
             originals[id] = CanvasRect(x: node.x, y: node.y, width: node.width, height: node.height)
         }
-        let object =
+        let primaryTitle =
+            doc.outline.first { $0.nodeId == moving.first }?.title ?? "card"
+        let object: CanvasModeObject =
             moving.count == 1
-            ? "\"\(doc.outline.first { $0.nodeId == moving.first }?.title ?? "card")\""
-            : "\(moving.count) cards"
+            ? .card(title: primaryTitle)
+            : .cards(count: UInt32(clamping: moving.count))
         let controller = canvasModeController(for: doc)
         let entered = controller.enter(
             .init(
-                name: "Move mode",
+                mode: .move,
                 object: object,
-                exits: "Arrows to move, Shift for big steps, Return to place, Escape to cancel.",
                 onCommit: { [weak self, weak doc] in
                     guard let self, let doc else { return nil }
-                    return self.canvasCommitTransient(doc: doc, verb: "move", object: object)
+                    return self.canvasCommitTransient(doc: doc, verb: .move, object: object)
                 },
                 onCancel: { [weak self, weak doc] in
-                    guard let self, let doc else { return "Move cancelled." }
+                    // The degenerate path (document gone before the
+                    // restore could run) states no restoration.
+                    guard let self, let doc else { return .unstated }
                     self.canvasDiscardTransient(doc: doc)
-                    return moving.count == 1
-                        ? "Move cancelled — card returned."
-                        : "Move cancelled — cards returned."
+                    return .cardsReturned(count: UInt32(clamping: moving.count))
                 }))
         guard entered else { return }
         canvasTransient = CanvasTransientState(
@@ -89,7 +90,7 @@ extension AppState {
             let selected = doc.selection.selected,
             let node = doc.scene.nodes.first(where: { $0.nodeId == selected })
         else {
-            canvasAnnouncer.announce(.status("Nothing selected."))
+            canvasAnnouncer.announce(.canvasStatus(note: .nothingSelected))
             return
         }
         let rect = CanvasRect(x: node.x, y: node.y, width: node.width, height: node.height)
@@ -97,19 +98,17 @@ extension AppState {
         let controller = canvasModeController(for: doc)
         let entered = controller.enter(
             .init(
-                name: "Resize mode",
-                object: "\"\(title)\"",
-                exits:
-                    "Left and Right arrows change width, Up and Down change height, Return to apply, Escape to cancel.",
+                mode: .resize,
+                object: .card(title: title),
                 onCommit: { [weak self, weak doc] in
                     guard let self, let doc else { return nil }
                     return self.canvasCommitTransient(
-                        doc: doc, verb: "resize", object: "\"\(title)\"")
+                        doc: doc, verb: .resize, object: .card(title: title))
                 },
                 onCancel: { [weak self, weak doc] in
-                    guard let self, let doc else { return "Resize cancelled." }
+                    guard let self, let doc else { return .unstated }
                     self.canvasDiscardTransient(doc: doc)
-                    return "Resize cancelled — size restored."
+                    return .sizeRestored
                 }))
         guard entered else { return }
         canvasTransient = CanvasTransientState(
@@ -126,7 +125,7 @@ extension AppState {
         guard let doc = activeCanvasDocument else { return }
         guard admitCanvasMutation(for: doc) else { return }
         let controller = canvasModeController(for: doc)
-        if controller.active?.name == "Resize mode" {
+        if controller.active?.mode == .resize {
             _ = controller.commit()
         } else {
             canvasEnterResizeMode()
@@ -169,15 +168,19 @@ extension AppState {
             let newWidth = rect.width + dx * step
             let newHeight = rect.height + dy * step
             if newWidth < Self.canvasMinCardSize || newHeight < Self.canvasMinCardSize {
-                canvasAnnouncer.announce(.status("Minimum size."))
+                canvasAnnouncer.announce(.canvasResizeClamped)
                 return
             }
             rect = CanvasRect(x: rect.x, y: rect.y, width: newWidth, height: newHeight)
             transient.rects[id] = rect
             canvasTransient = transient
             doc.transientRects = transient.rects
-            canvasAnnounceTransient(doc: doc, transient: &transient, describe: {
-                "\(Self.canvasSafeInt(rect.width)) by \(Self.canvasSafeInt(rect.height))"
+            canvasAnnounceTransient(doc: doc, transient: &transient, describe: { overlap in
+                CanvasA11yEvent.canvasResizeGeometry(
+                    preset: nil,
+                    width: UInt32(clamping: Self.canvasSafeInt(rect.width)),
+                    height: UInt32(clamping: Self.canvasSafeInt(rect.height)),
+                    overlap: overlap)
             })
         } else {
             for (id, rect) in transient.rects {
@@ -191,13 +194,20 @@ extension AppState {
             var mutable = transient
             canvasAnnounceTransient(
                 doc: doc, transient: &mutable,
-                describe: { self.canvasRelativeDescription(doc: doc, transient: snapshot) })
+                describe: { overlap in
+                    guard
+                        let descs = self.canvasRelativeDescription(
+                            doc: doc, transient: snapshot)
+                    else { return nil }
+                    return CanvasA11yEvent.canvasMoveRelative(
+                        descs: descs, overlap: overlap)
+                })
         }
     }
 
     /// Resize presets (M6-friendly: palette commands, no arrows needed).
     func canvasResizeDefaultSize() {
-        canvasApplyResizePreset(width: 260, height: 140, label: "default size")
+        canvasApplyResizePreset(width: 260, height: 140, preset: .defaultSize)
     }
 
     func canvasResizeFitContent() {
@@ -211,10 +221,12 @@ extension AppState {
         let text: String = (fetched ?? nil) ?? ""
         let lines = max(1, text.count / 32 + text.filter { $0 == "\n" }.count)
         let height = min(600, max(Double(lines) * 24 + 40, Self.canvasMinCardSize))
-        canvasApplyResizePreset(width: 260, height: height, label: "fit to content")
+        canvasApplyResizePreset(width: 260, height: height, preset: .fitToContent)
     }
 
-    private func canvasApplyResizePreset(width: Double, height: Double, label: String) {
+    private func canvasApplyResizePreset(
+        width: Double, height: Double, preset: CanvasResizePreset
+    ) {
         guard let doc = activeCanvasDocument, var transient = canvasTransient,
             transient.isResize, let id = transient.ids.first,
             let rect = transient.rects[id]
@@ -228,16 +240,20 @@ extension AppState {
         var mutable = transient
         canvasAnnounceTransient(
             doc: doc, transient: &mutable,
-            describe: {
-                "Resized to \(label): \(Self.canvasSafeInt(width)) by \(Self.canvasSafeInt(height))"
+            describe: { overlap in
+                CanvasA11yEvent.canvasResizeGeometry(
+                    preset: preset,
+                    width: UInt32(clamping: Self.canvasSafeInt(width)),
+                    height: UInt32(clamping: Self.canvasSafeInt(height)),
+                    overlap: overlap)
             })
     }
 
     // MARK: Commit / cancel plumbing
 
-    private func canvasCommitTransient(doc: CanvasDocument, verb: String, object: String)
-        -> String?
-    {
+    private func canvasCommitTransient(
+        doc: CanvasDocument, verb: CanvasTransientVerb, object: CanvasModeObject
+    ) -> CanvasA11yEvent? {
         guard admitCanvasMutation(for: doc) else { return nil }
         guard let transient = canvasTransient else { return nil }
         var ops: [CanvasOp] = []
@@ -253,12 +269,15 @@ extension AppState {
         canvasTransient = nil
         doc.transientRects = nil
         guard !ops.isEmpty else {
-            return "\(verb.capitalized) ended — nothing changed."
+            return .canvasModeEndedWithoutEffect(mode: Self.canvasMode(of: verb))
         }
         let ok = canvasApply(
-            CanvasAction(name: "\(verb) \(object)", ops: ops), to: doc)
+            CanvasAction(
+                name: "\(Self.canvasActionVerb(verb)) \(Self.canvasActionObject(object))",
+                ops: ops),
+            to: doc)
         guard ok else { return nil }  // conflict already announced
-        return verb == "move" ? "Placed \(object)." : "Resized \(object)."
+        return .canvasModeCommitted(verb: verb, object: object)
     }
 
     private func canvasDiscardTransient(doc: CanvasDocument) {
@@ -269,12 +288,17 @@ extension AppState {
     // MARK: Narration
 
     /// Overlap onset/offset (G20: silent stacking is invisible to a
-    /// non-visual author) + the coalesced relative description.
+    /// non-visual author) + the coalesced relative description. The
+    /// transition is a CLAUSE on the geometry event, never a second
+    /// utterance (contracts doc CD-1), so it is computed here and
+    /// handed to the event builder. A nil build means "nothing to say"
+    /// — the degenerate no-primary-rect path, which was an empty
+    /// string before.
     private func canvasAnnounceTransient(
         doc: CanvasDocument, transient: inout CanvasTransientState,
-        describe: () -> String
+        describe: (CanvasOverlapTransition?) -> CanvasA11yEvent?
     ) {
-        var text = describe()
+        var overlap: CanvasOverlapTransition?
         if let session = currentSession, let handle = doc.handle {
             let anyOverlap = transient.ids.contains { id in
                 guard let rect = transient.rects[id] else { return false }
@@ -284,24 +308,30 @@ extension AppState {
                 return !hits.isEmpty
             }
             if anyOverlap && !transient.wasOverlapping {
-                text += ". Overlapping another card"
+                overlap = .onset
             } else if !anyOverlap && transient.wasOverlapping {
-                text += ". Clear of overlaps"
+                overlap = .cleared
             }
             transient.wasOverlapping = anyOverlap
             canvasTransient = transient
         }
-        canvasAnnouncer.announce(.transientGeometry(text))
+        guard let event = describe(overlap) else { return }
+        canvasAnnouncer.announce(event)
     }
 
-    /// Relative description from the nearest non-moving neighbors:
-    /// "Below \"Research\", right of \"Ideas\"" (t4 phrasing).
+    /// Relative description from the nearest non-moving neighbors, as
+    /// core's OWN `CanvasRelativeDesc` list — core phrases it
+    /// (`Below "Research", right of "Ideas"`), the host only picks the
+    /// neighbours (§W-G row B; PR 0b moves the pick itself into
+    /// `canvas_describe_relative`). `nil` means there is nothing to
+    /// describe against at all, which stays silent; an EMPTY list is a
+    /// real fix — core speaks `Alone on the canvas`.
     func canvasRelativeDescription(doc: CanvasDocument, transient: CanvasTransientState)
-        -> String
+        -> [CanvasRelativeDesc]?
     {
         guard let primaryId = transient.ids.first,
             let rect = transient.rects[primaryId]
-        else { return "" }
+        else { return nil }
         let cx: Double = rect.x + rect.width / 2
         let cy: Double = rect.y + rect.height / 2
         typealias NeighborFix = (node: CanvasSceneNode, dx: Double, dy: Double)
@@ -317,24 +347,53 @@ extension AppState {
             let rd: Double = rhs.dx * rhs.dx + rhs.dy * rhs.dy
             return ld < rd
         }
-        guard let nearest = neighbors.first else { return "Alone on the canvas" }
+        guard let nearest = neighbors.first else { return [] }
 
-        func phrase(_ neighbor: NeighborFix) -> String {
+        func desc(_ neighbor: NeighborFix) -> CanvasRelativeDesc {
             if abs(neighbor.dy) >= abs(neighbor.dx) {
-                return neighbor.dy < 0 ? "Below \"\(neighbor.node.title)\"" : "Above \"\(neighbor.node.title)\""
+                return neighbor.dy < 0
+                    ? .below(anchorTitle: neighbor.node.title)
+                    : .above(anchorTitle: neighbor.node.title)
             }
             return neighbor.dx < 0
-                ? "Right of \"\(neighbor.node.title)\"" : "Left of \"\(neighbor.node.title)\""
+                ? .rightOf(anchorTitle: neighbor.node.title)
+                : .leftOf(anchorTitle: neighbor.node.title)
         }
 
-        var parts = [phrase(nearest)]
-        // A second axis-distinct neighbor completes the fix.
+        var descs = [desc(nearest)]
+        // A second axis-distinct neighbor completes the fix. Core
+        // capitalises the first phrase and lower-cases the rest.
         let vertical = abs(nearest.dy) >= abs(nearest.dx)
         if let second = neighbors.dropFirst().first(where: {
             (abs($0.dy) >= abs($0.dx)) != vertical
         }) {
-            parts.append(phrase(second).prefix(1).lowercased() + phrase(second).dropFirst())
+            descs.append(desc(second))
         }
-        return parts.joined(separator: ", ")
+        return descs
+    }
+
+    /// The mode a transient verb belongs to (`Move ended — nothing
+    /// changed.` names the MODE, the commit names the VERB).
+    private static func canvasMode(of verb: CanvasTransientVerb) -> CanvasMode {
+        switch verb {
+        case .move: return .move
+        case .resize: return .resize
+        }
+    }
+
+    /// Undo-stack action names are host data (t3), not announcements —
+    /// they ride into `CanvasHistoryApplied.name` as a payload.
+    private static func canvasActionVerb(_ verb: CanvasTransientVerb) -> String {
+        switch verb {
+        case .move: return "move"
+        case .resize: return "resize"
+        }
+    }
+
+    private static func canvasActionObject(_ object: CanvasModeObject) -> String {
+        switch object {
+        case .card(let title): return "\"\(title)\""
+        case .cards(let count): return "\(count) cards"
+        }
     }
 }
