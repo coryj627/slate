@@ -793,13 +793,18 @@ extension AppState {
         let ok = canvasApply(
             CanvasAction(
                 // CD-6: this name is SPOKEN — it rides into
-                // `CanvasHistoryApplied.name` — and the delete this
-                // undoes announced through core's grouped `count_noun`.
-                // `countedGrouped` keeps the pair agreeing at ≥ 1000
+                // `CanvasHistoryApplied.name` — and the delete it
+                // undoes announces through core's grouped `count_noun`.
+                // So the name calls that very function over the FFI
+                // (CD-26), which keeps the pair agreeing at ≥ 1000
                 // (`Undid delete 1,000 cards.` after
-                // `Deleted 1,000 cards.`); below 1000 it is
-                // byte-identical to what shipped.
-                name: "delete \(CountCopy.countedGrouped(marked.count, "card", "cards"))",
+                // `Deleted 1,000 cards.`) with no second grouping rule
+                // anywhere. Below 1000 it is byte-identical to what
+                // shipped.
+                name: "delete "
+                    + countNoun(
+                        count: UInt64(clamping: marked.count),
+                        singular: "card", plural: "cards"),
                 ops: ops), to: doc)
         guard ok else { return }
         doc.selection.marked = []
@@ -828,8 +833,11 @@ extension AppState {
         }
         let ok = canvasApply(
             CanvasAction(
-                // CD-6, as above: `CanvasBulkColorSet` groups.
-                name: "color \(CountCopy.countedGrouped(marked.count, "card", "cards"))",
+                // CD-6/CD-26, as above: `CanvasBulkColorSet` groups.
+                name: "color "
+                    + countNoun(
+                        count: UInt64(clamping: marked.count),
+                        singular: "card", plural: "cards"),
                 ops: ops), to: doc)
         guard ok else { return }
         canvasAnnouncer.announce(
@@ -862,8 +870,11 @@ extension AppState {
         guard let frame = frameLookup ?? nil else { return }
         let ok = canvasApply(
             CanvasAction(
-                // CD-6, as above: `CanvasGrouped` groups.
-                name: "group \(CountCopy.countedGrouped(marked.count, "card", "cards"))",
+                // CD-6/CD-26, as above: `CanvasGrouped` groups.
+                name: "group "
+                    + countNoun(
+                        count: UInt64(clamping: marked.count),
+                        singular: "card", plural: "cards"),
                 ops: [
                     .createGroup(
                         id: canvasNewId(),

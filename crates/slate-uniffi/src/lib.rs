@@ -8570,6 +8570,30 @@ pub fn canvas_color_name(color: CanvasColor) -> String {
     core::canvas::color_name(&color.into())
 }
 
+/// A grouped count plus its English noun — core's `count_noun`
+/// (`sidebar_filter.rs`), the single definition of both the thousands
+/// grouping (`1,000`, ASCII comma, locale-independent) and the
+/// singular-only-at-exactly-one agreement rule (zero stays plural).
+///
+/// Exported because a host sometimes composes a string that is read
+/// back BESIDE a core sentence counting the same number, and the two
+/// must agree. The shipped case is the canvas undo-stack action name:
+/// it rides into `CanvasHistoryApplied.name` as a payload and is spoken
+/// verbatim, so `Undid delete 1,000 cards.` has to follow
+/// `Deleted 1,000 cards.` (W6-1 CD-6). Before this export the mac host
+/// mirrored `group_thousands` in Swift; that mirror is deleted, which
+/// is the whole point — never a host re-implementation where a pure
+/// core function can be called (§W-G).
+///
+/// A caller that formats the number itself (locale decimals, ungrouped
+/// byte counts) wants the bare noun instead, which stays host-side
+/// because it is a two-branch ternary with no formatting to disagree
+/// about.
+#[uniffi::export]
+pub fn count_noun(count: u64, singular: String, plural: String) -> String {
+    core::sidebar_filter::count_noun(count, &singular, &plural)
+}
+
 /// Core Debug identity of the event — the exact string the corpus artifact
 /// pins in its `event` field. Host censuses assert this to prove they
 /// constructed the SAME semantic event (variant + parameters), not merely

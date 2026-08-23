@@ -848,9 +848,10 @@ the self-loop tie).
 `apps/slate-mac/Tests/SlateMacTests/ParityHarnessTests.swift`: the
 `canvas_queries` section's Swift twin, asserted against the same
 committed golden the Windows census uses.
-`apps/slate-mac/Tests/SlateMacTests/CountCopyTests.swift`:
-`countedGrouped` matches core's grouping at ≥ 1000 and is
-byte-identical to `counted` below it (CD-6's carried half).
+`apps/slate-mac/Tests/SlateMacTests/CountCopyTests.swift`: the
+boundary between the host's ungrouped `counted` and core's exported
+`count_noun` — identical below 1000, different at and above it
+(CD-6's carried half, CD-26).
 `apps/slate-mac/Tests/SlateMacTests/CanvasRendererTests.swift`:
 speakable-name uniqueness, and CD-20's renumbering as the one moved
 expectation.
@@ -870,7 +871,7 @@ table.
 | A | The entire announcer grammar: verbosity matrix, group entered/left, connection traversed (direction phrases, duplicated again in `CanvasOutlineView.swift:335–347`), confirmations, destructive "— ⌘Z to undo", error, filter count, mode entered/cancelled/committed, undid/redid, Where-am-I readback (`CanvasAnnouncer.swift:104–213`, `AppState+CanvasActions.swift:328–819` prose sites, `AppState+CanvasConnect.swift:62,127–181`); preset-name dictionary duplicated (`AppState+CanvasActions.swift:340,766`) | `HostComposed` residue; core supplies every payload (`CardSummary`, `Neighbor.direction`, `RelativeDesc`, `color_name`) | **1** | `A11yEvent::Canvas*` family + `CanvasVerbosity` (0a) | **closed** — core half + mac consumption both landed (0a-1, 0a-2) |
 | B | Relative-position description in move mode — nearest neighbours by squared centre distance, `Below "X", right of "Y"` (`AppState+CanvasModes.swift:299–339`) | `RelativeDesc` exists for placement only | 2 | `canvas_describe_relative(h, rect, exclude) -> Vec<CanvasRelativeDesc>` (0b) | **closed** — 0b-7; mac's nearest-neighbour walk deleted (0b-2), CD-19 |
 | C | Auto-side selection for new connections, **two copies** (`AppState+CanvasConnect.swift:24–33`, `CanvasRendererView.swift:582–600`) | none | 2 | `canvas_auto_sides` (0b) | **closed** — 0b-3, rect-keyed (CD-16); BOTH Swift copies deleted (0b-2) |
-| D | Containment / parent-group resolution, **three copies** (`AppState+CanvasCreate.swift:296–305`, `AppState+CanvasExtras.swift:131–147`, `AppState+CanvasActions.swift:439–441`) | `GroupTree` exists, not exposed | 2 | `canvas_parent_of`, `canvas_children_of` (0b) | **closed** — 0b-8; all THREE Swift copies deleted (0b-2 — the title-keyed one with `place_inside_group`), CD-18. CD-4 no longer needs `children_of` (0a-2 deleted the walk) |
+| D | Containment / parent-group resolution, **three copies** (`AppState+CanvasCreate.swift:296–305`, `AppState+CanvasExtras.swift:131–147`, `AppState+CanvasActions.swift:439–441`) | `GroupTree` exists, not exposed | 2 | `canvas_parent_of`, `canvas_children_of` (0b) | **closed** — 0b-8; all THREE Swift copies deleted (0b-2 — the title-keyed one with `place_inside_group`), CD-18, CD-27. CD-4 no longer needs `children_of` (0a-2 deleted the walk) |
 | E | Enter/exit group + group card count from outline `depth` walks; trace-path walk (`AppState+CanvasNavigation.swift:55–90,129–156,170–181`) | `reading_order`/`adjacency` exist | 2 | D's queries + `canvas_trace_path` (0b) | **closed** — 0b-8, 0b-9; the depth walks and the trace walk deleted (0b-2) |
 | F | Selection model + reading-order re-projection of the marked set | none (correct) | 3 / 2 | host state; `canvas_order_nodes` (0b) | **closed** — 0b-10; both re-projections deleted (0b-2). Selection model stays host state |
 | G | Undo/redo stacks, depth/session policy, menu-title composition (`AppState.swift:3987`) | `apply()` returns inverse + names | 3 | host stack; **menu title** = `CanvasUndoMenuTitle{verb,name}` | **menu title landed (0a)** |
@@ -1230,6 +1231,65 @@ second implementation for it to disagree with. `Above` and `LeftOf`
 remain unreachable by construction, which is what clipping to the group
 means.
 
+**CD-26 — `count_noun` is an FFI export, because CD-6's other half is a
+host string.** CD-6 routes the canvas ANNOUNCEMENTS through core's
+grouped `count_noun`. Three of the undo-stack action names pair with
+announcements that group — bulk delete, bulk colour, group-marked — and
+those names are SPOKEN, because `CanvasHistoryApplied.name` is a
+payload rendered verbatim. So `Undid delete 1000 cards.` followed
+`Deleted 1,000 cards.` from the same action.
+
+Task 0b-2 first closed that with a four-line `CountCopy.countedGrouped`
+mirroring `group_thousands` in Swift. **That was wrong and is
+retracted**: a host re-implementation where a pure core function can be
+called is precisely the failure §W-G exists to prevent, and the fact
+that it was small and test-pinned did not make it a second definition
+any less. `slate_core::sidebar_filter::count_noun` is now `pub` and
+`slate-uniffi` exports it as a free function (`count_noun(count,
+singular, plural)`), joining `canvas_constants` / `canvas_new_id` /
+`canvas_color_name` in the handle-free family (CD-17). The Swift
+mirror is deleted; the three names call the export.
+
+`CountCopy` keeps its ungrouped `counted` — that divergence is
+deliberate and documented for host copy with no core counterpart — and
+its doc comment now names the export and says not to add a grouped
+helper beside it. The mac host still owns the two-branch agreement
+ternary (`noun`/`verb`), which carries no formatting to disagree about.
+
+Nothing corpus-visible moved: the export renders no event, so no
+corpus entry, golden, census or §W-A artifact changed — verified by
+regenerating all 29 parity artifacts on the rebuilt library and
+diffing them byte-for-byte against the committed goldens.
+
+**CD-27 — Duplicate's group expansion answers from the tree, not from
+"centre inside a picked group".** Mac's copy 2
+(`AppState+CanvasExtras.swift:131–147`) asked, for every node, whether
+its centre fell strictly inside ANY picked group, and included it if so.
+That is the same set as "is a descendant of a picked group" only while
+groups NEST. Concretely, with groups `A` (large) and `B` (small)
+overlapping without either containing the other's centre, and card `c`
+whose centre lies inside BOTH:
+
+- core's `GroupTree` gives `c` exactly ONE parent — the smaller area,
+  `B` — so `canvas_children_of(A)` does not contain `c`, and duplicating
+  `A` alone copies the frame without `c`;
+- mac's test included `c` when `A` was picked, so duplicating `A` alone
+  copied `c` too — while the outline, derived from the same tree,
+  showed `c` under `B`.
+
+Core's answer wins per decision 14 (one derivation) and is the one the
+user can already see: the outline, the group path, `depth`, and every
+other containment surface are that tree. Mac's answer additionally
+contradicted its own outline, which is the stronger argument.
+
+**No mac test pinned the old answer** — `testDuplicateGroupExpandsToMembersAsOneAction`
+uses one group with two plainly-nested children, where both rules agree
+— so the migration moved no expectation. Cross-reference CD-18, which
+records the OTHER disagreement between mac's containment copies and
+core's tree (the equal-area tie-break); CD-18 is about which group
+wins a tie, CD-27 about a node whose membership two rules answer
+differently without any tie.
+
 ---
 
 ## Accepted risks (owner-recorded; off-limits for re-litigation)
@@ -1578,7 +1638,9 @@ every deleted symbol was re-grepped to zero afterwards.
   without nesting answer differently: mac included a node whose centre
   fell in the picked group even when the outline showed it inside the
   other one. Core's tree answers the question the outline shows, and
-  Duplicate now walks `canvas_children_of` transitively.
+  Duplicate now walks `canvas_children_of` transitively. **CD-27**
+  records the scenario and both answers; no mac test pinned the old
+  one.
 - **`canvas_place_inside_group`'s `TooSmall` still needs a host
   overlap check.** The contract says its point is the inset, unchecked
   — so `canvasMoveIntoGroup` runs `canvas_check_overlap` on that rect
@@ -1619,18 +1681,21 @@ every deleted symbol was re-grepped to zero afterwards.
   action names are SPOKEN (`CanvasHistoryApplied.name` is a payload),
   so each must count the way the sentence it undoes counts. Delete,
   colour and group render through core's grouped `counted`, so their
-  names took a new `CountCopy.countedGrouped`; move, duplicate and the
-  mode object render through core's ungrouped `plural`, so leaving them
-  on `counted` is what makes them agree. A blanket "group everything"
-  would have broken the pairing in the other direction. Below 1000 the
-  two helpers are byte-identical, which a test asserts rather than
-  assumes.
-- **`countedGrouped` is a host mirror of core's `group_thousands`, and
-  the honest fix is an export.** There is no FFI accessor for core's
-  count formatting, and PR 0b's core half is closed, so the grouping
-  rule is now spelled in two languages. It is four lines and pinned by
-  test at the values that matter, but it is a duplication of exactly
-  the kind §W-G exists to remove; a `count_noun` export would delete it.
+  names call core's `count_noun` over the FFI (CD-26); move, duplicate
+  and the mode object render through core's ungrouped `plural`, so
+  leaving them on the host's `counted` is what makes them agree. A
+  blanket "group everything" would have broken the pairing in the other
+  direction. Below 1000 the two are byte-identical, which a test
+  asserts rather than assumes.
+- **The first fix for that was a host mirror, and it was wrong.** The
+  grouped counting initially landed as a four-line
+  `CountCopy.countedGrouped` re-deriving `group_thousands` in Swift,
+  on the reading that core was out of scope. Corrected by controller
+  ruling: `count_noun` is now an FFI export and the Swift mirror is
+  deleted (CD-26). Recorded as a correction rather than edited away —
+  "small, pinned by test, and the alternative was out of scope" is
+  exactly the reasoning that puts a second definition of a core rule in
+  a host.
 - **Two Swift-side helpers survive by design.** The renderer's
   `Group ⟨name⟩` prefix is §W-C label class, not a spoken card
   reference; and `MIN_CARD_SIZE`'s reject-the-whole-step enforcement
