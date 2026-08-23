@@ -159,16 +159,6 @@ final class CanvasRendererNSView: NSView {
     /// observation-driven pan against the synchronous keyboard one.
     private var lastAutoPannedSelection: String?
 
-    /// Speakable names, deduplicated for Voice Control (t0 §1.1 /
-    /// t3 uniqueness test): duplicate display titles get a stable
-    /// reading-order ordinal suffix ("Ideas", "Ideas 2").
-    private(set) var speakableNames: [String: String] = [:]
-    /// Session-sticky assignments (red-team #367 F4): survivors keep
-    /// their name across mutations — deletes never renumber, renames
-    /// re-assign only the renamed card, and a rematerialized element
-    /// can never collide with a reused ordinal.
-    private var assignedSpeakable: [String: (title: String, name: String)] = [:]
-
     override var acceptsFirstResponder: Bool { true }
     override var isFlipped: Bool { true }
 
@@ -268,43 +258,12 @@ final class CanvasRendererNSView: NSView {
 
     // MARK: Data → layers/elements
 
+    /// §W-G row L: speakable names arrive ON the scene nodes now
+    /// (`CardSummary.speakable_name`, contract 0b-5), so there is
+    /// nothing to compute before repainting — a scene refresh IS a
+    /// name refresh.
     func refreshFromDocument() {
-        computeSpeakableNames()
         rebuildVisible()
-    }
-
-    private func computeSpeakableNames() {
-        guard let document else {
-            speakableNames = [:]
-            return
-        }
-        var result: [String: String] = [:]
-        var used: Set<String> = []
-        // Pass 1: survivors with unchanged titles keep their name
-        // (t0 §1.1: ordinals hold for the session).
-        for node in document.scene.nodes {
-            if let assigned = assignedSpeakable[node.nodeId], assigned.title == node.title {
-                result[node.nodeId] = assigned.name
-                used.insert(assigned.name)
-            }
-        }
-        // Pass 2: new/renamed cards take the first non-colliding name
-        // in reading order.
-        for node in document.scene.nodes where result[node.nodeId] == nil {
-            var candidate = node.title
-            var n = 1
-            while used.contains(candidate) {
-                n += 1
-                candidate = "\(node.title) \(n)"
-            }
-            result[node.nodeId] = candidate
-            used.insert(candidate)
-        }
-        speakableNames = result
-        assignedSpeakable = Dictionary(
-            uniqueKeysWithValues: document.scene.nodes.compactMap { node in
-                result[node.nodeId].map { (node.nodeId, (title: node.title, name: $0)) }
-            })
     }
 
     private var viewport: CanvasViewport? { document?.viewport }
@@ -397,10 +356,9 @@ final class CanvasRendererNSView: NSView {
             let element = axElement(for: node)
             element.setAccessibilityFrame(screenRect(from: viewRect))
             // Red-team #367 F4: labels re-stamp on every pass — a
-            // reused element must not speak a pre-rename title.
-            let speakable = speakableNames[node.nodeId] ?? node.title
-            element.setAccessibilityLabel(
-                node.kind == "group" ? "Group \(speakable)" : speakable)
+            // reused element must not speak a pre-rename title. The
+            // name itself is core's (§W-G row L / CD-23).
+            element.setAccessibilityLabel(Self.axLabel(for: node))
             // t0 §3: marked state is pull-readable on the element
             // everywhere the card appears.
             element.setAccessibilityValue(
@@ -442,9 +400,7 @@ final class CanvasRendererNSView: NSView {
         element.nodeId = node.nodeId
         element.setAccessibilityRole(.button)
         element.setAccessibilityParent(self)
-        let speakable = speakableNames[node.nodeId] ?? node.title
-        element.setAccessibilityLabel(
-            node.kind == "group" ? "Group \(speakable)" : speakable)
+        element.setAccessibilityLabel(Self.axLabel(for: node))
         element.setAccessibilityHelp(
             "\(node.kind.capitalized). Press to select. The outline and table carry the same card.")
         element.onPress = { [weak self] in
@@ -461,6 +417,25 @@ final class CanvasRendererNSView: NSView {
             appState.canvasSelect(nodeId: node.nodeId, in: document, announce: false)
         }
         return element
+    }
+
+    /// The card's Voice Control name. `speakableName` is core's
+    /// `CardSummary.speakable_name` (§W-G row L, contract 0b-5): the
+    /// display title when that spelling is free, otherwise the
+    /// document-order ordinal, SKIPPING any ordinal whose spelling is
+    /// some other card's real title — the guard mac's used-set loop
+    /// never had, and the reason a Voice Control user who reads
+    /// `Ideas 2` and says it now lands on the card they read it from.
+    ///
+    /// Ordinals renumber when the document changes (D-3 / CD-20): core
+    /// recomputes them from scratch on every derivation, so there is no
+    /// per-view sticky map here any more — which also means two panes
+    /// on one canvas finally agree about what a card is called.
+    ///
+    /// The `Group ⟨name⟩` prefix stays host-side: it is the renderer's
+    /// own AX label class (§W-C), not a spoken card reference.
+    private static func axLabel(for node: CanvasSceneNode) -> String {
+        node.kind == "group" ? "Group \(node.speakableName)" : node.speakableName
     }
 
     private func screenRect(from viewRect: CGRect) -> CGRect {

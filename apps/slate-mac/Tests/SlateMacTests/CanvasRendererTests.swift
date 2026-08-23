@@ -97,8 +97,9 @@ final class CanvasRendererTests: XCTestCase {
         XCTAssertEqual(
             labels.count, Set(labels).count,
             "no two elements share a speakable name (Voice Control): \(labels.sorted())")
-        // Duplicate titles disambiguate with stable reading-order
-        // ordinals (t0 §1.1 rule applied to titled duplicates too).
+        // Duplicate titles disambiguate with a DOCUMENT-order ordinal
+        // (t0 §1.1 rule applied to titled duplicates too) — core's
+        // `CardSummary.speakable_name`, contract 0b-5.
         XCTAssertTrue(labels.contains("Ideas"))
         XCTAssertTrue(labels.contains("Ideas 2"))
         // Groups keep their Group phrasing.
@@ -250,11 +251,22 @@ extension CanvasRendererTests {
             "follow-selection OFF: no observation-driven pan (F7)")
     }
 
-    func testRenameRefreshesLabelAndSurvivorsKeepOrdinals() async throws {
+    /// CD-20 (owner decision D-3, settled in 0b-1): speakable names are
+    /// core's, recomputed from document order on every derivation, so
+    /// an ordinal is a function of the CURRENT document and nothing
+    /// else. Renaming the first of two `Ideas` leaves exactly one
+    /// `Ideas`, and the survivor drops the ordinal it only ever had to
+    /// disambiguate against the card that just got renamed.
+    ///
+    /// This is the divergence from T R21's "ordinals hold for the
+    /// session". R21's stickiness lived in this view's own
+    /// `assignedSpeakable` map, so it was never document- or
+    /// session-held: two panes on one canvas already disagreed. Both
+    /// hosts now answer identically, which is what §W-A can pin and
+    /// per-view state never could.
+    func testRenameRefreshesLabelAndOrdinalsFollowDocumentOrder() async throws {
         let (state, doc, view) = try await makeView()
         XCTAssertTrue(view.speakableLabelsForTesting().contains("Ideas 2"))
-        // Rename the FIRST duplicate; the survivor must keep "Ideas 2"
-        // (session-sticky, no renumber) and the renamed card re-labels.
         _ = state.canvasApply(
             CanvasAction(
                 name: "rename",
@@ -263,9 +275,13 @@ extension CanvasRendererTests {
         await drainMainQueue()
         view.refreshFromDocument()
         let labels = view.speakableLabelsForTesting()
-        XCTAssertTrue(labels.contains("Fresh"), "\(labels)")
-        XCTAssertTrue(labels.contains("Ideas 2"), "survivor keeps its ordinal: \(labels)")
-        XCTAssertFalse(labels.contains("Ideas"), "old label gone after rename: \(labels)")
+        XCTAssertTrue(labels.contains("Fresh"), "renamed card re-labels: \(labels)")
+        XCTAssertTrue(
+            labels.contains("Ideas"),
+            "the last surviving \"Ideas\" needs no ordinal: \(labels)")
+        XCTAssertFalse(
+            labels.contains("Ideas 2"),
+            "the ordinal existed only against the renamed card: \(labels)")
         XCTAssertEqual(labels.count, Set(labels).count, "uniqueness holds: \(labels)")
     }
 
