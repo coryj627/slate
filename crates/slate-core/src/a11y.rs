@@ -444,6 +444,23 @@ pub enum CanvasStatusNote {
         forward: bool,
         ordinal: Option<u32>,
     },
+    /// A structural READ verb — enter group, exit group, trace path,
+    /// fit canvas — asked while the canvas is between a physical move
+    /// landing and its background reopen. Those verbs answer from
+    /// queries that need the native handle, and in that window the
+    /// handle is deliberately detached so nothing can save through the
+    /// moved-away path, so there is no answer to give.
+    ///
+    /// **New copy, not a migrated string** (W6-1 0b-2 fix round 2).
+    /// The alternative was silence, and t0's never-silent principle
+    /// says a keypress that does nothing must say so: the window is
+    /// transient but user-reachable, and the canvas commands carry no
+    /// enablement predicate (rule R1). Distinct from
+    /// [`CanvasMutationRefusal::Reopening`], which is the same window's
+    /// WRITE refusal and keeps its "before making changes" tail — this
+    /// one is reached by a user who changed nothing and is told when to
+    /// try again instead.
+    Reopening,
 }
 
 /// The assertive refusals and failures that are not the
@@ -2583,6 +2600,9 @@ impl CanvasA11yEvent {
                         None => format!("{base}."),
                     }
                 }
+                CanvasStatusNote::Reopening => {
+                    "This canvas is reopening. Try again in a moment.".to_owned()
+                }
             },
             CanvasBlocked { reason } => match reason {
                 CanvasBlockedReason::ModeBusy => {
@@ -4362,6 +4382,13 @@ fn canvas_corpus() -> Vec<CanvasA11yEvent> {
             mode: None,
             filter: CanvasFilterState::Inactive,
         },
+        // --- Read-verb refusal during the reopening window ---
+        // Appended, not filed beside its `CanvasStatus` siblings, so no
+        // pre-existing corpus index moves (contract 0a-2) — the same
+        // discipline the boundary witnesses above follow.
+        CanvasStatus {
+            note: CanvasStatusNote::Reopening,
+        },
     ]
 }
 
@@ -5018,6 +5045,8 @@ mod tests {
                 Medium,
                 "Text card \"Loose\", at canvas level, 1 of 1, 0 connections (0 in, 0 out)",
             ),
+            // Read-verb refusal during the reopening window.
+            (Medium, "This canvas is reopening. Try again in a moment."),
         ];
 
         let corpus = corpus();
@@ -5601,7 +5630,8 @@ mod tests {
                 | CanvasStatusNote::GroupIsEmpty { .. }
                 | CanvasStatusNote::NoOutgoingPath { .. }
                 | CanvasStatusNote::NotInAGroup { .. }
-                | CanvasStatusNote::NoConnection { .. } => None,
+                | CanvasStatusNote::NoConnection { .. }
+                | CanvasStatusNote::Reopening => None,
             },
             CanvasBlocked { reason } => match reason {
                 CanvasBlockedReason::ModeBusy

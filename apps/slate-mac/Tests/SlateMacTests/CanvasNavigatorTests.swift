@@ -163,7 +163,9 @@ final class CanvasNavigatorTests: XCTestCase {
     /// Exactly one state pairs `.ready` with no native handle: the
     /// window `beginBatchRetarget` opens between a physical move
     /// landing and its background reopen. That window is what any claim
-    /// about handle-less navigation is actually about.
+    /// about handle-less navigation is actually about, and in it the
+    /// structural verbs ANNOUNCE rather than go quiet (t0 never-silent;
+    /// `CanvasStatusNote.reopening`).
     func testOnlyTheBatchRetargetWindowPairsReadyWithNoHandle() async throws {
         let state = try await makeState()
         let doc = try XCTUnwrap(state.activeCanvasDocument)
@@ -198,23 +200,32 @@ final class CanvasNavigatorTests: XCTestCase {
                     + "\(String(describing: state.canvasMutationRefusal(for: doc)))")
         }
 
-        // The four STRUCTURAL verbs answer from core, which needs the
-        // handle, so they currently say nothing here. Pinned as the
-        // present behaviour and flagged, NOT endorsed: restoring speech
-        // needs either a read-only handle for this window or a
-        // navigation-specific sentence, and both are controller calls
-        // (task-0b2-report.md, "Ruling 2"). Whichever lands, this is
-        // where it shows up.
-        func assertStillSilent(_ label: String, _ verb: () -> Void) {
+        // The four STRUCTURAL verbs answer from core queries that need
+        // the handle, so they cannot do the work here — and t0's
+        // never-silent principle says a keypress that does nothing has
+        // to say so. They announce core's own sentence for this window
+        // rather than going quiet; silence is now a FAILURE, which is
+        // what stops the regression this test was written for from
+        // coming back.
+        func assertAnnouncesReopening(_ label: String, _ verb: () -> Void) {
             self.posted = []
             verb()
             state.canvasAnnouncer.flushForTests()
-            XCTAssertTrue(self.posted.isEmpty, "OPEN RULING — \(label) spoke: \(self.posted)")
+            XCTAssertEqual(
+                self.posted, ["This canvas is reopening. Try again in a moment."],
+                "\(label) must speak, exactly once, in the reopening window")
         }
-        assertStillSilent("enter group") { state.canvasEnterGroup() }
-        assertStillSilent("exit group") { state.canvasExitGroup() }
-        assertStillSilent("trace path") { state.canvasTracePath() }
-        assertStillSilent("fit canvas") { state.canvasFitCanvas() }
+        assertAnnouncesReopening("enter group") { state.canvasEnterGroup() }
+        assertAnnouncesReopening("exit group") { state.canvasExitGroup() }
+        assertAnnouncesReopening("trace path") { state.canvasTracePath() }
+        assertAnnouncesReopening("fit canvas") { state.canvasFitCanvas() }
+
+        // The read sentence is NOT the write refusal: a user who
+        // changed nothing must not be told to wait "before making
+        // changes".
+        XCTAssertNotEqual(
+            state.canvasMutationRefusal(for: doc)?.text,
+            "This canvas is reopening. Try again in a moment.")
     }
 
     /// The counterpart: the states 0b-2's report wrongly named are gated

@@ -855,6 +855,14 @@ boundary between the host's ungrouped `counted` and core's exported
 `apps/slate-mac/Tests/SlateMacTests/CanvasRendererTests.swift`:
 speakable-name uniqueness, and CD-20's renumbering as the one moved
 expectation.
+`apps/slate-mac/Tests/SlateMacTests/CanvasNavigatorTests.swift`:
+`testOnlyTheBatchRetargetWindowPairsReadyWithNoHandle` (the one
+`.ready`-with-no-handle window: movement still narrates, mutations
+still refuse audibly, and each of the four structural verbs speaks
+VA-1 rather than going quiet) and
+`testNonReadyCanvasesAreUnreachableByEveryNavigatorVerb` (the `.ready`
+gate, which is what makes any reachability claim about these verbs
+checkable).
 
 ---
 
@@ -886,6 +894,52 @@ table.
 
 ---
 
+## Vocabulary additions (new copy, not migrated strings)
+
+The `CD-n` register below records where core DIVERGES from a shipped mac
+string. This section is the other thing: sentences this programme
+**adds**, which no mac string corresponds to. Kept separate on purpose —
+calling an addition a divergence would imply a mac behaviour to compare
+it against, and a reviewer checking parity would go looking for one.
+
+**VA-1 — `CanvasStatusNote::Reopening`** (W6-1 0b-2 fix round 2).
+*"This canvas is reopening. Try again in a moment."* — Medium, status
+family, uncoalesced like every other `CanvasStatus`.
+
+Spoken when a structural READ verb (enter group, exit group, trace path,
+fit canvas) is used during `beginBatchRetarget`'s window: the canvas is
+`.ready` and its snapshot is visible, but the path-bound handle is
+detached until the background reopen lands, so the queries those verbs
+delegate to have no handle to answer from.
+
+**Why an addition rather than silence.** The verbs answered from
+Swift-side outline walks before PR 0b, so the window used to produce an
+answer; consuming core's queries made it produce nothing. t0's
+never-silent principle governs: a keypress that does nothing must say
+so. The window is transient but genuinely user-reachable — the canvas
+commands carry no enablement predicate (rule R1: commands are always
+reachable), and a batch rename's background reopens are not
+instantaneous.
+
+**Why not the existing sentence.** `CanvasMutationRefusal::Reopening`
+covers the same window for WRITES and keeps its
+*"Wait for it to finish before making changes."* tail. Reusing it here
+would tell a user who pressed a navigation key and changed nothing to
+wait before making changes — the wrong sentence for the trigger. The two
+now differ exactly where the user's intent differs: the write refusal
+names the changes, the read refusal names the retry.
+
+**Lockstep.** Five places moved together: the `CanvasStatusNote` arm and
+its render, the corpus entry (**appended**, so no pre-existing corpus
+index moves — contract 0a-2), the in-file golden table, the regenerated
+`corpus.json`, and both host censuses. The §W-D artifact diff is **five
+lines, purely additive**: one new entry, no existing entry's identity,
+priority or text touched. The uniffi mirror gained the arm; the
+coalescing class list did not change, because `CanvasStatus` is
+"everything else, posts immediately".
+
+---
+
 ## Recorded divergences (owner-recorded; off-limits for re-litigation)
 
 **CD-1 — No standalone overlap events.** The spec's minimum set proposed
@@ -914,6 +968,14 @@ Likewise `CanvasEmptyOnboarding` renders the **AX spelled-out** form
 (`CanvasContainerView.swift:492–494`) as the canonical text — the glyph
 form (`:481–483`) stays a host label, because the spelled-out one is
 what a screen reader actually receives. (R-0a-4.)
+
+**This closes t0 §5's ANNOUNCEMENT for a degraded load, not its
+navigability.** A degraded canvas is still unreachable by every
+navigator verb on mac — `activeCanvasDocument` gates on `.ready`, and
+the degraded branch clears `outline` outright. That is a separate,
+pre-existing gap no PR has owned; it is filed in "Mac details recorded
+while reading" (Task 0b-2's entry) for close-out, so nobody reads CD-3
+as evidence that §5 is satisfied end to end.
 
 **CD-4 — Group entry speaks the group's CHILD count.** t0 §1.2 specifies
 `Entering group "X", ⟨m⟩ cards`; mac passes the entered row's SIBLING
@@ -1423,6 +1485,33 @@ Read during PR 0b (Task 0b-1), none of it this task's to fix:
   `canvas_trace_path` returns the hop list and nothing about selection;
   where the caret lands is host state (§2 row F, Tier 3).
 
+Read during PR 0b (Task 0b-2), not this issue's to fix — **file at
+close-out**:
+
+- **A degraded or unavailable canvas is not navigable on mac at all,
+  which t0 §5 says it should be.** `AppState+CanvasNavigation.swift:16–23`
+  (`activeCanvasDocument`) ends `guard case .ready = doc.state else
+  { return nil }`, so EVERY navigator verb — next/previous, enter/exit
+  group, follow connection, trace path, Where-am-I, every viewport
+  command — is a silent no-op on `.degraded`, `.failed` and
+  `.retargetFailed`. It is not only the gate: `CanvasDocument.load`
+  (`:431–444`) *releases the handle and sets `outline = []`* on a
+  degraded load (Codoki #608's resource fix), so there is nothing left
+  to navigate even if the gate were opened. The published snapshot DOES
+  survive on the trashed and retarget-failed paths
+  (`markMovedToTrash` `:590–600` clears the handle but not `outline`),
+  which is what makes the code look navigable on a first read — it is
+  not.
+
+  t0 §5 wants a degraded canvas readable and announced, so a user can
+  inspect what survived a bad file rather than facing a dead tab. Fixing
+  it means deciding whether a degraded load keeps a read-only handle,
+  which is a core-adjacent design question with a §W-D announcement
+  surface — a piece of work in its own right, and no PR has ever owned
+  it. **Recorded here rather than absorbed into W6-1:** PR 0b did not
+  cause it and did not change it, and the one window PR 0b DID change
+  (`beginBatchRetarget`'s) is a different state with its own fix (VA-1).
+
 ---
 
 ## Owner decisions (adopted by controller ruling 2026-08-22, autonomous run)
@@ -1661,7 +1750,8 @@ every deleted symbol was re-grepped to zero afterwards.
   unreachable by EVERY navigator verb, before and after this migration.
   (t0 §5's degraded-canvas navigability is therefore a pre-existing mac
   gap — a degraded load clears `outline` and releases the handle — not
-  something PR 0b changed.) The claim was written from the shape of the
+  something PR 0b changed; it is filed for close-out in "Mac details
+  recorded while reading".) The claim was written from the shape of the
   code rather than from its reachability, which is the same class of
   error the round record already carries twice.
   **The one state that pairs `.ready` with no handle is
@@ -1670,13 +1760,31 @@ every deleted symbol was re-grepped to zero afterwards.
   path-bound handle is detached so nothing can save through the
   moved-away path. Arrow movement still narrates there (the filtered
   outline falls back to the published snapshot), and mutations are
-  refused audibly (`CanvasMutationRefusal::Reopening`) — but
-  enter-group, exit-group, trace-path and fit-canvas now say nothing.
-  `testOnlyTheBatchRetargetWindowPairsReadyWithNoHandle` and
-  `testNonReadyCanvasesAreUnreachableByEveryNavigatorVerb` pin both
-  halves; the silence is flagged in the first as an OPEN RULING, not
-  endorsed. Restoring speech there needs either a read-only handle for
-  the window or a navigation-specific sentence — see the task report.
+  refused audibly (`CanvasMutationRefusal::Reopening`).
+  **The four structural verbs now announce rather than go quiet** —
+  `CanvasStatusNote::Reopening`, new copy added for exactly this
+  trigger (see "Vocabulary additions" below). Silence is a test
+  FAILURE now:
+  `testOnlyTheBatchRetargetWindowPairsReadyWithNoHandle` asserts the
+  sentence at each of the four verbs, and
+  `testNonReadyCanvasesAreUnreachableByEveryNavigatorVerb` pins the
+  `.ready` gate that makes the reachability claim checkable rather than
+  merely asserted.
+
+  **Retaining the detached handle for READS is refused permanently, and
+  this is the reasoning so it is not re-proposed.** It is the cheapest
+  way to restore full navigability in that window and it was
+  considered. Today, "no edit can save through the moved-away path" is
+  a STRUCTURAL invariant: there is no handle, so `canvas_apply` cannot
+  be reached at all. Handing the verbs a read-only handle would
+  downgrade that to a host-enforced one — `admitCanvasMutation`'s
+  refusal would become the only thing standing between a mis-sequenced
+  call and a canvas re-created at the path the user just moved away
+  from. Trading a structural write-safety invariant for an
+  announcement is disqualified: the announcement was obtainable
+  another way, and safety invariants that depend on every caller
+  remembering a guard are the ones that fail quietly. (Controller
+  ruling, W6-1 0b-2 fix round 2.)
 - **`filterActive` did not move, and that is a decision.** It is UI
   state — the Clear button, the summary, the Esc rung — not the match
   rule, so it keeps Foundation's `.whitespaces` trimming. The one input

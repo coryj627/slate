@@ -22,6 +22,30 @@ extension AppState {
         return doc
     }
 
+    /// The four structural read verbs — enter group, exit group, trace
+    /// path, fit canvas — answer from core queries that need the native
+    /// handle. Exactly one reachable state pairs a `.ready` canvas with
+    /// no handle: `beginBatchRetarget`'s window, between a physical move
+    /// landing and its background reopen, where the handle is
+    /// deliberately detached so nothing can save through the moved-away
+    /// path.
+    ///
+    /// t0's never-silent principle: a keypress that does nothing has to
+    /// say so. `CanvasStatusNote.reopening` is that sentence — a NEW
+    /// one, drafted for this trigger rather than borrowed from the
+    /// write refusal (`CanvasMutationRefusal.reopening`), whose
+    /// "before making changes" tail would be wrong in the ear of a user
+    /// who changed nothing.
+    ///
+    /// Retaining the detached handle for reads was considered and is
+    /// permanently refused: it would downgrade a structural
+    /// write-safety invariant to a host-enforced one (contracts doc,
+    /// §0b "Verified during implementation").
+    private func canvasAnnounceStructuralQueryUnavailable(for doc: CanvasDocument) {
+        guard doc.handle == nil else { return }
+        canvasAnnouncer.announce(.canvasStatus(note: .reopening))
+    }
+
     /// Move selection to the next/previous card in reading order.
     func canvasSelectAdjacent(offset: Int) {
         guard let doc = activeCanvasDocument else { return }
@@ -60,10 +84,11 @@ extension AppState {
     /// the order the outline's depth-first walk emits — so the first
     /// child is the same card it always was.
     func canvasEnterGroup() {
-        guard let doc = activeCanvasDocument,
-            let session = currentSession,
-            let handle = doc.handle,
-            let selected = doc.selection.selected,
+        guard let doc = activeCanvasDocument else { return }
+        guard let session = currentSession, let handle = doc.handle else {
+            return canvasAnnounceStructuralQueryUnavailable(for: doc)
+        }
+        guard let selected = doc.selection.selected,
             let row = doc.outline.first(where: { $0.nodeId == selected })
         else { return }
         guard row.kind == "group" else {
@@ -86,10 +111,11 @@ extension AppState {
     /// `canvas_parent_of` (contract 0b-8) answers it, and `nil` — no
     /// parent — is exactly "at canvas level".
     func canvasExitGroup() {
-        guard let doc = activeCanvasDocument,
-            let session = currentSession,
-            let handle = doc.handle,
-            let selected = doc.selection.selected,
+        guard let doc = activeCanvasDocument else { return }
+        guard let session = currentSession, let handle = doc.handle else {
+            return canvasAnnounceStructuralQueryUnavailable(for: doc)
+        }
+        guard let selected = doc.selection.selected,
             // A selection the canvas no longer holds returns SILENTLY,
             // as it did when the outline row lookup failed: core would
             // refuse that id with `bad_node`, and reporting "at canvas
@@ -153,10 +179,11 @@ extension AppState {
     /// ended it. The hops EXCLUDE the start card, so an empty list is
     /// the dead end mac spelled as `visited.count == 1`.
     func canvasTracePath() {
-        guard let doc = activeCanvasDocument,
-            let session = currentSession,
-            let handle = doc.handle,
-            let start = doc.selection.selected,
+        guard let doc = activeCanvasDocument else { return }
+        guard let session = currentSession, let handle = doc.handle else {
+            return canvasAnnounceStructuralQueryUnavailable(for: doc)
+        }
+        guard let start = doc.selection.selected,
             let hops = try? session.canvasTracePath(handle: handle, nodeId: start)
         else { return }
         let startTitle = doc.outline.first { $0.nodeId == start }?.title
@@ -242,10 +269,11 @@ extension AppState {
         // node including group frames, exactly what the union loop that
         // stood here covered. `nil` is the empty canvas, which is the
         // `!doc.scene.nodes.isEmpty` guard it replaces.
-        guard let doc = activeCanvasDocument,
-            let session = currentSession,
-            let handle = doc.handle,
-            let bounds = (try? session.canvasBounds(handle: handle)) ?? nil
+        guard let doc = activeCanvasDocument else { return }
+        guard let session = currentSession, let handle = doc.handle else {
+            return canvasAnnounceStructuralQueryUnavailable(for: doc)
+        }
+        guard let bounds = (try? session.canvasBounds(handle: handle)) ?? nil
         else { return }
         doc.viewport.fit(
             rect: CGRect(
