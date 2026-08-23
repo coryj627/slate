@@ -553,23 +553,49 @@ it so the answer cannot pass for the wrong reason.
 
 **0b-6 — `speakable_name` reaches the outline and table by an
 in-memory join, not a schema bump.** `canvas_outline` /
-`canvas_table_rows` are single indexed `SELECT`s over `canvas_nodes`;
-`speakable_name` is added to their row records by looking the node up
-in `OpenCanvasState.model.summaries` after the query returns —
-a `HashMap` hit per already-materialised row, so the §K "one indexed
-query" budget and the query's shape are both untouched. **Rationale for
-the decision the spec does not make:** (1) a derived column would put a
-second copy of the algorithm's OUTPUT in the index, where it can rot
-against the model the same rows are derived from — 0b-1 exists to stop
-exactly that; (2) a column costs a migration plus the upgrade fence
-(`c559810`) plus a full canvas reindex on upgrade, for data that is
-already in memory whenever a handle is open — and outline/table rows
-are only reachable *through* an open handle, so the model is never
-absent at the join; (3) no existing row field changes, so no committed
-golden or host binding moves. The cost is that the two row types are no
-longer pure projections of one `SELECT`; that cost is named here rather
-than hidden. `CanvasSceneNode` and `CanvasWhereAmI` are model-backed
-already and simply read the new field.
+`canvas_table_rows` keep their single indexed `SELECT` over
+`canvas_nodes` unchanged; `speakable_name` is added to their row
+records from the handle's model after the query returns.
+
+**What the join actually does**, rather than what "join" suggests: one
+`node_id → speakable_name` `HashMap` is BUILT PER CALL from
+`OpenCanvasState.model.summaries` — a linear pass and two `String`
+clones per node — and then hit once per row. It is a copy, not a
+borrow, because the alternative is holding the registry lock across the
+SQLite read, which would invert this module's canvases → conn order.
+That is the same order of work as the row materialization it feeds, so
+the §K "one indexed query" budget and the query's plan are untouched;
+it is not free, and this row says so rather than implying a bare
+lookup.
+
+**Rationale for the decision the spec does not make:** (1) a derived
+column would put a second copy of the algorithm's OUTPUT in the index,
+where it can rot against the model the same rows are derived from —
+0b-1 exists to stop exactly that; (2) a column costs a migration plus
+the upgrade fence (`c559810`) plus a full canvas reindex on upgrade,
+for data that is already in memory whenever a handle is open; (3) no
+existing row field changes, so no committed golden or host binding
+moves.
+
+**The limit of (2), stated exactly.** Holding a handle guarantees a
+MODEL. It does not guarantee that the model and the rows agree about
+which nodes exist: `canvas_nodes` is scanner-managed, and a rescan
+rewrites it while the handle stays open on its open-time snapshot. An
+external edit that changes a node id, followed by a rescan, leaves rows
+whose ids the snapshot never had — the join misses. Those rows fall
+back to **the row's own title**, never to the empty string: an empty
+speakable name is a card Voice Control cannot address at all, and
+addressability is what this field exists for. The fallback gives up
+UNIQUENESS for the skewed rows, not addressability, and the host
+recovers both by reopening the handle on the change event.
+`speakable_name_falls_back_to_the_title_when_the_rows_outrun_the_handle`
+materializes exactly that skew — external write plus rescan with the
+handle open — and asserts the title, not `""`.
+
+The cost is that the two row types are no longer pure projections of
+one `SELECT`; that cost is named here rather than hidden.
+`CanvasSceneNode` and `CanvasWhereAmI` are model-backed already and
+simply read the new field, so they cannot skew at all.
 
 **0b-7 — Relative description reproduces mac, with its latent
 nondeterminism pinned** (CD-19). Candidates are every node that is not
@@ -636,10 +662,11 @@ anchored at `(g.x0 + GRID_STEP, g.y0 + 2·GRID_STEP)` — mac's
 in x and `ceil_to_grid(h + DEFAULT_GAP)` in y, and only slots lying
 fully inside the group rect are candidates. They are visited COLUMN by
 column, each column top to bottom — `place_new`'s `Below` before
-`RightOf` preference applied to a lattice instead of a ring;
-`Above`/`LeftOf` are unreachable because the lattice starts at the
-group's inset top-left, which is what clipping to the group means. The
-outcome is one of three, so a host never receives a point that is
+`RightOf` preference applied to a lattice instead of a ring, which is
+a recorded divergence from the ruling's literal wording and is
+CD-25; `Above`/`LeftOf` are unreachable because the lattice starts at
+the group's inset top-left, which is what clipping to the group means.
+The outcome is one of three, so a host never receives a point that is
 outside the group it asked about:
 
 | Outcome | When |
@@ -651,6 +678,14 @@ outside the group it asked about:
 The scan examines at most `placement::RING_LIMIT` candidates, the same
 budget `place_new`'s ring search spends, so a pathological group cannot
 make the query unbounded.
+
+Two id errors are refused before any geometry runs, and they are
+DIFFERENT errors because they send a caller to different fixes: an id
+that is not in the canvas is `bad_node`, and an id that IS in the
+canvas but is not a group is `not_a_group`. A card's rect is not a
+container, and answering geometry for one would hand the caller a
+position "inside" something that cannot hold it — PR E is the first
+consumer, so the refusal is cheaper now than the confusion later.
 
 **0b-13 — `canvas_filter` matches mac's field set, in reading order.**
 The needle is the query trimmed of whitespace; an **empty needle
@@ -668,17 +703,28 @@ matches. `target` comes from `CardSummary.target`, the same derivation
 `canvas_table_rows` serves and `canvas_db` writes, so the filter and
 the table cannot disagree about what a card points at.
 
-**0b-14 — Case folding and trimming diverge from Foundation, by a
-recorded amount** (CD-22). Core folds with Rust's `to_lowercase`
-(full Unicode simple lowercase, locale-INdependent) where mac uses
-`localizedCaseInsensitiveContains` (locale-sensitive, no full folding).
-The two agree on ASCII and Latin-1 — which is the entire fixture
-corpus, so the §W-A census cannot see the difference — and diverge on
-the Turkish dotless ı and on `İ` (U+0130), whose Rust lowering is two
-scalars. Core trims with Rust's `trim` (all Unicode whitespace,
-newlines included) where Swift trimmed `.whitespaces` (no newlines). A
-test pins which side wins on each of those, so the divergence is
-witnessed rather than asserted.
+**0b-14 — Case handling diverges from Foundation AND from case
+folding, by a recorded amount** (CD-22). Core lowercases both sides
+with `str::to_lowercase` and tests containment. That is Unicode's
+`Lowercase_Mapping`: locale-independent, and **full** in the sense that
+one scalar may become several — but it is NOT a case fold, simple or
+otherwise, and the earlier phrase "full Unicode simple lowercase" was
+self-contradictory. Three rules, three answers:
+
+- vs mac's `localizedCaseInsensitiveContains` (locale-sensitive, no
+  full mapping): they differ on the Turkish dotless `ı` and on `İ`
+  (U+0130), whose Rust lowering is `i` + combining dot above, so a
+  plain `istanbul` needle does not match it;
+- vs a case FOLD: they differ on `ß`, which folds to `ss` but
+  lowercases to itself, so `strasse` does not match `Straße` here.
+
+All three agree across ASCII and Latin-1, which is the entire fixture
+corpus, so the §W-A census cannot see any of it. Core trims with Rust's
+`trim` (all Unicode whitespace, newlines included) where Swift trimmed
+`.whitespaces` (no newlines). Both divergences are pinned by tests
+(`filter_folds_case_the_unicode_way_not_the_turkish_way`,
+`filter_lowercases_rather_than_case_folds`), so they are witnessed
+rather than asserted.
 
 **0b-15 — The §W-A `canvas_queries` section.** The harness gains a
 canvas pass: a SECOND temp vault holding only the `.canvas` fixtures
@@ -693,7 +739,11 @@ Task 0b-2's and is named in a comment beside them.
 `large_2000.canvas` is deliberately NOT in the artifact: it is the §K
 performance fixture, and at 2,000 nodes its rows would commit a
 golden no reviewer reads. Its coverage is the in-crate census, which
-runs the same queries over it.
+runs the same queries over it. **The mac parity census is RED between
+Task 0b-1 and Task 0b-2**: the golden lands with the Windows twin and
+the Swift twin that must reproduce it is 0b-2's, so the mac side fails
+on this artifact until then — by design, and the same sequencing 0a
+used for the C# corpus mirror.
 
 **0b-16 — The totality parser guard replaces 0a-14's interim scan.**
 Contract 0a-14 part (d) was a line-scoped lexical scan with two
@@ -1054,22 +1104,53 @@ card outside and containment silently un-parents it. The spec's rule
 ("falls back to `(x + 20, y + 40)` only when the group is smaller than
 one slot") is better defined and wins, so **geometry outcomes for
 empty-but-large groups differ from legacy mac**: mac drops the card at
-the inset, core ring-searches the interior. Coordinates are never
-announced, so no §W-D string moves; §W-A pins cross-host equality of the
-NEW rule. The spec is also silent on the group that fits slots but is
-full, which mac leaves undefined — 0b-12's third outcome (`Full`) closes
-it rather than returning a point outside the group.
+the inset, core walks the group's interior lattice from that inset and
+takes the first free slot (0b-12). Coordinates are never announced, so
+no §W-D string moves; §W-A pins cross-host equality of the NEW rule.
+The spec is also silent on the group that fits slots but is full, which
+mac leaves undefined — 0b-12's third outcome (`Full`) closes it rather
+than returning a point outside the group.
 
-**CD-22 — Case folding and whitespace trimming are Rust's, not
-Foundation's.** `canvas_filter` folds with `str::to_lowercase` (full
-Unicode simple lowercase, locale-independent) where mac used
-`localizedCaseInsensitiveContains` (current locale, no full folding),
+**CD-25 — the inside-group search is a column-major LATTICE, not a
+ring.** Controller ruling R-0b (§PR 0b) said "ring search inside the
+group rect with `place_new`'s preference order". A ring search is what
+`place_new` does around an anchor: for ring *r*, try the four
+directions at distance *r*. Clipped to a group and anchored at the
+group's inset top-left, three of those four directions leave the frame
+at every ring, so the ring degenerates to two arms and never reaches
+the interior's diagonal slots — a two-column, two-row group would leave
+its far corner unreachable. The implemented rule is a lattice over the
+interior, visited column by column and each column top to bottom, which
+preserves the part of the ruling that carries meaning — `Below` is
+preferred to `RightOf`, `place_new`'s first two preferences — and drops
+the part that does not survive clipping. Adopted by controller ruling
+in fix round 1: one deterministic order, pinned by fixtures
+(`inside_group_prefers_below_then_right`) and by the §W-A goldens, and
+both hosts consume core rather than re-deriving it, so there is no
+second implementation for it to disagree with. `Above` and `LeftOf`
+remain unreachable by construction, which is what clipping to the group
+means.
+
+**CD-22 — Case handling and whitespace trimming are Rust's, not
+Foundation's — and not case folding either.** `canvas_filter`
+lowercases both sides with `str::to_lowercase` (Unicode
+`Lowercase_Mapping`, locale-independent) where mac used
+`localizedCaseInsensitiveContains` (current locale, no full mapping),
 and trims with `str::trim` (all Unicode whitespace) where Swift trimmed
-`.whitespaces` (newlines NOT trimmed). Identical on ASCII and Latin-1,
-which is the whole fixture corpus; the recorded difference is Turkish
-dotless ı, `İ` (U+0130, whose Rust lowering is `i` + combining dot), and
-a query carrying a newline. The spec asked for this divergence
-explicitly; it is pinned by test rather than merely described.
+`.whitespaces` (newlines NOT trimmed).
+
+The spec's §2 row K and §PR 0b both ask for "Unicode simple
+case-folding". **What shipped is lowercasing, which is a third rule**,
+and the difference is recorded rather than glossed: a case fold
+collapses `ß` to `ss`, lowercasing leaves it alone, so `strasse` does
+not match `Straße` here. Lowercasing was kept because it is what the
+rest of this crate's case-insensitive matching already uses, and
+switching one predicate to `to_lowercase`-plus-folding for one letter
+would put a second case rule in core. All three rules agree across
+ASCII and Latin-1, which is the whole fixture corpus; the recorded
+differences are Turkish dotless `ı`, `İ` (U+0130, whose Rust lowering
+is `i` + combining dot), `ß`, and a query carrying a newline. Each is
+pinned by test rather than merely described (0b-14).
 
 **CD-23 — `speakable_name` is exposed on four records; which surface
 SPEAKS it stays the host's.** Mac's speakable names reach only the
