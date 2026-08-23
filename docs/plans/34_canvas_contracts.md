@@ -235,12 +235,16 @@ one.
 
 1. an **exhaustive** classifier, `spoken_cardinality`, says for every
    `CanvasA11yEvent` whether THIS VALUE speaks a count or a collection
-   length. Exhaustive at every level: no `..` elides a payload ENUM
-   anywhere in it, so all eighteen closed sets are matched arm by arm
-   and the compiler refuses the function when a variant OR a nested arm
-   is added. "This value", not "this variant": `CanvasMovedTo` renders
-   its connection count only at `Verbose`, so a terse or standard
-   moved-to speaks none and cannot serve as its witness;
+   length. Exhaustive at every level: `..` elides only fields whose
+   types cannot gain variants (`String`, `u32`, `bool`, `Vec<String>`,
+   and `Option` of those — `Option`'s two arms are fixed by the
+   language), so **every parameter type that CAN gain variants is
+   explicitly matched, with no exception** — this module's eighteen
+   closed sets plus the three reused `core::canvas` ones — and the
+   compiler refuses the function when a variant OR a nested arm is
+   added. "This value", not "this variant": `CanvasMovedTo` renders its
+   connection count only at `Verbose`, so a terse or standard moved-to
+   speaks none and cannot serve as its witness;
 2. every arm it classifies must have a `corpus()` witness at exactly
    one; an arm speaking a collection length must have an
    empty-collection witness; and an arm whose zero the HOST can reach

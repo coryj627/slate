@@ -5339,18 +5339,22 @@ mod tests {
     ///
     /// Exhaustive at EVERY level. The outer variant is matched arm by
     /// arm, and so is every one of the eighteen closed parameter sets
-    /// the family carries — no `..` elides a payload ENUM anywhere
-    /// below. The compiler therefore refuses this function the moment a
-    /// variant, or an arm of any nested set, is added; nothing joins the
-    /// family without its author declaring whether it speaks a count.
-    /// That is the property three rounds of hand-maintained,
-    /// hand-counted prose could not hold (contract 0a-14; round record,
-    /// rule 4). **Nothing enum-valued is wildcarded, with no
-    /// exception**: `..` elides plain data only — `String`, `u32`,
-    /// `bool`, `Vec<String>`. The three `core::canvas` sets this
+    /// the family carries. The compiler therefore refuses this function
+    /// the moment a variant, or an arm of any nested set, is added;
+    /// nothing joins the family without its author declaring whether it
+    /// speaks a count. That is the property three rounds of
+    /// hand-maintained, hand-counted prose could not hold (contract
+    /// 0a-14; round record, rule 4).
+    ///
+    /// The precise rule for `..`: it elides only fields whose types
+    /// **cannot gain variants** — `String`, `u32`, `bool`,
+    /// `Vec<String>`, and `Option` of those, whose two arms are fixed
+    /// by the language. **Every parameter type that CAN gain variants
+    /// is explicitly matched, with no exception** — this module's
+    /// eighteen closed sets, and the three `core::canvas` sets the
     /// vocabulary reuses (`RelativeDesc`, `EdgeDirection`,
-    /// `CanvasColor`) cannot carry a count either, but they are matched
-    /// through the helpers below rather than trusted.
+    /// `CanvasColor`), which cannot carry a count either but are
+    /// matched through the helpers below rather than trusted.
     ///
     /// "Speaks" means THIS value renders the count, not that the
     /// variant sometimes can. `CanvasMovedTo` is the only arm whose
@@ -5370,10 +5374,10 @@ mod tests {
 
     /// The three `core::canvas` sets this vocabulary reuses. They name
     /// anchors, directions and colours, so none of them can carry a
-    /// count — but they are ENUMS, so they are MATCHED rather than
-    /// elided, and an arm added to any of them fails to compile here.
-    /// That is what lets the record say "nothing enum-valued is
-    /// wildcarded", with no exception to remember.
+    /// count — but each CAN gain a variant, so they are MATCHED rather
+    /// than elided, and an arm added to any of them fails to compile
+    /// here. That is what lets the record say every variant-bearing
+    /// parameter type is matched, with no exception to remember.
     fn relative_speaks_no_count(relative: &RelativeDesc) {
         match relative {
             RelativeDesc::Below(_)
