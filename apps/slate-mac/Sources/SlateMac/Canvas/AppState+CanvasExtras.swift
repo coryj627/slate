@@ -53,10 +53,11 @@ extension AppState {
             return
         }
         let id = Self.newCanvasEntityID()
+        let geometry = Self.canvasGeometry
         do {
             let placement = try session.canvasPlaceNew(
                 handle: handle, anchor: origin,
-                width: 260, height: 140,
+                width: geometry.defaultCardW, height: geometry.defaultCardH,
                 directionHint: direction, exclude: [])
             // §W-G row C / CD-16: `canvas_auto_sides` is keyed by
             // RECTS, which is why this site could not have used an
@@ -69,7 +70,8 @@ extension AppState {
                     x: originNode.x, y: originNode.y,
                     width: originNode.width, height: originNode.height),
                 to: CanvasRect(
-                    x: placement.x, y: placement.y, width: 260, height: 140))
+                    x: placement.x, y: placement.y,
+                    width: geometry.defaultCardW, height: geometry.defaultCardH))
             let ok = canvasApply(
                 CanvasAction(
                     name: "create connected card",
@@ -77,7 +79,8 @@ extension AppState {
                         .createNode(
                             id: id, content: .text(text: ""),
                             x: placement.x, y: placement.y,
-                            width: 260, height: 140, color: nil),
+                            width: geometry.defaultCardW, height: geometry.defaultCardH,
+                            color: nil),
                         .addEdge(
                             id: Self.newCanvasEntityID(),
                             fromNode: origin, fromSide: sides.from,

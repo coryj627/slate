@@ -237,13 +237,19 @@ extension AppState {
     }
 
     func canvasFitCanvas() {
-        guard let doc = activeCanvasDocument, !doc.scene.nodes.isEmpty else { return }
-        var rect = CGRect.null
-        for node in doc.scene.nodes {
-            rect = rect.union(
-                CGRect(x: node.x, y: node.y, width: node.width, height: node.height))
-        }
-        doc.viewport.fit(rect: rect)
+        // §W-G row H: the scene's extent is core's `canvas_bounds`
+        // (contract 0b-11) — `SpatialIndex::bounds` verbatim, every
+        // node including group frames, exactly what the union loop that
+        // stood here covered. `nil` is the empty canvas, which is the
+        // `!doc.scene.nodes.isEmpty` guard it replaces.
+        guard let doc = activeCanvasDocument,
+            let session = currentSession,
+            let handle = doc.handle,
+            let bounds = (try? session.canvasBounds(handle: handle)) ?? nil
+        else { return }
+        doc.viewport.fit(
+            rect: CGRect(
+                x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height))
         canvasAnnouncer.announce(
             .canvasZoom(
                 context: .fitCanvas, percent: UInt32(clamping: doc.viewport.zoomPercent)))

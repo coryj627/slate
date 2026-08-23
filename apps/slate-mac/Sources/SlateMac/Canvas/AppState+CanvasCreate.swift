@@ -199,11 +199,12 @@ extension AppState {
             let handle = doc.handle
         else { return }
         let id = Self.newCanvasEntityID()
+        let geometry = Self.canvasGeometry
         do {
             let placement = try session.canvasPlaceNew(
                 handle: handle,
                 anchor: doc.selection.selected,
-                width: 260, height: 140,
+                width: geometry.defaultCardW, height: geometry.defaultCardH,
                 directionHint: nil, exclude: [])
             let ok = canvasApply(
                 CanvasAction(
@@ -212,7 +213,8 @@ extension AppState {
                         .createNode(
                             id: id, content: content,
                             x: placement.x, y: placement.y,
-                            width: 260, height: 140, color: nil)
+                            width: geometry.defaultCardW, height: geometry.defaultCardH,
+                            color: nil)
                     ]),
                 to: doc)
             guard ok else { return }

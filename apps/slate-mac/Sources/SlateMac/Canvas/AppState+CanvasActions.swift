@@ -80,11 +80,12 @@ extension AppState {
             let handle = doc.handle
         else { return }
         let id = Self.newCanvasEntityID()
+        let geometry = Self.canvasGeometry
         do {
             let placement = try session.canvasPlaceNew(
                 handle: handle,
                 anchor: doc.selection.selected,
-                width: 260, height: 140,
+                width: geometry.defaultCardW, height: geometry.defaultCardH,
                 directionHint: nil, exclude: [])
             let ok = canvasApply(
                 CanvasAction(
@@ -93,7 +94,8 @@ extension AppState {
                         .createNode(
                             id: id, content: .text(text: ""),
                             x: placement.x, y: placement.y,
-                            width: 260, height: 140, color: nil)
+                            width: geometry.defaultCardW, height: geometry.defaultCardH,
+                            color: nil)
                     ]),
                 to: doc)
             guard ok else { return }
@@ -121,11 +123,12 @@ extension AppState {
             let handle = doc.handle
         else { return }
         let id = Self.newCanvasEntityID()
+        let geometry = Self.canvasGeometry
         do {
             let placement = try session.canvasPlaceNew(
                 handle: handle,
                 anchor: doc.selection.selected,
-                width: 400, height: 300,
+                width: geometry.defaultGroupW, height: geometry.defaultGroupH,
                 directionHint: nil, exclude: [])
             let ok = canvasApply(
                 CanvasAction(
@@ -134,7 +137,8 @@ extension AppState {
                         .createGroup(
                             id: id, label: label.isEmpty ? nil : label,
                             x: placement.x, y: placement.y,
-                            width: 400, height: 300, color: nil)
+                            width: geometry.defaultGroupW, height: geometry.defaultGroupH,
+                            color: nil)
                     ]),
                 to: doc)
             guard ok else { return }
@@ -443,32 +447,48 @@ extension AppState {
             let node = doc.scene.nodes.first(where: { $0.nodeId == selected })
         else { return }
         do {
-            // Place inside the group's bounds: anchor on the group's
-            // first child if any, else land at the group's padded
-            // top-left (still engine-checked for overlap).
-            let firstChild = doc.outline.first {
-                $0.groupPath.last == group.title && $0.nodeId != selected
-            }
+            // §W-G rows D + H: placing inside a group is core's
+            // `canvas_place_inside_group` (contract 0b-12), and three
+            // things die with the block that stood here.
+            //
+            // 1. The first-child anchor was TITLE-keyed
+            //    (`groupPath.last == group.title`) — the last live copy
+            //    of the repeated-label miscount Codoki #613 flagged.
+            // 2. Anchoring on that child delegated to plain
+            //    `place_new`, which is not clipped to the group: a full
+            //    group pushed the card OUT and containment silently
+            //    un-parented it. Core's lattice never leaves the frame.
+            // 3. The `(x + 20, y + 40)` inset was `GRID_STEP` and
+            //    `2 × GRID_STEP` written as literals.
+            //
+            // The outcome is typed, so "the group is full" is answered
+            // instead of guessed (CD-21). `TooSmall` is the group that
+            // cannot hold one slot at all; its point is core's inset,
+            // deliberately unchecked for overlap, so the shipped
+            // refusal is preserved by checking it here.
+            let placement = try session.canvasPlaceInsideGroup(
+                handle: handle, groupId: groupId,
+                width: node.width, height: node.height, exclude: [selected])
             let target: (x: Double, y: Double)
-            if let firstChild {
-                let placement = try session.canvasPlaceNew(
-                    handle: handle, anchor: firstChild.nodeId,
-                    width: node.width, height: node.height,
-                    directionHint: nil, exclude: [selected])
-                target = (placement.x, placement.y)
-            } else {
+            switch placement {
+            case .placed(let x, let y):
+                target = (x, y)
+            case .tooSmall(let x, let y):
                 let overlaps = try session.canvasCheckOverlap(
                     handle: handle,
                     rect: CanvasRect(
-                        x: group.x + 20, y: group.y + 40,
-                        width: node.width, height: node.height),
+                        x: x, y: y, width: node.width, height: node.height),
                     exclude: [selected])
                 guard overlaps.isEmpty else {
                     canvasAnnouncer.announce(
                         .canvasBlocked(reason: .noFreeSpaceInGroup(label: group.title)))
                     return
                 }
-                target = (group.x + 20, group.y + 40)
+                target = (x, y)
+            case .full:
+                canvasAnnouncer.announce(
+                    .canvasBlocked(reason: .noFreeSpaceInGroup(label: group.title)))
+                return
             }
             let ok = canvasApply(
                 CanvasAction(
@@ -815,24 +835,24 @@ extension AppState {
     /// bounds — geometric containment (t1 rule 1) does the parenting.
     func canvasGroupMarked(label: String) {
         guard let doc = activeCanvasDocument,
-            admitCanvasMutation(for: doc)
+            admitCanvasMutation(for: doc),
+            let session = currentSession,
+            let handle = doc.handle
         else { return }
         let marked = canvasMarkedInOrder(doc)
         guard marked.count >= 1 else {
             canvasAnnouncer.announce(.canvasStatus(note: .noMarks))
             return
         }
-        var minX = Double.infinity, minY = Double.infinity
-        var maxX = -Double.infinity, maxY = -Double.infinity
-        for id in marked {
-            guard let node = doc.scene.nodes.first(where: { $0.nodeId == id }) else { continue }
-            minX = min(minX, node.x)
-            minY = min(minY, node.y)
-            maxX = max(maxX, node.x + node.width)
-            maxY = max(maxY, node.y + node.height)
-        }
-        guard minX.isFinite else { return }
-        let pad = 40.0
+        // §W-G row H: the padded bounding box is core's
+        // (`canvas_group_rect_around`, contract 0b-11). The literal
+        // `pad = 40` that stood here IS `placement::DEFAULT_GAP` — the
+        // fold and the number both go. `nil` (no member resolves) is
+        // mac's `guard minX.isFinite else { return }` silent no-op,
+        // typed now (CD-24); what a host SAYS there is PR G's call, not
+        // this migration's, so the silence is preserved deliberately.
+        let frameLookup = try? session.canvasGroupRectAround(handle: handle, members: marked)
+        guard let frame = frameLookup ?? nil else { return }
         let ok = canvasApply(
             CanvasAction(
                 name: "group \(CountCopy.counted(marked.count, "card", "cards"))",
@@ -840,9 +860,8 @@ extension AppState {
                     .createGroup(
                         id: Self.newCanvasEntityID(),
                         label: label.isEmpty ? nil : label,
-                        x: minX - pad, y: minY - pad,
-                        width: (maxX - minX) + pad * 2,
-                        height: (maxY - minY) + pad * 2,
+                        x: frame.x, y: frame.y,
+                        width: frame.width, height: frame.height,
                         color: nil)
                 ]),
             to: doc)

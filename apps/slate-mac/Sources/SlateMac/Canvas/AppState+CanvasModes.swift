@@ -13,11 +13,18 @@ import Foundation
 /// step, never per-nudge entries); Esc discards the transient with no
 /// backend call. Marked sets move as a rigid unit.
 extension AppState {
-    /// Grid steps mirror the backend constants (#517 exports them;
-    /// values pinned by the cross-checking test).
-    static let canvasGridStep: Double = 20
-    static let canvasGridStepLarge: Double = 100
-    static let canvasMinCardSize: Double = 40
+    /// Placement geometry, straight from core (`canvas_constants`,
+    /// §W-G row H / contract 0b-4). A free FFI function with no
+    /// handle (CD-17), so a mode can read `minCardSize` before any
+    /// canvas is open. The three Swift mirrors that stood here are
+    /// gone — `canvasMinCardSize` among them, which had no core
+    /// counterpart at all until 0b-1 added `MIN_CARD_SIZE`.
+    ///
+    /// Computed rather than stored: the call builds a record out of
+    /// module constants, and a lazily-initialized static of an FFI
+    /// record type is a concurrency question this does not need to
+    /// answer.
+    static var canvasGeometry: CanvasConstants { canvasConstants() }
 
     /// `Int(Double)` traps on NaN/Inf/≥2^63 — reachable via hostile
     /// .canvas geometry the parser tolerates (red-team #521 finding 3).
@@ -161,13 +168,19 @@ extension AppState {
     func canvasModeStep(dx: Double, dy: Double, large: Bool) {
         guard let doc = activeCanvasDocument, var transient = canvasTransient else { return }
         guard admitCanvasMutation(for: doc) else { return }
-        let step = large ? Self.canvasGridStepLarge : Self.canvasGridStep
+        let geometry = Self.canvasGeometry
+        let step = large ? geometry.gridStepLarge : geometry.gridStep
 
         if transient.isResize {
             guard let id = transient.ids.first, var rect = transient.rects[id] else { return }
             let newWidth = rect.width + dx * step
             let newHeight = rect.height + dy * step
-            if newWidth < Self.canvasMinCardSize || newHeight < Self.canvasMinCardSize {
+            // Reject-the-step, not clamp-to-min: neither dimension
+            // moves when either would fall below the minimum. The
+            // CONSTANT is core's; this rule is the host's and PR F
+            // copies it (contracts doc, "Mac details recorded while
+            // reading").
+            if newWidth < geometry.minCardSize || newHeight < geometry.minCardSize {
                 canvasAnnouncer.announce(.canvasResizeClamped)
                 return
             }
@@ -207,7 +220,10 @@ extension AppState {
 
     /// Resize presets (M6-friendly: palette commands, no arrows needed).
     func canvasResizeDefaultSize() {
-        canvasApplyResizePreset(width: 260, height: 140, preset: .defaultSize)
+        let geometry = Self.canvasGeometry
+        canvasApplyResizePreset(
+            width: geometry.defaultCardW, height: geometry.defaultCardH,
+            preset: .defaultSize)
     }
 
     func canvasResizeFitContent() {
@@ -216,12 +232,18 @@ extension AppState {
         else { return }
         guard admitCanvasMutation(for: doc) else { return }
         // Approximation: default width; height from the text length
-        // (the real editor's metrics land with the Wave-4 editor).
+        // (the real editor's metrics land with the Wave-4 editor). The
+        // formula's own numbers — 32, 24, 40, the 600 cap — are D-5's
+        // host-designated placeholder, identical on both hosts and NOT
+        // core constants; only the width and the floor come from
+        // `canvas_constants`.
+        let geometry = Self.canvasGeometry
         let fetched = try? currentSession?.canvasNodeText(handle: doc.handle ?? 0, nodeId: id)
         let text: String = (fetched ?? nil) ?? ""
         let lines = max(1, text.count / 32 + text.filter { $0 == "\n" }.count)
-        let height = min(600, max(Double(lines) * 24 + 40, Self.canvasMinCardSize))
-        canvasApplyResizePreset(width: 260, height: height, preset: .fitToContent)
+        let height = min(600, max(Double(lines) * 24 + 40, geometry.minCardSize))
+        canvasApplyResizePreset(
+            width: geometry.defaultCardW, height: height, preset: .fitToContent)
     }
 
     private func canvasApplyResizePreset(
