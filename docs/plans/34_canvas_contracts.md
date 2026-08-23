@@ -528,14 +528,28 @@ pinned by a shape test over many draws rather than by a golden value.
 `⟨display_title⟩ ⟨k⟩` for the k-th node (k ≥ 2) in **document order**
 that wants an already-assigned spelling — skipping any ordinal whose
 spelling is a real `display_title` of some node. That skip is core's
-existing `taken` guard from the untitled-ordinal loop, and it is what
-makes the result injective: mac's loop checks only the names it has
-already assigned, so document order `A`, `A`, `A 2` yields
-`A`, `A 2`, `A 2` — a duplicate on a surface whose whole purpose is
-Voice-Control uniqueness. Untitled cards are unchanged: they get
-`display_title` = `Untitled N` from the same allocator, which already
-skips taken spellings. Injectivity is a census assertion, not a claim
-here, and the `A, A, A 2` case is a committed fixture.
+existing `taken` guard from the untitled-ordinal loop.
+
+**What it buys, stated exactly** (an earlier draft of this row, and the
+research report it came from, said mac's loop yields a DUPLICATE on
+`A`, `A`, `A 2`; that is wrong, and the correction is recorded rather
+than quietly edited). Mac's loop increments until the candidate is
+unused, so its names ARE unique. What it does not check is the set of
+real titles, so a generated ordinal can spell some OTHER card's actual
+title: `A`, `A`, `A 2` becomes `A`, `A 2`, `A 2 2` on mac, and a Voice
+Control user who reads `A 2` on the third card and says it selects the
+second. Core's guard makes that unreachable — `A`, `A 3`, `A 2` — at
+the cost of an ordinal that "skips a number", which is exactly the
+trade core's `Untitled N` allocator already made for the same reason.
+Untitled cards are unchanged: `display_title` = `Untitled N` from that
+same allocator.
+
+Both properties are census assertions rather than claims here —
+uniqueness, and separately that no generated name spells another card's
+display title. Uniqueness alone would not have caught a missing guard,
+because mac's names satisfy it too. The `A`, `A`, `A 2` document order
+is a committed fixture (`cycle.canvas`), with its reverse pinned beside
+it so the answer cannot pass for the wrong reason.
 
 **0b-6 — `speakable_name` reaches the outline and table by an
 in-memory join, not a schema bump.** `canvas_outline` /

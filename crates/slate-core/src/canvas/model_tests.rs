@@ -381,7 +381,8 @@ fn redteam_untitled_ordinal_skips_taken_titles() {
 /// next free `⟨title⟩ ⟨k⟩` — skipping any spelling a REAL title already
 /// occupies. That skip is what mac's version lacks, and this fixture is
 /// the exact document order where the lack shows: `Same`, `Same`,
-/// `Same 2` renders `Same`, `Same 2`, `Same 2` on mac.
+/// `Same 2` becomes `Same`, `Same 2`, `Same 2 2` on mac, so the SECOND
+/// card answers to the THIRD card's real title.
 #[test]
 fn speakable_names_disambiguate_repeated_titles() {
     let (canvas, _) = parse(CYCLE);

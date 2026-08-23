@@ -492,10 +492,12 @@ pub fn derive_with(canvas: &Canvas, titles: &dyn FileTitleSource) -> CanvasModel
     // Speakable names (t0 §1.1 uniqueness, W6-1 contract 0b-5). Document
     // order, first-come keeps the bare title, and a generated ordinal
     // skips any spelling some node's REAL title occupies — the same
-    // `taken` guard the untitled loop above uses, and the reason this is
-    // injective where mac's version is not (its loop checks only the
-    // names it has already assigned, so `A`, `A`, `A 2` yields
-    // `A`, `A 2`, `A 2`).
+    // `taken` guard the untitled loop above uses, and for the same
+    // reason: without it an ordinal can spell some OTHER card's actual
+    // title, so a Voice Control user says what they read and lands on
+    // the wrong card. Mac's loop checks only the names it has already
+    // assigned, so `A`, `A`, `A 2` becomes `A`, `A 2`, `A 2 2` there —
+    // unique, but the second card answers to the third one's title.
     let real_titles: std::collections::HashSet<&str> =
         base_titles.values().map(String::as_str).collect();
     let mut used: std::collections::HashSet<String> =

@@ -689,8 +689,7 @@ fn census_structural_queries_hold_their_invariants() {
             assert_eq!(order_nodes(&model, &picked), oracle);
         }
 
-        // Speakable names are UNIQUE across the canvas — the property
-        // mac's version loses on `A, A, A 2`.
+        // Speakable names are UNIQUE across the canvas.
         let names: std::collections::HashSet<&str> = model
             .summaries
             .values()
@@ -701,6 +700,27 @@ fn census_structural_queries_hold_their_invariants() {
             model.summaries.len(),
             "speakable names collide"
         );
+
+        // …and a GENERATED ordinal never spells some OTHER card's real
+        // title. That is what the taken-guard buys, and mac's loop does
+        // not have it: mac turns `A`, `A`, `A 2` into
+        // `A`, `A 2`, `A 2 2`, so a Voice Control user reading `A 2` on
+        // the third card selects the second. Uniqueness alone cannot
+        // catch that — mac's names are unique too.
+        let real_titles: std::collections::HashSet<&str> = model
+            .summaries
+            .values()
+            .map(|s| s.display_title.as_str())
+            .collect();
+        for summary in model.summaries.values() {
+            if summary.speakable_name != summary.display_title {
+                assert!(
+                    !real_titles.contains(summary.speakable_name.as_str()),
+                    "the generated name {:?} is another card's real title",
+                    summary.speakable_name
+                );
+            }
+        }
 
         for start in &all {
             // The walk terminates, visits each node at most once, never
