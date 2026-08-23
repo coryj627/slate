@@ -234,13 +234,13 @@ one.
 (`a11y.rs`) holds it in four parts:
 
 1. an **exhaustive** classifier, `spoken_cardinality`, says for every
-   `CanvasA11yEvent` — and for every nested arm of the parameter sets it
-   reaches through — whether THIS VALUE speaks a count or a collection
-   length. The compiler refuses it when a variant or an arm is added, so
-   nothing joins the family without that declaration. "This value", not
-   "this variant": `CanvasMovedTo` renders its connection count only at
-   `Verbose`, so a terse or standard moved-to speaks none and cannot
-   serve as its witness;
+   `CanvasA11yEvent` whether THIS VALUE speaks a count or a collection
+   length. Exhaustive at every level: no `..` elides a payload ENUM
+   anywhere in it, so all eighteen closed sets are matched arm by arm
+   and the compiler refuses the function when a variant OR a nested arm
+   is added. "This value", not "this variant": `CanvasMovedTo` renders
+   its connection count only at `Verbose`, so a terse or standard
+   moved-to speaks none and cannot serve as its witness;
 2. every arm it classifies must have a `corpus()` witness at exactly
    one; an arm speaking a collection length must have an
    empty-collection witness; and an arm whose zero the HOST can reach
@@ -289,11 +289,23 @@ pluralization helper. Named residual classes it cannot see:
   fixed: `cards`, `marks`, `items`, `connections`);
 - a helper call wrapped so its literal leaves the call's line — which
   surfaces as a FALSE POSITIVE rather than a hole, deliberately: the
-  test fails and says to put them back on one line.
+  test fails and says to put them back on one line;
+- **line-wide helper provenance** — one genuine `plural(` on a line
+  vouches for every plural literal on that line. Comments no longer
+  count toward it (they are stripped, not merely skipped when they start
+  the line: a trailing `// plural(` used to be enough), but a line
+  carrying a real helper call AND a second, hardcoded plural still
+  passes. This is the largest named residual, and closing it is 0b's
+  parser.
 
-Reconstructing logical format strings needs the parser PR 0b builds, and
-the mutation-independence of parts 3 and 4 was demonstrated for the
-single-line form only. The general version — every count interpolation
+Reconstructing logical format strings needs the parser PR 0b builds.
+**No independence claim is made for parts 3 and 4**: the scan's helper
+provenance is LINE-WIDE, not bound to the noun it vouches for — a line
+naming `plural(` anywhere clears every plural literal on it — so the two
+parts are not shown to be independent guards, and this document does not
+say they are. Binding provenance to the noun is a parser problem (which
+argument of which call is this literal?), and that parser is 0b's. The
+general version — every count interpolation
 anywhere in the vocabulary proved to reach a helper — is 0b's, alongside
 the Rust-parses-Swift coalescing-class tripwire already queued there;
 carried in the SDD ledger (the 0a-2 codex round-1 entry, "Recorded for
@@ -302,8 +314,8 @@ carried in the SDD ledger (the 0a-2 codex round-1 entry, "Recorded for
 ### The event enumeration (the PR's contract)
 
 51 variants of `CanvasA11yEvent`, all reached through the single
-`A11yEvent::Canvas { event }` wrapper (0a-1b); **178** corpus entries,
-artifact 259 → **437**. 0a-1 landed 165; the rest are 0a-2's cardinality
+`A11yEvent::Canvas { event }` wrapper (0a-1b); **179** corpus entries,
+artifact 259 → **438**. 0a-1 landed 165; the rest are 0a-2's cardinality
 boundary witnesses (contract 0a-14) — the count of those lives in the
 test that requires them, not here. `V` = the `CanvasVerbosity`
 parameter.
@@ -403,9 +415,9 @@ cancel first.` — Canvas 553/591/621, Extras 266–269 — four copies) ·
 ### Tests that pin PR 0a
 
 `crates/slate-core/src/a11y.rs`: `corpus_renders_the_shipped_strings`
-(the golden table — 178 new rows),
+(the golden table — 179 new rows),
 `committed_corpus_artifact_matches_the_vocabulary` (artifact round-trip,
-437 entries), `every_canvas_variant_and_arm_is_represented_in_the_corpus`,
+438 entries), `every_canvas_variant_and_arm_is_represented_in_the_corpus`,
 `every_canvas_parameter_enum_is_listed_for_coverage` (0a-2),
 `the_canvas_family_occupies_one_top_level_variant`,
 `canvas_verbosity_matrix_pins_every_level`,
@@ -418,7 +430,7 @@ cancel first.` — Canvas 553/591/621, Extras 266–269 — four copies) ·
 `apps/slate-windows/.../A11yCorpusCensus.cs`:
 `EveryCorpusEventRendersTheCommittedIdentityTextAndPriority`,
 `TheMirrorHasNoDuplicateEntries`.
-`apps/slate-mac/Tests/SlateMacTests/`: `A11yCorpusCensusTests` (all 178
+`apps/slate-mac/Tests/SlateMacTests/`: `A11yCorpusCensusTests` (all 179
 canvas entries through the real FFI), `CanvasAnnouncerTests`
 (coalescing, the flush/supersede rule, the priority relay, and the
 WIDENED funnel guard), `A11yResidueCensusTests` (`pinnedResidueSites`
@@ -754,6 +766,19 @@ adding a residue site of its own — the count is 29, not 30.
   **Done (0a-2):** the guard scans both names (comment-only lines
   dropped, so prose naming them cannot trip it) and no canvas file
   calls either.
+- **A stale selection survives undo.** `reloadAfterMutation`
+  (`CanvasDocument.swift`) refreshes the outline, table, scene and
+  targets but never reconciles `CanvasSelection.selected`, so undoing a
+  create leaves the selection pointing at a node that no longer exists.
+  Verbs whose guard tests the raw selection then pass, while the
+  collection they announce — resolved against the outline — is empty.
+  The symptom codex round 6 traced is Duplicate announcing
+  `Duplicated 0 cards` (and writing an empty undo entry named
+  `duplicate 0 cards`). PR 0a pins the RENDERING (the zero witness is in
+  the corpus and 0a-14 requires it); reconciling selection after a
+  mutation is a host fix — file the mac issue. Windows must not copy it:
+  PR E's mutation funnel should drop a selection its reload cannot
+  resolve.
 - **`Deleted connection ` with a trailing space** is reachable on mac
   when the edge lookup misses (`AppState+CanvasConnect.swift:149`'s
   `?? ""`). The typed event cannot express it. **0a-2's resolution:**
@@ -940,11 +965,10 @@ paragraph and the allow-list; CR-3 itself is not re-litigated.
 
 Mutation-verified: deleting a count-one witness fails part 2;
 re-hardcoding a plural fails part 3; the same mutation with the string
-excused in the allow-list still fails part 4, so parts 3 and 4 are
-independent for the single-line form; a stale allow-list entry fails the
-anti-rot assertion; and adding a variant to `CanvasA11yEvent` fails to
-COMPILE at `spoken_cardinality`, which is the property the hand list
-never had.
+excused in the allow-list still fails part 4; a stale allow-list entry
+fails the anti-rot assertion; and adding a variant to `CanvasA11yEvent`
+fails to COMPILE at `spoken_cardinality`, which is the property the hand
+list never had.
 
 **Codex adversarial round 5** — NOT SAFE, blockers all inside round 4's
 own design pass (the interim guard overclaimed; rule-5 double-count
@@ -960,3 +984,23 @@ than the sentence — nested exhaustiveness, value-level classification,
 zero witnesses where a host reaches zero, (arm, string) provenance,
 continuation-joining plus bare-literal detection, and the guard's
 residual classes named in 0a-14 rather than implied away.
+
+**Codex adversarial round 6 — the final strengthening wave.** NOT SAFE.
+`ZERO_REACHABLE` recorded that no bulk verb can reach zero, and codex
+traced one that can: create selects the new card, undo removes it
+without reconciling `selection.selected`, and Duplicate's seed passes
+its non-empty guard while the collection it ANNOUNCES resolves to
+nothing — `Duplicated 0 cards`. The root cause is general and was
+re-audited per verb: reachability had been argued from the guarded seed
+while the payload speaks a later, filtered collection. The witness was
+added, its reason records the chain, and the mac behaviour behind it —
+a stale selection surviving undo — is filed in "Mac details recorded
+while reading" as an upstream bug, not this PR's to fix. Two further
+findings were fixed by raising the power: the classifier now
+destructures every nested payload enum (no `..` over a closed set), and
+comments are stripped before the source scan so a trailing `// plural(`
+cannot vouch for a hardcoded plural. The third was fixed by RETRACTION —
+the parts-3-and-4 independence claim is withdrawn rather than scoped,
+because provenance in a lexical scan is line-wide and cannot support it.
+**By decision, scan residue past this point is 0b's parser**; no further
+lexical strengthening is in scope for 0a.

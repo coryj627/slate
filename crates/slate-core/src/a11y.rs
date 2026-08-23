@@ -4345,6 +4345,7 @@ fn canvas_corpus() -> Vec<CanvasA11yEvent> {
             title: "Research".into(),
             count: 0,
         },
+        CanvasBulkDuplicated { count: 0 },
         CanvasFilterCount { matched: 0 },
         CanvasFilterCleared { total: 0 },
         CanvasWhereAmI {
@@ -5010,6 +5011,7 @@ mod tests {
                 "Text card \"Loose\", 1 of 1 in canvas, 0 connections",
             ),
             (Medium, "Unmarked \"Research\". 0 marked."),
+            (Medium, "Duplicated 0 cards — one undo restores."),
             (Medium, "0 cards match."),
             (Medium, "Filter cleared — 0 cards."),
             (
@@ -5335,13 +5337,18 @@ mod tests {
 
     /// What a canvas event says about CARDINALITY, if anything.
     ///
-    /// Exhaustive at EVERY level — the outer variant and each nested
-    /// parameter set — so the compiler refuses this function the moment
-    /// a variant or an arm is added anywhere in the family. A new arm
-    /// cannot enter without its author declaring whether it speaks a
-    /// count, which is the property three rounds of hand-maintained,
+    /// Exhaustive at EVERY level. The outer variant is matched arm by
+    /// arm, and so is every one of the eighteen closed parameter sets
+    /// the family carries — no `..` elides a payload ENUM anywhere
+    /// below. The compiler therefore refuses this function the moment a
+    /// variant, or an arm of any nested set, is added; nothing joins the
+    /// family without its author declaring whether it speaks a count.
+    /// That is the property three rounds of hand-maintained,
     /// hand-counted prose could not hold (contract 0a-14; round record,
-    /// rule 4).
+    /// rule 4). `..` is used only to elide plain data — `String`, `u32`,
+    /// `bool`, and the two `core::canvas` types (`RelativeDesc`,
+    /// `EdgeDirection`), which name anchors and directions and cannot
+    /// carry a count.
     ///
     /// "Speaks" means THIS value renders the count, not that the
     /// variant sometimes can. `CanvasMovedTo` is the only arm whose
@@ -5363,6 +5370,7 @@ mod tests {
         use CanvasA11yEvent::*;
         use SpokenCardinality::{Count, Length};
         match event {
+            // --- speaks a count ---------------------------------------
             CanvasMovedTo {
                 verbosity,
                 connection_count,
@@ -5374,53 +5382,194 @@ mod tests {
                 CanvasVerbosity::Terse | CanvasVerbosity::Standard => None,
             },
             CanvasWhereAmI {
-                connection_count, ..
-            } => Some(Count(*connection_count)),
+                connection_count,
+                mode,
+                filter,
+                ..
+            } => {
+                // `mode`/`filter` speak no count, but they are closed
+                // sets and so are matched rather than elided.
+                match mode {
+                    Some(CanvasMode::Move | CanvasMode::Resize | CanvasMode::Connect) | None => {}
+                }
+                match filter {
+                    CanvasFilterState::Inactive | CanvasFilterState::Active { .. } => {}
+                }
+                Some(Count(*connection_count))
+            }
             CanvasGroupEntered { count, .. } => Some(Count(*count)),
             CanvasTracePathEnd { titles } => Some(Length(titles.len())),
             // The mode object is a shared clause, so BOTH arms speak
             // its count and both need their own witness — the corpus is
             // per event, not per clause.
-            CanvasModeEntered { object, .. } | CanvasModeCommitted { object, .. } => match object {
-                CanvasModeObject::Cards { count } => Some(Count(*count)),
-                CanvasModeObject::Card { .. } => None,
-            },
-            CanvasModeCancelled { restoration, .. } => match restoration {
-                // The count is not interpolated here — only the noun
-                // agrees with it ("card returned" / "cards returned") —
-                // which is exactly the disagreement this test hunts.
-                CanvasModeRestoration::CardsReturned { count } => Some(Count(*count)),
-                CanvasModeRestoration::Unstated
-                | CanvasModeRestoration::SizeRestored
-                | CanvasModeRestoration::BackAt { .. } => None,
-            },
-            CanvasDeleted { target, .. } => match target {
-                CanvasDeleteTarget::Cards { count } => Some(Count(*count)),
-                CanvasDeleteTarget::Card { .. }
-                | CanvasDeleteTarget::Group { .. }
-                | CanvasDeleteTarget::Connection { .. } => None,
-            },
+            CanvasModeEntered { mode, object } => {
+                match mode {
+                    CanvasMode::Move | CanvasMode::Resize | CanvasMode::Connect => {}
+                }
+                match object {
+                    CanvasModeObject::Cards { count } => Some(Count(*count)),
+                    CanvasModeObject::Card { .. } => None,
+                }
+            }
+            CanvasModeCommitted { verb, object } => {
+                match verb {
+                    CanvasTransientVerb::Move | CanvasTransientVerb::Resize => {}
+                }
+                match object {
+                    CanvasModeObject::Cards { count } => Some(Count(*count)),
+                    CanvasModeObject::Card { .. } => None,
+                }
+            }
+            CanvasModeCancelled { mode, restoration } => {
+                match mode {
+                    CanvasMode::Move | CanvasMode::Resize | CanvasMode::Connect => {}
+                }
+                match restoration {
+                    // The count is not interpolated here — only the noun
+                    // agrees with it ("card returned" / "cards
+                    // returned") — which is exactly the disagreement
+                    // this test hunts.
+                    CanvasModeRestoration::CardsReturned { count } => Some(Count(*count)),
+                    CanvasModeRestoration::Unstated
+                    | CanvasModeRestoration::SizeRestored
+                    | CanvasModeRestoration::BackAt { .. } => None,
+                }
+            }
+            CanvasDeleted {
+                target, verbosity, ..
+            } => {
+                match verbosity {
+                    CanvasVerbosity::Terse
+                    | CanvasVerbosity::Standard
+                    | CanvasVerbosity::Verbose => {}
+                }
+                match target {
+                    CanvasDeleteTarget::Cards { count } => Some(Count(*count)),
+                    CanvasDeleteTarget::Card { .. }
+                    | CanvasDeleteTarget::Group { .. }
+                    | CanvasDeleteTarget::Connection { .. } => None,
+                }
+            }
             CanvasBulkMoved { count, .. }
-            | CanvasBulkColorSet { count, .. }
             | CanvasGrouped { count, .. }
             | CanvasBulkDuplicated { count }
             | CanvasMarkToggled { count, .. }
             | CanvasMarksCleared { count } => Some(Count(*count)),
+            CanvasBulkColorSet { count, .. } => Some(Count(*count)),
             CanvasFilterCount { matched } => Some(Count(*matched)),
             CanvasFilterCleared { total } => Some(Count(*total)),
             CanvasLoadedDegraded { skipped } => Some(Count(*skipped)),
 
-            // Speaks no cardinality. `CanvasMoveRelative` carries a
-            // `Vec` but never says how long it is (it joins the
-            // descriptions), and `CanvasStatus`'s `NoConnection`
-            // ordinal is a position, not a count of anything.
+            // --- speaks no count --------------------------------------
+            // Each closed parameter set is still matched arm by arm, so
+            // a count added to any of them lands here as a compile
+            // error rather than as an unpinned string.
+            CanvasMoveRelative { overlap, .. } | CanvasResizeGeometry { overlap, .. } => {
+                // `CanvasMoveRelative` carries a `Vec` but never says
+                // how long it is — it joins the descriptions.
+                match overlap {
+                    Some(CanvasOverlapTransition::Onset)
+                    | Some(CanvasOverlapTransition::Cleared)
+                    | None => None,
+                }
+            }
+            CanvasModeRejected { active_mode } => match active_mode {
+                CanvasMode::Move | CanvasMode::Resize | CanvasMode::Connect => None,
+            },
+            CanvasModeEndedWithoutEffect { mode } => match mode {
+                CanvasMode::Move | CanvasMode::Resize | CanvasMode::Connect => None,
+            },
+            CanvasCardPlaced { verb, .. } => match verb {
+                CanvasPlaceVerb::Moved | CanvasPlaceVerb::Duplicated => None,
+            },
+            CanvasOpened { target, .. } => match target {
+                CanvasOpenTarget::DefaultApp | CanvasOpenTarget::Browser => None,
+            },
+            CanvasSurfaceShown { surface } => match surface {
+                CanvasSurfaceKind::Outline
+                | CanvasSurfaceKind::Table
+                | CanvasSurfaceKind::Visual => None,
+            },
+            CanvasZoom { context, .. } => match context {
+                Some(CanvasZoomContext::FitCanvas)
+                | Some(CanvasZoomContext::ZoomedToSelection)
+                | None => None,
+            },
+            CanvasHistoryApplied { verb, .. } | CanvasUndoMenuTitle { verb, .. } => match verb {
+                CanvasHistoryVerb::Undo | CanvasHistoryVerb::Redo => None,
+            },
+            CanvasStatus { note } => match note {
+                CanvasStatusNote::NothingSelected
+                | CanvasStatusNote::NoMarks
+                | CanvasStatusNote::NotAGroup
+                | CanvasStatusNote::NotATextCard
+                | CanvasStatusNote::NotAFileCard
+                | CanvasStatusNote::NoGroups
+                | CanvasStatusNote::NoNotesInVault
+                | CanvasStatusNote::NoMediaInVault
+                | CanvasStatusNote::NoFilesToPointAt
+                | CanvasStatusNote::OnlyTextCardsConvert
+                | CanvasStatusNote::NoConnections
+                | CanvasStatusNote::PickOutsideMovingSet
+                | CanvasStatusNote::PickDifferentTarget
+                | CanvasStatusNote::NoChanges
+                | CanvasStatusNote::NotReadable
+                | CanvasStatusNote::Empty
+                | CanvasStatusNote::EndOfCanvas
+                | CanvasStatusNote::StartOfCanvas
+                | CanvasStatusNote::AtCanvasLevel
+                | CanvasStatusNote::NoCardsMatchFilter
+                | CanvasStatusNote::NothingToUndo
+                | CanvasStatusNote::NothingToRedo
+                | CanvasStatusNote::GroupIsEmpty { .. }
+                | CanvasStatusNote::NoOutgoingPath { .. }
+                | CanvasStatusNote::NotInAGroup { .. }
+                | CanvasStatusNote::NoConnection { .. } => None,
+            },
+            CanvasBlocked { reason } => match reason {
+                CanvasBlockedReason::ModeBusy
+                | CanvasBlockedReason::UndoBlocked
+                | CanvasBlockedReason::RedoBlocked
+                | CanvasBlockedReason::LinkOpenFailed
+                | CanvasBlockedReason::AlignWouldOverlap
+                | CanvasBlockedReason::NotAUrl
+                | CanvasBlockedReason::CardTextUnreadable
+                | CanvasBlockedReason::NotePathMustEndInMd
+                | CanvasBlockedReason::NoFreeSpaceInGroup { .. }
+                | CanvasBlockedReason::NotePathExists { .. }
+                | CanvasBlockedReason::NoteReadFailed { .. }
+                | CanvasBlockedReason::NoteCreateFailed { .. }
+                | CanvasBlockedReason::NoteRetargetFailed { .. }
+                | CanvasBlockedReason::HeadingNotFound { .. }
+                | CanvasBlockedReason::ReopenFailed { .. } => None,
+            },
+            CanvasActionFailed { action, .. } => match action {
+                CanvasFailedAction::NewCard
+                | CanvasFailedAction::NewGroup
+                | CanvasFailedAction::NewCanvas
+                | CanvasFailedAction::MoveIntoGroup
+                | CanvasFailedAction::Placement
+                | CanvasFailedAction::Align
+                | CanvasFailedAction::Create
+                | CanvasFailedAction::RemoveFromGroup
+                | CanvasFailedAction::Duplicate
+                | CanvasFailedAction::CreateConnectedCard
+                | CanvasFailedAction::CanvasAction
+                | CanvasFailedAction::WhereAmI => None,
+            },
+            CanvasMutationRefused { reason } => match reason {
+                CanvasMutationRefusal::Opening
+                | CanvasMutationRefusal::Reopening
+                | CanvasMutationRefusal::RetargetFailed
+                | CanvasMutationRefusal::Unavailable
+                | CanvasMutationRefusal::ReadOnly
+                | CanvasMutationRefusal::CardEditorUnavailable => None,
+            },
+
+            // No closed parameter set at all — plain data only.
             CanvasGroupLeft { .. }
             | CanvasConnectionTraversed { .. }
-            | CanvasMoveRelative { .. }
-            | CanvasResizeGeometry { .. }
             | CanvasResizeClamped
-            | CanvasModeRejected { .. }
-            | CanvasModeEndedWithoutEffect { .. }
             | CanvasCreated { .. }
             | CanvasFileCreated { .. }
             | CanvasConnectedCardCreated { .. }
@@ -5432,21 +5581,11 @@ mod tests {
             | CanvasRenamedGroup { .. }
             | CanvasCardUpdated { .. }
             | CanvasCardRetargeted { .. }
-            | CanvasCardPlaced { .. }
             | CanvasCardAligned { .. }
             | CanvasConvertedToNote { .. }
-            | CanvasZoom { .. }
             | CanvasFollowSelectionToggled { .. }
-            | CanvasSurfaceShown { .. }
-            | CanvasHistoryApplied { .. }
-            | CanvasUndoMenuTitle { .. }
-            | CanvasStatus { .. }
-            | CanvasBlocked { .. }
-            | CanvasActionFailed { .. }
             | CanvasSaveConflict
             | CanvasFileNotFound { .. }
-            | CanvasOpened { .. }
-            | CanvasMutationRefused { .. }
             | CanvasEmptyOnboarding { .. } => None,
         }
     }
@@ -5551,14 +5690,26 @@ mod tests {
                 "CanvasMarksCleared",
                 "clearing with nothing marked (its own template)",
             ),
-            // NOT reachable, and so deliberately absent: every bulk verb
-            // (`CanvasDeleted`, `CanvasBulkMoved`, `CanvasBulkColorSet`,
-            // `CanvasGrouped`, `CanvasBulkDuplicated`) is guarded by a
-            // non-empty marked/moving set that announces a precondition
-            // instead; the mode arms take the `Card` object below two;
-            // `CanvasGroupEntered` counts a container that holds the row
-            // just entered; `CanvasTracePathEnd` seeds with the selected
-            // card; `CanvasLoadedDegraded` only posts above zero.
+            (
+                "CanvasBulkDuplicated",
+                "a STALE selection: create selects the new card, undo \
+                 removes it without reconciling `selection.selected`, \
+                 and Duplicate's seed passes its non-empty guard while \
+                 the collection it announces resolves to nothing",
+            ),
+            // NOT reachable, and so deliberately absent. The audit that
+            // matters is not "is the verb guarded" but "is the guarded
+            // collection the ANNOUNCED one" — `CanvasBulkDuplicated`
+            // above is exactly the case where it is not. Re-checked
+            // per verb: `CanvasDeleted`, `CanvasBulkColorSet` and
+            // `CanvasGrouped` announce `canvasMarkedInOrder`, which is
+            // already outline-filtered when the guard sees it;
+            // `CanvasBulkMoved` and the mode arms announce the same
+            // `canvasMovingSet` seed they guard (a stale id there
+            // reaches ONE, not zero — CD-15). `CanvasGroupEntered`
+            // counts a container holding the row just entered;
+            // `CanvasTracePathEnd` seeds with the selected card;
+            // `CanvasLoadedDegraded` only posts above zero.
         ];
         for (arm, _) in ZERO_REACHABLE {
             assert!(
@@ -5685,11 +5836,34 @@ mod tests {
         // Rust continues a string literal across lines with a trailing
         // `\`, which would otherwise split `{count} \` from ` cards`
         // and hide the defect from both checks below.
+        //
+        // Comments are stripped, not merely skipped when they start the
+        // line: a TRAILING `// plural(` on a defective line would
+        // otherwise vouch for it, since helper provenance below is
+        // line-wide.
+        fn strip_comment(line: &str) -> &str {
+            let bytes = line.as_bytes();
+            let mut in_string = false;
+            let mut index = 0usize;
+            while index < bytes.len() {
+                match bytes[index] {
+                    b'\\' if in_string => index += 1,
+                    b'"' => in_string = !in_string,
+                    b'/' if !in_string && bytes.get(index + 1) == Some(&b'/') => {
+                        return &line[..index];
+                    }
+                    _ => {}
+                }
+                index += 1;
+            }
+            line
+        }
+
         let mut lines: Vec<(usize, String)> = Vec::new();
         let mut pending: Option<(usize, String)> = None;
         for (offset, raw) in source[begin..end].lines().enumerate() {
-            let trimmed = raw.trim();
-            if trimmed.starts_with("//") {
+            let trimmed = strip_comment(raw).trim();
+            if trimmed.is_empty() {
                 continue;
             }
             let (line_no, mut text) = pending

@@ -2170,6 +2170,11 @@
     "text": "Unmarked \"Research\". 0 marked."
   },
   {
+    "event": "Canvas { event: CanvasBulkDuplicated { count: 0 } }",
+    "priority": "medium",
+    "text": "Duplicated 0 cards — one undo restores."
+  },
+  {
     "event": "Canvas { event: CanvasFilterCount { matched: 0 } }",
     "priority": "medium",
     "text": "0 cards match."

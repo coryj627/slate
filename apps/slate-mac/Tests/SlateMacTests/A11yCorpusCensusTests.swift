@@ -496,6 +496,7 @@ final class A11yCorpusCensusTests: XCTestCase {
             .canvas(event: .canvasMarksCleared(count: 1)),
             .canvas(event: .canvasMovedTo(verbosity: .verbose, kindLabel: "text", title: "Loose", ordinalN: 1, totalM: 1, container: nil, connectionCount: 0, colorName: nil, marked: false)),
             .canvas(event: .canvasMarkToggled(marked: false, title: "Research", count: 0)),
+            .canvas(event: .canvasBulkDuplicated(count: 0)),
             .canvas(event: .canvasFilterCount(matched: 0)),
             .canvas(event: .canvasFilterCleared(total: 0)),
             .canvas(event: .canvasWhereAmI(kindLabel: "text", title: "Loose", groupPath: [], ordinalN: 1, totalM: 1, connectionCount: 0, inCount: 0, outCount: 0, colorName: nil, marked: false, mode: nil, filter: .inactive)),
