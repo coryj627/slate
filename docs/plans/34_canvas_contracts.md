@@ -43,6 +43,20 @@ error detail, host-supplied display chords, counts and dimensions —
 `crates/slate-core/src/a11y.rs` (51 canvas variants over 18 closed
 nested enums); enumerated in full below.
 
+**0a-1b — One engine, one top-level variant.** The family is reached
+through `A11yEvent::Canvas { event: CanvasA11yEvent }`;
+`CanvasA11yEvent` owns the 51 variants and its own `priority()` /
+`render()`, which `A11yEvent` delegates to. uniffi caps an enum at 256
+variants and this vocabulary was at 197 before canvas, so a flat family
+would have spent a fifth of the remaining budget on one surface and left
+none for the graph announcer — the other named residue engine, W6-2's
+subject. **Nested-family-per-engine is the pattern every later family
+copies** (`Graph { event: GraphA11yEvent }`). Variant NAMES keep their
+`Canvas` prefix so every spec, contracts-table and downstream-PR
+citation (`CanvasMovedTo`, `CanvasSaveConflict`, …) stays literally
+true. Pinned by `the_canvas_family_occupies_one_top_level_variant`.
+(CD-12.)
+
 **0a-2 — The five-place rule.** A canvas string is pinned in five
 hand-maintained places, and all five must move together: the
 `A11yEvent` variant + `render()` arm (`a11y.rs`), the in-file golden
@@ -153,9 +167,11 @@ panel heading) stays §W-C label class and is NOT in this vocabulary.
 
 ### The event enumeration (the PR's contract)
 
-51 variants, 165 corpus entries, artifact 259 → **424**. `V` = the
-`CanvasVerbosity` parameter. Coalescing class: `nav` / `filter` / `—`
-(immediate). All priorities `Medium` unless marked **High**.
+51 variants of `CanvasA11yEvent`, all reached through the single
+`A11yEvent::Canvas { event }` wrapper (0a-1b); 165 corpus entries,
+artifact 259 → **424**. `V` = the `CanvasVerbosity` parameter.
+Coalescing class: `nav` / `filter` / `—` (immediate). All priorities
+`Medium` unless marked **High**.
 
 | Event | Payload | Template(s) | Pri | Class | mac site(s) replaced |
 |---|---|---|---|---|---|
@@ -253,6 +269,7 @@ cancel first.` — Canvas 553/591/621, Extras 266–269 — four copies) ·
 (the golden table — 165 new rows),
 `committed_corpus_artifact_matches_the_vocabulary` (artifact round-trip,
 424 entries), `every_canvas_variant_and_arm_is_represented_in_the_corpus`,
+`the_canvas_family_occupies_one_top_level_variant`,
 `canvas_verbosity_matrix_pins_every_level`,
 `canvas_where_am_i_is_always_verbose_grade`,
 `canvas_priorities_pin_the_error_tier`,
@@ -399,6 +416,26 @@ spec-named variants (`CanvasMovedTo`, `CanvasDeleted`, `CanvasZoom`,
 `CanvasLoadedDegraded`, `CanvasUndoMenuTitle`, …) all kept their names.
 The four bulk variants stayed four per R-0a-5.
 
+**CD-12 — The family nests under one top-level variant** (controller
+ruling R-0a-8, 2026-08-22). `A11yEvent::Canvas { event: CanvasA11yEvent }`
+rather than 51 top-level variants. Landing it here — before Task 0a-2 and
+before any host names a case — is the cheapest moment it can ever
+happen: after merge it would churn shipped §W-D identities across the
+artifact and three mirrors. **Constraint honoured:** corpus indexes
+0–258 are byte-identical (verified entry by entry), and no `text` or
+`priority` changed anywhere; only the 165 canvas `event` identity
+strings gained the `Canvas { event: … }` wrapper. The in-file golden
+table needed no edit at all — it pins (priority, text). Variant names
+keep the `Canvas` prefix (0a-1b). Two tests were strengthened rather
+than merely updated: `the_ffi_mirror_covers_every_core_a11y_variant`
+now checks `CanvasA11yEvent` as well as `A11yEvent` (a nested family is
+exactly as invisible to a host when the mirror misses one of its
+variants), and both corpus tripwires now compare
+`Canvas/CanvasMovedTo`-style paths — without the inner name the wrapper
+would have flattened 165 distinct entries into one and the order check
+would have stopped meaning anything. Mutation-verified by swapping two
+adjacent canvas entries: both tripwires fail at index 265.
+
 **CD-11 — Names that differ from the spec's indicative list.** The spec
 wrote names "indicative". Landed: `CanvasBulk{verb,count,undo_chord}` →
 four variants (R-0a-5, and none carries the undo hint, matching mac);
@@ -414,14 +451,19 @@ payload-less; the shipped sentence names the group).
 
 ## Accepted risks (owner-recorded; off-limits for re-litigation)
 
-**CR-1 — The vocabulary is now at 248 of uniffi's 256 enum variants.**
-Eight slots remain before `A11yEvent` must be restructured (the obvious
-move is a nested `A11yEvent::Canvas{event: CanvasA11yEvent}` or the same
-for another family). Canvas is complete after 0a — later canvas PRs
-consume, they do not add — but any NEW family in W7/W8 must budget for
-this. Recorded so the next wave does not discover it mid-PR.
+**CR-1 — uniffi's 256-variant enum cap: pressure resolved, and the
+pattern is set.** The flat family took `A11yEvent` to 248 of 256, which
+left nothing for W6-2's graph family. R-0a-8 nested it: the top level is
+back to **~198 of 256** and the canvas family has its own budget inside
+`CanvasA11yEvent` (51 of 256). **Nested-family-per-engine is now the
+pattern** — the graph announcer lands as `Graph { event: GraphA11yEvent }`,
+and any future engine-scale vocabulary does the same rather than
+spending top-level slots. The residual risk is only that a later author
+adds a one-off variant at the top level without noticing the ceiling;
+`the_canvas_family_occupies_one_top_level_variant` documents the shape
+they should copy.
 
-**CR-2 — `a11y.rs` is now 5,215 lines** (was 2,586). The canvas family roughly
+**CR-2 — `a11y.rs` is now 5,291 lines** (was 2,586). The canvas family roughly
 doubled the file. Splitting the module was deliberately NOT done in this
 PR: the three positional lists (`corpus()`, the golden table, the
 artifact) and two parsers (the uniffi tripwires, which locate
@@ -508,7 +550,13 @@ canvas call sites move off it, the marker stays.
   spec's "four places" folds it into "a11y.rs variants"; it is a
   separate positional list. (Contract 0a-2.)
 - **uniffi caps enums at 256 variants**, and `A11yEvent` was already at
-  197. Discovered by compile failure at 292. Drove CD-10 and CR-1.
+  197. Discovered by compile failure at 292 (one variant per shipped
+  sentence). Drove CD-10 (typed nested enums for the families) and then
+  CD-12 / R-0a-8 (the whole family nests under one top-level variant).
+- **The wrapper cost nothing in the golden table.** Because the golden
+  pins (priority, text) and the wrapper is a pure relay, only the
+  artifact's `event` identities changed — which is the exact property
+  that makes doing this before merge cheap and after merge expensive.
 - **`CanvasRelativeDesc` needed `Eq`** and a reverse
   `From<CanvasRelativeDesc> for RelativeDesc` (as did
   `CanvasEdgeDirection`): the a11y vocabulary is the first place these

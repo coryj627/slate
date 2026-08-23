@@ -7250,207 +7250,8 @@ pub enum A11yEvent {
         name: String,
         template: String,
     },
-    CanvasMovedTo {
-        verbosity: CanvasVerbosity,
-        kind_label: String,
-        title: String,
-        ordinal_n: u32,
-        total_m: u32,
-        container: Option<String>,
-        connection_count: u32,
-        color_name: Option<String>,
-        marked: bool,
-    },
-    CanvasGroupEntered {
-        label: String,
-        count: u32,
-    },
-    CanvasGroupLeft {
-        label: String,
-    },
-    CanvasConnectionTraversed {
-        direction: CanvasEdgeDirection,
-        kind_label: String,
-        title: String,
-        label: Option<String>,
-    },
-    CanvasTracePathEnd {
-        titles: Vec<String>,
-    },
-    CanvasMoveRelative {
-        descs: Vec<CanvasRelativeDesc>,
-        overlap: Option<CanvasOverlapTransition>,
-    },
-    CanvasResizeGeometry {
-        preset: Option<CanvasResizePreset>,
-        width: u32,
-        height: u32,
-        overlap: Option<CanvasOverlapTransition>,
-    },
-    CanvasResizeClamped,
-    CanvasModeEntered {
-        mode: CanvasMode,
-        object: CanvasModeObject,
-    },
-    CanvasModeRejected {
-        active_mode: CanvasMode,
-    },
-    CanvasModeCommitted {
-        verb: CanvasTransientVerb,
-        object: CanvasModeObject,
-    },
-    CanvasModeEndedWithoutEffect {
-        mode: CanvasMode,
-    },
-    CanvasModeCancelled {
-        mode: CanvasMode,
-        restoration: CanvasModeRestoration,
-    },
-    CanvasCreated {
-        kind_label: String,
-        title: String,
-        relative: CanvasRelativeDesc,
-    },
-    CanvasFileCreated {
-        name: String,
-    },
-    CanvasConnectedCardCreated {
-        relative: CanvasRelativeDesc,
-        origin_title: String,
-    },
-    CanvasConnected {
-        from_title: String,
-        to_title: String,
-        label: Option<String>,
-    },
-    CanvasConnectionUpdated {
-        label: Option<String>,
-    },
-    CanvasMovedIntoGroup {
-        label: String,
-    },
-    CanvasRemovedFromGroup {
-        label: String,
-    },
-    CanvasColorSet {
-        title: String,
-        color_name: Option<String>,
-    },
-    CanvasRenamedGroup {
-        label: String,
-    },
-    CanvasCardUpdated {
-        title: String,
-    },
-    CanvasCardRetargeted {
-        title: String,
-        path: String,
-    },
-    CanvasCardPlaced {
-        verb: CanvasPlaceVerb,
-        title: String,
-        relative: CanvasRelativeDesc,
-    },
-    CanvasCardAligned {
-        title: String,
-        target_title: String,
-    },
-    CanvasConvertedToNote {
-        path: String,
-    },
-    CanvasDeleted {
-        target: CanvasDeleteTarget,
-        verbosity: CanvasVerbosity,
-        undo_chord: String,
-    },
-    CanvasBulkMoved {
-        count: u32,
-        relative: CanvasRelativeDesc,
-    },
-    CanvasBulkColorSet {
-        count: u32,
-        color_name: Option<String>,
-    },
-    CanvasGrouped {
-        count: u32,
-        label: String,
-    },
-    CanvasBulkDuplicated {
-        count: u32,
-    },
-    CanvasMarkToggled {
-        marked: bool,
-        title: String,
-        count: u32,
-    },
-    CanvasMarksCleared {
-        count: u32,
-    },
-    CanvasFilterCount {
-        matched: u32,
-    },
-    CanvasFilterCleared {
-        total: u32,
-    },
-    CanvasZoom {
-        context: Option<CanvasZoomContext>,
-        percent: u32,
-    },
-    CanvasFollowSelectionToggled {
-        following: bool,
-    },
-    CanvasSurfaceShown {
-        surface: CanvasSurfaceKind,
-    },
-    CanvasHistoryApplied {
-        verb: CanvasHistoryVerb,
-        name: String,
-    },
-    CanvasUndoMenuTitle {
-        verb: CanvasHistoryVerb,
-        name: String,
-    },
-    CanvasStatus {
-        note: CanvasStatusNote,
-    },
-    CanvasBlocked {
-        reason: CanvasBlockedReason,
-    },
-    CanvasActionFailed {
-        action: CanvasFailedAction,
-        detail: String,
-    },
-    CanvasSaveConflict,
-    CanvasFileNotFound {
-        target: String,
-    },
-    CanvasOpened {
-        title: String,
-        target: CanvasOpenTarget,
-    },
-    CanvasMutationRefused {
-        reason: CanvasMutationRefusal,
-    },
-    CanvasLoadedDegraded {
-        skipped: u32,
-    },
-    CanvasEmptyOnboarding {
-        new_card_chord: String,
-        palette_chord: String,
-    },
-    CanvasWhereAmI {
-        kind_label: String,
-        title: String,
-        group_path: Vec<String>,
-        ordinal_n: u32,
-        total_m: u32,
-        connection_count: u32,
-        in_count: u32,
-        out_count: u32,
-        color_name: Option<String>,
-        marked: bool,
-        mode: Option<CanvasMode>,
-        filter: CanvasFilterState,
+    Canvas {
+        event: CanvasA11yEvent,
     },
     HostComposed {
         text: String,
@@ -7945,6 +7746,443 @@ impl From<CanvasBlockedReason> for core::a11y::CanvasBlockedReason {
     }
 }
 
+/// FFI mirror of [`core::a11y::CanvasA11yEvent`] — the canvas family,
+/// nested so one engine costs one top-level `A11yEvent` variant
+/// (uniffi caps an enum at 256).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasA11yEvent {
+    CanvasMovedTo {
+        verbosity: CanvasVerbosity,
+        kind_label: String,
+        title: String,
+        ordinal_n: u32,
+        total_m: u32,
+        container: Option<String>,
+        connection_count: u32,
+        color_name: Option<String>,
+        marked: bool,
+    },
+    CanvasGroupEntered {
+        label: String,
+        count: u32,
+    },
+    CanvasGroupLeft {
+        label: String,
+    },
+    CanvasConnectionTraversed {
+        direction: CanvasEdgeDirection,
+        kind_label: String,
+        title: String,
+        label: Option<String>,
+    },
+    CanvasTracePathEnd {
+        titles: Vec<String>,
+    },
+    CanvasMoveRelative {
+        descs: Vec<CanvasRelativeDesc>,
+        overlap: Option<CanvasOverlapTransition>,
+    },
+    CanvasResizeGeometry {
+        preset: Option<CanvasResizePreset>,
+        width: u32,
+        height: u32,
+        overlap: Option<CanvasOverlapTransition>,
+    },
+    CanvasResizeClamped,
+    CanvasModeEntered {
+        mode: CanvasMode,
+        object: CanvasModeObject,
+    },
+    CanvasModeRejected {
+        active_mode: CanvasMode,
+    },
+    CanvasModeCommitted {
+        verb: CanvasTransientVerb,
+        object: CanvasModeObject,
+    },
+    CanvasModeEndedWithoutEffect {
+        mode: CanvasMode,
+    },
+    CanvasModeCancelled {
+        mode: CanvasMode,
+        restoration: CanvasModeRestoration,
+    },
+    CanvasCreated {
+        kind_label: String,
+        title: String,
+        relative: CanvasRelativeDesc,
+    },
+    CanvasFileCreated {
+        name: String,
+    },
+    CanvasConnectedCardCreated {
+        relative: CanvasRelativeDesc,
+        origin_title: String,
+    },
+    CanvasConnected {
+        from_title: String,
+        to_title: String,
+        label: Option<String>,
+    },
+    CanvasConnectionUpdated {
+        label: Option<String>,
+    },
+    CanvasMovedIntoGroup {
+        label: String,
+    },
+    CanvasRemovedFromGroup {
+        label: String,
+    },
+    CanvasColorSet {
+        title: String,
+        color_name: Option<String>,
+    },
+    CanvasRenamedGroup {
+        label: String,
+    },
+    CanvasCardUpdated {
+        title: String,
+    },
+    CanvasCardRetargeted {
+        title: String,
+        path: String,
+    },
+    CanvasCardPlaced {
+        verb: CanvasPlaceVerb,
+        title: String,
+        relative: CanvasRelativeDesc,
+    },
+    CanvasCardAligned {
+        title: String,
+        target_title: String,
+    },
+    CanvasConvertedToNote {
+        path: String,
+    },
+    CanvasDeleted {
+        target: CanvasDeleteTarget,
+        verbosity: CanvasVerbosity,
+        undo_chord: String,
+    },
+    CanvasBulkMoved {
+        count: u32,
+        relative: CanvasRelativeDesc,
+    },
+    CanvasBulkColorSet {
+        count: u32,
+        color_name: Option<String>,
+    },
+    CanvasGrouped {
+        count: u32,
+        label: String,
+    },
+    CanvasBulkDuplicated {
+        count: u32,
+    },
+    CanvasMarkToggled {
+        marked: bool,
+        title: String,
+        count: u32,
+    },
+    CanvasMarksCleared {
+        count: u32,
+    },
+    CanvasFilterCount {
+        matched: u32,
+    },
+    CanvasFilterCleared {
+        total: u32,
+    },
+    CanvasZoom {
+        context: Option<CanvasZoomContext>,
+        percent: u32,
+    },
+    CanvasFollowSelectionToggled {
+        following: bool,
+    },
+    CanvasSurfaceShown {
+        surface: CanvasSurfaceKind,
+    },
+    CanvasHistoryApplied {
+        verb: CanvasHistoryVerb,
+        name: String,
+    },
+    CanvasUndoMenuTitle {
+        verb: CanvasHistoryVerb,
+        name: String,
+    },
+    CanvasStatus {
+        note: CanvasStatusNote,
+    },
+    CanvasBlocked {
+        reason: CanvasBlockedReason,
+    },
+    CanvasActionFailed {
+        action: CanvasFailedAction,
+        detail: String,
+    },
+    CanvasSaveConflict,
+    CanvasFileNotFound {
+        target: String,
+    },
+    CanvasOpened {
+        title: String,
+        target: CanvasOpenTarget,
+    },
+    CanvasMutationRefused {
+        reason: CanvasMutationRefusal,
+    },
+    CanvasLoadedDegraded {
+        skipped: u32,
+    },
+    CanvasEmptyOnboarding {
+        new_card_chord: String,
+        palette_chord: String,
+    },
+    CanvasWhereAmI {
+        kind_label: String,
+        title: String,
+        group_path: Vec<String>,
+        ordinal_n: u32,
+        total_m: u32,
+        connection_count: u32,
+        in_count: u32,
+        out_count: u32,
+        color_name: Option<String>,
+        marked: bool,
+        mode: Option<CanvasMode>,
+        filter: CanvasFilterState,
+    },
+}
+
+impl From<CanvasA11yEvent> for core::a11y::CanvasA11yEvent {
+    fn from(e: CanvasA11yEvent) -> Self {
+        use CanvasA11yEvent as F;
+        use core::a11y::CanvasA11yEvent as C;
+        match e {
+            F::CanvasMovedTo {
+                verbosity,
+                kind_label,
+                title,
+                ordinal_n,
+                total_m,
+                container,
+                connection_count,
+                color_name,
+                marked,
+            } => C::CanvasMovedTo {
+                verbosity: verbosity.into(),
+                kind_label,
+                title,
+                ordinal_n,
+                total_m,
+                container,
+                connection_count,
+                color_name,
+                marked,
+            },
+            F::CanvasGroupEntered { label, count } => C::CanvasGroupEntered { label, count },
+            F::CanvasGroupLeft { label } => C::CanvasGroupLeft { label },
+            F::CanvasConnectionTraversed {
+                direction,
+                kind_label,
+                title,
+                label,
+            } => C::CanvasConnectionTraversed {
+                direction: direction.into(),
+                kind_label,
+                title,
+                label,
+            },
+            F::CanvasTracePathEnd { titles } => C::CanvasTracePathEnd { titles },
+            F::CanvasMoveRelative { descs, overlap } => C::CanvasMoveRelative {
+                descs: descs.into_iter().map(Into::into).collect(),
+                overlap: overlap.map(Into::into),
+            },
+            F::CanvasResizeGeometry {
+                preset,
+                width,
+                height,
+                overlap,
+            } => C::CanvasResizeGeometry {
+                preset: preset.map(Into::into),
+                width,
+                height,
+                overlap: overlap.map(Into::into),
+            },
+            F::CanvasResizeClamped => C::CanvasResizeClamped,
+            F::CanvasModeEntered { mode, object } => C::CanvasModeEntered {
+                mode: mode.into(),
+                object: object.into(),
+            },
+            F::CanvasModeRejected { active_mode } => C::CanvasModeRejected {
+                active_mode: active_mode.into(),
+            },
+            F::CanvasModeCommitted { verb, object } => C::CanvasModeCommitted {
+                verb: verb.into(),
+                object: object.into(),
+            },
+            F::CanvasModeEndedWithoutEffect { mode } => {
+                C::CanvasModeEndedWithoutEffect { mode: mode.into() }
+            }
+            F::CanvasModeCancelled { mode, restoration } => C::CanvasModeCancelled {
+                mode: mode.into(),
+                restoration: restoration.into(),
+            },
+            F::CanvasCreated {
+                kind_label,
+                title,
+                relative,
+            } => C::CanvasCreated {
+                kind_label,
+                title,
+                relative: relative.into(),
+            },
+            F::CanvasFileCreated { name } => C::CanvasFileCreated { name },
+            F::CanvasConnectedCardCreated {
+                relative,
+                origin_title,
+            } => C::CanvasConnectedCardCreated {
+                relative: relative.into(),
+                origin_title,
+            },
+            F::CanvasConnected {
+                from_title,
+                to_title,
+                label,
+            } => C::CanvasConnected {
+                from_title,
+                to_title,
+                label,
+            },
+            F::CanvasConnectionUpdated { label } => C::CanvasConnectionUpdated { label },
+            F::CanvasMovedIntoGroup { label } => C::CanvasMovedIntoGroup { label },
+            F::CanvasRemovedFromGroup { label } => C::CanvasRemovedFromGroup { label },
+            F::CanvasColorSet { title, color_name } => C::CanvasColorSet { title, color_name },
+            F::CanvasRenamedGroup { label } => C::CanvasRenamedGroup { label },
+            F::CanvasCardUpdated { title } => C::CanvasCardUpdated { title },
+            F::CanvasCardRetargeted { title, path } => C::CanvasCardRetargeted { title, path },
+            F::CanvasCardPlaced {
+                verb,
+                title,
+                relative,
+            } => C::CanvasCardPlaced {
+                verb: verb.into(),
+                title,
+                relative: relative.into(),
+            },
+            F::CanvasCardAligned {
+                title,
+                target_title,
+            } => C::CanvasCardAligned {
+                title,
+                target_title,
+            },
+            F::CanvasConvertedToNote { path } => C::CanvasConvertedToNote { path },
+            F::CanvasDeleted {
+                target,
+                verbosity,
+                undo_chord,
+            } => C::CanvasDeleted {
+                target: target.into(),
+                verbosity: verbosity.into(),
+                undo_chord,
+            },
+            F::CanvasBulkMoved { count, relative } => C::CanvasBulkMoved {
+                count,
+                relative: relative.into(),
+            },
+            F::CanvasBulkColorSet { count, color_name } => {
+                C::CanvasBulkColorSet { count, color_name }
+            }
+            F::CanvasGrouped { count, label } => C::CanvasGrouped { count, label },
+            F::CanvasBulkDuplicated { count } => C::CanvasBulkDuplicated { count },
+            F::CanvasMarkToggled {
+                marked,
+                title,
+                count,
+            } => C::CanvasMarkToggled {
+                marked,
+                title,
+                count,
+            },
+            F::CanvasMarksCleared { count } => C::CanvasMarksCleared { count },
+            F::CanvasFilterCount { matched } => C::CanvasFilterCount { matched },
+            F::CanvasFilterCleared { total } => C::CanvasFilterCleared { total },
+            F::CanvasZoom { context, percent } => C::CanvasZoom {
+                context: context.map(Into::into),
+                percent,
+            },
+            F::CanvasFollowSelectionToggled { following } => {
+                C::CanvasFollowSelectionToggled { following }
+            }
+            F::CanvasSurfaceShown { surface } => C::CanvasSurfaceShown {
+                surface: surface.into(),
+            },
+            F::CanvasHistoryApplied { verb, name } => C::CanvasHistoryApplied {
+                verb: verb.into(),
+                name,
+            },
+            F::CanvasUndoMenuTitle { verb, name } => C::CanvasUndoMenuTitle {
+                verb: verb.into(),
+                name,
+            },
+            F::CanvasStatus { note } => C::CanvasStatus { note: note.into() },
+            F::CanvasBlocked { reason } => C::CanvasBlocked {
+                reason: reason.into(),
+            },
+            F::CanvasActionFailed { action, detail } => C::CanvasActionFailed {
+                action: action.into(),
+                detail,
+            },
+            F::CanvasSaveConflict => C::CanvasSaveConflict,
+            F::CanvasFileNotFound { target } => C::CanvasFileNotFound { target },
+            F::CanvasOpened { title, target } => C::CanvasOpened {
+                title,
+                target: target.into(),
+            },
+            F::CanvasMutationRefused { reason } => C::CanvasMutationRefused {
+                reason: reason.into(),
+            },
+            F::CanvasLoadedDegraded { skipped } => C::CanvasLoadedDegraded { skipped },
+            F::CanvasEmptyOnboarding {
+                new_card_chord,
+                palette_chord,
+            } => C::CanvasEmptyOnboarding {
+                new_card_chord,
+                palette_chord,
+            },
+            F::CanvasWhereAmI {
+                kind_label,
+                title,
+                group_path,
+                ordinal_n,
+                total_m,
+                connection_count,
+                in_count,
+                out_count,
+                color_name,
+                marked,
+                mode,
+                filter,
+            } => C::CanvasWhereAmI {
+                kind_label,
+                title,
+                group_path,
+                ordinal_n,
+                total_m,
+                connection_count,
+                in_count,
+                out_count,
+                color_name,
+                marked,
+                mode: mode.map(Into::into),
+                filter: filter.into(),
+            },
+        }
+    }
+}
+
 impl From<A11yEvent> for core::a11y::A11yEvent {
     fn from(e: A11yEvent) -> Self {
         use A11yEvent as F;
@@ -8286,224 +8524,8 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             },
             F::TemplatePickerOpened { count } => C::TemplatePickerOpened { count },
             F::TemplateNoteCreated { name, template } => C::TemplateNoteCreated { name, template },
-            F::CanvasMovedTo {
-                verbosity,
-                kind_label,
-                title,
-                ordinal_n,
-                total_m,
-                container,
-                connection_count,
-                color_name,
-                marked,
-            } => C::CanvasMovedTo {
-                verbosity: verbosity.into(),
-                kind_label,
-                title,
-                ordinal_n,
-                total_m,
-                container,
-                connection_count,
-                color_name,
-                marked,
-            },
-            F::CanvasGroupEntered { label, count } => C::CanvasGroupEntered { label, count },
-            F::CanvasGroupLeft { label } => C::CanvasGroupLeft { label },
-            F::CanvasConnectionTraversed {
-                direction,
-                kind_label,
-                title,
-                label,
-            } => C::CanvasConnectionTraversed {
-                direction: direction.into(),
-                kind_label,
-                title,
-                label,
-            },
-            F::CanvasTracePathEnd { titles } => C::CanvasTracePathEnd { titles },
-            F::CanvasMoveRelative { descs, overlap } => C::CanvasMoveRelative {
-                descs: descs.into_iter().map(Into::into).collect(),
-                overlap: overlap.map(Into::into),
-            },
-            F::CanvasResizeGeometry {
-                preset,
-                width,
-                height,
-                overlap,
-            } => C::CanvasResizeGeometry {
-                preset: preset.map(Into::into),
-                width,
-                height,
-                overlap: overlap.map(Into::into),
-            },
-            F::CanvasResizeClamped => C::CanvasResizeClamped,
-            F::CanvasModeEntered { mode, object } => C::CanvasModeEntered {
-                mode: mode.into(),
-                object: object.into(),
-            },
-            F::CanvasModeRejected { active_mode } => C::CanvasModeRejected {
-                active_mode: active_mode.into(),
-            },
-            F::CanvasModeCommitted { verb, object } => C::CanvasModeCommitted {
-                verb: verb.into(),
-                object: object.into(),
-            },
-            F::CanvasModeEndedWithoutEffect { mode } => {
-                C::CanvasModeEndedWithoutEffect { mode: mode.into() }
-            }
-            F::CanvasModeCancelled { mode, restoration } => C::CanvasModeCancelled {
-                mode: mode.into(),
-                restoration: restoration.into(),
-            },
-            F::CanvasCreated {
-                kind_label,
-                title,
-                relative,
-            } => C::CanvasCreated {
-                kind_label,
-                title,
-                relative: relative.into(),
-            },
-            F::CanvasFileCreated { name } => C::CanvasFileCreated { name },
-            F::CanvasConnectedCardCreated {
-                relative,
-                origin_title,
-            } => C::CanvasConnectedCardCreated {
-                relative: relative.into(),
-                origin_title,
-            },
-            F::CanvasConnected {
-                from_title,
-                to_title,
-                label,
-            } => C::CanvasConnected {
-                from_title,
-                to_title,
-                label,
-            },
-            F::CanvasConnectionUpdated { label } => C::CanvasConnectionUpdated { label },
-            F::CanvasMovedIntoGroup { label } => C::CanvasMovedIntoGroup { label },
-            F::CanvasRemovedFromGroup { label } => C::CanvasRemovedFromGroup { label },
-            F::CanvasColorSet { title, color_name } => C::CanvasColorSet { title, color_name },
-            F::CanvasRenamedGroup { label } => C::CanvasRenamedGroup { label },
-            F::CanvasCardUpdated { title } => C::CanvasCardUpdated { title },
-            F::CanvasCardRetargeted { title, path } => C::CanvasCardRetargeted { title, path },
-            F::CanvasCardPlaced {
-                verb,
-                title,
-                relative,
-            } => C::CanvasCardPlaced {
-                verb: verb.into(),
-                title,
-                relative: relative.into(),
-            },
-            F::CanvasCardAligned {
-                title,
-                target_title,
-            } => C::CanvasCardAligned {
-                title,
-                target_title,
-            },
-            F::CanvasConvertedToNote { path } => C::CanvasConvertedToNote { path },
-            F::CanvasDeleted {
-                target,
-                verbosity,
-                undo_chord,
-            } => C::CanvasDeleted {
-                target: target.into(),
-                verbosity: verbosity.into(),
-                undo_chord,
-            },
-            F::CanvasBulkMoved { count, relative } => C::CanvasBulkMoved {
-                count,
-                relative: relative.into(),
-            },
-            F::CanvasBulkColorSet { count, color_name } => {
-                C::CanvasBulkColorSet { count, color_name }
-            }
-            F::CanvasGrouped { count, label } => C::CanvasGrouped { count, label },
-            F::CanvasBulkDuplicated { count } => C::CanvasBulkDuplicated { count },
-            F::CanvasMarkToggled {
-                marked,
-                title,
-                count,
-            } => C::CanvasMarkToggled {
-                marked,
-                title,
-                count,
-            },
-            F::CanvasMarksCleared { count } => C::CanvasMarksCleared { count },
-            F::CanvasFilterCount { matched } => C::CanvasFilterCount { matched },
-            F::CanvasFilterCleared { total } => C::CanvasFilterCleared { total },
-            F::CanvasZoom { context, percent } => C::CanvasZoom {
-                context: context.map(Into::into),
-                percent,
-            },
-            F::CanvasFollowSelectionToggled { following } => {
-                C::CanvasFollowSelectionToggled { following }
-            }
-            F::CanvasSurfaceShown { surface } => C::CanvasSurfaceShown {
-                surface: surface.into(),
-            },
-            F::CanvasHistoryApplied { verb, name } => C::CanvasHistoryApplied {
-                verb: verb.into(),
-                name,
-            },
-            F::CanvasUndoMenuTitle { verb, name } => C::CanvasUndoMenuTitle {
-                verb: verb.into(),
-                name,
-            },
-            F::CanvasStatus { note } => C::CanvasStatus { note: note.into() },
-            F::CanvasBlocked { reason } => C::CanvasBlocked {
-                reason: reason.into(),
-            },
-            F::CanvasActionFailed { action, detail } => C::CanvasActionFailed {
-                action: action.into(),
-                detail,
-            },
-            F::CanvasSaveConflict => C::CanvasSaveConflict,
-            F::CanvasFileNotFound { target } => C::CanvasFileNotFound { target },
-            F::CanvasOpened { title, target } => C::CanvasOpened {
-                title,
-                target: target.into(),
-            },
-            F::CanvasMutationRefused { reason } => C::CanvasMutationRefused {
-                reason: reason.into(),
-            },
-            F::CanvasLoadedDegraded { skipped } => C::CanvasLoadedDegraded { skipped },
-            F::CanvasEmptyOnboarding {
-                new_card_chord,
-                palette_chord,
-            } => C::CanvasEmptyOnboarding {
-                new_card_chord,
-                palette_chord,
-            },
-            F::CanvasWhereAmI {
-                kind_label,
-                title,
-                group_path,
-                ordinal_n,
-                total_m,
-                connection_count,
-                in_count,
-                out_count,
-                color_name,
-                marked,
-                mode,
-                filter,
-            } => C::CanvasWhereAmI {
-                kind_label,
-                title,
-                group_path,
-                ordinal_n,
-                total_m,
-                connection_count,
-                in_count,
-                out_count,
-                color_name,
-                marked,
-                mode: mode.map(Into::into),
-                filter: filter.into(),
+            F::Canvas { event } => C::Canvas {
+                event: event.into(),
             },
             F::HostComposed { text, priority } => C::HostComposed {
                 text,
@@ -10583,6 +10605,34 @@ mod tests {
     /// forgetting the list entirely.
     #[test]
     fn the_mac_corpus_mirror_lists_every_event_in_order() {
+        /// The leading identifier of a Rust `Debug` rendering.
+        fn debug_head(debug: &str) -> String {
+            debug
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric())
+                .collect()
+        }
+
+        /// uniffi lower-camelises Swift case names; every name in this
+        /// vocabulary is CamelCase, so lowering the first character is
+        /// the same transform.
+        fn lower_first(name: &str) -> String {
+            let mut chars = name.chars();
+            match chars.next() {
+                Some(first) => first.to_ascii_lowercase().to_string() + chars.as_str(),
+                None => String::new(),
+            }
+        }
+
+        /// The leading Swift case name of `.someCase(…)`, already
+        /// stripped of its dot.
+        fn swift_case(rest: &str) -> String {
+            rest.split(|c: char| !c.is_ascii_alphanumeric())
+                .next()
+                .unwrap_or_default()
+                .to_string()
+        }
+
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let swift = std::fs::read_to_string(
             manifest.join("../../apps/slate-mac/Tests/SlateMacTests/A11yCorpusCensusTests.swift"),
@@ -10605,16 +10655,20 @@ mod tests {
             .0;
 
         // Every `.someCase` at the head of a list element, in order.
+        // A nested family (`.canvas(event: .canvasMovedTo(…))`) reports
+        // `canvas/canvasMovedTo`: without the inner case the wrapper
+        // would flatten 165 distinct entries into one indistinguishable
+        // name and the order check would stop meaning anything.
         let listed: Vec<String> = body
             .lines()
             .map(str::trim)
             .filter(|line| line.starts_with('.'))
             .map(|line| {
-                line.trim_start_matches('.')
-                    .split(|c: char| !c.is_ascii_alphanumeric())
-                    .next()
-                    .unwrap_or_default()
-                    .to_string()
+                let head = swift_case(line.trim_start_matches('.'));
+                match line.split_once("event: .") {
+                    Some((_, rest)) => format!("{head}/{}", swift_case(rest)),
+                    None => head,
+                }
             })
             .filter(|name| !name.is_empty())
             .collect();
@@ -10625,13 +10679,9 @@ mod tests {
             .iter()
             .map(|event| {
                 let debug = format!("{event:?}");
-                let head: String = debug
-                    .chars()
-                    .take_while(|c| c.is_ascii_alphanumeric())
-                    .collect();
-                let mut chars = head.chars();
-                match chars.next() {
-                    Some(first) => first.to_ascii_lowercase().to_string() + chars.as_str(),
+                let head = lower_first(&debug_head(&debug));
+                match debug.split_once("event: ") {
+                    Some((_, rest)) => format!("{head}/{}", lower_first(&debug_head(rest))),
                     None => head,
                 }
             })
@@ -10680,26 +10730,41 @@ mod tests {
             .1;
         let body = body.split_once("\n    ];").expect("corpus terminator").0;
 
+        fn head(text: &str) -> String {
+            text.chars()
+                .take_while(|c| c.is_ascii_alphanumeric())
+                .collect()
+        }
+
         // `new A11yEvent.X(` heads, in order. An `A11yEvent` never
         // nests inside another, so scanning the whole slice is safe
-        // under any line wrapping the formatter chooses.
+        // under any line wrapping the formatter chooses. A nested
+        // family reports `Canvas/CanvasMovedTo`: without the inner
+        // variant the wrapper would flatten 165 distinct entries into
+        // one name and the order check would stop meaning anything.
         let listed: Vec<String> = body
             .match_indices("new A11yEvent.")
             .map(|(at, marker)| {
-                body[at + marker.len()..]
-                    .chars()
-                    .take_while(|c| c.is_ascii_alphanumeric())
-                    .collect()
+                let rest = &body[at + marker.len()..];
+                let outer = head(rest);
+                match rest.split_once("new CanvasA11yEvent.") {
+                    Some((before, inner)) if !before.contains("new A11yEvent.") => {
+                        format!("{outer}/{}", head(inner))
+                    }
+                    _ => outer,
+                }
             })
             .collect();
 
         let expected: Vec<String> = core::a11y::corpus()
             .iter()
             .map(|event| {
-                format!("{event:?}")
-                    .chars()
-                    .take_while(|c| c.is_ascii_alphanumeric())
-                    .collect()
+                let debug = format!("{event:?}");
+                let outer = head(&debug);
+                match debug.split_once("event: ") {
+                    Some((_, inner)) => format!("{outer}/{}", head(inner)),
+                    None => outer,
+                }
             })
             .collect();
 
@@ -10732,10 +10797,11 @@ mod tests {
     /// and #969 has five more families to convert.
     #[test]
     fn the_ffi_mirror_covers_every_core_a11y_variant() {
-        fn enum_body(source: &str) -> String {
+        fn enum_body_of(source: &str, enum_name: &str) -> String {
+            let needle = format!("pub enum {enum_name} {{");
             let decl = source
-                .find("pub enum A11yEvent {")
-                .expect("A11yEvent declaration");
+                .find(&needle)
+                .unwrap_or_else(|| panic!("{enum_name} declaration"));
             let open = decl + source[decl..].find('{').expect("opening brace");
             let mut depth = 0usize;
             for (offset, ch) in source[open..].char_indices() {
@@ -10750,11 +10816,11 @@ mod tests {
                     _ => {}
                 }
             }
-            panic!("unterminated A11yEvent declaration");
+            panic!("unterminated {enum_name} declaration");
         }
 
-        fn variant_names(source: &str) -> std::collections::BTreeSet<String> {
-            let body = enum_body(source);
+        fn variant_names_of(source: &str, enum_name: &str) -> std::collections::BTreeSet<String> {
+            let body = enum_body_of(source, enum_name);
             let mut names = std::collections::BTreeSet::new();
             let mut depth = 0usize;
             for line in body.lines() {
@@ -10783,20 +10849,27 @@ mod tests {
         let core_source = std::fs::read_to_string(manifest.join("../slate-core/src/a11y.rs"))
             .expect("core a11y source");
 
-        let mirror_variants = variant_names(&mirror);
-        let core_variants = variant_names(&core_source);
-        assert!(
-            core_variants.len() > 100,
-            "parsed only {} core variants — the parser broke, not the mirror",
-            core_variants.len()
-        );
+        // Both the top-level vocabulary AND every nested family enum:
+        // a family that lives one level down (W6-1 0a's
+        // `Canvas { event: CanvasA11yEvent }`) is exactly as invisible
+        // to a host if the mirror misses one of its variants.
+        for enum_name in ["A11yEvent", "CanvasA11yEvent"] {
+            let mirror_variants = variant_names_of(&mirror, enum_name);
+            let core_variants = variant_names_of(&core_source, enum_name);
+            assert!(
+                core_variants.len() > 40,
+                "parsed only {} core {enum_name} variants — the parser broke, \
+                 not the mirror",
+                core_variants.len()
+            );
 
-        let missing: Vec<&String> = core_variants.difference(&mirror_variants).collect();
-        assert!(
-            missing.is_empty(),
-            "these core A11yEvent variants are missing from the FFI mirror, so no \
-             host can name them: {missing:?}"
-        );
+            let missing: Vec<&String> = core_variants.difference(&mirror_variants).collect();
+            assert!(
+                missing.is_empty(),
+                "these core {enum_name} variants are missing from the FFI mirror, \
+                 so no host can name them: {missing:?}"
+            );
+        }
     }
 
     #[test]

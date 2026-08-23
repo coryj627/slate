@@ -114,15 +114,15 @@ impl ReadingNavTarget {
 // bursts (t0 §1.5; mac `CanvasAnnouncer.EventClass`, 200 ms
 // latest-wins, each class independent):
 //
-// - **`navigation`** — [`A11yEvent::CanvasMovedTo`],
-//   [`A11yEvent::CanvasGroupEntered`], [`A11yEvent::CanvasGroupLeft`],
-//   [`A11yEvent::CanvasConnectionTraversed`],
-//   [`A11yEvent::CanvasMoveRelative`],
-//   [`A11yEvent::CanvasResizeGeometry`].
-// - **`filter`** — [`A11yEvent::CanvasFilterCount`],
-//   [`A11yEvent::CanvasFilterCleared`].
+// - **`navigation`** — [`CanvasA11yEvent::CanvasMovedTo`],
+//   [`CanvasA11yEvent::CanvasGroupEntered`], [`CanvasA11yEvent::CanvasGroupLeft`],
+//   [`CanvasA11yEvent::CanvasConnectionTraversed`],
+//   [`CanvasA11yEvent::CanvasMoveRelative`],
+//   [`CanvasA11yEvent::CanvasResizeGeometry`].
+// - **`filter`** — [`CanvasA11yEvent::CanvasFilterCount`],
+//   [`CanvasA11yEvent::CanvasFilterCleared`].
 // - Everything else posts immediately, uncoalesced.
-// - A canvas event whose [`A11yEvent::priority`] is
+// - A canvas event whose [`CanvasA11yEvent::priority`] is
 //   [`A11yPriority::High`] FLUSHES both pending classes and DROPS
 //   them (never posts them): the error supersedes, and navigation
 //   context is re-derivable by moving again.
@@ -1182,6 +1182,30 @@ pub enum A11yEvent {
         template: String,
     },
 
+    /// The whole canvas announcement family (W6-1 0a, #745), nested
+    /// so one engine costs ONE top-level variant. uniffi caps an enum
+    /// at 256 variants and this vocabulary was at 197 before canvas;
+    /// a flat family would have spent a fifth of the remaining budget
+    /// on one surface and left none for the graph announcer (the other
+    /// named residue engine). Nesting per engine is the pattern every
+    /// later family copies.
+    Canvas {
+        event: CanvasA11yEvent,
+    },
+
+    HostComposed {
+        text: String,
+        priority: A11yPriority,
+    },
+}
+
+/// Everything the canvas may say out loud (t0 §1 grammars), reached
+/// through [`A11yEvent::Canvas`]. Its own enum rather than 51 more
+/// top-level variants: see that variant's note for why, and the
+/// section comment above for the closed parameter sets and the
+/// coalescing class keys.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CanvasA11yEvent {
     // --- Canvas: selection and navigation (W6-1 0a, #745; t0 §1.2) ---
     /// Selection landed on a card. The one event whose template is a
     /// verbosity MATRIX (t0 §1.2): terse speaks the bare title for
@@ -1496,11 +1520,6 @@ pub enum A11yEvent {
         mode: Option<CanvasMode>,
         filter: CanvasFilterState,
     },
-
-    HostComposed {
-        text: String,
-        priority: A11yPriority,
-    },
 }
 
 impl A11yEvent {
@@ -1531,18 +1550,9 @@ impl A11yEvent {
             | RestoredVersionFrom { .. }
             | RestoredFile { .. }
             | RestoredFileAs { .. }
-            | TemplateNoteCreated { .. }
-            // Canvas errors and conflicts (t0 §1.5: "navigation =
-            // polite; errors/conflicts = assertive"). This list is
-            // exactly mac's `.error` case — every other canvas event
-            // rode `.status`/`.confirmation`/`.mode`/`.bulk` and is
-            // Medium. Listed explicitly because the `_` arm below
-            // makes a forgotten member silently polite.
-            | CanvasModeRejected { .. }
-            | CanvasBlocked { .. }
-            | CanvasActionFailed { .. }
-            | CanvasSaveConflict
-            | CanvasFileNotFound { .. } => A11yPriority::High,
+            | TemplateNoteCreated { .. } => A11yPriority::High,
+            // The canvas family owns its own tiering (t0 §1.5).
+            Canvas { event } => event.priority(),
             HostComposed { priority, .. } => *priority,
             _ => A11yPriority::Medium,
         }
@@ -2127,6 +2137,36 @@ impl A11yEvent {
                 format!("Created {name} from {template}.")
             }
 
+            Canvas { event } => event.render(),
+
+            HostComposed { text, .. } => text.clone(),
+        }
+    }
+}
+
+impl CanvasA11yEvent {
+    /// The urgency this canvas event is spoken at. Exactly mac's
+    /// `.error` case is `High` (t0 §1.5: "navigation = polite;
+    /// errors/conflicts = assertive"); every other canvas event rode
+    /// `.status`/`.confirmation`/`.mode`/`.bulk` and is `Medium`. The
+    /// members are listed explicitly because the catch-all below makes
+    /// a forgotten one silently polite.
+    pub fn priority(&self) -> A11yPriority {
+        use CanvasA11yEvent::*;
+        match self {
+            CanvasModeRejected { .. }
+            | CanvasBlocked { .. }
+            | CanvasActionFailed { .. }
+            | CanvasSaveConflict
+            | CanvasFileNotFound { .. } => A11yPriority::High,
+            _ => A11yPriority::Medium,
+        }
+    }
+
+    /// The canonical spoken text — the shipped mac strings, verbatim.
+    pub fn render(&self) -> String {
+        use CanvasA11yEvent::*;
+        match self {
             CanvasMovedTo {
                 verbosity,
                 kind_label,
@@ -2638,8 +2678,6 @@ impl A11yEvent {
                 }
                 parts.join(", ")
             }
-
-            HostComposed { text, .. } => text.clone(),
         }
     }
 }
@@ -2754,7 +2792,7 @@ fn mode_object(object: &CanvasModeObject) -> String {
 /// apart.
 pub fn corpus() -> Vec<A11yEvent> {
     use A11yEvent::*;
-    vec![
+    let mut events = vec![
         FilesRegionFocused,
         LeafPanelShown {
             title: "Outline".into(),
@@ -3462,9 +3500,22 @@ pub fn corpus() -> Vec<A11yEvent> {
             text: "Composed by a host engine.".into(),
             priority: A11yPriority::High,
         },
-        // --- Canvas (W6-1 0a, #745). Appended as one block so every
-        // pre-existing index — and therefore both host mirrors — is
-        // untouched by this family.
+    ];
+    // The canvas family (W6-1 0a, #745) is APPENDED as one block, so
+    // every pre-existing index — and therefore both host mirrors —
+    // is untouched by it.
+    events.extend(canvas_corpus().into_iter().map(|event| Canvas { event }));
+    events
+}
+
+/// The canvas half of the corpus, in its own list because the family
+/// is its own enum ([`A11yEvent::Canvas`]). One representative event
+/// per variant, plus one per closed-set ARM whose template differs —
+/// `every_canvas_variant_and_arm_is_represented_in_the_corpus` proves
+/// the coverage.
+fn canvas_corpus() -> Vec<CanvasA11yEvent> {
+    use CanvasA11yEvent::*;
+    vec![
         CanvasMovedTo {
             verbosity: CanvasVerbosity::Terse,
             kind_label: "text".into(),
@@ -3528,9 +3579,7 @@ pub fn corpus() -> Vec<A11yEvent> {
             label: "Solo".into(),
             count: 1,
         },
-        CanvasGroupLeft {
-            label: "Q3".into(),
-        },
+        CanvasGroupLeft { label: "Q3".into() },
         CanvasConnectionTraversed {
             direction: EdgeDirection::Outgoing,
             kind_label: "text".into(),
@@ -3722,12 +3771,8 @@ pub fn corpus() -> Vec<A11yEvent> {
             label: Some("supports".into()),
         },
         CanvasConnectionUpdated { label: None },
-        CanvasMovedIntoGroup {
-            label: "Q3".into(),
-        },
-        CanvasRemovedFromGroup {
-            label: "Q3".into(),
-        },
+        CanvasMovedIntoGroup { label: "Q3".into() },
+        CanvasRemovedFromGroup { label: "Q3".into() },
         CanvasColorSet {
             title: "Research".into(),
             color_name: Some("red".into()),
@@ -3736,9 +3781,7 @@ pub fn corpus() -> Vec<A11yEvent> {
             title: "Research".into(),
             color_name: None,
         },
-        CanvasRenamedGroup {
-            label: "Q3".into(),
-        },
+        CanvasRenamedGroup { label: "Q3".into() },
         CanvasCardUpdated {
             title: "Research".into(),
         },
@@ -3780,9 +3823,7 @@ pub fn corpus() -> Vec<A11yEvent> {
             undo_chord: "⌘Z".into(),
         },
         CanvasDeleted {
-            target: CanvasDeleteTarget::Group {
-                label: "Q3".into(),
-            },
+            target: CanvasDeleteTarget::Group { label: "Q3".into() },
             verbosity: CanvasVerbosity::Standard,
             undo_chord: "⌘Z".into(),
         },
@@ -3965,9 +4006,7 @@ pub fn corpus() -> Vec<A11yEvent> {
             note: CanvasStatusNote::NothingToRedo,
         },
         CanvasStatus {
-            note: CanvasStatusNote::GroupIsEmpty {
-                label: "Q3".into(),
-            },
+            note: CanvasStatusNote::GroupIsEmpty { label: "Q3".into() },
         },
         CanvasStatus {
             note: CanvasStatusNote::NoOutgoingPath {
@@ -4022,9 +4061,7 @@ pub fn corpus() -> Vec<A11yEvent> {
             reason: CanvasBlockedReason::NotePathMustEndInMd,
         },
         CanvasBlocked {
-            reason: CanvasBlockedReason::NoFreeSpaceInGroup {
-                label: "Q3".into(),
-            },
+            reason: CanvasBlockedReason::NoFreeSpaceInGroup { label: "Q3".into() },
         },
         CanvasBlocked {
             reason: CanvasBlockedReason::NotePathExists {
@@ -4893,6 +4930,16 @@ mod tests {
             .collect()
     }
 
+    /// The INNER variant name of a canvas event, or `None` for
+    /// everything else. The family nests under one top-level variant
+    /// (`Canvas { event: … }`), so the head alone says "canvas" and
+    /// nothing more.
+    fn canvas_variant_of(event: &A11yEvent) -> Option<String> {
+        let debug = format!("{event:?}");
+        let at = debug.strip_prefix("Canvas { event: ")?;
+        Some(at.chars().take_while(char::is_ascii_alphanumeric).collect())
+    }
+
     /// The variant names declared by an enum in this file. The corpus
     /// is positional and hand-maintained, so "I added the variant and
     /// forgot the corpus entry" is the mistake that actually happens —
@@ -4945,12 +4992,12 @@ mod tests {
     }
 
     /// The nested-enum arm a corpus entry selected, read out of its
-    /// Debug string (`CanvasStatus { note: NotAGroup }` → `NotAGroup`).
+    /// Debug string (`… CanvasStatus { note: NotAGroup }` → `NotAGroup`).
     fn nested_arms(variant: &str, field: &str) -> std::collections::BTreeSet<String> {
         let prefix = format!("{field}: ");
         corpus()
             .iter()
-            .filter(|event| variant_of(event) == variant)
+            .filter(|event| canvas_variant_of(event).as_deref() == Some(variant))
             .filter_map(|event| {
                 let debug = format!("{event:?}");
                 let at = debug.find(&prefix)? + prefix.len();
@@ -4970,20 +5017,14 @@ mod tests {
     /// not either host census.
     #[test]
     fn every_canvas_variant_and_arm_is_represented_in_the_corpus() {
-        let declared: std::collections::BTreeSet<String> = declared_variants("A11yEvent")
-            .into_iter()
-            .filter(|name| name.starts_with("Canvas"))
-            .collect();
+        let declared = declared_variants("CanvasA11yEvent");
         assert!(
             declared.len() > 40,
             "parsed only {} canvas variants — the parser broke, not the vocabulary",
             declared.len()
         );
-        let represented: std::collections::BTreeSet<String> = corpus()
-            .iter()
-            .map(variant_of)
-            .filter(|name| name.starts_with("Canvas"))
-            .collect();
+        let represented: std::collections::BTreeSet<String> =
+            corpus().iter().filter_map(canvas_variant_of).collect();
         let missing: Vec<&String> = declared.difference(&represented).collect();
         assert!(
             missing.is_empty(),
@@ -5009,13 +5050,39 @@ mod tests {
         }
     }
 
+    /// The family is reached through exactly one top-level variant, and
+    /// no canvas variant leaked back out to the top level (the whole
+    /// point of the nesting — uniffi's 256-variant ceiling).
+    #[test]
+    fn the_canvas_family_occupies_one_top_level_variant() {
+        let top_level: std::collections::BTreeSet<String> = declared_variants("A11yEvent")
+            .into_iter()
+            .filter(|name| name.starts_with("Canvas"))
+            .collect();
+        assert_eq!(
+            top_level,
+            ["Canvas".to_owned()]
+                .into_iter()
+                .collect::<std::collections::BTreeSet<String>>(),
+            "the canvas family must nest under A11yEvent::Canvas"
+        );
+        assert!(
+            corpus()
+                .iter()
+                .filter(|event| variant_of(event) == "Canvas")
+                .count()
+                > 100,
+            "the canvas corpus went missing"
+        );
+    }
+
     /// t0 §1.2 and §1.3: the verbosity matrix, level by level, on the
     /// two families whose TEMPLATE varies — moved-to (the navigation
     /// matrix) and the destructive family (the undo hint at
     /// standard+). Full rendered strings, never substrings.
     #[test]
     fn canvas_verbosity_matrix_pins_every_level() {
-        let moved_to = |verbosity| A11yEvent::CanvasMovedTo {
+        let moved_to = |verbosity| CanvasA11yEvent::CanvasMovedTo {
             verbosity,
             kind_label: "text".into(),
             title: "Research".into(),
@@ -5026,7 +5093,7 @@ mod tests {
             color_name: Some("red".into()),
             marked: true,
         };
-        let deleted = |verbosity, target| A11yEvent::CanvasDeleted {
+        let deleted = |verbosity, target| CanvasA11yEvent::CanvasDeleted {
             target,
             verbosity,
             undo_chord: "⌘Z".into(),
@@ -5043,7 +5110,7 @@ mod tests {
             label: Some("supports".into()),
         };
 
-        let expected: Vec<(A11yEvent, &str)> = vec![
+        let expected: Vec<(CanvasA11yEvent, &str)> = vec![
             (moved_to(CanvasVerbosity::Terse), "Research"),
             (
                 moved_to(CanvasVerbosity::Standard),
@@ -5101,6 +5168,15 @@ mod tests {
         ];
         for (event, text) in &expected {
             assert_eq!(event.render(), *text, "verbosity render for {event:?}");
+            // The wrapper is a pure relay: the same string comes back
+            // through the top-level event a host actually posts.
+            assert_eq!(
+                A11yEvent::Canvas {
+                    event: event.clone()
+                }
+                .render(),
+                *text
+            );
         }
 
         // Everything else is verbosity-INVARIANT, and structurally so:
@@ -5109,7 +5185,7 @@ mod tests {
         let carriers: std::collections::BTreeSet<String> = corpus()
             .iter()
             .filter(|event| format!("{event:?}").contains("verbosity: "))
-            .map(variant_of)
+            .filter_map(canvas_variant_of)
             .collect();
         assert_eq!(
             carriers,
@@ -5125,7 +5201,7 @@ mod tests {
     #[test]
     fn canvas_where_am_i_is_always_verbose_grade() {
         assert_eq!(
-            A11yEvent::CanvasWhereAmI {
+            CanvasA11yEvent::CanvasWhereAmI {
                 kind_label: "text".into(),
                 title: "Research".into(),
                 group_path: vec!["Quarter".into(), "Q3".into()],
@@ -5149,17 +5225,21 @@ mod tests {
         assert!(
             !corpus()
                 .iter()
-                .any(|event| variant_of(event) == "CanvasWhereAmI"
-                    && format!("{event:?}").contains("verbosity")),
+                .any(
+                    |event| canvas_variant_of(event).as_deref() == Some("CanvasWhereAmI")
+                        && format!("{event:?}").contains("verbosity")
+                ),
             "Where-am-I must not take a verbosity"
         );
     }
 
     /// t0 §1.5: "navigation = polite; errors/conflicts = assertive."
-    /// The priority `match` ends in a catch-all `_ => Medium`, so a
-    /// canvas error that is not listed in the explicit arm is silently
-    /// polite. This pins the High membership BY NAME, both ways: the
-    /// five families that carry mac's `.error` case and nothing else.
+    /// `CanvasA11yEvent::priority` ends in a catch-all `_ => Medium`,
+    /// so a canvas error that is not listed is silently polite. This
+    /// pins the High membership BY NAME, both ways: the five families
+    /// that carry mac's `.error` case and nothing else. The assertions
+    /// run through the TOP-LEVEL event, so the wrapper's delegation is
+    /// covered too.
     #[test]
     fn canvas_priorities_pin_the_error_tier() {
         const HIGH: &[&str] = &[
@@ -5170,13 +5250,10 @@ mod tests {
             "CanvasSaveConflict",
         ];
         let mut high_seen = std::collections::BTreeSet::new();
-        let mut canvas_entries = 0usize;
         for event in corpus() {
-            let variant = variant_of(&event);
-            if !variant.starts_with("Canvas") {
+            let Some(variant) = canvas_variant_of(&event) else {
                 continue;
-            }
-            canvas_entries += 1;
+            };
             let listed = HIGH.contains(&variant.as_str());
             match event.priority() {
                 A11yPriority::High => {
@@ -5193,7 +5270,6 @@ mod tests {
                 ),
             }
         }
-        assert!(canvas_entries > 100, "the canvas corpus went missing");
         let expected: std::collections::BTreeSet<String> =
             HIGH.iter().map(|name| (*name).to_owned()).collect();
         assert_eq!(
