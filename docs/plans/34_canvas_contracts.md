@@ -254,16 +254,18 @@ one.
    no bare plural-noun literal may sit outside a
    `plural` / `plural_len` / `counted` call.
 
-**What is checked, and what follows.** Agreement is CHECKED at the
-boundaries — one, the empty collection, and zero where a host reaches
-it. Correctness at every other `n` is not witnessed one value at a time;
-it **follows structurally**, because part 4 forces every count
-interpolation through the shared helpers and those have a single
-definition of the singular/plural rule. That is the whole argument: the
-boundary is where a hardcoded plural shows itself, and the helper is why
-the rest cannot diverge. Parts 2–3 are retroactive — they catch a
-regression in an arm that HAS a witness — while part 4 catches the new
-arm that has none.
+**What is checked, and how far it reaches.** Agreement is CHECKED at
+the boundaries — one, the empty collection, and zero where a host
+reaches it. Values in between are not witnessed one at a time. What
+stands in for witnessing them is part 4, which routes count
+interpolations through the shared helpers **to the limit of
+line-scoped lexical verification** — it reads one logical line at a
+time and its helper provenance is line-wide (see the residual list
+below), so it is a check, not a proof. The noun-bound proof — this
+literal is that call's argument, therefore this count agrees at every
+`n` — needs the parser PR 0b builds. Parts 2–3 are retroactive: they
+catch a regression in an arm that HAS a witness, while part 4 catches
+the new arm that has none.
 
 **The list of count-speaking arms lives in that test**, not here. This
 paragraph deliberately states no counts: three consecutive adversarial

@@ -5345,10 +5345,12 @@ mod tests {
     /// family without its author declaring whether it speaks a count.
     /// That is the property three rounds of hand-maintained,
     /// hand-counted prose could not hold (contract 0a-14; round record,
-    /// rule 4). `..` is used only to elide plain data — `String`, `u32`,
-    /// `bool`, and the two `core::canvas` types (`RelativeDesc`,
-    /// `EdgeDirection`), which name anchors and directions and cannot
-    /// carry a count.
+    /// rule 4). **Nothing enum-valued is wildcarded, with no
+    /// exception**: `..` elides plain data only — `String`, `u32`,
+    /// `bool`, `Vec<String>`. The three `core::canvas` sets this
+    /// vocabulary reuses (`RelativeDesc`, `EdgeDirection`,
+    /// `CanvasColor`) cannot carry a count either, but they are matched
+    /// through the helpers below rather than trusted.
     ///
     /// "Speaks" means THIS value renders the count, not that the
     /// variant sometimes can. `CanvasMovedTo` is the only arm whose
@@ -5364,6 +5366,37 @@ mod tests {
         /// A collection LENGTH reaches the template, so the arm has an
         /// empty case as well as a singular one.
         Length(usize),
+    }
+
+    /// The three `core::canvas` sets this vocabulary reuses. They name
+    /// anchors, directions and colours, so none of them can carry a
+    /// count — but they are ENUMS, so they are MATCHED rather than
+    /// elided, and an arm added to any of them fails to compile here.
+    /// That is what lets the record say "nothing enum-valued is
+    /// wildcarded", with no exception to remember.
+    fn relative_speaks_no_count(relative: &RelativeDesc) {
+        match relative {
+            RelativeDesc::Below(_)
+            | RelativeDesc::RightOf(_)
+            | RelativeDesc::Above(_)
+            | RelativeDesc::LeftOf(_)
+            | RelativeDesc::AtOrigin => {}
+        }
+    }
+
+    fn direction_speaks_no_count(direction: &EdgeDirection) {
+        match direction {
+            EdgeDirection::Outgoing
+            | EdgeDirection::Incoming
+            | EdgeDirection::Bidirectional
+            | EdgeDirection::Undirected => {}
+        }
+    }
+
+    fn color_speaks_no_count(color: &Option<CanvasColor>) {
+        match color {
+            Some(CanvasColor::Preset(_)) | Some(CanvasColor::Hex(_)) | None => {}
+        }
     }
 
     fn spoken_cardinality(event: &CanvasA11yEvent) -> Option<SpokenCardinality> {
@@ -5445,17 +5478,25 @@ mod tests {
                 }
                 match target {
                     CanvasDeleteTarget::Cards { count } => Some(Count(*count)),
-                    CanvasDeleteTarget::Card { .. }
-                    | CanvasDeleteTarget::Group { .. }
-                    | CanvasDeleteTarget::Connection { .. } => None,
+                    CanvasDeleteTarget::Connection { direction, .. } => {
+                        direction_speaks_no_count(direction);
+                        None
+                    }
+                    CanvasDeleteTarget::Card { .. } | CanvasDeleteTarget::Group { .. } => None,
                 }
             }
-            CanvasBulkMoved { count, .. }
-            | CanvasGrouped { count, .. }
+            CanvasBulkMoved { count, relative } => {
+                relative_speaks_no_count(relative);
+                Some(Count(*count))
+            }
+            CanvasBulkColorSet { count, color } => {
+                color_speaks_no_count(color);
+                Some(Count(*count))
+            }
+            CanvasGrouped { count, .. }
             | CanvasBulkDuplicated { count }
             | CanvasMarkToggled { count, .. }
             | CanvasMarksCleared { count } => Some(Count(*count)),
-            CanvasBulkColorSet { count, .. } => Some(Count(*count)),
             CanvasFilterCount { matched } => Some(Count(*matched)),
             CanvasFilterCleared { total } => Some(Count(*total)),
             CanvasLoadedDegraded { skipped } => Some(Count(*skipped)),
@@ -5464,9 +5505,25 @@ mod tests {
             // Each closed parameter set is still matched arm by arm, so
             // a count added to any of them lands here as a compile
             // error rather than as an unpinned string.
-            CanvasMoveRelative { overlap, .. } | CanvasResizeGeometry { overlap, .. } => {
-                // `CanvasMoveRelative` carries a `Vec` but never says
-                // how long it is — it joins the descriptions.
+            CanvasMoveRelative { descs, overlap } => {
+                // Carries a `Vec` but never says how long it is — it
+                // joins the descriptions — so this is a Length-free
+                // arm. Its elements are still matched.
+                descs.iter().for_each(relative_speaks_no_count);
+                match overlap {
+                    Some(CanvasOverlapTransition::Onset)
+                    | Some(CanvasOverlapTransition::Cleared)
+                    | None => None,
+                }
+            }
+            CanvasResizeGeometry {
+                preset, overlap, ..
+            } => {
+                match preset {
+                    Some(CanvasResizePreset::DefaultSize)
+                    | Some(CanvasResizePreset::FitToContent)
+                    | None => {}
+                }
                 match overlap {
                     Some(CanvasOverlapTransition::Onset)
                     | Some(CanvasOverlapTransition::Cleared)
@@ -5479,9 +5536,25 @@ mod tests {
             CanvasModeEndedWithoutEffect { mode } => match mode {
                 CanvasMode::Move | CanvasMode::Resize | CanvasMode::Connect => None,
             },
-            CanvasCardPlaced { verb, .. } => match verb {
-                CanvasPlaceVerb::Moved | CanvasPlaceVerb::Duplicated => None,
-            },
+            CanvasCardPlaced { verb, relative, .. } => {
+                match verb {
+                    CanvasPlaceVerb::Moved | CanvasPlaceVerb::Duplicated => {}
+                }
+                relative_speaks_no_count(relative);
+                None
+            }
+            CanvasCreated { relative, .. } | CanvasConnectedCardCreated { relative, .. } => {
+                relative_speaks_no_count(relative);
+                None
+            }
+            CanvasConnectionTraversed { direction, .. } => {
+                direction_speaks_no_count(direction);
+                None
+            }
+            CanvasColorSet { color, .. } => {
+                color_speaks_no_count(color);
+                None
+            }
             CanvasOpened { target, .. } => match target {
                 CanvasOpenTarget::DefaultApp | CanvasOpenTarget::Browser => None,
             },
@@ -5568,16 +5641,12 @@ mod tests {
 
             // No closed parameter set at all — plain data only.
             CanvasGroupLeft { .. }
-            | CanvasConnectionTraversed { .. }
             | CanvasResizeClamped
-            | CanvasCreated { .. }
             | CanvasFileCreated { .. }
-            | CanvasConnectedCardCreated { .. }
             | CanvasConnected { .. }
             | CanvasConnectionUpdated { .. }
             | CanvasMovedIntoGroup { .. }
             | CanvasRemovedFromGroup { .. }
-            | CanvasColorSet { .. }
             | CanvasRenamedGroup { .. }
             | CanvasCardUpdated { .. }
             | CanvasCardRetargeted { .. }
@@ -5614,13 +5683,16 @@ mod tests {
     /// plural noun, and no bare plural-noun literal may sit outside a
     /// `plural` / `plural_len` / `counted` call.
     ///
-    /// Between them these pin the boundary, not the whole domain:
-    /// agreement is CHECKED at one (and at empty/zero where reachable),
-    /// and correctness at every other n follows structurally, because
-    /// (d) forces every count interpolation through the shared helpers
-    /// and those have one definition of the rule. (d) is lexical, not a
-    /// parser — its residual evasion and false-positive classes are
-    /// named in contract 0a-14, and PR 0b's parser closes them.
+    /// Between them these pin the BOUNDARY, not the whole domain:
+    /// agreement is checked at one (and at empty/zero where reachable),
+    /// and (d) routes count interpolations through the shared helpers
+    /// to the limit of line-scoped lexical verification. That is a
+    /// check, not a proof — (d) reads one logical line at a time and
+    /// its helper provenance is line-wide, so a line carrying a real
+    /// `plural(` call clears every plural literal on it. The noun-bound
+    /// proof needs a parser; its residual evasion and false-positive
+    /// classes are named in contract 0a-14, and PR 0b's parser closes
+    /// them.
     #[test]
     fn canvas_count_speaking_arms_have_boundary_witnesses_and_agreement() {
         // (a) --------------------------------------------------------
