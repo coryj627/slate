@@ -1742,9 +1742,10 @@ every deleted symbol was re-grepped to zero afterwards.
   level" for a card that is not on the canvas would be a new sentence);
   trace-path still names its start card from the outline row, so the
   `No outgoing path from "X".` string is composed where it always was.
-- **Structural navigation on a handle-less snapshot goes SILENT — in
-  ONE window, not the three the first draft of this note named.** That
-  draft said "a canvas moved to Trash, or one whose retarget failed",
+- **Structural navigation on a handle-less snapshot went silent, in ONE
+  window — not the three the first draft of this note named — and now
+  answers (VA-1).** That draft said "a canvas moved to Trash, or one
+  whose retarget failed",
   and both are wrong: `activeCanvasDocument` gates on `case .ready`, so
   a degraded load, a trashed canvas and a failed retarget are
   unreachable by EVERY navigator verb, before and after this migration.
