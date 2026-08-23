@@ -504,13 +504,26 @@ extension AppState {
         canvasCardPicker = CanvasCardPickerRequest(purpose: purpose)
     }
 
+    /// Project a set of ids onto the canvas reading order — core's
+    /// `canvas_order_nodes` (§W-G row F, contract 0b-10). Unknown ids
+    /// drop silently (a mark left over from an external write is not
+    /// fatal), duplicates collapse to one reading-order position, and
+    /// an empty input gives an empty output. Without a live handle
+    /// there is no reading order to project onto, and every caller is
+    /// behind `admitCanvasMutation`, which refuses in exactly that
+    /// case.
+    func canvasInReadingOrder(_ ids: [String], in doc: CanvasDocument) -> [String] {
+        guard let session = currentSession, let handle = doc.handle else { return [] }
+        return (try? session.canvasOrderNodes(handle: handle, ids: ids)) ?? []
+    }
+
     /// The ids that move for a structural placement: the marked set
     /// when marks exist (rigid unit, #524 semantics), else the
-    /// selected card.
+    /// selected card. The selection fallback is host state (§2 row F
+    /// is Tier 3 there); only the projection is core's.
     func canvasMovingSet(in doc: CanvasDocument) -> [String] {
         if !doc.selection.marked.isEmpty {
-            // Reading order keeps the op list deterministic.
-            return doc.outline.map(\.nodeId).filter { doc.selection.marked.contains($0) }
+            return canvasInReadingOrder(Array(doc.selection.marked), in: doc)
         }
         return doc.selection.selected.map { [$0] } ?? []
     }
@@ -740,9 +753,11 @@ extension AppState {
         presentCanvasPrompt(.marksList)
     }
 
-    /// Marked ids in reading order (deterministic everywhere).
+    /// Marked ids in reading order (deterministic everywhere) — the
+    /// same core projection `canvasMovingSet` uses, so the two cannot
+    /// disagree about what "in order" means.
     func canvasMarkedInOrder(_ doc: CanvasDocument) -> [String] {
-        doc.outline.map(\.nodeId).filter { doc.selection.marked.contains($0) }
+        canvasInReadingOrder(Array(doc.selection.marked), in: doc)
     }
 
     /// Bulk delete: one action, one undo, one summary.
