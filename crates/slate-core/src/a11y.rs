@@ -41,6 +41,7 @@
 //! identically on both platforms (`Return`, `Escape`) stay literal in
 //! the template — they are not chords.
 
+use crate::canvas::CanvasColor;
 use crate::canvas::model::EdgeDirection;
 use crate::canvas::placement::RelativeDesc;
 
@@ -1213,6 +1214,14 @@ pub enum CanvasA11yEvent {
     /// n-of-m fix, verbose adds connections, colour, and the mark.
     /// `container` is the innermost group label; `None` speaks the
     /// literal lowercase word `canvas`.
+    ///
+    /// `color_name` stays a `String` — unlike
+    /// [`CanvasA11yEvent::CanvasColorSet`]'s typed `CanvasColor` —
+    /// because it is core's OWN `canvas::color_name` output arriving
+    /// back through `CanvasOutlineRow.color_name`: the host relays it,
+    /// it never derives it. Typing it here would force a host to parse
+    /// a spoken name back into a colour, which is the re-derivation the
+    /// typed payload exists to prevent (contracts doc 0a-11).
     CanvasMovedTo {
         verbosity: CanvasVerbosity,
         kind_label: String,
@@ -1248,6 +1257,12 @@ pub enum CanvasA11yEvent {
     /// The whole traced chain in ONE utterance — mac deliberately does
     /// not narrate hop by hop, and the visited count is the tail of
     /// the same sentence, so a separate end event would double-speak.
+    ///
+    /// `titles` is the ONLY payload on purpose: the tail count is
+    /// `titles.len()`, so the list and the number it claims can never
+    /// disagree. Mac spoke `visited.count` while listing the titles it
+    /// could resolve to outline rows — two numbers from one walk
+    /// (contracts doc CD-13).
     CanvasTracePathEnd {
         titles: Vec<String>,
     },
@@ -1337,11 +1352,15 @@ pub enum CanvasA11yEvent {
     CanvasRemovedFromGroup {
         label: String,
     },
-    /// `color_name` is core's own `canvas::color_name` output;
-    /// `None` speaks the literal `no color` (the clear-colour arm).
+    /// The host hands over the colour it just SET — core's own
+    /// [`CanvasColor`], not a name it phrased itself — and
+    /// [`canvas::color_name`] does the phrasing here. `None` speaks
+    /// the literal `no color` (the clear-colour arm). Typing the
+    /// payload is what deletes mac's preset dictionaries: a host
+    /// cannot spell `"red"` at this seam even by accident.
     CanvasColorSet {
         title: String,
-        color_name: Option<String>,
+        color: Option<CanvasColor>,
     },
     CanvasRenamedGroup {
         label: String,
@@ -1389,9 +1408,11 @@ pub enum CanvasA11yEvent {
         count: u32,
         relative: RelativeDesc,
     },
+    /// Typed like [`CanvasA11yEvent::CanvasColorSet`] — the bulk verb
+    /// hands over the same `CanvasColor` it wrote.
     CanvasBulkColorSet {
         count: u32,
-        color_name: Option<String>,
+        color: Option<CanvasColor>,
     },
     CanvasGrouped {
         count: u32,
@@ -1505,7 +1526,9 @@ pub enum CanvasA11yEvent {
     },
     /// t0 §1.4: the pull-based readback, ALWAYS verbose-grade
     /// regardless of the verbosity setting — which is why it takes no
-    /// `verbosity` parameter.
+    /// `verbosity` parameter. `color_name` is a relayed `String` for
+    /// the same reason as [`CanvasA11yEvent::CanvasMovedTo`]'s: it
+    /// arrives from `CanvasWhereAmI.color_name`, already core's.
     CanvasWhereAmI {
         kind_label: String,
         title: String,
@@ -2336,10 +2359,9 @@ impl CanvasA11yEvent {
             },
             CanvasMovedIntoGroup { label } => format!("Moved into group \"{label}\"."),
             CanvasRemovedFromGroup { label } => format!("Removed from group \"{label}\"."),
-            CanvasColorSet { title, color_name } => format!(
-                "Set \"{title}\" to {}.",
-                color_name.as_deref().unwrap_or("no color")
-            ),
+            CanvasColorSet { title, color } => {
+                format!("Set \"{title}\" to {}.", spoken_color(color))
+            }
             CanvasRenamedGroup { label } => format!("Renamed group to \"{label}\"."),
             CanvasCardUpdated { title } => format!("Updated \"{title}\"."),
             CanvasCardRetargeted { title, path } => {
@@ -2412,10 +2434,10 @@ impl CanvasA11yEvent {
             CanvasBulkMoved { count, relative } => {
                 format!("Moved {count} cards {}.", relative_phrase(relative))
             }
-            CanvasBulkColorSet { count, color_name } => format!(
+            CanvasBulkColorSet { count, color } => format!(
                 "Set {} to {}.",
                 counted(*count, "card", "cards"),
-                color_name.as_deref().unwrap_or("no color")
+                spoken_color(color)
             ),
             CanvasGrouped { count, label } => format!(
                 "Grouped {} into \"{label}\".",
@@ -2682,9 +2704,6 @@ impl CanvasA11yEvent {
     }
 }
 
-/// en-US count noun (this vocabulary is V1 English; #264 owns l10n).
-/// Delegates so the singular-at-exactly-one rule has one definition;
-/// the count is interpolated by the caller and stays ungrouped here.
 /// True when `haystack` already speaks `field` as a COMPLETE row
 /// field — case-folded, bounded on each side by the start/end of the
 /// description or a field separator (`.`/`,`/`;`, one optional space
@@ -2707,8 +2726,22 @@ fn contains_field(haystack: &str, field: &str) -> bool {
     })
 }
 
+/// en-US count noun (this vocabulary is V1 English; #264 owns l10n).
+/// Delegates so the singular-at-exactly-one rule has one definition;
+/// the count is interpolated by the caller and stays ungrouped here.
 fn plural<'a>(count: u32, one: &'a str, many: &'a str) -> &'a str {
     crate::sidebar_filter::noun(count as u64, one, many)
+}
+
+/// The spoken name of a colour a host just wrote, or the literal
+/// `no color` for the clear-colour arm. One line, but it is the whole
+/// point of the typed `Option<CanvasColor>` payload: the preset table
+/// lives in [`canvas::color_name`] and nowhere else, on either host.
+fn spoken_color(color: &Option<CanvasColor>) -> String {
+    match color {
+        Some(color) => crate::canvas::color_name(color),
+        None => "no color".to_owned(),
+    }
 }
 
 /// A grouped count plus its noun (`"3 cards"`, `"1,024 cards"`). The
@@ -3775,11 +3808,11 @@ fn canvas_corpus() -> Vec<CanvasA11yEvent> {
         CanvasRemovedFromGroup { label: "Q3".into() },
         CanvasColorSet {
             title: "Research".into(),
-            color_name: Some("red".into()),
+            color: Some(CanvasColor::Preset(1)),
         },
         CanvasColorSet {
             title: "Research".into(),
-            color_name: None,
+            color: None,
         },
         CanvasRenamedGroup { label: "Q3".into() },
         CanvasCardUpdated {
@@ -3873,11 +3906,11 @@ fn canvas_corpus() -> Vec<CanvasA11yEvent> {
         },
         CanvasBulkColorSet {
             count: 3,
-            color_name: Some("cyan".into()),
+            color: Some(CanvasColor::Preset(5)),
         },
         CanvasBulkColorSet {
             count: 1,
-            color_name: None,
+            color: None,
         },
         CanvasGrouped {
             count: 3,
@@ -4973,16 +5006,25 @@ mod tests {
         for line in source[open + 1..end].lines() {
             let trimmed = line.trim();
             if depth == 0 && !trimmed.starts_with("//") && !trimmed.starts_with('#') {
-                let name = trimmed
-                    .trim_end_matches(',')
-                    .trim_end_matches('{')
-                    .trim_end_matches('(')
-                    .trim();
+                // The leading identifier of a variant line. Taking the
+                // HEAD rather than the whole trimmed line is what makes
+                // the single-line payload form (`Card { title: String },`
+                // — how the small parameter enums are written) parse the
+                // same as the multi-line one.
+                let name: String = trimmed
+                    .chars()
+                    .take_while(char::is_ascii_alphanumeric)
+                    .collect();
+                let tail = trimmed[name.len()..].trim_start();
+                let delimited = tail.is_empty()
+                    || tail.starts_with(',')
+                    || tail.starts_with('{')
+                    || tail.starts_with('(');
                 if !name.is_empty()
                     && name.starts_with(|c: char| c.is_ascii_uppercase())
-                    && name.chars().all(|c| c.is_ascii_alphanumeric())
+                    && delimited
                 {
-                    names.insert(name.to_string());
+                    names.insert(name);
                 }
             }
             depth += trimmed.matches('{').count();
@@ -4993,23 +5035,103 @@ mod tests {
 
     /// The nested-enum arm a corpus entry selected, read out of its
     /// Debug string (`… CanvasStatus { note: NotAGroup }` → `NotAGroup`).
-    fn nested_arms(variant: &str, field: &str) -> std::collections::BTreeSet<String> {
-        let prefix = format!("{field}: ");
-        corpus()
-            .iter()
-            .filter(|event| canvas_variant_of(event).as_deref() == Some(variant))
-            .filter_map(|event| {
+    /// `Option`-carried parameters unwrap through `Some(`; a `None`
+    /// contributes nothing, because "absent" is not an arm.
+    ///
+    /// Scoped by (variant, field) rather than by field alone: three
+    /// different enums ride a field called `verb`, two ride `reason`,
+    /// and two ride `target`, so field-only scoping would let one
+    /// enum's coverage vouch for another's.
+    fn nested_arms(sites: &[(&str, &str)]) -> std::collections::BTreeSet<String> {
+        let mut arms = std::collections::BTreeSet::new();
+        for (variant, field) in sites {
+            let prefix = format!("{field}: ");
+            for event in corpus()
+                .iter()
+                .filter(|event| canvas_variant_of(event).as_deref() == Some(*variant))
+            {
                 let debug = format!("{event:?}");
-                let at = debug.find(&prefix)? + prefix.len();
-                Some(
-                    debug[at..]
-                        .chars()
-                        .take_while(char::is_ascii_alphanumeric)
-                        .collect::<String>(),
-                )
-            })
-            .collect()
+                let Some(at) = debug.find(&prefix) else {
+                    continue;
+                };
+                let rest = &debug[at + prefix.len()..];
+                let rest = rest.strip_prefix("Some(").unwrap_or(rest);
+                let arm: String = rest
+                    .chars()
+                    .take_while(char::is_ascii_alphanumeric)
+                    .collect();
+                if !arm.is_empty() && arm != "None" {
+                    arms.insert(arm);
+                }
+            }
+        }
+        arms
     }
+
+    /// Every closed nested enum the canvas family carries as a
+    /// parameter, with the (variant, field) sites it is reached
+    /// through. Eighteen of them — the whole set, not a sample: an arm
+    /// added to ANY of these without a corpus entry ships a string no
+    /// golden, no artifact entry and no host census covers.
+    const CANVAS_NESTED_ENUMS: &[(&str, &[(&str, &str)])] = &[
+        (
+            "CanvasVerbosity",
+            &[
+                ("CanvasMovedTo", "verbosity"),
+                ("CanvasDeleted", "verbosity"),
+            ],
+        ),
+        (
+            "CanvasOverlapTransition",
+            &[
+                ("CanvasMoveRelative", "overlap"),
+                ("CanvasResizeGeometry", "overlap"),
+            ],
+        ),
+        (
+            "CanvasMode",
+            &[
+                ("CanvasModeEntered", "mode"),
+                ("CanvasModeRejected", "active_mode"),
+                ("CanvasModeEndedWithoutEffect", "mode"),
+                ("CanvasModeCancelled", "mode"),
+                ("CanvasWhereAmI", "mode"),
+            ],
+        ),
+        (
+            "CanvasModeObject",
+            &[
+                ("CanvasModeEntered", "object"),
+                ("CanvasModeCommitted", "object"),
+            ],
+        ),
+        ("CanvasTransientVerb", &[("CanvasModeCommitted", "verb")]),
+        (
+            "CanvasModeRestoration",
+            &[("CanvasModeCancelled", "restoration")],
+        ),
+        ("CanvasPlaceVerb", &[("CanvasCardPlaced", "verb")]),
+        ("CanvasOpenTarget", &[("CanvasOpened", "target")]),
+        ("CanvasResizePreset", &[("CanvasResizeGeometry", "preset")]),
+        ("CanvasSurfaceKind", &[("CanvasSurfaceShown", "surface")]),
+        ("CanvasZoomContext", &[("CanvasZoom", "context")]),
+        ("CanvasDeleteTarget", &[("CanvasDeleted", "target")]),
+        ("CanvasFailedAction", &[("CanvasActionFailed", "action")]),
+        (
+            "CanvasMutationRefusal",
+            &[("CanvasMutationRefused", "reason")],
+        ),
+        (
+            "CanvasHistoryVerb",
+            &[
+                ("CanvasHistoryApplied", "verb"),
+                ("CanvasUndoMenuTitle", "verb"),
+            ],
+        ),
+        ("CanvasStatusNote", &[("CanvasStatus", "note")]),
+        ("CanvasBlockedReason", &[("CanvasBlocked", "reason")]),
+        ("CanvasFilterState", &[("CanvasWhereAmI", "filter")]),
+    ];
 
     /// Five-place rule, first place: a canvas variant — or a closed-set
     /// ARM of one — that never reaches [`corpus()`] is pinned by
@@ -5032,15 +5154,13 @@ mod tests {
              artifact entry, and neither host census covers them: {missing:?}"
         );
 
-        for (enum_name, variant, field) in [
-            ("CanvasStatusNote", "CanvasStatus", "note"),
-            ("CanvasBlockedReason", "CanvasBlocked", "reason"),
-            ("CanvasFailedAction", "CanvasActionFailed", "action"),
-            ("CanvasMutationRefusal", "CanvasMutationRefused", "reason"),
-            ("CanvasDeleteTarget", "CanvasDeleted", "target"),
-        ] {
+        for (enum_name, sites) in CANVAS_NESTED_ENUMS {
             let declared = declared_variants(enum_name);
-            let covered = nested_arms(variant, field);
+            assert!(
+                !declared.is_empty(),
+                "parsed no arms of {enum_name} — the parser broke, not the vocabulary"
+            );
+            let covered = nested_arms(sites);
             let missing: Vec<&String> = declared.difference(&covered).collect();
             assert!(
                 missing.is_empty(),
@@ -5048,6 +5168,35 @@ mod tests {
                  pinned nowhere: {missing:?}"
             );
         }
+    }
+
+    /// The nested-enum table above must not silently fall behind the
+    /// module: every closed `Canvas*` parameter enum declared here is
+    /// listed, so adding one without a coverage site fails HERE rather
+    /// than leaving its arms unpinned forever.
+    #[test]
+    fn every_canvas_parameter_enum_is_listed_for_coverage() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/a11y.rs");
+        let source = std::fs::read_to_string(&path).expect("a11y source");
+        let declared: std::collections::BTreeSet<String> = source
+            .lines()
+            .filter_map(|line| line.strip_prefix("pub enum "))
+            .filter_map(|rest| rest.split_whitespace().next())
+            .filter(|name| name.starts_with("Canvas"))
+            // The family enum itself is not a parameter of the family.
+            .filter(|name| *name != "CanvasA11yEvent")
+            .map(str::to_owned)
+            .collect();
+        let listed: std::collections::BTreeSet<String> = CANVAS_NESTED_ENUMS
+            .iter()
+            .map(|(name, _)| (*name).to_owned())
+            .collect();
+        assert_eq!(
+            declared, listed,
+            "CANVAS_NESTED_ENUMS is out of step with the declared canvas \
+             parameter enums"
+        );
+        assert_eq!(listed.len(), 18, "the canvas family carries 18 closed sets");
     }
 
     /// The family is reached through exactly one top-level variant, and

@@ -7835,7 +7835,7 @@ pub enum CanvasA11yEvent {
     },
     CanvasColorSet {
         title: String,
-        color_name: Option<String>,
+        color: Option<CanvasColor>,
     },
     CanvasRenamedGroup {
         label: String,
@@ -7870,7 +7870,7 @@ pub enum CanvasA11yEvent {
     },
     CanvasBulkColorSet {
         count: u32,
-        color_name: Option<String>,
+        color: Option<CanvasColor>,
     },
     CanvasGrouped {
         count: u32,
@@ -8058,7 +8058,10 @@ impl From<CanvasA11yEvent> for core::a11y::CanvasA11yEvent {
             F::CanvasConnectionUpdated { label } => C::CanvasConnectionUpdated { label },
             F::CanvasMovedIntoGroup { label } => C::CanvasMovedIntoGroup { label },
             F::CanvasRemovedFromGroup { label } => C::CanvasRemovedFromGroup { label },
-            F::CanvasColorSet { title, color_name } => C::CanvasColorSet { title, color_name },
+            F::CanvasColorSet { title, color } => C::CanvasColorSet {
+                title,
+                color: color.map(Into::into),
+            },
             F::CanvasRenamedGroup { label } => C::CanvasRenamedGroup { label },
             F::CanvasCardUpdated { title } => C::CanvasCardUpdated { title },
             F::CanvasCardRetargeted { title, path } => C::CanvasCardRetargeted { title, path },
@@ -8092,9 +8095,10 @@ impl From<CanvasA11yEvent> for core::a11y::CanvasA11yEvent {
                 count,
                 relative: relative.into(),
             },
-            F::CanvasBulkColorSet { count, color_name } => {
-                C::CanvasBulkColorSet { count, color_name }
-            }
+            F::CanvasBulkColorSet { count, color } => C::CanvasBulkColorSet {
+                count,
+                color: color.map(Into::into),
+            },
             F::CanvasGrouped { count, label } => C::CanvasGrouped { count, label },
             F::CanvasBulkDuplicated { count } => C::CanvasBulkDuplicated { count },
             F::CanvasMarkToggled {
@@ -8553,6 +8557,17 @@ pub fn a11y_render(event: A11yEvent) -> RenderedAnnouncement {
         text: event.render(),
         priority: event.priority().into(),
     }
+}
+
+/// The pinned spoken/display NAME of a canvas colour
+/// (`slate_core::canvas::color_name` — presets in JSON Canvas order,
+/// hex as the nearest preset plus "custom"). Exported so no host
+/// spells the preset table: the a11y templates phrase it for speech,
+/// and this is the same answer for the colour PICKER's button labels
+/// and any other label-class surface (contracts doc 0a-11).
+#[uniffi::export]
+pub fn canvas_color_name(color: CanvasColor) -> String {
+    core::canvas::color_name(&color.into())
 }
 
 /// Core Debug identity of the event — the exact string the corpus artifact
@@ -9432,6 +9447,40 @@ impl From<core::CanvasTableRow> for CanvasTableRow {
             target: r.target,
             connection_count: r.connection_count,
             color_name: r.color_name,
+        }
+    }
+}
+
+/// A canvas colour: one of the six JSON Canvas presets, or a verbatim
+/// colour string. Mirrors `core::canvas::CanvasColor` so a host can
+/// hand the colour it just wrote to the a11y vocabulary
+/// (`CanvasColorSet` / `CanvasBulkColorSet`) instead of naming it —
+/// the preset table lives in `canvas::color_name` and nowhere else
+/// (contracts doc 0a-11).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasColor {
+    Preset { preset: u8 },
+    Hex { hex: String },
+}
+
+impl From<core::canvas::CanvasColor> for CanvasColor {
+    fn from(color: core::canvas::CanvasColor) -> Self {
+        use core::canvas::CanvasColor as C;
+        match color {
+            C::Preset(preset) => CanvasColor::Preset { preset },
+            C::Hex(hex) => CanvasColor::Hex { hex },
+        }
+    }
+}
+
+/// The reverse direction, for the a11y vocabulary: the colour crosses
+/// the boundary INTO core so `color_name` phrases it there.
+impl From<CanvasColor> for core::canvas::CanvasColor {
+    fn from(color: CanvasColor) -> Self {
+        use core::canvas::CanvasColor as C;
+        match color {
+            CanvasColor::Preset { preset } => C::Preset(preset),
+            CanvasColor::Hex { hex } => C::Hex(hex),
         }
     }
 }
@@ -10603,6 +10652,20 @@ mod tests {
     /// event identity against the artifact); this is the cheap local
     /// tripwire for the mistake that actually happens, which is
     /// forgetting the list entirely.
+    ///
+    /// ASYMMETRY WITH THE WINDOWS TWIN, deliberately: this parser is
+    /// LINE-oriented (one entry per line, each starting with `.`),
+    /// while `the_windows_corpus_mirror_lists_every_event_in_order`
+    /// scans the whole slice and is robust to any wrapping. The
+    /// difference is not an oversight — it follows the formatters. C#
+    /// entries are re-wrapped by `dotnet format`, which runs in CI and
+    /// would break a line-oriented parser; the Swift census is written
+    /// one entry per line and `swift-format` leaves those lines alone.
+    /// Should that ever change, a wrapped Swift entry fails LOUDLY
+    /// (the continuation line does not start with `.`, so the entry
+    /// count drops and the length assertion fires) rather than being
+    /// skipped silently — the safe failure mode, and the reason the
+    /// simpler parser is acceptable here.
     #[test]
     fn the_mac_corpus_mirror_lists_every_event_in_order() {
         /// The leading identifier of a Rust `Debug` rendering.
@@ -10826,16 +10889,25 @@ mod tests {
             for line in body.lines() {
                 let trimmed = line.trim();
                 if depth == 0 && !trimmed.starts_with("//") && !trimmed.starts_with('#') {
-                    let name = trimmed
-                        .trim_end_matches(',')
-                        .trim_end_matches('{')
-                        .trim_end_matches('(')
-                        .trim();
+                    // The leading identifier of a variant line, so the
+                    // single-line payload form (`Card { title: String },`)
+                    // parses the same as the multi-line one. Matching the
+                    // whole trimmed line would skip single-line variants
+                    // in BOTH sources — a silent false pass.
+                    let name: String = trimmed
+                        .chars()
+                        .take_while(char::is_ascii_alphanumeric)
+                        .collect();
+                    let tail = trimmed[name.len()..].trim_start();
+                    let delimited = tail.is_empty()
+                        || tail.starts_with(',')
+                        || tail.starts_with('{')
+                        || tail.starts_with('(');
                     if !name.is_empty()
                         && name.starts_with(|c: char| c.is_ascii_uppercase())
-                        && name.chars().all(|c| c.is_ascii_alphanumeric())
+                        && delimited
                     {
-                        names.insert(name.to_string());
+                        names.insert(name);
                     }
                 }
                 depth += trimmed.matches('{').count();
@@ -10853,14 +10925,26 @@ mod tests {
         // a family that lives one level down (W6-1 0a's
         // `Canvas { event: CanvasA11yEvent }`) is exactly as invisible
         // to a host if the mirror misses one of its variants.
-        for enum_name in ["A11yEvent", "CanvasA11yEvent"] {
+        //
+        // The floor is PER ENUM, not shared: one number covering both
+        // would be the smaller family's, and a parser that silently
+        // stopped seeing (say) half of `A11yEvent`'s ~198 variants
+        // would still clear a 40-variant bar while the difference-set
+        // assertion below quietly compared two truncated sets.
+        for (enum_name, floor) in [("A11yEvent", 100usize), ("CanvasA11yEvent", 40)] {
             let mirror_variants = variant_names_of(&mirror, enum_name);
             let core_variants = variant_names_of(&core_source, enum_name);
             assert!(
-                core_variants.len() > 40,
-                "parsed only {} core {enum_name} variants — the parser broke, \
-                 not the mirror",
+                core_variants.len() >= floor,
+                "parsed only {} core {enum_name} variants (floor {floor}) — the \
+                 parser broke, not the mirror",
                 core_variants.len()
+            );
+            assert!(
+                mirror_variants.len() >= floor,
+                "parsed only {} mirror {enum_name} variants (floor {floor}) — the \
+                 parser broke, not the mirror",
+                mirror_variants.len()
             );
 
             let missing: Vec<&String> = core_variants.difference(&mirror_variants).collect();

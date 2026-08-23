@@ -1555,12 +1555,12 @@
     "text": "Removed from group \"Q3\"."
   },
   {
-    "event": "Canvas { event: CanvasColorSet { title: \"Research\", color_name: Some(\"red\") } }",
+    "event": "Canvas { event: CanvasColorSet { title: \"Research\", color: Some(Preset(1)) } }",
     "priority": "medium",
     "text": "Set \"Research\" to red."
   },
   {
-    "event": "Canvas { event: CanvasColorSet { title: \"Research\", color_name: None } }",
+    "event": "Canvas { event: CanvasColorSet { title: \"Research\", color: None } }",
     "priority": "medium",
     "text": "Set \"Research\" to no color."
   },
@@ -1645,12 +1645,12 @@
     "text": "Moved 3 cards below \"Research\"."
   },
   {
-    "event": "Canvas { event: CanvasBulkColorSet { count: 3, color_name: Some(\"cyan\") } }",
+    "event": "Canvas { event: CanvasBulkColorSet { count: 3, color: Some(Preset(5)) } }",
     "priority": "medium",
     "text": "Set 3 cards to cyan."
   },
   {
-    "event": "Canvas { event: CanvasBulkColorSet { count: 1, color_name: None } }",
+    "event": "Canvas { event: CanvasBulkColorSet { count: 1, color: None } }",
     "priority": "medium",
     "text": "Set 1 card to no color."
   },
