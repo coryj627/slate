@@ -620,12 +620,13 @@ a typed no-room outcome** (CD-21). Candidate slots form a lattice
 anchored at `(g.x0 + GRID_STEP, g.y0 + 2·GRID_STEP)` — mac's
 `(x + 20, y + 40)` inset — stepping by `ceil_to_grid(w + DEFAULT_GAP)`
 in x and `ceil_to_grid(h + DEFAULT_GAP)` in y, and only slots lying
-fully inside the group rect are candidates. They are visited in `(y, x)`
-order, which is `place_new`'s `Below` → `RightOf` preference and the
-model's own sibling order; `Above`/`LeftOf` are unreachable because the
-lattice starts at the group's inset top-left. The outcome is one of
-three, so a host never receives a point that is outside the group it
-asked about:
+fully inside the group rect are candidates. They are visited COLUMN by
+column, each column top to bottom — `place_new`'s `Below` before
+`RightOf` preference applied to a lattice instead of a ring;
+`Above`/`LeftOf` are unreachable because the lattice starts at the
+group's inset top-left, which is what clipping to the group means. The
+outcome is one of three, so a host never receives a point that is
+outside the group it asked about:
 
 | Outcome | When |
 |---|---|
