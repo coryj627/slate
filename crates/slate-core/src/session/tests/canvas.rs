@@ -878,6 +878,23 @@ fn place_inside_group_refuses_a_node_that_is_not_a_group() {
         other => panic!("expected InvalidArgument, got {other:?}"),
     }
 
+    // Both halves of the distinctness, or it is not distinctness: an id
+    // the canvas does not hold must still say "not found". Asserting
+    // only that `not_a_group` avoids that phrase lets a `bad_node`
+    // rewording vacate the property silently — and 0b-12's API note
+    // leans on the two messages staying different, because it is what
+    // keeps the escalation to a typed variant possible for PR E.
+    let unknown = session
+        .canvas_place_inside_group(info.handle, "no-such-node", 10.0, 10.0, Vec::new())
+        .expect_err("an id the canvas does not hold is refused");
+    match unknown {
+        VaultError::InvalidArgument { ref message } => {
+            assert!(message.contains("not found"), "{message}");
+            assert!(!message.contains("not a group"), "{message}");
+        }
+        other => panic!("expected InvalidArgument, got {other:?}"),
+    }
+
     // The real group still answers.
     assert!(matches!(
         session

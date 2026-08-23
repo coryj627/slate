@@ -226,6 +226,55 @@ final class CanvasNavigatorTests: XCTestCase {
         XCTAssertNotEqual(
             state.canvasMutationRefusal(for: doc)?.text,
             "This canvas is reopening. Try again in a moment.")
+
+        // VA-1's other two members. Where-am-I is the PULL surface, so
+        // silence there is the failure t0 §1.4 exists to prevent; and
+        // follow-connection must not report a dead end it never
+        // learned — the adjacency cache is cold for this card, so the
+        // truth is unknowable, not "none".
+        assertAnnouncesReopening("where am I") { state.canvasWhereAmI() }
+        assertAnnouncesReopening("follow connection") {
+            state.canvasFollowConnection(forward: true)
+        }
+    }
+
+    /// The same two verbs OUTSIDE the window answer exactly as they did
+    /// before VA-1 reached them — the sentence is for the state, not a
+    /// new default.
+    func testWhereAmIAndFollowConnectionAreUnchangedWithALiveHandle() async throws {
+        let state = try await makeState()
+        let doc = try XCTUnwrap(state.activeCanvasDocument)
+
+        state.canvasSelect(nodeId: "a", in: doc, announce: false)
+        posted = []
+        state.canvasWhereAmI()
+        state.canvasAnnouncer.flushForTests()
+        let readback = try XCTUnwrap(state.canvasWhereAmIReadback)
+        XCTAssertTrue(readback.contains("Alpha"), readback)
+        XCTAssertFalse(
+            posted.contains("This canvas is reopening. Try again in a moment."), "\(posted)")
+
+        // A real dead end still says so: 'd' has no incoming connection,
+        // and that IS a fact the adjacency list returned.
+        state.canvasSelect(nodeId: "d", in: doc, announce: false)
+        posted = []
+        state.canvasFollowConnection(forward: false)
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertEqual(doc.selection.selected, "d")
+        XCTAssertTrue(
+            posted.contains { $0.contains("No incoming connection") }, "\(posted)")
+        XCTAssertFalse(
+            posted.contains("This canvas is reopening. Try again in a moment."), "\(posted)")
+
+        // And a warm cache keeps answering inside the window: the fact
+        // is real, so the dead-end phrase is still the right one.
+        _ = doc.beginBatchRetarget(to: doc.path)
+        posted = []
+        state.canvasFollowConnection(forward: false)
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertTrue(
+            posted.contains { $0.contains("No incoming connection") },
+            "a cached adjacency answer survives the window: \(posted)")
     }
 
     /// The counterpart: the states 0b-2's report wrongly named are gated

@@ -22,10 +22,16 @@ extension AppState {
         return doc
     }
 
-    /// The four structural read verbs — enter group, exit group, trace
-    /// path, fit canvas — answer from core queries that need the native
-    /// handle. Exactly one reachable state pairs a `.ready` canvas with
-    /// no handle: `beginBatchRetarget`'s window, between a physical move
+    /// VA-1's one trigger, so every member reaches the sentence the
+    /// same way. Its members are the structural read verbs — enter
+    /// group, exit group, trace path, fit canvas, Where-am-I,
+    /// follow-connection — plus the filter family, which owns its own
+    /// path because a stale filter answer needs a different decision
+    /// than a missing one (contracts doc, VA-1).
+    ///
+    /// They all answer from core queries that need the native handle,
+    /// and exactly one reachable state pairs a `.ready` canvas with no
+    /// handle: `beginBatchRetarget`'s window, between a physical move
     /// landing and its background reopen, where the handle is
     /// deliberately detached so nothing can save through the moved-away
     /// path.
@@ -41,7 +47,10 @@ extension AppState {
     /// permanently refused: it would downgrade a structural
     /// write-safety invariant to a host-enforced one (contracts doc,
     /// §0b "Verified during implementation").
-    private func canvasAnnounceStructuralQueryUnavailable(for doc: CanvasDocument) {
+    ///
+    /// Not `private`: Where-am-I lives in `AppState+Canvas.swift` and
+    /// must reach the same decision, not a second copy of it.
+    func canvasAnnounceStructuralQueryUnavailable(for doc: CanvasDocument) {
         guard doc.handle == nil else { return }
         canvasAnnouncer.announce(.canvasStatus(note: .reopening))
     }
@@ -165,11 +174,23 @@ extension AppState {
     /// direction sense: forward = connections leaving or linking this
     /// card; back = connections arriving. Direction respects
     /// `fromEnd`/`toEnd` (t0 §1.2 / #360 model data).
+    ///
+    /// `No connection…` is a claim about the adjacency list, so it is
+    /// spoken only when there IS one. An unanswerable lookup — the
+    /// reopening window with a cold cache, or a refused id — takes
+    /// VA-1's table instead: the sentence for the state, never a
+    /// dead-end phrase nothing returned.
     func canvasFollowConnection(forward: Bool, ordinal: Int = 1) {
         guard let doc = activeCanvasDocument, let selected = doc.selection.selected else {
             return
         }
-        let neighbors = doc.neighbors(of: selected, session: currentSession)
+        guard let neighbors = doc.neighborsIfKnown(of: selected, session: currentSession)
+        else {
+            if doc.handle == nil {
+                return canvasAnnounceStructuralQueryUnavailable(for: doc)
+            }
+            return canvasAnnounceSelectionUnresolvable()
+        }
         let candidates = neighbors.filter { neighbor in
             switch neighbor.direction {
             case .outgoing: return forward

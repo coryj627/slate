@@ -5719,14 +5719,28 @@ mod tests {
     ///
     /// Between them these pin the BOUNDARY, not the whole domain:
     /// agreement is checked at one (and at empty/zero where reachable),
-    /// and (d) routes count interpolations through the shared helpers
-    /// to the limit of line-scoped lexical verification. That is a
-    /// check, not a proof — (d) reads one logical line at a time and
-    /// its helper provenance is line-wide, so a line carrying a real
-    /// `plural(` call clears every plural literal on it. The noun-bound
-    /// proof needs a parser; its residual evasion and false-positive
-    /// classes are named in contract 0a-14, and PR 0b's parser closes
-    /// them.
+    /// and (d) routes count interpolations through the shared helpers.
+    ///
+    /// **(d) is a parser now, not a line scan** (contract 0b-16; the
+    /// implementation is below in this file). Two powers the 0a-1
+    /// version lacked, and this comment used to disclaim: the countable
+    /// noun list is DERIVED — it is the set of `one`/`many` arguments
+    /// this module's own `plural` / `plural_len` / `counted` call sites
+    /// pass, so a noun is guarded by being pluralized somewhere, not by
+    /// being typed into the test; and helper provenance is bound to the
+    /// LITERAL, not to the line, so a line carrying a real `plural(`
+    /// call no longer clears a hardcoded plural sitting beside it.
+    /// `\`-continuations are joined the way rustc joins them, with a
+    /// committed witness template proving the lexer builds the string
+    /// rustc does, and raw strings are refused loudly rather than
+    /// mis-lexed.
+    ///
+    /// It is still a check over THIS crate's source, not a proof:
+    /// `ZERO_REACHABLE` stays declared because host reachability is a
+    /// property of the mac call sites, and a runtime-assembled string or
+    /// a noun pluralized nowhere in the module remain outside its reach.
+    /// Those residuals are named in contract 0a-14, narrowed in place
+    /// rather than dropped.
     #[test]
     fn canvas_count_speaking_arms_have_boundary_witnesses_and_agreement() {
         // (a) --------------------------------------------------------

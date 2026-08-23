@@ -858,11 +858,17 @@ expectation.
 `apps/slate-mac/Tests/SlateMacTests/CanvasNavigatorTests.swift`:
 `testOnlyTheBatchRetargetWindowPairsReadyWithNoHandle` (the one
 `.ready`-with-no-handle window: movement still narrates, mutations
-still refuse audibly, and each of the four structural verbs speaks
-VA-1 rather than going quiet) and
+still refuse audibly, and every VA-1 member — the four structural verbs,
+Where-am-I and follow-connection — speaks rather than going quiet),
+`testWhereAmIAndFollowConnectionAreUnchangedWithALiveHandle` (the same
+two OUTSIDE the window, including a WARM adjacency cache inside it,
+which must still give the real dead-end phrase — VA-1 must not
+over-fire),
+`testFilterInTheReopeningWindowNeverAnnouncesAWrongCount` (the filter
+family's three rules and the displayed-equals-announced invariant) and
 `testNonReadyCanvasesAreUnreachableByEveryNavigatorVerb` (the `.ready`
 gate, which is what makes any reachability claim about these verbs
-checkable).
+checkable; all three non-ready states materialized and driven).
 
 ---
 
@@ -906,11 +912,34 @@ it against, and a reviewer checking parity would go looking for one.
 *"This canvas is reopening. Try again in a moment."* — Medium, status
 family, uncoalesced like every other `CanvasStatus`.
 
-Spoken when a structural READ verb (enter group, exit group, trace path,
-fit canvas) is used during `beginBatchRetarget`'s window: the canvas is
-`.ready` and its snapshot is visible, but the path-bound handle is
-detached until the background reopen lands, so the queries those verbs
-delegate to have no handle to answer from.
+Spoken when a structural READ verb is used during
+`beginBatchRetarget`'s window: the canvas is `.ready` and its snapshot
+is visible, but the path-bound handle is detached until the background
+reopen lands, so the queries those verbs delegate to have no handle to
+answer from.
+
+**VA-1's members, in full** — the list is exhaustive on purpose, because
+the first version of it was scoped to the verbs PR 0b silenced rather
+than to the verbs REACHABLE in the window, and missed two:
+
+| Member | Site | What it would otherwise do |
+|---|---|---|
+| Enter group | `canvasEnterGroup` | silence |
+| Exit group | `canvasExitGroup` | silence |
+| Trace path | `canvasTracePath` | silence |
+| Fit canvas | `canvasFitCanvas` | silence |
+| The filter family | `filterView` / `canvasAnnounceFilterCount` / the summary label | announce a count for rows that answer a different needle |
+| **Where am I** | `canvasWhereAmI` | silence — and it is the PULL surface, so silence is the one failure t0 §1.4 exists to prevent |
+| **Follow connection** | `canvasFollowConnection` | speak `No connection…`, a fact the adjacency list never returned, when the cache is cold and no handle can fill it |
+
+The last two were present at BASE and PR 0b did not change either site;
+they are in VA-1 because the sentence is the right answer for the state,
+not because 0b broke them. Where-am-I needed its `.ready` check moved
+ahead of its handle check — reversed, it also made the `.notReadable`
+arm below it unreachable, so a canvas that never opened cleanly said
+nothing at all. Follow-connection needed adjacency to distinguish "no
+connections" from "no answer": `neighborsIfKnown` returns `nil` for the
+second, and only a real list may produce the dead-end phrase.
 
 **Why an addition rather than silence.** The verbs answered from
 Swift-side outline walks before PR 0b, so the window used to produce an
@@ -946,8 +975,13 @@ The rule is *never a wrong number*:
 - the count the host announces is read from the view the surfaces are
   DISPLAYING, never recomputed, so *displayed rows == announced count*
   holds by construction. `CanvasDocument.FilterView` is that one value,
-  and the summary label, the outline, the table and the announcement all
-  read it;
+  and the outline rows, the table rows, the FILTER summary label, the
+  count announcement and Where-am-I's matched count all read it. (The
+  table's OTHER summary — the grid's `Canvas table: N cards, M groups.`
+  composition label — counts unfiltered rows and always has. It is a
+  never-announced label describing the canvas, not a match count, so it
+  is outside this invariant; named here because "the table reads it"
+  was too broad to be checkable.);
 - `NoCardsMatchFilter` is unaffected outside the window.
 
 **And it sets the rule for THROW arms.** A structural query can fail two
@@ -965,6 +999,35 @@ could not resolve was reported as an empty group, or as being at canvas
 level, or (trace path) as nothing at all. Announcing a verb-specific
 phrase for a query that never answered asserts something no query
 returned.
+
+**Two sites are outside the table by decision, both recorded rather than
+left to be rediscovered.**
+
+- `canvasFitCanvas` swallows a `bad_handle` throw silently
+  (`(try? canvas_bounds) ?? nil`, then return). Its `nil` is dominated
+  by the EMPTY canvas, which was silent before PR 0b too
+  (`guard !doc.scene.nodes.isEmpty`), and `canvas_bounds` has no
+  `bad_node` path — its only error is `bad_handle`, which needs a
+  stale-handle race to reach. Distinguishing the two would mean a
+  `do`/`catch` for a state the public surface cannot construct; the
+  no-handle case is already VA-1 via the guard above it.
+- `canvasMoveOutOfGroup` collapses a `canvas_parent_of` throw into
+  `NotInAGroup` through `try?` — the shape the middle row outlaws. It is
+  unreachable today: the node must be in `doc.scene`, which derives from
+  the same model the query reads, so `bad_node` cannot fire, and the
+  verb is a write behind `admitCanvasMutation`. **Flagged for PR E/F:
+  do not copy the collapse.** A Windows re-implementation whose scene
+  and query can come from different snapshots makes it live.
+
+**A behaviour change this rule carries, recorded so it is not read as
+incidental:** enter-group, exit-group and trace-path now announce
+`Nothing selected.` where BASE returned SILENTLY — for a missing
+selection as well as an unresolvable one. At BASE all three were silent
+and no test covered it; ~8 sibling verbs (`canvasEnterMoveMode`,
+`canvasEditCard`, `canvasRemoveFromGroup`, …) already announce exactly
+that string in exactly that situation, and the never-silent principle
+above decides the tie. It needs no vocabulary work — the arm was already
+in the corpus.
 
 **Lockstep.** Five places moved together: the `CanvasStatusNote` arm and
 its render, the corpus entry (**appended**, so no pre-existing corpus
@@ -1773,12 +1836,25 @@ every deleted symbol was re-grepped to zero afterwards.
   and keeps mac's shipped `No free space inside "X".` refusal. `Full`
   takes the same refusal directly. Without the check the host would
   have silently stacked a card in a group too small to hold it.
-- **Two degenerate navigation paths were held byte-identical
-  deliberately.** Exit-group returns silently for a selection the
-  canvas no longer holds (core would answer `bad_node`, and "at canvas
-  level" for a card that is not on the canvas would be a new sentence);
-  trace-path still names its start card from the outline row, so the
-  `No outgoing path from "X".` string is composed where it always was.
+- **One degenerate navigation path was held byte-identical; the other
+  was SUPERSEDED and this bullet used to assert the old one.** The
+  surviving half: trace-path still names its start card from the outline
+  row, so the `No outgoing path from "X".` string is composed where it
+  always was.
+
+  The retracted half said exit-group "returns silently for a selection
+  the canvas no longer holds", on the reasoning that announcing anything
+  there would be a new sentence rather than a migration. **VA-1's
+  throw-arm table replaced that**: a `bad_node` throw now answers
+  `Nothing selected.` at exit-group, enter-group and trace-path alike,
+  because a card core cannot resolve has no level, no children and no
+  path — and silence is the outcome the never-silent principle rules
+  out. The behaviour was already changed in code when this bullet still
+  described the old one, which is exactly the drift a PR C/E author
+  copying "silent by design" into the Windows navigator would have
+  shipped as a t0 violation. Retracted in place rather than deleted,
+  because the reasoning that produced it — "a new sentence is out of
+  scope for a migration" — is the tempting one to repeat.
 - **Structural navigation on a handle-less snapshot went silent, in ONE
   window — not the three the first draft of this note named — and now
   answers (VA-1).** That draft said "a canvas moved to Trash, or one
@@ -1804,7 +1880,7 @@ every deleted symbol was re-grepped to zero afterwards.
   trigger (see "Vocabulary additions" below). Silence is a test
   FAILURE now:
   `testOnlyTheBatchRetargetWindowPairsReadyWithNoHandle` asserts the
-  sentence at each of the four verbs, and
+  sentence at each VA-1 member, and
   `testNonReadyCanvasesAreUnreachableByEveryNavigatorVerb` pins the
   `.ready` gate that makes the reachability claim checkable rather than
   merely asserted.

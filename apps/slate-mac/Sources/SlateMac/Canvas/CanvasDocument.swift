@@ -672,14 +672,32 @@ final class CanvasDocument: ObservableObject {
         targets[nodeId] ?? ""
     }
 
-    /// Adjacency for one node (cached; empty on any failure — the
-    /// outline degrades to no connection rows, never an error state).
-    func neighbors(of nodeId: String, session: VaultSession?) -> [CanvasNeighbor] {
+    /// Adjacency for one node when it can be ANSWERED — the cache, or a
+    /// live query that succeeded. `nil` means neither could: no handle
+    /// and a cold cache (the reopening window), or a query that refused
+    /// the id.
+    ///
+    /// The distinction matters to exactly one caller. Follow-connection
+    /// reports "no connection in that direction" when the list comes
+    /// back without an nth candidate — a fact it may only assert if the
+    /// list is real. An unanswerable lookup flattened to `[]` makes that
+    /// sentence a claim nothing returned, which is what VA-1's table
+    /// forbids.
+    func neighborsIfKnown(of nodeId: String, session: VaultSession?) -> [CanvasNeighbor]? {
         if let cached = neighborsCache[nodeId] { return cached }
-        guard let session, let handle else { return [] }
-        let result = (try? session.canvasNeighbors(handle: handle, nodeId: nodeId)) ?? []
+        guard let session, let handle,
+            let result = try? session.canvasNeighbors(handle: handle, nodeId: nodeId)
+        else { return nil }
         neighborsCache[nodeId] = result
         return result
+    }
+
+    /// Adjacency for one node (cached; empty when it cannot be answered
+    /// — the outline degrades to no connection rows, never an error
+    /// state). Callers that must tell "no connections" from "no answer"
+    /// take `neighborsIfKnown` instead.
+    func neighbors(of nodeId: String, session: VaultSession?) -> [CanvasNeighbor] {
+        neighborsIfKnown(of: nodeId, session: session) ?? []
     }
 
     /// Filename without extension — never a raw path in UI copy.
