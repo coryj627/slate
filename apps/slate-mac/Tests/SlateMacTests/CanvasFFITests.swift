@@ -162,8 +162,9 @@ final class CanvasFFITests: XCTestCase {
             "an empty candidate set is an empty list, not a phrase")
 
         // Bounds (0b-11): every node, group frames included.
-        let bounds = try XCTUnwrap(session.canvasBounds(handle: handle))
-        XCTAssertEqual(bounds, CanvasRect(x: -20, y: -20, width: 400, height: 300))
+        XCTAssertEqual(
+            try session.canvasBounds(handle: handle),
+            CanvasRect(x: -20, y: -20, width: 400, height: 300))
 
         // Group rect (0b-11): the members' union inflated by
         // DEFAULT_GAP on all four sides; `nil` when nothing resolves.
@@ -211,7 +212,7 @@ final class CanvasFFITests: XCTestCase {
     /// The three handle-free canvas exports (0b-4 / CD-17): a caller
     /// needs no open canvas to read a constant, mint an id, or ask
     /// which edges two rects should join on.
-    func testCanvasHandleFreeExportsOverFFI() throws {
+    func testCanvasHandleFreeExportsOverFFI() {
         let geometry = canvasConstants()
         XCTAssertEqual(geometry.gridStep, 20)
         XCTAssertEqual(geometry.gridStepLarge, 100)
@@ -227,9 +228,12 @@ final class CanvasFFITests: XCTestCase {
         var minted: Set<String> = []
         for _ in 0..<64 {
             let id = canvasNewId()
+            let lowerHex = id.allSatisfy { $0.isHexDigit && !$0.isUppercase }
             XCTAssertEqual(id.count, 16, id)
-            XCTAssertTrue(id.allSatisfy { $0.isHexDigit && !$0.isUppercase }, id)
-            XCTAssertEqual(Array(id)[12], "4", id)
+            XCTAssertTrue(lowerHex, id)
+            // `dropFirst`, not a subscript: a length regression should
+            // fail this assertion, not trap the whole suite.
+            XCTAssertEqual(id.dropFirst(12).first, "4", id)
             minted.insert(id)
         }
         XCTAssertEqual(minted.count, 64, "16 hex characters do not repeat over 64 draws")
