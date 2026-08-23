@@ -34,11 +34,62 @@ final class ParityHarnessTests: XCTestCase {
         repoRoot.appendingPathComponent("crates/slate-core/tests/fixtures/markdown")
     }
 
+    /// The canvas corpus lives in a DIFFERENT fixture directory from the
+    /// markdown one, and gets its own temp vault below (W6-1 §W-A): a
+    /// `.canvas` dropped into the markdown vault would change what
+    /// `search`, `links`, `tasks` and `properties` see and move goldens
+    /// this section has no business touching.
+    private static var canvasFixturesDir: URL {
+        repoRoot.appendingPathComponent("crates/slate-core/tests/fixtures/canvas")
+    }
+
     private static var goldenDir: URL {
         repoRoot.appendingPathComponent("crates/slate-core/tests/fixtures/parity_golden")
     }
 
     private static let pinnedSearchQueries = ["fixture", "heading", "parity"]
+
+    // The three pinned canvas input lists below are DUPLICATED from the
+    // Windows twin (apps/slate-windows/tools/ParityHarness/
+    // SurfaceSerializer.cs, which names this file beside them), the same
+    // way `pinnedSearchQueries` is: the twins cannot share a declaration
+    // across languages, and the committed golden arbitrates — two lists
+    // that drift produce different artifacts and one census fails on the
+    // golden the other passes.
+
+    /// Filter queries the canvas artifact pins. The set is chosen for
+    /// what each proves, not for coverage: the EMPTY query (which
+    /// matches everything — the easiest rule to get backwards), a plain
+    /// ASCII needle, the same needle mixed-case and whitespace-padded
+    /// (case folding and trimming), a group-path element, the `kind`
+    /// type word (typing "group" selects every group — shipped mac
+    /// behaviour), and one that matches nothing.
+    private static let pinnedCanvasFilterQueries = [
+        "",
+        "card",
+        "ReSeArCh",
+        "  research  ",
+        "Q3",
+        "group",
+        "zzz-nothing",
+    ]
+
+    /// Rects the canvas artifact describes relatively. The last one
+    /// coincides exactly with a card in `sample.canvas`, which is the
+    /// zero-delta case whose axis rule is pinned in contract 0b-7.
+    private static let pinnedCanvasRelativeRects = [
+        CanvasRect(x: 0.0, y: 0.0, width: 240.0, height: 140.0),
+        CanvasRect(x: 300.0, y: 150.0, width: 240.0, height: 140.0),
+        CanvasRect(x: -1000.0, y: -1000.0, width: 10.0, height: 10.0),
+        CanvasRect(x: 640.0, y: 180.0, width: 240.0, height: 140.0),
+    ]
+
+    /// Canvas fixtures deliberately kept OUT of the artifact.
+    /// `large_2000.canvas` is the §K performance fixture; at 2,000 nodes
+    /// its per-node rows would commit a golden no reviewer reads. Its
+    /// coverage is the in-crate census, which runs the same queries over
+    /// it.
+    private static let canvasArtifactExclusions = ["large_2000.canvas"]
 
     func testHarnessArtifactsMatchCommittedGoldensByteForByte() throws {
         let produced = try Self.runHarness()
@@ -117,6 +168,9 @@ final class ParityHarnessTests: XCTestCase {
         artifacts["properties.json"] = Data(try propertiesArtifact(session: session).utf8)
         artifacts["bibliography.json"] = Data(
             try bibliographyArtifact(session: session, loadWarnings: bibWarnings).utf8)
+        // W6-1 PR 0b (§W-A `canvas_queries`): its own corpus, its own
+        // vault, so nothing above it moves. Mirrors Program.cs exactly.
+        artifacts["canvas_queries.json"] = Data(try canvasQueriesArtifact().utf8)
         return artifacts
     }
 
@@ -918,6 +972,152 @@ final class ParityHarnessTests: XCTestCase {
         }
         j.raw("]}")
         return j.output + "\n"
+    }
+
+    // MARK: - Canvas structural queries (W6-1 PR 0b, §W-A)
+
+    /// Vault-level artifact: the W6-1 PR 0b structural queries over
+    /// every canvas fixture — bounds, then per node in reading order
+    /// its speakable name, parent, children and traced path, then the
+    /// pinned filter results and relative descriptions.
+    ///
+    /// Twin of `SurfaceSerializer.CanvasQueriesArtifact` plus the vault
+    /// setup `Program.CanvasQueries` does; both are mirrored here
+    /// because this test is the whole mac-side harness (there is no mac
+    /// CLI).
+    private static func canvasQueriesArtifact() throws -> String {
+        let fm = FileManager.default
+        let canvasFiles = try fm.contentsOfDirectory(atPath: canvasFixturesDir.path)
+            .filter { $0.hasSuffix(".canvas") && !canvasArtifactExclusions.contains($0) }
+            .sorted { Array($0.utf16).lexicographicallyPrecedes(Array($1.utf16)) }
+        XCTAssertFalse(
+            canvasFiles.isEmpty, "no .canvas fixtures at \(canvasFixturesDir.path)")
+
+        let vaultRoot = fm.temporaryDirectory
+            .appendingPathComponent("parity-canvas-\(UUID().uuidString)")
+        try fm.createDirectory(at: vaultRoot, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: vaultRoot) }
+        for f in canvasFiles {
+            try fm.copyItem(
+                at: canvasFixturesDir.appendingPathComponent(f),
+                to: vaultRoot.appendingPathComponent(f))
+        }
+        let session = try VaultSession.openFilesystem(rootPath: vaultRoot.path)
+        let cancel = CancelToken()
+        _ = try session.scanInitial(cancel: cancel)
+
+        let j = CanonicalJson()
+        j.raw("{\"canvases\":[")
+        for (f, rel) in canvasFiles.enumerated() {
+            if f > 0 { j.raw(",") }
+            let info = try session.openCanvas(path: rel)
+            defer { session.closeCanvas(handle: info.handle) }
+
+            j.raw("{\"file\":").str(slash(rel))
+                .raw(",\"degraded\":").bool(info.degraded)
+                .raw(",\"bounds\":")
+            if let bounds = try session.canvasBounds(handle: info.handle) {
+                appendCanvasRect(j, bounds)
+            } else {
+                _ = j.null()
+            }
+
+            j.raw(",\"nodes\":[")
+            for (i, row) in (try session.canvasOutline(handle: info.handle)).enumerated() {
+                if i > 0 { j.raw(",") }
+                j.raw("{\"node_id\":").str(row.nodeId)
+                    .raw(",\"speakable_name\":").str(row.speakableName)
+                    .raw(",\"parent\":")
+                let parent = try session.canvasParentOf(
+                    handle: info.handle, nodeId: row.nodeId)
+                appendOptionalString(j, parent)
+
+                j.raw(",\"children\":[")
+                let children = try session.canvasChildrenOf(
+                    handle: info.handle, groupId: row.nodeId)
+                for (c, child) in children.enumerated() {
+                    if c > 0 { j.raw(",") }
+                    j.str(child)
+                }
+                j.raw("]")
+
+                j.raw(",\"trace\":[")
+                let hops = try session.canvasTracePath(handle: info.handle, nodeId: row.nodeId)
+                for (t, hop) in hops.enumerated() {
+                    if t > 0 { j.raw(",") }
+                    j.raw("{\"edge_id\":").str(hop.edgeId)
+                        .raw(",\"node_id\":").str(hop.nodeId)
+                        .raw(",\"title\":").str(hop.title)
+                        .raw(",\"label\":")
+                    appendOptionalString(j, hop.label)
+                    j.raw("}")
+                }
+                j.raw("]}")
+            }
+            j.raw("]")
+
+            j.raw(",\"filters\":[")
+            for (q, query) in pinnedCanvasFilterQueries.enumerated() {
+                if q > 0 { j.raw(",") }
+                j.raw("{\"query\":").str(query)
+                    .raw(",\"matched\":[")
+                let matched = try session.canvasFilter(handle: info.handle, query: query)
+                for (m, nodeId) in matched.enumerated() {
+                    if m > 0 { j.raw(",") }
+                    j.str(nodeId)
+                }
+                j.raw("]}")
+            }
+            j.raw("]")
+
+            j.raw(",\"relative\":[")
+            for (r, rect) in pinnedCanvasRelativeRects.enumerated() {
+                if r > 0 { j.raw(",") }
+                j.raw("{\"rect\":")
+                appendCanvasRect(j, rect)
+                j.raw(",\"descs\":[")
+                let descs = try session.canvasDescribeRelative(
+                    handle: info.handle, rect: rect, exclude: [])
+                for (d, desc) in descs.enumerated() {
+                    if d > 0 { j.raw(",") }
+                    j.raw("{\"kind\":").str(relativeDescName(desc))
+                        .raw(",\"anchor\":").str(relativeDescAnchor(desc))
+                        .raw("}")
+                }
+                j.raw("]}")
+            }
+            j.raw("]}")
+        }
+        j.raw("]}")
+        return j.output + "\n"
+    }
+
+    private static func relativeDescName(_ desc: CanvasRelativeDesc) -> String {
+        switch desc {
+        case .below: return "below"
+        case .rightOf: return "right_of"
+        case .above: return "above"
+        case .leftOf: return "left_of"
+        case .atOrigin: return "at_origin"
+        }
+    }
+
+    private static func relativeDescAnchor(_ desc: CanvasRelativeDesc) -> String {
+        switch desc {
+        case .below(let anchorTitle): return anchorTitle
+        case .rightOf(let anchorTitle): return anchorTitle
+        case .above(let anchorTitle): return anchorTitle
+        case .leftOf(let anchorTitle): return anchorTitle
+        case .atOrigin: return ""
+        }
+    }
+
+    private static func appendCanvasRect(_ j: CanonicalJson, _ rect: CanvasRect) {
+        j.raw("{\"x\":").num(rect.x)
+            .raw(",\"y\":").num(rect.y)
+            .raw(",\"width\":").num(rect.width)
+            .raw(",\"height\":").num(rect.height)
+            .raw("}")
     }
 
     private static func slash(_ path: String) -> String {
