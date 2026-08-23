@@ -6049,6 +6049,23 @@ mod tests {
     /// than mis-lexed: it would read as an ordinary literal and its
     /// escapes would be resolved wrongly. The refusal happens inside
     /// the lexer, where prose in a comment cannot trip it.
+    ///
+    /// Two shapes it does NOT handle, named rather than implied away:
+    ///
+    /// - **block comments** (`/* … */`) are not skipped, so a quote
+    ///   inside one would open a phantom literal and desynchronise
+    ///   everything after it. This module has none;
+    /// - **closure pipes** (`|x|`) are not bracket-like, so a comma
+    ///   inside a closure's parameter list increments the enclosing
+    ///   call's argument counter. That only mis-numbers arguments, and
+    ///   only for a call that takes a multi-parameter closure — no
+    ///   pluralization helper does.
+    ///
+    /// Neither can make the guard pass VACUOUSLY: both would corrupt
+    /// the derived noun set or the literal list, and the caller asserts
+    /// both are non-empty before using them. The failure mode is a loud
+    /// wrong answer, not a silent green — which is the property that
+    /// makes a hand-rolled lexer acceptable here at all.
     fn string_literals(source: &str) -> Vec<SourceLiteral> {
         let bytes = source.as_bytes();
         let mut out: Vec<SourceLiteral> = Vec::new();

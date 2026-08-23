@@ -336,17 +336,25 @@ fn describe_relative_at_coincident_centres_is_above() {
 
 #[test]
 fn describe_relative_skips_groups_and_the_excluded() {
-    // Groups are never candidates, so a canvas of nothing but groups
-    // answers with an empty list — which the announcement layer renders
-    // as "Alone on the canvas". This query never invents copy.
+    // Groups are never candidates. Excluding every NON-group leaves a
+    // canvas of nothing but groups, which answers with an empty list —
+    // the announcement layer renders that as "Alone on the canvas".
+    // This query never invents copy.
     let model = model_of(GROUPS_NESTED);
-    let groups: Vec<NodeId> = model
+    let every_card: Vec<NodeId> = model
         .summaries
         .iter()
         .filter(|(_, s)| s.kind_label != "group")
         .map(|(id, _)| id.clone())
         .collect();
-    assert!(describe_relative(&model, rect(0.0, 0.0, 10.0, 10.0), &groups).is_empty());
+    assert!(
+        model
+            .summaries
+            .values()
+            .any(|s| s.kind_label == "group" && !every_card.is_empty()),
+        "the fixture must hold both groups and cards for this to mean anything"
+    );
+    assert!(describe_relative(&model, rect(0.0, 0.0, 10.0, 10.0), &every_card).is_empty());
 
     // Excluding the only card leaves nothing to describe.
     let model = model_of(
@@ -523,6 +531,24 @@ fn filter_folds_case_the_unicode_way_not_the_turkish_way() {
     // scalars, so a plain "istanbul" needle does NOT match it.
     assert!(filtered(&model, "istanbul").is_empty());
     assert_eq!(filtered(&model, "İstanbul"), ["dotted"]);
+}
+
+/// …and lowercasing is not case FOLDING either, which is the second
+/// half of CD-22: `ß` folds to `ss` but lowercases to itself, so the
+/// two rules disagree here and core follows lowercasing.
+#[test]
+fn filter_lowercases_rather_than_case_folds() {
+    let model = model_of(
+        &serde_json::json!({"nodes":[
+            {"id":"sharp","type":"text","text":"Straße","x":0,"y":0,"width":10,"height":10},
+            {"id":"double","type":"text","text":"STRASSE","x":0,"y":100,"width":10,"height":10}
+        ],"edges":[]})
+        .to_string(),
+    );
+    // A case FOLD would make these two match each other; lowercasing
+    // does not, and lowercasing is what core does.
+    assert_eq!(filtered(&model, "strasse"), ["double"]);
+    assert_eq!(filtered(&model, "straße"), ["sharp"]);
 }
 
 // ---------------------------------------------------------------------------

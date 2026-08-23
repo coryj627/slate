@@ -302,10 +302,19 @@ pub fn group_rect_around(model: &CanvasModel, members: &[NodeId]) -> Option<Rect
 /// separator never matches. Both are shipped mac behaviour, preserved
 /// deliberately.
 ///
-/// Folding is Rust's full Unicode simple lowercase, locale-independent,
-/// where mac used `localizedCaseInsensitiveContains`; trimming is
-/// Rust's, which unlike Swift's `.whitespaces` also removes newlines
-/// (CD-22).
+/// Both sides are lowercased with [`str::to_lowercase`] before the
+/// containment test. That is Unicode's `Lowercase_Mapping`,
+/// locale-independent and NOT a case fold: it is full (one scalar can
+/// become several — `İ` U+0130 lowercases to `i` + combining dot
+/// above), and it leaves the pairs case folding would collapse (`ß`
+/// stays `ß` and never matches `SS`; final sigma is the documented
+/// exception it does handle). So this diverges from mac's
+/// `localizedCaseInsensitiveContains` — locale-sensitive, no full
+/// mapping — AND from a strict simple case fold, in different places.
+/// The three agree across ASCII and Latin-1, which is the whole fixture
+/// corpus; `filter_folds_case_the_unicode_way_not_the_turkish_way`
+/// pins the cases where they do not. Trimming is Rust's, which unlike
+/// Swift's `.whitespaces` also removes newlines. (CD-22.)
 pub fn filter(model: &CanvasModel, query: &str) -> Vec<NodeId> {
     let needle = query.trim();
     if needle.is_empty() {
@@ -345,10 +354,15 @@ pub fn new_id() -> String {
     let mut bytes = [0u8; 8];
     if getrandom::fill(&mut bytes).is_err() {
         // The OS entropy source is unavailable — vanishingly unlikely,
-        // and a panic here would kill a user's committed action. Fall
-        // back to process-local entropy (the hasher's per-process
-        // random seed, mixed with the clock) rather than returning a
-        // predictable constant.
+        // and a panic here would kill a user's committed action.
+        //
+        // The fallback is NOT a second source of randomness with any
+        // guarantee behind it. `RandomState` promises only that its
+        // keys are "not predictable across program invocations"; it is
+        // not documented as CSPRNG-backed, and hashing the clock adds
+        // resolution, not entropy. It is here so an id is still minted
+        // and still differs from its neighbours in one process, and it
+        // is unreachable on every platform this ships to.
         use std::hash::{BuildHasher, Hasher};
         let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
         hasher.write_u128(
