@@ -1353,6 +1353,55 @@ Read during PR 0b (Task 0b-1), none of it this task's to fix:
   "once per open" is "once per mounted container"; the banner renders
   the SAME event, so the two spellings cannot drift.
 
+### Task 0b-1 (the Rust + FFI + Windows-harness half)
+
+- **Mac's speakable names are NOT duplicated; the defect is narrower.**
+  The research report claimed mac's loop yields `A`, `A 2`, `A 2` on
+  document order `A`, `A`, `A 2`. Re-deriving both algorithms side by
+  side shows it does not: its `while used.contains(candidate)` keeps
+  incrementing, so mac produces `A`, `A 2`, `A 2 2` — unique. What it
+  lacks is the check against REAL titles, so a generated ordinal can
+  spell a different card's actual title and a Voice Control user who
+  says what they read lands on the wrong card. 0b-5 records the
+  correction rather than editing the claim away, because the wrong
+  version reached a commit message on this branch first.
+- **A census can assert the wrong property and look green.** The
+  speakable-name census asserted uniqueness, which mac satisfies too;
+  deleting the taken-guard left it passing and failed only the three
+  fixture tests. It now also asserts that no GENERATED name spells
+  another card's display title, which is the property the guard exists
+  for, and deleting the guard fails it.
+- **`(y, x)` order is not `Below` → `RightOf`.** Contract 0b-12's first
+  draft said the inside-group lattice is visited in `(y, x)` order and
+  called that `place_new`'s preference; `(y, x)` exhausts a ROW first,
+  which is `RightOf`. Caught by having to write
+  `inside_group_prefers_below_then_right`, which had to pick one. The
+  code walks a column top to bottom before moving right.
+- **`speakable_name` had to reach `CardSummary`, not just the session.**
+  Putting it in the session layer would have meant computing it per
+  query and twice for a row type that also feeds the scene; on the
+  summary it is derived once per model, which is also what makes the
+  0b-6 join a hash lookup rather than a second derivation.
+- **`target` moved into `CardSummary` too.** The filter matches it, and
+  `canvas_db` had its own `match` on node kind for the column. Two
+  spellings of "what does this card point at" is exactly the §W-G
+  failure mode, inside core this time; the column now writes the
+  summary's field.
+- **`getrandom` was already in the lock** (via `tempfile`, a direct
+  slate-core dependency), so `canvas_new_id` cost no new crate. It is
+  the whole dependency: the id is 16 hex characters with `'4'` at index
+  12, which needs randomness and no UUID type at all.
+- **The parity harness needed a second vault, not a second loop.**
+  Copying the canvas fixtures into the markdown vault would have
+  changed what `search`, `links`, `tasks` and `properties` see. With
+  its own vault, regenerating produced exactly one new artifact and
+  left the other twenty-eight byte-identical.
+- **Not built, deliberately:** `canvas_containing_group_of_rect` (the
+  transient-rect form of `parent_of`) and `canvas_roots`. The research
+  report suggests both; neither is in PR 0b's deliverable list, and
+  PR F is the first caller that would need the former. Recorded here so
+  the omission is a decision rather than an oversight.
+
 ---
 
 ## Round record
