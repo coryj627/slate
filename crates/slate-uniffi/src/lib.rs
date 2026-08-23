@@ -11086,6 +11086,150 @@ mod tests {
         }
     }
 
+    /// The mac coalescer's class switch must agree with the ONE list
+    /// core pins (contracts doc 0a-8, and 0b-17 which adds this test).
+    ///
+    /// Coalescing TIMING is host-side by design — a pure render has no
+    /// clock — but the class MEMBERSHIP is not: both hosts collapse the
+    /// same bursts only if they route the same events into the same
+    /// classes. 0a-8 put that list in one Rust doc comment and asked
+    /// the hosts to copy it, and nothing checked that the copy stayed
+    /// faithful. A core event added to the navigation or filter class
+    /// that mac's switch does not route now fails `cargo test`, in the
+    /// same fast lane as the two corpus-mirror tripwires — rather than
+    /// after a full `generate-bindings` + host round trip, or never.
+    ///
+    /// SCOPE: membership per class, both directions. The 200 ms window,
+    /// the latest-wins rule and the High-flushes-and-drops rule stay
+    /// the hosts' own tests (`CanvasAnnouncerTests`).
+    #[test]
+    fn the_mac_coalescing_switch_matches_the_pinned_class_list() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let core_source = std::fs::read_to_string(manifest.join("../slate-core/src/a11y.rs"))
+            .expect("core a11y source");
+        let swift = std::fs::read_to_string(
+            manifest.join("../../apps/slate-mac/Sources/SlateMac/Canvas/CanvasAnnouncer.swift"),
+        )
+        .expect("mac announcer source");
+
+        /// uniffi lower-camelises Swift case names; every name in this
+        /// vocabulary is CamelCase, so lowering the first character is
+        /// the same transform.
+        fn lower_first(name: &str) -> String {
+            let mut chars = name.chars();
+            match chars.next() {
+                Some(first) => first.to_ascii_lowercase().to_string() + chars.as_str(),
+                None => String::new(),
+            }
+        }
+
+        // --- The pinned list: core's own doc comment -----------------
+        // Bounded to the class-key section so a variant named anywhere
+        // else in the module doc cannot be counted.
+        let pinned_section = core_source
+            .split_once("// ## Coalescing class keys")
+            .expect("the coalescing class-key section")
+            .1;
+        let pinned_section = pinned_section
+            .split_once("// - Everything else posts immediately")
+            .expect("the section's terminator")
+            .0;
+
+        let mut pinned: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut current: Option<String> = None;
+        for chunk in pinned_section.split("// - **`") {
+            let Some((class, rest)) = chunk.split_once("`**") else {
+                continue;
+            };
+            current = Some(class.to_string());
+            let entry = pinned.entry(class.to_string()).or_default();
+            for (at, marker) in rest.match_indices("[`CanvasA11yEvent::") {
+                let name: String = rest[at + marker.len()..]
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric())
+                    .collect();
+                entry.insert(lower_first(&name));
+            }
+        }
+        assert!(
+            current.is_some() && pinned.values().all(|names| !names.is_empty()),
+            "the class-key doc comment parsed to nothing; its shape changed"
+        );
+
+        // Every name the doc comment comes from must still BE a variant
+        // — a rename that misses the comment is the other way this rots.
+        let variants: BTreeSet<String> = {
+            let decl = core_source
+                .find("pub enum CanvasA11yEvent {")
+                .expect("CanvasA11yEvent declaration");
+            let body = &core_source[decl..];
+            let body = &body[..body.find("\n}\n").expect("enum terminator")];
+            body.lines()
+                .map(str::trim)
+                .filter(|line| line.starts_with(|c: char| c.is_ascii_uppercase()))
+                .map(|line| {
+                    lower_first(
+                        &line
+                            .chars()
+                            .take_while(|c| c.is_ascii_alphanumeric())
+                            .collect::<String>(),
+                    )
+                })
+                .collect()
+        };
+        for (class, names) in &pinned {
+            for name in names {
+                assert!(
+                    variants.contains(name),
+                    "the {class} class lists {name}, which is not a CanvasA11yEvent variant"
+                );
+            }
+        }
+
+        // --- The copy: mac's switch ----------------------------------
+        let switch = swift
+            .split_once("func coalescingClass(of event: CanvasA11yEvent) -> EventClass?")
+            .expect("mac coalescing switch")
+            .1;
+        let switch = switch
+            .split_once("default:")
+            .expect("the switch's default arm")
+            .0;
+
+        let mut mac: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for arm in switch.split("case ").skip(1) {
+            let (cases, tail) = arm.split_once(':').expect("case arm ends in a colon");
+            let class: String = tail
+                .split_once("return .")
+                .expect("case arm returns a class")
+                .1
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric())
+                .collect();
+            let entry = mac.entry(class).or_default();
+            for (at, _) in cases.match_indices('.') {
+                let name: String = cases[at + 1..]
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric())
+                    .collect();
+                if !name.is_empty() {
+                    entry.insert(name);
+                }
+            }
+        }
+
+        assert_eq!(
+            mac, pinned,
+            "mac's coalescing switch and the class list core pins (0a-8) disagree. \
+             Left is CanvasAnnouncer.swift, right is the a11y.rs doc comment; a core \
+             event in either class that the switch does not route is spoken \
+             uncoalesced on mac and coalesced on Windows, which is a §W-D difference \
+             no corpus entry can show."
+        );
+    }
+
     /// The FFI mirror must carry EVERY core variant.
     ///
     /// `From<A11yEvent> for core::a11y::A11yEvent` is exhaustive, so the
