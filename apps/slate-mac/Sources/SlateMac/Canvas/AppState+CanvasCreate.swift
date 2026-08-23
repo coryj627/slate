@@ -292,18 +292,18 @@ extension AppState {
                 .canvasStatus(note: .notInAGroup(title: row.title)))
             return
         }
-        // Enclosing group by t1 containment: center inside, smallest
-        // area wins (title lookups would break on duplicate labels).
-        let cx = node.x + node.width / 2
-        let cy = node.y + node.height / 2
-        let parent = doc.scene.nodes
-            .filter {
-                $0.kind == "group" && $0.nodeId != selected
-                    && cx > $0.x && cx < $0.x + $0.width
-                    && cy > $0.y && cy < $0.y + $0.height
-            }
-            .min { $0.width * $0.height < $1.width * $1.height }
-        guard let parent else {
+        // §W-G row D: the enclosing group is core's `canvas_parent_of`
+        // (contract 0b-8) — the same `GroupTree` the outline's depth
+        // and group path already come from, so this verb and the rows
+        // it moves can no longer disagree about who contains what. The
+        // strict-centre / smallest-area filter that lived here is
+        // gone, and with it mac's equal-area tie-break: core keeps the
+        // LATER document order (CD-18), observable only for exactly
+        // coincident group rects.
+        let parentLookup = try? session.canvasParentOf(handle: handle, nodeId: selected)
+        guard let parentId = parentLookup ?? nil,
+            let parent = doc.scene.nodes.first(where: { $0.nodeId == parentId })
+        else {
             canvasAnnouncer.announce(
                 .canvasStatus(note: .notInAGroup(title: row.title)))
             return

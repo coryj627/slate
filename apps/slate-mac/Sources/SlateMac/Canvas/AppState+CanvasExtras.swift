@@ -114,8 +114,8 @@ extension AppState {
     // MARK: Duplicate (selection or marked set — ONE action)
 
     /// Duplicate the marked set (rigid unit) or the selected card.
-    /// Groups expand to their geometric members (t1 strict-center
-    /// containment), so a duplicated frame keeps its cards. Engine
+    /// Groups expand to the members core's containment tree gives them
+    /// (§W-G row D), so a duplicated frame keeps its cards. Engine
     /// set-placement preserves pairwise offsets; edges are not copied
     /// (cards duplicate, connections are authored intent).
     func canvasDuplicate() {
@@ -131,26 +131,24 @@ extension AppState {
         }
         let nodesById = Dictionary(
             uniqueKeysWithValues: doc.scene.nodes.map { ($0.nodeId, $0) })
-        // Expand groups to members by strict-center containment.
-        var expanded: [String] = []
-        var included = Set<String>()
-        for id in doc.outline.map(\.nodeId) {  // reading order, deterministic
-            guard let node = nodesById[id] else { continue }
-            let directlyPicked = seed.contains(id)
-            let insidePickedGroup = seed.contains { pickedId in
-                guard pickedId != id, let group = nodesById[pickedId],
-                    group.kind == "group"
-                else { return false }
-                let cx = node.x + node.width / 2
-                let cy = node.y + node.height / 2
-                return cx > group.x && cx < group.x + group.width
-                    && cy > group.y && cy < group.y + group.height
-            }
-            if (directlyPicked || insidePickedGroup) && !included.contains(id) {
-                expanded.append(id)
-                included.insert(id)
+        // §W-G row D: a picked group brings its members, and membership
+        // is core's `GroupTree` (`canvas_children_of`, contract 0b-8)
+        // rather than a centre-in-rect test written out again here.
+        // Walked transitively, because a picked group's members include
+        // the contents of the groups it contains. `children_of` answers
+        // `[]` for a card, so the walk needs no kind test of its own.
+        var members = Set(seed)
+        var pending = seed
+        while let id = pending.popLast() {
+            let children =
+                (try? session.canvasChildrenOf(handle: handle, groupId: id)) ?? []
+            for child in children where !members.contains(child) {
+                members.insert(child)
+                pending.append(child)
             }
         }
+        // Reading order, from the one projection (§W-G row F).
+        let expanded = canvasInReadingOrder(Array(members), in: doc)
         do {
             let boxes = expanded.compactMap { id -> CanvasRect? in
                 nodesById[id].map {
