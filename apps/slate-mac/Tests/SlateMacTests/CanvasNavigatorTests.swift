@@ -153,6 +153,89 @@ final class CanvasNavigatorTests: XCTestCase {
         XCTAssertEqual(doc.selection.selected, "c")
     }
 
+    /// The state machine behind "which documents can the navigator
+    /// verbs even reach" — the coverage whose absence let W6-1 0b-2
+    /// describe the wrong states in its own report.
+    ///
+    /// `activeCanvasDocument` gates on `.ready`, so a degraded load, a
+    /// canvas moved to Trash and a failed retarget are ALL unreachable
+    /// by every navigator verb — before and after the PR 0b migration.
+    /// Exactly one state pairs `.ready` with no native handle: the
+    /// window `beginBatchRetarget` opens between a physical move
+    /// landing and its background reopen. That window is what any claim
+    /// about handle-less navigation is actually about.
+    func testOnlyTheBatchRetargetWindowPairsReadyWithNoHandle() async throws {
+        let state = try await makeState()
+        let doc = try XCTUnwrap(state.activeCanvasDocument)
+        XCTAssertNotNil(doc.handle, "a ready canvas owns its handle")
+
+        // The reopening window: the snapshot stays visible and READY,
+        // the path-bound handle is detached for the caller to close
+        // off-main, and the replacement is prepared in the background.
+        let reservation = doc.beginBatchRetarget(to: doc.path)
+        XCTAssertNotNil(reservation.replacedHandle, "the old handle is handed over, not leaked")
+        XCTAssertEqual(doc.state, .ready, "the snapshot stays visible — no blank pane")
+        XCTAssertNil(doc.handle, "…but nothing may write through the moved-away path")
+        XCTAssertTrue(doc.hasPendingRetargetPreparation)
+        XCTAssertTrue(
+            state.activeCanvasDocument === doc,
+            "the verbs can still reach it: this is the one window that matters")
+
+        // Movement still works and still SPEAKS here — the filtered
+        // outline falls back to the published snapshot when no handle
+        // can answer, so the window is not an announcement blackout.
+        posted = []
+        state.canvasSelectAdjacent(offset: 1)
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertEqual(doc.selection.selected, "g1")
+        XCTAssertFalse(posted.isEmpty, "arrow movement narrates in the reopening window")
+
+        // Mutations are refused with a spoken reason, not silently
+        // dropped — the admission ladder already covers this window.
+        guard case .canvas(.reopening)? = state.canvasMutationRefusal(for: doc) else {
+            return XCTFail(
+                "the reopening window must refuse mutations audibly, got "
+                    + "\(String(describing: state.canvasMutationRefusal(for: doc)))")
+        }
+
+        // The four STRUCTURAL verbs answer from core, which needs the
+        // handle, so they currently say nothing here. Pinned as the
+        // present behaviour and flagged, NOT endorsed: restoring speech
+        // needs either a read-only handle for this window or a
+        // navigation-specific sentence, and both are controller calls
+        // (task-0b2-report.md, "Ruling 2"). Whichever lands, this is
+        // where it shows up.
+        func assertStillSilent(_ label: String, _ verb: () -> Void) {
+            self.posted = []
+            verb()
+            state.canvasAnnouncer.flushForTests()
+            XCTAssertTrue(self.posted.isEmpty, "OPEN RULING — \(label) spoke: \(self.posted)")
+        }
+        assertStillSilent("enter group") { state.canvasEnterGroup() }
+        assertStillSilent("exit group") { state.canvasExitGroup() }
+        assertStillSilent("trace path") { state.canvasTracePath() }
+        assertStillSilent("fit canvas") { state.canvasFitCanvas() }
+    }
+
+    /// The counterpart: the states 0b-2's report wrongly named are gated
+    /// out one level higher, so no navigator verb has ever run in them.
+    func testNonReadyCanvasesAreUnreachableByEveryNavigatorVerb() async throws {
+        let state = try await makeState()
+        let doc = try XCTUnwrap(state.activeCanvasDocument)
+        XCTAssertFalse(doc.outline.isEmpty)
+
+        doc.markMovedToTrash(session: state.currentSession)
+        guard case .failed = doc.state else {
+            return XCTFail("a trashed canvas lands in .failed, got \(doc.state)")
+        }
+        XCTAssertFalse(
+            doc.outline.isEmpty,
+            "the published snapshot survives — which is why it looked navigable")
+        XCTAssertNil(
+            state.activeCanvasDocument,
+            "…but `.ready` is the gate, so no verb reaches it either way")
+    }
+
     func testEnterExitGroupBoundaries() async throws {
         let state = try await makeState()
         let doc = try XCTUnwrap(state.activeCanvasDocument)

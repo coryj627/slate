@@ -1653,18 +1653,30 @@ every deleted symbol was re-grepped to zero afterwards.
   level" for a card that is not on the canvas would be a new sentence);
   trace-path still names its start card from the outline row, so the
   `No outgoing path from "X".` string is composed where it always was.
-- **Structural navigation on a handle-less snapshot goes SILENT, and
-  that is a narrowing.** Enter-group, exit-group, trace-path and
-  fit-canvas used to answer off `doc.outline` / `doc.scene` alone, so
-  they still spoke (`Not a group.`, `At canvas level.`,
-  `No outgoing path from "X".`) on a document whose native handle was
-  gone — a canvas moved to Trash, or one whose retarget failed. They
-  now require the handle, because the answer is core's, and return
-  without announcing when it is missing. Those states are read-only
-  snapshots where every mutation is already refused with a spoken
-  reason, and no test covered the combination; recorded because it is a
-  real change to what a user hears in a rare state, not because
-  anything caught it.
+- **Structural navigation on a handle-less snapshot goes SILENT — in
+  ONE window, not the three the first draft of this note named.** That
+  draft said "a canvas moved to Trash, or one whose retarget failed",
+  and both are wrong: `activeCanvasDocument` gates on `case .ready`, so
+  a degraded load, a trashed canvas and a failed retarget are
+  unreachable by EVERY navigator verb, before and after this migration.
+  (t0 §5's degraded-canvas navigability is therefore a pre-existing mac
+  gap — a degraded load clears `outline` and releases the handle — not
+  something PR 0b changed.) The claim was written from the shape of the
+  code rather than from its reachability, which is the same class of
+  error the round record already carries twice.
+  **The one state that pairs `.ready` with no handle is
+  `beginBatchRetarget`'s window**: between a physical move landing and
+  its background reopen, the snapshot stays visible and READY while the
+  path-bound handle is detached so nothing can save through the
+  moved-away path. Arrow movement still narrates there (the filtered
+  outline falls back to the published snapshot), and mutations are
+  refused audibly (`CanvasMutationRefusal::Reopening`) — but
+  enter-group, exit-group, trace-path and fit-canvas now say nothing.
+  `testOnlyTheBatchRetargetWindowPairsReadyWithNoHandle` and
+  `testNonReadyCanvasesAreUnreachableByEveryNavigatorVerb` pin both
+  halves; the silence is flagged in the first as an OPEN RULING, not
+  endorsed. Restoring speech there needs either a read-only handle for
+  the window or a navigation-specific sentence — see the task report.
 - **`filterActive` did not move, and that is a decision.** It is UI
   state — the Clear button, the summary, the Esc rung — not the match
   rule, so it keeps Foundation's `.whitespaces` trimming. The one input
