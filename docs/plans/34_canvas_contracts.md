@@ -929,6 +929,43 @@ wait before making changes — the wrong sentence for the trigger. The two
 now differ exactly where the user's intent differs: the write refusal
 names the changes, the read refusal names the retry.
 
+**It also covers the FILTER family.** `canvas_filter` is a structural
+query like the other four, and the filter has a second failure mode the
+navigation verbs do not: a stale answer that still looks like an answer.
+The rule is *never a wrong number*:
+
+- an ACTIVE filter whose needle is UNCHANGED keeps serving the memoized
+  match set — those ids are still correct, so nothing is announced
+  differently;
+- a needle CHANGE that no handle can answer does **not** apply. The
+  previous rows stay on screen and VA-1 is announced instead of a count.
+  Widening silently back to the full outline — which is what a naive
+  "no answer ⇒ no filter" fallback does — would show every card while
+  the field still claims to be filtering, and then speak that number as
+  a match count;
+- the count the host announces is read from the view the surfaces are
+  DISPLAYING, never recomputed, so *displayed rows == announced count*
+  holds by construction. `CanvasDocument.FilterView` is that one value,
+  and the summary label, the outline, the table and the announcement all
+  read it;
+- `NoCardsMatchFilter` is unaffected outside the window.
+
+**And it sets the rule for THROW arms.** A structural query can fail two
+ways, and they get different sentences because they are different facts:
+
+| Failure | Sentence | Why |
+|---|---|---|
+| No handle (the reopening window) | VA-1 | the query never ran |
+| The query THREW with a live handle | `Nothing selected.` | `bad_node` — the selection does not name a card this canvas can answer for (0b-6's row/model skew) |
+| The query SUCCEEDED and came back empty | the verb's own phrase — `Group "X" is empty.`, `At canvas level.`, `No outgoing path from "X".` | that fact was actually learned |
+
+Silence is not on the list. The middle row is the one that was wrong
+before: a throw fell into the verb's empty-answer branch, so a card core
+could not resolve was reported as an empty group, or as being at canvas
+level, or (trace path) as nothing at all. Announcing a verb-specific
+phrase for a query that never answered asserts something no query
+returned.
+
 **Lockstep.** Five places moved together: the `CanvasStatusNote` arm and
 its render, the corpus entry (**appended**, so no pre-existing corpus
 index moves — contract 0a-2), the in-file golden table, the regenerated
@@ -1786,6 +1823,20 @@ every deleted symbol was re-grepped to zero afterwards.
   another way, and safety invariants that depend on every caller
   remembering a guard are the ones that fail quietly. (Controller
   ruling, W6-1 0b-2 fix round 2.)
+- **One row-F caller is not behind admission, and the cost is
+  cosmetic.** `canvasInReadingOrder` answers `[]` without a handle, and
+  its first doc comment claimed every caller was behind
+  `admitCanvasMutation`. Not true: the card picker's `excluded:`
+  argument is a sheet BODY, re-evaluated on every SwiftUI pass, so a
+  reopening window opening while the sheet is up leaves it empty and the
+  picker stops hiding the moving set. Picking one of those rows is still
+  refused downstream — `canvasPlaceRelative` guards
+  `!moving.contains(target)` and announces
+  `Pick a card outside the moving set.` — so no wrong placement is
+  reachable through it; the user is offered rows that would otherwise be
+  omitted. Left as-is deliberately (the alternative is threading a
+  handle into a sheet body for a transient cosmetic), with the comment
+  corrected to say what is true.
 - **`filterActive` did not move, and that is a decision.** It is UI
   state — the Clear button, the summary, the Esc rung — not the match
   rule, so it keeps Foundation's `.whitespaces` trimming. The one input

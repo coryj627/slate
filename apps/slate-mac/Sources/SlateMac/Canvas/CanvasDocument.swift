@@ -249,7 +249,28 @@ final class CanvasDocument: ObservableObject {
         !filterText.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
-    /// Rows matching the filter, in reading order. The MATCH is core's
+    /// What the surfaces are showing for the filter, and whether that
+    /// answers the needle now in the field.
+    ///
+    /// Every consumer reads this one value, so the rows on screen, the
+    /// summary's number and the announced count cannot come from three
+    /// different answers — the invariant is *displayed rows == announced
+    /// count*, always.
+    struct FilterView {
+        /// Exactly what the surfaces display.
+        let rows: [CanvasOutlineRow]
+        /// True when a filter narrowed `rows` at all.
+        let narrowed: Bool
+        /// True when `rows` answer the needle in the field. False means
+        /// no handle could answer it and the PREVIOUS answer is still on
+        /// screen — the caller must say so rather than count these rows
+        /// as if they matched what the user just typed.
+        let current: Bool
+    }
+
+    /// What the surfaces show for the current needle, in reading order.
+    ///
+    /// The MATCH is core's
     /// `canvas_filter` (§W-G row K, contracts 0b-13 / 0b-14): title,
     /// the `kind` type word, any ONE element of the group path, and the
     /// activation target — the same four fields, and the same
@@ -261,28 +282,53 @@ final class CanvasDocument: ObservableObject {
     /// The needle goes over UNTRIMMED: core trims it and an empty
     /// needle matches everything, so whitespace answers the full
     /// outline exactly as `filterActive` says it should.
-    func filteredOutline(session: VaultSession?) -> [CanvasOutlineRow] {
-        guard filterActive, let matches = filterMatches(session: session) else {
-            return outline
+    ///
+    /// **The reopening window** (`beginBatchRetarget`: `.ready`, no
+    /// handle) is why this returns a view rather than rows. An
+    /// unchanged needle keeps serving the memoized answer, which is
+    /// still correct. A CHANGED needle cannot be answered, so the
+    /// previous answer stays on screen and `current` is false — never
+    /// the full outline, which would silently widen the display while
+    /// the field still claims to be filtering.
+    ///
+    /// The answer is memoized per needle: SwiftUI reads the filtered
+    /// rows several times per body pass, and at the §K 2,000-node budget
+    /// each read would otherwise be another `canvas_filter` round trip.
+    /// The memo is invalidated wherever `neighborsCache` is, because the
+    /// ids can move under an unchanged needle — and deliberately NOT by
+    /// `beginBatchRetarget`, which is what lets the window keep serving
+    /// a correct answer for an unchanged needle.
+    func filterView(session: VaultSession?) -> FilterView {
+        guard filterActive else {
+            return FilterView(rows: outline, narrowed: false, current: true)
         }
-        return outline.filter { matches.contains($0.nodeId) }
+        if let cached = filterMatchCache, cached.needle == filterText {
+            return FilterView(rows: rows(matching: cached.ids), narrowed: true, current: true)
+        }
+        if let session, let handle,
+            let matched = try? session.canvasFilter(handle: handle, query: filterText)
+        {
+            let ids = Set(matched)
+            filterMatchCache = (needle: filterText, ids: ids)
+            return FilterView(rows: rows(matching: ids), narrowed: true, current: true)
+        }
+        if let cached = filterMatchCache {
+            return FilterView(rows: rows(matching: cached.ids), narrowed: true, current: false)
+        }
+        // Nothing was ever applied, so the unfiltered outline IS the
+        // prior view. `narrowed: false` keeps the summary from claiming
+        // these rows matched anything.
+        return FilterView(rows: outline, narrowed: false, current: false)
     }
 
-    /// Memoized per needle: SwiftUI reads the filtered rows several
-    /// times per body pass, and at the §K 2,000-node budget each read
-    /// is another `canvas_filter` round trip. Invalidated wherever
-    /// `neighborsCache` is, because the ids can move under the same
-    /// needle.
-    private func filterMatches(session: VaultSession?) -> Set<String>? {
-        if let cached = filterMatchCache, cached.needle == filterText {
-            return cached.ids
-        }
-        guard let session, let handle,
-            let matched = try? session.canvasFilter(handle: handle, query: filterText)
-        else { return nil }
-        let ids = Set(matched)
-        filterMatchCache = (needle: filterText, ids: ids)
-        return ids
+    /// The rows the surfaces show — `filterView`'s rows, for the callers
+    /// that need nothing else.
+    func filteredOutline(session: VaultSession?) -> [CanvasOutlineRow] {
+        filterView(session: session).rows
+    }
+
+    private func rows(matching ids: Set<String>) -> [CanvasOutlineRow] {
+        outline.filter { ids.contains($0.nodeId) }
     }
 
     /// Hypothetical geometry while a move/resize mode is active

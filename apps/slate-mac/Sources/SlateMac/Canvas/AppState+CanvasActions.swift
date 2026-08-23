@@ -521,10 +521,21 @@ extension AppState {
     /// `canvas_order_nodes` (§W-G row F, contract 0b-10). Unknown ids
     /// drop silently (a mark left over from an external write is not
     /// fatal), duplicates collapse to one reading-order position, and
-    /// an empty input gives an empty output. Without a live handle
-    /// there is no reading order to project onto, and every caller is
-    /// behind `admitCanvasMutation`, which refuses in exactly that
-    /// case.
+    /// an empty input gives an empty output.
+    ///
+    /// **Without a live handle this answers `[]`**, and the callers
+    /// divide into two kinds. The mutating ones — move mode, place
+    /// relative, duplicate, and the three bulk verbs — are all behind
+    /// `admitCanvasMutation`, which refuses before they get here, so
+    /// they never see the empty answer. The card picker's `excluded:`
+    /// argument is NOT: it is a sheet BODY, re-evaluated on every
+    /// SwiftUI pass, so a reopening window that opens while the sheet is
+    /// up leaves it empty. The cost is cosmetic — the picker stops
+    /// hiding the moving set, offering rows it would otherwise omit —
+    /// and picking one is still refused downstream by
+    /// `canvasPlaceRelative`'s `!moving.contains(target)` guard with
+    /// `Pick a card outside the moving set.` No silent wrong placement
+    /// is reachable through it.
     func canvasInReadingOrder(_ ids: [String], in doc: CanvasDocument) -> [String] {
         guard let session = currentSession, let handle = doc.handle else { return [] }
         return (try? session.canvasOrderNodes(handle: handle, ids: ids)) ?? []

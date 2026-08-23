@@ -46,6 +46,23 @@ extension AppState {
         canvasAnnouncer.announce(.canvasStatus(note: .reopening))
     }
 
+    /// The other never-silent arm: the query THREW while the handle was
+    /// live. Every structural query in this file refuses an id the model
+    /// does not hold with `bad_node`, so a throw here means the
+    /// selection no longer names a card this canvas can answer for —
+    /// rows outrunning the handle after an external write plus rescan
+    /// (contract 0b-6's skew).
+    ///
+    /// `Nothing selected.` is the accurate existing phrase for that:
+    /// nothing RESOLVABLE is selected. It is deliberately not the
+    /// verb-specific phrase, because none of those was learned — the
+    /// group might have children, the card might have a path, the row
+    /// might not be at canvas level. Announcing one of those would be
+    /// asserting an answer the query never gave.
+    private func canvasAnnounceSelectionUnresolvable() {
+        canvasAnnouncer.announce(.canvasStatus(note: .nothingSelected))
+    }
+
     /// Move selection to the next/previous card in reading order.
     func canvasSelectAdjacent(offset: Int) {
         guard let doc = activeCanvasDocument else { return }
@@ -83,19 +100,31 @@ extension AppState {
     /// contract 0b-8), whose sibling order `(y, x, document index)` is
     /// the order the outline's depth-first walk emits — so the first
     /// child is the same card it always was.
+    ///
+    /// The selection is checked BEFORE the handle, so "nothing
+    /// selected" answers the same way in every state — the reopening
+    /// window must not turn a selection question into a reopening one.
     func canvasEnterGroup() {
         guard let doc = activeCanvasDocument else { return }
+        guard let selected = doc.selection.selected,
+            let row = doc.outline.first(where: { $0.nodeId == selected })
+        else {
+            return canvasAnnounceSelectionUnresolvable()
+        }
         guard let session = currentSession, let handle = doc.handle else {
             return canvasAnnounceStructuralQueryUnavailable(for: doc)
         }
-        guard let selected = doc.selection.selected,
-            let row = doc.outline.first(where: { $0.nodeId == selected })
-        else { return }
         guard row.kind == "group" else {
             canvasAnnouncer.announce(.canvasStatus(note: .notAGroup))
             return
         }
-        let children = (try? session.canvasChildrenOf(handle: handle, groupId: selected)) ?? []
+        // A THROW is not an empty group — see
+        // `canvasAnnounceSelectionUnresolvable`. Only a successful query
+        // that came back empty may claim the group is empty.
+        guard let children = try? session.canvasChildrenOf(handle: handle, groupId: selected)
+        else {
+            return canvasAnnounceSelectionUnresolvable()
+        }
         guard let firstChild = children.first else {
             canvasAnnouncer.announce(.canvasStatus(note: .groupIsEmpty(label: row.title)))
             return
@@ -112,19 +141,20 @@ extension AppState {
     /// parent — is exactly "at canvas level".
     func canvasExitGroup() {
         guard let doc = activeCanvasDocument else { return }
+        guard let selected = doc.selection.selected else {
+            return canvasAnnounceSelectionUnresolvable()
+        }
         guard let session = currentSession, let handle = doc.handle else {
             return canvasAnnounceStructuralQueryUnavailable(for: doc)
         }
-        guard let selected = doc.selection.selected,
-            // A selection the canvas no longer holds returns SILENTLY,
-            // as it did when the outline row lookup failed: core would
-            // refuse that id with `bad_node`, and reporting "at canvas
-            // level" for a card that is not on the canvas would be a
-            // new sentence, not a migration.
-            doc.outline.contains(where: { $0.nodeId == selected })
-        else { return }
-        let parentLookup = try? session.canvasParentOf(handle: handle, nodeId: selected)
-        guard let parent = parentLookup ?? nil else {
+        // A THROW is not "at canvas level" — a card the canvas cannot
+        // resolve has no level. Only a successful query returning no
+        // parent may say that.
+        guard let parentLookup = try? session.canvasParentOf(handle: handle, nodeId: selected)
+        else {
+            return canvasAnnounceSelectionUnresolvable()
+        }
+        guard let parent = parentLookup else {
             canvasAnnouncer.announce(.canvasStatus(note: .atCanvasLevel))
             return
         }
@@ -180,12 +210,17 @@ extension AppState {
     /// the dead end mac spelled as `visited.count == 1`.
     func canvasTracePath() {
         guard let doc = activeCanvasDocument else { return }
+        guard let start = doc.selection.selected else {
+            return canvasAnnounceSelectionUnresolvable()
+        }
         guard let session = currentSession, let handle = doc.handle else {
             return canvasAnnounceStructuralQueryUnavailable(for: doc)
         }
-        guard let start = doc.selection.selected,
-            let hops = try? session.canvasTracePath(handle: handle, nodeId: start)
-        else { return }
+        // A THROW is not a dead end: `No outgoing path from "X".` is
+        // spoken only when the walk actually came back with no hops.
+        guard let hops = try? session.canvasTracePath(handle: handle, nodeId: start) else {
+            return canvasAnnounceSelectionUnresolvable()
+        }
         let startTitle = doc.outline.first { $0.nodeId == start }?.title
         guard let last = hops.last else {
             canvasAnnouncer.announce(

@@ -24,8 +24,8 @@ import Foundation
 /// number formats it itself and takes `noun` for the agreement alone
 /// (see `SidebarFileRow`'s word count).
 ///
-/// **Need core's GROUPED form?** Call the `countNoun(count:singular:
-/// plural:)` FFI export — core's `count_noun` itself, the one
+/// **Need core's GROUPED form?** Call the FFI export
+/// `countNoun` — core's `count_noun` itself, the one
 /// definition of both the `1,000` grouping and the agreement rule. A
 /// host string that is read back BESIDE a core sentence counting the
 /// same number has to use it, or the two disagree at ≥ 1000 (W6-1

@@ -405,12 +405,22 @@ extension AppState {
 
     /// Debounced result count (t0 §1.5 — the announcer's filter
     /// category coalesces keystroke bursts).
+    ///
+    /// The number is taken from the view the surfaces are DISPLAYING,
+    /// never recomputed, so the announced count and the rows on screen
+    /// cannot disagree. When the needle changed but no handle could
+    /// answer it — the reopening window — the previous rows are still
+    /// on screen, so counting them as matches for what the user just
+    /// typed would be a false number; VA-1's sentence says why instead.
     func canvasAnnounceFilterCount(doc: CanvasDocument) {
         guard doc.filterActive else { return }
+        let view = doc.filterView(session: currentSession)
+        guard view.current else {
+            canvasAnnouncer.announce(.canvasStatus(note: .reopening))
+            return
+        }
         canvasAnnouncer.announce(
-            .canvasFilterCount(
-                matched: UInt32(
-                    clamping: doc.filteredOutline(session: currentSession).count)))
+            .canvasFilterCount(matched: UInt32(clamping: view.rows.count)))
     }
 
     // MARK: `#heading` subpath open-to-anchor (t5)

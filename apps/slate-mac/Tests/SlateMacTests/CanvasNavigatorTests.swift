@@ -230,21 +230,80 @@ final class CanvasNavigatorTests: XCTestCase {
 
     /// The counterpart: the states 0b-2's report wrongly named are gated
     /// out one level higher, so no navigator verb has ever run in them.
+    /// All three are materialized through the real lifecycle methods and
+    /// each is DRIVEN, because "unreachable" is a claim about what
+    /// happens when you press the key, not about a state enum.
     func testNonReadyCanvasesAreUnreachableByEveryNavigatorVerb() async throws {
-        let state = try await makeState()
-        let doc = try XCTUnwrap(state.activeCanvasDocument)
-        XCTAssertFalse(doc.outline.isEmpty)
+        /// Drive one verb per state and prove it neither speaks nor
+        /// moves the caret.
+        func assertInert(
+            _ label: String, _ state: AppState, _ doc: CanvasDocument, _ verb: () -> Void
+        ) {
+            let selectionBefore = doc.selection.selected
+            self.posted = []
+            verb()
+            state.canvasAnnouncer.flushForTests()
+            XCTAssertTrue(self.posted.isEmpty, "\(label): announced \(self.posted)")
+            XCTAssertEqual(
+                doc.selection.selected, selectionBefore, "\(label): selection moved")
+            XCTAssertNil(state.activeCanvasDocument, "\(label): `.ready` is the gate")
+        }
 
-        doc.markMovedToTrash(session: state.currentSession)
-        guard case .failed = doc.state else {
-            return XCTFail("a trashed canvas lands in .failed, got \(doc.state)")
+        // Each selection is set AFTER the state transition — a prepared
+        // install resets interaction state, so setting it first would
+        // leave `selectionBefore` nil and make the "did not move" check
+        // vacuous.
+
+        // --- .failed (moved to Trash) --------------------------------
+        let trashedState = try await makeState()
+        let trashed = try XCTUnwrap(trashedState.activeCanvasDocument)
+        XCTAssertFalse(trashed.outline.isEmpty)
+        trashed.markMovedToTrash(session: trashedState.currentSession)
+        guard case .failed = trashed.state else {
+            return XCTFail("a trashed canvas lands in .failed, got \(trashed.state)")
         }
         XCTAssertFalse(
-            doc.outline.isEmpty,
+            trashed.outline.isEmpty,
             "the published snapshot survives — which is why it looked navigable")
-        XCTAssertNil(
-            state.activeCanvasDocument,
-            "…but `.ready` is the gate, so no verb reaches it either way")
+        trashed.selection.selected = "g1"
+        assertInert("trashed / enter group", trashedState, trashed) {
+            trashedState.canvasEnterGroup()
+        }
+
+        // --- .degraded ------------------------------------------------
+        let degradedState = try await makeState()
+        let degraded = try XCTUnwrap(degradedState.activeCanvasDocument)
+        degraded.applyPreparedLoad(
+            .degraded(warnings: [], message: "the file is not valid JSON Canvas"))
+        guard case .degraded = degraded.state else {
+            return XCTFail("expected .degraded, got \(degraded.state)")
+        }
+        XCTAssertTrue(
+            degraded.outline.isEmpty,
+            "a degraded load CLEARS the outline — the pre-existing t0 §5 gap")
+        degraded.selection.selected = "g1"
+        assertInert("degraded / trace path", degradedState, degraded) {
+            degradedState.canvasTracePath()
+        }
+
+        // --- .retargetFailed ------------------------------------------
+        let failedState = try await makeState()
+        let failed = try XCTUnwrap(failedState.activeCanvasDocument)
+        let reservation = failed.beginBatchRetarget(to: failed.path)
+        let generation = try XCTUnwrap(failed.claimRetargetPreparation())
+        XCTAssertEqual(generation, reservation.generation)
+        XCTAssertTrue(
+            failed.applyRetargetPreparation(
+                .failed("could not reopen"), generation: generation, path: failed.path))
+        guard case .retargetFailed = failed.state else {
+            return XCTFail("expected .retargetFailed, got \(failed.state)")
+        }
+        XCTAssertFalse(
+            failed.outline.isEmpty, "the last good snapshot is retained, not blanked")
+        failed.selection.selected = "g1"
+        assertInert("retarget failed / exit group", failedState, failed) {
+            failedState.canvasExitGroup()
+        }
     }
 
     func testEnterExitGroupBoundaries() async throws {
@@ -1766,6 +1825,70 @@ extension CanvasNavigatorTests {
                 .isSuperset(of: ["g1", "a", "b"]))
         doc.filterText = ""
         XCTAssertEqual(doc.filteredOutline(session: session).count, doc.outline.count)
+    }
+
+    /// The filter in the reopening window. The rule is *never a wrong
+    /// number*: whatever the surfaces display is what gets counted and
+    /// announced, and a needle core could not answer is said out loud
+    /// rather than counted as if it had been applied.
+    func testFilterInTheReopeningWindowNeverAnnouncesAWrongCount() async throws {
+        let (state, doc) = try await normalizedState()
+        doc.filterText = "gamma"
+        // Answer it once while the handle is live, so the window has a
+        // memoized answer to keep serving.
+        XCTAssertEqual(
+            doc.filteredOutline(session: state.currentSession).map(\.title), ["Gamma"])
+
+        _ = doc.beginBatchRetarget(to: doc.path)
+        XCTAssertNil(doc.handle)
+
+        // (a) UNCHANGED needle: the memoized answer is still correct, so
+        // it keeps being served — NOT widened back to the whole canvas,
+        // which is the bug this test exists for.
+        let held = doc.filterView(session: state.currentSession)
+        XCTAssertEqual(held.rows.map(\.title), ["Gamma"])
+        XCTAssertTrue(held.narrowed)
+        XCTAssertTrue(held.current, "an unchanged needle is still answered")
+        posted = []
+        state.canvasAnnounceFilterCount(doc: doc)
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertEqual(posted, ["1 card match."], "\(posted)")
+
+        // (b) CHANGED needle: it cannot be applied, so the PRIOR view is
+        // retained and the announcement says why instead of counting.
+        doc.filterText = "alp"
+        let stale = doc.filterView(session: state.currentSession)
+        XCTAssertEqual(
+            stale.rows.map(\.title), ["Gamma"], "the prior view is retained, not widened")
+        XCTAssertFalse(stale.current, "…and it is marked as not answering the new needle")
+        posted = []
+        state.canvasAnnounceFilterCount(doc: doc)
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertEqual(
+            posted, ["This canvas is reopening. Try again in a moment."],
+            "a needle core could not answer is spoken, never counted: \(posted)")
+
+        // The invariant, asserted where it was broken: what the
+        // navigator walks, what the surfaces display and what any count
+        // would report are one and the same set.
+        XCTAssertEqual(
+            doc.filteredOutline(session: state.currentSession).map(\.nodeId),
+            stale.rows.map(\.nodeId))
+        doc.selection.selected = nil
+        state.canvasSelectAdjacent(offset: 1)
+        XCTAssertEqual(
+            doc.selection.selected, "c",
+            "movement walks the displayed rows, not the full canvas")
+
+        // (c) Outside the window nothing changed: clearing the needle
+        // restores the full outline, and the no-match narration is
+        // still reachable — `testFilterCountAnnouncesAndClearRestores`
+        // pins both against a live handle.
+        doc.filterText = ""
+        let cleared = doc.filterView(session: state.currentSession)
+        XCTAssertFalse(cleared.narrowed)
+        XCTAssertTrue(cleared.current)
+        XCTAssertEqual(cleared.rows.count, doc.outline.count)
     }
 
     func testFilterCountAnnouncesAndClearRestores() async throws {
