@@ -46,6 +46,7 @@ use serde_json::{Map, Value};
 pub mod apply;
 pub mod model;
 pub mod placement;
+pub mod queries;
 pub mod serialize;
 
 /// Insertion-ordered map of raw JSON fields (requires serde_json's

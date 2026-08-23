@@ -15,6 +15,7 @@ const SAMPLE: &str = include_str!("../../tests/fixtures/canvas/sample.canvas");
 const GROUPS_NESTED: &str = include_str!("../../tests/fixtures/canvas/groups_nested.canvas");
 const MALFORMED: &str = include_str!("../../tests/fixtures/canvas/malformed.canvas");
 const LARGE: &str = include_str!("../../tests/fixtures/canvas/large_2000.canvas");
+const CYCLE: &str = include_str!("../../tests/fixtures/canvas/cycle.canvas");
 
 fn id(s: &str) -> NodeId {
     NodeId(s.to_string())
@@ -374,6 +375,80 @@ fn redteam_untitled_ordinal_skips_taken_titles() {
     // All distinct despite the literal collision candidate.
     let unique: HashSet<&str> = titles.iter().copied().collect();
     assert_eq!(unique.len(), 3);
+}
+
+/// Speakable names (W6-1 0b-5): the display title when free, else the
+/// next free `⟨title⟩ ⟨k⟩` — skipping any spelling a REAL title already
+/// occupies. That skip is what mac's version lacks, and this fixture is
+/// the exact document order where the lack shows: `Same`, `Same`,
+/// `Same 2` renders `Same`, `Same 2`, `Same 2` on mac.
+#[test]
+fn speakable_names_disambiguate_repeated_titles() {
+    let (canvas, _) = parse(CYCLE);
+    let model = derive(&canvas);
+    let spoken = |n: &str| model.summaries[&id(n)].speakable_name.as_str();
+    // Untouched where the title is already unique.
+    assert_eq!(spoken("a"), "Alpha");
+    // First come, bare title.
+    assert_eq!(spoken("same-1"), "Same");
+    // The obvious ordinal is a real card's title, so it is SKIPPED.
+    assert_eq!(spoken("same-2"), "Same 3");
+    assert_eq!(spoken("same-real-2"), "Same 2");
+    // An untitled card keeps the display title it already had.
+    assert_eq!(spoken("untitled"), "Untitled 1");
+    assert_eq!(model.summaries[&id("untitled")].display_title, "Untitled 1");
+    // Injective across the canvas — the property the surface exists for.
+    let names: HashSet<&str> = model
+        .summaries
+        .values()
+        .map(|s| s.speakable_name.as_str())
+        .collect();
+    assert_eq!(names.len(), model.summaries.len());
+}
+
+/// Document order alone decides, so reordering the SAME three titles
+/// moves the ordinals — the D-3 renumbering CD-20 records, pinned so it
+/// is a decision and not a surprise.
+#[test]
+fn speakable_names_follow_document_order() {
+    let doc = |order: [&str; 3]| {
+        let nodes: Vec<serde_json::Value> = order
+            .iter()
+            .enumerate()
+            .map(|(i, title)| {
+                serde_json::json!({"id": format!("n{i}"), "type":"text", "text": title,
+                    "x": 0, "y": (i as i64) * 20, "width": 10, "height": 10})
+            })
+            .collect();
+        let (canvas, _) = parse(&serde_json::json!({"nodes":nodes,"edges":[]}).to_string());
+        let model = derive(&canvas);
+        (0..3)
+            .map(|i| {
+                model.summaries[&id(&format!("n{i}"))]
+                    .speakable_name
+                    .clone()
+            })
+            .collect::<Vec<String>>()
+    };
+    assert_eq!(doc(["A", "A", "A 2"]), ["A", "A 3", "A 2"]);
+    assert_eq!(doc(["A 2", "A", "A"]), ["A 2", "A", "A 3"]);
+    assert_eq!(doc(["A", "A", "A"]), ["A", "A 2", "A 3"]);
+}
+
+/// `target` is derived once, in the model, and the index column is that
+/// derivation rather than a second `match` in `canvas_db` (0b-13).
+#[test]
+fn targets_are_the_file_path_the_url_or_empty() {
+    let (canvas, _) = parse(SAMPLE);
+    let model = derive(&canvas);
+    let target = |n: &str| model.summaries[&id(n)].target.as_str();
+    assert_eq!(target("card-notes"), "notes/canvas research.md");
+    // The subpath is NOT part of the target (it rides on the title).
+    assert_eq!(target("card-spec"), "specs/interaction.md");
+    assert_eq!(target("card-jsoncanvas"), "https://jsoncanvas.org/spec/1.0");
+    assert_eq!(target("card-diagram"), "assets/architecture diagram.png");
+    assert_eq!(target("card-question"), "");
+    assert_eq!(target("grp-research"), "");
 }
 
 /// Degenerate file paths never produce a bare "› Heading" or empty

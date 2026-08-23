@@ -297,3 +297,231 @@ fn census_placement_never_overlaps() {
         }
     }
 }
+
+// --- W6-1 PR 0b: constants + inside-group placement ------------------------
+
+/// Contract 0b-4: `constants()` is a VIEW of this module's constants,
+/// never a second copy of the numbers. Written field by field against
+/// the constants themselves, so re-typing a literal in either place
+/// fails here — an equality against `40.0` alone would not.
+#[test]
+fn constants_are_the_module_constants() {
+    let c = constants();
+    assert_eq!(c.grid_step, GRID_STEP);
+    assert_eq!(c.grid_step_large, GRID_STEP_LARGE);
+    assert_eq!(c.default_card_w, DEFAULT_CARD_WIDTH);
+    assert_eq!(c.default_card_h, DEFAULT_CARD_HEIGHT);
+    assert_eq!(c.default_group_w, DEFAULT_GROUP_WIDTH);
+    assert_eq!(c.default_group_h, DEFAULT_GROUP_HEIGHT);
+    assert_eq!(c.default_gap, DEFAULT_GAP);
+    assert_eq!(c.min_card_size, MIN_CARD_SIZE);
+    // The mac spellings these replace, asserted as identities rather
+    // than restated as numbers: the group pad IS the default gap
+    // (0b-11), and the move-into-group inset IS one and two grid steps
+    // (0b-12).
+    assert_eq!(c.default_gap, 40.0, "mac's `let pad = 40.0`");
+    assert_eq!(c.grid_step, 20.0, "mac's `canvasGridStep`");
+    assert_eq!(c.min_card_size, 40.0, "mac's `canvasMinCardSize`");
+}
+
+fn group_canvas(group: (f64, f64, f64, f64), cards: &[(f64, f64, f64, f64)]) -> String {
+    let mut nodes = vec![serde_json::json!({
+        "id": "g", "type": "group", "label": "G",
+        "x": group.0, "y": group.1, "width": group.2, "height": group.3
+    })];
+    for (i, c) in cards.iter().enumerate() {
+        nodes.push(serde_json::json!({
+            "id": format!("c{i}"), "type": "text", "text": format!("C{i}"),
+            "x": c.0, "y": c.1, "width": c.2, "height": c.3
+        }));
+    }
+    serde_json::json!({"nodes": nodes, "edges": []}).to_string()
+}
+
+fn group_rect(model: &CanvasModel) -> Rect {
+    model.spatial.rect_of(&id("g")).expect("group is present")
+}
+
+/// The inset is mac's `(x + 20, y + 40)`, expressed as the grid steps it
+/// is (0b-12). An empty-but-LARGE group searches from there instead of
+/// dropping the card at it, which is the CD-21 divergence.
+#[test]
+fn inside_group_places_at_the_inset_when_the_group_is_empty() {
+    let model = model_of(&group_canvas((0.0, 0.0, 400.0, 300.0), &[]));
+    assert_eq!(
+        place_inside_group(&model, group_rect(&model), (100.0, 50.0), &[]),
+        InsideGroupPlacement::Placed {
+            x: GRID_STEP,
+            y: 2.0 * GRID_STEP
+        }
+    );
+}
+
+/// `Below` before `RightOf` — `place_new`'s preference, applied down a
+/// column before moving right.
+#[test]
+fn inside_group_prefers_below_then_right() {
+    let step_y = 100.0; // ceil_to_grid(50 + DEFAULT_GAP)
+    let step_x = 140.0; // ceil_to_grid(100 + DEFAULT_GAP)
+    // The inset slot is taken, so the next candidate is the one BELOW
+    // it, not the one to its right.
+    let model = model_of(&group_canvas(
+        (0.0, 0.0, 400.0, 300.0),
+        &[(20.0, 40.0, 100.0, 50.0)],
+    ));
+    assert_eq!(
+        place_inside_group(&model, group_rect(&model), (100.0, 50.0), &[]),
+        InsideGroupPlacement::Placed {
+            x: 20.0,
+            y: 40.0 + step_y
+        }
+    );
+    // With the whole first column taken, it moves right.
+    let model = model_of(&group_canvas(
+        (0.0, 0.0, 400.0, 300.0),
+        &[
+            (20.0, 40.0, 100.0, 50.0),
+            (20.0, 140.0, 100.0, 50.0),
+            (20.0, 240.0, 100.0, 50.0),
+        ],
+    ));
+    assert_eq!(
+        place_inside_group(&model, group_rect(&model), (100.0, 50.0), &[]),
+        InsideGroupPlacement::Placed {
+            x: 20.0 + step_x,
+            y: 40.0
+        }
+    );
+}
+
+/// Everything a lattice slot can be. "Outside the group" is never one
+/// of the answers (0b-12).
+#[test]
+fn inside_group_outcomes_are_placed_too_small_or_full() {
+    // Too small: the inset slot does not fit inside the frame. The
+    // fallback point is the inset, and it is NOT overlap-checked.
+    let model = model_of(&group_canvas((0.0, 0.0, 100.0, 100.0), &[]));
+    assert_eq!(
+        place_inside_group(&model, group_rect(&model), (100.0, 50.0), &[]),
+        InsideGroupPlacement::TooSmall { x: 20.0, y: 40.0 }
+    );
+    // One slot exactly, and it is occupied ⇒ Full, not a point outside.
+    let occupied = model_of(&group_canvas(
+        (0.0, 0.0, 400.0, 300.0),
+        &[(20.0, 40.0, 300.0, 200.0)],
+    ));
+    assert_eq!(
+        place_inside_group(&occupied, group_rect(&occupied), (300.0, 200.0), &[]),
+        InsideGroupPlacement::Full
+    );
+    // …and excluding the occupant frees it again: `exclude` is how a
+    // card being MOVED stops blocking its own destination.
+    assert_eq!(
+        place_inside_group(
+            &occupied,
+            group_rect(&occupied),
+            (300.0, 200.0),
+            &[id("c0")]
+        ),
+        InsideGroupPlacement::Placed { x: 20.0, y: 40.0 }
+    );
+}
+
+/// A group frame inside a group never blocks placement — the same rule
+/// `place_new` uses, and the reason a card can join a nested group.
+#[test]
+fn inside_group_is_not_blocked_by_group_frames() {
+    let doc = serde_json::json!({"nodes":[
+        {"id":"g","type":"group","label":"G","x":0,"y":0,"width":400,"height":300},
+        {"id":"inner","type":"group","label":"Inner","x":20,"y":40,"width":200,"height":100}
+    ],"edges":[]})
+    .to_string();
+    let model = model_of(&doc);
+    assert_eq!(
+        place_inside_group(&model, group_rect(&model), (100.0, 50.0), &[]),
+        InsideGroupPlacement::Placed { x: 20.0, y: 40.0 }
+    );
+}
+
+/// Hostile geometry must answer, not spin: a degenerate frame has no
+/// slot, and a non-finite size cannot advance the lattice.
+#[test]
+fn redteam_inside_group_refuses_degenerate_geometry() {
+    let model = model_of(&group_canvas((0.0, 0.0, 0.0, 0.0), &[]));
+    assert!(matches!(
+        place_inside_group(&model, group_rect(&model), (100.0, 50.0), &[]),
+        InsideGroupPlacement::TooSmall { .. }
+    ));
+    let huge = model_of(&group_canvas((0.0, 0.0, 400.0, 300.0), &[]));
+    assert!(matches!(
+        place_inside_group(&huge, group_rect(&huge), (f64::INFINITY, 50.0), &[]),
+        InsideGroupPlacement::TooSmall { .. }
+    ));
+    assert!(matches!(
+        place_inside_group(&huge, group_rect(&huge), (f64::NAN, f64::NAN), &[]),
+        InsideGroupPlacement::TooSmall { .. }
+    ));
+}
+
+/// Every outcome keeps the card inside the frame it named — the
+/// property mac loses when a full group pushes the card out and
+/// containment silently un-parents it.
+#[test]
+fn census_inside_group_never_places_outside_the_group() {
+    let (rounds, max_cards) = if std::env::var("SLATE_CENSUS_FULL").as_deref() == Ok("1") {
+        (400u64, 40usize)
+    } else {
+        (80u64, 14usize)
+    };
+    let mut rng = Rng(0x1234_5678_9ABC_DEF0);
+    let mut outcomes = (0usize, 0usize, 0usize);
+    for _ in 0..rounds {
+        let group = (
+            (rng.pick_i(-10, 10) * 20) as f64,
+            (rng.pick_i(-10, 10) * 20) as f64,
+            (rng.below(30) * 20) as f64,
+            (rng.below(30) * 20) as f64,
+        );
+        let cards: Vec<(f64, f64, f64, f64)> = (0..rng.below(max_cards as u64 + 1))
+            .map(|_| {
+                (
+                    group.0 + (rng.below(20) * 20) as f64,
+                    group.1 + (rng.below(20) * 20) as f64,
+                    (20 + rng.below(10) * 20) as f64,
+                    (20 + rng.below(10) * 20) as f64,
+                )
+            })
+            .collect();
+        let model = model_of(&group_canvas(group, &cards));
+        let g = group_rect(&model);
+        let size = (
+            (20 + rng.below(8) * 20) as f64,
+            (20 + rng.below(8) * 20) as f64,
+        );
+        match place_inside_group(&model, g, size, &[]) {
+            InsideGroupPlacement::Placed { x, y } => {
+                outcomes.0 += 1;
+                let slot = Rect::new(x, y, size.0, size.1);
+                assert!(
+                    slot.x0 >= g.x0 && slot.y0 >= g.y0 && slot.x1 <= g.x1 && slot.y1 <= g.y1,
+                    "placed slot {slot:?} escaped its group {g:?}"
+                );
+                assert!(
+                    !model.spatial.any_overlap(slot, &[], false),
+                    "placed slot overlaps a card"
+                );
+            }
+            InsideGroupPlacement::TooSmall { x, y } => {
+                outcomes.1 += 1;
+                assert_eq!((x, y), (g.x0 + GRID_STEP, g.y0 + 2.0 * GRID_STEP));
+            }
+            InsideGroupPlacement::Full => outcomes.2 += 1,
+        }
+    }
+    // A census that only ever reaches one outcome proves nothing about
+    // the other two.
+    assert!(
+        outcomes.0 > 0 && outcomes.1 > 0 && outcomes.2 > 0,
+        "{outcomes:?}"
+    );
+}
