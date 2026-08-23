@@ -80,10 +80,25 @@ parameter identity stays the censuses' job.
 **0a-4 — Completeness is asserted, not assumed.** `a11y.rs`'s
 `every_canvas_variant_and_arm_is_represented_in_the_corpus` parses this
 file's own `pub enum` declarations and fails when a canvas variant — or
-a closed-set ARM of `CanvasStatusNote`, `CanvasBlockedReason`,
-`CanvasFailedAction`, `CanvasMutationRefusal`, `CanvasDeleteTarget` —
-never reaches `corpus()`. A variant that never reaches the corpus is
-pinned by nothing: not the golden, not the artifact, not either census.
+a closed-set ARM of **any of the 18 nested parameter enums** — never
+reaches `corpus()`. A variant that never reaches the corpus is pinned by
+nothing: not the golden, not the artifact, not either census.
+
+Task 0a-2 widened this from 5 of 18 to **18 of 18**: it covered only
+`CanvasStatusNote`, `CanvasBlockedReason`, `CanvasFailedAction`,
+`CanvasMutationRefusal` and `CanvasDeleteTarget`, so a new arm on any of
+the other thirteen (a fourth `CanvasMode`, a third
+`CanvasZoomContext`, …) shipped a string nothing pinned. The coverage
+sites are scoped by (variant, field) rather than by field alone —
+three different enums ride a field called `verb`, two ride `reason`,
+two ride `target` — and `Option`-carried parameters unwrap through
+`Some(`. A companion test,
+`every_canvas_parameter_enum_is_listed_for_coverage`, asserts the table
+lists exactly the `Canvas*` parameter enums this module declares, so
+adding a nineteenth without a coverage site fails there rather than
+going unpinned. Mutation-verified: deleting the
+`CanvasZoom { context: Some(ZoomedToSelection) }` corpus entry fails
+with *"CanvasZoomContext arms with no corpus entry … [\"ZoomedToSelection\"]"*.
 
 **0a-5 — Verbosity is a parameter on exactly two families.**
 `CanvasVerbosity { Terse, Standard, Verbose }` is core; it is carried by
@@ -140,11 +155,25 @@ card reference (`CanvasAnnouncer.swift:37–39`,
 they collapse to this one.
 
 **0a-11 — Colour names come from core.** No template embeds a preset
-dictionary. `color_name: Option<String>` is core's own
-`canvas::color_name()` output (`canvas/mod.rs:80–88`); `None` speaks the
-literal `no color` (the clear-colour arm). The three Swift copies
-(`AppState+CanvasActions.swift:340`, `:766`,
-`CanvasPromptSheet.swift:227`) die with the migration.
+dictionary. `None` speaks the literal `no color` (the clear-colour
+arm). The three Swift copies (`AppState+CanvasActions.swift:340`,
+`:766`, `CanvasPromptSheet.swift:227`) die with the migration.
+
+**Typed, not named (Task 0a-2).** The two events a host reaches when it
+has just WRITTEN a colour — `CanvasColorSet` and `CanvasBulkColorSet` —
+carry `color: Option<CanvasColor>`, core's own colour type, and
+`canvas::color_name()` phrases it inside `render()`. A host cannot
+spell `"red"` at that seam even by accident, which is what actually
+deletes the two announcement dictionaries. The two events that REPORT a
+colour core already named — `CanvasMovedTo` and `CanvasWhereAmI` — keep
+`color_name: Option<String>`, because their value arrives from
+`CanvasOutlineRow.color_name` / `CanvasWhereAmI.color_name` and the host
+only relays it; typing those would force a host to parse a spoken name
+back into a colour, which is the re-derivation the typed payload exists
+to prevent. The picker's BUTTON LABELS (the third copy) are label class
+and so are not in this vocabulary (0a-13); they come from a new
+exported accessor, `canvas_color_name(color) -> String`, over the same
+`canvas::color_name` — one table, one answer, speech and labels alike.
 
 **0a-12 — The admission ladder joins the vocabulary.** The six
 mutation-refusal constants that bypassed the canvas funnel entirely via
@@ -195,7 +224,7 @@ Coalescing class: `nav` / `filter` / `—` (immediate). All priorities
 | `CanvasConnectionUpdated` | `label?` | `Connection updated[, labelled "⟨l⟩"].` | | — | `AppState+CanvasConnect.swift:181–183` |
 | `CanvasMovedIntoGroup` | `label` | `Moved into group "⟨label⟩".` | | — | `AppState+CanvasActions.swift:472` |
 | `CanvasRemovedFromGroup` | `label` | `Removed from group "⟨label⟩".` | | — | `AppState+CanvasCreate.swift:324–325` |
-| `CanvasColorSet` | `title, color_name?` | `Set "⟨title⟩" to ⟨color‖no color⟩.` | | — | `AppState+CanvasActions.swift:340,348–349` |
+| `CanvasColorSet` | `title, color?` | `Set "⟨title⟩" to ⟨color‖no color⟩.` | | — | `AppState+CanvasActions.swift:340,348–349` |
 | `CanvasRenamedGroup` | `label` | `Renamed group to "⟨label⟩".` | | — | `AppState+CanvasActions.swift:370–371` |
 | `CanvasCardUpdated` | `title` | `Updated "⟨title⟩".` | | — | `AppState+CanvasCreate.swift:97` |
 | `CanvasCardRetargeted` | `title, path` | `"⟨title⟩" now points at ⟨path⟩.` | | — | `AppState+CanvasCreate.swift:270–271` |
@@ -204,7 +233,7 @@ Coalescing class: `nav` / `filter` / `—` (immediate). All priorities
 | `CanvasConvertedToNote` | `path` | `Converted to note ⟨path⟩. The card now points at it.` | | — | `AppState+CanvasExtras.swift:353–355` |
 | `CanvasDeleted` | `target, V, undo_chord` | `Deleted ⟨card⟩` ‖ `Ungrouped Group "⟨l⟩" — cards kept` ‖ `Deleted ⟨n⟩ card[s]` ‖ `Deleted connection ⟨to‖from‖with⟩ "⟨t⟩"[, labelled "⟨l⟩"]`; **+ ` — ⟨undo_chord⟩ to undo` at standard+** | | — | `CanvasAnnouncer.swift:63,189–192`; `AppState+CanvasActions.swift:325–329,751–753`; `AppState+CanvasConnect.swift:127–131,148–149` |
 | `CanvasBulkMoved` | `count, relative` | `Moved ⟨n⟩ cards ⟨relative⟩.` | | — | `AppState+CanvasActions.swift:563–566` |
-| `CanvasBulkColorSet` | `count, color_name?` | `Set ⟨n⟩ card[s] to ⟨color‖no color⟩.` | | — | `AppState+CanvasActions.swift:766,776–777` |
+| `CanvasBulkColorSet` | `count, color?` | `Set ⟨n⟩ card[s] to ⟨color‖no color⟩.` | | — | `AppState+CanvasActions.swift:766,776–777` |
 | `CanvasGrouped` | `count, label` | `Grouped ⟨n⟩ card[s] into "⟨label⟩".` | | — | `AppState+CanvasActions.swift:817–821` |
 | `CanvasBulkDuplicated` | `count` | `Duplicated ⟨n⟩ cards — one undo restores.` | | — | `AppState+CanvasExtras.swift:202–203` |
 | `CanvasMarkToggled` | `marked, title, count` | `⟨Marked‖Unmarked⟩ "⟨title⟩". ⟨n⟩ marked.` | | — | `AppState+CanvasActions.swift:698–703` |
@@ -269,6 +298,7 @@ cancel first.` — Canvas 553/591/621, Extras 266–269 — four copies) ·
 (the golden table — 165 new rows),
 `committed_corpus_artifact_matches_the_vocabulary` (artifact round-trip,
 424 entries), `every_canvas_variant_and_arm_is_represented_in_the_corpus`,
+`every_canvas_parameter_enum_is_listed_for_coverage` (0a-2),
 `the_canvas_family_occupies_one_top_level_variant`,
 `canvas_verbosity_matrix_pins_every_level`,
 `canvas_where_am_i_is_always_verbose_grade`,
@@ -280,6 +310,11 @@ cancel first.` — Canvas 553/591/621, Extras 266–269 — four copies) ·
 `apps/slate-windows/.../A11yCorpusCensus.cs`:
 `EveryCorpusEventRendersTheCommittedIdentityTextAndPriority`,
 `TheMirrorHasNoDuplicateEntries`.
+`apps/slate-mac/Tests/SlateMacTests/`: `A11yCorpusCensusTests` (all 165
+canvas entries through the real FFI), `CanvasAnnouncerTests`
+(coalescing, the flush/supersede rule, the priority relay, and the
+WIDENED funnel guard), `A11yResidueCensusTests` (`pinnedResidueSites`
+30 → **29**).
 
 ---
 
@@ -293,7 +328,7 @@ table.
 
 | # | Swift-derived pocket (file:line) | Core today | Tier | Target (PR) | State |
 |---|---|---|---|---|---|
-| A | The entire announcer grammar: verbosity matrix, group entered/left, connection traversed (direction phrases, duplicated again in `CanvasOutlineView.swift:335–347`), confirmations, destructive "— ⌘Z to undo", error, filter count, mode entered/cancelled/committed, undid/redid, Where-am-I readback (`CanvasAnnouncer.swift:104–213`, `AppState+CanvasActions.swift:328–819` prose sites, `AppState+CanvasConnect.swift:62,127–181`); preset-name dictionary duplicated (`AppState+CanvasActions.swift:340,766`) | `HostComposed` residue; core supplies every payload (`CardSummary`, `Neighbor.direction`, `RelativeDesc`, `color_name`) | **1** | `A11yEvent::Canvas*` family + `CanvasVerbosity` (0a) | **core half landed (this PR); mac consumption is Task 0a-2** |
+| A | The entire announcer grammar: verbosity matrix, group entered/left, connection traversed (direction phrases, duplicated again in `CanvasOutlineView.swift:335–347`), confirmations, destructive "— ⌘Z to undo", error, filter count, mode entered/cancelled/committed, undid/redid, Where-am-I readback (`CanvasAnnouncer.swift:104–213`, `AppState+CanvasActions.swift:328–819` prose sites, `AppState+CanvasConnect.swift:62,127–181`); preset-name dictionary duplicated (`AppState+CanvasActions.swift:340,766`) | `HostComposed` residue; core supplies every payload (`CardSummary`, `Neighbor.direction`, `RelativeDesc`, `color_name`) | **1** | `A11yEvent::Canvas*` family + `CanvasVerbosity` (0a) | **closed** — core half + mac consumption both landed (0a-1, 0a-2) |
 | B | Relative-position description in move mode — nearest neighbours by squared centre distance, `Below "X", right of "Y"` (`AppState+CanvasModes.swift:299–339`) | `RelativeDesc` exists for placement only | 2 | `canvas_describe_relative(h, rect, exclude) -> Vec<CanvasRelativeDesc>` (0b) | open — 0a's `CanvasMoveRelative { descs }` already takes that list |
 | C | Auto-side selection for new connections, **two copies** (`AppState+CanvasConnect.swift:24–33`, `CanvasRendererView.swift:582–600`) | none | 2 | `canvas_auto_sides` (0b) | open |
 | D | Containment / parent-group resolution, **three copies** (`AppState+CanvasCreate.swift:296–305`, `AppState+CanvasExtras.swift:131–147`, `AppState+CanvasActions.swift:439–441`) | `GroupTree` exists, not exposed | 2 | `canvas_parent_of`, `canvas_children_of` (0b) | open — 0a-CD-4 depends on `children_of` for the group card count |
@@ -416,6 +451,17 @@ spec-named variants (`CanvasMovedTo`, `CanvasDeleted`, `CanvasZoom`,
 `CanvasLoadedDegraded`, `CanvasUndoMenuTitle`, …) all kept their names.
 The four bulk variants stayed four per R-0a-5.
 
+**CD-11 — Names that differ from the spec's indicative list.** The spec
+wrote names "indicative". Landed: `CanvasBulk{verb,count,undo_chord}` →
+four variants (R-0a-5, and none carries the undo hint, matching mac);
+`CanvasModeCommitted{mode,detail}` → `CanvasModeCommitted{verb,object}`
++ `CanvasModeEndedWithoutEffect{mode}`;
+`CanvasModeCancelled{mode}` → `{mode, restoration}`;
+`CanvasUndid`/`CanvasRedid` → `CanvasHistoryApplied{verb,name}`;
+`CanvasMoveRelative{descs}` gained `overlap` (CD-1);
+`CanvasRemovedFromGroup` gained `label` (the spec listed it
+payload-less; the shipped sentence names the group).
+
 **CD-12 — The family nests under one top-level variant** (controller
 ruling R-0a-8, 2026-08-22). `A11yEvent::Canvas { event: CanvasA11yEvent }`
 rather than 51 top-level variants. Landing it here — before Task 0a-2 and
@@ -436,16 +482,25 @@ would have flattened 165 distinct entries into one and the order check
 would have stopped meaning anything. Mutation-verified by swapping two
 adjacent canvas entries: both tripwires fail at index 265.
 
-**CD-11 — Names that differ from the spec's indicative list.** The spec
-wrote names "indicative". Landed: `CanvasBulk{verb,count,undo_chord}` →
-four variants (R-0a-5, and none carries the undo hint, matching mac);
-`CanvasModeCommitted{mode,detail}` → `CanvasModeCommitted{verb,object}`
-+ `CanvasModeEndedWithoutEffect{mode}`;
-`CanvasModeCancelled{mode}` → `{mode, restoration}`;
-`CanvasUndid`/`CanvasRedid` → `CanvasHistoryApplied{verb,name}`;
-`CanvasMoveRelative{descs}` gained `overlap` (CD-1);
-`CanvasRemovedFromGroup` gained `label` (the spec listed it
-payload-less; the shipped sentence names the group).
+**CD-13 — `CanvasTracePathEnd` speaks the count of the titles it just
+listed.** The trace sentence is ONE utterance —
+`Path: A, then B. End of path — ⟨n⟩ cards visited.` — and mac took its
+two halves from two different collections
+(`AppState+CanvasNavigation.swift:144–155`): the list from `titles`
+(`visited.compactMap { outline row → title }`) and the count from
+`visited.count`. They differ whenever a visited node id has no outline
+row, and the result is a sentence that contradicts itself. The event
+therefore carries `titles` and NOTHING else, and the template speaks
+`titles.len()`: the list and the number it claims cannot disagree,
+because there is only one collection. This is the t0-correct reading —
+t0 §1.1's rule is that the utterance describes what it names — and the
+divergence is unreachable in practice anyway (the start id is the
+selected row, and every other id comes from core's own adjacency over
+the same model the outline is flattened from). Recorded rather than
+"fixed to match mac" because the mac number, not the template, was the
+defect. (Decided per the authority chain in Task 0a-2; the alternative —
+adding a `visited` count parameter — would have preserved the ability to
+disagree.)
 
 ---
 
@@ -485,14 +540,19 @@ alternative — one variant per mode — costs three more of the eight
 remaining enum slots (CR-1). Hosts construct these at exactly three call
 sites each, all in the mode controller.
 
-**CR-5 — The residue count is unchanged by THIS commit.**
-`A11yResidueCensusTests.pinnedResidueSites` stays 30; it drops to **29**
-in Task 0a-2, when `CanvasAnnouncer.swift:104` stops posting
-`.hostComposed`. `AppState.swift:16273` (`postMutationAnnouncement`) is a
-SHARED residue site used by five canvas admission paths and by
-non-canvas structural builders, so it cannot be deleted by the canvas
-migration even though `CanvasMutationRefused` now exists (0a-12); the
-canvas call sites move off it, the marker stays.
+**CR-5 — The residue count is unchanged by 0a-1; 0a-2 lowers it.**
+`A11yResidueCensusTests.pinnedResidueSites` stayed 30 through 0a-1 and
+drops to **29** in Task 0a-2, where `CanvasAnnouncer` stopped posting
+`.hostComposed` — **done**, together with the `a11y.rs` module-doc
+paragraph that named the canvas announcer as a residue engine.
+`AppState.swift`'s `postMutationAnnouncement` is a SHARED residue site
+used by five canvas admission paths and by non-canvas structural
+builders, so it cannot be deleted by the canvas migration even though
+`CanvasMutationRefused` now exists (0a-12); the canvas call sites moved
+off it and the marker stays. Its `.hostComposed(` line moved into a new
+`mutationAnnouncementEvent(_:)` seam so the canvas funnel can carry the
+one sentence it still relays (BatchTrash's quarantine reason) without
+adding a residue site of its own — the count is 29, not 30.
 
 ---
 
@@ -507,23 +567,33 @@ canvas call sites move off it, the marker stays.
   (`anchorPoint`'s `case nil` arm). PR 0b deletes it.
 - **Preset colour names are spelled three times in Swift** —
   `AppState+CanvasActions.swift:340`, `:766`,
-  `CanvasPromptSheet.swift:227` — shadowing core's `color_name()`. Task
-  0a-2 deletes all three (0a-11).
+  `CanvasPromptSheet.swift:227` — shadowing core's `color_name()`.
+  **Done (0a-2):** the two announcement dictionaries die with the typed
+  `Option<CanvasColor>` payload; the picker's labels come from the new
+  `canvas_color_name` export (0a-11).
 - **`CanvasTableView.swift:92` discards core's priority**: it unwraps an
   already-core-rendered event to text and re-wraps it as `.status`
-  (Medium). Task 0a-2 relays `a11yRender(...).priority` instead.
+  (Medium). **Done (0a-2):** `CanvasAnnouncer.relay(_ event: A11yEvent)`
+  carries the render's text AND priority; pinned by
+  `CanvasAnnouncerTests.testRelayCarriesTheCorePriorityOfANonCanvasEvent`.
 - **`CanvasOutlineView.swift:391` still uses the title-keyed group
   lookup** that `AppState+CanvasNavigation.swift:172–180` deliberately
-  replaced for Codoki #613 (repeated group labels miscount). PR 0b's
-  `canvas_children_of` settles it.
+  replaced for Codoki #613 (repeated group labels miscount).
+  **Done (0a-2), earlier than expected:** CD-4's correct number is the
+  arrived-at row's `total_m`, so BOTH lookups are deleted rather than
+  replaced — 0b's `canvas_children_of` is no longer needed for this.
 - **The funnel guard has a hole**:
   `CanvasAnnouncerTests.testNoDirectAnnouncementsUnderCanvas:168–191`
   greps only `postAccessibilityAnnouncement`, so the five canvas
-  `postMutationAnnouncement` sites bypass it undetected. 0a-12 gives
-  them a vocabulary; Task 0a-2 should widen the grep.
+  `postMutationAnnouncement` sites bypass it undetected.
+  **Done (0a-2):** the guard scans both names (comment-only lines
+  dropped, so prose naming them cannot trip it) and no canvas file
+  calls either.
 - **`Deleted connection ` with a trailing space** is reachable on mac
   when the edge lookup misses (`AppState+CanvasConnect.swift:149`'s
-  `?? ""`). The typed event cannot express it.
+  `?? ""`). The typed event cannot express it. **0a-2's resolution:**
+  the structural lookup runs BEFORE the apply and a miss returns
+  without deleting — see CD-7's behaviour note.
 
 ---
 
@@ -575,6 +645,82 @@ canvas call sites move off it, the marker stays.
   Debug identities** (throwaway script, not committed) and then verified
   by the censuses themselves — the transcription risk of 165 entries ×
   two hosts is the kind of thing hand-typing gets wrong silently.
+
+### Task 0a-2 (the mac consumption half)
+
+- **The migration is 140 → 0 free-text announcements.** All 136
+  `canvasAnnouncer.announce(…)` call sites across ten canvas files plus
+  the four inside `CanvasModeController` construct a typed
+  `CanvasA11yEvent`; `CanvasEvent` and its twelve cases are deleted,
+  along with `phrase(_:)`, `whereAmIText(…)`, `createdText`,
+  `relativePhrase`, `undidText` and `redidText`. `CanvasAnnouncer` is
+  158 lines of verbosity storage, class-keyed coalescing, error flush
+  and `flushForTests` — plus one `a11yRender` call.
+- **The host `CanvasVerbosity` enum could not have survived.** uniffi
+  generates `public enum CanvasVerbosity` into
+  `Sources/SlateMac/slate_uniffi.swift`, the SAME Swift module as the
+  hand-written canvas code, so 0a-1's core enum and the host's
+  three-case copy were a redeclaration: **the mac lane could not have
+  compiled on 0a-1 alone**. The host copy is gone and the FFI enum is
+  extended in place (`Codable` over a stable persistence tag,
+  `CaseIterable`, `title`) exactly as `MathPrefs.swift` does for
+  `MathVerbosity` — the stored preference strings are unchanged, so
+  saved prefs decode as before.
+- **CD-4 fell out of the row data, not a new query.** The entered
+  group's own card count is exactly the ARRIVED-AT row's `total_m` (its
+  container size). mac walked back to the group's own outline row and
+  spoke ITS `total_m` — the group's SIBLING count. The fix deletes the
+  walk instead of adding one, which also retires the Codoki #613
+  repeated-label hazard at both call sites without waiting for 0b's
+  `canvas_children_of`.
+- **The residue census forbids the string primitive**, so the
+  announcer's default post goes through `AppKitAnnouncementPoster`
+  rather than `postAccessibilityAnnouncement(_:priority:)`: a
+  `priority:` label at the top level of that call is exactly what
+  `testNoInteractionSiteCallsTheStringPrimitiveDirectly` fails on.
+- **`postMutationAnnouncement`'s `.hostComposed(` line moved into a new
+  `mutationAnnouncementEvent(_:)`** so the canvas funnel can carry the
+  one admission sentence that is NOT canvas vocabulary (BatchTrash's
+  quarantine reason) without adding a second residue site. The canvas
+  six announce as `CanvasMutationRefused` and record into the same
+  structural-mutation ledger, so §U2-6's verbatim-string assertions and
+  the focus token are byte-identical either way.
+- **The mode controller's `ModeSpec` is typed** (`CanvasMode`,
+  `CanvasModeObject`, `onCommit -> CanvasA11yEvent?`,
+  `onCancel -> CanvasModeRestoration`), which rewrote the M1–M7 test
+  FIXTURES: they used to invent strings ("Move mode — 'Research'. …")
+  and now assert the real shipped ones. No shipped expectation changed
+  there; only the fixture shape and the M3 label's quoting
+  (`Move mode: 'Research'` → `Move mode: "Research"`), which follows
+  core's `mode_object`.
+- **The M3 inspectable value is the one host-side spelling of the mode
+  names that survives.** It is §W-C label class (0a-13), composed from
+  the same typed fields the spoken entry carries; a label-grade
+  accessor on 0b's query surface is where it collapses.
+- **The outline keeps a `CanvasCardRef`** — as a LABEL helper for the
+  row's `accessibilityLabel` only, moved out of `CanvasAnnouncer.swift`
+  into `CanvasOutlineView.swift`. The outline's DUPLICATED direction
+  phrases are gone: the connection row renders the same
+  `CanvasConnectionTraversed` event the navigator announces, so the row
+  now reads `Connects to Text card "Ideas"` rather than
+  `Connects to "Ideas"` (it also stops hardcoding `kind: "text"`).
+- **`canvas_color_name` is a new FFI export.** Without it the third
+  preset-name copy (`CanvasPromptSheet.swift:227`, the picker's button
+  labels) could not die: it is label class, so no announcement event
+  renders it, and 0a's surface had no colour-name accessor. Ten lines
+  over the `CanvasColor` type that the typed payload already carries
+  across the boundary.
+- **CD-7 costs a behaviour note.** `canvasDeleteConnection` now looks
+  the connection up structurally BEFORE applying and returns without
+  deleting when the edge is not among the selected card's neighbours —
+  where mac deleted it and spoke `Deleted connection ` with a trailing
+  space (`?? ""`). Connection rows only ever materialise under the
+  selected card, so the path is unreachable in the shipped UI, and the
+  typed event cannot express that string.
+- **CD-3 is scoped by the view's lifetime.** The degraded-load
+  announcement fires from a `@State` flag on `CanvasContainerView`, so
+  "once per open" is "once per mounted container"; the banner renders
+  the SAME event, so the two spellings cannot drift.
 
 ---
 
