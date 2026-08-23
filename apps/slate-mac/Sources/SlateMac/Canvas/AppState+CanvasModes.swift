@@ -319,57 +319,29 @@ extension AppState {
         canvasAnnouncer.announce(event)
     }
 
-    /// Relative description from the nearest non-moving neighbors, as
-    /// core's OWN `CanvasRelativeDesc` list — core phrases it
-    /// (`Below "Research", right of "Ideas"`), the host only picks the
-    /// neighbours (§W-G row B; PR 0b moves the pick itself into
-    /// `canvas_describe_relative`). `nil` means there is nothing to
-    /// describe against at all, which stays silent; an EMPTY list is a
-    /// real fix — core speaks `Alone on the canvas`.
+    /// Relative description from the nearest non-moving neighbours —
+    /// core's `canvas_describe_relative` (§W-G row B, contract 0b-7).
+    /// The nearest-neighbour walk that lived here is gone: core picks
+    /// the neighbours AND phrases them (`Below "Research", right of
+    /// "Ideas"`), and its `(squared distance, document index)` order
+    /// pins the tie-break Swift's unstable `sort(by:)` left undefined
+    /// (CD-19).
+    ///
+    /// `nil` means there is nothing to describe against at all, which
+    /// stays silent; an EMPTY list is a real fix — core speaks
+    /// `Alone on the canvas`.
     func canvasRelativeDescription(doc: CanvasDocument, transient: CanvasTransientState)
         -> [CanvasRelativeDesc]?
     {
         guard let primaryId = transient.ids.first,
-            let rect = transient.rects[primaryId]
+            let rect = transient.rects[primaryId],
+            let session = currentSession,
+            let handle = doc.handle
         else { return nil }
-        let cx: Double = rect.x + rect.width / 2
-        let cy: Double = rect.y + rect.height / 2
-        typealias NeighborFix = (node: CanvasSceneNode, dx: Double, dy: Double)
-        var neighbors: [NeighborFix] = []
-        for node in doc.scene.nodes {
-            if transient.ids.contains(node.nodeId) || node.kind == "group" { continue }
-            let dx: Double = node.x + node.width / 2 - cx
-            let dy: Double = node.y + node.height / 2 - cy
-            neighbors.append((node: node, dx: dx, dy: dy))
-        }
-        neighbors.sort { lhs, rhs in
-            let ld: Double = lhs.dx * lhs.dx + lhs.dy * lhs.dy
-            let rd: Double = rhs.dx * rhs.dx + rhs.dy * rhs.dy
-            return ld < rd
-        }
-        guard let nearest = neighbors.first else { return [] }
-
-        func desc(_ neighbor: NeighborFix) -> CanvasRelativeDesc {
-            if abs(neighbor.dy) >= abs(neighbor.dx) {
-                return neighbor.dy < 0
-                    ? .below(anchorTitle: neighbor.node.title)
-                    : .above(anchorTitle: neighbor.node.title)
-            }
-            return neighbor.dx < 0
-                ? .rightOf(anchorTitle: neighbor.node.title)
-                : .leftOf(anchorTitle: neighbor.node.title)
-        }
-
-        var descs = [desc(nearest)]
-        // A second axis-distinct neighbor completes the fix. Core
-        // capitalises the first phrase and lower-cases the rest.
-        let vertical = abs(nearest.dy) >= abs(nearest.dx)
-        if let second = neighbors.dropFirst().first(where: {
-            (abs($0.dy) >= abs($0.dx)) != vertical
-        }) {
-            descs.append(desc(second))
-        }
-        return descs
+        // The moving set is the exclusion list: a card is never
+        // described relative to itself or to the rest of its rigid unit.
+        return try? session.canvasDescribeRelative(
+            handle: handle, rect: rect, exclude: transient.ids)
     }
 
     /// The mode a transient verb belongs to (`Move ended — nothing
