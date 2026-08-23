@@ -10652,6 +10652,73 @@ mod tests {
         }
     }
 
+    /// The Windows twin of the tripwire above (W6-1 0a, #745).
+    ///
+    /// The C# census (`A11yCorpusCensus`) fails by design when the
+    /// vocabulary grows without it — but only after
+    /// `generate-bindings.ps1` has rebuilt the cdylib AND `dotnet test`
+    /// has run, i.e. a full local round-trip later than the mac half,
+    /// which fails right here in `cargo test`. That asymmetry is the
+    /// whole reason this exists: forgetting the C# list is exactly as
+    /// easy as forgetting the Swift one, and it should cost the same.
+    ///
+    /// SCOPE: variant names and their order, NOT parameters — the C#
+    /// census still compares full event identity against the artifact.
+    #[test]
+    fn the_windows_corpus_mirror_lists_every_event_in_order() {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let census = std::fs::read_to_string(manifest.join(
+            "../../apps/slate-windows/tests/SlateWindows.Tests/Censuses/A11yCorpusCensus.cs",
+        ))
+        .expect("windows corpus census source");
+
+        // Bounded to the mirror literal so a doc comment or an
+        // assertion message naming a variant cannot be counted.
+        let body = census
+            .split_once("private static readonly A11yEvent[] Corpus =")
+            .expect("corpus declaration")
+            .1;
+        let body = body.split_once("\n    ];").expect("corpus terminator").0;
+
+        // `new A11yEvent.X(` heads, in order. An `A11yEvent` never
+        // nests inside another, so scanning the whole slice is safe
+        // under any line wrapping the formatter chooses.
+        let listed: Vec<String> = body
+            .match_indices("new A11yEvent.")
+            .map(|(at, marker)| {
+                body[at + marker.len()..]
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric())
+                    .collect()
+            })
+            .collect();
+
+        let expected: Vec<String> = core::a11y::corpus()
+            .iter()
+            .map(|event| {
+                format!("{event:?}")
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric())
+                    .collect()
+            })
+            .collect();
+
+        assert_eq!(
+            listed.len(),
+            expected.len(),
+            "the Windows corpus mirror lists {} events, the vocabulary has {}",
+            listed.len(),
+            expected.len()
+        );
+        for (index, (got, want)) in listed.iter().zip(expected.iter()).enumerate() {
+            assert_eq!(
+                got, want,
+                "Windows corpus mirror diverges at index {index}: listed {got}, \
+                 vocabulary has {want}"
+            );
+        }
+    }
+
     /// The FFI mirror must carry EVERY core variant.
     ///
     /// `From<A11yEvent> for core::a11y::A11yEvent` is exhaustive, so the
