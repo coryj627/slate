@@ -222,19 +222,33 @@ mac's incidental guards.
 
 The corpus samples the BOUNDARY, not just the comfortable value:
 **every arm that speaks a count or a collection length has a count-one
-witness in `corpus()`**, plus the single-title and the empty trace path,
-so an arm that hardcodes `cards` fails the golden instead of shipping
-`1 cards`. Most arms already carried one (`CanvasGroupEntered`'s `Solo`,
-`CardsReturned`, `CanvasDeleteTarget::Cards`, `CanvasBulkColorSet`,
+witness in `corpus()`**, and the one arm that speaks a collection length
+also has an EMPTY-collection witness — so an arm that hardcodes `cards`
+fails the golden instead of shipping `1 cards`.
+
+Ten arms already carried a count-one witness before 0a-2:
+`CanvasMovedTo` and `CanvasWhereAmI` (connection counts),
+`CanvasGroupEntered` (`Solo`), `CanvasModeCancelled`
+(`CardsReturned { count: 1 }`), `CanvasDeleted`
+(`CanvasDeleteTarget::Cards { count: 1 }`), `CanvasBulkColorSet`,
 `CanvasMarkToggled`, `CanvasFilterCount`, `CanvasFilterCleared`,
-`CanvasLoadedDegraded`, and the connection counts on `CanvasMovedTo` /
-`CanvasWhereAmI`); the eight that did not are grouped in a **cardinality
-boundary witness** block at the end of `canvas_corpus()`. Two of those
-eight — `CanvasGrouped` and `CanvasMarksCleared` — already rendered
-correctly through `counted`; their witnesses exist so the claim above is
-TRUE rather than nearly true, and so a later edit cannot regress them
-unseen. The block is appended rather than filed beside its siblings so no
-pre-existing corpus index moves (0a-2).
+`CanvasLoadedDegraded`.
+
+**Seven arms did not**, and they are what the **cardinality boundary
+witness** block at the end of `canvas_corpus()` exists for:
+`CanvasTracePathEnd`, `CanvasBulkMoved`, `CanvasBulkDuplicated`,
+`CanvasModeEntered`, `CanvasModeCommitted`, `CanvasGrouped`,
+`CanvasMarksCleared`. The block holds **eight entries**, not seven: seven
+count-one witnesses plus `CanvasTracePathEnd { titles: [] }`, which is the
+empty-collection witness rather than an eighth arm. (`CanvasModeEntered`
+and `CanvasModeCommitted` are two arms sharing one `CanvasModeObject::Cards`
+clause; each needs its own witness because the corpus is per-event.)
+
+Two of those seven — `CanvasGrouped` and `CanvasMarksCleared` — already
+rendered correctly through `counted`; their witnesses exist so the claim
+above is TRUE rather than nearly true, and so a later edit cannot regress
+them unseen. The block is appended rather than filed beside its siblings
+so no pre-existing corpus index moves (0a-2).
 
 Hosts mirror the rule where they compose the same clause for a LABEL:
 mac's M3 inspectable value and its undo-action names route through
