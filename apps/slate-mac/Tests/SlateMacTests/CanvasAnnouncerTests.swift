@@ -129,6 +129,12 @@ final class CanvasAnnouncerTests: XCTestCase {
     /// exist; this keeps it that way. `CanvasAnnouncer.swift` stays the
     /// one exempted file — it is the single legal posting seam — which
     /// is the same exemption the two names above already rely on.
+    ///
+    /// The walk is RECURSIVE (round 1, m-F). It used to be
+    /// `contentsOfDirectory`, which reads one level: `Canvas/` is flat
+    /// today, so a future `Canvas/CanvasPickers/` would have escaped
+    /// the guard entirely and silently. `A11yResidueCensusTests` already
+    /// enumerates its tree this way; the guards now agree on scope.
     func testNoDirectAnnouncementsUnderCanvas() throws {
         let testsDir = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
         let canvasDir =
@@ -136,11 +142,21 @@ final class CanvasAnnouncerTests: XCTestCase {
             .deletingLastPathComponent()  // Tests/SlateMacTests → Tests
             .deletingLastPathComponent()  // → package root
             .appendingPathComponent("Sources/SlateMac/Canvas")
-        let files = try FileManager.default.contentsOfDirectory(
-            at: canvasDir, includingPropertiesForKeys: nil)
+        guard
+            let enumerator = FileManager.default.enumerator(
+                at: canvasDir, includingPropertiesForKeys: nil)
+        else {
+            return XCTFail("cannot enumerate \(canvasDir.path)")
+        }
         var offenders: [String] = []
-        for file in files where file.pathExtension == "swift" {
+        for case let file as URL in enumerator where file.pathExtension == "swift" {
             if file.lastPathComponent == "CanvasAnnouncer.swift" { continue }
+            // Path relative to Canvas/, so an offender in a
+            // subdirectory names itself unambiguously.
+            let label =
+                file.path.hasPrefix(canvasDir.path + "/")
+                ? String(file.path.dropFirst(canvasDir.path.count + 1))
+                : file.lastPathComponent
             // Comment-only lines dropped, like the residue census does,
             // so prose NAMING the bypasses cannot trip the guard.
             let source = try String(contentsOf: file, encoding: .utf8)
@@ -152,7 +168,7 @@ final class CanvasAnnouncerTests: XCTestCase {
                 "AppKitAnnouncementPoster",
             ] {
                 if source.contains(bypass) {
-                    offenders.append("\(file.lastPathComponent): \(bypass)")
+                    offenders.append("\(label): \(bypass)")
                 }
             }
         }
