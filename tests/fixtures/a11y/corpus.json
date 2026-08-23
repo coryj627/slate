@@ -2158,5 +2158,30 @@
     "event": "Canvas { event: CanvasMarksCleared { count: 1 } }",
     "priority": "medium",
     "text": "Cleared 1 mark."
+  },
+  {
+    "event": "Canvas { event: CanvasMovedTo { verbosity: Verbose, kind_label: \"text\", title: \"Loose\", ordinal_n: 1, total_m: 1, container: None, connection_count: 0, color_name: None, marked: false } }",
+    "priority": "medium",
+    "text": "Text card \"Loose\", 1 of 1 in canvas, 0 connections"
+  },
+  {
+    "event": "Canvas { event: CanvasMarkToggled { marked: false, title: \"Research\", count: 0 } }",
+    "priority": "medium",
+    "text": "Unmarked \"Research\". 0 marked."
+  },
+  {
+    "event": "Canvas { event: CanvasFilterCount { matched: 0 } }",
+    "priority": "medium",
+    "text": "0 cards match."
+  },
+  {
+    "event": "Canvas { event: CanvasFilterCleared { total: 0 } }",
+    "priority": "medium",
+    "text": "Filter cleared — 0 cards."
+  },
+  {
+    "event": "Canvas { event: CanvasWhereAmI { kind_label: \"text\", title: \"Loose\", group_path: [], ordinal_n: 1, total_m: 1, connection_count: 0, in_count: 0, out_count: 0, color_name: None, marked: false, mode: None, filter: Inactive } }",
+    "priority": "medium",
+    "text": "Text card \"Loose\", at canvas level, 1 of 1, 0 connections (0 in, 0 out)"
   }
 ]

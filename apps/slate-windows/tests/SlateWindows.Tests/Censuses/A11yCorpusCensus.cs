@@ -482,6 +482,11 @@ public sealed class A11yCorpusCensus
         new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasModeCommitted(Verb: CanvasTransientVerb.Move, Object: new CanvasModeObject.Cards(Count: 1))),
         new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasGrouped(Count: 1, Label: "Q3")),
         new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasMarksCleared(Count: 1)),
+        new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasMovedTo(Verbosity: CanvasVerbosity.Verbose, KindLabel: "text", Title: "Loose", OrdinalN: 1, TotalM: 1, Container: null, ConnectionCount: 0, ColorName: null, Marked: false)),
+        new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasMarkToggled(Marked: false, Title: "Research", Count: 0)),
+        new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasFilterCount(Matched: 0)),
+        new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasFilterCleared(Total: 0)),
+        new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasWhereAmI(KindLabel: "text", Title: "Loose", GroupPath: [], OrdinalN: 1, TotalM: 1, ConnectionCount: 0, InCount: 0, OutCount: 0, ColorName: null, Marked: false, Mode: null, Filter: new CanvasFilterState.Inactive())),
     ];
 
     [Fact]
