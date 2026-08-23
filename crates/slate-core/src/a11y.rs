@@ -5896,8 +5896,16 @@ mod tests {
 
         // (d) --------------------------------------------------------
         // The canvas templates and the helpers they call: from the
-        // family's own impl block down to `corpus()`. LEXICAL by
-        // design — see 0a-14 for what it therefore cannot see.
+        // family's own impl block down to `corpus()`.
+        //
+        // W6-1 contract 0b-16 replaced the line-scoped scan 0a-1
+        // shipped. This walks the module's string literals WITH the
+        // call and argument position each one belongs to, so both of
+        // that scan's declared artefacts are gone: the countable-noun
+        // list is whatever the helper call sites actually pass, and a
+        // noun literal is excused only when THAT literal is a helper's
+        // noun argument — a line carrying a real `plural(` call no
+        // longer vouches for a hardcoded plural sitting beside it.
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/a11y.rs");
         let source = std::fs::read_to_string(&path).expect("a11y source");
         let begin = source
@@ -5907,84 +5915,100 @@ mod tests {
             .find("pub fn corpus()")
             .expect("corpus() terminates the render section")
             + begin;
-        let first_line = source[..begin].lines().count();
 
-        // Rust continues a string literal across lines with a trailing
-        // `\`, which would otherwise split `{count} \` from ` cards`
-        // and hide the defect from both checks below.
-        //
-        // Comments are stripped, not merely skipped when they start the
-        // line: a TRAILING `// plural(` on a defective line would
-        // otherwise vouch for it, since helper provenance below is
-        // line-wide.
-        fn strip_comment(line: &str) -> &str {
-            let bytes = line.as_bytes();
-            let mut in_string = false;
-            let mut index = 0usize;
-            while index < bytes.len() {
-                match bytes[index] {
-                    b'\\' if in_string => index += 1,
-                    b'"' => in_string = !in_string,
-                    b'/' if !in_string && bytes.get(index + 1) == Some(&b'/') => {
-                        return &line[..index];
-                    }
-                    _ => {}
-                }
-                index += 1;
-            }
-            line
-        }
+        // Every helper takes `(count, one, many)`, so the noun forms
+        // are arguments 1 and 2 of a call by one of these names.
+        const PLURAL_HELPERS: &[&str] = &["plural", "plural_len", "counted"];
+        const SINGULAR_ARG: usize = 1;
+        const PLURAL_ARG: usize = 2;
 
-        let mut lines: Vec<(usize, String)> = Vec::new();
-        let mut pending: Option<(usize, String)> = None;
-        for (offset, raw) in source[begin..end].lines().enumerate() {
-            let trimmed = strip_comment(raw).trim();
-            if trimmed.is_empty() {
+        // The nouns this vocabulary counts, DERIVED from the calls that
+        // count them rather than declared here: a noun enters these
+        // sets by being pluralized somewhere in the module.
+        let module_literals = string_literals(&source);
+        let noun_forms = |position: usize| -> std::collections::BTreeSet<&str> {
+            module_literals
+                .iter()
+                .filter(|lit| PLURAL_HELPERS.contains(&lit.call.as_str()) && lit.arg == position)
+                .map(|lit| lit.text.as_str())
+                .collect()
+        };
+        let singulars = noun_forms(SINGULAR_ARG);
+        let plurals = noun_forms(PLURAL_ARG);
+        assert!(
+            !singulars.is_empty() && !plurals.is_empty(),
+            "no pluralization call sites were found, so this guard would pass \
+             vacuously — the lexer, the helper names or the argument positions are wrong"
+        );
+        let counted_nouns: std::collections::BTreeSet<&str> =
+            singulars.union(&plurals).copied().collect();
+
+        let literals = string_literals(&source[begin..end]);
+        assert!(
+            !literals.is_empty(),
+            "the canvas render section parsed to zero string literals, so this guard \
+             would pass vacuously"
+        );
+        // The lexer's own witness: this template is written across two
+        // source lines with a `\`-continuation, and rustc joins it with
+        // no indentation. If the lexer ever stops agreeing, the
+        // placeholder-then-noun check below is reading strings rustc
+        // never builds, and the whole guard is measuring the wrong text.
+        assert!(
+            literals
+                .iter()
+                .any(|lit| lit.text.contains("in the file but not shown.")),
+            "the lexer did not join a `\\`-continued template the way rustc does"
+        );
+        let line_of = |literal: &SourceLiteral| source[..begin].lines().count() + literal.line - 1;
+
+        let mut offenders: Vec<String> = Vec::new();
+        for literal in &literals {
+            let routed = PLURAL_HELPERS.contains(&literal.call.as_str())
+                && (literal.arg == SINGULAR_ARG || literal.arg == PLURAL_ARG);
+            // A literal that IS a counted noun, in either form, is
+            // either that call's argument or a hardcoded form smuggled
+            // past the template. Provenance is the literal's own call
+            // and argument position, never its line.
+            if counted_nouns.contains(literal.text.as_str()) && !routed {
+                offenders.push(format!(
+                    "a11y.rs:{}: the literal {:?} is a counted noun but is argument {} of \
+                     `{}`, not a noun argument of plural()/plural_len()/counted()",
+                    line_of(literal),
+                    literal.text,
+                    literal.arg,
+                    literal.call
+                ));
                 continue;
             }
-            let (line_no, mut text) = pending
-                .take()
-                .unwrap_or_else(|| (first_line + offset, String::new()));
-            text.push_str(trimmed);
-            if text.ends_with('\\') {
-                text.pop();
-                pending = Some((line_no, text));
-            } else {
-                lines.push((line_no, text));
+            if routed {
+                continue;
             }
-        }
-        if let Some(rest) = pending {
-            lines.push(rest);
-        }
-
-        const PLURAL_NOUNS: &[&str] = &["cards", "marks", "items", "connections"];
-        const PLURAL_HELPERS: &[&str] = &["plural(", "plural_len(", "counted("];
-        let mut offenders: Vec<String> = Vec::new();
-        for (line_no, line) in &lines {
-            let routed = PLURAL_HELPERS.iter().any(|helper| line.contains(helper));
-            for noun in PLURAL_NOUNS {
-                // A bare `"cards"` literal is either a helper argument
-                // or a hardcoded plural smuggled past the template.
-                if line.contains(&format!("\"{noun}\"")) && !routed {
-                    offenders.push(format!(
-                        "a11y.rs:{line_no}: bare \"{noun}\" literal outside a \
-                         plural()/plural_len()/counted() call — {line}"
-                    ));
-                }
+            // The defect shape, inside ONE logical format string
+            // (`\`-continuations already joined by the lexer): a
+            // placeholder, then whitespace, then a hardcoded PLURAL.
+            // Only the plural form — a placeholder before a SINGULAR is
+            // the shape `⟨Kind⟩ card "title"` legitimately uses, and
+            // nothing lexical separates the two (0a-14's residuals).
+            for noun in &plurals {
                 let mut from = 0usize;
-                while let Some(at) = line[from..].find(noun) {
+                while let Some(at) = literal.text[from..].find(noun) {
                     let at = from + at;
                     from = at + noun.len();
+                    let before = &literal.text[..at];
+                    let after = &literal.text[from..];
                     // Whole word only — never `placards`, `Cards`.
-                    if line[from..].starts_with(|c: char| c.is_ascii_alphanumeric()) {
+                    if before.ends_with(|c: char| c.is_alphanumeric())
+                        || after.starts_with(|c: char| c.is_alphanumeric())
+                    {
                         continue;
                     }
-                    // The defect shape: a format placeholder, then
-                    // whitespace, then the hardcoded plural.
-                    if line[..at].trim_end().ends_with('}') {
+                    if before.trim_end().ends_with('}') {
                         offenders.push(format!(
-                            "a11y.rs:{line_no}: interpolated count immediately before \
-                             the hardcoded plural \"{noun}\" — {line}"
+                            "a11y.rs:{}: {:?} interpolates a value immediately before the \
+                             hardcoded plural {noun:?}",
+                            line_of(literal),
+                            literal.text
                         ));
                     }
                 }
@@ -5992,11 +6016,169 @@ mod tests {
         }
         assert!(
             offenders.is_empty(),
-            "a canvas template speaks a plural noun the count cannot agree with — route \
-             it through plural()/plural_len()/counted() (contract 0a-14). If a helper \
-             call was wrapped so its literal left the call's line, put them back on one \
-             line: this scan is lexical: {offenders:#?}"
+            "a canvas template speaks a noun whose count cannot agree with it — route it \
+             through plural()/plural_len()/counted() (contracts 0a-14, 0b-16): {offenders:#?}"
         );
+    }
+
+    /// One string literal from Rust source, with the call it is an
+    /// argument of — the provenance contract 0b-16 binds to the
+    /// literal instead of to its line.
+    struct SourceLiteral {
+        /// 1-based line within the slice that was lexed.
+        line: usize,
+        /// The literal's CONTENT: escapes resolved, and Rust's
+        /// `\`-before-newline continuation applied, so a template split
+        /// across source lines reads as the one logical string it is.
+        text: String,
+        /// The identifier opening the innermost enclosing bracket
+        /// (`format!`, `plural`, …); empty when nothing names it.
+        call: String,
+        /// 0-based argument position within that call, so the SINGULAR
+        /// and PLURAL forms a helper is passed can be told apart.
+        arg: usize,
+    }
+
+    /// Lex `source` into its string literals. Deliberately small: it
+    /// knows strings, escapes, line comments, char literals and bracket
+    /// nesting, which is exactly what binding a plural noun to its call
+    /// needs — and nothing else, so it cannot quietly grow into a
+    /// second Rust front end.
+    ///
+    /// A raw string literal (the `r`-prefixed form) is REFUSED rather
+    /// than mis-lexed: it would read as an ordinary literal and its
+    /// escapes would be resolved wrongly. The refusal happens inside
+    /// the lexer, where prose in a comment cannot trip it.
+    fn string_literals(source: &str) -> Vec<SourceLiteral> {
+        let bytes = source.as_bytes();
+        let mut out: Vec<SourceLiteral> = Vec::new();
+        // One frame per open bracket: the identifier that opened it and
+        // the argument position within it. Braces and square brackets
+        // get a frame too, so a comma inside a closure or an array
+        // cannot be mistaken for the next argument of a call.
+        let mut stack: Vec<(String, usize)> = Vec::new();
+        let mut ident = String::new();
+        let mut line = 1usize;
+        let mut index = 0usize;
+        while index < bytes.len() {
+            match bytes[index] {
+                b'\n' => {
+                    line += 1;
+                    ident.clear();
+                    index += 1;
+                }
+                b'/' if bytes.get(index + 1) == Some(&b'/') => {
+                    while index < bytes.len() && bytes[index] != b'\n' {
+                        index += 1;
+                    }
+                    ident.clear();
+                }
+                b'(' | b'[' | b'{' => {
+                    stack.push((std::mem::take(&mut ident), 0));
+                    index += 1;
+                }
+                b')' | b']' | b'}' => {
+                    stack.pop();
+                    ident.clear();
+                    index += 1;
+                }
+                b',' => {
+                    if let Some(frame) = stack.last_mut() {
+                        frame.1 += 1;
+                    }
+                    ident.clear();
+                    index += 1;
+                }
+                b'\'' => {
+                    // A char literal (`'x'`, `'\n'`) or a lifetime.
+                    // Only the former can hide a quote from the scanner.
+                    if bytes.get(index + 1) == Some(&b'\\') {
+                        index += 2;
+                        while index < bytes.len() && bytes[index] != b'\'' {
+                            index += 1;
+                        }
+                        index += 1;
+                    } else if bytes.get(index + 2) == Some(&b'\'') {
+                        index += 3;
+                    } else {
+                        index += 1;
+                    }
+                    ident.clear();
+                }
+                b'"' => {
+                    assert_ne!(
+                        ident, "r",
+                        "the literal lexer does not handle raw strings; teach it before \
+                         using one in this module"
+                    );
+                    let start = line;
+                    let mut text: Vec<u8> = Vec::new();
+                    index += 1;
+                    while index < bytes.len() && bytes[index] != b'"' {
+                        if bytes[index] == b'\\' {
+                            index += 1;
+                            match bytes.get(index) {
+                                Some(b'n') => text.push(b'\n'),
+                                Some(b't') => text.push(b'\t'),
+                                Some(b'r') => text.push(b'\r'),
+                                Some(b'0') => text.push(0),
+                                // Continuation: the newline AND the
+                                // indentation after it are swallowed,
+                                // exactly as rustc does — which is how
+                                // a template split across source lines
+                                // is read as one logical string.
+                                Some(b'\n') => {
+                                    line += 1;
+                                    index += 1;
+                                    while matches!(bytes.get(index), Some(b' ' | b'\t')) {
+                                        index += 1;
+                                    }
+                                    continue;
+                                }
+                                Some(other) => text.push(*other),
+                                None => break,
+                            }
+                            index += 1;
+                            continue;
+                        }
+                        if bytes[index] == b'\n' {
+                            line += 1;
+                        }
+                        text.push(bytes[index]);
+                        index += 1;
+                    }
+                    index += 1;
+                    let (call, arg) = stack.last().cloned().unwrap_or_default();
+                    out.push(SourceLiteral {
+                        line: start,
+                        text: String::from_utf8(text).expect("source is UTF-8"),
+                        call,
+                        arg,
+                    });
+                    ident.clear();
+                }
+                c if c.is_ascii_alphanumeric() || c == b'_' => {
+                    ident.push(c as char);
+                    index += 1;
+                }
+                b'!' => {
+                    // `format!` / `matches!`: the bang belongs to the
+                    // name the following `(` opens.
+                    if !ident.is_empty() {
+                        ident.push('!');
+                    }
+                    index += 1;
+                }
+                // `r#"…"#`: the hash keeps the `r` alive so the quote
+                // arm above still sees the raw-string prefix.
+                b'#' if ident == "r" => index += 1,
+                _ => {
+                    ident.clear();
+                    index += 1;
+                }
+            }
+        }
+        out
     }
 
     /// The family is reached through exactly one top-level variant, and
