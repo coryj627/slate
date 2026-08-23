@@ -194,6 +194,10 @@ extension AppState {
                 }
             }
             let single = expanded.count == 1
+            // Deliberately UNGROUPED (CD-6): `CanvasBulkDuplicated`
+            // renders through core's `plural`, so
+            // `Duplicated ⟨n⟩ cards` interpolates the count plainly
+            // and the undo name it pairs with must too.
             let name =
                 single
                 ? "duplicate \"\(doc.outline.first { $0.nodeId == expanded[0] }?.title ?? "card")\""

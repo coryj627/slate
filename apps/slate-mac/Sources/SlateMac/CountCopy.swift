@@ -31,6 +31,43 @@ enum CountCopy {
         "\(value) \(noun(value, singular, plural))"
     }
 
+    /// `"1 card"`, `"1,000 cards"` — the GROUPED twin of `counted`,
+    /// byte-identical to core's `count_noun` at every value.
+    ///
+    /// It exists because some host strings are read back through a core
+    /// sentence that already grouped the same number, and the two
+    /// halves must not disagree: a canvas undo-stack action name rides
+    /// into `CanvasHistoryApplied.name` as a payload, so `Undid delete
+    /// 1000 cards.` followed `Deleted 1,000 cards.` at the same count
+    /// (contracts doc CD-6). A host string with no core counterpart
+    /// takes `counted`, whose ungrouped contract above is unchanged.
+    ///
+    /// Grouping is spelled out rather than delegated to
+    /// `NumberFormatter`: core's separator is a fixed ASCII comma and
+    /// the formatter's follows the user's locale, so the convenient
+    /// call is the one that would silently break the identity this
+    /// helper exists to hold.
+    static func countedGrouped(
+        _ value: some BinaryInteger, _ singular: String, _ plural: String
+    ) -> String {
+        "\(grouped(value)) \(noun(value, singular, plural))"
+    }
+
+    /// Thousands separated by ASCII commas — core's `group_thousands`.
+    static func grouped(_ value: some BinaryInteger) -> String {
+        let text = "\(value)"
+        let negative = text.hasPrefix("-")
+        let digits = negative ? String(text.dropFirst()) : text
+        var out = negative ? "-" : ""
+        for (index, character) in digits.enumerated() {
+            if index != 0 && (digits.count - index) % 3 == 0 {
+                out.append(",")
+            }
+            out.append(character)
+        }
+        return out
+    }
+
     /// The bare noun for a count — for templates that place the number
     /// elsewhere, e.g. `"\(shown) of \(total) \(CountCopy.noun(total, …))"`.
     static func noun(

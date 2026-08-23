@@ -387,6 +387,9 @@ extension AppState {
     private static func canvasActionObject(_ object: CanvasModeObject) -> String {
         switch object {
         case .card(let title): return "\"\(title)\""
+        // Deliberately UNGROUPED (CD-6): the mode object renders
+        // through core's `plural`, so `Placed ⟨n⟩ cards.` and the
+        // `move ⟨n⟩ cards` undo entry it pairs with agree.
         case .cards(let count): return CountCopy.counted(count, "card", "cards")
         }
     }

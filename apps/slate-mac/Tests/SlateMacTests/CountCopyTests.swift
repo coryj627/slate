@@ -44,6 +44,25 @@ final class CountCopyTests: XCTestCase {
         XCTAssertEqual(CountCopy.counted(1_234_567, "row", "rows"), "1234567 rows")
     }
 
+    /// `countedGrouped` is the twin that DOES group, for host strings
+    /// read back beside a core sentence that grouped the same number —
+    /// the canvas undo-stack names spoken through
+    /// `CanvasHistoryApplied` (CD-6). Below 1000 it must be
+    /// byte-identical to `counted`, which is what keeps every shipped
+    /// expectation still true.
+    func testCountedGroupedMatchesCoreAndAgreesWithCountedBelowAThousand() {
+        XCTAssertEqual(CountCopy.countedGrouped(1000, "card", "cards"), "1,000 cards")
+        XCTAssertEqual(CountCopy.countedGrouped(1_234_567, "row", "rows"), "1,234,567 rows")
+        XCTAssertEqual(CountCopy.grouped(999), "999")
+        XCTAssertEqual(CountCopy.grouped(0), "0")
+        for value in [0, 1, 2, 7, 42, 100, 999] {
+            XCTAssertEqual(
+                CountCopy.countedGrouped(value, "card", "cards"),
+                CountCopy.counted(value, "card", "cards"),
+                "grouping must be a no-op below 1000 (\(value))")
+        }
+    }
+
     /// The composed shape used by the "X of Y" summaries: the noun
     /// agrees with the TOTAL, the verb with the shown count.
     func testOfTotalTemplateAgreesNounWithTotalAndVerbWithSubject() {
