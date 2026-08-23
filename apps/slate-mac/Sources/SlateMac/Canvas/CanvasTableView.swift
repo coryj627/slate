@@ -88,8 +88,11 @@ struct CanvasTableView: View {
                     appState.canvasDeleteSelection()
                 },
             ],
+            // The grid raises core events already; relaying keeps
+            // core's PRIORITY too — unwrapping the text and re-wrapping
+            // it as a status discarded it (contracts doc, mac details).
             announce: { [weak appState] event in
-                appState?.canvasAnnouncer.announce(.status(a11yRender(event: event).text))
+                appState?.canvasAnnouncer.relay(event)
             }
         )
     }
@@ -112,9 +115,10 @@ struct CanvasTableView: View {
                     let row = document.outline.first(where: { $0.nodeId == id })
                 else { return }
                 appState.canvasAnnouncer.announce(
-                    .movedTo(
-                        card: CanvasCardRef(kind: row.kind, title: row.title),
-                        ordinal: row.ordinalN, total: row.totalM,
+                    .canvasMovedTo(
+                        verbosity: appState.canvasAnnouncer.verbosity,
+                        kindLabel: row.kind, title: row.title,
+                        ordinalN: row.ordinalN, totalM: row.totalM,
                         container: row.groupPath.last,
                         connectionCount: row.connectionCount,
                         colorName: row.colorName,

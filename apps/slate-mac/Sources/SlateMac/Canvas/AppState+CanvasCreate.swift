@@ -30,7 +30,7 @@ extension AppState {
             admitCanvasMutation(for: doc),
             let selected = doc.selection.selected
         else {
-            canvasAnnouncer.announce(.status("Nothing selected."))
+            canvasAnnouncer.announce(.canvasStatus(note: .nothingSelected))
             return
         }
         canvasEditCard(nodeId: selected)
@@ -43,13 +43,13 @@ extension AppState {
             let row = doc.outline.first(where: { $0.nodeId == nodeId })
         else { return }
         guard row.kind == "text" else {
-            canvasAnnouncer.announce(.status("Not a text card."))
+            canvasAnnouncer.announce(.canvasStatus(note: .notATextCard))
             return
         }
         guard let session = currentSession, let handle = doc.handle,
             let fetched = try? session.canvasNodeText(handle: handle, nodeId: nodeId)
         else {
-            canvasAnnouncer.announce(.error("The card's text could not be read."))
+            canvasAnnouncer.announce(.canvasBlocked(reason: .cardTextUnreadable))
             return
         }
         canvasCardEditor = CanvasCardEditorRequest(
@@ -73,15 +73,15 @@ extension AppState {
             return false
         }
         guard let doc = activeCanvasDocument else {
-            postMutationAnnouncement(Self.canvasCardEditorUnavailableReason)
+            announceCanvasRefusal(.canvas(.cardEditorUnavailable))
             return false
         }
-        if let reason = activeCanvasCardEditorDisabledReason {
-            postMutationAnnouncement(reason)
+        if let refusal = activeCanvasCardEditorRefusal {
+            announceCanvasRefusal(refusal)
             return false
         }
         guard newText != editor.initialText else {
-            canvasAnnouncer.announce(.status("No changes."))
+            canvasAnnouncer.announce(.canvasStatus(note: .noChanges))
             dismissCanvasCardEditor()
             return true
         }
@@ -94,7 +94,7 @@ extension AppState {
         // editor open so the draft is not lost.
         guard ok else { return false }
         dismissCanvasCardEditor()
-        canvasAnnouncer.announce(.confirmation("Updated \"\(editor.title)\"."))
+        canvasAnnouncer.announce(.canvasCardUpdated(title: editor.title))
         return true
     }
 
@@ -139,7 +139,7 @@ extension AppState {
         else { return }
         let notes = canvasNotePaths
         guard !notes.isEmpty else {
-            canvasAnnouncer.announce(.status("This vault has no notes yet."))
+            canvasAnnouncer.announce(.canvasStatus(note: .noNotesInVault))
             return
         }
         presentCanvasPrompt(.addNote(files: notes))
@@ -151,7 +151,7 @@ extension AppState {
         else { return }
         let media = canvasMediaPaths
         guard !media.isEmpty else {
-            canvasAnnouncer.announce(.status("This vault has no media files."))
+            canvasAnnouncer.announce(.canvasStatus(note: .noMediaInVault))
             return
         }
         presentCanvasPrompt(.addMedia(files: media))
@@ -178,7 +178,7 @@ extension AppState {
     func canvasAddLinkCard(url: String) {
         let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let parsed = URL(string: trimmed), parsed.scheme != nil else {
-            canvasAnnouncer.announce(.error("That doesn't look like a URL."))
+            canvasAnnouncer.announce(.canvasBlocked(reason: .notAUrl))
             return
         }
         canvasCreatePlaced(
@@ -218,12 +218,12 @@ extension AppState {
             guard ok else { return }
             canvasSelect(nodeId: id, in: doc, announce: false)
             canvasAnnouncer.announce(
-                .confirmation(
-                    CanvasAnnouncer.createdText(
-                        card: CanvasCardRef(kind: kind, title: title),
-                        relative: placement.relative)))
+                .canvasCreated(
+                    kindLabel: kind, title: title, relative: placement.relative))
         } catch {
-            canvasAnnouncer.announce(.error("Create failed: \(error.localizedDescription)"))
+            canvasAnnouncer.announce(
+                .canvasActionFailed(
+                    action: .create, detail: error.localizedDescription))
         }
     }
 
@@ -237,18 +237,18 @@ extension AppState {
             let selected = doc.selection.selected,
             let row = doc.outline.first(where: { $0.nodeId == selected })
         else {
-            canvasAnnouncer.announce(.status("Nothing selected."))
+            canvasAnnouncer.announce(.canvasStatus(note: .nothingSelected))
             return
         }
         guard admitCanvasMutation(for: doc) else { return }
         guard row.kind == "file" || row.kind == "image" else {
-            canvasAnnouncer.announce(.status("Not a file card."))
+            canvasAnnouncer.announce(.canvasStatus(note: .notAFileCard))
             return
         }
         var candidates = canvasNotePaths
         candidates.append(contentsOf: canvasMediaPaths)
         guard !candidates.isEmpty else {
-            canvasAnnouncer.announce(.status("This vault has no files to point at."))
+            canvasAnnouncer.announce(.canvasStatus(note: .noFilesToPointAt))
             return
         }
         presentCanvasPrompt(
@@ -268,7 +268,7 @@ extension AppState {
             to: doc)
         guard ok else { return }
         canvasAnnouncer.announce(
-            .confirmation("\"\(row.title)\" now points at \(path)."))
+            .canvasCardRetargeted(title: row.title, path: path))
     }
 
     // MARK: Remove from Group (R22)
@@ -284,11 +284,12 @@ extension AppState {
             let row = doc.outline.first(where: { $0.nodeId == selected }),
             let node = doc.scene.nodes.first(where: { $0.nodeId == selected })
         else {
-            canvasAnnouncer.announce(.status("Nothing selected."))
+            canvasAnnouncer.announce(.canvasStatus(note: .nothingSelected))
             return
         }
         guard !row.groupPath.isEmpty else {
-            canvasAnnouncer.announce(.status("\"\(row.title)\" is not in a group."))
+            canvasAnnouncer.announce(
+                .canvasStatus(note: .notInAGroup(title: row.title)))
             return
         }
         // Enclosing group by t1 containment: center inside, smallest
@@ -303,7 +304,8 @@ extension AppState {
             }
             .min { $0.width * $0.height < $1.width * $1.height }
         guard let parent else {
-            canvasAnnouncer.announce(.status("\"\(row.title)\" is not in a group."))
+            canvasAnnouncer.announce(
+                .canvasStatus(note: .notInAGroup(title: row.title)))
             return
         }
         do {
@@ -321,10 +323,11 @@ extension AppState {
                     ]),
                 to: doc)
             guard ok else { return }
-            canvasAnnouncer.announce(
-                .confirmation("Removed from group \"\(parent.title)\"."))
+            canvasAnnouncer.announce(.canvasRemovedFromGroup(label: parent.title))
         } catch {
-            canvasAnnouncer.announce(.error("Remove failed: \(error.localizedDescription)"))
+            canvasAnnouncer.announce(
+                .canvasActionFailed(
+                    action: .removeFromGroup, detail: error.localizedDescription))
         }
     }
 }

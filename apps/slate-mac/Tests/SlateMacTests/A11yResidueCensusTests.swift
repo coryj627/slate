@@ -20,7 +20,14 @@ final class A11yResidueCensusTests: XCTestCase {
     /// the diff is the reviewable claim that the copy cannot be a
     /// vocabulary template yet. Shrinking it (converting residue) is the
     /// intended direction.
-    private static let pinnedResidueSites = 30
+    ///
+    /// 31 → 30 → **29**: W6-1 PR 0a gave the canvas announcer a typed
+    /// core vocabulary (`A11yEvent.canvas`), so `CanvasAnnouncer` posts
+    /// rendered events and its `.hostComposed` site is gone. The graph
+    /// announcer is the remaining named engine (W6-2). The shared
+    /// structural-mutation site stays: it serves every authoring
+    /// surface, and the canvas admission ladder merely left it.
+    private static let pinnedResidueSites = 29
 
     private struct SwiftSource {
         let path: String

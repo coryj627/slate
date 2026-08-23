@@ -3,6 +3,32 @@
 
 import Foundation
 
+/// Why a canvas refuses mutations (the admission ladder). The canvas
+/// ladder's six reasons are CORE vocabulary now
+/// (`CanvasMutationRefusal`, contracts doc 0a-12) — one closed set
+/// feeding the announcement, every disabled command's reason, and the
+/// sheets' read-only copy, three surfaces that drifted while it was a
+/// host-side constant. The quarantine arm is BatchTrash's own
+/// sentence, shared with every authoring surface and not this
+/// vocabulary's to own.
+enum CanvasMutationRefusalReason {
+    case canvas(CanvasMutationRefusal)
+    case quarantine(String)
+
+    /// The sentence — one render, used by the speech AND by every
+    /// label that has to explain the same refusal.
+    var text: String {
+        switch self {
+        case .canvas(let refusal):
+            return a11yRender(
+                event: .canvas(event: .canvasMutationRefused(reason: refusal))
+            ).text
+        case .quarantine(let reason):
+            return reason
+        }
+    }
+}
+
 /// Canvas tab lifecycle (Milestone T, #369): the canvas arm of the
 /// single navigation funnel, the per-path `CanvasDocument` registry
 /// (t2: one document per open path, shared across panes), and the
@@ -25,7 +51,10 @@ extension AppState {
         advancesSidebarSelectionRevision: Bool = true
     ) {
         if let reason = propertyEditNavigationDisabledReason {
-            postMutationAnnouncement(reason)
+            // Not canvas vocabulary (property recovery owns this
+            // sentence), but it is a canvas call site, so it rides the
+            // canvas funnel like every other one — DoD §H.
+            canvasAnnouncer.relay(mutationAnnouncementEvent(reason))
             return
         }
         if advancesSidebarSelectionRevision {
@@ -290,7 +319,7 @@ extension AppState {
     func showCanvasSurface(_ surface: CanvasSurface) {
         guard let tab = workspace.activeTab, case .canvas = tab.item else { return }
         workspace.setCanvasSurface(surface, for: tab.id)
-        canvasAnnouncer.announce(.status("Canvas \(surface.title.lowercased()) view."))
+        canvasAnnouncer.announce(.canvasSurfaceShown(surface: surface.coreKind))
     }
 
     /// ⌃⌘I (t0 §1.4, #518): one pull-based verbose readback of the
@@ -301,35 +330,44 @@ extension AppState {
         let doc = canvasDocument(for: path)
         guard let handle = doc.handle, let session = currentSession else { return }
         guard case .ready = doc.state else {
-            canvasAnnouncer.announce(.status("Canvas is not readable."))
+            canvasAnnouncer.announce(.canvasStatus(note: .notReadable))
             return
         }
         // Fall back to the first card in reading order when nothing is
         // selected yet (fresh landing) — "where am I" always answers.
         guard let nodeId = doc.selection.selected ?? doc.outline.first?.nodeId else {
-            canvasAnnouncer.announce(.status("Canvas is empty."))
+            canvasAnnouncer.announce(.canvasStatus(note: .empty))
             return
         }
         do {
             let ctx = try session.canvasWhereAmI(handle: handle, nodeId: nodeId)
-            let text = canvasAnnouncer.whereAmIText(
-                ctx,
+            // CD-5: ONE filter spelling — t0's `⟨matched⟩ of ⟨total⟩
+            // shown`, a normal comma-joined clause. mac appended a
+            // SECOND, differently-worded one here (leading space, no
+            // comma) on top of the tested parameter form, and passed
+            // `activeMode: nil` although the mode stack had shipped;
+            // both are fixed by handing core the real state.
+            let event = CanvasA11yEvent.canvasWhereAmI(
+                kindLabel: ctx.kind, title: ctx.title, groupPath: ctx.groupPath,
+                ordinalN: ctx.ordinalN, totalM: ctx.totalM,
+                connectionCount: ctx.connectionCount,
+                inCount: ctx.inCount, outCount: ctx.outCount,
+                colorName: ctx.colorName,
                 marked: doc.selection.marked.contains(nodeId),
-                activeMode: nil,  // mode stack lands with #364 (Wave 3)
-                filterSummary: nil)  // filter lands with #373 (Wave 5)
-            // #373: the navigator's "filtered" cue — Where-am-I always
-            // discloses an active filter and its result count.
-            var full = text
-            if doc.filterActive {
-                full +=
-                    " Filter active: \(doc.filteredOutline.count) of "
-                    + "\(CountCopy.counted(doc.outline.count, "card", "cards")) "
-                    + CountCopy.verb(doc.filteredOutline.count, "matches", "match") + "."
-            }
-            canvasWhereAmIReadback = full
-            canvasAnnouncer.announce(.status(full))
+                mode: canvasModeControllers[doc.path]?.active?.mode,
+                filter: doc.filterActive
+                    ? .active(
+                        matched: UInt32(clamping: doc.filteredOutline.count),
+                        total: UInt32(clamping: doc.outline.count))
+                    : .inactive)
+            // The panel shows the SAME string the announcement speaks —
+            // one render, no second composition (t0 §1.4 / §3).
+            canvasWhereAmIReadback = a11yRender(event: .canvas(event: event)).text
+            canvasAnnouncer.announce(event)
         } catch {
-            canvasAnnouncer.announce(.error("Where am I failed: \(error.localizedDescription)"))
+            canvasAnnouncer.announce(
+                .canvasActionFailed(
+                    action: .whereAmI, detail: error.localizedDescription))
         }
     }
 
@@ -341,47 +379,71 @@ extension AppState {
 
     // MARK: Mutations + undo (#372)
 
+    /// The mac display chord for undo, handed to the destructive
+    /// template as a PARAMETER: the chord table is host-owned
+    /// (program decision 12 / contract 0a-9), so core takes the
+    /// string rather than embedding a platform glyph.
+    static let canvasUndoChord = "⌘Z"
+
+    /// The typed colour a canvas colour verb just wrote — `nil` is the
+    /// clear-colour arm, which core speaks as `no color`. Presets are
+    /// 1…6 per JSON Canvas; the host never names them (0a-11).
+    static func canvasColor(preset: Int?) -> CanvasColor? {
+        preset.map { .preset(preset: UInt8(clamping: $0)) }
+    }
+
     /// Outcome-unknown Trash paths keep their last safe snapshot visible, but
     /// every authoring surface must describe that snapshot as read-only. This
     /// single capability feeds views, command availability, prompts, keyboard
     /// actions, and the final native-write backstop.
-    static let canvasOpeningMutationDisabledReason =
-        "This canvas is still opening. Wait for it to finish before making changes."
-    static let canvasReopeningMutationDisabledReason =
-        "This canvas is reopening. Wait for it to finish before making changes."
-    static let canvasRetargetFailedMutationDisabledReason =
-        "This canvas could not be reopened. Choose Retry before making changes."
-    static let canvasUnavailableMutationDisabledReason =
-        "This canvas is no longer available. Copy any draft before closing."
-    static let canvasReadOnlyMutationDisabledReason =
-        "This canvas is read-only because it could not be opened safely."
-
-    func canvasMutationDisabledReason(for document: CanvasDocument) -> String? {
+    func canvasMutationRefusal(for document: CanvasDocument)
+        -> CanvasMutationRefusalReason?
+    {
         switch batchTrashPathCapability(for: document.path) {
         case .writable:
             break
         case .readOnly(let reason), .invalid(let reason):
-            return reason
+            return .quarantine(reason)
         }
 
         if document.handle != nil { return nil }
         if document.hasPendingRetargetPreparation {
             if case .retargetFailed = document.state {
-                return Self.canvasRetargetFailedMutationDisabledReason
+                return .canvas(.retargetFailed)
             }
-            return Self.canvasReopeningMutationDisabledReason
+            return .canvas(.reopening)
         }
         switch document.state {
         case .loading:
-            return Self.canvasOpeningMutationDisabledReason
+            return .canvas(.opening)
         case .retargetFailed:
-            return Self.canvasRetargetFailedMutationDisabledReason
+            return .canvas(.retargetFailed)
         case .failed:
-            return Self.canvasUnavailableMutationDisabledReason
+            return .canvas(.unavailable)
         case .degraded:
-            return Self.canvasReadOnlyMutationDisabledReason
+            return .canvas(.readOnly)
         case .ready:
-            return Self.canvasUnavailableMutationDisabledReason
+            return .canvas(.unavailable)
+        }
+    }
+
+    func canvasMutationDisabledReason(for document: CanvasDocument) -> String? {
+        canvasMutationRefusal(for: document)?.text
+    }
+
+    /// The one place a canvas refusal is spoken (DoD §H): through the
+    /// canvas funnel, typed when the vocabulary owns the sentence and
+    /// relayed when it does not. Both arms still record into the
+    /// structural-mutation ledger, so §U2-6's verbatim-string tests
+    /// and the focus token behave exactly as they did when this went
+    /// out through `postMutationAnnouncement`.
+    func announceCanvasRefusal(_ refusal: CanvasMutationRefusalReason) {
+        switch refusal {
+        case .canvas(let reason):
+            recordMutationAnnouncement(refusal.text)
+            canvasAnnouncer.announce(.canvasMutationRefused(reason: reason))
+        case .quarantine(let reason):
+            canvasAnnouncer.relay(mutationAnnouncementEvent(reason))
         }
     }
 
@@ -395,34 +457,39 @@ extension AppState {
         return canvasDocuments[path]
     }
 
-    var activeCanvasMutationDisabledReason: String? {
+    var activeCanvasMutationRefusal: CanvasMutationRefusalReason? {
         guard let tab = workspace.activeTab, case .canvas = tab.item else {
             return nil
         }
         guard let document = activeCanvasRecoveryDocument else {
-            return Self.canvasUnavailableMutationDisabledReason
+            return .canvas(.unavailable)
         }
-        return canvasMutationDisabledReason(for: document)
+        return canvasMutationRefusal(for: document)
+    }
+
+    var activeCanvasMutationDisabledReason: String? {
+        activeCanvasMutationRefusal?.text
     }
 
     /// A card draft can outlive the native Canvas document when reconciliation
     /// proves the file absent. Keep the editor useful for selection/copy/close,
     /// but never re-enable Done merely because the unknown ledger cleared.
-    static let canvasCardEditorUnavailableReason =
-        "This canvas is no longer available. Copy your draft before closing the editor."
-
-    var activeCanvasCardEditorDisabledReason: String? {
+    var activeCanvasCardEditorRefusal: CanvasMutationRefusalReason? {
         guard canvasCardEditor != nil else { return nil }
         guard let document = activeCanvasRecoveryDocument else {
-            return Self.canvasCardEditorUnavailableReason
+            return .canvas(.cardEditorUnavailable)
         }
-        if let reason = canvasMutationDisabledReason(for: document) {
-            return reason
+        if let refusal = canvasMutationRefusal(for: document) {
+            return refusal
         }
         guard document.handle != nil else {
-            return Self.canvasCardEditorUnavailableReason
+            return .canvas(.cardEditorUnavailable)
         }
         return nil
+    }
+
+    var activeCanvasCardEditorDisabledReason: String? {
+        activeCanvasCardEditorRefusal?.text
     }
 
     /// Defensive admission for every Canvas writer. Disableable controls use
@@ -430,10 +497,10 @@ extension AppState {
     /// still pass here and announce the exact same recovery instruction.
     @discardableResult
     func admitCanvasMutation(for document: CanvasDocument) -> Bool {
-        guard let reason = canvasMutationDisabledReason(for: document) else {
+        guard let refusal = canvasMutationRefusal(for: document) else {
             return true
         }
-        postMutationAnnouncement(reason)
+        announceCanvasRefusal(refusal)
         return false
     }
 
@@ -444,7 +511,7 @@ extension AppState {
     @discardableResult
     func commitCanvasPromptMutation(_ action: () -> Void) -> Bool {
         guard let document = activeCanvasRecoveryDocument else {
-            postMutationAnnouncement(Self.canvasUnavailableMutationDisabledReason)
+            announceCanvasRefusal(.canvas(.unavailable))
             return false
         }
         guard admitCanvasMutation(for: document) else { return false }
@@ -550,8 +617,7 @@ extension AppState {
         // `canvasTransient` before calling here, so this guard only
         // stops out-of-band verbs (palette/menu) mid-mode.
         guard canvasTransient == nil else {
-            canvasAnnouncer.announce(
-                .error("A move or resize is in progress. Return to place it or Escape to cancel first."))
+            canvasAnnouncer.announce(.canvasBlocked(reason: .modeBusy))
             return false
         }
         guard let session = currentSession, let handle = doc.handle else { return false }
@@ -568,16 +634,17 @@ extension AppState {
             return true
         } catch let error as VaultError {
             if case .WriteConflict = error {
-                canvasAnnouncer.announce(
-                    .error(
-                        "The canvas changed on disk. Reload it to continue — your action was not applied."
-                    ))
+                canvasAnnouncer.announce(.canvasSaveConflict)
             } else {
-                canvasAnnouncer.announce(.error("Canvas action failed: \(error.localizedDescription)"))
+                canvasAnnouncer.announce(
+                    .canvasActionFailed(
+                        action: .canvasAction, detail: error.localizedDescription))
             }
             return false
         } catch {
-            canvasAnnouncer.announce(.error("Canvas action failed: \(error.localizedDescription)"))
+            canvasAnnouncer.announce(
+                .canvasActionFailed(
+                    action: .canvasAction, detail: error.localizedDescription))
             return false
         }
     }
@@ -588,13 +655,12 @@ extension AppState {
         guard let doc = activeCanvasDocument else { return }
         guard admitCanvasMutation(for: doc) else { return }
         guard canvasTransient == nil else {
-            canvasAnnouncer.announce(
-                .error("A move or resize is in progress. Return to place it or Escape to cancel first."))
+            canvasAnnouncer.announce(.canvasBlocked(reason: .modeBusy))
             return
         }
         guard let session = currentSession, let handle = doc.handle else { return }
         guard let entry = doc.undoStack.popLast() else {
-            canvasAnnouncer.announce(.status("Nothing to undo."))
+            canvasAnnouncer.announce(.canvasStatus(note: .nothingToUndo))
             return
         }
         do {
@@ -603,13 +669,13 @@ extension AppState {
             doc.redoStack.append((name: entry.name, inverse: result.inverse))
             doc.reloadAfterMutation(session: session)
             noteUndoStacksChanged()  // #867 menu-title pulse
-            canvasAnnouncer.announce(.confirmation(CanvasAnnouncer.undidText(actionName: entry.name)))
+            canvasAnnouncer.announce(
+                .canvasHistoryApplied(verb: .undo, name: entry.name))
         } catch {
             // Stale undo after an external change: conflict surfaces,
             // the entry stays poppable after the user reloads (t3).
             doc.undoStack.append(entry)
-            canvasAnnouncer.announce(
-                .error("Undo blocked: the canvas changed on disk. Reload it and try again."))
+            canvasAnnouncer.announce(.canvasBlocked(reason: .undoBlocked))
         }
     }
 
@@ -618,13 +684,12 @@ extension AppState {
         guard let doc = activeCanvasDocument else { return }
         guard admitCanvasMutation(for: doc) else { return }
         guard canvasTransient == nil else {
-            canvasAnnouncer.announce(
-                .error("A move or resize is in progress. Return to place it or Escape to cancel first."))
+            canvasAnnouncer.announce(.canvasBlocked(reason: .modeBusy))
             return
         }
         guard let session = currentSession, let handle = doc.handle else { return }
         guard let entry = doc.redoStack.popLast() else {
-            canvasAnnouncer.announce(.status("Nothing to redo."))
+            canvasAnnouncer.announce(.canvasStatus(note: .nothingToRedo))
             return
         }
         do {
@@ -633,11 +698,11 @@ extension AppState {
             doc.undoStack.append((name: entry.name, inverse: result.inverse))
             doc.reloadAfterMutation(session: session)
             noteUndoStacksChanged()  // #867 menu-title pulse
-            canvasAnnouncer.announce(.confirmation(CanvasAnnouncer.redidText(actionName: entry.name)))
+            canvasAnnouncer.announce(
+                .canvasHistoryApplied(verb: .redo, name: entry.name))
         } catch {
             doc.redoStack.append(entry)
-            canvasAnnouncer.announce(
-                .error("Redo blocked: the canvas changed on disk. Reload it and try again."))
+            canvasAnnouncer.announce(.canvasBlocked(reason: .redoBlocked))
         }
     }
 

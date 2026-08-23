@@ -7250,6 +7250,9 @@ pub enum A11yEvent {
         name: String,
         template: String,
     },
+    Canvas {
+        event: CanvasA11yEvent,
+    },
     HostComposed {
         text: String,
         priority: A11yPriority,
@@ -7284,6 +7287,902 @@ impl From<ReadingNavTarget> for core::a11y::ReadingNavTarget {
             F::CodeBlock => C::CodeBlock,
             F::Math => C::Math,
             F::Diagram => C::Diagram,
+        }
+    }
+}
+
+// The canvas announcement vocabulary's closed parameter sets (W6-1
+// 0a, #745): 1:1 mirrors of the `slate_core::a11y` enums, no logic.
+// See that module for what each one means and why it is closed.
+
+/// FFI mirror of [`core::a11y::CanvasVerbosity`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasVerbosity {
+    Terse,
+    Standard,
+    Verbose,
+}
+
+impl From<CanvasVerbosity> for core::a11y::CanvasVerbosity {
+    fn from(v: CanvasVerbosity) -> Self {
+        use core::a11y::CanvasVerbosity as C;
+        match v {
+            CanvasVerbosity::Terse => C::Terse,
+            CanvasVerbosity::Standard => C::Standard,
+            CanvasVerbosity::Verbose => C::Verbose,
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::CanvasOverlapTransition`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasOverlapTransition {
+    Onset,
+    Cleared,
+}
+
+impl From<CanvasOverlapTransition> for core::a11y::CanvasOverlapTransition {
+    fn from(t: CanvasOverlapTransition) -> Self {
+        use core::a11y::CanvasOverlapTransition as C;
+        match t {
+            CanvasOverlapTransition::Onset => C::Onset,
+            CanvasOverlapTransition::Cleared => C::Cleared,
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::CanvasMode`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasMode {
+    Move,
+    Resize,
+    Connect,
+}
+
+impl From<CanvasMode> for core::a11y::CanvasMode {
+    fn from(m: CanvasMode) -> Self {
+        use core::a11y::CanvasMode as C;
+        match m {
+            CanvasMode::Move => C::Move,
+            CanvasMode::Resize => C::Resize,
+            CanvasMode::Connect => C::Connect,
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::CanvasModeObject`].
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasModeObject {
+    Card { title: String },
+    Cards { count: u32 },
+}
+
+impl From<CanvasModeObject> for core::a11y::CanvasModeObject {
+    fn from(o: CanvasModeObject) -> Self {
+        use core::a11y::CanvasModeObject as C;
+        match o {
+            CanvasModeObject::Card { title } => C::Card { title },
+            CanvasModeObject::Cards { count } => C::Cards { count },
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::CanvasTransientVerb`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasTransientVerb {
+    Move,
+    Resize,
+}
+
+impl From<CanvasTransientVerb> for core::a11y::CanvasTransientVerb {
+    fn from(v: CanvasTransientVerb) -> Self {
+        use core::a11y::CanvasTransientVerb as C;
+        match v {
+            CanvasTransientVerb::Move => C::Move,
+            CanvasTransientVerb::Resize => C::Resize,
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::CanvasResizePreset`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasResizePreset {
+    DefaultSize,
+    FitToContent,
+}
+
+impl From<CanvasResizePreset> for core::a11y::CanvasResizePreset {
+    fn from(p: CanvasResizePreset) -> Self {
+        use core::a11y::CanvasResizePreset as C;
+        match p {
+            CanvasResizePreset::DefaultSize => C::DefaultSize,
+            CanvasResizePreset::FitToContent => C::FitToContent,
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::CanvasSurfaceKind`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasSurfaceKind {
+    Outline,
+    Table,
+    Visual,
+}
+
+impl From<CanvasSurfaceKind> for core::a11y::CanvasSurfaceKind {
+    fn from(s: CanvasSurfaceKind) -> Self {
+        use core::a11y::CanvasSurfaceKind as C;
+        match s {
+            CanvasSurfaceKind::Outline => C::Outline,
+            CanvasSurfaceKind::Table => C::Table,
+            CanvasSurfaceKind::Visual => C::Visual,
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::CanvasZoomContext`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasZoomContext {
+    FitCanvas,
+    ZoomedToSelection,
+}
+
+impl From<CanvasZoomContext> for core::a11y::CanvasZoomContext {
+    fn from(z: CanvasZoomContext) -> Self {
+        use core::a11y::CanvasZoomContext as C;
+        match z {
+            CanvasZoomContext::FitCanvas => C::FitCanvas,
+            CanvasZoomContext::ZoomedToSelection => C::ZoomedToSelection,
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::CanvasDeleteTarget`].
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasDeleteTarget {
+    Card {
+        kind_label: String,
+        title: String,
+    },
+    Group {
+        label: String,
+    },
+    Cards {
+        count: u32,
+    },
+    Connection {
+        direction: CanvasEdgeDirection,
+        other_title: String,
+        label: Option<String>,
+    },
+}
+
+impl From<CanvasDeleteTarget> for core::a11y::CanvasDeleteTarget {
+    fn from(t: CanvasDeleteTarget) -> Self {
+        use core::a11y::CanvasDeleteTarget as C;
+        match t {
+            CanvasDeleteTarget::Card { kind_label, title } => C::Card { kind_label, title },
+            CanvasDeleteTarget::Group { label } => C::Group { label },
+            CanvasDeleteTarget::Cards { count } => C::Cards { count },
+            CanvasDeleteTarget::Connection {
+                direction,
+                other_title,
+                label,
+            } => C::Connection {
+                direction: direction.into(),
+                other_title,
+                label,
+            },
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::CanvasFailedAction`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasFailedAction {
+    NewCard,
+    NewGroup,
+    NewCanvas,
+    MoveIntoGroup,
+    Placement,
+    Align,
+    Create,
+    RemoveFromGroup,
+    Duplicate,
+    CreateConnectedCard,
+    CanvasAction,
+    WhereAmI,
+}
+
+impl From<CanvasFailedAction> for core::a11y::CanvasFailedAction {
+    fn from(a: CanvasFailedAction) -> Self {
+        use core::a11y::CanvasFailedAction as C;
+        match a {
+            CanvasFailedAction::NewCard => C::NewCard,
+            CanvasFailedAction::NewGroup => C::NewGroup,
+            CanvasFailedAction::NewCanvas => C::NewCanvas,
+            CanvasFailedAction::MoveIntoGroup => C::MoveIntoGroup,
+            CanvasFailedAction::Placement => C::Placement,
+            CanvasFailedAction::Align => C::Align,
+            CanvasFailedAction::Create => C::Create,
+            CanvasFailedAction::RemoveFromGroup => C::RemoveFromGroup,
+            CanvasFailedAction::Duplicate => C::Duplicate,
+            CanvasFailedAction::CreateConnectedCard => C::CreateConnectedCard,
+            CanvasFailedAction::CanvasAction => C::CanvasAction,
+            CanvasFailedAction::WhereAmI => C::WhereAmI,
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::CanvasMutationRefusal`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasMutationRefusal {
+    Opening,
+    Reopening,
+    RetargetFailed,
+    Unavailable,
+    ReadOnly,
+    CardEditorUnavailable,
+}
+
+impl From<CanvasMutationRefusal> for core::a11y::CanvasMutationRefusal {
+    fn from(r: CanvasMutationRefusal) -> Self {
+        use core::a11y::CanvasMutationRefusal as C;
+        match r {
+            CanvasMutationRefusal::Opening => C::Opening,
+            CanvasMutationRefusal::Reopening => C::Reopening,
+            CanvasMutationRefusal::RetargetFailed => C::RetargetFailed,
+            CanvasMutationRefusal::Unavailable => C::Unavailable,
+            CanvasMutationRefusal::ReadOnly => C::ReadOnly,
+            CanvasMutationRefusal::CardEditorUnavailable => C::CardEditorUnavailable,
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::CanvasHistoryVerb`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasHistoryVerb {
+    Undo,
+    Redo,
+}
+
+impl From<CanvasHistoryVerb> for core::a11y::CanvasHistoryVerb {
+    fn from(v: CanvasHistoryVerb) -> Self {
+        use core::a11y::CanvasHistoryVerb as C;
+        match v {
+            CanvasHistoryVerb::Undo => C::Undo,
+            CanvasHistoryVerb::Redo => C::Redo,
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::CanvasFilterState`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasFilterState {
+    Inactive,
+    Active { matched: u32, total: u32 },
+}
+
+impl From<CanvasFilterState> for core::a11y::CanvasFilterState {
+    fn from(f: CanvasFilterState) -> Self {
+        use core::a11y::CanvasFilterState as C;
+        match f {
+            CanvasFilterState::Inactive => C::Inactive,
+            CanvasFilterState::Active { matched, total } => C::Active { matched, total },
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::CanvasModeRestoration`].
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasModeRestoration {
+    /// Cancelled without a restoration statement — the degenerate
+    /// path where the document went away before the restore could
+    /// run. (Named `Unstated` rather than `None` so the Swift
+    /// binding cannot collide with `Optional.none`.)
+    Unstated,
+    CardsReturned {
+        count: u32,
+    },
+    SizeRestored,
+    BackAt {
+        title: String,
+    },
+}
+
+impl From<CanvasModeRestoration> for core::a11y::CanvasModeRestoration {
+    fn from(r: CanvasModeRestoration) -> Self {
+        use core::a11y::CanvasModeRestoration as C;
+        match r {
+            CanvasModeRestoration::Unstated => C::Unstated,
+            CanvasModeRestoration::CardsReturned { count } => C::CardsReturned { count },
+            CanvasModeRestoration::SizeRestored => C::SizeRestored,
+            CanvasModeRestoration::BackAt { title } => C::BackAt { title },
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::CanvasPlaceVerb`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasPlaceVerb {
+    Moved,
+    Duplicated,
+}
+
+impl From<CanvasPlaceVerb> for core::a11y::CanvasPlaceVerb {
+    fn from(v: CanvasPlaceVerb) -> Self {
+        use core::a11y::CanvasPlaceVerb as C;
+        match v {
+            CanvasPlaceVerb::Moved => C::Moved,
+            CanvasPlaceVerb::Duplicated => C::Duplicated,
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::CanvasOpenTarget`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasOpenTarget {
+    DefaultApp,
+    Browser,
+}
+
+impl From<CanvasOpenTarget> for core::a11y::CanvasOpenTarget {
+    fn from(t: CanvasOpenTarget) -> Self {
+        use core::a11y::CanvasOpenTarget as C;
+        match t {
+            CanvasOpenTarget::DefaultApp => C::DefaultApp,
+            CanvasOpenTarget::Browser => C::Browser,
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::CanvasStatusNote`].
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasStatusNote {
+    NothingSelected,
+    NoMarks,
+    NotAGroup,
+    NotATextCard,
+    NotAFileCard,
+    NoGroups,
+    NoNotesInVault,
+    NoMediaInVault,
+    NoFilesToPointAt,
+    OnlyTextCardsConvert,
+    NoConnections,
+    PickOutsideMovingSet,
+    PickDifferentTarget,
+    NoChanges,
+    NotReadable,
+    Empty,
+    EndOfCanvas,
+    StartOfCanvas,
+    AtCanvasLevel,
+    NoCardsMatchFilter,
+    NothingToUndo,
+    NothingToRedo,
+    GroupIsEmpty { label: String },
+    NoOutgoingPath { title: String },
+    NotInAGroup { title: String },
+    NoConnection { forward: bool, ordinal: Option<u32> },
+}
+
+impl From<CanvasStatusNote> for core::a11y::CanvasStatusNote {
+    fn from(n: CanvasStatusNote) -> Self {
+        use CanvasStatusNote as F;
+        use core::a11y::CanvasStatusNote as C;
+        match n {
+            F::NothingSelected => C::NothingSelected,
+            F::NoMarks => C::NoMarks,
+            F::NotAGroup => C::NotAGroup,
+            F::NotATextCard => C::NotATextCard,
+            F::NotAFileCard => C::NotAFileCard,
+            F::NoGroups => C::NoGroups,
+            F::NoNotesInVault => C::NoNotesInVault,
+            F::NoMediaInVault => C::NoMediaInVault,
+            F::NoFilesToPointAt => C::NoFilesToPointAt,
+            F::OnlyTextCardsConvert => C::OnlyTextCardsConvert,
+            F::NoConnections => C::NoConnections,
+            F::PickOutsideMovingSet => C::PickOutsideMovingSet,
+            F::PickDifferentTarget => C::PickDifferentTarget,
+            F::NoChanges => C::NoChanges,
+            F::NotReadable => C::NotReadable,
+            F::Empty => C::Empty,
+            F::EndOfCanvas => C::EndOfCanvas,
+            F::StartOfCanvas => C::StartOfCanvas,
+            F::AtCanvasLevel => C::AtCanvasLevel,
+            F::NoCardsMatchFilter => C::NoCardsMatchFilter,
+            F::NothingToUndo => C::NothingToUndo,
+            F::NothingToRedo => C::NothingToRedo,
+            F::GroupIsEmpty { label } => C::GroupIsEmpty { label },
+            F::NoOutgoingPath { title } => C::NoOutgoingPath { title },
+            F::NotInAGroup { title } => C::NotInAGroup { title },
+            F::NoConnection { forward, ordinal } => C::NoConnection { forward, ordinal },
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::CanvasBlockedReason`].
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasBlockedReason {
+    ModeBusy,
+    UndoBlocked,
+    RedoBlocked,
+    LinkOpenFailed,
+    AlignWouldOverlap,
+    NotAUrl,
+    CardTextUnreadable,
+    NotePathMustEndInMd,
+    NoFreeSpaceInGroup { label: String },
+    NotePathExists { path: String, on_disk: bool },
+    NoteReadFailed { message: String },
+    NoteCreateFailed { path: String, message: String },
+    NoteRetargetFailed { path: String, message: String },
+    HeadingNotFound { heading: String, filename: String },
+    ReopenFailed { message: String },
+}
+
+impl From<CanvasBlockedReason> for core::a11y::CanvasBlockedReason {
+    fn from(r: CanvasBlockedReason) -> Self {
+        use CanvasBlockedReason as F;
+        use core::a11y::CanvasBlockedReason as C;
+        match r {
+            F::ModeBusy => C::ModeBusy,
+            F::UndoBlocked => C::UndoBlocked,
+            F::RedoBlocked => C::RedoBlocked,
+            F::LinkOpenFailed => C::LinkOpenFailed,
+            F::AlignWouldOverlap => C::AlignWouldOverlap,
+            F::NotAUrl => C::NotAUrl,
+            F::CardTextUnreadable => C::CardTextUnreadable,
+            F::NotePathMustEndInMd => C::NotePathMustEndInMd,
+            F::NoFreeSpaceInGroup { label } => C::NoFreeSpaceInGroup { label },
+            F::NotePathExists { path, on_disk } => C::NotePathExists { path, on_disk },
+            F::NoteReadFailed { message } => C::NoteReadFailed { message },
+            F::NoteCreateFailed { path, message } => C::NoteCreateFailed { path, message },
+            F::NoteRetargetFailed { path, message } => C::NoteRetargetFailed { path, message },
+            F::HeadingNotFound { heading, filename } => C::HeadingNotFound { heading, filename },
+            F::ReopenFailed { message } => C::ReopenFailed { message },
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::CanvasA11yEvent`] — the canvas family,
+/// nested so one engine costs one top-level `A11yEvent` variant
+/// (uniffi caps an enum at 256).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasA11yEvent {
+    CanvasMovedTo {
+        verbosity: CanvasVerbosity,
+        kind_label: String,
+        title: String,
+        ordinal_n: u32,
+        total_m: u32,
+        container: Option<String>,
+        connection_count: u32,
+        color_name: Option<String>,
+        marked: bool,
+    },
+    CanvasGroupEntered {
+        label: String,
+        count: u32,
+    },
+    CanvasGroupLeft {
+        label: String,
+    },
+    CanvasConnectionTraversed {
+        direction: CanvasEdgeDirection,
+        kind_label: String,
+        title: String,
+        label: Option<String>,
+    },
+    CanvasTracePathEnd {
+        titles: Vec<String>,
+    },
+    CanvasMoveRelative {
+        descs: Vec<CanvasRelativeDesc>,
+        overlap: Option<CanvasOverlapTransition>,
+    },
+    CanvasResizeGeometry {
+        preset: Option<CanvasResizePreset>,
+        width: u32,
+        height: u32,
+        overlap: Option<CanvasOverlapTransition>,
+    },
+    CanvasResizeClamped,
+    CanvasModeEntered {
+        mode: CanvasMode,
+        object: CanvasModeObject,
+    },
+    CanvasModeRejected {
+        active_mode: CanvasMode,
+    },
+    CanvasModeCommitted {
+        verb: CanvasTransientVerb,
+        object: CanvasModeObject,
+    },
+    CanvasModeEndedWithoutEffect {
+        mode: CanvasMode,
+    },
+    CanvasModeCancelled {
+        mode: CanvasMode,
+        restoration: CanvasModeRestoration,
+    },
+    CanvasCreated {
+        kind_label: String,
+        title: String,
+        relative: CanvasRelativeDesc,
+    },
+    CanvasFileCreated {
+        name: String,
+    },
+    CanvasConnectedCardCreated {
+        relative: CanvasRelativeDesc,
+        origin_title: String,
+    },
+    CanvasConnected {
+        from_title: String,
+        to_title: String,
+        label: Option<String>,
+    },
+    CanvasConnectionUpdated {
+        label: Option<String>,
+    },
+    CanvasMovedIntoGroup {
+        label: String,
+    },
+    CanvasRemovedFromGroup {
+        label: String,
+    },
+    CanvasColorSet {
+        title: String,
+        color: Option<CanvasColor>,
+    },
+    CanvasRenamedGroup {
+        label: String,
+    },
+    CanvasCardUpdated {
+        title: String,
+    },
+    CanvasCardRetargeted {
+        title: String,
+        path: String,
+    },
+    CanvasCardPlaced {
+        verb: CanvasPlaceVerb,
+        title: String,
+        relative: CanvasRelativeDesc,
+    },
+    CanvasCardAligned {
+        title: String,
+        target_title: String,
+    },
+    CanvasConvertedToNote {
+        path: String,
+    },
+    CanvasDeleted {
+        target: CanvasDeleteTarget,
+        verbosity: CanvasVerbosity,
+        undo_chord: String,
+    },
+    CanvasBulkMoved {
+        count: u32,
+        relative: CanvasRelativeDesc,
+    },
+    CanvasBulkColorSet {
+        count: u32,
+        color: Option<CanvasColor>,
+    },
+    CanvasGrouped {
+        count: u32,
+        label: String,
+    },
+    CanvasBulkDuplicated {
+        count: u32,
+    },
+    CanvasMarkToggled {
+        marked: bool,
+        title: String,
+        count: u32,
+    },
+    CanvasMarksCleared {
+        count: u32,
+    },
+    CanvasFilterCount {
+        matched: u32,
+    },
+    CanvasFilterCleared {
+        total: u32,
+    },
+    CanvasZoom {
+        context: Option<CanvasZoomContext>,
+        percent: u32,
+    },
+    CanvasFollowSelectionToggled {
+        following: bool,
+    },
+    CanvasSurfaceShown {
+        surface: CanvasSurfaceKind,
+    },
+    CanvasHistoryApplied {
+        verb: CanvasHistoryVerb,
+        name: String,
+    },
+    CanvasUndoMenuTitle {
+        verb: CanvasHistoryVerb,
+        name: String,
+    },
+    CanvasStatus {
+        note: CanvasStatusNote,
+    },
+    CanvasBlocked {
+        reason: CanvasBlockedReason,
+    },
+    CanvasActionFailed {
+        action: CanvasFailedAction,
+        detail: String,
+    },
+    CanvasSaveConflict,
+    CanvasFileNotFound {
+        target: String,
+    },
+    CanvasOpened {
+        title: String,
+        target: CanvasOpenTarget,
+    },
+    CanvasMutationRefused {
+        reason: CanvasMutationRefusal,
+    },
+    CanvasLoadedDegraded {
+        skipped: u32,
+    },
+    CanvasEmptyOnboarding {
+        new_card_chord: String,
+        palette_chord: String,
+    },
+    CanvasWhereAmI {
+        kind_label: String,
+        title: String,
+        group_path: Vec<String>,
+        ordinal_n: u32,
+        total_m: u32,
+        connection_count: u32,
+        in_count: u32,
+        out_count: u32,
+        color_name: Option<String>,
+        marked: bool,
+        mode: Option<CanvasMode>,
+        filter: CanvasFilterState,
+    },
+}
+
+impl From<CanvasA11yEvent> for core::a11y::CanvasA11yEvent {
+    fn from(e: CanvasA11yEvent) -> Self {
+        use CanvasA11yEvent as F;
+        use core::a11y::CanvasA11yEvent as C;
+        match e {
+            F::CanvasMovedTo {
+                verbosity,
+                kind_label,
+                title,
+                ordinal_n,
+                total_m,
+                container,
+                connection_count,
+                color_name,
+                marked,
+            } => C::CanvasMovedTo {
+                verbosity: verbosity.into(),
+                kind_label,
+                title,
+                ordinal_n,
+                total_m,
+                container,
+                connection_count,
+                color_name,
+                marked,
+            },
+            F::CanvasGroupEntered { label, count } => C::CanvasGroupEntered { label, count },
+            F::CanvasGroupLeft { label } => C::CanvasGroupLeft { label },
+            F::CanvasConnectionTraversed {
+                direction,
+                kind_label,
+                title,
+                label,
+            } => C::CanvasConnectionTraversed {
+                direction: direction.into(),
+                kind_label,
+                title,
+                label,
+            },
+            F::CanvasTracePathEnd { titles } => C::CanvasTracePathEnd { titles },
+            F::CanvasMoveRelative { descs, overlap } => C::CanvasMoveRelative {
+                descs: descs.into_iter().map(Into::into).collect(),
+                overlap: overlap.map(Into::into),
+            },
+            F::CanvasResizeGeometry {
+                preset,
+                width,
+                height,
+                overlap,
+            } => C::CanvasResizeGeometry {
+                preset: preset.map(Into::into),
+                width,
+                height,
+                overlap: overlap.map(Into::into),
+            },
+            F::CanvasResizeClamped => C::CanvasResizeClamped,
+            F::CanvasModeEntered { mode, object } => C::CanvasModeEntered {
+                mode: mode.into(),
+                object: object.into(),
+            },
+            F::CanvasModeRejected { active_mode } => C::CanvasModeRejected {
+                active_mode: active_mode.into(),
+            },
+            F::CanvasModeCommitted { verb, object } => C::CanvasModeCommitted {
+                verb: verb.into(),
+                object: object.into(),
+            },
+            F::CanvasModeEndedWithoutEffect { mode } => {
+                C::CanvasModeEndedWithoutEffect { mode: mode.into() }
+            }
+            F::CanvasModeCancelled { mode, restoration } => C::CanvasModeCancelled {
+                mode: mode.into(),
+                restoration: restoration.into(),
+            },
+            F::CanvasCreated {
+                kind_label,
+                title,
+                relative,
+            } => C::CanvasCreated {
+                kind_label,
+                title,
+                relative: relative.into(),
+            },
+            F::CanvasFileCreated { name } => C::CanvasFileCreated { name },
+            F::CanvasConnectedCardCreated {
+                relative,
+                origin_title,
+            } => C::CanvasConnectedCardCreated {
+                relative: relative.into(),
+                origin_title,
+            },
+            F::CanvasConnected {
+                from_title,
+                to_title,
+                label,
+            } => C::CanvasConnected {
+                from_title,
+                to_title,
+                label,
+            },
+            F::CanvasConnectionUpdated { label } => C::CanvasConnectionUpdated { label },
+            F::CanvasMovedIntoGroup { label } => C::CanvasMovedIntoGroup { label },
+            F::CanvasRemovedFromGroup { label } => C::CanvasRemovedFromGroup { label },
+            F::CanvasColorSet { title, color } => C::CanvasColorSet {
+                title,
+                color: color.map(Into::into),
+            },
+            F::CanvasRenamedGroup { label } => C::CanvasRenamedGroup { label },
+            F::CanvasCardUpdated { title } => C::CanvasCardUpdated { title },
+            F::CanvasCardRetargeted { title, path } => C::CanvasCardRetargeted { title, path },
+            F::CanvasCardPlaced {
+                verb,
+                title,
+                relative,
+            } => C::CanvasCardPlaced {
+                verb: verb.into(),
+                title,
+                relative: relative.into(),
+            },
+            F::CanvasCardAligned {
+                title,
+                target_title,
+            } => C::CanvasCardAligned {
+                title,
+                target_title,
+            },
+            F::CanvasConvertedToNote { path } => C::CanvasConvertedToNote { path },
+            F::CanvasDeleted {
+                target,
+                verbosity,
+                undo_chord,
+            } => C::CanvasDeleted {
+                target: target.into(),
+                verbosity: verbosity.into(),
+                undo_chord,
+            },
+            F::CanvasBulkMoved { count, relative } => C::CanvasBulkMoved {
+                count,
+                relative: relative.into(),
+            },
+            F::CanvasBulkColorSet { count, color } => C::CanvasBulkColorSet {
+                count,
+                color: color.map(Into::into),
+            },
+            F::CanvasGrouped { count, label } => C::CanvasGrouped { count, label },
+            F::CanvasBulkDuplicated { count } => C::CanvasBulkDuplicated { count },
+            F::CanvasMarkToggled {
+                marked,
+                title,
+                count,
+            } => C::CanvasMarkToggled {
+                marked,
+                title,
+                count,
+            },
+            F::CanvasMarksCleared { count } => C::CanvasMarksCleared { count },
+            F::CanvasFilterCount { matched } => C::CanvasFilterCount { matched },
+            F::CanvasFilterCleared { total } => C::CanvasFilterCleared { total },
+            F::CanvasZoom { context, percent } => C::CanvasZoom {
+                context: context.map(Into::into),
+                percent,
+            },
+            F::CanvasFollowSelectionToggled { following } => {
+                C::CanvasFollowSelectionToggled { following }
+            }
+            F::CanvasSurfaceShown { surface } => C::CanvasSurfaceShown {
+                surface: surface.into(),
+            },
+            F::CanvasHistoryApplied { verb, name } => C::CanvasHistoryApplied {
+                verb: verb.into(),
+                name,
+            },
+            F::CanvasUndoMenuTitle { verb, name } => C::CanvasUndoMenuTitle {
+                verb: verb.into(),
+                name,
+            },
+            F::CanvasStatus { note } => C::CanvasStatus { note: note.into() },
+            F::CanvasBlocked { reason } => C::CanvasBlocked {
+                reason: reason.into(),
+            },
+            F::CanvasActionFailed { action, detail } => C::CanvasActionFailed {
+                action: action.into(),
+                detail,
+            },
+            F::CanvasSaveConflict => C::CanvasSaveConflict,
+            F::CanvasFileNotFound { target } => C::CanvasFileNotFound { target },
+            F::CanvasOpened { title, target } => C::CanvasOpened {
+                title,
+                target: target.into(),
+            },
+            F::CanvasMutationRefused { reason } => C::CanvasMutationRefused {
+                reason: reason.into(),
+            },
+            F::CanvasLoadedDegraded { skipped } => C::CanvasLoadedDegraded { skipped },
+            F::CanvasEmptyOnboarding {
+                new_card_chord,
+                palette_chord,
+            } => C::CanvasEmptyOnboarding {
+                new_card_chord,
+                palette_chord,
+            },
+            F::CanvasWhereAmI {
+                kind_label,
+                title,
+                group_path,
+                ordinal_n,
+                total_m,
+                connection_count,
+                in_count,
+                out_count,
+                color_name,
+                marked,
+                mode,
+                filter,
+            } => C::CanvasWhereAmI {
+                kind_label,
+                title,
+                group_path,
+                ordinal_n,
+                total_m,
+                connection_count,
+                in_count,
+                out_count,
+                color_name,
+                marked,
+                mode: mode.map(Into::into),
+                filter: filter.into(),
+            },
         }
     }
 }
@@ -7629,6 +8528,9 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             },
             F::TemplatePickerOpened { count } => C::TemplatePickerOpened { count },
             F::TemplateNoteCreated { name, template } => C::TemplateNoteCreated { name, template },
+            F::Canvas { event } => C::Canvas {
+                event: event.into(),
+            },
             F::HostComposed { text, priority } => C::HostComposed {
                 text,
                 priority: priority.into(),
@@ -7655,6 +8557,17 @@ pub fn a11y_render(event: A11yEvent) -> RenderedAnnouncement {
         text: event.render(),
         priority: event.priority().into(),
     }
+}
+
+/// The pinned spoken/display NAME of a canvas colour
+/// (`slate_core::canvas::color_name` — presets in JSON Canvas order,
+/// hex as the nearest preset plus "custom"). Exported so no host
+/// spells the preset table: the a11y templates phrase it for speech,
+/// and this is the same answer for the colour PICKER's button labels
+/// and any other label-class surface (contracts doc 0a-11).
+#[uniffi::export]
+pub fn canvas_color_name(color: CanvasColor) -> String {
+    core::canvas::color_name(&color.into())
 }
 
 /// Core Debug identity of the event — the exact string the corpus artifact
@@ -8538,6 +9451,40 @@ impl From<core::CanvasTableRow> for CanvasTableRow {
     }
 }
 
+/// A canvas colour: one of the six JSON Canvas presets, or a verbatim
+/// colour string. Mirrors `core::canvas::CanvasColor` so a host can
+/// hand the colour it just wrote to the a11y vocabulary
+/// (`CanvasColorSet` / `CanvasBulkColorSet`) instead of naming it —
+/// the preset table lives in `canvas::color_name` and nowhere else
+/// (contracts doc 0a-11).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasColor {
+    Preset { preset: u8 },
+    Hex { hex: String },
+}
+
+impl From<core::canvas::CanvasColor> for CanvasColor {
+    fn from(color: core::canvas::CanvasColor) -> Self {
+        use core::canvas::CanvasColor as C;
+        match color {
+            C::Preset(preset) => CanvasColor::Preset { preset },
+            C::Hex(hex) => CanvasColor::Hex { hex },
+        }
+    }
+}
+
+/// The reverse direction, for the a11y vocabulary: the colour crosses
+/// the boundary INTO core so `color_name` phrases it there.
+impl From<CanvasColor> for core::canvas::CanvasColor {
+    fn from(color: CanvasColor) -> Self {
+        use core::canvas::CanvasColor as C;
+        match color {
+            CanvasColor::Preset { preset } => C::Preset(preset),
+            CanvasColor::Hex { hex } => C::Hex(hex),
+        }
+    }
+}
+
 /// Direction of a connection from the queried node's perspective
 /// (t0 §1.2: "connects to" / "connected from" / "linked with").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -8556,6 +9503,21 @@ impl From<core::canvas::model::EdgeDirection> for CanvasEdgeDirection {
             D::Incoming => CanvasEdgeDirection::Incoming,
             D::Bidirectional => CanvasEdgeDirection::Bidirectional,
             D::Undirected => CanvasEdgeDirection::Undirected,
+        }
+    }
+}
+
+/// The reverse direction, for the a11y vocabulary: the canvas
+/// announcement events (W6-1 0a) take a direction FROM the host and
+/// core phrases it, so this type crosses the boundary both ways.
+impl From<CanvasEdgeDirection> for core::canvas::model::EdgeDirection {
+    fn from(d: CanvasEdgeDirection) -> Self {
+        use core::canvas::model::EdgeDirection as D;
+        match d {
+            CanvasEdgeDirection::Outgoing => D::Outgoing,
+            CanvasEdgeDirection::Incoming => D::Incoming,
+            CanvasEdgeDirection::Bidirectional => D::Bidirectional,
+            CanvasEdgeDirection::Undirected => D::Undirected,
         }
     }
 }
@@ -8720,7 +9682,7 @@ impl From<CanvasPlaceDirection> for core::canvas::placement::PlaceDirection {
 
 /// Typed relative-position description; `anchor_title` is empty for
 /// `AtOrigin`. Phrasing stays UI-side (#518 grammar tables).
-#[derive(Debug, Clone, PartialEq, uniffi::Enum)]
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum CanvasRelativeDesc {
     Below { anchor_title: String },
     RightOf { anchor_title: String },
@@ -8738,6 +9700,22 @@ impl From<core::canvas::placement::RelativeDesc> for CanvasRelativeDesc {
             R::Above(t) => CanvasRelativeDesc::Above { anchor_title: t },
             R::LeftOf(t) => CanvasRelativeDesc::LeftOf { anchor_title: t },
             R::AtOrigin => CanvasRelativeDesc::AtOrigin,
+        }
+    }
+}
+
+/// The reverse direction, for the a11y vocabulary: a host hands core's
+/// own placement description straight back to the canvas announcement
+/// events (W6-1 0a) rather than phrasing it itself (R-D).
+impl From<CanvasRelativeDesc> for core::canvas::placement::RelativeDesc {
+    fn from(r: CanvasRelativeDesc) -> Self {
+        use core::canvas::placement::RelativeDesc as R;
+        match r {
+            CanvasRelativeDesc::Below { anchor_title } => R::Below(anchor_title),
+            CanvasRelativeDesc::RightOf { anchor_title } => R::RightOf(anchor_title),
+            CanvasRelativeDesc::Above { anchor_title } => R::Above(anchor_title),
+            CanvasRelativeDesc::LeftOf { anchor_title } => R::LeftOf(anchor_title),
+            CanvasRelativeDesc::AtOrigin => R::AtOrigin,
         }
     }
 }
@@ -9674,8 +10652,50 @@ mod tests {
     /// event identity against the artifact); this is the cheap local
     /// tripwire for the mistake that actually happens, which is
     /// forgetting the list entirely.
+    ///
+    /// ASYMMETRY WITH THE WINDOWS TWIN, deliberately: this parser is
+    /// LINE-oriented (one entry per line, each starting with `.`),
+    /// while `the_windows_corpus_mirror_lists_every_event_in_order`
+    /// scans the whole slice and is robust to any wrapping. The
+    /// difference is not an oversight — it follows the formatters. C#
+    /// entries are re-wrapped by `dotnet format`, which runs in CI and
+    /// would break a line-oriented parser; the Swift census is written
+    /// one entry per line and `swift-format` leaves those lines alone.
+    /// Should that ever change, a wrapped Swift entry fails LOUDLY
+    /// (the continuation line does not start with `.`, so the entry
+    /// count drops and the length assertion fires) rather than being
+    /// skipped silently — the safe failure mode, and the reason the
+    /// simpler parser is acceptable here.
     #[test]
     fn the_mac_corpus_mirror_lists_every_event_in_order() {
+        /// The leading identifier of a Rust `Debug` rendering.
+        fn debug_head(debug: &str) -> String {
+            debug
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric())
+                .collect()
+        }
+
+        /// uniffi lower-camelises Swift case names; every name in this
+        /// vocabulary is CamelCase, so lowering the first character is
+        /// the same transform.
+        fn lower_first(name: &str) -> String {
+            let mut chars = name.chars();
+            match chars.next() {
+                Some(first) => first.to_ascii_lowercase().to_string() + chars.as_str(),
+                None => String::new(),
+            }
+        }
+
+        /// The leading Swift case name of `.someCase(…)`, already
+        /// stripped of its dot.
+        fn swift_case(rest: &str) -> String {
+            rest.split(|c: char| !c.is_ascii_alphanumeric())
+                .next()
+                .unwrap_or_default()
+                .to_string()
+        }
+
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let swift = std::fs::read_to_string(
             manifest.join("../../apps/slate-mac/Tests/SlateMacTests/A11yCorpusCensusTests.swift"),
@@ -9698,16 +10718,20 @@ mod tests {
             .0;
 
         // Every `.someCase` at the head of a list element, in order.
+        // A nested family (`.canvas(event: .canvasMovedTo(…))`) reports
+        // `canvas/canvasMovedTo`: without the inner case the wrapper
+        // would flatten 165 distinct entries into one indistinguishable
+        // name and the order check would stop meaning anything.
         let listed: Vec<String> = body
             .lines()
             .map(str::trim)
             .filter(|line| line.starts_with('.'))
             .map(|line| {
-                line.trim_start_matches('.')
-                    .split(|c: char| !c.is_ascii_alphanumeric())
-                    .next()
-                    .unwrap_or_default()
-                    .to_string()
+                let head = swift_case(line.trim_start_matches('.'));
+                match line.split_once("event: .") {
+                    Some((_, rest)) => format!("{head}/{}", swift_case(rest)),
+                    None => head,
+                }
             })
             .filter(|name| !name.is_empty())
             .collect();
@@ -9718,13 +10742,9 @@ mod tests {
             .iter()
             .map(|event| {
                 let debug = format!("{event:?}");
-                let head: String = debug
-                    .chars()
-                    .take_while(|c| c.is_ascii_alphanumeric())
-                    .collect();
-                let mut chars = head.chars();
-                match chars.next() {
-                    Some(first) => first.to_ascii_lowercase().to_string() + chars.as_str(),
+                let head = lower_first(&debug_head(&debug));
+                match debug.split_once("event: ") {
+                    Some((_, rest)) => format!("{head}/{}", lower_first(&debug_head(rest))),
                     None => head,
                 }
             })
@@ -9745,6 +10765,88 @@ mod tests {
         }
     }
 
+    /// The Windows twin of the tripwire above (W6-1 0a, #745).
+    ///
+    /// The C# census (`A11yCorpusCensus`) fails by design when the
+    /// vocabulary grows without it — but only after
+    /// `generate-bindings.ps1` has rebuilt the cdylib AND `dotnet test`
+    /// has run, i.e. a full local round-trip later than the mac half,
+    /// which fails right here in `cargo test`. That asymmetry is the
+    /// whole reason this exists: forgetting the C# list is exactly as
+    /// easy as forgetting the Swift one, and it should cost the same.
+    ///
+    /// SCOPE: variant names and their order, NOT parameters — the C#
+    /// census still compares full event identity against the artifact.
+    #[test]
+    fn the_windows_corpus_mirror_lists_every_event_in_order() {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let census = std::fs::read_to_string(manifest.join(
+            "../../apps/slate-windows/tests/SlateWindows.Tests/Censuses/A11yCorpusCensus.cs",
+        ))
+        .expect("windows corpus census source");
+
+        // Bounded to the mirror literal so a doc comment or an
+        // assertion message naming a variant cannot be counted.
+        let body = census
+            .split_once("private static readonly A11yEvent[] Corpus =")
+            .expect("corpus declaration")
+            .1;
+        let body = body.split_once("\n    ];").expect("corpus terminator").0;
+
+        fn head(text: &str) -> String {
+            text.chars()
+                .take_while(|c| c.is_ascii_alphanumeric())
+                .collect()
+        }
+
+        // `new A11yEvent.X(` heads, in order. An `A11yEvent` never
+        // nests inside another, so scanning the whole slice is safe
+        // under any line wrapping the formatter chooses. A nested
+        // family reports `Canvas/CanvasMovedTo`: without the inner
+        // variant the wrapper would flatten 165 distinct entries into
+        // one name and the order check would stop meaning anything.
+        let listed: Vec<String> = body
+            .match_indices("new A11yEvent.")
+            .map(|(at, marker)| {
+                let rest = &body[at + marker.len()..];
+                let outer = head(rest);
+                match rest.split_once("new CanvasA11yEvent.") {
+                    Some((before, inner)) if !before.contains("new A11yEvent.") => {
+                        format!("{outer}/{}", head(inner))
+                    }
+                    _ => outer,
+                }
+            })
+            .collect();
+
+        let expected: Vec<String> = core::a11y::corpus()
+            .iter()
+            .map(|event| {
+                let debug = format!("{event:?}");
+                let outer = head(&debug);
+                match debug.split_once("event: ") {
+                    Some((_, inner)) => format!("{outer}/{}", head(inner)),
+                    None => outer,
+                }
+            })
+            .collect();
+
+        assert_eq!(
+            listed.len(),
+            expected.len(),
+            "the Windows corpus mirror lists {} events, the vocabulary has {}",
+            listed.len(),
+            expected.len()
+        );
+        for (index, (got, want)) in listed.iter().zip(expected.iter()).enumerate() {
+            assert_eq!(
+                got, want,
+                "Windows corpus mirror diverges at index {index}: listed {got}, \
+                 vocabulary has {want}"
+            );
+        }
+    }
+
     /// The FFI mirror must carry EVERY core variant.
     ///
     /// `From<A11yEvent> for core::a11y::A11yEvent` is exhaustive, so the
@@ -9758,10 +10860,11 @@ mod tests {
     /// and #969 has five more families to convert.
     #[test]
     fn the_ffi_mirror_covers_every_core_a11y_variant() {
-        fn enum_body(source: &str) -> String {
+        fn enum_body_of(source: &str, enum_name: &str) -> String {
+            let needle = format!("pub enum {enum_name} {{");
             let decl = source
-                .find("pub enum A11yEvent {")
-                .expect("A11yEvent declaration");
+                .find(&needle)
+                .unwrap_or_else(|| panic!("{enum_name} declaration"));
             let open = decl + source[decl..].find('{').expect("opening brace");
             let mut depth = 0usize;
             for (offset, ch) in source[open..].char_indices() {
@@ -9776,26 +10879,35 @@ mod tests {
                     _ => {}
                 }
             }
-            panic!("unterminated A11yEvent declaration");
+            panic!("unterminated {enum_name} declaration");
         }
 
-        fn variant_names(source: &str) -> std::collections::BTreeSet<String> {
-            let body = enum_body(source);
+        fn variant_names_of(source: &str, enum_name: &str) -> std::collections::BTreeSet<String> {
+            let body = enum_body_of(source, enum_name);
             let mut names = std::collections::BTreeSet::new();
             let mut depth = 0usize;
             for line in body.lines() {
                 let trimmed = line.trim();
                 if depth == 0 && !trimmed.starts_with("//") && !trimmed.starts_with('#') {
-                    let name = trimmed
-                        .trim_end_matches(',')
-                        .trim_end_matches('{')
-                        .trim_end_matches('(')
-                        .trim();
+                    // The leading identifier of a variant line, so the
+                    // single-line payload form (`Card { title: String },`)
+                    // parses the same as the multi-line one. Matching the
+                    // whole trimmed line would skip single-line variants
+                    // in BOTH sources — a silent false pass.
+                    let name: String = trimmed
+                        .chars()
+                        .take_while(char::is_ascii_alphanumeric)
+                        .collect();
+                    let tail = trimmed[name.len()..].trim_start();
+                    let delimited = tail.is_empty()
+                        || tail.starts_with(',')
+                        || tail.starts_with('{')
+                        || tail.starts_with('(');
                     if !name.is_empty()
                         && name.starts_with(|c: char| c.is_ascii_uppercase())
-                        && name.chars().all(|c| c.is_ascii_alphanumeric())
+                        && delimited
                     {
-                        names.insert(name.to_string());
+                        names.insert(name);
                     }
                 }
                 depth += trimmed.matches('{').count();
@@ -9809,20 +10921,39 @@ mod tests {
         let core_source = std::fs::read_to_string(manifest.join("../slate-core/src/a11y.rs"))
             .expect("core a11y source");
 
-        let mirror_variants = variant_names(&mirror);
-        let core_variants = variant_names(&core_source);
-        assert!(
-            core_variants.len() > 100,
-            "parsed only {} core variants — the parser broke, not the mirror",
-            core_variants.len()
-        );
+        // Both the top-level vocabulary AND every nested family enum:
+        // a family that lives one level down (W6-1 0a's
+        // `Canvas { event: CanvasA11yEvent }`) is exactly as invisible
+        // to a host if the mirror misses one of its variants.
+        //
+        // The floor is PER ENUM, not shared: one number covering both
+        // would be the smaller family's, and a parser that silently
+        // stopped seeing (say) half of `A11yEvent`'s ~198 variants
+        // would still clear a 40-variant bar while the difference-set
+        // assertion below quietly compared two truncated sets.
+        for (enum_name, floor) in [("A11yEvent", 100usize), ("CanvasA11yEvent", 40)] {
+            let mirror_variants = variant_names_of(&mirror, enum_name);
+            let core_variants = variant_names_of(&core_source, enum_name);
+            assert!(
+                core_variants.len() >= floor,
+                "parsed only {} core {enum_name} variants (floor {floor}) — the \
+                 parser broke, not the mirror",
+                core_variants.len()
+            );
+            assert!(
+                mirror_variants.len() >= floor,
+                "parsed only {} mirror {enum_name} variants (floor {floor}) — the \
+                 parser broke, not the mirror",
+                mirror_variants.len()
+            );
 
-        let missing: Vec<&String> = core_variants.difference(&mirror_variants).collect();
-        assert!(
-            missing.is_empty(),
-            "these core A11yEvent variants are missing from the FFI mirror, so no \
-             host can name them: {missing:?}"
-        );
+            let missing: Vec<&String> = core_variants.difference(&mirror_variants).collect();
+            assert!(
+                missing.is_empty(),
+                "these core {enum_name} variants are missing from the FFI mirror, \
+                 so no host can name them: {missing:?}"
+            );
+        }
     }
 
     #[test]

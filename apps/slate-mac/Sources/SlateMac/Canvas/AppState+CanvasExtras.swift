@@ -49,7 +49,7 @@ extension AppState {
             let originRow = doc.outline.first(where: { $0.nodeId == origin }),
             let originNode = doc.scene.nodes.first(where: { $0.nodeId == origin })
         else {
-            canvasAnnouncer.announce(.status("Nothing selected."))
+            canvasAnnouncer.announce(.canvasStatus(note: .nothingSelected))
             return
         }
         let id = Self.newCanvasEntityID()
@@ -82,23 +82,22 @@ extension AppState {
             guard ok else { return }
             canvasSelect(nodeId: id, in: doc, announce: false)
             canvasAnnouncer.announce(
-                .confirmation(
-                    "Created connected card "
-                        + CanvasAnnouncer.relativePhrase(placement.relative)
-                        + " — connected from \"\(originRow.title)\"."))
+                .canvasConnectedCardCreated(
+                    relative: placement.relative, originTitle: originRow.title))
             // Lands in edit mode (the mind-mapping loop: create → type).
             canvasCardEditor = CanvasCardEditorRequest(
                 nodeId: id, title: "Untitled", initialText: "")
         } catch {
             canvasAnnouncer.announce(
-                .error("Create connected card failed: \(error.localizedDescription)"))
+                .canvasActionFailed(
+                    action: .createConnectedCard, detail: error.localizedDescription))
         }
     }
 
     /// Palette variant: choose the direction first.
     func canvasPromptConnectedDirection() {
         guard let doc = activeCanvasDocument, doc.selection.selected != nil else {
-            canvasAnnouncer.announce(.status("Nothing selected."))
+            canvasAnnouncer.announce(.canvasStatus(note: .nothingSelected))
             return
         }
         guard admitCanvasMutation(for: doc) else { return }
@@ -120,7 +119,7 @@ extension AppState {
         else { return }
         let seed = canvasMovingSet(in: doc)
         guard !seed.isEmpty else {
-            canvasAnnouncer.announce(.status("Nothing selected."))
+            canvasAnnouncer.announce(.canvasStatus(note: .nothingSelected))
             return
         }
         let nodesById = Dictionary(
@@ -190,20 +189,24 @@ extension AppState {
             let name =
                 single
                 ? "duplicate \"\(doc.outline.first { $0.nodeId == expanded[0] }?.title ?? "card")\""
-                : "duplicate \(expanded.count) cards"
+                : "duplicate \(CountCopy.counted(expanded.count, "card", "cards"))"
             let ok = canvasApply(CanvasAction(name: name, ops: ops), to: doc)
             guard ok else { return }
             if single {
+                let title =
+                    doc.outline.first { $0.nodeId == expanded[0] }?.title ?? "card"
                 canvasAnnouncer.announce(
-                    .confirmation(
-                        "Duplicated \"\(doc.outline.first { $0.nodeId == expanded[0] }?.title ?? "card")\" "
-                            + CanvasAnnouncer.relativePhrase(placement.relative) + "."))
+                    .canvasCardPlaced(
+                        verb: .duplicated, title: title,
+                        relative: placement.relative))
             } else {
                 canvasAnnouncer.announce(
-                    .bulk("Duplicated \(expanded.count) cards — one undo restores."))
+                    .canvasBulkDuplicated(count: UInt32(clamping: expanded.count)))
             }
         } catch {
-            canvasAnnouncer.announce(.error("Duplicate failed: \(error.localizedDescription)"))
+            canvasAnnouncer.announce(
+                .canvasActionFailed(
+                    action: .duplicate, detail: error.localizedDescription))
         }
     }
 
@@ -214,11 +217,11 @@ extension AppState {
             let selected = doc.selection.selected,
             let row = doc.outline.first(where: { $0.nodeId == selected })
         else {
-            canvasAnnouncer.announce(.status("Nothing selected."))
+            canvasAnnouncer.announce(.canvasStatus(note: .nothingSelected))
             return
         }
         guard row.kind == "text" else {
-            canvasAnnouncer.announce(.status("Only text cards convert to notes."))
+            canvasAnnouncer.announce(.canvasStatus(note: .onlyTextCardsConvert))
             return
         }
         guard admitCanvasMutation(for: doc) else { return }
@@ -251,7 +254,7 @@ extension AppState {
         else { return nil }
         let cleanPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanPath.isEmpty, cleanPath.lowercased().hasSuffix(".md") else {
-            canvasAnnouncer.announce(.error("The note path must end in .md."))
+            canvasAnnouncer.announce(.canvasBlocked(reason: .notePathMustEndInMd))
             return nil
         }
         // The `files` snapshot is a cheap early bail; it is NOT the
@@ -259,14 +262,12 @@ extension AppState {
         // (possibly stale/unscanned) list would slip through. The real
         // guard is the backend's create-if-absent contract below.
         guard !files.contains(where: { $0.path == cleanPath }) else {
-            canvasAnnouncer.announce(.error("\(cleanPath) already exists. Pick another name."))
+            canvasAnnouncer.announce(
+                .canvasBlocked(reason: .notePathExists(path: cleanPath, onDisk: false)))
             return nil
         }
         guard canvasTransient == nil else {
-            canvasAnnouncer.announce(
-                .error(
-                    "A move or resize is in progress. Return to place it or Escape to cancel first."
-                ))
+            canvasAnnouncer.announce(.canvasBlocked(reason: .modeBusy))
             return nil
         }
         guard admitStructuralMutationRequest() else { return nil }
@@ -351,21 +352,22 @@ extension AppState {
                 doc.reloadAfterMutation(session: session)
                 self.noteUndoStacksChanged()
                 self.canvasAnnouncer.announce(
-                    .confirmation(
-                        "Converted to note \(cleanPath). The card now points at it."))
+                    .canvasConvertedToNote(path: cleanPath))
             case .destinationExists:
                 self.canvasAnnouncer.announce(
-                    .error("\(cleanPath) already exists on disk. Pick another name."))
+                    .canvasBlocked(
+                        reason: .notePathExists(path: cleanPath, onDisk: true)))
             case .readFailed(let message):
                 self.canvasAnnouncer.announce(
-                    .error("Could not read the card text: \(message)"))
+                    .canvasBlocked(reason: .noteReadFailed(message: message)))
             case .createFailed(let message):
                 self.canvasAnnouncer.announce(
-                    .error("Could not create \(cleanPath): \(message)"))
+                    .canvasBlocked(
+                        reason: .noteCreateFailed(path: cleanPath, message: message)))
             case .retargetFailed(let message):
                 self.canvasAnnouncer.announce(
-                    .error(
-                        "Created \(cleanPath), but could not retarget the card: \(message)"))
+                    .canvasBlocked(
+                        reason: .noteRetargetFailed(path: cleanPath, message: message)))
             }
         }
         recordPendingStructuralTask(task)
@@ -386,17 +388,16 @@ extension AppState {
         guard doc.filterActive || !doc.filterText.isEmpty else { return }
         doc.filterText = ""
         canvasAnnouncer.announce(
-            .filter(
-                "Filter cleared — \(CountCopy.counted(doc.outline.count, "card", "cards"))."))
+            .canvasFilterCleared(total: UInt32(clamping: doc.outline.count)))
     }
 
     /// Debounced result count (t0 §1.5 — the announcer's filter
     /// category coalesces keystroke bursts).
     func canvasAnnounceFilterCount(doc: CanvasDocument) {
         guard doc.filterActive else { return }
-        let count = doc.filteredOutline.count
         canvasAnnouncer.announce(
-            .filter("\(count) card\(count == 1 ? "" : "s") match."))
+            .canvasFilterCount(
+                matched: UInt32(clamping: doc.filteredOutline.count)))
     }
 
     // MARK: `#heading` subpath open-to-anchor (t5)
@@ -419,9 +420,10 @@ extension AppState {
                 // Still the canvas activation's outcome — funnel rules
                 // apply (DoD §H) even though the note is now frontmost.
                 self.canvasAnnouncer.announce(
-                    .error(
-                        "Heading \(wanted) was not found in \((path as NSString).lastPathComponent)."
-                    ))
+                    .canvasBlocked(
+                        reason: .headingNotFound(
+                            heading: wanted,
+                            filename: (path as NSString).lastPathComponent)))
             }
         }
     }

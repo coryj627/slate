@@ -23,6 +23,17 @@ enum CanvasSurface: String, CaseIterable {
         case .visual: return "Visual"
         }
     }
+
+    /// The core surface kind this projection announces as
+    /// (`CanvasSurfaceShown`) — core owns the spoken word, this type
+    /// stays the persistence + UI identity.
+    var coreKind: CanvasSurfaceKind {
+        switch self {
+        case .outline: return .outline
+        case .table: return .table
+        case .visual: return .visual
+        }
+    }
 }
 
 /// The single source of truth every canvas surface binds to (t2):

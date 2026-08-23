@@ -17,7 +17,7 @@
 //! execution time) migrates in treatment classes. Literal, templated,
 //! and simple-builder announcements are typed variants below — their
 //! Swift string originals are deleted. A minority of sites relay text
-//! composed by dedicated engines (the canvas/graph announcers' verbosity
+//! composed by dedicated engines (the GRAPH announcer's verbosity
 //! machinery, Bases result summaries, filename advisories) or by
 //! availability logic whose copy serves double duty in dialogs/hints;
 //! those post [`A11yEvent::HostComposed`] carrying their text verbatim,
@@ -27,13 +27,33 @@
 //! follow-on batches) and keeps direct string-primitive calls at zero,
 //! so no NEW announcement can bypass the vocabulary.
 //!
+//! The CANVAS announcer was such an engine and is no longer: W6-1 PR 0a
+//! gave it the typed family below and Task 0a-2 moved the mac host onto
+//! it, so `CanvasAnnouncer` posts rendered events and its residue site
+//! is gone (the mac census drops 30 → 29). The graph announcer is the
+//! remaining named engine, and W6-2 does for it what 0a did here. One
+//! shared residue site survives that the canvas migration could not
+//! delete: the structural-mutation builder the mac reaches through
+//! `postMutationAnnouncement`, which serves every authoring surface —
+//! the canvas call sites left it, the marker stays.
+//!
 //! ## Copy rules
 //!
 //! Templates are the shipped mac strings, moved verbatim — this issue
 //! deliberately does not redesign wording or verbosity policy. Plain
-//! en-US in V1 (#264 owns localisation). Chord placeholders, when a
-//! template ever needs one, render per-platform (program decision 12);
-//! no current template carries a chord.
+//! en-US in V1 (#264 owns localisation). Chord placeholders render
+//! per-platform (program decision 12): the few templates that carry a
+//! chord take the host's DISPLAY chord string as a parameter
+//! (`undo_chord`, `new_card_chord`, `palette_chord` — mac `"⌘Z"`,
+//! Windows `"Ctrl+Z"`), because the chord table is host-owned. The
+//! §W-D census normalizes those parameters; they are the one recorded
+//! platform difference in the corpus. Key NAMES that are spelled
+//! identically on both platforms (`Return`, `Escape`) stay literal in
+//! the template — they are not chords.
+
+use crate::canvas::CanvasColor;
+use crate::canvas::model::EdgeDirection;
+use crate::canvas::placement::RelativeDesc;
 
 /// How urgently a host should speak an event. `High` interrupts
 /// current speech (assertive); `Medium` queues politely — mirroring the
@@ -84,6 +104,403 @@ impl ReadingNavTarget {
             Diagram => "diagram".to_owned(),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Canvas announcement vocabulary (W6-1 PR 0a, #745 — t0 §1 grammar,
+// #518). The whole grammar used to live in Swift: a 248-line
+// `CanvasAnnouncer` whose twelve cases were eight free-text
+// passthroughs, plus ~140 prose call sites composing the sentences at
+// the interaction site. It moves here verbatim so both hosts speak one
+// canvas. The enums below are the CLOSED parameter sets the templates
+// switch on; open-ended payload (titles, labels, group paths, file
+// paths, URL hosts, OS error detail, host chord strings, counts and
+// dimensions) stays `String`/number, and no variant carries a whole
+// sentence.
+//
+// ## Coalescing class keys (host-side timing, ONE list)
+//
+// Timing stays with the hosts — a pure render has no clock — but the
+// class keys are pinned here so mac and Windows collapse identical
+// bursts (t0 §1.5; mac `CanvasAnnouncer.EventClass`, 200 ms
+// latest-wins, each class independent):
+//
+// - **`navigation`** — [`CanvasA11yEvent::CanvasMovedTo`],
+//   [`CanvasA11yEvent::CanvasGroupEntered`], [`CanvasA11yEvent::CanvasGroupLeft`],
+//   [`CanvasA11yEvent::CanvasConnectionTraversed`],
+//   [`CanvasA11yEvent::CanvasMoveRelative`],
+//   [`CanvasA11yEvent::CanvasResizeGeometry`].
+// - **`filter`** — [`CanvasA11yEvent::CanvasFilterCount`],
+//   [`CanvasA11yEvent::CanvasFilterCleared`].
+// - Everything else posts immediately, uncoalesced.
+// - A canvas event whose [`CanvasA11yEvent::priority`] is
+//   [`A11yPriority::High`] FLUSHES both pending classes and DROPS
+//   them (never posts them): the error supersedes, and navigation
+//   context is re-derivable by moving again.
+
+/// Canvas announcement verbosity (t0 §1.2). Deliberately a PARAMETER
+/// on the two families that vary — the moved-to family and the
+/// destructive family — rather than module state: core stays pure and
+/// each host owns its own persisted, live-switchable preference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanvasVerbosity {
+    Terse,
+    Standard,
+    Verbose,
+}
+
+/// An overlap transition crossed by a transient move/resize step (t4
+/// G20: silent stacking is invisible to a non-visual author).
+/// Deliberately NOT its own event: mac appends it as a clause to the
+/// geometry line so the coalescer emits one utterance, and two
+/// utterances would be a behaviour change (contracts doc 0a-D2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanvasOverlapTransition {
+    Onset,
+    Cleared,
+}
+
+/// A canvas mode (t0 §2). Core owns each mode's spoken NAME and its
+/// exit instructions; the host supplies only the object acted on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanvasMode {
+    Move,
+    Resize,
+    Connect,
+}
+
+impl CanvasMode {
+    /// The mode's spoken name — also the lead of the M3 inspectable
+    /// container value and of the Where-am-I mode clause.
+    fn name(&self) -> &'static str {
+        match self {
+            CanvasMode::Move => "Move mode",
+            CanvasMode::Resize => "Resize mode",
+            CanvasMode::Connect => "Connect mode",
+        }
+    }
+
+    /// The bare verb, for the lifecycle sentences that do not say
+    /// "mode" (`Move cancelled.`, `Resize ended — …`).
+    fn verb(&self) -> &'static str {
+        match self {
+            CanvasMode::Move => "Move",
+            CanvasMode::Resize => "Resize",
+            CanvasMode::Connect => "Connect",
+        }
+    }
+
+    /// The M1 exit instructions. `Return`/`Escape` are KEY NAMES, not
+    /// chords — spelled identically on both platforms — so they stay
+    /// literal here (unlike the undo hint, which takes the host's
+    /// display chord as a parameter).
+    fn exits(&self) -> &'static str {
+        match self {
+            CanvasMode::Move => {
+                "Arrows to move, Shift for big steps, Return to place, Escape to cancel."
+            }
+            CanvasMode::Resize => {
+                "Left and Right arrows change width, Up and Down change height, \
+                 Return to apply, Escape to cancel."
+            }
+            CanvasMode::Connect => {
+                "Navigate to the target with the usual movements, Return to connect, \
+                 Escape to cancel."
+            }
+        }
+    }
+}
+
+/// What a mode acts on (t0 §2 M1). Move mode takes the marked set as a
+/// rigid unit, so the object is either one titled card or a count.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CanvasModeObject {
+    Card { title: String },
+    Cards { count: u32 },
+}
+
+/// The two modes that hold transient geometry. Connect is absent by
+/// design: it has no rects, so `Placed …`/`Resized …` is only ever
+/// spoken for these two.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanvasTransientVerb {
+    Move,
+    Resize,
+}
+
+/// What a cancelled mode put back (t0 §2 M2: Esc restores prior state
+/// and says so). `None` is the degenerate path where the document went
+/// away before the restore could run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CanvasModeRestoration {
+    /// Cancelled without a restoration statement — the degenerate
+    /// path where the document went away before the restore could
+    /// run. (Named `Unstated` rather than `None` so the Swift
+    /// binding cannot collide with `Optional.none`.)
+    Unstated,
+    CardsReturned {
+        count: u32,
+    },
+    SizeRestored,
+    BackAt {
+        title: String,
+    },
+}
+
+/// The two single-card structural placements that share one template
+/// (`⟨Verb⟩ "title" ⟨relative⟩.`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanvasPlaceVerb {
+    Moved,
+    Duplicated,
+}
+
+/// Where a card's target was handed off to (t5 #525).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanvasOpenTarget {
+    DefaultApp,
+    Browser,
+}
+
+/// A resize preset (t4 #521). Core owns the spoken label; the host
+/// owns the geometry (Fit to Content is a recorded placeholder
+/// formula shared by both hosts — owner decision D-5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanvasResizePreset {
+    DefaultSize,
+    FitToContent,
+}
+
+/// The three canvas projections (t2 #369).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanvasSurfaceKind {
+    Outline,
+    Table,
+    Visual,
+}
+
+/// What produced a zoom announcement (#520): a bare zoom step carries
+/// no context, while Fit Canvas and Zoom to Selection each prefix
+/// their own sentence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanvasZoomContext {
+    FitCanvas,
+    ZoomedToSelection,
+}
+
+/// What a destructive confirmation removed (t0 §1.3). Four arms
+/// because four different tails ship, not because the verb varies —
+/// deleting a group is spoken as *ungrouping* because the cards
+/// survive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CanvasDeleteTarget {
+    Card {
+        kind_label: String,
+        title: String,
+    },
+    Group {
+        label: String,
+    },
+    Cards {
+        count: u32,
+    },
+    /// The connection's own reference, spoken as the picker row reads
+    /// it lower-cased into the sentence (`to "Ideas", labelled
+    /// "supports"`). Structural rather than a pre-lowered string:
+    /// mac lower-cased the whole row, which mangled the author's card
+    /// title and label (contracts doc 0a-D5).
+    Connection {
+        direction: EdgeDirection,
+        other_title: String,
+        label: Option<String>,
+    },
+}
+
+/// The canvas verbs that wrap a backend failure in the shipped
+/// `⟨Verb⟩ failed: ⟨detail⟩` sentence. A closed set, not prose: the
+/// only open-ended part is the OS/FFI `detail`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanvasFailedAction {
+    NewCard,
+    NewGroup,
+    NewCanvas,
+    MoveIntoGroup,
+    Placement,
+    Align,
+    Create,
+    RemoveFromGroup,
+    Duplicate,
+    CreateConnectedCard,
+    CanvasAction,
+    WhereAmI,
+}
+
+impl CanvasFailedAction {
+    fn verb(&self) -> &'static str {
+        match self {
+            CanvasFailedAction::NewCard => "New card",
+            CanvasFailedAction::NewGroup => "New group",
+            CanvasFailedAction::NewCanvas => "New canvas",
+            CanvasFailedAction::MoveIntoGroup => "Move",
+            CanvasFailedAction::Placement => "Placement",
+            CanvasFailedAction::Align => "Align",
+            CanvasFailedAction::Create => "Create",
+            CanvasFailedAction::RemoveFromGroup => "Remove",
+            CanvasFailedAction::Duplicate => "Duplicate",
+            CanvasFailedAction::CreateConnectedCard => "Create connected card",
+            CanvasFailedAction::CanvasAction => "Canvas action",
+            CanvasFailedAction::WhereAmI => "Where am I",
+        }
+    }
+}
+
+/// Why a canvas refuses mutations (the admission ladder). Closed
+/// rather than prose because the SAME sentence serves the
+/// announcement, every disabled command's reason, and the sheet's
+/// read-only copy — three surfaces that drifted while it was a
+/// host-side constant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanvasMutationRefusal {
+    Opening,
+    Reopening,
+    RetargetFailed,
+    Unavailable,
+    ReadOnly,
+    CardEditorUnavailable,
+}
+
+/// Undo or redo — for the Edit-menu title, which is LABEL class, not
+/// speech (§2 row G: the title is rendered here so both hosts compose
+/// it identically from core's action name).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanvasHistoryVerb {
+    Undo,
+    Redo,
+}
+
+impl CanvasHistoryVerb {
+    /// The menu-title base.
+    fn base(&self) -> &'static str {
+        match self {
+            CanvasHistoryVerb::Undo => "Undo",
+            CanvasHistoryVerb::Redo => "Redo",
+        }
+    }
+
+    /// The spoken past tense (t0 §1.3: undo/redo announce the op name).
+    fn past(&self) -> &'static str {
+        match self {
+            CanvasHistoryVerb::Undo => "Undid",
+            CanvasHistoryVerb::Redo => "Redid",
+        }
+    }
+}
+
+/// The polite "why that did nothing" sentences — preconditions,
+/// navigation dead ends, and the empty-history notes. One closed set
+/// because mac retyped the same fourteen sentences across ten files
+/// (`Nothing selected.` alone appears sixteen times) and they are all
+/// the same speech act at the same priority.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CanvasStatusNote {
+    NothingSelected,
+    NoMarks,
+    NotAGroup,
+    NotATextCard,
+    NotAFileCard,
+    NoGroups,
+    NoNotesInVault,
+    NoMediaInVault,
+    NoFilesToPointAt,
+    OnlyTextCardsConvert,
+    NoConnections,
+    PickOutsideMovingSet,
+    PickDifferentTarget,
+    NoChanges,
+    /// Where-am-I on a document that never opened cleanly.
+    NotReadable,
+    /// Where-am-I with no rows — deliberately NOT the onboarding copy,
+    /// which advertises the create chord.
+    Empty,
+    EndOfCanvas,
+    StartOfCanvas,
+    AtCanvasLevel,
+    NoCardsMatchFilter,
+    NothingToUndo,
+    NothingToRedo,
+    GroupIsEmpty {
+        label: String,
+    },
+    NoOutgoingPath {
+        title: String,
+    },
+    NotInAGroup {
+        title: String,
+    },
+    /// Follow-connection found nothing. `ordinal` is `None` when the
+    /// card has no connection in that direction at all, and `Some(n)`
+    /// when it has some but not an nth.
+    NoConnection {
+        forward: bool,
+        ordinal: Option<u32>,
+    },
+}
+
+/// The assertive refusals and failures that are not the
+/// `⟨Verb⟩ failed: ⟨detail⟩` family (t0 §1.5: errors are assertive).
+/// One closed set so a new canvas error cannot inherit the polite
+/// default by omission.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CanvasBlockedReason {
+    /// An out-of-band mutation (apply, undo, redo, convert) refused
+    /// while a move or resize holds transient geometry.
+    ModeBusy,
+    UndoBlocked,
+    RedoBlocked,
+    LinkOpenFailed,
+    AlignWouldOverlap,
+    NotAUrl,
+    CardTextUnreadable,
+    NotePathMustEndInMd,
+    NoFreeSpaceInGroup {
+        label: String,
+    },
+    /// Convert-to-note collision. `on_disk` distinguishes the cheap
+    /// snapshot bail from the backend's create-if-absent refusal — two
+    /// different sentences, because only the second proves it.
+    NotePathExists {
+        path: String,
+        on_disk: bool,
+    },
+    NoteReadFailed {
+        message: String,
+    },
+    NoteCreateFailed {
+        path: String,
+        message: String,
+    },
+    /// The partial-failure arm: the note landed, the card did not
+    /// follow. Naming the created file is the whole point.
+    NoteRetargetFailed {
+        path: String,
+        message: String,
+    },
+    HeadingNotFound {
+        heading: String,
+        filename: String,
+    },
+    ReopenFailed {
+        message: String,
+    },
+}
+
+/// The filter clause Where-am-I discloses (t0 §1.4). One spelling —
+/// t0's `⟨matched⟩ of ⟨total⟩ shown` — replaces the two mac shipped
+/// (contracts doc 0a-D3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanvasFilterState {
+    Inactive,
+    Active { matched: u32, total: u32 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -776,9 +1193,365 @@ pub enum A11yEvent {
         template: String,
     },
 
+    /// The whole canvas announcement family (W6-1 0a, #745), nested
+    /// so one engine costs ONE top-level variant. uniffi caps an enum
+    /// at 256 variants and this vocabulary was at 197 before canvas;
+    /// a flat family would have spent a fifth of the remaining budget
+    /// on one surface and left none for the graph announcer (the other
+    /// named residue engine). Nesting per engine is the pattern every
+    /// later family copies.
+    Canvas {
+        event: CanvasA11yEvent,
+    },
+
     HostComposed {
         text: String,
         priority: A11yPriority,
+    },
+}
+
+/// Everything the canvas may say out loud (t0 §1 grammars), reached
+/// through [`A11yEvent::Canvas`]. Its own enum rather than 51 more
+/// top-level variants: see that variant's note for why, and the
+/// section comment above for the closed parameter sets and the
+/// coalescing class keys.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CanvasA11yEvent {
+    // --- Canvas: selection and navigation (W6-1 0a, #745; t0 §1.2) ---
+    /// Selection landed on a card. The one event whose template is a
+    /// verbosity MATRIX (t0 §1.2): terse speaks the bare title for
+    /// rapid arrowing, standard adds the card reference and the
+    /// n-of-m fix, verbose adds connections, colour, and the mark.
+    /// `container` is the innermost group label; `None` speaks the
+    /// literal lowercase word `canvas`.
+    ///
+    /// `color_name` stays a `String` — unlike
+    /// [`CanvasA11yEvent::CanvasColorSet`]'s typed `CanvasColor` —
+    /// because it is core's OWN `canvas::color_name` output arriving
+    /// back through `CanvasOutlineRow.color_name`: the host relays it,
+    /// it never derives it. Typing it here would force a host to parse
+    /// a spoken name back into a colour, which is the re-derivation the
+    /// typed payload exists to prevent (contracts doc 0a-11).
+    CanvasMovedTo {
+        verbosity: CanvasVerbosity,
+        kind_label: String,
+        title: String,
+        ordinal_n: u32,
+        total_m: u32,
+        container: Option<String>,
+        connection_count: u32,
+        color_name: Option<String>,
+        marked: bool,
+    },
+    /// Crossed INTO a group. `count` is the group's own card count —
+    /// mac spoke the entered row's SIBLING count, a miscount this
+    /// migration fixes (contracts doc 0a-D4).
+    CanvasGroupEntered {
+        label: String,
+        count: u32,
+    },
+    CanvasGroupLeft {
+        label: String,
+    },
+    /// Followed a connection. The direction phrase comes from the
+    /// model's `EdgeDirection` (derived from `fromEnd`/`toEnd`), never
+    /// from geometry; `kind_label`/`title` describe the card ARRIVED
+    /// AT, so a group or file target is never introduced as a text
+    /// card (Codoki #613).
+    CanvasConnectionTraversed {
+        direction: EdgeDirection,
+        kind_label: String,
+        title: String,
+        label: Option<String>,
+    },
+    /// The whole traced chain in ONE utterance — mac deliberately does
+    /// not narrate hop by hop, and the visited count is the tail of
+    /// the same sentence, so a separate end event would double-speak.
+    ///
+    /// `titles` is the ONLY payload on purpose: the tail count is
+    /// `titles.len()`, so the list and the number it claims can never
+    /// disagree. Mac spoke `visited.count` while listing the titles it
+    /// could resolve to outline rows — two numbers from one walk
+    /// (contracts doc CD-13).
+    CanvasTracePathEnd {
+        titles: Vec<String>,
+    },
+
+    // --- Canvas: transient geometry (t4 #521; `navigation` class) ---
+    /// Move-mode narration: the nearest-neighbour fix, coalesced so a
+    /// held arrow announces the resting position. `descs` is core's
+    /// own relative description list (empty = nothing to fix against);
+    /// the first phrase is capitalised and the rest join lower-cased.
+    CanvasMoveRelative {
+        descs: Vec<RelativeDesc>,
+        overlap: Option<CanvasOverlapTransition>,
+    },
+    /// Resize-mode narration. `preset` is `None` for an arrow step and
+    /// names the preset when one was applied; both carry the overlap
+    /// clause because a preset can land on another card too.
+    CanvasResizeGeometry {
+        preset: Option<CanvasResizePreset>,
+        width: u32,
+        height: u32,
+        overlap: Option<CanvasOverlapTransition>,
+    },
+    /// A resize step refused at the minimum card size.
+    CanvasResizeClamped,
+
+    // --- Canvas: mode stack (t0 §2, M1-M7) ---
+    /// M1 entry: name, object, exits — the three things a mode must
+    /// disclose before it swallows the arrow keys.
+    CanvasModeEntered {
+        mode: CanvasMode,
+        object: CanvasModeObject,
+    },
+    /// M7: a second mode was refused while one is active.
+    CanvasModeRejected {
+        active_mode: CanvasMode,
+    },
+    /// M2 commit that changed geometry.
+    CanvasModeCommitted {
+        verb: CanvasTransientVerb,
+        object: CanvasModeObject,
+    },
+    /// M2 commit that wrote nothing — no ops for move/resize, no
+    /// target for connect. The user must hear that rather than a
+    /// false confirmation.
+    CanvasModeEndedWithoutEffect {
+        mode: CanvasMode,
+    },
+    /// M2 cancel: prior state restored, and the restoration named.
+    CanvasModeCancelled {
+        mode: CanvasMode,
+        restoration: CanvasModeRestoration,
+    },
+
+    // --- Canvas: authoring confirmations (t0 §1.3) ---
+    /// A card or group was created at a computed placement. One
+    /// template for both: mac's group arm hand-rolled a string that
+    /// was byte-identical to the builder's group rendering.
+    CanvasCreated {
+        kind_label: String,
+        title: String,
+        relative: RelativeDesc,
+    },
+    /// A `.canvas` FILE was created (the File-section verb), not a
+    /// card on one.
+    CanvasFileCreated {
+        name: String,
+    },
+    /// The mind-mapping loop's compound verb: create + connect in one
+    /// action, so it is one confirmation.
+    CanvasConnectedCardCreated {
+        relative: RelativeDesc,
+        origin_title: String,
+    },
+    CanvasConnected {
+        from_title: String,
+        to_title: String,
+        label: Option<String>,
+    },
+    CanvasConnectionUpdated {
+        label: Option<String>,
+    },
+    CanvasMovedIntoGroup {
+        label: String,
+    },
+    /// Names the group left behind — a payload-less variant could not
+    /// render the shipped sentence.
+    CanvasRemovedFromGroup {
+        label: String,
+    },
+    /// The host hands over the colour it just SET — core's own
+    /// [`CanvasColor`], not a name it phrased itself — and
+    /// [`canvas::color_name`] does the phrasing here. `None` speaks
+    /// the literal `no color` (the clear-colour arm). Typing the
+    /// payload is what deletes mac's preset dictionaries: a host
+    /// cannot spell `"red"` at this seam even by accident.
+    CanvasColorSet {
+        title: String,
+        color: Option<CanvasColor>,
+    },
+    CanvasRenamedGroup {
+        label: String,
+    },
+    CanvasCardUpdated {
+        title: String,
+    },
+    /// Locate… repointed a file card at a new vault path.
+    CanvasCardRetargeted {
+        title: String,
+        path: String,
+    },
+    /// The two single-card structural placements that share one
+    /// template (Place Below/Above/Left Of/Right Of…, and Duplicate).
+    CanvasCardPlaced {
+        verb: CanvasPlaceVerb,
+        title: String,
+        relative: RelativeDesc,
+    },
+    CanvasCardAligned {
+        title: String,
+        target_title: String,
+    },
+    CanvasConvertedToNote {
+        path: String,
+    },
+
+    // --- Canvas: destructive confirmations (t0 §1.3) ---
+    /// The one destructive family. The undo hint rides at standard+
+    /// only (terse users asked for minimum chrome), and `undo_chord`
+    /// is the host's DISPLAY chord — the first chord-bearing template
+    /// in this vocabulary.
+    CanvasDeleted {
+        target: CanvasDeleteTarget,
+        verbosity: CanvasVerbosity,
+        undo_chord: String,
+    },
+
+    // --- Canvas: bulk over the marked set (t0 §1.5: one summary) ---
+    /// Four typed bulk variants, not one `{verb, count}`: the shipped
+    /// tails are a relative description, a colour name, a group label,
+    /// and a fixed clause — they do not share a shape. None of them
+    /// carries the undo hint (only the destructive family does).
+    CanvasBulkMoved {
+        count: u32,
+        relative: RelativeDesc,
+    },
+    /// Typed like [`CanvasA11yEvent::CanvasColorSet`] — the bulk verb
+    /// hands over the same `CanvasColor` it wrote.
+    CanvasBulkColorSet {
+        count: u32,
+        color: Option<CanvasColor>,
+    },
+    CanvasGrouped {
+        count: u32,
+        label: String,
+    },
+    CanvasBulkDuplicated {
+        count: u32,
+    },
+
+    // --- Canvas: marks (t4 #524) ---
+    CanvasMarkToggled {
+        marked: bool,
+        title: String,
+        count: u32,
+    },
+    /// Clearing marks with nothing marked speaks the precondition
+    /// instead — mac's ternary, kept inside the template.
+    CanvasMarksCleared {
+        count: u32,
+    },
+
+    // --- Canvas: filter (t5 #373; `filter` class) ---
+    /// The debounced result count. Carries `matched` only: the
+    /// m-of-n form is the static summary LABEL, not speech.
+    CanvasFilterCount {
+        matched: u32,
+    },
+    CanvasFilterCleared {
+        total: u32,
+    },
+
+    // --- Canvas: viewport and surfaces (#520, #369) ---
+    CanvasZoom {
+        context: Option<CanvasZoomContext>,
+        percent: u32,
+    },
+    CanvasFollowSelectionToggled {
+        following: bool,
+    },
+    CanvasSurfaceShown {
+        surface: CanvasSurfaceKind,
+    },
+
+    // --- Canvas: undo and redo (t3 #372) ---
+    /// `Undid: ⟨name⟩` / `Redid: ⟨name⟩` — the op name is core's own
+    /// `CanvasAction.name`, spoken verbatim.
+    CanvasHistoryApplied {
+        verb: CanvasHistoryVerb,
+        name: String,
+    },
+    /// LABEL class, not speech: the Edit menu's item title. Only the
+    /// leading character is upper-cased — core's action names embed
+    /// user-typed card titles that must pass through verbatim.
+    CanvasUndoMenuTitle {
+        verb: CanvasHistoryVerb,
+        name: String,
+    },
+
+    // --- Canvas: polite notes and assertive refusals ---
+    /// A command that could not run, or a movement with nowhere to go.
+    CanvasStatus {
+        note: CanvasStatusNote,
+    },
+    /// The assertive refusals and failures outside the
+    /// `⟨Verb⟩ failed:` family.
+    CanvasBlocked {
+        reason: CanvasBlockedReason,
+    },
+    /// The `⟨Verb⟩ failed: ⟨detail⟩` family. Twelve verbs ship; the
+    /// detail is the OS/FFI message.
+    CanvasActionFailed {
+        action: CanvasFailedAction,
+        detail: String,
+    },
+    /// t0 §5 save conflict: the file changed under us and nothing was
+    /// applied. Its own variant because the whole conflict SURFACE
+    /// (Reload / Overwrite / Save a Copy) keys off it.
+    CanvasSaveConflict,
+    /// A file card whose target is gone. `target` is the vault-relative
+    /// path, falling back to the card title when the node carries no
+    /// target at all.
+    CanvasFileNotFound {
+        target: String,
+    },
+    /// A file or link card handed off to the OS.
+    CanvasOpened {
+        title: String,
+        target: CanvasOpenTarget,
+    },
+
+    // --- Canvas: admission (the mutation ladder) ---
+    /// The six refusal reasons that used to bypass the canvas funnel
+    /// entirely as host-composed text.
+    CanvasMutationRefused {
+        reason: CanvasMutationRefusal,
+    },
+
+    // --- Canvas: load states and Where-am-I (t0 §1.4, §5) ---
+    /// t0 §5 tolerant-parse notice, polite. Mac ships this as a
+    /// static banner only; t0 requires the announcement, so the
+    /// event exists and mac gains the post.
+    CanvasLoadedDegraded {
+        skipped: u32,
+    },
+    /// The empty-canvas onboarding region — LABEL grade (region text,
+    /// never spoken). Renders the spelled-out AX form, which is the
+    /// one a screen reader gets; the glyph form stays a host label.
+    CanvasEmptyOnboarding {
+        new_card_chord: String,
+        palette_chord: String,
+    },
+    /// t0 §1.4: the pull-based readback, ALWAYS verbose-grade
+    /// regardless of the verbosity setting — which is why it takes no
+    /// `verbosity` parameter. `color_name` is a relayed `String` for
+    /// the same reason as [`CanvasA11yEvent::CanvasMovedTo`]'s: it
+    /// arrives from `CanvasWhereAmI.color_name`, already core's.
+    CanvasWhereAmI {
+        kind_label: String,
+        title: String,
+        group_path: Vec<String>,
+        ordinal_n: u32,
+        total_m: u32,
+        connection_count: u32,
+        in_count: u32,
+        out_count: u32,
+        color_name: Option<String>,
+        marked: bool,
+        mode: Option<CanvasMode>,
+        filter: CanvasFilterState,
     },
 }
 
@@ -811,6 +1584,8 @@ impl A11yEvent {
             | RestoredFile { .. }
             | RestoredFileAs { .. }
             | TemplateNoteCreated { .. } => A11yPriority::High,
+            // The canvas family owns its own tiering (t0 §1.5).
+            Canvas { event } => event.priority(),
             HostComposed { priority, .. } => *priority,
             _ => A11yPriority::Medium,
         }
@@ -1395,14 +2170,567 @@ impl A11yEvent {
                 format!("Created {name} from {template}.")
             }
 
+            Canvas { event } => event.render(),
+
             HostComposed { text, .. } => text.clone(),
         }
     }
 }
 
-/// en-US count noun (this vocabulary is V1 English; #264 owns l10n).
-/// Delegates so the singular-at-exactly-one rule has one definition;
-/// the count is interpolated by the caller and stays ungrouped here.
+impl CanvasA11yEvent {
+    /// The urgency this canvas event is spoken at. Exactly mac's
+    /// `.error` case is `High` (t0 §1.5: "navigation = polite;
+    /// errors/conflicts = assertive"); every other canvas event rode
+    /// `.status`/`.confirmation`/`.mode`/`.bulk` and is `Medium`. The
+    /// members are listed explicitly because the catch-all below makes
+    /// a forgotten one silently polite.
+    pub fn priority(&self) -> A11yPriority {
+        use CanvasA11yEvent::*;
+        match self {
+            CanvasModeRejected { .. }
+            | CanvasBlocked { .. }
+            | CanvasActionFailed { .. }
+            | CanvasSaveConflict
+            | CanvasFileNotFound { .. } => A11yPriority::High,
+            _ => A11yPriority::Medium,
+        }
+    }
+
+    /// The canonical spoken text — the shipped mac strings, verbatim.
+    pub fn render(&self) -> String {
+        use CanvasA11yEvent::*;
+        match self {
+            CanvasMovedTo {
+                verbosity,
+                kind_label,
+                title,
+                ordinal_n,
+                total_m,
+                container,
+                connection_count,
+                color_name,
+                marked,
+            } => match verbosity {
+                CanvasVerbosity::Terse => title.clone(),
+                _ => {
+                    let mut parts = vec![
+                        card_ref(kind_label, title),
+                        format!(
+                            "{ordinal_n} of {total_m} in {}",
+                            container.as_deref().unwrap_or("canvas")
+                        ),
+                    ];
+                    if matches!(verbosity, CanvasVerbosity::Verbose) {
+                        parts.push(format!(
+                            "{connection_count} {}",
+                            plural(*connection_count, "connection", "connections")
+                        ));
+                        if let Some(color_name) = color_name {
+                            parts.push(color_name.clone());
+                        }
+                        if *marked {
+                            parts.push("marked".to_owned());
+                        }
+                    }
+                    parts.join(", ")
+                }
+            },
+            CanvasGroupEntered { label, count } => format!(
+                "Entering group \"{label}\", {count} {}",
+                plural(*count, "card", "cards")
+            ),
+            CanvasGroupLeft { label } => format!("Leaving group \"{label}\""),
+            CanvasConnectionTraversed {
+                direction,
+                kind_label,
+                title,
+                label,
+            } => {
+                let phrase = match direction {
+                    EdgeDirection::Outgoing => "Connects to",
+                    EdgeDirection::Incoming => "Connected from",
+                    EdgeDirection::Bidirectional | EdgeDirection::Undirected => "Linked with",
+                };
+                let reference = card_ref(kind_label, title);
+                match label {
+                    Some(label) => format!("{phrase} {reference}, labelled \"{label}\""),
+                    None => format!("{phrase} {reference}"),
+                }
+            }
+            CanvasTracePathEnd { titles } => {
+                let tail = format!(
+                    "End of path — {} {} visited.",
+                    titles.len(),
+                    plural_len(titles.len(), "card", "cards")
+                );
+                if titles.is_empty() {
+                    // The `Path: …` clause is omitted when it has no
+                    // content, like every other optional clause here —
+                    // `Path: . End of path — 0 cards visited.` is not a
+                    // sentence. Unreachable from mac (the walk always
+                    // seeds with the selected card and returns
+                    // `NoOutgoingPath` below two), but the arm is total
+                    // over the payload (contract 0a-14).
+                    tail
+                } else {
+                    format!("Path: {}. {tail}", titles.join(", then "))
+                }
+            }
+
+            CanvasMoveRelative { descs, overlap } => {
+                let fix = if descs.is_empty() {
+                    "Alone on the canvas".to_owned()
+                } else {
+                    descs
+                        .iter()
+                        .enumerate()
+                        .map(|(index, desc)| {
+                            let phrase = relative_phrase(desc);
+                            if index == 0 {
+                                capitalize_first(&phrase)
+                            } else {
+                                phrase
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                format!("{fix}{}", overlap_clause(overlap))
+            }
+            CanvasResizeGeometry {
+                preset,
+                width,
+                height,
+                overlap,
+            } => {
+                let size = match preset {
+                    None => format!("{width} by {height}"),
+                    Some(CanvasResizePreset::DefaultSize) => {
+                        format!("Resized to default size: {width} by {height}")
+                    }
+                    Some(CanvasResizePreset::FitToContent) => {
+                        format!("Resized to fit to content: {width} by {height}")
+                    }
+                };
+                format!("{size}{}", overlap_clause(overlap))
+            }
+            CanvasResizeClamped => "Minimum size.".to_owned(),
+
+            CanvasModeEntered { mode, object } => format!(
+                "{} — {}. {}",
+                mode.name(),
+                mode_object(object),
+                mode.exits()
+            ),
+            CanvasModeRejected { active_mode } => format!(
+                "{} is active. Return to commit or Escape to cancel first.",
+                active_mode.name()
+            ),
+            CanvasModeCommitted { verb, object } => match verb {
+                CanvasTransientVerb::Move => format!("Placed {}.", mode_object(object)),
+                CanvasTransientVerb::Resize => format!("Resized {}.", mode_object(object)),
+            },
+            CanvasModeEndedWithoutEffect { mode } => match mode {
+                // Connect's "no effect" is a different fact: nothing
+                // was chosen, rather than nothing changed.
+                CanvasMode::Connect => "Connect ended — no target chosen.".to_owned(),
+                _ => format!("{} ended — nothing changed.", mode.verb()),
+            },
+            CanvasModeCancelled { mode, restoration } => {
+                let head = format!("{} cancelled", mode.verb());
+                match restoration {
+                    CanvasModeRestoration::Unstated => format!("{head}."),
+                    CanvasModeRestoration::CardsReturned { count } => {
+                        format!("{head} — {} returned.", plural(*count, "card", "cards"))
+                    }
+                    CanvasModeRestoration::SizeRestored => format!("{head} — size restored."),
+                    CanvasModeRestoration::BackAt { title } => {
+                        format!("{head} — back at \"{title}\".")
+                    }
+                }
+            }
+
+            CanvasCreated {
+                kind_label,
+                title,
+                relative,
+            } => format!(
+                "Created {} {}",
+                lower_first(&card_ref(kind_label, title)),
+                relative_phrase(relative)
+            ),
+            CanvasFileCreated { name } => format!("Created canvas \"{name}\"."),
+            CanvasConnectedCardCreated {
+                relative,
+                origin_title,
+            } => format!(
+                "Created connected card {} — connected from \"{origin_title}\".",
+                relative_phrase(relative)
+            ),
+            CanvasConnected {
+                from_title,
+                to_title,
+                label,
+            } => match label {
+                Some(label) => {
+                    format!("Connected \"{from_title}\" to \"{to_title}\", labelled \"{label}\".")
+                }
+                None => format!("Connected \"{from_title}\" to \"{to_title}\"."),
+            },
+            CanvasConnectionUpdated { label } => match label {
+                Some(label) => format!("Connection updated, labelled \"{label}\"."),
+                None => "Connection updated.".to_owned(),
+            },
+            CanvasMovedIntoGroup { label } => format!("Moved into group \"{label}\"."),
+            CanvasRemovedFromGroup { label } => format!("Removed from group \"{label}\"."),
+            CanvasColorSet { title, color } => {
+                format!("Set \"{title}\" to {}.", spoken_color(color))
+            }
+            CanvasRenamedGroup { label } => format!("Renamed group to \"{label}\"."),
+            CanvasCardUpdated { title } => format!("Updated \"{title}\"."),
+            CanvasCardRetargeted { title, path } => {
+                format!("\"{title}\" now points at {path}.")
+            }
+            CanvasCardPlaced {
+                verb,
+                title,
+                relative,
+            } => format!(
+                "{} \"{title}\" {}.",
+                match verb {
+                    CanvasPlaceVerb::Moved => "Moved",
+                    CanvasPlaceVerb::Duplicated => "Duplicated",
+                },
+                relative_phrase(relative)
+            ),
+            CanvasCardAligned {
+                title,
+                target_title,
+            } => format!("Aligned \"{title}\" with \"{target_title}\"."),
+            CanvasConvertedToNote { path } => {
+                format!("Converted to note {path}. The card now points at it.")
+            }
+
+            CanvasDeleted {
+                target,
+                verbosity,
+                undo_chord,
+            } => {
+                let body = match target {
+                    CanvasDeleteTarget::Card { kind_label, title } => {
+                        format!("Deleted {}", card_ref(kind_label, title))
+                    }
+                    CanvasDeleteTarget::Group { label } => {
+                        format!("Ungrouped {} — cards kept", card_ref("group", label))
+                    }
+                    CanvasDeleteTarget::Cards { count } => {
+                        format!("Deleted {}", counted(*count, "card", "cards"))
+                    }
+                    CanvasDeleteTarget::Connection {
+                        direction,
+                        other_title,
+                        label,
+                    } => {
+                        let preposition = match direction {
+                            EdgeDirection::Outgoing => "to",
+                            EdgeDirection::Incoming => "from",
+                            EdgeDirection::Bidirectional | EdgeDirection::Undirected => "with",
+                        };
+                        match label {
+                            Some(label) => format!(
+                                "Deleted connection {preposition} \"{other_title}\", \
+                                 labelled \"{label}\""
+                            ),
+                            None => {
+                                format!("Deleted connection {preposition} \"{other_title}\"")
+                            }
+                        }
+                    }
+                };
+                match verbosity {
+                    // The undo hint rides at standard+ (t0 §1.3);
+                    // terse users asked for minimum chrome.
+                    CanvasVerbosity::Terse => body,
+                    _ => format!("{body} — {undo_chord} to undo"),
+                }
+            }
+
+            CanvasBulkMoved { count, relative } => format!(
+                "Moved {count} {} {}.",
+                plural(*count, "card", "cards"),
+                relative_phrase(relative)
+            ),
+            CanvasBulkColorSet { count, color } => format!(
+                "Set {} to {}.",
+                counted(*count, "card", "cards"),
+                spoken_color(color)
+            ),
+            CanvasGrouped { count, label } => format!(
+                "Grouped {} into \"{label}\".",
+                counted(*count, "card", "cards")
+            ),
+            CanvasBulkDuplicated { count } => format!(
+                "Duplicated {count} {} — one undo restores.",
+                plural(*count, "card", "cards")
+            ),
+
+            CanvasMarkToggled {
+                marked,
+                title,
+                count,
+            } => format!(
+                "{} \"{title}\". {count} marked.",
+                if *marked { "Marked" } else { "Unmarked" }
+            ),
+            CanvasMarksCleared { count } => {
+                if *count == 0 {
+                    "No marks.".to_owned()
+                } else {
+                    format!("Cleared {}.", counted(*count, "mark", "marks"))
+                }
+            }
+
+            CanvasFilterCount { matched } => {
+                format!("{matched} {} match.", plural(*matched, "card", "cards"))
+            }
+            CanvasFilterCleared { total } => {
+                format!("Filter cleared — {}.", counted(*total, "card", "cards"))
+            }
+
+            CanvasZoom { context, percent } => match context {
+                None => format!("Zoom {percent} percent."),
+                Some(CanvasZoomContext::FitCanvas) => {
+                    format!("Fit canvas. Zoom {percent} percent.")
+                }
+                Some(CanvasZoomContext::ZoomedToSelection) => {
+                    format!("Zoomed to selection. Zoom {percent} percent.")
+                }
+            },
+            CanvasFollowSelectionToggled { following } => if *following {
+                "Viewport follows selection."
+            } else {
+                "Viewport stays put."
+            }
+            .to_owned(),
+            CanvasSurfaceShown { surface } => format!(
+                "Canvas {} view.",
+                match surface {
+                    CanvasSurfaceKind::Outline => "outline",
+                    CanvasSurfaceKind::Table => "table",
+                    CanvasSurfaceKind::Visual => "visual",
+                }
+            ),
+
+            CanvasHistoryApplied { verb, name } => format!("{}: {name}", verb.past()),
+            CanvasUndoMenuTitle { verb, name } => {
+                if name.is_empty() {
+                    verb.base().to_owned()
+                } else {
+                    format!("{} {}", verb.base(), capitalize_first(name))
+                }
+            }
+
+            CanvasStatus { note } => match note {
+                CanvasStatusNote::NothingSelected => "Nothing selected.".to_owned(),
+                CanvasStatusNote::NoMarks => "No marks.".to_owned(),
+                CanvasStatusNote::NotAGroup => "Not a group.".to_owned(),
+                CanvasStatusNote::NotATextCard => "Not a text card.".to_owned(),
+                CanvasStatusNote::NotAFileCard => "Not a file card.".to_owned(),
+                CanvasStatusNote::NoGroups => "This canvas has no groups.".to_owned(),
+                CanvasStatusNote::NoNotesInVault => "This vault has no notes yet.".to_owned(),
+                CanvasStatusNote::NoMediaInVault => "This vault has no media files.".to_owned(),
+                CanvasStatusNote::NoFilesToPointAt => {
+                    "This vault has no files to point at.".to_owned()
+                }
+                CanvasStatusNote::OnlyTextCardsConvert => {
+                    "Only text cards convert to notes.".to_owned()
+                }
+                CanvasStatusNote::NoConnections => {
+                    "The selected card has no connections.".to_owned()
+                }
+                CanvasStatusNote::PickOutsideMovingSet => {
+                    "Pick a card outside the moving set.".to_owned()
+                }
+                CanvasStatusNote::PickDifferentTarget => {
+                    "Pick a different card to connect to.".to_owned()
+                }
+                CanvasStatusNote::NoChanges => "No changes.".to_owned(),
+                CanvasStatusNote::NotReadable => "Canvas is not readable.".to_owned(),
+                CanvasStatusNote::Empty => "Canvas is empty.".to_owned(),
+                CanvasStatusNote::EndOfCanvas => "End of canvas.".to_owned(),
+                CanvasStatusNote::StartOfCanvas => "Start of canvas.".to_owned(),
+                CanvasStatusNote::AtCanvasLevel => "At canvas level.".to_owned(),
+                CanvasStatusNote::NoCardsMatchFilter => "No cards match the filter.".to_owned(),
+                CanvasStatusNote::NothingToUndo => "Nothing to undo.".to_owned(),
+                CanvasStatusNote::NothingToRedo => "Nothing to redo.".to_owned(),
+                CanvasStatusNote::GroupIsEmpty { label } => {
+                    format!("Group \"{label}\" is empty.")
+                }
+                CanvasStatusNote::NoOutgoingPath { title } => {
+                    format!("No outgoing path from \"{title}\".")
+                }
+                CanvasStatusNote::NotInAGroup { title } => {
+                    format!("\"{title}\" is not in a group.")
+                }
+                CanvasStatusNote::NoConnection { forward, ordinal } => {
+                    let base = if *forward {
+                        "No outgoing connection"
+                    } else {
+                        "No incoming connection"
+                    };
+                    match ordinal {
+                        Some(ordinal) => format!("{base} {ordinal}."),
+                        None => format!("{base}."),
+                    }
+                }
+            },
+            CanvasBlocked { reason } => match reason {
+                CanvasBlockedReason::ModeBusy => {
+                    "A move or resize is in progress. Return to place it or Escape to \
+                     cancel first."
+                        .to_owned()
+                }
+                CanvasBlockedReason::UndoBlocked => {
+                    "Undo blocked: the canvas changed on disk. Reload it and try again.".to_owned()
+                }
+                CanvasBlockedReason::RedoBlocked => {
+                    "Redo blocked: the canvas changed on disk. Reload it and try again.".to_owned()
+                }
+                CanvasBlockedReason::LinkOpenFailed => "The link could not be opened.".to_owned(),
+                CanvasBlockedReason::AlignWouldOverlap => {
+                    "Aligning would overlap another card — not moved.".to_owned()
+                }
+                CanvasBlockedReason::NotAUrl => "That doesn't look like a URL.".to_owned(),
+                CanvasBlockedReason::CardTextUnreadable => {
+                    "The card's text could not be read.".to_owned()
+                }
+                CanvasBlockedReason::NotePathMustEndInMd => {
+                    "The note path must end in .md.".to_owned()
+                }
+                CanvasBlockedReason::NoFreeSpaceInGroup { label } => {
+                    format!("No free space inside \"{label}\".")
+                }
+                CanvasBlockedReason::NotePathExists { path, on_disk } => {
+                    if *on_disk {
+                        format!("{path} already exists on disk. Pick another name.")
+                    } else {
+                        format!("{path} already exists. Pick another name.")
+                    }
+                }
+                CanvasBlockedReason::NoteReadFailed { message } => {
+                    format!("Could not read the card text: {message}")
+                }
+                CanvasBlockedReason::NoteCreateFailed { path, message } => {
+                    format!("Could not create {path}: {message}")
+                }
+                CanvasBlockedReason::NoteRetargetFailed { path, message } => {
+                    format!("Created {path}, but could not retarget the card: {message}")
+                }
+                CanvasBlockedReason::HeadingNotFound { heading, filename } => {
+                    format!("Heading {heading} was not found in {filename}.")
+                }
+                CanvasBlockedReason::ReopenFailed { message } => format!(
+                    "Canvas could not be reopened. The previous snapshot is read-only. \
+                     {message}"
+                ),
+            },
+            CanvasActionFailed { action, detail } => {
+                format!("{} failed: {detail}", action.verb())
+            }
+            CanvasSaveConflict => {
+                "The canvas changed on disk. Reload it to continue — your action was \
+                 not applied."
+                    .to_owned()
+            }
+            CanvasFileNotFound { target } => {
+                format!("{target} is missing from the vault. Use Locate File to repoint this card.")
+            }
+            CanvasOpened { title, target } => match target {
+                CanvasOpenTarget::DefaultApp => {
+                    format!("Opened {title} in its default app.")
+                }
+                CanvasOpenTarget::Browser => format!("Opened {title} in your browser."),
+            },
+
+            CanvasMutationRefused { reason } => match reason {
+                CanvasMutationRefusal::Opening => {
+                    "This canvas is still opening. Wait for it to finish before making \
+                     changes."
+                }
+                CanvasMutationRefusal::Reopening => {
+                    "This canvas is reopening. Wait for it to finish before making changes."
+                }
+                CanvasMutationRefusal::RetargetFailed => {
+                    "This canvas could not be reopened. Choose Retry before making changes."
+                }
+                CanvasMutationRefusal::Unavailable => {
+                    "This canvas is no longer available. Copy any draft before closing."
+                }
+                CanvasMutationRefusal::ReadOnly => {
+                    "This canvas is read-only because it could not be opened safely."
+                }
+                CanvasMutationRefusal::CardEditorUnavailable => {
+                    "This canvas is no longer available. Copy your draft before closing \
+                     the editor."
+                }
+            }
+            .to_owned(),
+
+            CanvasLoadedDegraded { skipped } => format!(
+                "Canvas loaded. {skipped} unsupported {} are preserved in the file but \
+                 not shown.",
+                plural(*skipped, "item", "items")
+            ),
+            CanvasEmptyOnboarding {
+                new_card_chord,
+                palette_chord,
+            } => format!(
+                "Canvas is empty. Press {new_card_chord} to create your first card. \
+                 Every other canvas action is in the Command Palette, {palette_chord}."
+            ),
+            CanvasWhereAmI {
+                kind_label,
+                title,
+                group_path,
+                ordinal_n,
+                total_m,
+                connection_count,
+                in_count,
+                out_count,
+                color_name,
+                marked,
+                mode,
+                filter,
+            } => {
+                let mut parts = vec![card_ref(kind_label, title)];
+                parts.push(if group_path.is_empty() {
+                    "at canvas level".to_owned()
+                } else {
+                    format!("in {}", group_path.join(" › "))
+                });
+                parts.push(format!("{ordinal_n} of {total_m}"));
+                parts.push(format!(
+                    "{connection_count} {} ({in_count} in, {out_count} out)",
+                    plural(*connection_count, "connection", "connections")
+                ));
+                if let Some(color_name) = color_name {
+                    parts.push(color_name.clone());
+                }
+                if *marked {
+                    parts.push("marked".to_owned());
+                }
+                if let Some(mode) = mode {
+                    parts.push(mode.name().to_owned());
+                }
+                if let CanvasFilterState::Active { matched, total } = filter {
+                    parts.push(format!("{matched} of {total} shown"));
+                }
+                parts.join(", ")
+            }
+        }
+    }
+}
+
 /// True when `haystack` already speaks `field` as a COMPLETE row
 /// field — case-folded, bounded on each side by the start/end of the
 /// description or a field separator (`.`/`,`/`;`, one optional space
@@ -1425,8 +2753,105 @@ fn contains_field(haystack: &str, field: &str) -> bool {
     })
 }
 
+/// en-US count noun (this vocabulary is V1 English; #264 owns l10n).
+/// Delegates so the singular-at-exactly-one rule has one definition;
+/// the count is interpolated by the caller and stays ungrouped here.
 fn plural<'a>(count: u32, one: &'a str, many: &'a str) -> &'a str {
     crate::sidebar_filter::noun(count as u64, one, many)
+}
+
+/// The same rule over a COLLECTION LENGTH. Every count payload in this
+/// vocabulary is a `u32`, but the arms that speak the size of a `Vec`
+/// hold a `usize`; routing them here keeps the singular/plural rule at
+/// one definition instead of casting (or hand-branching) at the site.
+fn plural_len<'a>(len: usize, one: &'a str, many: &'a str) -> &'a str {
+    crate::sidebar_filter::noun(len as u64, one, many)
+}
+
+/// The spoken name of a colour a host just wrote, or the literal
+/// `no color` for the clear-colour arm. One line, but it is the whole
+/// point of the typed `Option<CanvasColor>` payload: the preset table
+/// lives in [`canvas::color_name`] and nowhere else, on either host.
+fn spoken_color(color: &Option<CanvasColor>) -> String {
+    match color {
+        Some(color) => crate::canvas::color_name(color),
+        None => "no color".to_owned(),
+    }
+}
+
+/// A grouped count plus its noun (`"3 cards"`, `"1,024 cards"`). The
+/// canvas templates that mac built with `CountCopy.counted` route here
+/// instead: `CountCopy` deliberately does NOT group thousands, so the
+/// two spellings diverge at ≥ 1000 and core's grouping wins (contracts
+/// doc 0a-D6).
+fn counted(count: u32, one: &str, many: &str) -> String {
+    crate::sidebar_filter::count_noun(count as u64, one, many)
+}
+
+/// The t0 §1.1 card reference: `Group "label"` for groups,
+/// `⟨Kind⟩ card "title"` otherwise. ONE definition — mac spelled it in
+/// `CanvasCardRef.phrase`, again (unquoted) in the renderer's peer
+/// names, and again (with a hardcoded kind) in the outline's
+/// connection rows, and the three drifted.
+fn card_ref(kind_label: &str, title: &str) -> String {
+    if kind_label == "group" {
+        format!("Group \"{title}\"")
+    } else {
+        format!("{} card \"{title}\"", capitalize_first(kind_label))
+    }
+}
+
+/// Upper-cases the LEADING character only — canvas payloads embed
+/// user-typed titles that must pass through verbatim.
+fn capitalize_first(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
+/// The inverse, for a card reference used mid-sentence
+/// (`Created text card "X" …`).
+fn lower_first(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_lowercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
+/// Core's own placement description, spoken. Lower-case because every
+/// shipped template places it mid-sentence; the move-mode narration
+/// capitalises its leading phrase itself.
+fn relative_phrase(relative: &RelativeDesc) -> String {
+    match relative {
+        RelativeDesc::Below(anchor) => format!("below \"{anchor}\""),
+        RelativeDesc::RightOf(anchor) => format!("right of \"{anchor}\""),
+        RelativeDesc::Above(anchor) => format!("above \"{anchor}\""),
+        RelativeDesc::LeftOf(anchor) => format!("left of \"{anchor}\""),
+        RelativeDesc::AtOrigin => "at the canvas origin".to_owned(),
+    }
+}
+
+/// The overlap clause a transient geometry line carries (t4 G20). It
+/// is a suffix, never a sentence of its own.
+fn overlap_clause(overlap: &Option<CanvasOverlapTransition>) -> &'static str {
+    match overlap {
+        None => "",
+        Some(CanvasOverlapTransition::Onset) => ". Overlapping another card",
+        Some(CanvasOverlapTransition::Cleared) => ". Clear of overlaps",
+    }
+}
+
+/// The object clause of a mode announcement (t0 §2 M1).
+fn mode_object(object: &CanvasModeObject) -> String {
+    match object {
+        CanvasModeObject::Card { title } => format!("\"{title}\""),
+        CanvasModeObject::Cards { count } => {
+            format!("{count} {}", plural(*count, "card", "cards"))
+        }
+    }
 }
 
 /// One representative event per variant (parameterized variants use
@@ -1437,7 +2862,7 @@ fn plural<'a>(count: u32, one: &'a str, many: &'a str) -> &'a str {
 /// apart.
 pub fn corpus() -> Vec<A11yEvent> {
     use A11yEvent::*;
-    vec![
+    let mut events = vec![
         FilesRegionFocused,
         LeafPanelShown {
             title: "Outline".into(),
@@ -2145,6 +3570,798 @@ pub fn corpus() -> Vec<A11yEvent> {
             text: "Composed by a host engine.".into(),
             priority: A11yPriority::High,
         },
+    ];
+    // The canvas family (W6-1 0a, #745) is APPENDED as one block, so
+    // every pre-existing index — and therefore both host mirrors —
+    // is untouched by it.
+    events.extend(canvas_corpus().into_iter().map(|event| Canvas { event }));
+    events
+}
+
+/// The canvas half of the corpus, in its own list because the family
+/// is its own enum ([`A11yEvent::Canvas`]). One representative event
+/// per variant, plus one per closed-set ARM whose template differs —
+/// `every_canvas_variant_and_arm_is_represented_in_the_corpus` proves
+/// the coverage.
+fn canvas_corpus() -> Vec<CanvasA11yEvent> {
+    use CanvasA11yEvent::*;
+    vec![
+        CanvasMovedTo {
+            verbosity: CanvasVerbosity::Terse,
+            kind_label: "text".into(),
+            title: "Research".into(),
+            ordinal_n: 2,
+            total_m: 5,
+            container: Some("Q3".into()),
+            connection_count: 3,
+            color_name: Some("red".into()),
+            marked: true,
+        },
+        CanvasMovedTo {
+            verbosity: CanvasVerbosity::Standard,
+            kind_label: "text".into(),
+            title: "Research".into(),
+            ordinal_n: 2,
+            total_m: 5,
+            container: Some("Q3".into()),
+            connection_count: 3,
+            color_name: Some("red".into()),
+            marked: true,
+        },
+        CanvasMovedTo {
+            verbosity: CanvasVerbosity::Verbose,
+            kind_label: "text".into(),
+            title: "Research".into(),
+            ordinal_n: 2,
+            total_m: 5,
+            container: Some("Q3".into()),
+            connection_count: 3,
+            color_name: Some("red".into()),
+            marked: true,
+        },
+        CanvasMovedTo {
+            verbosity: CanvasVerbosity::Standard,
+            kind_label: "group".into(),
+            title: "Q3".into(),
+            ordinal_n: 1,
+            total_m: 3,
+            container: None,
+            connection_count: 0,
+            color_name: None,
+            marked: false,
+        },
+        CanvasMovedTo {
+            verbosity: CanvasVerbosity::Verbose,
+            kind_label: "file".into(),
+            title: "Notes.md".into(),
+            ordinal_n: 1,
+            total_m: 1,
+            container: None,
+            connection_count: 1,
+            color_name: None,
+            marked: false,
+        },
+        CanvasGroupEntered {
+            label: "Q3".into(),
+            count: 4,
+        },
+        CanvasGroupEntered {
+            label: "Solo".into(),
+            count: 1,
+        },
+        CanvasGroupLeft { label: "Q3".into() },
+        CanvasConnectionTraversed {
+            direction: EdgeDirection::Outgoing,
+            kind_label: "text".into(),
+            title: "Ideas".into(),
+            label: Some("supports".into()),
+        },
+        CanvasConnectionTraversed {
+            direction: EdgeDirection::Incoming,
+            kind_label: "text".into(),
+            title: "Research".into(),
+            label: None,
+        },
+        CanvasConnectionTraversed {
+            direction: EdgeDirection::Undirected,
+            kind_label: "group".into(),
+            title: "Q3".into(),
+            label: None,
+        },
+        CanvasConnectionTraversed {
+            direction: EdgeDirection::Bidirectional,
+            kind_label: "link".into(),
+            title: "example.com".into(),
+            label: None,
+        },
+        CanvasTracePathEnd {
+            titles: vec!["Research".into(), "Ideas".into(), "Draft".into()],
+        },
+        CanvasMoveRelative {
+            descs: Vec::new(),
+            overlap: None,
+        },
+        CanvasMoveRelative {
+            descs: vec![RelativeDesc::Below("Research".into())],
+            overlap: None,
+        },
+        CanvasMoveRelative {
+            descs: vec![
+                RelativeDesc::Below("Research".into()),
+                RelativeDesc::RightOf("Ideas".into()),
+            ],
+            overlap: Some(CanvasOverlapTransition::Onset),
+        },
+        CanvasMoveRelative {
+            descs: vec![RelativeDesc::Above("Ideas".into())],
+            overlap: Some(CanvasOverlapTransition::Cleared),
+        },
+        CanvasResizeGeometry {
+            preset: None,
+            width: 320,
+            height: 200,
+            overlap: None,
+        },
+        CanvasResizeGeometry {
+            preset: Some(CanvasResizePreset::DefaultSize),
+            width: 260,
+            height: 140,
+            overlap: None,
+        },
+        CanvasResizeGeometry {
+            preset: Some(CanvasResizePreset::FitToContent),
+            width: 260,
+            height: 88,
+            overlap: Some(CanvasOverlapTransition::Onset),
+        },
+        CanvasResizeClamped,
+        CanvasModeEntered {
+            mode: CanvasMode::Move,
+            object: CanvasModeObject::Card {
+                title: "Research".into(),
+            },
+        },
+        CanvasModeEntered {
+            mode: CanvasMode::Move,
+            object: CanvasModeObject::Cards { count: 3 },
+        },
+        CanvasModeEntered {
+            mode: CanvasMode::Resize,
+            object: CanvasModeObject::Card {
+                title: "Research".into(),
+            },
+        },
+        CanvasModeEntered {
+            mode: CanvasMode::Connect,
+            object: CanvasModeObject::Card {
+                title: "Research".into(),
+            },
+        },
+        CanvasModeRejected {
+            active_mode: CanvasMode::Move,
+        },
+        CanvasModeCommitted {
+            verb: CanvasTransientVerb::Move,
+            object: CanvasModeObject::Card {
+                title: "Research".into(),
+            },
+        },
+        CanvasModeCommitted {
+            verb: CanvasTransientVerb::Move,
+            object: CanvasModeObject::Cards { count: 3 },
+        },
+        CanvasModeCommitted {
+            verb: CanvasTransientVerb::Resize,
+            object: CanvasModeObject::Card {
+                title: "Research".into(),
+            },
+        },
+        CanvasModeEndedWithoutEffect {
+            mode: CanvasMode::Move,
+        },
+        CanvasModeEndedWithoutEffect {
+            mode: CanvasMode::Resize,
+        },
+        CanvasModeEndedWithoutEffect {
+            mode: CanvasMode::Connect,
+        },
+        CanvasModeCancelled {
+            mode: CanvasMode::Move,
+            restoration: CanvasModeRestoration::Unstated,
+        },
+        CanvasModeCancelled {
+            mode: CanvasMode::Move,
+            restoration: CanvasModeRestoration::CardsReturned { count: 1 },
+        },
+        CanvasModeCancelled {
+            mode: CanvasMode::Move,
+            restoration: CanvasModeRestoration::CardsReturned { count: 3 },
+        },
+        CanvasModeCancelled {
+            mode: CanvasMode::Resize,
+            restoration: CanvasModeRestoration::Unstated,
+        },
+        CanvasModeCancelled {
+            mode: CanvasMode::Resize,
+            restoration: CanvasModeRestoration::SizeRestored,
+        },
+        CanvasModeCancelled {
+            mode: CanvasMode::Connect,
+            restoration: CanvasModeRestoration::Unstated,
+        },
+        CanvasModeCancelled {
+            mode: CanvasMode::Connect,
+            restoration: CanvasModeRestoration::BackAt {
+                title: "Research".into(),
+            },
+        },
+        CanvasCreated {
+            kind_label: "text".into(),
+            title: "New idea".into(),
+            relative: RelativeDesc::Below("Research".into()),
+        },
+        CanvasCreated {
+            kind_label: "group".into(),
+            title: "Q3".into(),
+            relative: RelativeDesc::RightOf("Research".into()),
+        },
+        CanvasCreated {
+            kind_label: "file".into(),
+            title: "Notes.md".into(),
+            relative: RelativeDesc::Above("Research".into()),
+        },
+        CanvasCreated {
+            kind_label: "link".into(),
+            title: "example.com".into(),
+            relative: RelativeDesc::LeftOf("Research".into()),
+        },
+        CanvasCreated {
+            kind_label: "text".into(),
+            title: "Untitled".into(),
+            relative: RelativeDesc::AtOrigin,
+        },
+        CanvasFileCreated {
+            name: "Roadmap".into(),
+        },
+        CanvasConnectedCardCreated {
+            relative: RelativeDesc::Below("Research".into()),
+            origin_title: "Research".into(),
+        },
+        CanvasConnected {
+            from_title: "Research".into(),
+            to_title: "Ideas".into(),
+            label: Some("supports".into()),
+        },
+        CanvasConnected {
+            from_title: "Research".into(),
+            to_title: "Ideas".into(),
+            label: None,
+        },
+        CanvasConnectionUpdated {
+            label: Some("supports".into()),
+        },
+        CanvasConnectionUpdated { label: None },
+        CanvasMovedIntoGroup { label: "Q3".into() },
+        CanvasRemovedFromGroup { label: "Q3".into() },
+        CanvasColorSet {
+            title: "Research".into(),
+            color: Some(CanvasColor::Preset(1)),
+        },
+        CanvasColorSet {
+            title: "Research".into(),
+            color: None,
+        },
+        CanvasRenamedGroup { label: "Q3".into() },
+        CanvasCardUpdated {
+            title: "Research".into(),
+        },
+        CanvasCardRetargeted {
+            title: "Research".into(),
+            path: "notes/research.md".into(),
+        },
+        CanvasCardPlaced {
+            verb: CanvasPlaceVerb::Moved,
+            title: "Research".into(),
+            relative: RelativeDesc::Below("Ideas".into()),
+        },
+        CanvasCardPlaced {
+            verb: CanvasPlaceVerb::Duplicated,
+            title: "Research".into(),
+            relative: RelativeDesc::RightOf("Research".into()),
+        },
+        CanvasCardAligned {
+            title: "Research".into(),
+            target_title: "Ideas".into(),
+        },
+        CanvasConvertedToNote {
+            path: "notes/research.md".into(),
+        },
+        CanvasDeleted {
+            target: CanvasDeleteTarget::Card {
+                kind_label: "text".into(),
+                title: "Research".into(),
+            },
+            verbosity: CanvasVerbosity::Standard,
+            undo_chord: "⌘Z".into(),
+        },
+        CanvasDeleted {
+            target: CanvasDeleteTarget::Card {
+                kind_label: "text".into(),
+                title: "Research".into(),
+            },
+            verbosity: CanvasVerbosity::Terse,
+            undo_chord: "⌘Z".into(),
+        },
+        CanvasDeleted {
+            target: CanvasDeleteTarget::Group { label: "Q3".into() },
+            verbosity: CanvasVerbosity::Standard,
+            undo_chord: "⌘Z".into(),
+        },
+        // The chord parameter is the one recorded platform difference
+        // in this corpus (§W-D): the Windows display chord renders
+        // through the same template.
+        CanvasDeleted {
+            target: CanvasDeleteTarget::Cards { count: 3 },
+            verbosity: CanvasVerbosity::Standard,
+            undo_chord: "Ctrl+Z".into(),
+        },
+        CanvasDeleted {
+            target: CanvasDeleteTarget::Cards { count: 1 },
+            verbosity: CanvasVerbosity::Verbose,
+            undo_chord: "⌘Z".into(),
+        },
+        CanvasDeleted {
+            target: CanvasDeleteTarget::Connection {
+                direction: EdgeDirection::Outgoing,
+                other_title: "Ideas".into(),
+                label: Some("supports".into()),
+            },
+            verbosity: CanvasVerbosity::Standard,
+            undo_chord: "⌘Z".into(),
+        },
+        CanvasDeleted {
+            target: CanvasDeleteTarget::Connection {
+                direction: EdgeDirection::Incoming,
+                other_title: "Research".into(),
+                label: None,
+            },
+            verbosity: CanvasVerbosity::Terse,
+            undo_chord: "⌘Z".into(),
+        },
+        CanvasDeleted {
+            target: CanvasDeleteTarget::Connection {
+                direction: EdgeDirection::Undirected,
+                other_title: "Q3".into(),
+                label: None,
+            },
+            verbosity: CanvasVerbosity::Standard,
+            undo_chord: "⌘Z".into(),
+        },
+        CanvasBulkMoved {
+            count: 3,
+            relative: RelativeDesc::Below("Research".into()),
+        },
+        CanvasBulkColorSet {
+            count: 3,
+            color: Some(CanvasColor::Preset(5)),
+        },
+        CanvasBulkColorSet {
+            count: 1,
+            color: None,
+        },
+        CanvasGrouped {
+            count: 3,
+            label: "Q3".into(),
+        },
+        CanvasBulkDuplicated { count: 2 },
+        CanvasMarkToggled {
+            marked: true,
+            title: "Research".into(),
+            count: 2,
+        },
+        CanvasMarkToggled {
+            marked: false,
+            title: "Research".into(),
+            count: 1,
+        },
+        CanvasMarksCleared { count: 0 },
+        CanvasMarksCleared { count: 3 },
+        CanvasFilterCount { matched: 3 },
+        CanvasFilterCount { matched: 1 },
+        CanvasFilterCleared { total: 40 },
+        CanvasFilterCleared { total: 1 },
+        CanvasZoom {
+            context: None,
+            percent: 100,
+        },
+        CanvasZoom {
+            context: Some(CanvasZoomContext::FitCanvas),
+            percent: 80,
+        },
+        CanvasZoom {
+            context: Some(CanvasZoomContext::ZoomedToSelection),
+            percent: 150,
+        },
+        CanvasFollowSelectionToggled { following: true },
+        CanvasFollowSelectionToggled { following: false },
+        CanvasSurfaceShown {
+            surface: CanvasSurfaceKind::Outline,
+        },
+        CanvasSurfaceShown {
+            surface: CanvasSurfaceKind::Table,
+        },
+        CanvasSurfaceShown {
+            surface: CanvasSurfaceKind::Visual,
+        },
+        CanvasHistoryApplied {
+            verb: CanvasHistoryVerb::Undo,
+            name: "move \"Research\"".into(),
+        },
+        CanvasHistoryApplied {
+            verb: CanvasHistoryVerb::Redo,
+            name: "move \"Research\"".into(),
+        },
+        CanvasUndoMenuTitle {
+            verb: CanvasHistoryVerb::Undo,
+            name: "delete \"My Card\"".into(),
+        },
+        CanvasUndoMenuTitle {
+            verb: CanvasHistoryVerb::Redo,
+            name: String::new(),
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::NothingSelected,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::NoMarks,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::NotAGroup,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::NotATextCard,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::NotAFileCard,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::NoGroups,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::NoNotesInVault,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::NoMediaInVault,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::NoFilesToPointAt,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::OnlyTextCardsConvert,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::NoConnections,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::PickOutsideMovingSet,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::PickDifferentTarget,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::NoChanges,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::NotReadable,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::Empty,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::EndOfCanvas,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::StartOfCanvas,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::AtCanvasLevel,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::NoCardsMatchFilter,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::NothingToUndo,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::NothingToRedo,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::GroupIsEmpty { label: "Q3".into() },
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::NoOutgoingPath {
+                title: "Research".into(),
+            },
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::NotInAGroup {
+                title: "Research".into(),
+            },
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::NoConnection {
+                forward: true,
+                ordinal: None,
+            },
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::NoConnection {
+                forward: true,
+                ordinal: Some(2),
+            },
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::NoConnection {
+                forward: false,
+                ordinal: None,
+            },
+        },
+        CanvasBlocked {
+            reason: CanvasBlockedReason::ModeBusy,
+        },
+        CanvasBlocked {
+            reason: CanvasBlockedReason::UndoBlocked,
+        },
+        CanvasBlocked {
+            reason: CanvasBlockedReason::RedoBlocked,
+        },
+        CanvasBlocked {
+            reason: CanvasBlockedReason::LinkOpenFailed,
+        },
+        CanvasBlocked {
+            reason: CanvasBlockedReason::AlignWouldOverlap,
+        },
+        CanvasBlocked {
+            reason: CanvasBlockedReason::NotAUrl,
+        },
+        CanvasBlocked {
+            reason: CanvasBlockedReason::CardTextUnreadable,
+        },
+        CanvasBlocked {
+            reason: CanvasBlockedReason::NotePathMustEndInMd,
+        },
+        CanvasBlocked {
+            reason: CanvasBlockedReason::NoFreeSpaceInGroup { label: "Q3".into() },
+        },
+        CanvasBlocked {
+            reason: CanvasBlockedReason::NotePathExists {
+                path: "notes/research.md".into(),
+                on_disk: false,
+            },
+        },
+        CanvasBlocked {
+            reason: CanvasBlockedReason::NotePathExists {
+                path: "notes/research.md".into(),
+                on_disk: true,
+            },
+        },
+        CanvasBlocked {
+            reason: CanvasBlockedReason::NoteReadFailed {
+                message: "The card text is unavailable.".into(),
+            },
+        },
+        CanvasBlocked {
+            reason: CanvasBlockedReason::NoteCreateFailed {
+                path: "notes/research.md".into(),
+                message: "io error".into(),
+            },
+        },
+        CanvasBlocked {
+            reason: CanvasBlockedReason::NoteRetargetFailed {
+                path: "notes/research.md".into(),
+                message: "io error".into(),
+            },
+        },
+        CanvasBlocked {
+            reason: CanvasBlockedReason::HeadingNotFound {
+                heading: "Roadmap".into(),
+                filename: "notes.md".into(),
+            },
+        },
+        CanvasBlocked {
+            reason: CanvasBlockedReason::ReopenFailed {
+                message: "The file moved.".into(),
+            },
+        },
+        CanvasActionFailed {
+            action: CanvasFailedAction::NewCard,
+            detail: "the file is read-only".into(),
+        },
+        CanvasActionFailed {
+            action: CanvasFailedAction::NewGroup,
+            detail: "the file is read-only".into(),
+        },
+        CanvasActionFailed {
+            action: CanvasFailedAction::NewCanvas,
+            detail: "the file is read-only".into(),
+        },
+        CanvasActionFailed {
+            action: CanvasFailedAction::MoveIntoGroup,
+            detail: "the file is read-only".into(),
+        },
+        CanvasActionFailed {
+            action: CanvasFailedAction::Placement,
+            detail: "the file is read-only".into(),
+        },
+        CanvasActionFailed {
+            action: CanvasFailedAction::Align,
+            detail: "the file is read-only".into(),
+        },
+        CanvasActionFailed {
+            action: CanvasFailedAction::Create,
+            detail: "the file is read-only".into(),
+        },
+        CanvasActionFailed {
+            action: CanvasFailedAction::RemoveFromGroup,
+            detail: "the file is read-only".into(),
+        },
+        CanvasActionFailed {
+            action: CanvasFailedAction::Duplicate,
+            detail: "the file is read-only".into(),
+        },
+        CanvasActionFailed {
+            action: CanvasFailedAction::CreateConnectedCard,
+            detail: "the file is read-only".into(),
+        },
+        CanvasActionFailed {
+            action: CanvasFailedAction::CanvasAction,
+            detail: "the file is read-only".into(),
+        },
+        CanvasActionFailed {
+            action: CanvasFailedAction::WhereAmI,
+            detail: "the file is read-only".into(),
+        },
+        CanvasSaveConflict,
+        CanvasFileNotFound {
+            target: "media/diagram.png".into(),
+        },
+        CanvasOpened {
+            title: "Notes.md".into(),
+            target: CanvasOpenTarget::DefaultApp,
+        },
+        CanvasOpened {
+            title: "example.com".into(),
+            target: CanvasOpenTarget::Browser,
+        },
+        CanvasMutationRefused {
+            reason: CanvasMutationRefusal::Opening,
+        },
+        CanvasMutationRefused {
+            reason: CanvasMutationRefusal::Reopening,
+        },
+        CanvasMutationRefused {
+            reason: CanvasMutationRefusal::RetargetFailed,
+        },
+        CanvasMutationRefused {
+            reason: CanvasMutationRefusal::Unavailable,
+        },
+        CanvasMutationRefused {
+            reason: CanvasMutationRefusal::ReadOnly,
+        },
+        CanvasMutationRefused {
+            reason: CanvasMutationRefusal::CardEditorUnavailable,
+        },
+        CanvasLoadedDegraded { skipped: 3 },
+        CanvasLoadedDegraded { skipped: 1 },
+        CanvasEmptyOnboarding {
+            new_card_chord: "Option Command N".into(),
+            palette_chord: "Command Shift P".into(),
+        },
+        CanvasWhereAmI {
+            kind_label: "text".into(),
+            title: "Research".into(),
+            group_path: vec!["Quarter".into(), "Q3".into()],
+            ordinal_n: 2,
+            total_m: 5,
+            connection_count: 3,
+            in_count: 1,
+            out_count: 2,
+            color_name: Some("red".into()),
+            marked: true,
+            mode: Some(CanvasMode::Move),
+            filter: CanvasFilterState::Active {
+                matched: 3,
+                total: 40,
+            },
+        },
+        CanvasWhereAmI {
+            kind_label: "text".into(),
+            title: "Loose".into(),
+            group_path: Vec::new(),
+            ordinal_n: 1,
+            total_m: 1,
+            connection_count: 1,
+            in_count: 1,
+            out_count: 0,
+            color_name: None,
+            marked: false,
+            mode: None,
+            filter: CanvasFilterState::Inactive,
+        },
+        // --- Cardinality boundary witnesses (contract 0a-14) ---
+        // Every arm above that interpolates a count or a collection
+        // length is sampled at its PLURAL value; these sample the
+        // singular and the empty collection, so an arm that hardcodes
+        // "cards" fails the golden instead of shipping "1 cards". They
+        // are appended rather than filed beside their siblings so no
+        // pre-existing corpus index moves (contract 0a-2), and grouped
+        // so the reason they exist is legible in one block.
+        CanvasTracePathEnd {
+            titles: vec!["Research".into()],
+        },
+        CanvasTracePathEnd { titles: Vec::new() },
+        CanvasBulkMoved {
+            count: 1,
+            relative: RelativeDesc::Below("Research".into()),
+        },
+        CanvasBulkDuplicated { count: 1 },
+        CanvasModeEntered {
+            mode: CanvasMode::Move,
+            object: CanvasModeObject::Cards { count: 1 },
+        },
+        CanvasModeCommitted {
+            verb: CanvasTransientVerb::Move,
+            object: CanvasModeObject::Cards { count: 1 },
+        },
+        // These two already rendered correctly (they route through
+        // `counted`); the witnesses exist so the claim "every
+        // count-speaking arm has a count-one witness" is TRUE rather
+        // than nearly true, and so a later edit cannot regress them
+        // unseen.
+        CanvasGrouped {
+            count: 1,
+            label: "Q3".into(),
+        },
+        CanvasMarksCleared { count: 1 },
+        // Zero witnesses, for the arms whose zero the HOST can reach
+        // (the reachability claim, with its reason per arm, is in
+        // `canvas_count_speaking_arms_have_boundary_witnesses_and_agreement`'s
+        // `ZERO_REACHABLE`). The bulk verbs are absent because their
+        // call sites announce a precondition instead of counting to
+        // zero.
+        CanvasMovedTo {
+            verbosity: CanvasVerbosity::Verbose,
+            kind_label: "text".into(),
+            title: "Loose".into(),
+            ordinal_n: 1,
+            total_m: 1,
+            container: None,
+            connection_count: 0,
+            color_name: None,
+            marked: false,
+        },
+        CanvasMarkToggled {
+            marked: false,
+            title: "Research".into(),
+            count: 0,
+        },
+        CanvasBulkDuplicated { count: 0 },
+        CanvasFilterCount { matched: 0 },
+        CanvasFilterCleared { total: 0 },
+        CanvasWhereAmI {
+            kind_label: "text".into(),
+            title: "Loose".into(),
+            group_path: Vec::new(),
+            ordinal_n: 1,
+            total_m: 1,
+            connection_count: 0,
+            in_count: 0,
+            out_count: 0,
+            color_name: None,
+            marked: false,
+            mode: None,
+            filter: CanvasFilterState::Inactive,
+        },
     ]
 }
 
@@ -2499,6 +4716,308 @@ mod tests {
             (Medium, "Template picker opened. 7 templates available."),
             (High, "Created Meeting 2026-08-20.md from Meeting."),
             (High, "Composed by a host engine."),
+            // --- Canvas (W6-1 0a, #745) ---
+            (Medium, "Research"),
+            (Medium, "Text card \"Research\", 2 of 5 in Q3"),
+            (
+                Medium,
+                "Text card \"Research\", 2 of 5 in Q3, 3 connections, red, marked",
+            ),
+            (Medium, "Group \"Q3\", 1 of 3 in canvas"),
+            (
+                Medium,
+                "File card \"Notes.md\", 1 of 1 in canvas, 1 connection",
+            ),
+            (Medium, "Entering group \"Q3\", 4 cards"),
+            (Medium, "Entering group \"Solo\", 1 card"),
+            (Medium, "Leaving group \"Q3\""),
+            (
+                Medium,
+                "Connects to Text card \"Ideas\", labelled \"supports\"",
+            ),
+            (Medium, "Connected from Text card \"Research\""),
+            (Medium, "Linked with Group \"Q3\""),
+            (Medium, "Linked with Link card \"example.com\""),
+            (
+                Medium,
+                "Path: Research, then Ideas, then Draft. End of path — 3 cards visited.",
+            ),
+            (Medium, "Alone on the canvas"),
+            (Medium, "Below \"Research\""),
+            (
+                Medium,
+                "Below \"Research\", right of \"Ideas\". Overlapping another card",
+            ),
+            (Medium, "Above \"Ideas\". Clear of overlaps"),
+            (Medium, "320 by 200"),
+            (Medium, "Resized to default size: 260 by 140"),
+            (
+                Medium,
+                "Resized to fit to content: 260 by 88. Overlapping another card",
+            ),
+            (Medium, "Minimum size."),
+            (
+                Medium,
+                "Move mode — \"Research\". Arrows to move, Shift for big steps, Return to place, Escape to cancel.",
+            ),
+            (
+                Medium,
+                "Move mode — 3 cards. Arrows to move, Shift for big steps, Return to place, Escape to cancel.",
+            ),
+            (
+                Medium,
+                "Resize mode — \"Research\". Left and Right arrows change width, Up and Down change height, Return to apply, Escape to cancel.",
+            ),
+            (
+                Medium,
+                "Connect mode — \"Research\". Navigate to the target with the usual movements, Return to connect, Escape to cancel.",
+            ),
+            (
+                High,
+                "Move mode is active. Return to commit or Escape to cancel first.",
+            ),
+            (Medium, "Placed \"Research\"."),
+            (Medium, "Placed 3 cards."),
+            (Medium, "Resized \"Research\"."),
+            (Medium, "Move ended — nothing changed."),
+            (Medium, "Resize ended — nothing changed."),
+            (Medium, "Connect ended — no target chosen."),
+            (Medium, "Move cancelled."),
+            (Medium, "Move cancelled — card returned."),
+            (Medium, "Move cancelled — cards returned."),
+            (Medium, "Resize cancelled."),
+            (Medium, "Resize cancelled — size restored."),
+            (Medium, "Connect cancelled."),
+            (Medium, "Connect cancelled — back at \"Research\"."),
+            (Medium, "Created text card \"New idea\" below \"Research\""),
+            (Medium, "Created group \"Q3\" right of \"Research\""),
+            (Medium, "Created file card \"Notes.md\" above \"Research\""),
+            (
+                Medium,
+                "Created link card \"example.com\" left of \"Research\"",
+            ),
+            (
+                Medium,
+                "Created text card \"Untitled\" at the canvas origin",
+            ),
+            (Medium, "Created canvas \"Roadmap\"."),
+            (
+                Medium,
+                "Created connected card below \"Research\" — connected from \"Research\".",
+            ),
+            (
+                Medium,
+                "Connected \"Research\" to \"Ideas\", labelled \"supports\".",
+            ),
+            (Medium, "Connected \"Research\" to \"Ideas\"."),
+            (Medium, "Connection updated, labelled \"supports\"."),
+            (Medium, "Connection updated."),
+            (Medium, "Moved into group \"Q3\"."),
+            (Medium, "Removed from group \"Q3\"."),
+            (Medium, "Set \"Research\" to red."),
+            (Medium, "Set \"Research\" to no color."),
+            (Medium, "Renamed group to \"Q3\"."),
+            (Medium, "Updated \"Research\"."),
+            (Medium, "\"Research\" now points at notes/research.md."),
+            (Medium, "Moved \"Research\" below \"Ideas\"."),
+            (Medium, "Duplicated \"Research\" right of \"Research\"."),
+            (Medium, "Aligned \"Research\" with \"Ideas\"."),
+            (
+                Medium,
+                "Converted to note notes/research.md. The card now points at it.",
+            ),
+            (Medium, "Deleted Text card \"Research\" — ⌘Z to undo"),
+            (Medium, "Deleted Text card \"Research\""),
+            (Medium, "Ungrouped Group \"Q3\" — cards kept — ⌘Z to undo"),
+            (Medium, "Deleted 3 cards — Ctrl+Z to undo"),
+            (Medium, "Deleted 1 card — ⌘Z to undo"),
+            (
+                Medium,
+                "Deleted connection to \"Ideas\", labelled \"supports\" — ⌘Z to undo",
+            ),
+            (Medium, "Deleted connection from \"Research\""),
+            (Medium, "Deleted connection with \"Q3\" — ⌘Z to undo"),
+            (Medium, "Moved 3 cards below \"Research\"."),
+            (Medium, "Set 3 cards to cyan."),
+            (Medium, "Set 1 card to no color."),
+            (Medium, "Grouped 3 cards into \"Q3\"."),
+            (Medium, "Duplicated 2 cards — one undo restores."),
+            (Medium, "Marked \"Research\". 2 marked."),
+            (Medium, "Unmarked \"Research\". 1 marked."),
+            (Medium, "No marks."),
+            (Medium, "Cleared 3 marks."),
+            (Medium, "3 cards match."),
+            (Medium, "1 card match."),
+            (Medium, "Filter cleared — 40 cards."),
+            (Medium, "Filter cleared — 1 card."),
+            (Medium, "Zoom 100 percent."),
+            (Medium, "Fit canvas. Zoom 80 percent."),
+            (Medium, "Zoomed to selection. Zoom 150 percent."),
+            (Medium, "Viewport follows selection."),
+            (Medium, "Viewport stays put."),
+            (Medium, "Canvas outline view."),
+            (Medium, "Canvas table view."),
+            (Medium, "Canvas visual view."),
+            (Medium, "Undid: move \"Research\""),
+            (Medium, "Redid: move \"Research\""),
+            (Medium, "Undo Delete \"My Card\""),
+            (Medium, "Redo"),
+            (Medium, "Nothing selected."),
+            (Medium, "No marks."),
+            (Medium, "Not a group."),
+            (Medium, "Not a text card."),
+            (Medium, "Not a file card."),
+            (Medium, "This canvas has no groups."),
+            (Medium, "This vault has no notes yet."),
+            (Medium, "This vault has no media files."),
+            (Medium, "This vault has no files to point at."),
+            (Medium, "Only text cards convert to notes."),
+            (Medium, "The selected card has no connections."),
+            (Medium, "Pick a card outside the moving set."),
+            (Medium, "Pick a different card to connect to."),
+            (Medium, "No changes."),
+            (Medium, "Canvas is not readable."),
+            (Medium, "Canvas is empty."),
+            (Medium, "End of canvas."),
+            (Medium, "Start of canvas."),
+            (Medium, "At canvas level."),
+            (Medium, "No cards match the filter."),
+            (Medium, "Nothing to undo."),
+            (Medium, "Nothing to redo."),
+            (Medium, "Group \"Q3\" is empty."),
+            (Medium, "No outgoing path from \"Research\"."),
+            (Medium, "\"Research\" is not in a group."),
+            (Medium, "No outgoing connection."),
+            (Medium, "No outgoing connection 2."),
+            (Medium, "No incoming connection."),
+            (
+                High,
+                "A move or resize is in progress. Return to place it or Escape to cancel first.",
+            ),
+            (
+                High,
+                "Undo blocked: the canvas changed on disk. Reload it and try again.",
+            ),
+            (
+                High,
+                "Redo blocked: the canvas changed on disk. Reload it and try again.",
+            ),
+            (High, "The link could not be opened."),
+            (High, "Aligning would overlap another card — not moved."),
+            (High, "That doesn't look like a URL."),
+            (High, "The card's text could not be read."),
+            (High, "The note path must end in .md."),
+            (High, "No free space inside \"Q3\"."),
+            (High, "notes/research.md already exists. Pick another name."),
+            (
+                High,
+                "notes/research.md already exists on disk. Pick another name.",
+            ),
+            (
+                High,
+                "Could not read the card text: The card text is unavailable.",
+            ),
+            (High, "Could not create notes/research.md: io error"),
+            (
+                High,
+                "Created notes/research.md, but could not retarget the card: io error",
+            ),
+            (High, "Heading Roadmap was not found in notes.md."),
+            (
+                High,
+                "Canvas could not be reopened. The previous snapshot is read-only. The file moved.",
+            ),
+            (High, "New card failed: the file is read-only"),
+            (High, "New group failed: the file is read-only"),
+            (High, "New canvas failed: the file is read-only"),
+            (High, "Move failed: the file is read-only"),
+            (High, "Placement failed: the file is read-only"),
+            (High, "Align failed: the file is read-only"),
+            (High, "Create failed: the file is read-only"),
+            (High, "Remove failed: the file is read-only"),
+            (High, "Duplicate failed: the file is read-only"),
+            (High, "Create connected card failed: the file is read-only"),
+            (High, "Canvas action failed: the file is read-only"),
+            (High, "Where am I failed: the file is read-only"),
+            (
+                High,
+                "The canvas changed on disk. Reload it to continue — your action was not applied.",
+            ),
+            (
+                High,
+                "media/diagram.png is missing from the vault. Use Locate File to repoint this card.",
+            ),
+            (Medium, "Opened Notes.md in its default app."),
+            (Medium, "Opened example.com in your browser."),
+            (
+                Medium,
+                "This canvas is still opening. Wait for it to finish before making changes.",
+            ),
+            (
+                Medium,
+                "This canvas is reopening. Wait for it to finish before making changes.",
+            ),
+            (
+                Medium,
+                "This canvas could not be reopened. Choose Retry before making changes.",
+            ),
+            (
+                Medium,
+                "This canvas is no longer available. Copy any draft before closing.",
+            ),
+            (
+                Medium,
+                "This canvas is read-only because it could not be opened safely.",
+            ),
+            (
+                Medium,
+                "This canvas is no longer available. Copy your draft before closing the editor.",
+            ),
+            (
+                Medium,
+                "Canvas loaded. 3 unsupported items are preserved in the file but not shown.",
+            ),
+            (
+                Medium,
+                "Canvas loaded. 1 unsupported item are preserved in the file but not shown.",
+            ),
+            (
+                Medium,
+                "Canvas is empty. Press Option Command N to create your first card. Every other canvas action is in the Command Palette, Command Shift P.",
+            ),
+            (
+                Medium,
+                "Text card \"Research\", in Quarter › Q3, 2 of 5, 3 connections (1 in, 2 out), red, marked, Move mode, 3 of 40 shown",
+            ),
+            (
+                Medium,
+                "Text card \"Loose\", at canvas level, 1 of 1, 1 connection (1 in, 0 out)",
+            ),
+            // --- Cardinality boundary witnesses (contract 0a-14) ---
+            (Medium, "Path: Research. End of path — 1 card visited."),
+            (Medium, "End of path — 0 cards visited."),
+            (Medium, "Moved 1 card below \"Research\"."),
+            (Medium, "Duplicated 1 card — one undo restores."),
+            (
+                Medium,
+                "Move mode — 1 card. Arrows to move, Shift for big steps, Return to place, Escape to cancel.",
+            ),
+            (Medium, "Placed 1 card."),
+            (Medium, "Grouped 1 card into \"Q3\"."),
+            (Medium, "Cleared 1 mark."),
+            // Zero witnesses (host-reachable zeros only).
+            (
+                Medium,
+                "Text card \"Loose\", 1 of 1 in canvas, 0 connections",
+            ),
+            (Medium, "Unmarked \"Research\". 0 marked."),
+            (Medium, "Duplicated 0 cards — one undo restores."),
+            (Medium, "0 cards match."),
+            (Medium, "Filter cleared — 0 cards."),
+            (
+                Medium,
+                "Text card \"Loose\", at canvas level, 1 of 1, 0 connections (0 in, 0 out)",
+            ),
         ];
 
         let corpus = corpus();
@@ -2569,6 +5088,1142 @@ mod tests {
             expected,
             "corpus artifact drifted from the vocabulary — regenerate \
              deliberately and review the diff as a §W-D change",
+        );
+    }
+
+    /// The Debug head of an event — its variant name.
+    fn variant_of(event: &A11yEvent) -> String {
+        format!("{event:?}")
+            .chars()
+            .take_while(char::is_ascii_alphanumeric)
+            .collect()
+    }
+
+    /// The INNER variant name of a canvas event, or `None` for
+    /// everything else. The family nests under one top-level variant
+    /// (`Canvas { event: … }`), so the head alone says "canvas" and
+    /// nothing more.
+    fn canvas_variant_of(event: &A11yEvent) -> Option<String> {
+        let debug = format!("{event:?}");
+        let at = debug.strip_prefix("Canvas { event: ")?;
+        Some(at.chars().take_while(char::is_ascii_alphanumeric).collect())
+    }
+
+    /// The variant names declared by an enum in this file. The corpus
+    /// is positional and hand-maintained, so "I added the variant and
+    /// forgot the corpus entry" is the mistake that actually happens —
+    /// and it is invisible until a host names the case. Same parser
+    /// shape as slate-uniffi's mirror tripwire.
+    fn declared_variants(enum_name: &str) -> std::collections::BTreeSet<String> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/a11y.rs");
+        let source = std::fs::read_to_string(&path).expect("a11y source");
+        let needle = format!("pub enum {enum_name} {{");
+        let decl = source
+            .find(&needle)
+            .unwrap_or_else(|| panic!("{enum_name} declaration"));
+        let open = decl + source[decl..].find('{').expect("opening brace");
+        let mut depth = 0usize;
+        let mut end = source.len();
+        for (offset, ch) in source[open..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = open + offset;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut names = std::collections::BTreeSet::new();
+        let mut depth = 0usize;
+        for line in source[open + 1..end].lines() {
+            let trimmed = line.trim();
+            if depth == 0 && !trimmed.starts_with("//") && !trimmed.starts_with('#') {
+                // The leading identifier of a variant line. Taking the
+                // HEAD rather than the whole trimmed line is what makes
+                // the single-line payload form (`Card { title: String },`
+                // — how the small parameter enums are written) parse the
+                // same as the multi-line one.
+                let name: String = trimmed
+                    .chars()
+                    .take_while(char::is_ascii_alphanumeric)
+                    .collect();
+                let tail = trimmed[name.len()..].trim_start();
+                let delimited = tail.is_empty()
+                    || tail.starts_with(',')
+                    || tail.starts_with('{')
+                    || tail.starts_with('(');
+                if !name.is_empty()
+                    && name.starts_with(|c: char| c.is_ascii_uppercase())
+                    && delimited
+                {
+                    names.insert(name);
+                }
+            }
+            depth += trimmed.matches('{').count();
+            depth -= trimmed.matches('}').count().min(depth);
+        }
+        names
+    }
+
+    /// The nested-enum arm a corpus entry selected, read out of its
+    /// Debug string (`… CanvasStatus { note: NotAGroup }` → `NotAGroup`).
+    /// `Option`-carried parameters unwrap through `Some(`; a `None`
+    /// contributes nothing, because "absent" is not an arm.
+    ///
+    /// Scoped by (variant, field) rather than by field alone: three
+    /// different enums ride a field called `verb`, two ride `reason`,
+    /// and two ride `target`, so field-only scoping would let one
+    /// enum's coverage vouch for another's.
+    fn nested_arms(sites: &[(&str, &str)]) -> std::collections::BTreeSet<String> {
+        let mut arms = std::collections::BTreeSet::new();
+        for (variant, field) in sites {
+            let prefix = format!("{field}: ");
+            for event in corpus()
+                .iter()
+                .filter(|event| canvas_variant_of(event).as_deref() == Some(*variant))
+            {
+                let debug = format!("{event:?}");
+                let Some(at) = debug.find(&prefix) else {
+                    continue;
+                };
+                let rest = &debug[at + prefix.len()..];
+                let rest = rest.strip_prefix("Some(").unwrap_or(rest);
+                let arm: String = rest
+                    .chars()
+                    .take_while(char::is_ascii_alphanumeric)
+                    .collect();
+                if !arm.is_empty() && arm != "None" {
+                    arms.insert(arm);
+                }
+            }
+        }
+        arms
+    }
+
+    /// Every closed nested enum the canvas family carries as a
+    /// parameter, with the (variant, field) sites it is reached
+    /// through. Eighteen of them — the whole set, not a sample: an arm
+    /// added to ANY of these without a corpus entry ships a string no
+    /// golden, no artifact entry and no host census covers.
+    const CANVAS_NESTED_ENUMS: &[(&str, &[(&str, &str)])] = &[
+        (
+            "CanvasVerbosity",
+            &[
+                ("CanvasMovedTo", "verbosity"),
+                ("CanvasDeleted", "verbosity"),
+            ],
+        ),
+        (
+            "CanvasOverlapTransition",
+            &[
+                ("CanvasMoveRelative", "overlap"),
+                ("CanvasResizeGeometry", "overlap"),
+            ],
+        ),
+        (
+            "CanvasMode",
+            &[
+                ("CanvasModeEntered", "mode"),
+                ("CanvasModeRejected", "active_mode"),
+                ("CanvasModeEndedWithoutEffect", "mode"),
+                ("CanvasModeCancelled", "mode"),
+                ("CanvasWhereAmI", "mode"),
+            ],
+        ),
+        (
+            "CanvasModeObject",
+            &[
+                ("CanvasModeEntered", "object"),
+                ("CanvasModeCommitted", "object"),
+            ],
+        ),
+        ("CanvasTransientVerb", &[("CanvasModeCommitted", "verb")]),
+        (
+            "CanvasModeRestoration",
+            &[("CanvasModeCancelled", "restoration")],
+        ),
+        ("CanvasPlaceVerb", &[("CanvasCardPlaced", "verb")]),
+        ("CanvasOpenTarget", &[("CanvasOpened", "target")]),
+        ("CanvasResizePreset", &[("CanvasResizeGeometry", "preset")]),
+        ("CanvasSurfaceKind", &[("CanvasSurfaceShown", "surface")]),
+        ("CanvasZoomContext", &[("CanvasZoom", "context")]),
+        ("CanvasDeleteTarget", &[("CanvasDeleted", "target")]),
+        ("CanvasFailedAction", &[("CanvasActionFailed", "action")]),
+        (
+            "CanvasMutationRefusal",
+            &[("CanvasMutationRefused", "reason")],
+        ),
+        (
+            "CanvasHistoryVerb",
+            &[
+                ("CanvasHistoryApplied", "verb"),
+                ("CanvasUndoMenuTitle", "verb"),
+            ],
+        ),
+        ("CanvasStatusNote", &[("CanvasStatus", "note")]),
+        ("CanvasBlockedReason", &[("CanvasBlocked", "reason")]),
+        ("CanvasFilterState", &[("CanvasWhereAmI", "filter")]),
+    ];
+
+    /// Five-place rule, first place: a canvas variant — or a closed-set
+    /// ARM of one — that never reaches [`corpus()`] is pinned by
+    /// nothing: not the golden above, not the committed artifact, and
+    /// not either host census.
+    #[test]
+    fn every_canvas_variant_and_arm_is_represented_in_the_corpus() {
+        let declared = declared_variants("CanvasA11yEvent");
+        assert!(
+            declared.len() > 40,
+            "parsed only {} canvas variants — the parser broke, not the vocabulary",
+            declared.len()
+        );
+        let represented: std::collections::BTreeSet<String> =
+            corpus().iter().filter_map(canvas_variant_of).collect();
+        let missing: Vec<&String> = declared.difference(&represented).collect();
+        assert!(
+            missing.is_empty(),
+            "these canvas variants never appear in corpus(), so no golden, no \
+             artifact entry, and neither host census covers them: {missing:?}"
+        );
+
+        for (enum_name, sites) in CANVAS_NESTED_ENUMS {
+            let declared = declared_variants(enum_name);
+            assert!(
+                !declared.is_empty(),
+                "parsed no arms of {enum_name} — the parser broke, not the vocabulary"
+            );
+            let covered = nested_arms(sites);
+            let missing: Vec<&String> = declared.difference(&covered).collect();
+            assert!(
+                missing.is_empty(),
+                "{enum_name} arms with no corpus entry, so their shipped string is \
+                 pinned nowhere: {missing:?}"
+            );
+        }
+    }
+
+    /// The nested-enum table above must not silently fall behind the
+    /// module: every closed `Canvas*` parameter enum declared here is
+    /// listed, so adding one without a coverage site fails HERE rather
+    /// than leaving its arms unpinned forever.
+    #[test]
+    fn every_canvas_parameter_enum_is_listed_for_coverage() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/a11y.rs");
+        let source = std::fs::read_to_string(&path).expect("a11y source");
+        let declared: std::collections::BTreeSet<String> = source
+            .lines()
+            .filter_map(|line| line.strip_prefix("pub enum "))
+            .filter_map(|rest| rest.split_whitespace().next())
+            .filter(|name| name.starts_with("Canvas"))
+            // The family enum itself is not a parameter of the family.
+            .filter(|name| *name != "CanvasA11yEvent")
+            .map(str::to_owned)
+            .collect();
+        let listed: std::collections::BTreeSet<String> = CANVAS_NESTED_ENUMS
+            .iter()
+            .map(|(name, _)| (*name).to_owned())
+            .collect();
+        assert_eq!(
+            declared, listed,
+            "CANVAS_NESTED_ENUMS is out of step with the declared canvas \
+             parameter enums"
+        );
+        assert_eq!(listed.len(), 18, "the canvas family carries 18 closed sets");
+    }
+
+    /// What a canvas event says about CARDINALITY, if anything.
+    ///
+    /// Exhaustive at EVERY level. The outer variant is matched arm by
+    /// arm, and so is every one of the eighteen closed parameter sets
+    /// the family carries. The compiler therefore refuses this function
+    /// the moment a variant, or an arm of any nested set, is added;
+    /// nothing joins the family without its author declaring whether it
+    /// speaks a count. That is the property three rounds of
+    /// hand-maintained, hand-counted prose could not hold (contract
+    /// 0a-14; round record, rule 4).
+    ///
+    /// The precise rule for `..`: it elides only fields whose types
+    /// **cannot gain variants** — `String`, `u32`, `bool`,
+    /// `Vec<String>`, and `Option` of those, whose two arms are fixed
+    /// by the language. **Every parameter type that CAN gain variants
+    /// is explicitly matched, with no exception** — this module's
+    /// eighteen closed sets, and the three `core::canvas` sets the
+    /// vocabulary reuses (`RelativeDesc`, `EdgeDirection`,
+    /// `CanvasColor`), which cannot carry a count either but are
+    /// matched through the helpers below rather than trusted.
+    ///
+    /// "Speaks" means THIS value renders the count, not that the
+    /// variant sometimes can. `CanvasMovedTo` is the only arm whose
+    /// count is conditional on another field — the connection clause
+    /// rides at `Verbose` only — so a terse or standard moved-to speaks
+    /// no count and cannot serve as its witness. (Swept: every other
+    /// count reaches its template unconditionally. `CanvasMarksCleared`
+    /// swaps template at zero, but zero is a count it does speak.)
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum SpokenCardinality {
+        /// A `u32` count reaches the template.
+        Count(u32),
+        /// A collection LENGTH reaches the template, so the arm has an
+        /// empty case as well as a singular one.
+        Length(usize),
+    }
+
+    /// The three `core::canvas` sets this vocabulary reuses. They name
+    /// anchors, directions and colours, so none of them can carry a
+    /// count — but each CAN gain a variant, so they are MATCHED rather
+    /// than elided, and an arm added to any of them fails to compile
+    /// here. That is what lets the record say every variant-bearing
+    /// parameter type is matched, with no exception to remember.
+    fn relative_speaks_no_count(relative: &RelativeDesc) {
+        match relative {
+            RelativeDesc::Below(_)
+            | RelativeDesc::RightOf(_)
+            | RelativeDesc::Above(_)
+            | RelativeDesc::LeftOf(_)
+            | RelativeDesc::AtOrigin => {}
+        }
+    }
+
+    fn direction_speaks_no_count(direction: &EdgeDirection) {
+        match direction {
+            EdgeDirection::Outgoing
+            | EdgeDirection::Incoming
+            | EdgeDirection::Bidirectional
+            | EdgeDirection::Undirected => {}
+        }
+    }
+
+    fn color_speaks_no_count(color: &Option<CanvasColor>) {
+        match color {
+            Some(CanvasColor::Preset(_)) | Some(CanvasColor::Hex(_)) | None => {}
+        }
+    }
+
+    fn spoken_cardinality(event: &CanvasA11yEvent) -> Option<SpokenCardinality> {
+        use CanvasA11yEvent::*;
+        use SpokenCardinality::{Count, Length};
+        match event {
+            // --- speaks a count ---------------------------------------
+            CanvasMovedTo {
+                verbosity,
+                connection_count,
+                ..
+            } => match verbosity {
+                CanvasVerbosity::Verbose => Some(Count(*connection_count)),
+                // The connection clause is not rendered at all here, so
+                // this value speaks no count.
+                CanvasVerbosity::Terse | CanvasVerbosity::Standard => None,
+            },
+            CanvasWhereAmI {
+                connection_count,
+                mode,
+                filter,
+                ..
+            } => {
+                // `mode`/`filter` speak no count, but they are closed
+                // sets and so are matched rather than elided.
+                match mode {
+                    Some(CanvasMode::Move | CanvasMode::Resize | CanvasMode::Connect) | None => {}
+                }
+                match filter {
+                    CanvasFilterState::Inactive | CanvasFilterState::Active { .. } => {}
+                }
+                Some(Count(*connection_count))
+            }
+            CanvasGroupEntered { count, .. } => Some(Count(*count)),
+            CanvasTracePathEnd { titles } => Some(Length(titles.len())),
+            // The mode object is a shared clause, so BOTH arms speak
+            // its count and both need their own witness — the corpus is
+            // per event, not per clause.
+            CanvasModeEntered { mode, object } => {
+                match mode {
+                    CanvasMode::Move | CanvasMode::Resize | CanvasMode::Connect => {}
+                }
+                match object {
+                    CanvasModeObject::Cards { count } => Some(Count(*count)),
+                    CanvasModeObject::Card { .. } => None,
+                }
+            }
+            CanvasModeCommitted { verb, object } => {
+                match verb {
+                    CanvasTransientVerb::Move | CanvasTransientVerb::Resize => {}
+                }
+                match object {
+                    CanvasModeObject::Cards { count } => Some(Count(*count)),
+                    CanvasModeObject::Card { .. } => None,
+                }
+            }
+            CanvasModeCancelled { mode, restoration } => {
+                match mode {
+                    CanvasMode::Move | CanvasMode::Resize | CanvasMode::Connect => {}
+                }
+                match restoration {
+                    // The count is not interpolated here — only the noun
+                    // agrees with it ("card returned" / "cards
+                    // returned") — which is exactly the disagreement
+                    // this test hunts.
+                    CanvasModeRestoration::CardsReturned { count } => Some(Count(*count)),
+                    CanvasModeRestoration::Unstated
+                    | CanvasModeRestoration::SizeRestored
+                    | CanvasModeRestoration::BackAt { .. } => None,
+                }
+            }
+            CanvasDeleted {
+                target, verbosity, ..
+            } => {
+                match verbosity {
+                    CanvasVerbosity::Terse
+                    | CanvasVerbosity::Standard
+                    | CanvasVerbosity::Verbose => {}
+                }
+                match target {
+                    CanvasDeleteTarget::Cards { count } => Some(Count(*count)),
+                    CanvasDeleteTarget::Connection { direction, .. } => {
+                        direction_speaks_no_count(direction);
+                        None
+                    }
+                    CanvasDeleteTarget::Card { .. } | CanvasDeleteTarget::Group { .. } => None,
+                }
+            }
+            CanvasBulkMoved { count, relative } => {
+                relative_speaks_no_count(relative);
+                Some(Count(*count))
+            }
+            CanvasBulkColorSet { count, color } => {
+                color_speaks_no_count(color);
+                Some(Count(*count))
+            }
+            CanvasGrouped { count, .. }
+            | CanvasBulkDuplicated { count }
+            | CanvasMarkToggled { count, .. }
+            | CanvasMarksCleared { count } => Some(Count(*count)),
+            CanvasFilterCount { matched } => Some(Count(*matched)),
+            CanvasFilterCleared { total } => Some(Count(*total)),
+            CanvasLoadedDegraded { skipped } => Some(Count(*skipped)),
+
+            // --- speaks no count --------------------------------------
+            // Each closed parameter set is still matched arm by arm, so
+            // a count added to any of them lands here as a compile
+            // error rather than as an unpinned string.
+            CanvasMoveRelative { descs, overlap } => {
+                // Carries a `Vec` but never says how long it is — it
+                // joins the descriptions — so this is a Length-free
+                // arm. Its elements are still matched.
+                descs.iter().for_each(relative_speaks_no_count);
+                match overlap {
+                    Some(CanvasOverlapTransition::Onset)
+                    | Some(CanvasOverlapTransition::Cleared)
+                    | None => None,
+                }
+            }
+            CanvasResizeGeometry {
+                preset, overlap, ..
+            } => {
+                match preset {
+                    Some(CanvasResizePreset::DefaultSize)
+                    | Some(CanvasResizePreset::FitToContent)
+                    | None => {}
+                }
+                match overlap {
+                    Some(CanvasOverlapTransition::Onset)
+                    | Some(CanvasOverlapTransition::Cleared)
+                    | None => None,
+                }
+            }
+            CanvasModeRejected { active_mode } => match active_mode {
+                CanvasMode::Move | CanvasMode::Resize | CanvasMode::Connect => None,
+            },
+            CanvasModeEndedWithoutEffect { mode } => match mode {
+                CanvasMode::Move | CanvasMode::Resize | CanvasMode::Connect => None,
+            },
+            CanvasCardPlaced { verb, relative, .. } => {
+                match verb {
+                    CanvasPlaceVerb::Moved | CanvasPlaceVerb::Duplicated => {}
+                }
+                relative_speaks_no_count(relative);
+                None
+            }
+            CanvasCreated { relative, .. } | CanvasConnectedCardCreated { relative, .. } => {
+                relative_speaks_no_count(relative);
+                None
+            }
+            CanvasConnectionTraversed { direction, .. } => {
+                direction_speaks_no_count(direction);
+                None
+            }
+            CanvasColorSet { color, .. } => {
+                color_speaks_no_count(color);
+                None
+            }
+            CanvasOpened { target, .. } => match target {
+                CanvasOpenTarget::DefaultApp | CanvasOpenTarget::Browser => None,
+            },
+            CanvasSurfaceShown { surface } => match surface {
+                CanvasSurfaceKind::Outline
+                | CanvasSurfaceKind::Table
+                | CanvasSurfaceKind::Visual => None,
+            },
+            CanvasZoom { context, .. } => match context {
+                Some(CanvasZoomContext::FitCanvas)
+                | Some(CanvasZoomContext::ZoomedToSelection)
+                | None => None,
+            },
+            CanvasHistoryApplied { verb, .. } | CanvasUndoMenuTitle { verb, .. } => match verb {
+                CanvasHistoryVerb::Undo | CanvasHistoryVerb::Redo => None,
+            },
+            CanvasStatus { note } => match note {
+                CanvasStatusNote::NothingSelected
+                | CanvasStatusNote::NoMarks
+                | CanvasStatusNote::NotAGroup
+                | CanvasStatusNote::NotATextCard
+                | CanvasStatusNote::NotAFileCard
+                | CanvasStatusNote::NoGroups
+                | CanvasStatusNote::NoNotesInVault
+                | CanvasStatusNote::NoMediaInVault
+                | CanvasStatusNote::NoFilesToPointAt
+                | CanvasStatusNote::OnlyTextCardsConvert
+                | CanvasStatusNote::NoConnections
+                | CanvasStatusNote::PickOutsideMovingSet
+                | CanvasStatusNote::PickDifferentTarget
+                | CanvasStatusNote::NoChanges
+                | CanvasStatusNote::NotReadable
+                | CanvasStatusNote::Empty
+                | CanvasStatusNote::EndOfCanvas
+                | CanvasStatusNote::StartOfCanvas
+                | CanvasStatusNote::AtCanvasLevel
+                | CanvasStatusNote::NoCardsMatchFilter
+                | CanvasStatusNote::NothingToUndo
+                | CanvasStatusNote::NothingToRedo
+                | CanvasStatusNote::GroupIsEmpty { .. }
+                | CanvasStatusNote::NoOutgoingPath { .. }
+                | CanvasStatusNote::NotInAGroup { .. }
+                | CanvasStatusNote::NoConnection { .. } => None,
+            },
+            CanvasBlocked { reason } => match reason {
+                CanvasBlockedReason::ModeBusy
+                | CanvasBlockedReason::UndoBlocked
+                | CanvasBlockedReason::RedoBlocked
+                | CanvasBlockedReason::LinkOpenFailed
+                | CanvasBlockedReason::AlignWouldOverlap
+                | CanvasBlockedReason::NotAUrl
+                | CanvasBlockedReason::CardTextUnreadable
+                | CanvasBlockedReason::NotePathMustEndInMd
+                | CanvasBlockedReason::NoFreeSpaceInGroup { .. }
+                | CanvasBlockedReason::NotePathExists { .. }
+                | CanvasBlockedReason::NoteReadFailed { .. }
+                | CanvasBlockedReason::NoteCreateFailed { .. }
+                | CanvasBlockedReason::NoteRetargetFailed { .. }
+                | CanvasBlockedReason::HeadingNotFound { .. }
+                | CanvasBlockedReason::ReopenFailed { .. } => None,
+            },
+            CanvasActionFailed { action, .. } => match action {
+                CanvasFailedAction::NewCard
+                | CanvasFailedAction::NewGroup
+                | CanvasFailedAction::NewCanvas
+                | CanvasFailedAction::MoveIntoGroup
+                | CanvasFailedAction::Placement
+                | CanvasFailedAction::Align
+                | CanvasFailedAction::Create
+                | CanvasFailedAction::RemoveFromGroup
+                | CanvasFailedAction::Duplicate
+                | CanvasFailedAction::CreateConnectedCard
+                | CanvasFailedAction::CanvasAction
+                | CanvasFailedAction::WhereAmI => None,
+            },
+            CanvasMutationRefused { reason } => match reason {
+                CanvasMutationRefusal::Opening
+                | CanvasMutationRefusal::Reopening
+                | CanvasMutationRefusal::RetargetFailed
+                | CanvasMutationRefusal::Unavailable
+                | CanvasMutationRefusal::ReadOnly
+                | CanvasMutationRefusal::CardEditorUnavailable => None,
+            },
+
+            // No closed parameter set at all — plain data only.
+            CanvasGroupLeft { .. }
+            | CanvasResizeClamped
+            | CanvasFileCreated { .. }
+            | CanvasConnected { .. }
+            | CanvasConnectionUpdated { .. }
+            | CanvasMovedIntoGroup { .. }
+            | CanvasRemovedFromGroup { .. }
+            | CanvasRenamedGroup { .. }
+            | CanvasCardUpdated { .. }
+            | CanvasCardRetargeted { .. }
+            | CanvasCardAligned { .. }
+            | CanvasConvertedToNote { .. }
+            | CanvasFollowSelectionToggled { .. }
+            | CanvasSaveConflict
+            | CanvasFileNotFound { .. }
+            | CanvasEmptyOnboarding { .. } => None,
+        }
+    }
+
+    /// Contract 0a-14, mechanically.
+    ///
+    /// Totality used to be pinned by a paragraph that counted arms and
+    /// witnesses by hand; three consecutive adversarial rounds found
+    /// three different miscounts in it (round record, rule 4), so the
+    /// invariant lives here and the paragraph points at this test.
+    ///
+    /// **(a)** the record — the count-speaking arms, derived from the
+    /// exhaustive classifier above and cross-checked against a written
+    /// list so the change is legible in a diff.
+    /// **(b)** each has a `corpus()` witness at exactly one; an arm
+    /// speaking a collection length also has an empty-collection one;
+    /// and an arm whose ZERO the host can reach has a zero witness
+    /// (that reachability is a claim about mac, so it is declared, not
+    /// derived — see `ZERO_REACHABLE`).
+    /// **(c)** those boundary renderings carry no plural form, except
+    /// the templates CR-3 pins, which are allow-listed as
+    /// (arm, string) PAIRS and proved to render from that arm and
+    /// nowhere else.
+    /// **(d)** a lexical source scan of the canvas render section: no
+    /// template may interpolate a count immediately before a hardcoded
+    /// plural noun, and no bare plural-noun literal may sit outside a
+    /// `plural` / `plural_len` / `counted` call.
+    ///
+    /// Between them these pin the BOUNDARY, not the whole domain:
+    /// agreement is checked at one (and at empty/zero where reachable),
+    /// and (d) routes count interpolations through the shared helpers
+    /// to the limit of line-scoped lexical verification. That is a
+    /// check, not a proof — (d) reads one logical line at a time and
+    /// its helper provenance is line-wide, so a line carrying a real
+    /// `plural(` call clears every plural literal on it. The noun-bound
+    /// proof needs a parser; its residual evasion and false-positive
+    /// classes are named in contract 0a-14, and PR 0b's parser closes
+    /// them.
+    #[test]
+    fn canvas_count_speaking_arms_have_boundary_witnesses_and_agreement() {
+        // (a) --------------------------------------------------------
+        let listed: std::collections::BTreeSet<&str> = [
+            "CanvasBulkColorSet",
+            "CanvasBulkDuplicated",
+            "CanvasBulkMoved",
+            "CanvasDeleted",
+            "CanvasFilterCleared",
+            "CanvasFilterCount",
+            "CanvasGroupEntered",
+            "CanvasGrouped",
+            "CanvasLoadedDegraded",
+            "CanvasMarkToggled",
+            "CanvasMarksCleared",
+            "CanvasModeCancelled",
+            "CanvasModeCommitted",
+            "CanvasModeEntered",
+            "CanvasMovedTo",
+            "CanvasTracePathEnd",
+            "CanvasWhereAmI",
+        ]
+        .into_iter()
+        .collect();
+
+        let mut speaking: std::collections::BTreeMap<String, Vec<(SpokenCardinality, String)>> =
+            std::collections::BTreeMap::new();
+        for entry in corpus() {
+            let A11yEvent::Canvas { ref event } = entry else {
+                continue;
+            };
+            if let Some(cardinality) = spoken_cardinality(event) {
+                let name = canvas_variant_of(&entry).expect("canvas variant name");
+                speaking
+                    .entry(name)
+                    .or_default()
+                    .push((cardinality, entry.render()));
+            }
+        }
+        let derived: std::collections::BTreeSet<&str> =
+            speaking.keys().map(String::as_str).collect();
+        assert_eq!(
+            derived, listed,
+            "the written list of count-speaking canvas arms is out of step with what \
+             `spoken_cardinality` classifies over corpus() — add the arm here, then \
+             give it the witnesses below"
+        );
+
+        // (b) --------------------------------------------------------
+        // Arms whose count the MAC HOST can actually reach at zero.
+        // Reachability is a property of the host's call sites, not of
+        // this crate, so it cannot be derived here — it is declared,
+        // with the reason, and re-checked when a host changes.
+        const ZERO_REACHABLE: &[(&str, &str)] = &[
+            ("CanvasMovedTo", "a card with no connections, at Verbose"),
+            ("CanvasWhereAmI", "a card with no connections"),
+            (
+                "CanvasMarkToggled",
+                "unmarking the last mark leaves zero marked",
+            ),
+            ("CanvasFilterCount", "a filter that matches nothing"),
+            (
+                "CanvasFilterCleared",
+                "clearing the filter on an empty canvas",
+            ),
+            (
+                "CanvasMarksCleared",
+                "clearing with nothing marked (its own template)",
+            ),
+            (
+                "CanvasBulkDuplicated",
+                "a STALE selection: create selects the new card, undo \
+                 removes it without reconciling `selection.selected`, \
+                 and Duplicate's seed passes its non-empty guard while \
+                 the collection it announces resolves to nothing",
+            ),
+            // NOT reachable, and so deliberately absent. The audit that
+            // matters is not "is the verb guarded" but "is the guarded
+            // collection the ANNOUNCED one" — `CanvasBulkDuplicated`
+            // above is exactly the case where it is not. Re-checked
+            // per verb: `CanvasDeleted`, `CanvasBulkColorSet` and
+            // `CanvasGrouped` announce `canvasMarkedInOrder`, which is
+            // already outline-filtered when the guard sees it;
+            // `CanvasBulkMoved` and the mode arms announce the same
+            // `canvasMovingSet` seed they guard (a stale id there
+            // reaches ONE, not zero — CD-15). `CanvasGroupEntered`
+            // counts a container holding the row just entered;
+            // `CanvasTracePathEnd` seeds with the selected card;
+            // `CanvasLoadedDegraded` only posts above zero.
+        ];
+        for (arm, _) in ZERO_REACHABLE {
+            assert!(
+                listed.contains(arm),
+                "{arm} is declared zero-reachable but is not a count-speaking arm"
+            );
+        }
+
+        for (arm, samples) in &speaking {
+            assert!(
+                samples.iter().any(|(c, _)| matches!(
+                    c,
+                    SpokenCardinality::Count(1) | SpokenCardinality::Length(1)
+                )),
+                "{arm} speaks a count but corpus() has no witness at ONE, so nothing \
+                 pins its singular rendering (contract 0a-14). NOTE: a witness only \
+                 counts if the event actually RENDERS the count — a non-Verbose \
+                 `CanvasMovedTo` does not"
+            );
+            if samples
+                .iter()
+                .any(|(c, _)| matches!(c, SpokenCardinality::Length(_)))
+            {
+                assert!(
+                    samples
+                        .iter()
+                        .any(|(c, _)| matches!(c, SpokenCardinality::Length(0))),
+                    "{arm} speaks a collection LENGTH, so it also needs an \
+                     empty-collection witness (contract 0a-14)"
+                );
+            }
+            if let Some((_, why)) = ZERO_REACHABLE.iter().find(|(a, _)| a == arm) {
+                assert!(
+                    samples
+                        .iter()
+                        .any(|(c, _)| matches!(c, SpokenCardinality::Count(0))),
+                    "{arm} can reach zero on the host ({why}) but corpus() has no \
+                     witness at zero (contract 0a-14)"
+                );
+            }
+        }
+
+        // (c) --------------------------------------------------------
+        // The shipped English defects CR-3 pins as verbatim, as
+        // (arm, rendering) PAIRS. The pairing is enforced below: each
+        // string must render from THAT arm and from nowhere else in the
+        // corpus, so a second defective template cannot hide behind an
+        // existing excuse, and a defect that moves arms fails here.
+        const CR3_VERBATIM_DEFECTS: &[(&str, &str)] = &[
+            // The plural rule is applied to the noun but the verb is
+            // fixed.
+            ("CanvasFilterCount", "1 card match."),
+            // "item" is singular, "are" is not.
+            (
+                "CanvasLoadedDegraded",
+                "Canvas loaded. 1 unsupported item are preserved in the file but not shown.",
+            ),
+        ];
+        // A plural noun, or a verb agreeing with one, has no business
+        // in a rendering whose count is one. The verbs are listed
+        // because NEITHER CR-3 defect carries a plural noun — both are
+        // correctly singular there — so a noun-only check would excuse
+        // them silently.
+        const PLURAL_AT_ONE: &[&str] =
+            &["cards", "marks", "items", "connections", " are ", " match."];
+
+        for (arm, text) in CR3_VERBATIM_DEFECTS {
+            let sources: Vec<String> = corpus()
+                .iter()
+                .filter(|event| event.render() == *text)
+                .filter_map(canvas_variant_of)
+                .collect();
+            assert_eq!(
+                sources,
+                vec![(*arm).to_owned()],
+                "CR3_VERBATIM_DEFECTS pairs {text:?} with {arm}, but the corpus renders \
+                 that exact string from {sources:?} — a carve-out excuses ONE template \
+                 on ONE arm, so update the pair (or drop it, if CR-3 was fixed)"
+            );
+        }
+
+        for (arm, samples) in &speaking {
+            for (cardinality, text) in samples {
+                if !matches!(
+                    cardinality,
+                    SpokenCardinality::Count(1) | SpokenCardinality::Length(1)
+                ) {
+                    continue;
+                }
+                if CR3_VERBATIM_DEFECTS
+                    .iter()
+                    .any(|(defect_arm, defect)| defect_arm == arm && defect == text)
+                {
+                    continue;
+                }
+                for token in PLURAL_AT_ONE {
+                    assert!(
+                        !text.contains(token),
+                        "{arm} renders {text:?} at a count of one, which carries the \
+                         plural form {token:?} — route the noun through \
+                         plural()/plural_len()/counted() (contract 0a-14), or, if this \
+                         is a deliberately preserved shipped defect, add the \
+                         (arm, string) pair to CR3_VERBATIM_DEFECTS with a citation"
+                    );
+                }
+            }
+        }
+
+        // (d) --------------------------------------------------------
+        // The canvas templates and the helpers they call: from the
+        // family's own impl block down to `corpus()`. LEXICAL by
+        // design — see 0a-14 for what it therefore cannot see.
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/a11y.rs");
+        let source = std::fs::read_to_string(&path).expect("a11y source");
+        let begin = source
+            .find("impl CanvasA11yEvent {")
+            .expect("canvas render impl");
+        let end = source[begin..]
+            .find("pub fn corpus()")
+            .expect("corpus() terminates the render section")
+            + begin;
+        let first_line = source[..begin].lines().count();
+
+        // Rust continues a string literal across lines with a trailing
+        // `\`, which would otherwise split `{count} \` from ` cards`
+        // and hide the defect from both checks below.
+        //
+        // Comments are stripped, not merely skipped when they start the
+        // line: a TRAILING `// plural(` on a defective line would
+        // otherwise vouch for it, since helper provenance below is
+        // line-wide.
+        fn strip_comment(line: &str) -> &str {
+            let bytes = line.as_bytes();
+            let mut in_string = false;
+            let mut index = 0usize;
+            while index < bytes.len() {
+                match bytes[index] {
+                    b'\\' if in_string => index += 1,
+                    b'"' => in_string = !in_string,
+                    b'/' if !in_string && bytes.get(index + 1) == Some(&b'/') => {
+                        return &line[..index];
+                    }
+                    _ => {}
+                }
+                index += 1;
+            }
+            line
+        }
+
+        let mut lines: Vec<(usize, String)> = Vec::new();
+        let mut pending: Option<(usize, String)> = None;
+        for (offset, raw) in source[begin..end].lines().enumerate() {
+            let trimmed = strip_comment(raw).trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let (line_no, mut text) = pending
+                .take()
+                .unwrap_or_else(|| (first_line + offset, String::new()));
+            text.push_str(trimmed);
+            if text.ends_with('\\') {
+                text.pop();
+                pending = Some((line_no, text));
+            } else {
+                lines.push((line_no, text));
+            }
+        }
+        if let Some(rest) = pending {
+            lines.push(rest);
+        }
+
+        const PLURAL_NOUNS: &[&str] = &["cards", "marks", "items", "connections"];
+        const PLURAL_HELPERS: &[&str] = &["plural(", "plural_len(", "counted("];
+        let mut offenders: Vec<String> = Vec::new();
+        for (line_no, line) in &lines {
+            let routed = PLURAL_HELPERS.iter().any(|helper| line.contains(helper));
+            for noun in PLURAL_NOUNS {
+                // A bare `"cards"` literal is either a helper argument
+                // or a hardcoded plural smuggled past the template.
+                if line.contains(&format!("\"{noun}\"")) && !routed {
+                    offenders.push(format!(
+                        "a11y.rs:{line_no}: bare \"{noun}\" literal outside a \
+                         plural()/plural_len()/counted() call — {line}"
+                    ));
+                }
+                let mut from = 0usize;
+                while let Some(at) = line[from..].find(noun) {
+                    let at = from + at;
+                    from = at + noun.len();
+                    // Whole word only — never `placards`, `Cards`.
+                    if line[from..].starts_with(|c: char| c.is_ascii_alphanumeric()) {
+                        continue;
+                    }
+                    // The defect shape: a format placeholder, then
+                    // whitespace, then the hardcoded plural.
+                    if line[..at].trim_end().ends_with('}') {
+                        offenders.push(format!(
+                            "a11y.rs:{line_no}: interpolated count immediately before \
+                             the hardcoded plural \"{noun}\" — {line}"
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "a canvas template speaks a plural noun the count cannot agree with — route \
+             it through plural()/plural_len()/counted() (contract 0a-14). If a helper \
+             call was wrapped so its literal left the call's line, put them back on one \
+             line: this scan is lexical: {offenders:#?}"
+        );
+    }
+
+    /// The family is reached through exactly one top-level variant, and
+    /// no canvas variant leaked back out to the top level (the whole
+    /// point of the nesting — uniffi's 256-variant ceiling).
+    #[test]
+    fn the_canvas_family_occupies_one_top_level_variant() {
+        let top_level: std::collections::BTreeSet<String> = declared_variants("A11yEvent")
+            .into_iter()
+            .filter(|name| name.starts_with("Canvas"))
+            .collect();
+        assert_eq!(
+            top_level,
+            ["Canvas".to_owned()]
+                .into_iter()
+                .collect::<std::collections::BTreeSet<String>>(),
+            "the canvas family must nest under A11yEvent::Canvas"
+        );
+        assert!(
+            corpus()
+                .iter()
+                .filter(|event| variant_of(event) == "Canvas")
+                .count()
+                > 100,
+            "the canvas corpus went missing"
+        );
+    }
+
+    /// t0 §1.2 and §1.3: the verbosity matrix, level by level, on the
+    /// two families whose TEMPLATE varies — moved-to (the navigation
+    /// matrix) and the destructive family (the undo hint at
+    /// standard+). Full rendered strings, never substrings.
+    #[test]
+    fn canvas_verbosity_matrix_pins_every_level() {
+        let moved_to = |verbosity| CanvasA11yEvent::CanvasMovedTo {
+            verbosity,
+            kind_label: "text".into(),
+            title: "Research".into(),
+            ordinal_n: 2,
+            total_m: 5,
+            container: Some("Q3".into()),
+            connection_count: 3,
+            color_name: Some("red".into()),
+            marked: true,
+        };
+        let deleted = |verbosity, target| CanvasA11yEvent::CanvasDeleted {
+            target,
+            verbosity,
+            undo_chord: "⌘Z".into(),
+        };
+        let card = || CanvasDeleteTarget::Card {
+            kind_label: "text".into(),
+            title: "Research".into(),
+        };
+        let group = || CanvasDeleteTarget::Group { label: "Q3".into() };
+        let cards = || CanvasDeleteTarget::Cards { count: 3 };
+        let connection = || CanvasDeleteTarget::Connection {
+            direction: EdgeDirection::Outgoing,
+            other_title: "Ideas".into(),
+            label: Some("supports".into()),
+        };
+
+        let expected: Vec<(CanvasA11yEvent, &str)> = vec![
+            (moved_to(CanvasVerbosity::Terse), "Research"),
+            (
+                moved_to(CanvasVerbosity::Standard),
+                "Text card \"Research\", 2 of 5 in Q3",
+            ),
+            (
+                moved_to(CanvasVerbosity::Verbose),
+                "Text card \"Research\", 2 of 5 in Q3, 3 connections, red, marked",
+            ),
+            (
+                deleted(CanvasVerbosity::Terse, card()),
+                "Deleted Text card \"Research\"",
+            ),
+            (
+                deleted(CanvasVerbosity::Standard, card()),
+                "Deleted Text card \"Research\" — ⌘Z to undo",
+            ),
+            (
+                deleted(CanvasVerbosity::Verbose, card()),
+                "Deleted Text card \"Research\" — ⌘Z to undo",
+            ),
+            (
+                deleted(CanvasVerbosity::Terse, group()),
+                "Ungrouped Group \"Q3\" — cards kept",
+            ),
+            (
+                deleted(CanvasVerbosity::Standard, group()),
+                "Ungrouped Group \"Q3\" — cards kept — ⌘Z to undo",
+            ),
+            (
+                deleted(CanvasVerbosity::Verbose, group()),
+                "Ungrouped Group \"Q3\" — cards kept — ⌘Z to undo",
+            ),
+            (deleted(CanvasVerbosity::Terse, cards()), "Deleted 3 cards"),
+            (
+                deleted(CanvasVerbosity::Standard, cards()),
+                "Deleted 3 cards — ⌘Z to undo",
+            ),
+            (
+                deleted(CanvasVerbosity::Verbose, cards()),
+                "Deleted 3 cards — ⌘Z to undo",
+            ),
+            (
+                deleted(CanvasVerbosity::Terse, connection()),
+                "Deleted connection to \"Ideas\", labelled \"supports\"",
+            ),
+            (
+                deleted(CanvasVerbosity::Standard, connection()),
+                "Deleted connection to \"Ideas\", labelled \"supports\" — ⌘Z to undo",
+            ),
+            (
+                deleted(CanvasVerbosity::Verbose, connection()),
+                "Deleted connection to \"Ideas\", labelled \"supports\" — ⌘Z to undo",
+            ),
+        ];
+        for (event, text) in &expected {
+            assert_eq!(event.render(), *text, "verbosity render for {event:?}");
+            // The wrapper is a pure relay: the same string comes back
+            // through the top-level event a host actually posts.
+            assert_eq!(
+                A11yEvent::Canvas {
+                    event: event.clone()
+                }
+                .render(),
+                *text
+            );
+        }
+
+        // Everything else is verbosity-INVARIANT, and structurally so:
+        // no other variant carries the parameter at all, which is why
+        // a host cannot accidentally make one vary.
+        let carriers: std::collections::BTreeSet<String> = corpus()
+            .iter()
+            .filter(|event| format!("{event:?}").contains("verbosity: "))
+            .filter_map(canvas_variant_of)
+            .collect();
+        assert_eq!(
+            carriers,
+            ["CanvasDeleted".to_owned(), "CanvasMovedTo".to_owned()]
+                .into_iter()
+                .collect::<std::collections::BTreeSet<String>>(),
+            "only the moved-to and destructive families take a verbosity"
+        );
+    }
+
+    /// t0 §1.4: the ⌃⌘I readback is ALWAYS verbose-grade — it takes no
+    /// verbosity parameter, so a terse user still gets the full fix.
+    #[test]
+    fn canvas_where_am_i_is_always_verbose_grade() {
+        assert_eq!(
+            CanvasA11yEvent::CanvasWhereAmI {
+                kind_label: "text".into(),
+                title: "Research".into(),
+                group_path: vec!["Quarter".into(), "Q3".into()],
+                ordinal_n: 2,
+                total_m: 5,
+                connection_count: 3,
+                in_count: 1,
+                out_count: 2,
+                color_name: Some("red".into()),
+                marked: true,
+                mode: Some(CanvasMode::Move),
+                filter: CanvasFilterState::Active {
+                    matched: 3,
+                    total: 40,
+                },
+            }
+            .render(),
+            "Text card \"Research\", in Quarter › Q3, 2 of 5, 3 connections (1 in, 2 out), \
+             red, marked, Move mode, 3 of 40 shown"
+        );
+        assert!(
+            !corpus()
+                .iter()
+                .any(
+                    |event| canvas_variant_of(event).as_deref() == Some("CanvasWhereAmI")
+                        && format!("{event:?}").contains("verbosity")
+                ),
+            "Where-am-I must not take a verbosity"
+        );
+    }
+
+    /// t0 §1.5: "navigation = polite; errors/conflicts = assertive."
+    /// `CanvasA11yEvent::priority` ends in a catch-all `_ => Medium`,
+    /// so a canvas error that is not listed is silently polite. This
+    /// pins the High membership BY NAME, both ways: the five families
+    /// that carry mac's `.error` case and nothing else. The assertions
+    /// run through the TOP-LEVEL event, so the wrapper's delegation is
+    /// covered too.
+    #[test]
+    fn canvas_priorities_pin_the_error_tier() {
+        const HIGH: &[&str] = &[
+            "CanvasActionFailed",
+            "CanvasBlocked",
+            "CanvasFileNotFound",
+            "CanvasModeRejected",
+            "CanvasSaveConflict",
+        ];
+        let mut high_seen = std::collections::BTreeSet::new();
+        for event in corpus() {
+            let Some(variant) = canvas_variant_of(&event) else {
+                continue;
+            };
+            let listed = HIGH.contains(&variant.as_str());
+            match event.priority() {
+                A11yPriority::High => {
+                    assert!(
+                        listed,
+                        "{variant} renders High but is not in the error tier"
+                    );
+                    high_seen.insert(variant);
+                }
+                A11yPriority::Medium => assert!(
+                    !listed,
+                    "{variant} is in the error tier but renders Medium — the \
+                     explicit priority() arm is missing it"
+                ),
+            }
+        }
+        let expected: std::collections::BTreeSet<String> =
+            HIGH.iter().map(|name| (*name).to_owned()).collect();
+        assert_eq!(
+            high_seen, expected,
+            "every error-tier canvas variant must be exercised by the corpus"
         );
     }
 
