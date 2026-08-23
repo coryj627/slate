@@ -9402,6 +9402,8 @@ pub struct CanvasOutlineRow {
     /// "text" | "file" | "image" | "link" | "group" (t0 §1.1 type word).
     pub kind: String,
     pub title: String,
+    /// The title made unique across the canvas (W6-1 0b-5).
+    pub speakable_name: String,
     pub group_path: Vec<String>,
     pub ordinal_n: u32,
     pub total_m: u32,
@@ -9416,6 +9418,7 @@ impl From<core::CanvasOutlineRow> for CanvasOutlineRow {
             depth: r.depth,
             kind: r.kind,
             title: r.title,
+            speakable_name: r.speakable_name,
             group_path: r.group_path,
             ordinal_n: r.ordinal_n,
             total_m: r.total_m,
@@ -9431,6 +9434,8 @@ pub struct CanvasTableRow {
     pub node_id: String,
     pub kind: String,
     pub title: String,
+    /// The title made unique across the canvas (W6-1 0b-5).
+    pub speakable_name: String,
     pub group_path: Vec<String>,
     pub target: String,
     pub connection_count: u32,
@@ -9443,6 +9448,7 @@ impl From<core::CanvasTableRow> for CanvasTableRow {
             node_id: r.node_id,
             kind: r.kind,
             title: r.title,
+            speakable_name: r.speakable_name,
             group_path: r.group_path,
             target: r.target,
             connection_count: r.connection_count,
@@ -9574,6 +9580,8 @@ impl From<core::CanvasNeighbor> for CanvasNeighbor {
 pub struct CanvasWhereAmI {
     pub node_id: String,
     pub title: String,
+    /// The title made unique across the canvas (W6-1 0b-5).
+    pub speakable_name: String,
     pub kind: String,
     pub group_path: Vec<String>,
     pub ordinal_n: u32,
@@ -9589,6 +9597,7 @@ impl From<core::CanvasWhereAmI> for CanvasWhereAmI {
         CanvasWhereAmI {
             node_id: w.node_id,
             title: w.title,
+            speakable_name: w.speakable_name,
             kind: w.kind,
             group_path: w.group_path,
             ordinal_n: w.ordinal_n,
@@ -10228,6 +10237,9 @@ pub struct CanvasSceneNode {
     pub node_id: String,
     pub kind: String,
     pub title: String,
+    /// The title made unique across the canvas (W6-1 0b-5) — the
+    /// renderer's AX peer name (CD-23).
+    pub speakable_name: String,
     pub x: f64,
     pub y: f64,
     pub width: f64,
@@ -10243,6 +10255,7 @@ impl From<core::CanvasSceneNode> for CanvasSceneNode {
             node_id: n.node_id,
             kind: n.kind,
             title: n.title,
+            speakable_name: n.speakable_name,
             x: n.x,
             y: n.y,
             width: n.width,
@@ -10289,6 +10302,123 @@ impl From<core::CanvasSceneEdge> for CanvasSceneEdge {
 pub struct CanvasScene {
     pub nodes: Vec<CanvasSceneNode>,
     pub edges: Vec<CanvasSceneEdge>,
+}
+
+// ---------------------------------------------------------------------------
+// Canvas structural queries (W6-1 PR 0b, #745): the §W-G row B–M rules,
+// mirrored 1:1. Same rule as above — no logic here.
+
+/// One hop of a traced connection path (0b-9). The start node is not a
+/// hop, so `hops.len() + 1` is mac's "cards visited".
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct CanvasTraceHop {
+    pub edge_id: String,
+    pub node_id: String,
+    pub title: String,
+    pub label: Option<String>,
+}
+
+impl From<core::CanvasTraceHop> for CanvasTraceHop {
+    fn from(h: core::CanvasTraceHop) -> Self {
+        CanvasTraceHop {
+            edge_id: h.edge_id,
+            node_id: h.node_id,
+            title: h.title,
+            label: h.label,
+        }
+    }
+}
+
+/// The attachment sides an auto-routed connection uses (0b-3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct CanvasSidePair {
+    pub from: CanvasSide,
+    pub to: CanvasSide,
+}
+
+/// Where a card lands inside a group, or why it cannot (0b-12).
+#[derive(Debug, Clone, Copy, PartialEq, uniffi::Enum)]
+pub enum CanvasInsideGroupPlacement {
+    /// A free slot fully inside the group frame.
+    Placed { x: f64, y: f64 },
+    /// No candidate slot fits inside the group; the point is mac's
+    /// `(x + 20, y + 40)` inset, NOT checked for overlap.
+    TooSmall { x: f64, y: f64 },
+    /// Slots fit, but every one examined is occupied.
+    Full,
+}
+
+impl From<core::canvas::placement::InsideGroupPlacement> for CanvasInsideGroupPlacement {
+    fn from(p: core::canvas::placement::InsideGroupPlacement) -> Self {
+        use core::canvas::placement::InsideGroupPlacement as P;
+        match p {
+            P::Placed { x, y } => CanvasInsideGroupPlacement::Placed { x, y },
+            P::TooSmall { x, y } => CanvasInsideGroupPlacement::TooSmall { x, y },
+            P::Full => CanvasInsideGroupPlacement::Full,
+        }
+    }
+}
+
+/// The canvas grid/sizing constants (0b-4). Every field is the
+/// `slate_core::canvas::placement` constant of that name — a host that
+/// re-types one of these numbers has re-derived it (R-D).
+#[derive(Debug, Clone, Copy, PartialEq, uniffi::Record)]
+pub struct CanvasConstants {
+    pub grid_step: f64,
+    pub grid_step_large: f64,
+    pub default_card_w: f64,
+    pub default_card_h: f64,
+    pub default_group_w: f64,
+    pub default_group_h: f64,
+    pub default_gap: f64,
+    pub min_card_size: f64,
+}
+
+impl From<core::canvas::placement::Constants> for CanvasConstants {
+    fn from(c: core::canvas::placement::Constants) -> Self {
+        CanvasConstants {
+            grid_step: c.grid_step,
+            grid_step_large: c.grid_step_large,
+            default_card_w: c.default_card_w,
+            default_card_h: c.default_card_h,
+            default_group_w: c.default_group_w,
+            default_group_h: c.default_group_h,
+            default_gap: c.default_gap,
+            min_card_size: c.min_card_size,
+        }
+    }
+}
+
+/// The canvas grid/sizing constants. Handle-free by ruling R-0b-2
+/// (CD-17): a host needs `min_card_size` to construct its mode
+/// controller, before any canvas is open.
+#[uniffi::export]
+pub fn canvas_constants() -> CanvasConstants {
+    core::canvas::placement::constants().into()
+}
+
+/// A fresh JSON-Canvas node/edge id: 16 lowercase hex from a v4 UUID,
+/// so index 12 is always `'4'` and the id carries 60 bits (0b-4).
+/// Handle-free, and deliberately unchecked against any canvas — mac
+/// mints the same way.
+#[uniffi::export]
+pub fn canvas_new_id() -> String {
+    core::canvas::queries::new_id()
+}
+
+/// The attachment sides for a connection between two RECTS (0b-3).
+/// Rects, not node ids: create-connected-card asks about a card that
+/// does not exist yet (CD-16). Horizontal wins only on a strict
+/// `|dx| > |dy|`, so a diagonal tie — and a self-loop — answers
+/// `(Top, Bottom)`.
+#[uniffi::export]
+pub fn canvas_auto_sides(from: CanvasRect, to: CanvasRect) -> CanvasSidePair {
+    let rect = |r: CanvasRect| core::canvas::model::Rect::new(r.x, r.y, r.width, r.height);
+    let (from, to) = core::canvas::queries::auto_sides(rect(from), rect(to));
+    CanvasSidePair {
+        from: from.into(),
+        to: to.into(),
+    }
 }
 
 #[uniffi::export]
@@ -10437,6 +10567,115 @@ impl VaultSession {
         Ok(self
             .inner
             .canvas_check_overlap(handle, rect.into(), exclude)?)
+    }
+}
+
+/// The W6-1 PR 0b structural queries (§W-G rows B–M).
+#[uniffi::export]
+impl VaultSession {
+    /// The node's containing group, `None` at canvas level (0b-8).
+    pub fn canvas_parent_of(
+        &self,
+        handle: u64,
+        node_id: String,
+    ) -> Result<Option<String>, VaultError> {
+        Ok(self.inner.canvas_parent_of(handle, &node_id)?)
+    }
+
+    /// The group's direct children in reading order (0b-8).
+    pub fn canvas_children_of(
+        &self,
+        handle: u64,
+        group_id: String,
+    ) -> Result<Vec<String>, VaultError> {
+        Ok(self.inner.canvas_children_of(handle, &group_id)?)
+    }
+
+    /// Project a set of node ids onto reading order (0b-10).
+    pub fn canvas_order_nodes(
+        &self,
+        handle: u64,
+        ids: Vec<String>,
+    ) -> Result<Vec<String>, VaultError> {
+        Ok(self.inner.canvas_order_nodes(handle, ids)?)
+    }
+
+    /// The cycle-safe outgoing walk from `node_id` (0b-9).
+    pub fn canvas_trace_path(
+        &self,
+        handle: u64,
+        node_id: String,
+    ) -> Result<Vec<CanvasTraceHop>, VaultError> {
+        Ok(self
+            .inner
+            .canvas_trace_path(handle, &node_id)?
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
+
+    /// Where `rect` sits relative to its nearest neighbours (0b-7).
+    pub fn canvas_describe_relative(
+        &self,
+        handle: u64,
+        rect: CanvasRect,
+        exclude: Vec<String>,
+    ) -> Result<Vec<CanvasRelativeDesc>, VaultError> {
+        Ok(self
+            .inner
+            .canvas_describe_relative(handle, rect.into(), exclude)?
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
+
+    /// Bounding box of every node, group frames included (0b-11).
+    pub fn canvas_bounds(&self, handle: u64) -> Result<Option<CanvasRect>, VaultError> {
+        Ok(self.inner.canvas_bounds(handle)?.map(|r| CanvasRect {
+            x: r.x,
+            y: r.y,
+            width: r.width,
+            height: r.height,
+        }))
+    }
+
+    /// The group frame enclosing `members` — union plus `default_gap`
+    /// on all four sides (0b-11).
+    pub fn canvas_group_rect_around(
+        &self,
+        handle: u64,
+        members: Vec<String>,
+    ) -> Result<Option<CanvasRect>, VaultError> {
+        Ok(self
+            .inner
+            .canvas_group_rect_around(handle, members)?
+            .map(|r| CanvasRect {
+                x: r.x,
+                y: r.y,
+                width: r.width,
+                height: r.height,
+            }))
+    }
+
+    /// A free slot INSIDE the group, or a typed refusal (0b-12).
+    pub fn canvas_place_inside_group(
+        &self,
+        handle: u64,
+        group_id: String,
+        width: f64,
+        height: f64,
+        exclude: Vec<String>,
+    ) -> Result<CanvasInsideGroupPlacement, VaultError> {
+        Ok(self
+            .inner
+            .canvas_place_inside_group(handle, &group_id, width, height, exclude)?
+            .into())
+    }
+
+    /// Node ids matching `query`, in reading order; an empty query
+    /// matches everything (0b-13).
+    pub fn canvas_filter(&self, handle: u64, query: String) -> Result<Vec<String>, VaultError> {
+        Ok(self.inner.canvas_filter(handle, &query)?)
     }
 }
 

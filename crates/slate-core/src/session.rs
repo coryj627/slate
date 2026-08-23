@@ -18577,6 +18577,9 @@ pub struct CanvasOutlineRow {
     /// Announcement type word: "text" | "file" | "image" | "link" | "group".
     pub kind: String,
     pub title: String,
+    /// The title made unique across the canvas (W6-1 0b-5). Joined in
+    /// from the open handle's model, not stored in the index (0b-6).
+    pub speakable_name: String,
     pub group_path: Vec<String>,
     /// 1-based position among siblings ("n of m in ⟨group‖canvas⟩").
     pub ordinal_n: u32,
@@ -18591,6 +18594,9 @@ pub struct CanvasTableRow {
     pub node_id: String,
     pub kind: String,
     pub title: String,
+    /// The title made unique across the canvas (W6-1 0b-5), joined in
+    /// from the open handle's model (0b-6).
+    pub speakable_name: String,
     pub group_path: Vec<String>,
     /// File path (file/image cards), URL (link cards), "" otherwise.
     pub target: String,
@@ -18619,6 +18625,8 @@ pub struct CanvasNeighbor {
 pub struct CanvasWhereAmI {
     pub node_id: String,
     pub title: String,
+    /// The title made unique across the canvas (W6-1 0b-5).
+    pub speakable_name: String,
     pub kind: String,
     pub group_path: Vec<String>,
     pub ordinal_n: u32,
@@ -18636,6 +18644,10 @@ pub struct CanvasSceneNode {
     pub node_id: String,
     pub kind: String,
     pub title: String,
+    /// The title made unique across the canvas (W6-1 0b-5) — the
+    /// renderer's AX peer name, which is the one surface mac speaks it
+    /// on (CD-23).
+    pub speakable_name: String,
     pub x: f64,
     pub y: f64,
     pub width: f64,
@@ -18717,6 +18729,16 @@ pub struct CanvasPlacement {
 pub struct CanvasSetPlacement {
     pub origins: Vec<(f64, f64)>,
     pub relative: crate::canvas::placement::RelativeDesc,
+}
+
+/// One hop of a traced connection path (W6-1 0b-9): the connection
+/// followed and the card it led to. The start node is NOT a hop.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CanvasTraceHop {
+    pub edge_id: String,
+    pub node_id: String,
+    pub title: String,
+    pub label: Option<String>,
 }
 
 /// Result of `canvas_apply`: the post-write content hash (the next
@@ -18991,7 +19013,7 @@ impl VaultSession {
     /// Depth-first outline rows, one per node, in reading order — a
     /// single indexed query against the derived columns (§K).
     pub fn canvas_outline(&self, handle: u64) -> Result<Vec<CanvasOutlineRow>, VaultError> {
-        let file_id = self.canvas_file_id(handle)?;
+        let (file_id, speakable) = self.canvas_rows_context(handle)?;
         let conn = self.conn.lock().expect("session connection mutex");
         let mut stmt = conn.prepare_cached(
             "SELECT node_id, depth, kind, title, group_path, ordinal_n, total_m,
@@ -18999,8 +19021,8 @@ impl VaultSession {
              FROM canvas_nodes WHERE file_id = ?1 ORDER BY order_idx",
         )?;
         let rows = stmt.query_map(rusqlite::params![file_id], |row| {
+            let node_id: String = row.get(0)?;
             Ok(CanvasOutlineRow {
-                node_id: row.get(0)?,
                 depth: row.get::<_, i64>(1)? as u32,
                 kind: row.get(2)?,
                 title: row.get(3)?,
@@ -19009,6 +19031,8 @@ impl VaultSession {
                 total_m: row.get::<_, i64>(6)? as u32,
                 connection_count: row.get::<_, i64>(7)? as u32,
                 color_name: row.get(8)?,
+                speakable_name: speakable.get(&node_id).cloned().unwrap_or_default(),
+                node_id,
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -19017,21 +19041,23 @@ impl VaultSession {
     /// Flat table rows in reading order; the table view sorts client-side
     /// per column (#519 v2 comparators).
     pub fn canvas_table_rows(&self, handle: u64) -> Result<Vec<CanvasTableRow>, VaultError> {
-        let file_id = self.canvas_file_id(handle)?;
+        let (file_id, speakable) = self.canvas_rows_context(handle)?;
         let conn = self.conn.lock().expect("session connection mutex");
         let mut stmt = conn.prepare_cached(
             "SELECT node_id, kind, title, group_path, target, conn_count, color_name
              FROM canvas_nodes WHERE file_id = ?1 ORDER BY order_idx",
         )?;
         let rows = stmt.query_map(rusqlite::params![file_id], |row| {
+            let node_id: String = row.get(0)?;
             Ok(CanvasTableRow {
-                node_id: row.get(0)?,
                 kind: row.get(1)?,
                 title: row.get(2)?,
                 group_path: parse_group_path(&row.get::<_, String>(3)?),
                 target: row.get(4)?,
                 connection_count: row.get::<_, i64>(5)? as u32,
                 color_name: row.get(6)?,
+                speakable_name: speakable.get(&node_id).cloned().unwrap_or_default(),
+                node_id,
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -19088,6 +19114,7 @@ impl VaultSession {
         Ok(CanvasWhereAmI {
             node_id: node_id.to_string(),
             title: s.display_title.clone(),
+            speakable_name: s.speakable_name.clone(),
             kind: s.kind_label.to_string(),
             group_path: s.group_path.clone(),
             ordinal_n: s.position_in_container as u32,
@@ -19097,6 +19124,173 @@ impl VaultSession {
             out_count: s.out_count as u32,
             color_name: s.color_name.clone(),
         })
+    }
+
+    // --- W6-1 PR 0b: the structural queries (§W-G rows B–M) ----------
+    //
+    // Each is a handle lookup plus one call into `canvas::queries` or
+    // `canvas::placement`; the rules live there, once, and the contracts
+    // are `docs/plans/34_canvas_contracts.md` §"PR 0b".
+
+    /// The node's containing group, or `None` at canvas level (0b-8).
+    /// An unknown node id is `bad_node`, so a caller can tell "no
+    /// parent" from "no such node".
+    pub fn canvas_parent_of(
+        &self,
+        handle: u64,
+        node_id: &str,
+    ) -> Result<Option<String>, VaultError> {
+        let canvases = self.canvases.lock().expect("canvas registry mutex");
+        let state = canvases.get(&handle).ok_or_else(|| bad_handle(handle))?;
+        let id = crate::canvas::NodeId(node_id.to_string());
+        if !state.model.summaries.contains_key(&id) {
+            return Err(bad_node(node_id));
+        }
+        Ok(crate::canvas::queries::parent_of(&state.model, &id).map(|p| p.0))
+    }
+
+    /// The group's direct children in reading order (0b-8). Empty for a
+    /// childless group and for a node that is not a group; an unknown
+    /// node id is `bad_node`.
+    pub fn canvas_children_of(
+        &self,
+        handle: u64,
+        group_id: &str,
+    ) -> Result<Vec<String>, VaultError> {
+        let canvases = self.canvases.lock().expect("canvas registry mutex");
+        let state = canvases.get(&handle).ok_or_else(|| bad_handle(handle))?;
+        let id = crate::canvas::NodeId(group_id.to_string());
+        if !state.model.summaries.contains_key(&id) {
+            return Err(bad_node(group_id));
+        }
+        Ok(crate::canvas::queries::children_of(&state.model, &id)
+            .into_iter()
+            .map(|n| n.0)
+            .collect())
+    }
+
+    /// Project a set of node ids onto reading order (0b-10). Unknown
+    /// ids are dropped silently and duplicates collapse — a stale mark
+    /// must not be fatal to a bulk verb.
+    pub fn canvas_order_nodes(
+        &self,
+        handle: u64,
+        ids: Vec<String>,
+    ) -> Result<Vec<String>, VaultError> {
+        let canvases = self.canvases.lock().expect("canvas registry mutex");
+        let state = canvases.get(&handle).ok_or_else(|| bad_handle(handle))?;
+        let ids: Vec<crate::canvas::NodeId> = ids.into_iter().map(crate::canvas::NodeId).collect();
+        Ok(crate::canvas::queries::order_nodes(&state.model, &ids)
+            .into_iter()
+            .map(|n| n.0)
+            .collect())
+    }
+
+    /// The greedy, cycle-safe outgoing walk from `node_id` (0b-9). The
+    /// start node is not a hop, so a dead end returns an empty list.
+    pub fn canvas_trace_path(
+        &self,
+        handle: u64,
+        node_id: &str,
+    ) -> Result<Vec<CanvasTraceHop>, VaultError> {
+        let canvases = self.canvases.lock().expect("canvas registry mutex");
+        let state = canvases.get(&handle).ok_or_else(|| bad_handle(handle))?;
+        let id = crate::canvas::NodeId(node_id.to_string());
+        if !state.model.summaries.contains_key(&id) {
+            return Err(bad_node(node_id));
+        }
+        Ok(crate::canvas::queries::trace_path(&state.model, &id)
+            .into_iter()
+            .map(|hop| CanvasTraceHop {
+                edge_id: hop.edge.0,
+                node_id: hop.node.0,
+                title: hop.title,
+                label: hop.label,
+            })
+            .collect())
+    }
+
+    /// Where `rect` sits relative to its nearest non-group neighbours
+    /// (0b-7) — zero, one or two descriptions. An empty list is "no
+    /// candidates"; the announcement layer renders that.
+    pub fn canvas_describe_relative(
+        &self,
+        handle: u64,
+        rect: CanvasRectArg,
+        exclude: Vec<String>,
+    ) -> Result<Vec<crate::canvas::placement::RelativeDesc>, VaultError> {
+        let canvases = self.canvases.lock().expect("canvas registry mutex");
+        let state = canvases.get(&handle).ok_or_else(|| bad_handle(handle))?;
+        let exclude: Vec<crate::canvas::NodeId> =
+            exclude.into_iter().map(crate::canvas::NodeId).collect();
+        Ok(crate::canvas::queries::describe_relative(
+            &state.model,
+            crate::canvas::model::Rect::new(rect.x, rect.y, rect.width, rect.height),
+            &exclude,
+        ))
+    }
+
+    /// Bounding box of every node, group frames included (0b-11).
+    /// `None` on an empty canvas.
+    pub fn canvas_bounds(&self, handle: u64) -> Result<Option<CanvasRectArg>, VaultError> {
+        let canvases = self.canvases.lock().expect("canvas registry mutex");
+        let state = canvases.get(&handle).ok_or_else(|| bad_handle(handle))?;
+        Ok(crate::canvas::queries::bounds(&state.model).map(rect_arg))
+    }
+
+    /// The group frame enclosing `members`: their union plus
+    /// `DEFAULT_GAP` on all four sides (0b-11). `None` when no member
+    /// resolves.
+    pub fn canvas_group_rect_around(
+        &self,
+        handle: u64,
+        members: Vec<String>,
+    ) -> Result<Option<CanvasRectArg>, VaultError> {
+        let canvases = self.canvases.lock().expect("canvas registry mutex");
+        let state = canvases.get(&handle).ok_or_else(|| bad_handle(handle))?;
+        let members: Vec<crate::canvas::NodeId> =
+            members.into_iter().map(crate::canvas::NodeId).collect();
+        Ok(crate::canvas::queries::group_rect_around(&state.model, &members).map(rect_arg))
+    }
+
+    /// A free slot for a card of `width × height` INSIDE the group
+    /// (0b-12) — or a typed "too small" / "full" outcome, never a point
+    /// outside the group.
+    pub fn canvas_place_inside_group(
+        &self,
+        handle: u64,
+        group_id: &str,
+        width: f64,
+        height: f64,
+        exclude: Vec<String>,
+    ) -> Result<crate::canvas::placement::InsideGroupPlacement, VaultError> {
+        let canvases = self.canvases.lock().expect("canvas registry mutex");
+        let state = canvases.get(&handle).ok_or_else(|| bad_handle(handle))?;
+        let id = crate::canvas::NodeId(group_id.to_string());
+        let rect = state
+            .model
+            .spatial
+            .rect_of(&id)
+            .ok_or_else(|| bad_node(group_id))?;
+        let exclude: Vec<crate::canvas::NodeId> =
+            exclude.into_iter().map(crate::canvas::NodeId).collect();
+        Ok(crate::canvas::placement::place_inside_group(
+            &state.model,
+            rect,
+            (width, height),
+            &exclude,
+        ))
+    }
+
+    /// Node ids matching `query`, in reading order (0b-13). An empty or
+    /// whitespace-only query matches EVERYTHING.
+    pub fn canvas_filter(&self, handle: u64, query: &str) -> Result<Vec<String>, VaultError> {
+        let canvases = self.canvases.lock().expect("canvas registry mutex");
+        let state = canvases.get(&handle).ok_or_else(|| bad_handle(handle))?;
+        Ok(crate::canvas::queries::filter(&state.model, query)
+            .into_iter()
+            .map(|n| n.0)
+            .collect())
     }
 
     /// Non-overlapping, grid-aligned position for a new card (#517).
@@ -19336,6 +19530,7 @@ impl VaultSession {
                     node_id: node.id.0.clone(),
                     kind: summary.kind_label.to_string(),
                     title: summary.display_title.clone(),
+                    speakable_name: summary.speakable_name.clone(),
                     x: node.x,
                     y: node.y,
                     width: node.width,
@@ -19396,18 +19591,40 @@ impl VaultSession {
         })
     }
 
-    fn canvas_file_id(&self, handle: u64) -> Result<i64, VaultError> {
-        self.canvases
-            .lock()
-            .expect("canvas registry mutex")
-            .get(&handle)
-            .map(|s| s.file_id)
-            .ok_or_else(|| bad_handle(handle))
+    /// The handle's file id together with its `node_id → speakable_name`
+    /// map — the in-memory join contract 0b-6 chose over a derived
+    /// column. Both come out of ONE registry lock, and the lock is
+    /// released before the SQLite read: the established order in this
+    /// module is canvases → conn (see `canvas_apply`), so a query
+    /// holding the connection must never reach back for the registry.
+    fn canvas_rows_context(
+        &self,
+        handle: u64,
+    ) -> Result<(i64, std::collections::HashMap<String, String>), VaultError> {
+        let canvases = self.canvases.lock().expect("canvas registry mutex");
+        let state = canvases.get(&handle).ok_or_else(|| bad_handle(handle))?;
+        let speakable = state
+            .model
+            .summaries
+            .iter()
+            .map(|(id, s)| (id.0.clone(), s.speakable_name.clone()))
+            .collect();
+        Ok((state.file_id, speakable))
     }
 }
 
 fn parse_group_path(json: &str) -> Vec<String> {
     serde_json::from_str(json).unwrap_or_default()
+}
+
+/// A model rect as the FFI's origin+size record (W6-1 0b-11).
+fn rect_arg(r: crate::canvas::model::Rect) -> CanvasRectArg {
+    CanvasRectArg {
+        x: r.x0,
+        y: r.y0,
+        width: r.width(),
+        height: r.height(),
+    }
 }
 
 fn load_warning(w: &crate::canvas::CanvasWarning) -> CanvasLoadWarning {
