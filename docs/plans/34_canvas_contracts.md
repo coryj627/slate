@@ -1591,6 +1591,18 @@ every deleted symbol was re-grepped to zero afterwards.
   level" for a card that is not on the canvas would be a new sentence);
   trace-path still names its start card from the outline row, so the
   `No outgoing path from "X".` string is composed where it always was.
+- **Structural navigation on a handle-less snapshot goes SILENT, and
+  that is a narrowing.** Enter-group, exit-group, trace-path and
+  fit-canvas used to answer off `doc.outline` / `doc.scene` alone, so
+  they still spoke (`Not a group.`, `At canvas level.`,
+  `No outgoing path from "X".`) on a document whose native handle was
+  gone — a canvas moved to Trash, or one whose retarget failed. They
+  now require the handle, because the answer is core's, and return
+  without announcing when it is missing. Those states are read-only
+  snapshots where every mutation is already refused with a spoken
+  reason, and no test covered the combination; recorded because it is a
+  real change to what a user hears in a rare state, not because
+  anything caught it.
 - **`filterActive` did not move, and that is a decision.** It is UI
   state — the Clear button, the summary, the Esc rung — not the match
   rule, so it keeps Foundation's `.whitespaces` trimming. The one input
