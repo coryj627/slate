@@ -1003,9 +1003,10 @@ added, its reason records the chain, and the mac behaviour behind it —
 a stale selection surviving undo — is filed in "Mac details recorded
 while reading" as an upstream bug, not this PR's to fix. Two further
 findings were fixed by raising the power: the classifier now
-destructures every nested payload enum (no `..` over a closed set), and
-comments are stripped before the source scan so a trailing `// plural(`
-cannot vouch for a hardcoded plural. The third was fixed by RETRACTION —
+destructures every parameter type that can gain variants — `..` elides
+only variant-fixed types (`String`, `u32`, `bool`, `Vec<String>`, and
+`Option` of those) — and comments are stripped before the source scan so
+a trailing `// plural(` cannot vouch for a hardcoded plural. The third was fixed by RETRACTION —
 the parts-3-and-4 independence claim is withdrawn rather than scoped,
 because provenance in a lexical scan is line-wide and cannot support it.
 **By decision, scan residue past this point is 0b's parser**; no further
