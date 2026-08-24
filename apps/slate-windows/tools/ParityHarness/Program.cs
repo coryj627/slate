@@ -151,10 +151,12 @@ try
     // this section has no business touching.
     if (canvasFixtures != null)
     {
-        WriteArtifact(
-            Path.Combine(outDir, "canvas_queries.json"),
-            CanvasQueries(canvasFixtures));
-        artifacts += 1;
+        (string queries, string read) = CanvasSections(canvasFixtures);
+        WriteArtifact(Path.Combine(outDir, "canvas_queries.json"), queries);
+        // W6-1 PR A (§W-A `canvas_read`, contract A20): the READ side of
+        // the same corpus, from the same temp vault.
+        WriteArtifact(Path.Combine(outDir, "canvas_read.json"), read);
+        artifacts += 2;
     }
 
     Console.WriteLine($"parity-harness: {artifacts} artifacts -> {outDir}");
@@ -174,7 +176,7 @@ finally
     }
 }
 
-static string CanvasQueries(string canvasFixtures)
+static (string Queries, string Read) CanvasSections(string canvasFixtures)
 {
     var canvasFiles = Directory.EnumerateFiles(canvasFixtures, "*.canvas")
         .Select(Path.GetFileName)
@@ -198,7 +200,9 @@ static string CanvasQueries(string canvasFixtures)
         using var session = VaultSession.OpenFilesystem(root);
         using var cancel = new CancelToken();
         session.ScanInitial(cancel);
-        return SurfaceSerializer.CanvasQueriesArtifact(session, canvasFiles);
+        return (
+            SurfaceSerializer.CanvasQueriesArtifact(session, canvasFiles),
+            SurfaceSerializer.CanvasReadArtifact(session, canvasFiles));
     }
     finally
     {

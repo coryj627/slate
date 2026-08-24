@@ -229,6 +229,11 @@ public class ParityHarnessCensus
                 Path.Combine(outDir, "canvas_queries.json"),
                 System.Text.Encoding.UTF8.GetBytes(
                     SurfaceSerializer.CanvasQueriesArtifact(session, canvasFiles)));
+            // W6-1 PR A (§W-A `canvas_read`, contract A20).
+            File.WriteAllBytes(
+                Path.Combine(outDir, "canvas_read.json"),
+                System.Text.Encoding.UTF8.GetBytes(
+                    SurfaceSerializer.CanvasReadArtifact(session, canvasFiles)));
         }
         finally
         {
