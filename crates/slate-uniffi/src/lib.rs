@@ -14007,9 +14007,7 @@ mod canvas_mirror_tests {
         let gate_call = format!("{PRECEDENCE_GATE}(");
         let selection_first: BTreeSet<&str> = bodies
             .iter()
-            .filter(|(name, body)| {
-                name.as_str() != PRECEDENCE_GATE && body.contains(&gate_call)
-            })
+            .filter(|(name, body)| name.as_str() != PRECEDENCE_GATE && body.contains(&gate_call))
             .map(|(name, _)| name.as_str())
             .collect();
 
@@ -14075,7 +14073,10 @@ mod canvas_mirror_tests {
                 }
             }
             let end = end.unwrap_or_else(|| {
-                panic!("{}: `{binding}`'s array literal never closes", path.display())
+                panic!(
+                    "{}: `{binding}`'s array literal never closes",
+                    path.display()
+                )
             });
             let mut verbs = BTreeSet::new();
             for line in source[start..end].lines() {
@@ -14100,8 +14101,10 @@ mod canvas_mirror_tests {
              {test_free:?}); the comparison below would pass vacuously"
         );
 
-        let derived: BTreeSet<String> =
-            selection_first.iter().map(|name| (*name).to_owned()).collect();
+        let derived: BTreeSet<String> = selection_first
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect();
         let untested: Vec<&String> = derived.difference(&test_bearing).collect();
         let unbacked: Vec<&String> = test_bearing.difference(&derived).collect();
         assert!(

@@ -938,7 +938,7 @@ description of the derivation rather than the authority:
 | Fit canvas | `canvasFitCanvas` | silence |
 | The filter family | `filterView` / `canvasAnnounceFilterCount` / the summary label | announce a count for rows that answer a different needle |
 | **Where am I** | `canvasWhereAmI` | silence — and it is the PULL surface, so silence is the one failure t0 §1.4 exists to prevent |
-| **Follow connection** | `canvasFollowConnection` | speak `No connection…`, a fact the adjacency list never returned, when the cache is cold and no handle can fill it |
+| **Follow connection** | `canvasFollowConnection` | speak `No connection…`, a fact the adjacency list never returned, when the cache is cold and no handle can fill it — **and, in the other direction, refuse with VA-1 when the cache CAN answer.** Its order is fixed: (1) the selection precondition, via the precedence gate; (2) `neighborsIfKnown` — a non-nil list answers normally, traversal or accurate dead end, whatever the state; (3) the mapping's refusal, and only when (2) came back nil |
 
 The last two were present at BASE and PR 0b did not change either site;
 they are in VA-1 because the sentence is the right answer for the state,
@@ -948,6 +948,29 @@ arm below it unreachable, so a canvas that never opened cleanly said
 nothing at all. Follow-connection needed adjacency to distinguish "no
 connections" from "no answer": `neighborsIfKnown` returns `nil` for the
 second, and only a real list may produce the dead-end phrase.
+
+**The order took a CI run to become executable** (PR #1155). The
+context-as-proof rewiring put the mapping first, so a WARM cache lost
+to `.reopening` — the accurate phrase refused in favour of a refusal,
+which is the rule backwards. Asking the data first is not a second
+state reader: the consult reads no state, and it cannot escalate a
+refusal into a live read, because `neighborsIfKnown`'s query arm needs
+a handle and every non-`.ready` state has already dropped it. It is the
+same shape the filter family has had since VA-1 — `FilterView.current`
+first, mapping only when the needle went unanswered — and those two are
+the only members with a cache-answerable path.
+
+**The invariant that makes it safe: a read cache never outlives the
+rows it describes.** `neighborsCache` and `filterMatchCache` were
+already emptied by every reload and by the successful retarget; PR 0b
+adds the two transitions that BLANK the surface without reloading —
+`beginPreparedReplacement` (the container shows a spinner) and
+`markMovedToTrash` (it shows a message). Both cost nothing, since every
+path out of those states clears the caches again, and both close the
+gap where a stale answer could speak for rows the user cannot see. What
+remains warm is exactly `.ready` and `.retargetFailed` — the two states
+whose retained rows the container renders, per the matrix in VA-2's
+section.
 
 **Why an addition rather than silence.** The verbs answered from
 Swift-side outline walks before PR 0b, so the window used to produce an
@@ -1055,8 +1078,13 @@ family, uncoalesced. VA-1's sibling, same membership, different state.
 for that one alone.
 `.loading` is reachable two ways: a first open, and a prepared
 replacement installed over an already-open tab
-(`beginPreparedReplacement`), where the previous snapshot stays on
-screen while the state flips. **VA-1's copy would be false there** — a
+(`beginPreparedReplacement`), where the tab and its document object
+survive while the state flips. (An earlier draft of this sentence said
+the previous SNAPSHOT stays on screen; the container renders a
+`ProgressView` for `.loading`, so it does not — the round-5 matrix in
+this section is the authority, and this was the same kind of
+hand-written claim about the view that round 5 was called on.)
+**VA-1's copy would be false there** — a
 first open is not a REopen — so the state gets its own sentence rather
 than a stretched one. That is the same decision VA-1 made against
 `CanvasMutationRefusal::Reopening`, applied one level down.

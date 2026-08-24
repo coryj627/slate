@@ -314,6 +314,77 @@ final class CanvasNavigatorTests: XCTestCase {
             "a cached adjacency answer survives the window: \(posted)")
     }
 
+    /// The other half of the same rule, which nothing executed until
+    /// #1155's CI: a warm answer wins for a TRAVERSAL too, not only for
+    /// the accurate dead end. Both are facts the adjacency list
+    /// returned, and VA-1 refuses only when the truth is unknowable.
+    func testAWarmAdjacencyAnswerTraversesInsideTheReopeningWindow() async throws {
+        let state = try await makeState()
+        let doc = try XCTUnwrap(state.activeCanvasDocument)
+
+        // Premise: warm the cache for 'a' through the live handle, then
+        // put the caret back where it started.
+        state.canvasSelect(nodeId: "a", in: doc, announce: false)
+        state.canvasFollowConnection(forward: true)
+        XCTAssertEqual(doc.selection.selected, "b", "the live traversal is the premise")
+        state.canvasSelect(nodeId: "a", in: doc, announce: false)
+
+        _ = doc.beginBatchRetarget(to: doc.path)
+        XCTAssertNil(doc.handle, "the window detaches the handle: no live query can answer")
+        posted = []
+        state.canvasFollowConnection(forward: true)
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertEqual(doc.selection.selected, "b", "the cached traversal still moves the caret")
+        XCTAssertFalse(
+            posted.contains("This canvas is reopening. Try again in a moment."), "\(posted)")
+        XCTAssertTrue(posted.contains { $0.contains("Beta") }, "\(posted)")
+    }
+
+    /// The invariant that makes "answer from the cache" safe to ask
+    /// BEFORE the state mapping: a read cache never outlives the rows it
+    /// describes. Both transitions here blank the canvas surface — the
+    /// container renders a spinner or a message, not retained rows — so
+    /// a previously warm adjacency answer must not keep answering, and
+    /// the mapping's sentence is what the press owes.
+    func testTheReadCachesDoNotOutliveTheRowsOnScreen() async throws {
+        func warmThenBlank(
+            _ label: String,
+            _ blank: (AppState, CanvasDocument) -> Void
+        ) async throws {
+            let state = try await self.makeState()
+            let doc = try XCTUnwrap(state.activeCanvasDocument)
+            state.canvasSelect(nodeId: "d", in: doc, announce: false)
+            self.posted = []
+            state.canvasFollowConnection(forward: false)
+            state.canvasAnnouncer.flushForTests()
+            XCTAssertTrue(
+                self.posted.contains { $0.contains("No incoming connection") },
+                "\(label): the warm cache is the premise — \(self.posted)")
+
+            blank(state, doc)
+            XCTAssertEqual(
+                doc.selection.selected, "d",
+                "\(label): the caret is untouched, so only the cache can differ")
+            let note = try XCTUnwrap(
+                state.canvasReadRefusal(for: doc),
+                "\(label): a blanked canvas owes a sentence")
+            self.posted = []
+            state.canvasFollowConnection(forward: false)
+            state.canvasAnnouncer.flushForTests()
+            XCTAssertEqual(
+                self.posted,
+                [a11yRender(event: .canvas(event: .canvasStatus(note: note))).text],
+                "\(label): a stale cached answer spoke for rows that are not on screen")
+        }
+
+        try await warmThenBlank("moved to Trash") { state, doc in
+            doc.markMovedToTrash(session: state.currentSession)
+        }
+        try await warmThenBlank("prepared replacement") { _, doc in
+            _ = doc.beginPreparedReplacement()
+        }
+    }
+
     /// Every non-ready load state, driven, with the expectations taken
     /// FROM the mapping rather than written out beside it.
     ///

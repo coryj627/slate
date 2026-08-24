@@ -299,6 +299,13 @@ extension AppState {
     /// reopening window with a cold cache, or a refused id — takes
     /// VA-1's table instead: the sentence for the state, never a
     /// dead-end phrase nothing returned.
+    ///
+    /// The ORDER that makes both halves true, and the one VA-1 records:
+    /// 1. the verb's own precondition (a selection, via the precedence
+    ///    gate);
+    /// 2. the adjacency answer — a non-nil list answers normally,
+    ///    traversal or accurate dead end, whatever the state;
+    /// 3. the mapping's refusal, and only when step 2 came back nil.
     func canvasFollowConnection(forward: Bool, ordinal: Int = 1) {
         // Split, not combined: the document gate and the selection are
         // different questions with different answers, and folding them
@@ -306,17 +313,37 @@ extension AppState {
         // nothing-selected press SILENT on an ordinary ready canvas —
         // palette-reachable, and out of step with the three sibling
         // verbs that answer it.
-        guard let found = activeCanvasDocumentAnyState else { return }
-        if canvasAnsweredMissingSelection(found) { return }
-        guard let target = canvasReadContext(for: found) else { return }
-        let doc = target.doc
-        guard let selected = doc.selection.selected else {
-            return canvasAnnounceSelectionUnresolvable()
+        guard let doc = activeCanvasDocumentAnyState else { return }
+        if canvasAnsweredMissingSelection(doc) { return }
+        // DATA BEFORE STATE, and this is not a second state reader — it
+        // reads no state at all. A warm adjacency list is a FACT about
+        // the rows the user is looking at, and VA-1's rule is that the
+        // accurate phrase wins wherever a fact exists: the refusal is
+        // for when the truth is unknowable, not for when it is already
+        // known. This is the same shape the filter family has had since
+        // VA-1 (`FilterView.current` first, mapping only when the
+        // needle went unanswered); follow-connection is the only other
+        // member with a cache-answerable path, and asking in the other
+        // order is what made a warm cache lose to `.reopening` (PR
+        // #1155 CI).
+        //
+        // The consult cannot escalate a refusal into a live read: the
+        // query arm of `neighborsIfKnown` needs a handle, and every
+        // non-ready state has already dropped it — `beginBatchRetarget`,
+        // `beginPreparedReplacement`, `applyPreparedLoad`,
+        // `markMovedToTrash` and the failed retarget arms all leave
+        // `handle == nil`. Outside `.ready` it can only answer from the
+        // cache, and the cache is emptied wherever the view stops
+        // rendering those rows, so "warm" means "still on screen".
+        let known = doc.selection.selected.flatMap {
+            doc.neighborsIfKnown(of: $0, session: currentSession)
         }
-        // Past the mapping the handle is live, so an unanswerable
-        // lookup here is a refused id, not a state.
-        guard let neighbors = doc.neighborsIfKnown(of: selected, session: target.session)
-        else {
+        guard let neighbors = known else {
+            // Nothing cached, nothing live. WHICH sentence that owes is
+            // the mapping's call. When the mapping admits the document
+            // the handle is live, so the lookup was refused for the id
+            // — the selection's problem, not the state's.
+            guard canvasReadContext(for: doc) != nil else { return }
             return canvasAnnounceSelectionUnresolvable()
         }
         let candidates = neighbors.filter { neighbor in

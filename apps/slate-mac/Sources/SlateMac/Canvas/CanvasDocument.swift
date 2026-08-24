@@ -547,6 +547,14 @@ final class CanvasDocument: ObservableObject {
         handle = nil
         awaitingPreparedLoad = true
         preparedActivationPending = false
+        // The read caches describe rows this state stops rendering, and
+        // a reader that finds one warm is entitled to answer from it
+        // (follow-connection's step 2). Emptying them here costs
+        // nothing — every path out of `.loading` clears them again — and
+        // it keeps the one invariant those readers rely on: warm means
+        // the rows are still on screen.
+        neighborsCache = [:]
+        filterMatchCache = nil
         state = .loading
         return replacedHandle
     }
@@ -670,6 +678,12 @@ final class CanvasDocument: ObservableObject {
         handle = nil
         awaitingPreparedLoad = false
         preparedActivationPending = false
+        // Same reason as `beginPreparedReplacement`: the outline object
+        // survives, but the view renders only the message, so nothing
+        // may answer a reader from these rows as though they were on
+        // screen. A later successful reopen refills them.
+        neighborsCache = [:]
+        filterMatchCache = nil
         state = .failed(
             "\(displayName) was moved to Trash and is no longer available.")
     }
