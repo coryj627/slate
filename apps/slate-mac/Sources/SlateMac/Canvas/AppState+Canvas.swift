@@ -326,32 +326,15 @@ extension AppState {
     /// selected card's full context — announced AND rendered in a
     /// focusable transient panel so braille users read it at leisure.
     func canvasWhereAmI() {
-        guard let tab = workspace.activeTab, case .canvas(let path) = tab.item else { return }
-        let doc = canvasDocument(for: path)
-        // The STATE is checked before the handle. Reversed — as it was —
-        // a canvas that never opened cleanly fell out of the handle
-        // guard and said nothing, which made the `.notReadable` arm
-        // below unreachable and contradicted this function's own
-        // promise that Where-am-I always answers (t0 §1.4: it is the
-        // pull surface, and a pull that yields silence is the failure
-        // it exists to prevent).
-        guard case .ready = doc.state else {
-            // `.loading` is VA-2, not "not readable": a canvas that has
-            // not finished opening is not a canvas that cannot be read.
-            // The other three non-ready states keep `.notReadable`.
-            if case .loading = doc.state {
-                canvasAnnouncer.announce(.canvasStatus(note: .loading))
-            } else {
-                canvasAnnouncer.announce(.canvasStatus(note: .notReadable))
-            }
-            return
-        }
-        // Ready but handle-less is the reopening window. Through VA-1's
-        // one trigger, not a second copy of the sentence — Where-am-I is
-        // a member of that list like the navigation verbs.
-        guard let handle = doc.handle, let session = currentSession else {
-            return canvasAnnounceStructuralQueryUnavailable(for: doc)
-        }
+        // Through the one state mapping, like every other read verb.
+        // Where-am-I used to carry its own per-state answers — that is
+        // where `.notReadable` came from, and the mapping now gives it
+        // to everyone (t0 §1.4: this is the pull surface, and a pull
+        // that yields silence is the failure it exists to prevent).
+        guard let target = canvasReadTarget() else { return }
+        let doc = target.doc
+        let session = target.session
+        let handle = target.handle
         // Fall back to the first card in reading order when nothing is
         // selected yet (fresh landing) — "where am I" always answers.
         guard let nodeId = doc.selection.selected ?? doc.outline.first?.nodeId else {

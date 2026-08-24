@@ -416,7 +416,17 @@ extension AppState {
         guard doc.filterActive else { return }
         let view = doc.filterView(session: currentSession)
         guard view.current else {
-            canvasAnnouncer.announce(.canvasStatus(note: .reopening))
+            // The needle went unanswered. WHICH sentence that owes is
+            // the state mapping's call, not this function's — it used
+            // to hardcode `.reopening`, which was simply false in
+            // `.loading` and in the three unreadable states.
+            //
+            // A mapping that says the canvas CAN answer means the
+            // handle went stale inside the call itself; `.reopening` is
+            // the honest "not now" for that, and it is the one arm the
+            // mapping cannot speak to.
+            canvasAnnouncer.announce(
+                .canvasStatus(note: canvasReadRefusal(for: doc) ?? .reopening))
             return
         }
         canvasAnnouncer.announce(

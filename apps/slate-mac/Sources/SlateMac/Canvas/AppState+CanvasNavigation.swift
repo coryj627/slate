@@ -3,6 +3,16 @@
 
 import Foundation
 
+/// What a canvas READ verb needs to run, handed out only by
+/// `AppState.canvasReadContext(for:)` so no verb re-derives whether it
+/// may proceed. Holding one is the proof that the state mapping said
+/// yes.
+struct CanvasReadContext {
+    let doc: CanvasDocument
+    let session: VaultSession
+    let handle: UInt64
+}
+
 /// The canvas keyboard navigator (Milestone T, #364) — deliberately a
 /// **command layer, not a fourth view** (t2 shared-architecture
 /// decision): these commands are hosted by every canvas surface and
@@ -22,78 +32,81 @@ extension AppState {
         return doc
     }
 
-    /// The document a structural READ verb may work from, or `nil`
-    /// after announcing what its state owes the user.
+    /// **The one state → response mapping for canvas READ verbs.**
     ///
-    /// `LoadState` is `.loading`, `.ready`, `.degraded`, `.failed`,
-    /// `.retargetFailed` — one readable and four not. Each answers
-    /// differently:
+    /// `nil` means the document can answer a core query. Anything else
+    /// is the sentence its state owes the user, and it is TOTAL over
+    /// `LoadState` — the `switch` has no `default`, so a new case fails
+    /// to compile here rather than falling into somebody's silent arm.
     ///
-    /// - `.ready` — the document, for the verb to use;
-    /// - `.loading` — **VA-2**. Reachable as a first open, and as a
-    ///   prepared replacement installed over an already-open tab
-    ///   (`beginPreparedReplacement`), where the old snapshot is still
-    ///   on screen. VA-1's copy says "reopening", which is false the
-    ///   first time a canvas is opened, so this is its own sentence;
-    /// - `.degraded` / `.failed` / `.retargetFailed` — silent, and
-    ///   that is the PRE-EXISTING t0 §5 gap filed in the contracts'
-    ///   mac-details register. PR 0b neither caused it nor changes it
-    ///   here; closing it is its own piece of work.
+    /// | State | Answer |
+    /// |---|---|
+    /// | `.ready`, handle live | `nil` — proceed |
+    /// | `.ready`, handle detached | `.reopening` (VA-1) |
+    /// | `.loading` | `.loading` (VA-2) |
+    /// | `.degraded`, `.failed`, `.retargetFailed` | `.notReadable` |
     ///
-    /// Membership is VA-1's membership: the same verbs that say
-    /// "reopening" for a detached handle say "loading" for a document
-    /// that has not finished opening — enter group, exit group, trace
-    /// path, fit canvas, Where-am-I, follow-connection, plus the filter
-    /// family on its own path.
+    /// This exists because the alternative did not survive contact:
+    /// three review rounds in a row found a member missing from a
+    /// handwritten list, or a state missing from a handwritten
+    /// response set, or two lists disagreeing. Red-team protocol rule 4
+    /// says stop patching the sentences and implement the invariant, so
+    /// there is now one function to read, one place to change, and a
+    /// Rust guard (`slate-uniffi`) that fails when a canvas query is
+    /// called from a function that does not route through here and is
+    /// not on a named exclusion list.
     ///
-    /// Outside it is the SNAPSHOT-ONLY subset: `canvasSelectAdjacent`
-    /// and the zoom/pan verbs, which read `doc.outline` / `doc.scene` /
-    /// `doc.viewport` rather than a core query, so they have no handle
-    /// to be missing. Note fit canvas is NOT in that subset even though
-    /// it is a viewport command — it answers from `canvas_bounds`.
-    func canvasReadTarget() -> CanvasDocument? {
+    /// Two decisions this table carries. `.reopening` is a NEW sentence
+    /// rather than the write refusal, because
+    /// `CanvasMutationRefusal.reopening` ends "before making changes",
+    /// which is wrong in the ear of a user who pressed a navigation key
+    /// and changed nothing. And the detached handle is not reused for
+    /// reads: that would downgrade a structural write-safety invariant
+    /// — no handle, so `canvas_apply` is unreachable — to a
+    /// host-enforced one. Permanently refused (contracts doc, §0b
+    /// "Verified during implementation").
+    func canvasReadRefusal(for doc: CanvasDocument) -> CanvasStatusNote? {
+        switch doc.state {
+        case .ready:
+            // The one reachable `.ready`-with-no-handle state is
+            // `beginBatchRetarget`'s window: the snapshot stays visible
+            // while the path-bound handle is detached so nothing can
+            // save through the moved-away path.
+            return doc.handle == nil || currentSession == nil ? .reopening : nil
+        case .loading:
+            // A first open, or a prepared replacement installed over an
+            // already-open tab. "Reopening" would be false for the
+            // first, which is why VA-2 is its own sentence.
+            return .loading
+        case .degraded, .failed, .retargetFailed:
+            // Where-am-I's answer, now everyone's: a canvas that never
+            // opened cleanly, was moved to Trash, or failed to reopen
+            // cannot answer a structural question, and saying nothing
+            // was the t0 §5 gap.
+            return .notReadable
+        }
+    }
+
+    /// What a read verb needs, or `nil` after ANNOUNCING what the
+    /// state owes. The announcement happens here so no member decides
+    /// which sentence its state deserves.
+    func canvasReadContext(for doc: CanvasDocument) -> CanvasReadContext? {
+        if let note = canvasReadRefusal(for: doc) {
+            canvasAnnouncer.announce(.canvasStatus(note: note))
+            return nil
+        }
+        // Unreachable by the mapping above, which refuses both nils —
+        // this is the unwrap, not a second policy.
+        guard let session = currentSession, let handle = doc.handle else { return nil }
+        return CanvasReadContext(doc: doc, session: session, handle: handle)
+    }
+
+    /// The active tab's canvas, through the mapping.
+    func canvasReadTarget() -> CanvasReadContext? {
         guard let tab = workspace.activeTab, case .canvas(let path) = tab.item else {
             return nil
         }
-        let doc = canvasDocument(for: path)
-        if case .ready = doc.state { return doc }
-        if case .loading = doc.state {
-            canvasAnnouncer.announce(.canvasStatus(note: .loading))
-        }
-        return nil
-    }
-
-    /// VA-1's one trigger, so every member reaches the sentence the
-    /// same way. Its members are the structural read verbs — enter
-    /// group, exit group, trace path, fit canvas, Where-am-I,
-    /// follow-connection — plus the filter family, which owns its own
-    /// path because a stale filter answer needs a different decision
-    /// than a missing one (contracts doc, VA-1).
-    ///
-    /// They all answer from core queries that need the native handle,
-    /// and exactly one reachable state pairs a `.ready` canvas with no
-    /// handle: `beginBatchRetarget`'s window, between a physical move
-    /// landing and its background reopen, where the handle is
-    /// deliberately detached so nothing can save through the moved-away
-    /// path.
-    ///
-    /// t0's never-silent principle: a keypress that does nothing has to
-    /// say so. `CanvasStatusNote.reopening` is that sentence — a NEW
-    /// one, drafted for this trigger rather than borrowed from the
-    /// write refusal (`CanvasMutationRefusal.reopening`), whose
-    /// "before making changes" tail would be wrong in the ear of a user
-    /// who changed nothing.
-    ///
-    /// Retaining the detached handle for reads was considered and is
-    /// permanently refused: it would downgrade a structural
-    /// write-safety invariant to a host-enforced one (contracts doc,
-    /// §0b "Verified during implementation").
-    ///
-    /// Not `private`: Where-am-I lives in `AppState+Canvas.swift` and
-    /// must reach the same decision, not a second copy of it.
-    func canvasAnnounceStructuralQueryUnavailable(for doc: CanvasDocument) {
-        guard doc.handle == nil else { return }
-        canvasAnnouncer.announce(.canvasStatus(note: .reopening))
+        return canvasReadContext(for: canvasDocument(for: path))
     }
 
     /// The other never-silent arm: the query THREW while the handle was
@@ -155,14 +168,12 @@ extension AppState {
     /// selected" answers the same way in every state — the reopening
     /// window must not turn a selection question into a reopening one.
     func canvasEnterGroup() {
-        guard let doc = canvasReadTarget() else { return }
+        guard let target = canvasReadTarget() else { return }
+        let doc = target.doc
         guard let selected = doc.selection.selected,
             let row = doc.outline.first(where: { $0.nodeId == selected })
         else {
             return canvasAnnounceSelectionUnresolvable()
-        }
-        guard let session = currentSession, let handle = doc.handle else {
-            return canvasAnnounceStructuralQueryUnavailable(for: doc)
         }
         guard row.kind == "group" else {
             canvasAnnouncer.announce(.canvasStatus(note: .notAGroup))
@@ -171,7 +182,9 @@ extension AppState {
         // A THROW is not an empty group — see
         // `canvasAnnounceSelectionUnresolvable`. Only a successful query
         // that came back empty may claim the group is empty.
-        guard let children = try? session.canvasChildrenOf(handle: handle, groupId: selected)
+        guard
+            let children = try? target.session.canvasChildrenOf(
+                handle: target.handle, groupId: selected)
         else {
             return canvasAnnounceSelectionUnresolvable()
         }
@@ -190,12 +203,10 @@ extension AppState {
     /// `canvas_parent_of` (contract 0b-8) answers it, and `nil` — no
     /// parent — is exactly "at canvas level".
     func canvasExitGroup() {
-        guard let doc = canvasReadTarget() else { return }
+        guard let target = canvasReadTarget() else { return }
+        let doc = target.doc
         guard let selected = doc.selection.selected else {
             return canvasAnnounceSelectionUnresolvable()
-        }
-        guard let session = currentSession, let handle = doc.handle else {
-            return canvasAnnounceStructuralQueryUnavailable(for: doc)
         }
         // A THROW is not "at canvas level" — a card the canvas cannot
         // resolve has no level. Only a successful query returning no
@@ -210,7 +221,8 @@ extension AppState {
         // which is how it was caught.
         let parent: String?
         do {
-            parent = try session.canvasParentOf(handle: handle, nodeId: selected)
+            parent = try target.session.canvasParentOf(
+                handle: target.handle, nodeId: selected)
         } catch {
             return canvasAnnounceSelectionUnresolvable()
         }
@@ -238,15 +250,15 @@ extension AppState {
         // nothing-selected press SILENT on an ordinary ready canvas —
         // palette-reachable, and out of step with the three sibling
         // verbs that answer it.
-        guard let doc = canvasReadTarget() else { return }
+        guard let target = canvasReadTarget() else { return }
+        let doc = target.doc
         guard let selected = doc.selection.selected else {
             return canvasAnnounceSelectionUnresolvable()
         }
-        guard let neighbors = doc.neighborsIfKnown(of: selected, session: currentSession)
+        // Past the mapping the handle is live, so an unanswerable
+        // lookup here is a refused id, not a state.
+        guard let neighbors = doc.neighborsIfKnown(of: selected, session: target.session)
         else {
-            if doc.handle == nil {
-                return canvasAnnounceStructuralQueryUnavailable(for: doc)
-            }
             return canvasAnnounceSelectionUnresolvable()
         }
         let candidates = neighbors.filter { neighbor in
@@ -288,16 +300,16 @@ extension AppState {
     /// ended it. The hops EXCLUDE the start card, so an empty list is
     /// the dead end mac spelled as `visited.count == 1`.
     func canvasTracePath() {
-        guard let doc = canvasReadTarget() else { return }
+        guard let target = canvasReadTarget() else { return }
+        let doc = target.doc
         guard let start = doc.selection.selected else {
             return canvasAnnounceSelectionUnresolvable()
         }
-        guard let session = currentSession, let handle = doc.handle else {
-            return canvasAnnounceStructuralQueryUnavailable(for: doc)
-        }
         // A THROW is not a dead end: `No outgoing path from "X".` is
         // spoken only when the walk actually came back with no hops.
-        guard let hops = try? session.canvasTracePath(handle: handle, nodeId: start) else {
+        guard let hops = try? target.session.canvasTracePath(
+            handle: target.handle, nodeId: start)
+        else {
             return canvasAnnounceSelectionUnresolvable()
         }
         let startTitle = doc.outline.first { $0.nodeId == start }?.title
@@ -383,16 +395,14 @@ extension AppState {
         // node including group frames, exactly what the union loop that
         // stood here covered. `nil` is the empty canvas, which is the
         // `!doc.scene.nodes.isEmpty` guard it replaces.
-        guard let doc = canvasReadTarget() else { return }
-        guard let session = currentSession, let handle = doc.handle else {
-            return canvasAnnounceStructuralQueryUnavailable(for: doc)
-        }
+        guard let target = canvasReadTarget() else { return }
+        let doc = target.doc
         // One `?`, not two (SE-0230 flattens): an empty canvas and a
         // thrown query arrive as the same `nil`, and both stay silent —
         // the empty case was silent before PR 0b, and `canvas_bounds`
         // has no `bad_node` path to distinguish (contracts doc, VA-1's
         // recorded exclusions).
-        guard let bounds = try? session.canvasBounds(handle: handle)
+        guard let bounds = try? target.session.canvasBounds(handle: target.handle)
         else { return }
         doc.viewport.fit(
             rect: CGRect(

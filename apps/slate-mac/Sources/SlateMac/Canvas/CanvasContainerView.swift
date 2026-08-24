@@ -384,7 +384,11 @@ struct CanvasContainerView: View {
     private var filterSummary: String {
         let view = document.filterView(session: appState.currentSession)
         guard view.current else {
-            return a11yRender(event: .canvas(event: .canvasStatus(note: .reopening))).text
+            // The same sentence the announcement gives, from the same
+            // state mapping — one render, no second composition, and no
+            // second opinion about which sentence the state owes.
+            let note = appState.canvasReadRefusal(for: document) ?? .reopening
+            return a11yRender(event: .canvas(event: .canvasStatus(note: note))).text
         }
         return "\(view.rows.count) of "
             + "\(CountCopy.counted(document.outline.count, "card", "cards")) "

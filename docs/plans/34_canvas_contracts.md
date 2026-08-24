@@ -866,12 +866,12 @@ which must still give the real dead-end phrase — VA-1 must not
 over-fire),
 `testFilterInTheReopeningWindowNeverAnnouncesAWrongCount` (the filter
 family's three rules and the displayed-equals-announced invariant) and
-`testEveryNonReadyLoadStateAnswersItsOwnWay` (ALL FOUR non-ready
-states — `.loading`, `.degraded`, `.failed`, `.retargetFailed` —
-materialized through their real lifecycle methods and each driving
-every VA member: VA-2 for `.loading`, silence for the other three. One
-test, because splitting the states across two is what let `.loading` go
-unexamined twice) and
+`testEveryNonReadyLoadStateAnswersWhatTheMappingSays` (every non-ready
+state — `.loading`, `.degraded`, `.failed`, `.retargetFailed` —
+materialized through its real lifecycle method, each driving every VA
+member, and every expectation taken FROM `canvasReadRefusal(for:)`
+rather than written beside it, so the test cannot drift from the
+mapping) and
 `testFollowConnectionWithoutASelectionAnswersLikeItsSiblings` (the
 selection question, answered the same on a ready canvas as its
 siblings answer it).
@@ -924,9 +924,11 @@ is visible, but the path-bound handle is detached until the background
 reopen lands, so the queries those verbs delegate to have no handle to
 answer from.
 
-**VA-1's members, in full** — the list is exhaustive on purpose, because
-the first version of it was scoped to the verbs PR 0b silenced rather
-than to the verbs REACHABLE in the window, and missed two:
+**VA-1's members** — written here for a reader; the list a REVIEWER
+should trust is the one `every_mac_canvas_read_is_gated_or_named`
+derives from the Swift source (see VA-2's section). Handwritten
+membership is what rule 4 was invoked over, and this table is now a
+description of the derivation rather than the authority:
 
 | Member | Site | What it would otherwise do |
 |---|---|---|
@@ -1049,8 +1051,8 @@ coalescing class list did not change, because `CanvasStatus` is
 family, uncoalesced. VA-1's sibling, same membership, different state.
 
 `LoadState` is `.loading`, `.ready`, `.degraded`, `.failed` and
-`.retargetFailed` — one readable state and FOUR non-ready ones — and
-VA-1 only ever answered for the readable one.
+`.retargetFailed`; only `.ready` can answer a query, and VA-1 answered
+for that one alone.
 `.loading` is reachable two ways: a first open, and a prepared
 replacement installed over an already-open tab
 (`beginPreparedReplacement`), where the previous snapshot stays on
@@ -1062,29 +1064,73 @@ than a stretched one. That is the same decision VA-1 made against
 `CanvasMutationRefusal::Opening` covers `.loading` for WRITES and keeps
 its *"Wait for it to finish before making changes."* tail, untouched.
 
-**The gate is shared.** `canvasReadTarget()` is the one place a
-structural read verb resolves its document: `.ready` yields it,
-`.loading` announces VA-2, and `.degraded` / `.failed` /
-`.retargetFailed` stay silent — the pre-existing t0 §5 gap filed in
-"Mac details recorded while reading", which PR 0b neither caused nor
-closes. Where-am-I reaches the same decision through its own
-`.notReadable` guard, because "not readable" is false for a canvas that
-simply has not finished opening.
+**One mapping, and membership is DERIVED — red-team rule 4.**
 
-**Membership, named rather than gestured at.** The VA members are
-enter group, exit group, trace path, **fit canvas**, Where-am-I,
-follow-connection, and the filter family. Fit canvas IS one — it
-answers from `canvas_bounds`, so it takes `canvasReadTarget()` and both
-VA tests require its sentence.
+Three consecutive review rounds found the same class of defect in this
+subsystem: `.loading` bypassing VA-1, then the state census drifting,
+then the merged test's heterogeneous expectations plus a filter path
+that announced `.reopening` in every non-ready state. The class was
+never the individual sentence — it was **VA membership and per-state
+responses written by hand in four places**. Rule 4 says stop patching
+and implement the invariant.
 
-What is outside is the SNAPSHOT-ONLY subset: arrow movement
-(`canvasSelectAdjacent`) and the zoom/pan verbs — `canvasZoomIn`,
-`canvasZoomOut`, `canvasActualSize`, `canvasZoomToSelection`,
-`canvasToggleFollowSelection`. Each of those reads published state
-(`doc.outline`, `doc.scene`, `doc.viewport`) rather than a core query,
-so there is no handle for them to be missing and nothing for a VA
-sentence to be about. "The viewport verbs" as a category would be
-wrong, because fit canvas is one of them and is a member.
+**`AppState.canvasReadRefusal(for:)` is now the single state → response
+authority**, total over `LoadState` with no `default`, so a new case
+fails to compile there rather than falling into somebody's silent arm:
+
+| State | Answer |
+|---|---|
+| `.ready`, handle live | proceed |
+| `.ready`, handle detached | `.reopening` (VA-1) |
+| `.loading` | `.loading` (VA-2) |
+| `.degraded`, `.failed`, `.retargetFailed` | `.notReadable` |
+
+Every member routes through it — `canvasReadContext(for:)` announces
+and returns `nil`, or hands back a `CanvasReadContext` whose existence
+IS the proof the mapping said yes, so no verb re-derives session and
+handle. The last row is Where-am-I's old per-state answer becoming
+everyone's; it also closes the announcement half of the t0 §5 gap filed
+in "Mac details recorded while reading" (those canvases now SAY they
+cannot be read — they are still not navigable, which is what remains
+filed).
+
+**The filter family routes through it too.** `canvasAnnounceFilterCount`
+and the summary label used to hardcode `.reopening` when the needle went
+unanswered, which was simply false in `.loading` and in the three
+unreadable states. They ask the mapping now. The one arm the mapping
+cannot speak to — a state that CAN answer, meaning the handle went
+stale inside the call — keeps `.reopening` as the honest "not now", and
+says so at the site.
+
+**Membership is enforced, not curated.**
+`every_mac_canvas_read_is_gated_or_named` (`slate-uniffi`, sibling to
+the coalescing tripwire) scans the mac tree for calls to the
+handle-based canvas read queries and asserts each calling function
+either mentions `canvasReadTarget` / `canvasReadContext` /
+`canvasReadRefusal`, or appears on a NAMED exclusion list with a stated
+reason. Adding an ungated read verb fails the test and names the
+function — mutation-verified. Two properties make it non-vacuous: it
+asserts it found call sites at all, and it asserts every exclusion still
+calls a scanned query, so a stale excuse cannot sit there hiding the
+next one.
+
+The exclusions, each with its reason: `filterView` and
+`neighborsIfKnown` (the document's data layer RETURNS un-answerability
+instead of announcing it, so their callers can route through the
+mapping); and `canvasRemoveFromGroup`, `canvasGroupMarked`,
+`canvasDuplicate`, `canvasInReadingOrder`, `canvasRelativeDescription`
+(write paths behind `admitCanvasMutation`, a different ladder with its
+own spoken refusals — routing them here would double-announce).
+
+`canvasSelectAdjacent` is deliberately NOT an exclusion. It reaches
+`canvas_filter` only through `filteredOutline`, so the scan never sees
+it, and `FilterView.current` already separates a live answer from a
+retained one — which is exactly what keeps arrow movement working on
+the displayed rows in the reopening window, as VA-1's tests require.
+Decided by reading the path, recorded here rather than left implicit.
+
+`canvasAutoSides` is outside the scanned set: it takes no handle and
+cannot fail, so there is no state for a mapping to answer about.
 
 Same five-place lockstep as VA-1, and the §W-D artifact diff is again
 **five lines, purely additive**.
@@ -1932,7 +1978,7 @@ every deleted symbol was re-grepped to zero afterwards.
   FAILURE now:
   `testOnlyTheBatchRetargetWindowPairsReadyWithNoHandle` asserts the
   sentence at each VA-1 member, and
-  `testEveryNonReadyLoadStateAnswersItsOwnWay` pins the
+  `testEveryNonReadyLoadStateAnswersWhatTheMappingSays` pins the
   `.ready` gate that makes the reachability claim checkable rather than
   merely asserted.
 
@@ -2112,6 +2158,43 @@ than the sentence — nested exhaustiveness, value-level classification,
 zero witnesses where a host reaches zero, (arm, string) provenance,
 continuation-joining plus bare-literal detection, and the guard's
 residual classes named in 0a-14 rather than implied away.
+
+**Codex 0b rounds 1–3 — PROTOCOL RULE 4 (second invocation this
+programme).** Three consecutive rounds of blockers in one subsystem: the
+VA/reopening family. Round 1 found `.loading` bypassing VA-1 entirely
+(plus a `try?`-flattening compile break and an auto-side pair read
+twice); round 2 found the state census drifting — "four cases" where
+`LoadState` has five — after round 1 had just fixed a membership list;
+round 3 found the merged test asserting handwritten per-state
+expectations while the filter family announced `.reopening` in every
+non-ready state.
+
+**The class was never the sentence.** It was *VA membership and
+per-state responses maintained as handwritten lists in four places* —
+the same shape as 0a's round-4 finding (hand-quantified prose over a
+machine-enumerable corpus), and each round's fix corrected the named
+list and left the next copy of it standing.
+
+Per rule 4 the patching stopped and the invariant was implemented:
+`canvasReadRefusal(for:)` is one total mapping over `LoadState`; every
+member reaches it through `canvasReadContext(for:)`, whose return value
+is the proof it said yes; the filter family routes through it; the test
+takes its expectations FROM it rather than restating them; and
+`every_mac_canvas_read_is_gated_or_named` derives membership from the
+Swift source, failing when a canvas read query is called from a
+function that neither routes through the mapping nor appears on a named
+exclusion list with a reason.
+
+Mutation-verified: an ungated read verb fails the guard by name; an
+exclusion that stops calling a query fails the anti-rot assertion. Both
+were observed failing and reverted.
+
+Round 3's non-membership findings landed with it: rustc's
+string-continuation escape skips blank lines and CRs, not just
+indentation (the decoder now matches, with codex's multi-newline probe
+as a witness, mutation-verified both ways); the surviving "four"
+counts became names; and the SE-0230 sweep's zero became true rather
+than a property of its closure.
 
 **Codex adversarial round 6 — the final strengthening wave.** NOT SAFE.
 `ZERO_REACHABLE` recorded that no bulk verb can reach zero, and codex

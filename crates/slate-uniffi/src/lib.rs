@@ -13716,4 +13716,223 @@ mod canvas_mirror_tests {
             frame.iteration
         );
     }
+
+    /// Every mac call of a canvas READ query routes through the one
+    /// state mapping, or is named as an exclusion with a reason.
+    ///
+    /// **Why this is a parser and not a list.** VA-1/VA-2 membership and
+    /// the per-state responses were handwritten in four places, and
+    /// three consecutive review rounds found the same class of defect:
+    /// a member missing from a list, a state missing from a response
+    /// set, two lists disagreeing. Red-team protocol rule 4 says stop
+    /// fixing the sentences and implement the invariant. Membership is
+    /// DERIVED here: a Swift function that calls a canvas read query
+    /// either mentions `canvasReadTarget` / `canvasReadContext` /
+    /// `canvasReadRefusal` in its body, or it is on `EXCLUSIONS` with a
+    /// stated reason. Adding an ungated read verb fails this test and
+    /// names the function.
+    ///
+    /// Scope is the canvas READ set — the queries whose answer depends
+    /// on a live handle. Mutating entry points (`canvas_apply`,
+    /// `open_canvas`) are outside it: they are gated by
+    /// `admitCanvasMutation`, a different ladder with its own spoken
+    /// refusals.
+    #[test]
+    fn every_mac_canvas_read_is_gated_or_named() {
+        use std::collections::BTreeMap;
+
+        /// The generated Swift names of the handle-based canvas read
+        /// queries — the ones whose answer depends on a live handle, so
+        /// the ones a state mapping can have an opinion about.
+        ///
+        /// `canvasAutoSides` is deliberately absent: it takes no handle
+        /// and cannot fail, so there is no state for a mapping to
+        /// answer about and nothing to gate.
+        const READ_QUERIES: &[&str] = &[
+            "canvasParentOf",
+            "canvasChildrenOf",
+            "canvasTracePath",
+            "canvasOrderNodes",
+            "canvasFilter",
+            "canvasBounds",
+            "canvasDescribeRelative",
+            "canvasNeighbors",
+            "canvasGroupRectAround",
+            "canvasWhereAmI",
+        ];
+
+        /// The one place membership is allowed to be a list — and every
+        /// entry states why the mapping does not apply. Function names,
+        /// not files, so moving a function does not silently excuse it.
+        /// An entry that stops calling a scanned query fails the
+        /// anti-rot assertion below, because a stale excuse is how the
+        /// next ungated verb hides.
+        ///
+        /// `canvasSelectAdjacent` is NOT here, and that is a decision
+        /// rather than an omission: it reaches `canvas_filter` only
+        /// through `filteredOutline`, so this scan never sees it, and
+        /// `FilterView.current` already separates a live answer from a
+        /// retained one — which is what keeps arrow movement working on
+        /// the displayed rows in the reopening window, as VA-1's tests
+        /// require. Recorded in the contracts (codex 0b round 3).
+        const EXCLUSIONS: &[(&str, &str)] = &[
+            // The document's own data layer RETURNS un-answerability
+            // (`FilterView.current`, `neighborsIfKnown`'s `nil`) rather
+            // than announcing it, so its callers can route through the
+            // mapping. Gating here too would announce twice.
+            (
+                "filterView",
+                "returns `current: false`; the caller announces",
+            ),
+            ("neighborsIfKnown", "returns nil; the caller announces"),
+            // Write verbs sit behind `admitCanvasMutation`, a different
+            // ladder with its own spoken refusals; routing them through
+            // the read mapping would double-announce.
+            (
+                "canvasRemoveFromGroup",
+                "write verb behind admitCanvasMutation",
+            ),
+            ("canvasGroupMarked", "write verb behind admitCanvasMutation"),
+            ("canvasDuplicate", "write verb behind admitCanvasMutation"),
+            (
+                "canvasInReadingOrder",
+                "projection for write verbs behind admission",
+            ),
+            (
+                "canvasRelativeDescription",
+                "move-mode narration behind admission",
+            ),
+        ];
+
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let root = manifest.join("../../apps/slate-mac/Sources/SlateMac");
+        let mut sources: Vec<std::path::PathBuf> = Vec::new();
+        let mut stack = vec![root.clone()];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).expect("mac sources") {
+                let path = entry.expect("dir entry").path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().and_then(|e| e.to_str()) == Some("swift")
+                    // The generated bindings DECLARE the queries; they
+                    // are not a host call site.
+                    && path.file_name().and_then(|n| n.to_str()) != Some("slate_uniffi.swift")
+                {
+                    sources.push(path);
+                }
+            }
+        }
+        assert!(
+            !sources.is_empty(),
+            "no mac Swift sources found under {}; this guard would pass vacuously",
+            root.display()
+        );
+
+        // Enclosing `func` per line, by brace depth: a function owns
+        // every line until its body closes.
+        let mut callers: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut bodies: BTreeMap<String, String> = BTreeMap::new();
+        for path in &sources {
+            let text = std::fs::read_to_string(path).expect("swift source");
+            let file = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default()
+                .to_string();
+            let lines: Vec<&str> = text.lines().collect();
+            let mut current: Option<(String, i32)> = None;
+            // A Swift signature may put its opening brace on a later
+            // line, so "the body closed" only means something once the
+            // body has been ENTERED — without this, every such function
+            // was dropped on its own declaration line and its calls
+            // went unattributed.
+            let mut entered = false;
+            let mut depth: i32 = 0;
+            for (index, line) in lines.iter().enumerate() {
+                let trimmed = line.trim_start();
+                let code = trimmed.split("//").next().unwrap_or("");
+                // Every query in the read set is handle-based, so a
+                // `handle:` argument is what separates the FFI call from
+                // a host verb that happens to share its name
+                // (`appState?.canvasTracePath()` is the navigator's).
+                // Three lines, because these calls wrap.
+                let window = lines[index..(index + 3).min(lines.len())].join(" ");
+                let handle_keyed = window.contains("handle:");
+                if current.is_none()
+                    && let Some(rest) = code.split_once("func ")
+                    && let Some(name) = rest
+                        .1
+                        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                        .find(|s| !s.is_empty())
+                {
+                    current = Some((name.to_string(), depth));
+                    entered = false;
+                }
+                if let Some((name, _)) = &current {
+                    let name = name.clone();
+                    for query in READ_QUERIES {
+                        // `.canvasFoo(` — a CALL, not the declaration.
+                        if code.contains(&format!(".{query}(")) && handle_keyed {
+                            callers
+                                .entry(name.clone())
+                                .or_default()
+                                .push(format!("{file}: {}", trimmed.trim_end()));
+                        }
+                    }
+                    bodies.entry(name).or_default().push_str(code);
+                }
+                depth += code.matches('{').count() as i32;
+                depth -= code.matches('}').count() as i32;
+                if let Some((_, opened)) = &current {
+                    if depth > *opened {
+                        entered = true;
+                    } else if entered {
+                        current = None;
+                    }
+                }
+            }
+        }
+
+        assert!(
+            !callers.is_empty(),
+            "no canvas read-query call sites found in the mac tree; the query names or \
+             the scan are wrong, and this guard would pass vacuously"
+        );
+
+        let gated = |name: &str| -> bool {
+            bodies.get(name).is_some_and(|body| {
+                body.contains("canvasReadTarget")
+                    || body.contains("canvasReadContext")
+                    || body.contains("canvasReadRefusal")
+            })
+        };
+        let excluded: BTreeMap<&str, &str> = EXCLUSIONS.iter().copied().collect();
+
+        let mut ungated: Vec<String> = Vec::new();
+        for (name, sites) in &callers {
+            if gated(name) || excluded.contains_key(name.as_str()) {
+                continue;
+            }
+            ungated.push(format!("{name} — {}", sites.join("; ")));
+        }
+        assert!(
+            ungated.is_empty(),
+            "these mac functions call a canvas read query without routing through the \
+             state mapping (`canvasReadTarget`/`canvasReadContext`/`canvasReadRefusal`) \
+             and are not on the named exclusion list: {ungated:#?}"
+        );
+
+        // Anti-rot: an exclusion that no longer calls a read query is a
+        // stale excuse, and a stale excuse is how the next ungated verb
+        // hides.
+        let stale: Vec<&str> = EXCLUSIONS
+            .iter()
+            .map(|(name, _)| *name)
+            .filter(|name| !callers.contains_key(*name))
+            .collect();
+        assert!(
+            stale.is_empty(),
+            "these exclusions no longer call any canvas read query — delete them: {stale:?}"
+        );
+    }
 }

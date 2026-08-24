@@ -277,29 +277,28 @@ final class CanvasNavigatorTests: XCTestCase {
             "a cached adjacency answer survives the window: \(posted)")
     }
 
-    /// Every NON-READY load state, driven — one test, because splitting
-    /// them is what let `.loading` go unexamined behind an "all three"
-    /// claim, and then behind a "four cases" one. `LoadState` is
-    /// `.loading`, `.ready`, `.degraded`, `.failed`, `.retargetFailed`:
-    /// one readable, FOUR not, and all four of those are here.
+    /// Every non-ready load state, driven, with the expectations taken
+    /// FROM the mapping rather than written out beside it.
     ///
-    /// Each is materialized through the real lifecycle method, and each
-    /// drives every VA member, because "what this state does" is a
-    /// claim about pressing the key rather than about a state enum.
-    /// `.loading` owes VA-2; the other three are silent, which is the
-    /// pre-existing t0 §5 gap filed in the contracts — not a PR 0b
-    /// behaviour.
-    func testEveryNonReadyLoadStateAnswersItsOwnWay() async throws {
-        let loadingSentence = "This canvas is loading. Try again in a moment."
-
-        /// Drive all six VA members and assert this state's answer at
-        /// each, plus that none of them moved the caret.
-        func driveMembers(
-            _ label: String,
-            _ state: AppState,
-            _ doc: CanvasDocument,
-            expecting expected: [String]
-        ) {
+    /// `canvasReadRefusal(for:)` is the single state → response
+    /// authority. This test asks it what each state owes and then
+    /// asserts every VA member says exactly that — so the test cannot
+    /// drift from the code the way three rounds of handwritten lists
+    /// did, and a mapping change shows up here as a behaviour change
+    /// rather than as a stale expectation.
+    ///
+    /// `LoadState` is `.loading`, `.ready`, `.degraded`, `.failed`,
+    /// `.retargetFailed`; every non-ready one is materialized here
+    /// through its real lifecycle method.
+    func testEveryNonReadyLoadStateAnswersWhatTheMappingSays() async throws {
+        /// Drive every VA member and assert it speaks the mapping's
+        /// note — once — and moved no caret.
+        func driveMembers(_ label: String, _ state: AppState, _ doc: CanvasDocument) {
+            let note = state.canvasReadRefusal(for: doc)
+            XCTAssertNotNil(note, "\(label): a non-ready state owes a sentence")
+            let expected = note.map {
+                [a11yRender(event: .canvas(event: .canvasStatus(note: $0))).text]
+            }
             XCTAssertNil(
                 state.activeCanvasDocument,
                 "\(label): `.ready` is the gate the verbs pass")
@@ -319,6 +318,11 @@ final class CanvasNavigatorTests: XCTestCase {
             check("fit canvas") { state.canvasFitCanvas() }
             check("where am I") { state.canvasWhereAmI() }
             check("follow connection") { state.canvasFollowConnection(forward: true) }
+            // The filter family is a member too, and it reaches the
+            // same mapping by its own path.
+            doc.filterText = "gamma"
+            check("filter count") { state.canvasAnnounceFilterCount(doc: doc) }
+            doc.filterText = ""
         }
 
         // Selections are set AFTER each transition: a prepared install
@@ -326,8 +330,6 @@ final class CanvasNavigatorTests: XCTestCase {
         // `selectionBefore` nil and make the caret check vacuous.
 
         // --- .loading — VA-2 ------------------------------------------
-        // A prepared replacement over an already-open tab: the snapshot
-        // stays on screen while the state flips.
         let loadingState = try await makeState()
         let loading = try XCTUnwrap(loadingState.activeCanvasDocument)
         _ = loading.beginPreparedReplacement()
@@ -335,11 +337,10 @@ final class CanvasNavigatorTests: XCTestCase {
             return XCTFail("expected .loading, got \(loading.state)")
         }
         loading.selection.selected = "g1"
-        driveMembers("loading", loadingState, loading, expecting: [loadingSentence])
-        // VA-2 is not VA-1: "reopening" would be false for a first open.
-        XCTAssertFalse(posted.contains("This canvas is reopening. Try again in a moment."))
+        XCTAssertEqual(loadingState.canvasReadRefusal(for: loading), .loading)
+        driveMembers("loading", loadingState, loading)
 
-        // --- .failed (moved to Trash) — silent ------------------------
+        // --- .failed (moved to Trash) — `.notReadable` ----------------
         let trashedState = try await makeState()
         let trashed = try XCTUnwrap(trashedState.activeCanvasDocument)
         XCTAssertFalse(trashed.outline.isEmpty)
@@ -351,9 +352,10 @@ final class CanvasNavigatorTests: XCTestCase {
             trashed.outline.isEmpty,
             "the published snapshot survives — which is why it looked navigable")
         trashed.selection.selected = "g1"
-        driveMembers("failed", trashedState, trashed, expecting: [])
+        XCTAssertEqual(trashedState.canvasReadRefusal(for: trashed), .notReadable)
+        driveMembers("failed", trashedState, trashed)
 
-        // --- .degraded — silent ---------------------------------------
+        // --- .degraded — `.notReadable` -------------------------------
         let degradedState = try await makeState()
         let degraded = try XCTUnwrap(degradedState.activeCanvasDocument)
         degraded.applyPreparedLoad(
@@ -362,12 +364,11 @@ final class CanvasNavigatorTests: XCTestCase {
             return XCTFail("expected .degraded, got \(degraded.state)")
         }
         XCTAssertTrue(
-            degraded.outline.isEmpty,
-            "a degraded load CLEARS the outline — the pre-existing t0 §5 gap")
+            degraded.outline.isEmpty, "a degraded load CLEARS the outline")
         degraded.selection.selected = "g1"
-        driveMembers("degraded", degradedState, degraded, expecting: [])
+        driveMembers("degraded", degradedState, degraded)
 
-        // --- .retargetFailed — silent ---------------------------------
+        // --- .retargetFailed — `.notReadable` -------------------------
         let failedState = try await makeState()
         let failed = try XCTUnwrap(failedState.activeCanvasDocument)
         let reservation = failed.beginBatchRetarget(to: failed.path)
@@ -382,7 +383,7 @@ final class CanvasNavigatorTests: XCTestCase {
         XCTAssertFalse(
             failed.outline.isEmpty, "the last good snapshot is retained, not blanked")
         failed.selection.selected = "g1"
-        driveMembers("retargetFailed", failedState, failed, expecting: [])
+        driveMembers("retargetFailed", failedState, failed)
     }
 
     /// The document gate and the selection are different questions. On
@@ -1662,12 +1663,14 @@ extension CanvasNavigatorTests {
         XCTAssertTrue(posted.contains("Updated \"Alpha\"."), "\(posted)")
         let text = try state.currentSession?.canvasNodeText(
             handle: doc.handle ?? 0, nodeId: "a")
-        XCTAssertEqual(text ?? nil, "Alpha revised")
+        // One `?`: optional chaining flattens, so this is `String?`
+        // and the second unwrap was dead (SE-0230).
+        XCTAssertEqual(text, "Alpha revised")
 
         state.canvasUndo()
         let reverted = try state.currentSession?.canvasNodeText(
             handle: doc.handle ?? 0, nodeId: "a")
-        XCTAssertEqual(reverted ?? nil, "Alpha")
+        XCTAssertEqual(reverted, "Alpha")
     }
 
     func testEditCardNoChangeWritesNothing() async throws {
