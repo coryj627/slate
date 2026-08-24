@@ -849,30 +849,276 @@ public sealed class CanvasDocumentTests : IDisposable
         document.Shutdown();
     });
 
+    /// <summary>
+    /// Contract A14 end to end, through the PRODUCTION trigger: opening
+    /// a canvas from the workspace lands keyboard focus on a realized
+    /// outline row, and coming back from an activated card lands on
+    /// THAT row (WCAG 2.4.3).
+    /// </summary>
+    /// <remarks>
+    /// This fact used to call <c>FocusLandingRow()</c> itself, which is
+    /// manufacturing the delivery it claims to observe: it would have
+    /// passed with every open site's focus call deleted. It drives
+    /// <c>OpenPath</c> now — the real user route — with MainWindow's own
+    /// subscriber attached, so the two focus authorities actually
+    /// compete. Mutation-verified: removing the funnel's canvas request
+    /// fails it.
+    /// </remarks>
     [Fact]
-    public void OpeningLandsFocusOnTheFirstRowAndReturningRestoresIt() => RunSta(() =>
+    public void OpeningACanvasFromTheWorkspaceLandsFocusOnARealizedRow() => RunSta(() =>
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        using var host = new FocusHarness(workspace);
+        workspace.OpenPath("board.canvas");
+        host.Pump();
+
+        CanvasDocumentViewModel document = Assert.IsType<CanvasDocumentViewModel>(
+            workspace.ActiveGroup.ActiveTab!.Canvas);
+        // Delivered: the request is consumed and focus is on a row.
+        Assert.Null(document.FocusRequest);
+        CanvasOutlineRowViewModel landed = Assert.IsType<CanvasOutlineRowViewModel>(
+            host.FocusedRow());
+        Assert.Equal(document.Outline[0].NodeId, landed.Id);
+        Assert.Equal(document.Outline[0].NodeId, document.Selection.Selected);
+        // MainWindow's subscriber DID run — the canvas keeping focus is
+        // the handler standing aside, not the handler never firing.
+        Assert.NotEmpty(host.PaneFocusRequests);
+
+        // WCAG 2.4.3: activating a card records the row; coming back
+        // through the same funnel lands on it, not the top.
+        document.OpenFileCardFromSurface = (_, _) => true;
+        _ = document.Activate(Row(document, "note"));
+        workspace.RequestActiveEditorFocus();
+        host.Pump();
+        Assert.Null(document.FocusRequest);
+        CanvasOutlineRowViewModel restored = Assert.IsType<CanvasOutlineRowViewModel>(
+            host.FocusedRow());
+        Assert.Equal("note", restored.Id);
+    });
+
+    /// <summary>
+    /// The request is STATE, so a surface that mounts LATE still gets
+    /// it: the edge-triggered version delivered to whoever happened to
+    /// be subscribed at the instant, and a view created afterwards never
+    /// heard it at all.
+    /// </summary>
+    [Fact]
+    public void AFocusRequestSurvivesUntilASurfaceCanActuallyDeliverIt() => RunSta(() =>
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+
+        // Asked for before any surface exists at all.
+        document.RequestFocusLanding(tab);
+        Assert.NotNull(document.FocusRequest);
+
+        var surface = new CanvasSurfaceView { DataContext = tab, Model = document };
+        using var host = Host(surface);
+
+        // Mounting delivered it.
+        Assert.Null(document.FocusRequest);
+        Assert.NotNull(FocusedRow(host));
+    });
+
+    /// <summary>
+    /// A row whose container is virtualized away is REALIZED before
+    /// focus goes to it, and an unrealizable one does not consume the
+    /// request. <c>_tree.Focus()</c> used to stand in for both,
+    /// reporting success while the row was never reached.
+    /// </summary>
+    [Fact]
+    public void FocusRealizesADeeplyVirtualizedRowRatherThanFakingIt() => RunSta(() =>
+    {
+        File.Copy(
+            Path.Combine(
+                SourceText.RepoRoot(), "crates", "slate-core", "tests", "fixtures",
+                "canvas", "large_2000.canvas"),
+            Path.Combine(_fixture.Root, "large.canvas"),
+            overwrite: true);
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("large.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        var surface = new CanvasSurfaceView { DataContext = tab, Model = document };
+        using var host = Host(surface);
+
+        // A row far past the first viewport — its container cannot
+        // already exist under virtualization.
+        string deep = document.Outline[^1].NodeId;
+        document.RequestFocusLanding(tab, deep);
+        host.UpdateLayout();
+
+        Assert.Null(document.FocusRequest);
+        CanvasOutlineRowViewModel landed = Assert.IsType<CanvasOutlineRowViewModel>(
+            FocusedRow(host));
+        Assert.Equal(deep, landed.Id);
+    });
+
+    /// <summary>
+    /// A request naming a row this document does not have falls back to
+    /// the document's own answer rather than being consumed by nothing.
+    /// </summary>
+    [Fact]
+    public void AFocusRequestForAnUnknownRowFallsBackToTheFirst() => RunSta(() =>
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        var surface = new CanvasSurfaceView { DataContext = tab, Model = document };
+        using var host = Host(surface);
+
+        document.RequestFocusLanding(tab, "no-such-node");
+        host.UpdateLayout();
+        Assert.Null(document.FocusRequest);
+        Assert.Equal(
+            document.Outline[0].NodeId,
+            Assert.IsType<CanvasOutlineRowViewModel>(FocusedRow(host)).Id);
+    });
+
+    /// <summary>
+    /// A window hosting the active tab's canvas surface AND MainWindow's
+    /// own focus subscriber, so the two authorities compete exactly as
+    /// they do in the app (contract A14).
+    /// </summary>
+    private sealed class FocusHarness : IDisposable
+    {
+        private readonly Window _window;
+        private readonly ContentControl _content;
+        private readonly WorkspaceViewModel _workspace;
+        private readonly List<WorkspaceGroupViewModel> _paneFocusRequests = [];
+
+        internal FocusHarness(WorkspaceViewModel workspace)
+        {
+            _workspace = workspace;
+            _content = new ContentControl();
+            _window = new Window
+            {
+                Content = _content,
+                Width = 900,
+                Height = 700,
+                ShowInTaskbar = false,
+                WindowStyle = WindowStyle.None,
+                ShowActivated = false,
+            };
+            _window.Show();
+            // MainWindow's subscriber, in the shape that matters: the
+            // production handler returns early for a canvas tab (A14),
+            // so recording the call here proves it RAN and stood aside
+            // rather than that it never fired.
+            workspace.EditorPaneFocusRequested += OnPaneFocusRequested;
+        }
+
+        internal IReadOnlyList<WorkspaceGroupViewModel> PaneFocusRequests =>
+            _paneFocusRequests;
+
+        private void OnPaneFocusRequested(object? sender, WorkspaceGroupViewModel group) =>
+            _paneFocusRequests.Add(group);
+
+        /// <summary>Mount the active tab's canvas surface the way the
+        /// tab template does — DataContext is the tab.</summary>
+        internal void Pump()
+        {
+            WorkspaceTabViewModel? tab = _workspace.ActiveGroup.ActiveTab;
+            if (_content.Content is not CanvasSurfaceView surface
+                || !ReferenceEquals(surface.DataContext, tab))
+            {
+                surface = new CanvasSurfaceView { DataContext = tab, Model = tab?.Canvas };
+                _content.Content = surface;
+            }
+            else
+            {
+                surface.Model = tab?.Canvas;
+            }
+            _window.UpdateLayout();
+            // Drain Loaded/Render-priority work: a surface added to a
+            // shown window is Loaded asynchronously, and the delivery
+            // retries on that. The app's dispatcher does this by
+            // running; a test has to ask.
+            DrainDispatcher();
+        }
+
+        /// <summary>Run everything queued at Loaded priority or
+        /// above — the pass the app gets for free.</summary>
+        private static void DrainDispatcher()
+        {
+            var frame = new System.Windows.Threading.DispatcherFrame();
+            _ = System.Windows.Threading.Dispatcher.CurrentDispatcher.BeginInvoke(
+                System.Windows.Threading.DispatcherPriority.Background,
+                () => frame.Continue = false);
+            System.Windows.Threading.Dispatcher.PushFrame(frame);
+        }
+
+        internal CanvasOutlineRowViewModel? FocusedRow() =>
+            (System.Windows.Input.FocusManager.GetFocusedElement(_window)
+                as FrameworkElement)?.DataContext as CanvasOutlineRowViewModel;
+
+        public void Dispose()
+        {
+            _workspace.EditorPaneFocusRequested -= OnPaneFocusRequested;
+            _window.Close();
+        }
+    }
+
+    /// <summary>
+    /// An unrealizable container does NOT consume the request. This is
+    /// the property the old <c>_tree.Focus()</c> fallback destroyed: it
+    /// reported success, the request was cleared, focus sat on the tree,
+    /// and the row was never read — with nothing left to retry.
+    /// </summary>
+    /// <remarks>
+    /// Driven on a view that has a model and rows but no visual tree, so
+    /// no container can exist. Mutation-verified: restoring the fallback
+    /// makes this return the row.
+    /// </remarks>
+    [Fact]
+    public void AnUnrealizableRowIsNotReportedAsDelivered() => RunSta(() =>
     {
         CanvasDocumentViewModel document = NewDocument("board.canvas");
         document.Load();
-        var surface = new CanvasSurfaceView { Model = document };
-        // A rendered visual tree is what makes focus real.
-        using var host = Host(surface);
-        CanvasOutlineRowViewModel landed = Assert.IsType<CanvasOutlineRowViewModel>(
-            surface.OutlineForTests.FocusLandingRow());
-        Assert.Equal(document.Outline[0].NodeId, landed.Id);
-        Assert.Equal(document.Outline[0].NodeId, document.Selection.Selected);
-        Assert.Same(landed, FocusedRow(host));
+        // Never hosted: the generator has produced nothing.
+        var view = new CanvasOutlineView { Model = document };
+        Assert.NotEmpty(view.RootsForTests);
 
-        // WCAG 2.4.3: after activating a card, coming back lands on
-        // THAT row, not the top.
-        document.OpenFileCardFromSurface = (_, _) => true;
-        _ = document.Activate(Row(document, "note"));
-        CanvasOutlineRowViewModel restored = Assert.IsType<CanvasOutlineRowViewModel>(
-            surface.OutlineForTests.FocusLandingRow());
-        Assert.Equal("note", restored.Id);
-        Assert.Equal("note", document.Selection.Selected);
-        Assert.Same(restored, FocusedRow(host));
+        Assert.Null(view.DeliverFocus(document.Outline[0].NodeId));
         document.Shutdown();
+    });
+
+    /// <summary>
+    /// And the surface leaves the request PENDING when delivery fails,
+    /// so the next realization can still deliver it.
+    /// </summary>
+    [Fact]
+    public void AFailedDeliveryLeavesTheRequestPendingForTheNextTry() => RunSta(() =>
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+
+        // A surface that is not in any window: IsVisible is false, so
+        // nothing can be delivered.
+        var offscreen = new CanvasSurfaceView { DataContext = tab, Model = document };
+        document.RequestFocusLanding(tab);
+        Assert.NotNull(document.FocusRequest);
+        _ = offscreen;
+
+        // A surface that IS hosted delivers the same still-pending
+        // request.
+        var hosted = new CanvasSurfaceView { DataContext = tab, Model = document };
+        using var host = Host(hosted);
+        Assert.Null(document.FocusRequest);
+        Assert.NotNull(FocusedRow(host));
     });
 
     /// <summary>The LOGICAL focus target's row — keyboard focus needs
@@ -1644,17 +1890,23 @@ public sealed class CanvasDocumentTests : IDisposable
         using var host = Host(surface);
 
         // The document is already loaded and published; the surface
-        // mounts onto a registry HIT.
+        // mounts onto a registry HIT — no publish will ever come for it,
+        // which is what the old publish-triggered design missed
+        // entirely. The request is durable state, so mounting delivers
+        // the one OpenPath already raised.
         Assert.Equal(CanvasLoadState.Ready, first.Canvas!.State);
-        Assert.Null(FocusedRow(host));
-
-        // The open funnel every user-initiated open already calls.
-        workspace.RequestActiveEditorFocus();
-        host.UpdateLayout();
-
+        Assert.Null(first.Canvas.FocusRequest);
         CanvasOutlineRowViewModel landed = Assert.IsType<CanvasOutlineRowViewModel>(
             FocusedRow(host));
         Assert.Equal(first.Canvas.Outline[0].NodeId, landed.Id);
+
+        // And a fresh request on the same already-open document still
+        // lands, with no publish anywhere in sight.
+        first.Canvas.SelectNode("loose", announce: false);
+        workspace.RequestActiveEditorFocus();
+        host.UpdateLayout();
+        Assert.Null(first.Canvas.FocusRequest);
+        Assert.NotNull(FocusedRow(host));
     });
 
     /// <summary>An empty canvas has no row to land on; focus goes to the
@@ -1819,6 +2071,224 @@ public sealed class CanvasDocumentTests : IDisposable
             await Task.Delay(2);
         }
     }
+
+    // --- B3: a rename lands new bytes at the DESTINATION -------------------
+
+    /// <summary>
+    /// The atomic-save shape: write a temp file, rename it onto the open
+    /// canvas. The SOURCE was never open, so the registry re-key loop
+    /// does nothing — and the destination document went on rendering the
+    /// pre-rename rows.
+    /// </summary>
+    [Fact]
+    public void ARenameOntoAnOpenCanvasReloadsTheDestination()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        CanvasDocumentViewModel document = Assert.IsType<CanvasDocumentViewModel>(
+            workspace.ActiveGroup.ActiveTab!.Canvas);
+        Assert.Contains(document.Outline, row => row.NodeId == "question");
+
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "board.canvas.tmp"),
+            """
+            {"nodes":[
+              {"id":"after","type":"text","text":"Renamed in","x":0,"y":0,"width":10,"height":10}
+            ],"edges":[]}
+            """);
+        File.Move(
+            Path.Combine(_fixture.Root, "board.canvas.tmp"),
+            Path.Combine(_fixture.Root, "board.canvas"),
+            overwrite: true);
+        workspace.RetargetPath("board.canvas.tmp", "board.canvas");
+
+        Assert.Same(document, workspace.ActiveGroup.ActiveTab!.Canvas);
+        Assert.Equal(CanvasLoadState.Ready, document.State);
+        Assert.Contains(document.Outline, row => row.NodeId == "after");
+        Assert.DoesNotContain(document.Outline, row => row.NodeId == "question");
+    }
+
+    /// <summary>
+    /// Both open: the destination reloads and the source's tabs retarget
+    /// onto it, so the two panes end up on ONE document showing the
+    /// bytes that are actually on disk.
+    /// </summary>
+    [Fact]
+    public void ARenameWithBothPathsOpenReloadsTheDestinationAndRetargetsTheSource()
+    {
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "source.canvas"),
+            """
+            {"nodes":[{"id":"src","type":"text","text":"Source","x":0,"y":0,"width":10,"height":10}],"edges":[]}
+            """);
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel destinationTab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel destination = Assert.IsType<CanvasDocumentViewModel>(
+            destinationTab.Canvas);
+        ((System.Windows.Input.ICommand)workspace.SplitRightCommand).Execute(null);
+        workspace.OpenPath("source.canvas");
+        WorkspaceTabViewModel sourceTab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        Assert.NotSame(destination, sourceTab.Canvas);
+
+        File.Move(
+            Path.Combine(_fixture.Root, "source.canvas"),
+            Path.Combine(_fixture.Root, "board.canvas"),
+            overwrite: true);
+        workspace.RetargetPath("source.canvas", "board.canvas");
+
+        // One document for the one path, and it agrees with disk.
+        CanvasDocumentViewModel survivor = Assert.IsType<CanvasDocumentViewModel>(
+            destinationTab.Canvas);
+        Assert.Same(survivor, sourceTab.Canvas);
+        Assert.Equal(CanvasLoadState.Ready, survivor.State);
+        Assert.Contains(survivor.Outline, row => row.NodeId == "src");
+        Assert.DoesNotContain(survivor.Outline, row => row.NodeId == "question");
+    }
+
+    // --- B4: the gate is physical and fails closed -------------------------
+
+    /// <summary>
+    /// Containment is checked against the target's PHYSICAL identity. A
+    /// symlink inside the vault whose terminal target is outside it has
+    /// a path that starts with the vault root, so a textual prefix check
+    /// admits it and the shell opens a file the vault never contained.
+    /// </summary>
+    [Fact]
+    public void AnInVaultSymlinkPointingOutsideTheVaultIsRefused()
+    {
+        string outside = Path.Combine(Path.GetTempPath(), $"slate-outside-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outside);
+        try
+        {
+            string realFile = Path.Combine(outside, "elsewhere.png");
+            File.WriteAllBytes(realFile, [0x89, 0x50, 0x4E, 0x47]);
+            string link = Path.Combine(_fixture.Root, "innocent.png");
+            try
+            {
+                File.CreateSymbolicLink(link, realFile);
+            }
+            catch (Exception exception) when (
+                exception is IOException or UnauthorizedAccessException)
+            {
+                // Symlink creation needs Developer Mode or elevation.
+                // Skipping silently would make this fact meaningless, so
+                // it says so — and the fail-closed fact below covers the
+                // policy's other half unconditionally.
+                Assert.Fail(
+                    "this box cannot create symlinks, so the physical-containment "
+                    + "arm of CD-38 went unchecked: enable Developer Mode or run "
+                    + $"elevated. ({exception.GetType().Name})");
+                return;
+            }
+
+            // A plain in-vault media file still opens...
+            File.WriteAllBytes(
+                Path.Combine(_fixture.Root, "real.png"), [0x89, 0x50, 0x4E, 0x47]);
+            Assert.NotNull(
+                CanvasMediaPolicy.ResolveInsideVault(_fixture.Root, "real.png"));
+            // ...and the link out of the vault does not.
+            Assert.Null(
+                CanvasMediaPolicy.ResolveInsideVault(_fixture.Root, "innocent.png"));
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(outside, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+        }
+    }
+
+    /// <summary>
+    /// Fail CLOSED: every malformed target the framework throws on is a
+    /// refusal, never an exception escaping into the activation and
+    /// never a launch. An escaping exception would abort the activation
+    /// without saying anything, which is the one outcome t0 forbids.
+    /// </summary>
+    [Theory]
+    [InlineData("has\0nul.png")]
+    [InlineData("CON.png")]
+    [InlineData("   ")]
+    [InlineData("..")]
+    [InlineData("C:\\Windows\\System32\\calc.png")]
+    [InlineData("\\\\server\\share\\thing.png")]
+    public void AMalformedMediaTargetIsRefusedRatherThanThrown(string target)
+    {
+        string? resolved = CanvasMediaPolicy.ResolveInsideVault(_fixture.Root, target);
+        Assert.Null(resolved);
+    }
+
+    /// <summary>And the refusal is AUDIBLE at the activation, not a
+    /// silent false: t0's never-silent rule.</summary>
+    [Fact]
+    public void AMalformedMediaTargetRefusesAudibly()
+    {
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "hostile-media.canvas"),
+            "{\"nodes\":[{\"id\":\"bad\",\"type\":\"file\","
+            + "\"file\":\"..\\\\..\\\\outside.png\","
+            + "\"x\":0,\"y\":0,\"width\":10,\"height\":10}],\"edges\":[]}");
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("hostile-media.canvas");
+        CanvasDocumentViewModel document = Assert.IsType<CanvasDocumentViewModel>(
+            workspace.ActiveGroup.ActiveTab!.Canvas);
+        _announced.Clear();
+
+        Assert.Equal(CanvasActivation.Refused, document.Activate(Row(document, "bad")));
+        document.Announcer.FlushForTests();
+        Assert.NotEmpty(_announced);
+        Assert.Equal(A11yPriority.High, _announced[^1].Priority);
+    }
+
+    // --- B5: the announcer is retired with its document --------------------
+
+    /// <summary>
+    /// A coalesced line is a timer holding a rendered string. Closing the
+    /// last tab on a canvas the user had just moved around in used to
+    /// leave one queued on a retired document, firing ~200 ms later —
+    /// the shell speaking about a surface that is gone.
+    /// </summary>
+    [Fact]
+    public void NothingSpeaksAfterTheLastTabClosed() => RunSta(() =>
+    {
+        var posted = new List<RenderedAnnouncement>();
+        using var workspace = new WorkspaceViewModel(
+            _session,
+            _fixture.Root,
+            () => [],
+            _ => { },
+            startInteractionBackgroundWork: false,
+            announceRendered: posted.Add);
+        workspace.OpenPath("board.canvas");
+        CanvasDocumentViewModel document = Assert.IsType<CanvasDocumentViewModel>(
+            workspace.ActiveGroup.ActiveTab!.Canvas);
+
+        // A move, still inside the coalescing window.
+        document.SelectNode("evidence");
+        Assert.Empty(posted);
+
+        // The last tab closes: the document is retired mid-window.
+        ((System.Windows.Input.ICommand)workspace.CloseActiveTabCommand).Execute(null);
+
+        // The queued line is DROPPED, not flushed: the reason to say it
+        // (the user is reading that canvas) stopped being true.
+        document.Announcer.FlushForTests();
+        Assert.Empty(posted);
+
+        // And a LATE caller is refused, not merely un-queued. This is
+        // the other half of retirement: a path that outlived its
+        // document must not reach the dispatcher at all.
+        document.Announcer.Announce(
+            new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoMarks()));
+        document.Announcer.FlushForTests();
+        Assert.Empty(posted);
+    });
 
     // --- A17: the §K budget, in BOTH scheduling modes ------------------------
 

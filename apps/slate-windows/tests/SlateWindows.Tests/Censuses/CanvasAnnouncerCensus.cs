@@ -192,6 +192,46 @@ public sealed class CanvasAnnouncerCensus
         return joined.Length == 0 ? "(none)" : joined;
     }
 
+    /// <summary>
+    /// Contract A14's one-authority rule, asserted in the source
+    /// because no in-process fact can reach it: MainWindow's
+    /// <c>FocusEditorPane</c> must return early for a canvas tab.
+    /// </summary>
+    /// <remarks>
+    /// It is queued at Input priority, i.e. it runs AFTER the canvas
+    /// surface has placed focus on a realized row, and its fallbacks
+    /// (the TabItem, then the TabControl) would take focus straight back
+    /// — deterministically, every time. The canvas surface has a landing
+    /// place for every one of its states, so standing aside never leaves
+    /// focus nowhere.
+    /// </remarks>
+    [Fact]
+    public void TheEditorPaneFocusFallbackStandsAsideForACanvasTab()
+    {
+        MethodDeclarationSyntax method =
+            CSharpSource.Load("MainWindow.xaml.cs").Method("FocusEditorPane");
+        IfStatementSyntax? guard = method.Body?.Statements
+            .OfType<IfStatementSyntax>()
+            .FirstOrDefault(statement =>
+                statement.Condition.ToString().Contains("IsCanvas", StringComparison.Ordinal));
+
+        Assert.True(
+            guard is not null,
+            "FocusEditorPane must short-circuit for a canvas tab (contract A14); "
+            + "without it the pane fallback takes focus back off the outline row "
+            + "the canvas surface just realized, every time.");
+        Assert.True(
+            guard!.Statement.DescendantNodesAndSelf().OfType<ReturnStatementSyntax>().Any(),
+            "the canvas arm of FocusEditorPane must RETURN — falling through would "
+            + "reach the TabItem fallback anyway.");
+        // And it has to come before the fallbacks it is protecting the
+        // canvas from, not after them.
+        Assert.True(
+            method.Body!.Statements.IndexOf(guard) <= 1,
+            "the canvas short-circuit must run before FocusEditorPane's own "
+            + "focus attempts, or it protects nothing.");
+    }
+
     private static IEnumerable<string> CanvasSources()
     {
         string root = CanvasSourceRoot();

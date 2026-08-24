@@ -63,6 +63,7 @@ internal sealed class CanvasAnnouncer
     /// than merely survivable.
     /// </remarks>
     private readonly Dispatcher _dispatcher;
+    private bool _isShutDown;
 
     /// <summary>
     /// The seam is a RENDERED line rather than an event because the
@@ -114,8 +115,38 @@ internal sealed class CanvasAnnouncer
         return SlateUniffiMethods.A11yRender(new A11yEvent.Canvas(@event)).Text;
     }
 
+    /// <summary>
+    /// Retirement: cancel every pending line and refuse anything later
+    /// (contract A5).
+    /// </summary>
+    /// <remarks>
+    /// A coalesced line is a timer holding a rendered string. Without
+    /// this, closing the last tab on a canvas the user had just moved
+    /// around in left a navigation line queued on a document that no
+    /// longer exists, and it fired ~200 ms later — the shell speaking
+    /// about a surface that is gone. The pending lines are DROPPED, not
+    /// flushed: the reason to say them (the user is reading that canvas)
+    /// stopped being true.
+    /// </remarks>
+    internal void Shutdown()
+    {
+        _isShutDown = true;
+        DropAllPending();
+    }
+
     private void Emit(A11yEvent @event, EventClass? eventClass)
     {
+        if (_isShutDown)
+        {
+            // Not merely dropped: a post after retirement means some
+            // path outlived the document that owns it, and silence would
+            // hide that.
+            Debug.Fail(
+                "CanvasAnnouncer posted after Shutdown: the document it belongs "
+                + "to has been retired, so nothing it says can be about a "
+                + "surface the user can see.");
+            return;
+        }
         Debug.Assert(
             _dispatcher.CheckAccess(),
             "CanvasAnnouncer must be driven from the thread it was built on: its "

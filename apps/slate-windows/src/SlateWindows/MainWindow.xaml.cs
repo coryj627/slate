@@ -1492,6 +1492,19 @@ public partial class MainWindow : Window
     private void FocusEditorPane(WorkspaceGroupViewModel group)
     {
         WorkspaceTabViewModel? activeTab = group.ActiveTab;
+        // W6-1 PR A (contract A14): a canvas tab's focus belongs to the
+        // canvas surface, which realizes an outline row and places focus
+        // there. This handler is queued at Input priority, i.e. it runs
+        // AFTER that delivery, and its fallbacks below (the TabItem, then
+        // the TabControl) would take focus straight back off the row —
+        // deterministically, every time. One authority per tab kind; the
+        // canvas surface has a landing place for every one of its states
+        // (a row, the onboarding region, or the failure banner), so
+        // standing aside here never leaves focus nowhere.
+        if (activeTab is { IsCanvas: true })
+        {
+            return;
+        }
         SlateTextEditor? editor = FindVisualDescendants<SlateTextEditor>(ContentPaneBorder)
             .FirstOrDefault(candidate => ReferenceEquals(candidate.DataContext, activeTab));
         if (editor is { IsVisible: true, IsEnabled: true } && editor.FocusInputOwner())

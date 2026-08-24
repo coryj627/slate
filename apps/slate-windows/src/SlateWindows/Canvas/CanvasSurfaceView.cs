@@ -44,7 +44,6 @@ internal sealed class CanvasSurfaceView : UserControl
     private readonly TextBlock _detailHeading;
     private readonly TextBox _detailText;
     private bool _synchronizingSwitcher;
-    private bool _focusLandingPending;
 
     public CanvasSurfaceView()
     {
@@ -139,6 +138,11 @@ internal sealed class CanvasSurfaceView : UserControl
         };
         _detailRegion.Children.Add(detailStack);
 
+        // Every condition that can turn a pending request deliverable.
+        Loaded += (_, _) => TryDeliverFocus();
+        IsVisibleChanged += (_, _) => TryDeliverFocus();
+        _outline.ContainersRealized += TryDeliverFocus;
+
         var layout = new DockPanel();
         DockPanel.SetDock(header, Dock.Top);
         DockPanel.SetDock(banners, Dock.Top);
@@ -213,71 +217,75 @@ internal sealed class CanvasSurfaceView : UserControl
         {
             oldModel.PropertyChanged -= view.OnModelPropertyChanged;
             oldModel.OutlinePublished -= view.OnOutlinePublished;
-            oldModel.FocusLandingRequested -= view.OnFocusLandingRequested;
             oldModel.Selection.PropertyChanged -= view.OnSelectionPropertyChanged;
-            view._focusLandingPending = false;
         }
         view._outline.Model = e.NewValue as CanvasDocumentViewModel;
         if (e.NewValue is CanvasDocumentViewModel model)
         {
             model.PropertyChanged += view.OnModelPropertyChanged;
             model.OutlinePublished += view.OnOutlinePublished;
-            model.FocusLandingRequested += view.OnFocusLandingRequested;
             model.Selection.PropertyChanged += view.OnSelectionPropertyChanged;
         }
         view.Render();
+        view.TryDeliverFocus();
     }
 
     private void OnOutlinePublished(object? sender, EventArgs e)
     {
         Render();
-        // The DEFERRED half of contract A14: a focus request that
-        // arrived while the canvas was still loading lands here, on the
-        // first publish with rows to land on — once, and only because
-        // the user asked. A publish nobody asked for (a retarget, a
-        // reload, a restored pane the user is not in) lands nothing.
-        if (_focusLandingPending)
-        {
-            TryLandFocus();
-        }
+        TryDeliverFocus();
     }
 
     /// <summary>
-    /// Contract A14: a user-initiated open asked for focus. Land it now
-    /// if there is a row, else arm the next publish.
+    /// Deliver a pending focus request if it is ours and everything it
+    /// needs now exists (contract A14).
     /// </summary>
     /// <remarks>
-    /// Only if the request was for THIS view. The document is shared by
-    /// every pane on the path, so the request is addressed to the tab
-    /// that asked; a sibling pane showing the same canvas ignores it,
-    /// and does not land focus for an open that happened somewhere else.
+    /// <para>
+    /// Called from every condition that can change the answer: the model
+    /// changing, a publish landing, this view loading, this view
+    /// becoming visible, the request itself being raised, and the tree
+    /// realizing containers. None of them is "the" moment — that was the
+    /// edge-triggered design's mistake — so each simply asks again, and
+    /// only a real delivery consumes the request.
+    /// </para>
+    /// <para>
+    /// Every non-Ready state has somewhere to put focus, which is what
+    /// lets <c>MainWindow.FocusEditorPane</c> step aside for canvas tabs
+    /// entirely: a failure state focuses its (focusable) banner, an
+    /// empty canvas focuses its onboarding region, and Loading simply
+    /// stays pending until the publish arrives.
+    /// </para>
     /// </remarks>
-    private void OnFocusLandingRequested(object? owner)
+    private void TryDeliverFocus()
     {
-        if (!ReferenceEquals(owner, DataContext))
+        if (Model is not { FocusRequest: { } request } model
+            || !ReferenceEquals(request.Owner, DataContext)
+            || !IsVisible)
         {
             return;
         }
-        _focusLandingPending = true;
-        TryLandFocus();
-    }
-
-    private void TryLandFocus()
-    {
-        if (Model is not { State: CanvasLoadState.Ready } model || !IsVisible)
+        bool delivered;
+        switch (model.State)
         {
-            return;
+            case CanvasLoadState.Loading:
+                // Nothing to land on yet; the publish will call back.
+                return;
+            case CanvasLoadState.Ready when model.Outline.Count == 0:
+                delivered = _onboarding.Focus();
+                break;
+            case CanvasLoadState.Ready:
+                delivered = model.FocusLandingNodeFor(request) is { } nodeId
+                    && _outline.DeliverFocus(nodeId) is not null;
+                break;
+            default:
+                delivered = _stateBanner.Focus();
+                break;
         }
-        if (model.Outline.Count == 0)
+        if (delivered)
         {
-            // An empty canvas has no row to land on, and the onboarding
-            // region is the only thing to read (m4): land there instead
-            // of leaving focus wherever it was.
-            _focusLandingPending = false;
-            _ = _onboarding.Focus();
-            return;
+            model.CompleteFocusLanding(request);
         }
-        _focusLandingPending = _outline.FocusLandingRow() is null;
     }
 
     private void OnModelPropertyChanged(
@@ -289,6 +297,11 @@ internal sealed class CanvasSurfaceView : UserControl
             or nameof(CanvasDocumentViewModel.DetailText))
         {
             Render();
+            TryDeliverFocus();
+        }
+        else if (e.PropertyName == nameof(CanvasDocumentViewModel.FocusRequest))
+        {
+            TryDeliverFocus();
         }
     }
 
@@ -419,6 +432,10 @@ internal sealed class CanvasSurfaceView : UserControl
         }
         e.Handled = true;
         model.CloseDetail();
-        _ = _outline.FocusLandingRow();
+        // Back to the row that opened it (WCAG 2.1.2/2.4.3).
+        if (model.LastActivatedNode is { } row)
+        {
+            _ = _outline.DeliverFocus(row);
+        }
     }
 }

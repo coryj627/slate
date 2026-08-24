@@ -58,6 +58,14 @@ internal enum CanvasActivation
 }
 
 /// <summary>
+/// A pending focus delivery (contract A14): who asked, which row, and
+/// which request it is. A record so a surface can hand the exact
+/// instance back when it delivers, and the document can tell a late
+/// delivery of an old request from a live one.
+/// </summary>
+internal sealed record CanvasFocusRequest(object Owner, string? NodeId, int Generation);
+
+/// <summary>
 /// W6-1 PR A (#745): the per-path canvas document — the mac
 /// <c>CanvasDocument</c> twin, built on the W4-6 <c>BaseDocument</c>
 /// pattern. Owns the native handle, the load state, the published
@@ -285,25 +293,86 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// path is a registry hit that never publishes — so it never landed
     /// focus at all.
     /// </remarks>
+    private CanvasFocusRequest? _focusRequest;
+    private int _focusRequestGeneration;
+
+    /// <summary>
+    /// The pending focus delivery — STATE, not an event edge
+    /// (contract A14).
+    /// </summary>
     /// <remarks>
-    /// The payload is the TAB that asked. One document is shared by
-    /// every pane showing the path, so a bare broadcast reached every
-    /// mounted surface and each one landed — opening a canvas in pane B
-    /// pulled focus in pane A too. The surface compares the payload
-    /// against its own <c>DataContext</c> and ignores a request meant
-    /// for a sibling.
+    /// <para>
+    /// An edge is delivered once, at the instant it is raised, to
+    /// whoever happens to be subscribed and ready. That is the wrong
+    /// shape for this: the surface may not be loaded yet, may not be
+    /// visible yet, and its virtualized container may not exist yet —
+    /// three independent reasons the instant can be the wrong one, and
+    /// none of them observable from the document. Four consecutive
+    /// review rounds found a defect in this delivery, every one of them
+    /// a variation on "the trigger fired and nothing was listening in
+    /// the right state".
+    /// </para>
+    /// <para>
+    /// As STATE it survives all three: the request stays pending until a
+    /// surface actually delivers it and says so, surfaces retry on mount,
+    /// on visibility, on publish and on container realization, and a
+    /// newer request supersedes an older one by generation.
+    /// </para>
     /// </remarks>
-    internal event Action<object?>? FocusLandingRequested;
+    public CanvasFocusRequest? FocusRequest
+    {
+        get => _focusRequest;
+        private set => SetField(ref _focusRequest, value);
+    }
 
     /// <param name="owner">
     /// The view this request is FOR — the tab a surface carries as its
     /// <c>DataContext</c>. Required, with no default: an unaddressed
     /// request reaches every pane on the shared path and each one lands
-    /// focus, and a default made that the easy thing to write. The
-    /// off-shape call is now a compile error rather than a convention.
+    /// focus, and a default made that the easy thing to write.
     /// </param>
-    internal void RequestFocusLanding(object owner) =>
-        FocusLandingRequested?.Invoke(owner);
+    /// <param name="nodeId">
+    /// The row to land on, or null for the document's own answer (the
+    /// last activated row, else the first). PR C's navigator passes one.
+    /// </param>
+    internal void RequestFocusLanding(object owner, string? nodeId = null)
+    {
+        ArgumentNullException.ThrowIfNull(owner);
+        FocusRequest = new CanvasFocusRequest(
+            owner, nodeId, Interlocked.Increment(ref _focusRequestGeneration));
+    }
+
+    /// <summary>
+    /// A surface delivered the request and is saying so. Only the
+    /// matching generation clears it: a request raised while an older
+    /// one was still pending must not be consumed by the older one's
+    /// late delivery.
+    /// </summary>
+    internal void CompleteFocusLanding(CanvasFocusRequest delivered)
+    {
+        ArgumentNullException.ThrowIfNull(delivered);
+        if (_focusRequest is { } pending && pending.Generation == delivered.Generation)
+        {
+            FocusRequest = null;
+        }
+    }
+
+    /// <summary>The row a focus request should land on when it names
+    /// none: the row whose activation the user is returning from (WCAG
+    /// 2.4.3), else the first.</summary>
+    internal string? FocusLandingNodeFor(CanvasFocusRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.NodeId is { } named && _rows.ContainsKey(named))
+        {
+            return named;
+        }
+        if (LastActivatedNode is { } last && _rows.ContainsKey(last))
+        {
+            return last;
+        }
+        return _outline.Count > 0 ? _outline[0].NodeId : null;
+    }
 
     /// <summary>The ONE surface switch (contracts A15/A18): the header
     /// switcher and the three <c>slate.canvas.show*</c> commands share
@@ -867,6 +936,13 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     {
         base.Shutdown();
         _ = Interlocked.Increment(ref _generation);
+        // Every retirement route reaches here — the release sweep, the
+        // retarget, the vault-close drain — so this is the one place the
+        // announcer has to be silenced (contract A5): a coalesced line
+        // queued on a dying document would otherwise fire ~200 ms later
+        // and speak about a surface that no longer exists.
+        Announcer.Shutdown();
+        FocusRequest = null;
         if (IsSynchronousForTests)
         {
             CloseHandleGuarded();

@@ -88,28 +88,14 @@ internal sealed partial class WorkspaceViewModel
             return navigated;
         };
         document.OpenExternalLinkFromSurface = target => _externalOpener(target);
-        // The media hand-off (contract A13): the document holds a
+        // The media hand-off (contract A13/CD-38): the document holds a
         // VAULT-RELATIVE target and the workspace owns the root, so the
-        // absolute path is composed exactly here. A target that escapes
-        // the vault is refused rather than handed to the shell — a
-        // `.canvas` file is untrusted input, and `../../` in a `file`
-        // node would otherwise open anything on the disk.
+        // absolute path is composed exactly here. Containment is checked
+        // against the PHYSICAL identity and the whole thing fails
+        // closed — see CanvasMediaPolicy.ResolveInsideVault.
         document.OpenMediaCardFromSurface = target =>
-        {
-            string root = System.IO.Path.GetFullPath(_vaultRoot);
-            string absolute = System.IO.Path.GetFullPath(
-                System.IO.Path.Combine(root, target));
-            if (!absolute.StartsWith(
-                    root.EndsWith(System.IO.Path.DirectorySeparatorChar)
-                        ? root
-                        : root + System.IO.Path.DirectorySeparatorChar,
-                    StringComparison.Ordinal)
-                || !System.IO.File.Exists(absolute))
-            {
-                return false;
-            }
-            return _externalOpener(absolute);
-        };
+            CanvasMediaPolicy.ResolveInsideVault(_vaultRoot, target) is { } absolute
+            && _externalOpener(absolute);
         // Contract A15: the persisted token follows the shared surface
         // for EVERY tab on this path, since they share the document.
         document.SurfaceChanged += (sender, surface) =>
@@ -210,6 +196,16 @@ internal sealed partial class WorkspaceViewModel
                     retargetedFrom: oldDocument.Path));
             }
         }
+        // A rename lands NEW BYTES at the DESTINATION, and a document
+        // open there is now stale (W6-1 B3). Two shapes reach this:
+        // an atomic save (write `x.tmp`, rename it onto the open
+        // `board.canvas` — the source was never open, so the loop above
+        // did nothing at all), and both-open, where the loop re-keyed
+        // the source's tabs onto the destination's existing document
+        // without re-reading it. Same answer for both, and it must come
+        // AFTER the re-key so the surviving document is the one that
+        // reloads.
+        ReloadCanvasDocumentAt(destination);
     }
 
     /// <summary>Vault close: every document holds the shared session and

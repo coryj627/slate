@@ -1,6 +1,8 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.IO;
+
 namespace SlateWindows;
 
 // The shell hand-off policies. Two rules, one file, because they answer
@@ -127,6 +129,71 @@ internal static class CanvasMediaPolicy
         return ImageExtensions.Contains(extension)
             || AudioExtensions.Contains(extension)
             || VideoExtensions.Contains(extension);
+    }
+
+    /// <summary>
+    /// The absolute path to hand the shell, or null to refuse — the
+    /// whole containment decision, made against the target's PHYSICAL
+    /// identity and failing closed.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A textual prefix check is not containment. A symlink, junction or
+    /// hardlink inside the vault can name a file anywhere on the disk,
+    /// and its path still starts with the vault root — so the link chain
+    /// is followed to its terminal target and it is the RESOLVED
+    /// identity that has to be inside the vault. `ResolveLinkTarget`
+    /// with `returnFinalTarget` walks the whole chain; a file that is
+    /// not a link resolves to itself.
+    /// </para>
+    /// <para>
+    /// Every failure mode is a refusal, including the ones the framework
+    /// raises: a target with a NUL character, an invalid device name, a
+    /// path too long, a cycle in the link chain, a permission error
+    /// reading the link. Any of them throws somewhere in here, and an
+    /// exception escaping to the caller would abort the activation
+    /// without a word rather than refuse it audibly — so the whole thing
+    /// is wrapped, and the answer is always "no" when anything at all
+    /// goes wrong. Fail closed: this decides what reaches
+    /// <c>ShellExecute</c>.
+    /// </para>
+    /// </remarks>
+    internal static string? ResolveInsideVault(string vaultRoot, string target)
+    {
+        try
+        {
+            if (!IsOpenableMedia(target))
+            {
+                return null;
+            }
+            string root = Path.TrimEndingDirectorySeparator(
+                Path.GetFullPath(vaultRoot));
+            string absolute = Path.GetFullPath(Path.Combine(root, target));
+            var file = new FileInfo(absolute);
+            if (!file.Exists)
+            {
+                return null;
+            }
+            // The PHYSICAL identity: a link resolves to its terminal
+            // target, a plain file to itself.
+            string resolved = Path.GetFullPath(
+                file.ResolveLinkTarget(returnFinalTarget: true)?.FullName
+                ?? file.FullName);
+            if (!resolved.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+            {
+                return null;
+            }
+            // The resolved identity must still BE media: a `.png` that
+            // links to a `.exe` is the whole point of resolving.
+            return IsOpenableMedia(resolved) ? resolved : null;
+        }
+        catch (Exception exception) when (
+            exception is not OutOfMemoryException
+                and not StackOverflowException
+                and not AccessViolationException)
+        {
+            return null;
+        }
     }
 
     /// <summary>

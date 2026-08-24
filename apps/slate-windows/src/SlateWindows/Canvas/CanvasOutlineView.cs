@@ -9,6 +9,8 @@ using System.Windows.Automation.Provider;
 using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Threading;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows.Canvas;
@@ -208,6 +210,16 @@ internal sealed class CanvasOutlineView : UserControl
     private readonly ObservableCollection<CanvasOutlineRowViewModel> _roots = [];
     private readonly Dictionary<string, CanvasOutlineRowViewModel> _byNode =
         new(StringComparer.Ordinal);
+
+    /// <summary>Row → its parent row. The realization walk needs the
+    /// ancestor chain root-first, and nothing else in WPF will give it:
+    /// a virtualized container has no visual parent until it exists.</summary>
+    private readonly Dictionary<CanvasOutlineRowViewModel, CanvasOutlineRowViewModel> _parentOf =
+        [];
+
+    /// <summary>The row this view believes is selected — the one whose
+    /// TwoWay flag must be cleared before another is set.</summary>
+    private CanvasOutlineRowViewModel? _selectedRow;
     private string? _connectionHost;
     private int _connectionCount;
     private bool _syncingSelection;
@@ -230,6 +242,23 @@ internal sealed class CanvasOutlineView : UserControl
             _tree, VirtualizationMode.Standard);
         AutomationProperties.SetAutomationId(_tree, "CanvasOutlineTree");
         AutomationProperties.SetName(_tree, CanvasPhrase.OutlineName);
+        _tree.ItemContainerGenerator.StatusChanged += (_, _) =>
+        {
+            if (_tree.ItemContainerGenerator.Status
+                != System.Windows.Controls.Primitives.GeneratorStatus.ContainersGenerated)
+            {
+                return;
+            }
+            // POSTED, not called: this fires from inside the generator's
+            // own pass, and a delivery attempt lays out and may ask the
+            // panel to bring an index into view — re-entering generation
+            // and throwing "Cannot call StartAt when content generation
+            // is in progress". Background priority runs it after the
+            // pass completes.
+            _ = Dispatcher.BeginInvoke(
+                DispatcherPriority.Background,
+                () => ContainersRealized?.Invoke());
+        };
         _tree.SelectedItemChanged += OnTreeSelectionChanged;
         _tree.KeyDown += OnTreeKeyDown;
         _tree.MouseDoubleClick += OnTreeDoubleClick;
@@ -246,58 +275,123 @@ internal sealed class CanvasOutlineView : UserControl
     /// published — the surface moves focus there (contract A13).</summary>
     internal event Action? DetailRequested;
 
+    /// <summary>The tree realized containers — a pending focus request
+    /// that could not reach its row may be deliverable now.</summary>
+    internal event Action? ContainersRealized;
+
     internal TreeView TreeForTests => _tree;
 
     internal IReadOnlyList<CanvasOutlineRowViewModel> RootsForTests => _roots;
 
-    /// <summary>Contract A14: opening lands keyboard focus on the first
-    /// item; coming back from an opened card lands on the row that
-    /// opened it, never the top. Returns the row it landed on, or null
-    /// when there is nothing to land on.</summary>
-    internal CanvasOutlineRowViewModel? FocusLandingRow()
+    /// <summary>
+    /// Deliver focus to a row, REALIZING its container first. Returns
+    /// the row on success and null when the container could not be
+    /// realized — and null must not be read as "delivered", which is
+    /// the whole point (contract A14).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Under virtualization a row's container does not exist until the
+    /// panel makes it, and an ancestor group must be expanded before its
+    /// children are items at all. The walk is the documented one: from
+    /// the root down, expand, lay out, ask the generator, and if the
+    /// container is still absent bring its index into view through the
+    /// virtualizing panel and lay out again.
+    /// </para>
+    /// <para>
+    /// The previous version fell back to <c>_tree.Focus()</c> and
+    /// returned the row anyway, so an unrealized container reported
+    /// SUCCESS and consumed the request — focus landed on the tree, the
+    /// row was never read, and nothing retried. A failure here leaves
+    /// the request pending so the next realization delivers it.
+    /// </para>
+    /// </remarks>
+    internal CanvasOutlineRowViewModel? DeliverFocus(string nodeId)
     {
-        CanvasOutlineRowViewModel? target =
-            (Model?.LastActivatedNode is { } last
-                && _byNode.TryGetValue(last, out CanvasOutlineRowViewModel? restored))
-                ? restored
-                : _roots.FirstOrDefault();
-        if (target is null)
+        if (!_byNode.TryGetValue(nodeId, out CanvasOutlineRowViewModel? target))
         {
             return null;
         }
-        target.IsSelected = true;
-        // Containers materialize lazily under virtualization; the
-        // landing row is the one the user is about to read, so it has
-        // to exist before focus can reach it.
-        _tree.UpdateLayout();
-        if (FindContainer(_tree, target) is { } container)
-        {
-            _ = container.Focus();
-        }
-        else
-        {
-            _ = _tree.Focus();
-        }
-        return target;
+        // Selection first: it is what the row's container binds, and a
+        // realized container must come up already selected.
+        SetSelectedRow(target);
+        return RealizeContainer(target) is { } container && container.Focus()
+            ? target
+            : null;
     }
 
-    /// <summary>The container for a row at ANY depth. A tree's own
-    /// generator answers only for its direct items, and the row a
-    /// restore lands on is routinely nested inside a group.</summary>
-    private static CanvasOutlineItem? FindContainer(ItemsControl parent, object item)
+    /// <summary>The container for a row at any depth, realized if it
+    /// can be. Null when the panel would not make it.</summary>
+    private CanvasOutlineItem? RealizeContainer(CanvasOutlineRowViewModel target)
     {
-        for (int index = 0; index < parent.Items.Count; index++)
+        // Root-first path, so every ancestor is expanded before its
+        // children are asked for.
+        var path = new List<CanvasOutlineRowViewModel>();
+        for (CanvasOutlineRowViewModel? step = target;
+            step is not null;
+            step = _parentOf.GetValueOrDefault(step))
         {
-            if (parent.ItemContainerGenerator.ContainerFromIndex(index)
-                is not CanvasOutlineItem container)
+            path.Add(step);
+        }
+        path.Reverse();
+
+        ItemsControl parent = _tree;
+        CanvasOutlineItem? container = null;
+        foreach (CanvasOutlineRowViewModel step in path)
+        {
+            container = RealizeChild(parent, step);
+            if (container is null)
             {
-                continue;
+                return null;
             }
-            if (ReferenceEquals(container.DataContext, item))
+            if (!ReferenceEquals(step, target))
             {
-                return container;
+                // An ancestor: its children are not items until it is
+                // expanded, so expanding IS part of realization.
+                step.IsExpanded = true;
+                container.UpdateLayout();
             }
-            if (FindContainer(container, item) is { } nested)
+            parent = container;
+        }
+        container?.BringIntoView();
+        return container;
+    }
+
+    private static CanvasOutlineItem? RealizeChild(ItemsControl parent, object item)
+    {
+        parent.ApplyTemplate();
+        parent.UpdateLayout();
+        if (parent.ItemContainerGenerator.ContainerFromItem(item) is CanvasOutlineItem ready)
+        {
+            return ready;
+        }
+        int index = parent.Items.IndexOf(item);
+        if (index < 0)
+        {
+            return null;
+        }
+        // Virtualized away: ask the panel for it by index, which is the
+        // one supported way to make a container that does not exist.
+        if (FindVisualChild<VirtualizingStackPanel>(parent) is { } panel)
+        {
+            panel.BringIndexIntoViewPublic(index);
+            parent.UpdateLayout();
+        }
+        return parent.ItemContainerGenerator.ContainerFromItem(item) as CanvasOutlineItem;
+    }
+
+    private static TChild? FindVisualChild<TChild>(DependencyObject parent)
+        where TChild : DependencyObject
+    {
+        int count = VisualTreeHelper.GetChildrenCount(parent);
+        for (int index = 0; index < count; index++)
+        {
+            DependencyObject child = VisualTreeHelper.GetChild(parent, index);
+            if (child is TChild match)
+            {
+                return match;
+            }
+            if (FindVisualChild<TChild>(child) is { } nested)
             {
                 return nested;
             }
@@ -340,6 +434,8 @@ internal sealed class CanvasOutlineView : UserControl
     {
         _roots.Clear();
         _byNode.Clear();
+        _parentOf.Clear();
+        _selectedRow = null;
         _connectionHost = null;
         _connectionCount = 0;
         if (Model is not { } model)
@@ -363,6 +459,7 @@ internal sealed class CanvasOutlineView : UserControl
             else
             {
                 stack.Peek().Row.Children.Add(line);
+                _parentOf[line] = stack.Peek().Row;
                 // A group with members is expandable; it opens by
                 // default so a first read is the whole structure.
                 stack.Peek().Row.IsExpanded = true;
@@ -414,6 +511,7 @@ internal sealed class CanvasOutlineView : UserControl
         {
             for (int index = 0; index < _connectionCount; index++)
             {
+                _ = _parentOf.Remove(host.Children[0]);
                 host.Children.RemoveAt(0);
             }
             _connectionHost = null;
@@ -437,6 +535,7 @@ internal sealed class CanvasOutlineView : UserControl
                     neighbors.Count);
                 connection.Activate = ActivateRow;
                 line.Children.Insert(index, connection);
+                _parentOf[connection] = line;
             }
             _connectionHost = selected;
             _connectionCount = neighbors.Count;
@@ -447,7 +546,27 @@ internal sealed class CanvasOutlineView : UserControl
                 line.IsExpanded = true;
             }
         }
-        line.IsSelected = true;
+        SetSelectedRow(line);
+    }
+
+    /// <summary>
+    /// Seat selection on exactly one row: the previous row's TwoWay flag
+    /// is cleared FIRST, then the new one is set.
+    /// </summary>
+    /// <remarks>
+    /// Leaving the old flag true let WPF's own deselection echo back
+    /// through the binding after the new row was already seated — a
+    /// stale write of the row the user had just left. Clearing it here,
+    /// inside the sync guard, means the echo has nothing to say.
+    /// </remarks>
+    private void SetSelectedRow(CanvasOutlineRowViewModel row)
+    {
+        if (_selectedRow is { } previous && !ReferenceEquals(previous, row))
+        {
+            previous.IsSelected = false;
+        }
+        _selectedRow = row;
+        row.IsSelected = true;
     }
 
     private void OnTreeSelectionChanged(

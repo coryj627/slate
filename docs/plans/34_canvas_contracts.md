@@ -918,6 +918,16 @@ re-seats only when the selected node is gone. Pinned by
 `TheReloadKeepsTheSharedDocumentObject`, and mutation-verified: dropping
 the reload call brings the stale rows back.
 
+**A rename lands new bytes at the DESTINATION, too.** Two shapes reach
+it: the atomic save (write `x.tmp`, rename it onto the open
+`board.canvas` — the source was never open, so the registry's re-key
+loop does nothing at all), and both-open, where the re-key points the
+source's tabs at the destination's existing document without re-reading
+it. `RetargetCanvasDocuments` therefore reloads the destination after
+the re-key, so the surviving document is the one that re-reads. Pinned
+by `ARenameOntoAnOpenCanvasReloadsTheDestination` and
+`ARenameWithBothPathsOpenReloadsTheDestinationAndRetargetsTheSource`.
+
 **Scope, stated honestly.** The fact drives the reload SITE, not the
 whole History restore: W4-7's restore carries its own preconditions for
 a non-markdown tab (the CAS basis is the history head hash, not a tab
@@ -1052,6 +1062,20 @@ thread. Separately, the empty-render arm (mac's
 canvas template renders empty, and a silent drop is the worst way to
 learn that one started to, because the symptom is an announcement that
 does not happen.
+
+**The announcer is retired with its document.** `Shutdown()` cancels the
+timers, DROPS the pending lines rather than flushing them (the reason to
+say a navigation line — the user is reading that canvas — stopped being
+true), and refuses anything posted afterwards with a `Debug.Fail`,
+because a post after retirement means some path outlived the document
+that owns it. `CanvasDocumentViewModel.Shutdown` calls it, so every
+retirement route reaches it: the release sweep, the retarget, the
+vault-close drain. Without it, closing the last tab on a canvas the user
+had just moved around in left a coalesced line queued on a dead document
+that fired ~200 ms later, and the shell spoke about a surface that was
+gone. Pinned by `NothingSpeaksAfterTheLastTabClosed`, which covers both
+halves (the dropped queue and the refused late post) and is
+mutation-verified against each.
 
 **The post seam is `(text, priority)`, so the dispatcher gained an
 overload.** `AccessibilityNotificationDispatcher.Post(A11yEvent)`
@@ -1244,33 +1268,79 @@ Group ⇒ expand. A file card whose target is gone announces
 announces `CanvasBlocked { CardTextUnreadable }` — the 0b never-silent
 table, and the reason A16 exists.
 
-**A14 — Focus lands when the USER opens, and comes back (WCAG 2.4.3).**
-Opening lands keyboard focus on the outline's first item (on an empty
-canvas, on the onboarding region — the only thing there is to read).
-Activating a file card records the row on the document
-(`LastActivatedNode`, mac's field), and the surface re-mounting restores
-focus to that row rather than the top.
+**A14 — Focus delivery is durable STATE, delivered by whichever surface
+can actually deliver it** (rewritten as the design pass's contract,
+stopping rule 4).
 
-**The trigger is the workspace's open funnel, not a publish, and it is
-ADDRESSED.** Focus keyed on "first publish while this view is visible"
-got both directions wrong at once: a retarget attached a fresh document
-whose publish yanked focus out of the files tree the user was renaming
-in, and a session restore did the same from a pane the user was not in;
-meanwhile a second tab or pane on an ALREADY-open path is a registry hit
-that never publishes, so it never landed focus at all — A14's own
-sentence, unimplemented for that case. Focus is a request now:
-`RequestActiveEditorFocus` — the one funnel every user-initiated open
-already calls and no background path does — asks the active tab's
-document, which raises `FocusLandingRequested` **carrying the tab that
-asked**; the surface compares that against its own `DataContext` and
-ignores a request meant for a sibling, because one document serves every
-pane on the path and an unaddressed broadcast landed focus in all of
-them. The surface lands immediately if the rows are there and arms the
-next publish if the canvas is still loading. Pinned by
-`ARetargetPublishNeverStealsFocus`,
-`ASecondTabOnAnOpenPathStillLandsFocus`,
-`OpeningACanvasInOnePaneNeverLandsFocusInAnother` and
-`AnEmptyCanvasLandsFocusOnTheOnboardingRegion`.
+**Why a rewrite.** Four consecutive review rounds found a defect in this
+one behaviour — the connection-row follow, the retarget focus theft, two
+tests that could not fail, and then codex's three. Every one was a
+variation on the same thing: focus was delivered on an EDGE, at the
+instant something fired, to whoever happened to be subscribed and ready,
+and the tests supplied the trigger themselves. Rule 4 says stop patching
+the sites and write the design.
+
+**The design.**
+
+1. **The request is state, not an edge.** `CanvasFocusRequest
+   { Owner, NodeId, Generation }` lives on the document as
+   `FocusRequest`. `RequestActiveEditorFocus` — the one funnel every
+   user-initiated open calls and no background path does — raises it,
+   addressed to the tab that asked. It stays pending until a surface
+   delivers it and says so (`CompleteFocusLanding`), and a newer request
+   supersedes an older one by generation, so a late delivery of a
+   superseded request cannot clear a live one.
+2. **Every surface retries on every condition that can change the
+   answer**: the model changing, a publish landing, the view loading,
+   the view becoming visible, the request being raised, and the tree
+   realizing containers. None of these is "the" moment — assuming one
+   was is what the edge design got wrong — so each simply asks again.
+   A surface whose `DataContext` is not the request's owner ignores it,
+   which is what stops one document's request landing in every pane
+   showing that path.
+3. **Realization is part of delivery.** A virtualized row has no
+   container until the panel makes one, and an ancestor group's children
+   are not items until it is expanded. `DeliverFocus` walks the ancestor
+   chain root-first, expanding and laying out, and asks the virtualizing
+   panel to bring the index into view when the generator has not made
+   the container yet. **Only a realized container counts as delivered**:
+   the previous code fell back to focusing the tree and returned success,
+   so the request was consumed, the row was never read, and nothing
+   retried. A failed delivery leaves the request pending.
+4. **One authority per tab kind.** `MainWindow.FocusEditorPane` returns
+   early for a canvas tab. It is queued at `Input` priority — strictly
+   after the canvas delivery — and its fallbacks (the `TabItem`, then
+   the `TabControl`) would take focus straight back off the row, every
+   time. The ordering is what makes this provable rather than a race:
+   the canvas delivers synchronously on the funnel call, the pane
+   handler runs later and declines. Standing aside is safe because the
+   canvas surface has a landing place for **every** state — a realized
+   row when Ready with rows, the onboarding region when Ready and empty,
+   the (focusable) failure banner otherwise, and nothing at all while
+   Loading, where the request simply stays pending.
+
+**What the row lands on.** The request's `NodeId` when it names a row
+this document has; else `LastActivatedNode`, which is how returning from
+an opened card lands on the row that opened it (WCAG 2.4.3); else the
+first row.
+
+**The facts drive the production trigger.** `OpeningACanvasFromTheWorkspaceLandsFocusOnARealizedRow`
+opens through `OpenPath` with MainWindow's own subscriber attached, so
+the two authorities compete as they do in the app, and asserts the
+subscriber RAN (standing aside, not never firing).
+`AFocusRequestSurvivesUntilASurfaceCanActuallyDeliverIt` mounts the
+surface after the request. `FocusRealizesADeeplyVirtualizedRowRatherThanFakingIt`
+lands on the last row of the 2,000-node fixture.
+`AnUnrealizableRowIsNotReportedAsDelivered` and
+`AFailedDeliveryLeavesTheRequestPendingForTheNextTry` pin the honest
+failure. `OpeningACanvasInOnePaneNeverLandsFocusInAnother` pins the
+addressing, `AnEmptyCanvasLandsFocusOnTheOnboardingRegion` and
+`TheFailureBannerIsAFocusableRegion` the non-Ready landings, and
+`TheEditorPaneFocusFallbackStandsAsideForACanvasTab` pins point 4 in the
+source, because no in-process fact can reach `MainWindow`.
+**Mutation-verified**: removing the funnel's canvas request fails three
+of them; restoring the tree-focus fallback fails the realization fact;
+deleting MainWindow's early return fails the source guard.
 
 **A15 — `ActiveCanvasSurface` round-trips, and outline is ABSENT.**
 The persisted token stays `"table" | "visual"` with outline written as
@@ -2457,6 +2527,25 @@ its own reasons (the spec's Add Media row — "media kinds by extension
 set — core's `media_class` decides the label"), so PR E exports it,
 deletes this copy, and retires the pin above with it.
 
+**Containment is PHYSICAL, and the whole decision fails closed.** A
+textual prefix check is not containment: a symlink, junction or hardlink
+inside the vault can name a file anywhere on the disk and its path still
+starts with the vault root. `ResolveInsideVault` follows the link chain
+to its terminal target (`FileInfo.ResolveLinkTarget(returnFinalTarget)`)
+and requires the RESOLVED identity to be inside the root — and re-checks
+that the resolved name is still media, because a `.png` that links to a
+`.exe` is the case the resolution exists for. The whole closure is
+wrapped: a NUL character in the target, a reserved device name, a path
+too long, a link cycle, a permission error reading the link — every one
+of them throws somewhere in that path, and an exception escaping into
+the activation would abort it silently rather than refuse it audibly.
+Any failure at all answers "no". Pinned by
+`AnInVaultSymlinkPointingOutsideTheVaultIsRefused` (which FAILS rather
+than skipping when the box cannot make symlinks, so the arm is never
+silently unchecked) and `AMalformedMediaTargetIsRefusedRatherThanThrown`
+over six hostile shapes, with `AMalformedMediaTargetRefusesAudibly` for
+the never-silent half.
+
 **Deliberately stricter than mac, because the threat models differ.**
 Mac opens any non-Markdown target through `NSWorkspace`
 (`CanvasContainerView.swift:181–187`), where Gatekeeper, quarantine and
@@ -3394,3 +3483,37 @@ the parts-3-and-4 independence claim is withdrawn rather than scoped,
 because provenance in a lexical scan is line-wide and cannot support it.
 **By decision, scan residue past this point is 0b's parser**; no further
 lexical strengthening is in scope for 0a.
+
+### PR A — Codex adversarial round 1 — NOT SAFE, 5 blockers + 1 major
+
+Blockers B1/B2/B6 all landed on focus and selection delivery, and that
+made **four consecutive rounds** with a finding in the same behaviour
+(red-team I2's connection-row follow, M2's retarget theft and
+registry-hit gap, round 4's two facts that could not fail, and now
+codex's three). **Stopping rule 4 applied**: one design pass instead of
+three more point fixes — written up as the rewritten **A14**, which is
+now the design's contract rather than a description of the code.
+
+The class, named: **edge-triggered delivery with no durable state,
+tested by supplying the trigger.** Focus was delivered at the instant
+something fired, to whoever happened to be subscribed and in the right
+state, and every fact called the delivery method itself. Three
+independent things can make that instant wrong — the surface is not
+mounted, is not visible, or its virtualized container does not exist —
+and none of them is observable from the document. Each round fixed the
+instance and left the shape. A14's rewrite replaces it: the request is
+state, every surface retries on every condition that can change the
+answer, realization is part of delivery, only a realized container
+counts as delivered, and one authority owns focus per tab kind.
+
+Point fixes, each with its own contract amendment: **B3** the rename
+DESTINATION reloads (A1); **B4** containment becomes physical and the
+closure fails closed (CD-38); **B5** the announcer is retired with its
+document (A5).
+
+**Every guard in this round is mutation-verified**: removing the open
+funnel's canvas request fails three integration facts; restoring the
+tree-focus fallback fails the realization fact; deleting MainWindow's
+early return fails the source guard; dropping the announcer's
+shut-down flag fails the late-post half of the lifecycle fact; deleting
+the media gate opens an `.exe`.
