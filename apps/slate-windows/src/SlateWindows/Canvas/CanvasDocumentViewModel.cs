@@ -661,12 +661,12 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     private CanvasActivation ActivateLinkCard(CanvasOutlineRow row)
     {
         string url = TargetOf(row.NodeId);
-        // The shared external-link policy's allowlist
-        // (WorkspaceViewModel.Citations.cs): a canvas file cannot
-        // smuggle a `file:` or `javascript:` target past it.
-        bool allowed = Uri.TryCreate(url, UriKind.Absolute, out Uri? uri)
-            && uri.Scheme is "http" or "https" or "mailto";
-        if (!allowed)
+        // The ONE allowlist every shell hand-off shares
+        // (ExternalLinkPolicy): a canvas file cannot smuggle a `file:`
+        // or `javascript:` target past it. The PREDICATE is shared; the
+        // refusal below is canvas vocabulary, because a canvas surface
+        // speaking the ExternalLink* family would be §W-D drift.
+        if (!ExternalLinkPolicy.IsLaunchable(url))
         {
             Announcer.Announce(new CanvasA11yEvent.CanvasBlocked(
                 new CanvasBlockedReason.NotAUrl()));
@@ -822,16 +822,46 @@ internal static class CanvasPhrase
 
     public const string VisualShipsLater = "The canvas visual view arrives in a later slice.";
 
-    /// <summary>t0 §1.1's card reference, composed from core's parts —
-    /// core's kind word and core's <c>speakable_name</c> (contract A9,
-    /// CD-30). The mac <c>CanvasCardRef.phrase</c> twin.</summary>
+    /// <summary>
+    /// t0 §1.1's card reference, composed from core's parts — core's
+    /// kind word and core's <c>speakable_name</c> (contract A9, CD-30).
+    /// The mac <c>CanvasCardRef.phrase</c> twin, and a transliteration
+    /// of core's own <c>a11y.rs::card_ref</c>, which is why
+    /// <c>TheCardReferenceMatchesCoresOwnComposition</c> pins it
+    /// against a RENDERED <c>CanvasMovedTo</c> rather than against
+    /// itself.
+    /// </summary>
     public static string CardReference(string kind, string speakableName) =>
         string.Equals(kind, "group", StringComparison.Ordinal)
             ? $"Group \"{speakableName}\""
             : $"{Capitalized(kind)} card \"{speakableName}\"";
 
-    private static string Capitalized(string word) =>
-        word.Length == 0 ? word : char.ToUpperInvariant(word[0]) + word[1..];
+    /// <summary>
+    /// Core's <c>capitalize_first</c>: the LEADING character only, so a
+    /// user-typed title passes through verbatim.
+    /// </summary>
+    /// <remarks>
+    /// Rust's <c>char::to_uppercase</c> is the FULL Unicode mapping (one
+    /// scalar may become several) and .NET's <c>ToUpperInvariant</c> is
+    /// the simple one, so the two disagree on scalars like
+    /// <c>ß</c> → <c>SS</c> — CD-34. Unreachable in practice
+    /// and checked rather than asserted: the only argument is core's
+    /// <c>kind_label</c>, a closed set of five ASCII words, and
+    /// <c>TheCardReferenceMatchesCoresOwnComposition</c> renders all
+    /// five through core. The split is on the first TEXT ELEMENT rather
+    /// than the first UTF-16 unit, so a surrogate pair is at least not
+    /// cut in half if the input set ever widens.
+    /// </remarks>
+    private static string Capitalized(string word)
+    {
+        if (word.Length == 0)
+        {
+            return word;
+        }
+        int lead = char.IsHighSurrogate(word[0]) && word.Length > 1 ? 2 : 1;
+        return string.Concat(
+            word[..lead].ToUpperInvariant(), word[lead..]);
+    }
 
     /// <summary>t0 §1.2 standard context + §3 inspectability (contract
     /// A10): position, colour and marked state are pull-readable, never

@@ -912,11 +912,13 @@ property of the sweep: 0→1 is the `CanvasDocumentFor` miss that
 constructs and loads (A4 hangs the once-per-open announcement there),
 and N→0 is the sweep finding no live tab. Pinned by
 `OneDocumentIsSharedByEveryTabOnThePath`,
-`TheLastTabClosingClosesTheHandleAndClearsTheMarks`.
+`TheLastTabClosingReleasesTheDocumentAndItsMarks`.
 
 **A2 — The attach funnel has FIVE call sites, and the list is derived.**
-Controller ruling. `AttachBaseDocumentIfNeeded`'s doc comment
-(`WorkspaceViewModel.Bases.cs:1042–1046`) named four — "AddTab, restore,
+Controller ruling. The funnel's doc comment — it was named
+AttachBaseDocumentIfNeeded before this PR renamed it, so that spelling
+is history rather than a citation
+(`WorkspaceViewModel.Bases.cs:1042–1046`) — named four — "AddTab, restore,
 duplicate, and the in-place REPLACE arm" — and there were five: the
 active-tab replace arm in `TryOpenItem` (`Layout.cs:161`), `AddTab`
 (`Layout.cs:210`), `DuplicateActiveTab` (`Layout.cs:441`), `RestoreNode`
@@ -974,7 +976,7 @@ the mac per-container behaviour stays a recorded platform note (CD-29).
 SAME event through `A11yRender` rather than composing a second copy —
 the mac CD-3 precedent, so banner and speech cannot drift. Pinned by
 `TwoPanesOnOneDocumentAnnounceTheDegradedLoadOnce` and
-`TheDegradedBannerTextIsTheRenderedEvent`.
+`TheDegradedBannerIsTheSameRenderTheAnnouncementSpeaks`.
 
 **The footer rows are wider than the banner's count, deliberately.**
 Spec behavior 2 asks for "a focusable detail row in the outline footer
@@ -1002,6 +1004,21 @@ The window is 200 ms latest-wins, each class independent. `Relay` takes
 a non-canvas `A11yEvent` (the shared grid's own events, PR B) and
 carries its core priority through unwrapped — the mac
 `testRelayCarriesTheCorePriorityOfANonCanvasEvent` fact.
+
+**The timers are bound to the dispatcher captured at CONSTRUCTION, and
+an empty render is loud.** A `DispatcherTimer` binds to
+`Dispatcher.CurrentDispatcher` of whatever thread creates it, and these
+are created lazily on the first debounce of each class — so a first
+navigation announcement arriving from a scheduler body would have
+created a timer on a POOL thread whose dispatcher nothing ever pumps,
+and the queued line would simply never fire. The announcer captures the
+dispatcher in its constructor and passes it to every timer, which makes
+that unreachable, and asserts in Debug that it is being driven from that
+thread. Separately, the empty-render arm (mac's
+`guard !rendered.text.isEmpty` twin) now carries a `Debug.Fail`: no
+canvas template renders empty, and a silent drop is the worst way to
+learn that one started to, because the symptom is an announcement that
+does not happen.
 
 **The post seam is `(text, priority)`, so the dispatcher gained an
 overload.** `AccessibilityNotificationDispatcher.Post(A11yEvent)`
@@ -1037,7 +1054,7 @@ recorded rather than papered over: **no unit guard asserts that a new
 announce site threads verbosity** — a `CanvasA11yEvent` variant that
 takes the parameter cannot be constructed without one, and which VALUE
 it gets is not a property any source scan can see. The coverage is the
-end-to-end-through-render facts (`ADeeperRowAnnouncesItsCoreRendered…`),
+end-to-end-through-render facts (`MovingSelectionAnnouncesTheCoreRenderedMoveAtTheVerbosity`),
 exactly as mac has it.
 
 **A8 — The outline is a tree of core's rows, nested by `depth`.**
@@ -1099,8 +1116,27 @@ its structural children — which reproduces mac's flat reading order
 walk. Their Name is `A11yRender(CanvasConnectionTraversed { direction,
 kind_label, title, label })` — the same event the navigator speaks when
 it traverses that connection (CD-14, and the reason mac's second copy
-died). ItemStatus is `connection ⟨i⟩ of ⟨n⟩`; Invoke follows the
-connection, which selects the other card and announces the move.
+died). ItemStatus is `connection ⟨i⟩ of ⟨n⟩`.
+
+**Invoke follows; ARROWING does not.** A connection row is a reading
+position, not canvas selection state, so the tree's selection changing
+onto one leaves the model alone — `Invoke`, Enter and double-click all
+route through the one activation path, which is the same split mac
+draws with `returnOpensRow`. Following on selection made the rows
+unreadable: the arrow key that landed on a row immediately moved the
+model to the other card, which rebuilt the selected card's children out
+from under the cursor, so the direction phrase a screen reader was about
+to speak was gone before it spoke it.
+
+**And the view's re-seat must not read back as a user action.** Removing
+those rows can remove the tree's CURRENT selection, and WPF answers by
+re-selecting the parent container — which arrived at the selection
+handler as a fresh user selection and dragged the model back to the card
+the user had just left. The whole model→view apply therefore runs under
+the sync guard, not just its final assignment.
+`ArrowingOntoAConnectionRowLeavesItReadable` pins both halves: the row
+survives with its name and status intact and nothing is announced, and
+then Invoke does move.
 Neighbours are `canvas_neighbors`, fetched lazily per node and cached,
 cache dropped on every load — the mac `neighborsCache` shape.
 
@@ -1120,7 +1156,7 @@ first row so the tree has a selected item, and announces nothing: the
 focus lands there and the screen reader reads the row it lands on, so a
 `CanvasMovedTo` on top of it is the t0 §1.5 doubling rule broken at the
 first keystroke of the surface's life. Pinned by
-`OpeningACanvasSeatsTheFirstRowWithoutAnnouncingAMove`.
+`ReadyPublishesCoreRowsAndSeatsTheFirstRowSilently`.
 
 **A13 — Activation is per kind, and every arm speaks canvas
 vocabulary.** Text ⇒ the interim read-only detail region seeded from
@@ -1129,10 +1165,21 @@ PR E swaps in the editor). File/image ⇒ the workspace's ONE navigation
 seam (`OpenEditorNavigation`), with the scene node's `subpath` mapped to
 a `LinkAnchor` — `#^id` ⇒ `("block", id)`, `#…` ⇒ `("heading", …)` —
 so the W3-5 anchor resolution lands the caret at the heading rather
-than at the note top. Link ⇒ the existing external-link policy's
-allowlist (`http`/`https`/`mailto`, `WorkspaceViewModel.Citations.cs:338`)
-and injected opener, announcing `CanvasOpened { Browser }`,
+than at the note top. Link ⇒ `ExternalLinkPolicy.IsLaunchable` —
+the ONE scheme allowlist (`http`/`https`/`mailto`) — and the injected
+opener, announcing `CanvasOpened { Browser }`,
 `CanvasBlocked { LinkOpenFailed }` or `CanvasBlocked { NotAUrl }`.
+
+**The predicate is shared; the announcements deliberately are not.**
+The first cut of this row said "the shared external-link policy" while
+copying the scheme literal a THIRD time (the right-pane panels and the
+citation popover held the other two), which is the claim-exceeds-
+enforcement class this document exists to stop. `ExternalLinkPolicy` is
+now the one definition and all three call sites read it, so a fourth
+scheme is a one-line change rather than a search. What stays per-surface
+is the sentence: the panels and the popover speak the `ExternalLink*`
+family, the canvas speaks its own, because a canvas surface emitting
+another family's strings would be §W-D drift.
 Group ⇒ expand. A file card whose target is gone announces
 `CanvasFileNotFound`; a text card whose `canvas_node_text` refuses
 announces `CanvasBlocked { CardTextUnreadable }` — the 0b never-silent
@@ -1251,10 +1298,21 @@ flush-and-drop, the relay's priority pass-through, and the label render
 used by the banner.
 `apps/slate-windows/tests/SlateWindows.Tests/Censuses/CanvasAnnouncerCensus.cs`:
 A6's funnel guard, plus A2's attach-funnel doc-comment twin.
+`apps/slate-windows/tests/SlateWindows.Tests/Censuses/AnnouncementSeamCensus.cs`:
+the production wiring as a CHAIN — the three shipping call expressions
+from `MainWindow` to the announcer, and a canvas load driven through a
+real dispatcher. The one guard class here that no injected sink can
+replace.
+`apps/slate-windows/tests/SlateWindows.Tests/Censuses/ContractsCitationCensus.cs`:
+every long identifier §A cites resolves to a real declaration. This
+section shipped five citations of tests that did not exist; a contract
+row citing a renamed test reads as evidenced and is not, which is the
+failure class PR H's reconciliation depends on catching.
 `apps/slate-windows/tests/SlateWindows.Tests/ChordTableTests.cs` /
 `CommandDriftTests.cs`: green with the three new rows.
 `apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs`:
-`Canvas_OutlineJourney` — tree and tree-item control types, the row
+`CanvasSurfaces_OutlineTreeSelectionAndActivation_AreClean` — tree and
+tree-item control types, the row
 names and ItemStatus, expand/collapse, selection, Enter activation,
 focus landing, the degraded banner reachable, axe 0 failures. CI
 arbitrates; it is never run locally beside the unit suite.
@@ -1284,10 +1342,12 @@ table.
 | I | Viewport math — clamp 0.1–4.0, step 1.25, fit padding 40/120 | none | 3 | host rendering; constants pinned here; zoom % announced via `CanvasZoom` | **event landed (0a)** |
 | J | Table column order/sort comparators/summary sentence; outline interleave | rows from core | 3 | host projection config; summary sentence stays a **static label** (never announced on mac) | resolved as label class (0a-13) |
 | K | Filter predicate — title/kind/groupPath/target, case-insensitive contains | none | 2 | `canvas_filter` (0b) | **closed** — 0b-13, 0b-14; `matchesFilter` deleted (0b-2), CD-22. `filterActive` stays host UI state |
-| L | Speakable-name dedup vs core's untitled-only allocation — two uniqueness algorithms | partial, conflicting | 2 | one algorithm in core: `CardSummary.speakable_name` (0b, D-3) | **closed** — 0b-5, 0b-6, CD-20, CD-23; the renderer's used-set walk and its per-view sticky map deleted (0b-2) |
+| L | Speakable-name dedup vs core's untitled-only allocation — two uniqueness algorithms | partial, conflicting | 2 | one algorithm in core: `CardSummary.speakable_name` (0b, D-3) | **closed** — 0b-5, 0b-6, CD-20, CD-23; the renderer's used-set walk and its per-view sticky map deleted (0b-2). **PR A note:** CD-23's "which surface reads which field" answer now differs by platform — the Windows OUTLINE reads `speakable_name` where mac's reads `title` (CD-30), so row P's two copies are not byte-identical on a canvas with repeated titles |
 | M | Node/edge id minting | none | 2 | `canvas_new_id()` (0b) | **closed** — 0b-4; `newCanvasEntityID` deleted, nine call sites (0b-2) |
 | N | Overlap onset/offset transition tracking | query exposed | 3 | host state machine (two-state, pinned); the CLAUSE is core's (`CanvasOverlapTransition`) | **clause landed (0a)** |
 | O | Resize → Fit to Content text-metrics approximation | none | 3 (D-5) | host, identical placeholder formula both hosts; the LABEL is core's (`CanvasResizePreset::FitToContent`) | **label landed (0a)** |
+| P | **The outline row's card reference** — `⟨Kind⟩ card "⟨name⟩"` / `Group "⟨label⟩"`, composed host-side by `CanvasPhrase.CardReference` (Windows) and `CanvasCardRef.phrase` (mac) | **`a11y.rs::card_ref` composes the identical clause**, but only INSIDE templates — no exported accessor renders a bare card reference (0a-10) | 3 by designation (§W-C label class, 0a-13) | host, on both platforms, until an owner designates a label accessor | **open by designation** — the two copies are pinned against core's own render by `TheCardReferenceMatchesCoresOwnComposition`, so a core wording change fails Windows CI rather than drifting. CD-30 records the `speakable_name` vs `title` difference; CD-34 the capitalisation residue |
+| Q | **The outline row's positional status** — `⟨n⟩ of ⟨m⟩ in ⟨container‖canvas⟩[, ⟨colour⟩][, marked]`, composed by `CanvasPhrase.RowStatus` (Windows) and `nodeValue` (mac) | **the same clause is the tail of `CanvasMovedTo`** at Standard and Verbose; again template-internal, with no accessor | 3 by designation (§W-C label class, 0a-13 names the outline node value explicitly) | host, both platforms | **open by designation** — same pin: the Standard render of `CanvasMovedTo` is asserted to equal `CardReference + ", " + RowStatus`, word for word |
 
 ---
 
@@ -2126,6 +2186,53 @@ rows are never hidden behind a collapse the user did not ask for), and
 a collapsed group hides its members from the tree walk, which is what a
 tree is for and what mac's flat list cannot offer.
 
+**CD-34 — `CanvasPhrase.CardReference` capitalises with .NET's SIMPLE
+mapping where core uses Rust's FULL one.** Core's `capitalize_first`
+(`a11y.rs:2841`) upper-cases the leading character through
+`char::to_uppercase`, which is the full Unicode mapping — one scalar may
+become several, so `ß` → `SS` and `ﬁ` → `FI`. .NET's
+`ToUpperInvariant` is deliberately the simple 1:1 mapping and leaves
+both alone. The two therefore disagree on any leading character whose
+full uppercase is longer than itself.
+
+**Unreachable, and checked rather than asserted.** The only argument is
+core's own `kind_label`, a closed set of five ASCII words
+(`text` · `file` · `image` · `link` · `group`,
+`model.rs::kind_label` returning `&'static str`), so no input in the
+system reaches the divergence.
+`TheCardReferenceMatchesCoresOwnComposition` renders all five through
+core and compares, which turns "unreachable" from a claim into a
+per-kind check that fails the day a sixth kind arrives with a
+non-ASCII initial. The host splits on the first TEXT ELEMENT rather
+than the first UTF-16 unit, so a surrogate pair would at least not be
+cut in half if the set ever widened. Recorded rather than worked
+around: emulating Rust's full mapping in C# means hand-coding the
+special-casing table, which is a real second copy of a Unicode rule for
+a case no caller can produce.
+
+**CD-35 — The canvas link card has no confirmation step, and neither
+does the policy it reuses.** Spec §PR A behavior 5 says *"link ⇒
+`Process.Start` URL with confirmation per the existing external-link
+policy"*. The existing policy has no confirmation: the right-pane
+panels and the citation popover both check the scheme allowlist and
+launch, announcing `ExternalLinkOpened` or `ExternalLinkFailed`
+afterwards — there is no prompt anywhere in it. Mac's canvas is the
+same shape (`CanvasContainerView.swift:177–178,188` announces
+`CanvasOpened` after the fact).
+
+So "with confirmation per the existing policy" reads as *the
+announcement IS the confirmation*, and that is what ships: the
+allowlist refuses `file:`/`javascript:`/custom schemes with
+`CanvasBlocked { NotAUrl }`, a successful launch says
+`CanvasOpened { Browser }`, and a failed one says
+`CanvasBlocked { LinkOpenFailed }`. Adding a modal prompt on the canvas
+path alone would make the canvas the only surface in the shell that
+asks before opening a link — a divergence from both the other Windows
+surfaces and from mac, introduced by PR A, on the strength of one
+ambiguous word. If an owner wants a confirmation, it belongs on
+`ExternalLinkPolicy` for every surface at once, which is a decision, not
+a canvas detail.
+
 ---
 
 ## Accepted risks (owner-recorded; off-limits for re-litigation)
@@ -2744,14 +2851,28 @@ every deleted symbol was re-grepped to zero afterwards.
   rows. The alternative — an invokable child element inside each row —
   is what the journeys' peered-elements-only trap forbids, so the item
   is a `CanvasOutlineItem` whose peer adds the pattern.
-- **A `RenderedAnnouncement` overload was unavoidable.**
-  `AccessibilityNotificationDispatcher.Post` rendered internally, and a
-  coalescer cannot use that: the window's winner is decided AFTER the
-  render and the loser is dropped without ever being spoken, so the
-  queue holds rendered lines. `Post(A11yEvent)` now delegates to
-  `Post(RenderedAnnouncement)`; the seam is threaded from `MainWindow`
-  through the vault lifecycle to the workspace with the same
-  `?? (_ => { })` shape the event seam already had.
+- **A `RenderedAnnouncement` overload was unavoidable, and the seam it
+  created was not wired.** `AccessibilityNotificationDispatcher.Post`
+  rendered internally, and a coalescer cannot use that: the window's
+  winner is decided AFTER the render and the loser is dropped without
+  ever being spoken, so the queue holds rendered lines.
+  `Post(A11yEvent)` now delegates to `Post(RenderedAnnouncement)`, and
+  the new seam takes the same `?? (_ => { })` default the event seam
+  already had at each hop.
+
+  **This bullet used to claim the seam was "threaded from `MainWindow`
+  through the vault lifecycle to the workspace". It was not.** The
+  production construction passed no `announceRendered:` argument at all,
+  so the default no-op threaded the whole way and every canvas
+  announcement died silently in the shipping app — while the entire
+  suite stayed green, because every fact injects its own sink. That is
+  the exact shape a default-to-harmless seam fails in, and no
+  test-injected sink can ever catch it. Fixed, and guarded by
+  `AnnouncementSeamCensus`, which reads the three SHIPPING call
+  expressions — `MainWindow` → lifecycle → workspace → announcer — and
+  a fourth fact that drives a canvas load through a real
+  `AccessibilityNotificationDispatcher`. Mutation-verified: deleting the
+  argument again fails the first of them by name.
 - **The attach funnel's doc comment was one site behind, and now cannot
   be.** The controller ruling said four listed versus five real; that
   was correct (`Layout.cs:161`, the active-tab replace arm in
@@ -2773,6 +2894,40 @@ every deleted symbol was re-grepped to zero afterwards.
   every commit; no unrelated file was rewritten. The ten xUnit2031
   analyzer warnings the first cut of `CanvasDocumentTests` produced were
   cleared rather than left in the log.
+
+**Fix round 1 (task review).** Three of the findings changed shipped
+behaviour rather than only prose, and one of those was found by a test
+written for a different finding:
+
+- **The rendered seam was never wired** (above, in the amended overload
+  bullet). Class: a seam whose every hop defaults to harmless is
+  invisible to any suite that injects its own sink.
+- **Removing a selected connection row dragged the model backwards.**
+  Writing the arrow-onto-a-connection-row fact exposed it: WPF
+  re-selects the parent container when the selected item is removed, and
+  that arrived at the selection handler as a user action. The apply now
+  runs wholly under the sync guard (A11). The reviewer's finding was
+  that arrowing must not follow; the guard gap was underneath it and
+  would have survived the narrow fix.
+- **Three copies of the scheme allowlist** — panels, citation popover,
+  canvas — while the contracts row said "shared". Now one
+  `ExternalLinkPolicy`; the row says what is true (I4/A13).
+- **Five §A citations named tests that did not exist.** Corrected, and
+  `ContractsCitationCensus` now derives the check instead of trusting a
+  re-read. The mechanical sweep also found the inverse hazard: §A cites
+  plenty of real identifiers that live outside the C# tree (WPF, the mac
+  twins), so the census lists those explicitly rather than loosening the
+  rule until it passes.
+
+**Deferred to PR E (m5, ledgered, no action here).** `Rebuild()`
+force-expands every group with members so a first read is the whole
+structure, which means a republish discards a user's collapse. Nothing
+in PR A republishes except a reload, so the cost is currently one lost
+collapse per explicit reload; PR E's mutation funnel republishes on
+every write, at which point expansion state has to be preserved across a
+rebuild rather than reset. Recorded here so PR E inherits the decision
+rather than rediscovering it.
+
 
 ---
 

@@ -41,7 +41,15 @@ public partial class MainWindow : Window
             confirmDirtyNavigation: ConfirmDirtyNavigation,
             confirmDirtyClose: ConfirmDirtyClose,
             confirmDestructive: ConfirmDestructive,
-            pickImportSources: PickImportSourcesAsync);
+            pickImportSources: PickImportSourcesAsync,
+            // W6-1 PR A (contract A5): the canvas coalescer queues
+            // RENDERED lines, so it cannot use the event seam above.
+            // BOTH seams must be threaded here or every canvas
+            // announcement falls into the lifecycle's no-op default and
+            // dies silently in production while every fact that injects
+            // its own sink stays green. AnnouncementSeamCensus reads
+            // this call and fails if either argument goes missing.
+            announceRendered: _announcer.Post);
         _viewModel.RecentVaultsChanged += ViewModel_RecentVaultsChanged;
         _viewModel.ReturnedToWelcome += ViewModel_ReturnedToWelcome;
         _viewModel.WorkspaceReady += ViewModel_WorkspaceReady;

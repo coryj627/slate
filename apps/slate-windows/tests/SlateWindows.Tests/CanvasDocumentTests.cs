@@ -689,6 +689,65 @@ public sealed class CanvasDocumentTests : IDisposable
         document.Shutdown();
     });
 
+    /// <summary>
+    /// Contract A11: a connection row is a READING position, not canvas
+    /// selection state. Arrowing onto one must leave the model alone —
+    /// following there rebuilt the selected card's children out from
+    /// under the cursor, so the direction phrase a screen reader was
+    /// about to speak was gone before it spoke it, and the row could
+    /// never be read at all. Invoke and Enter are the follow path
+    /// (mac's `returnOpensRow` split).
+    /// </summary>
+    [Fact]
+    public void ArrowingOntoAConnectionRowLeavesItReadable() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = NewDocument("board.canvas");
+        document.Load();
+        var surface = new CanvasSurfaceView { Model = document };
+        using var host = Host(surface);
+        CanvasOutlineView view = surface.OutlineForTests;
+
+        document.SelectNode("question");
+        host.UpdateLayout();
+        CanvasOutlineRowViewModel group =
+            Assert.Single(view.RootsForTests, row => row.Id == "grp");
+        CanvasOutlineRowViewModel question =
+            Assert.Single(group.Children, child => child.Id == "question");
+        CanvasOutlineRowViewModel connection = question.Children[0];
+        Assert.True(connection.IsConnection);
+        string name = connection.Name;
+        Assert.NotEmpty(name);
+        // Drain the move that seated the selection BEFORE clearing:
+        // clearing the recorder does not empty the coalescer, and its
+        // pending navigation line would land in the middle of the
+        // assertion below and read as an arrow-key announcement.
+        document.Announcer.FlushForTests();
+        _announced.Clear();
+
+        // The arrow key's effect: the tree selects the row.
+        connection.IsSelected = true;
+        host.UpdateLayout();
+
+        // The row is still there, still under the same card, still
+        // carrying the direction phrase a reader is about to speak.
+        Assert.Same(connection, question.Children[0]);
+        Assert.Equal(name, connection.Name);
+        Assert.Equal(
+            CanvasPhrase.ConnectionStatus(1, document.NeighborsOf("question").Count),
+            connection.Status);
+        // The canvas selection did not move, and nothing was said.
+        Assert.Equal("question", document.Selection.Selected);
+        document.Announcer.FlushForTests();
+        Assert.Empty(_announced);
+
+        // Invoke IS the follow path, and it does move.
+        connection.RaiseActivate();
+        document.Announcer.FlushForTests();
+        Assert.Equal("evidence", document.Selection.Selected);
+        Assert.NotEmpty(_announced);
+        document.Shutdown();
+    });
+
     [Fact]
     public void SelectionFlowsBothWaysWithoutAnEcho() => RunSta(() =>
     {
@@ -1163,10 +1222,19 @@ public sealed class CanvasDocumentTests : IDisposable
 
         Assert.Equal(CanvasLoadState.Ready, document.State);
         Assert.Equal(2000, document.Outline.Count);
-        // The mac core path is 5.62 ms at this scale; the C# delta is
-        // marshalling. 500 ms is the §K interactive budget the renderer
-        // suite also asserts — a regression that makes opening a
-        // 2,000-node canvas non-interactive fails here.
+        // 500 ms is the §K interactive budget the mac renderer suite
+        // also asserts — a regression that makes opening a 2,000-node
+        // canvas non-interactive fails here. The measured figures live
+        // in BENCHMARKS.md, taken by CanvasOpenBenchmarks, not by this
+        // clock.
+        //
+        // In the ASYNCHRONOUS arm the number is a CEILING, not a
+        // measurement: the drain loop polls at 5 ms, so a load that
+        // finished at t=1 ms can be observed as late as t=6 ms and the
+        // reading is quantized to that granularity. That is fine for
+        // what this asserts — an order of magnitude of headroom — and
+        // it is why the elapsed value is never recorded anywhere as a
+        // benchmark.
         Assert.True(
             clock.ElapsedMilliseconds < 500,
             $"opening a 2,000-node canvas took {clock.ElapsedMilliseconds} ms "

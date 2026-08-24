@@ -386,6 +386,28 @@ internal sealed class CanvasOutlineView : UserControl
         {
             return;
         }
+        // The WHOLE body is the model → view direction, so none of it
+        // may be read back as a user action. Guarding only the
+        // `IsSelected` assignment was not enough: removing the
+        // connection rows below removes a row that may currently BE the
+        // tree's selection (arrow onto a connection row, then follow),
+        // and WPF answers by re-selecting the parent container — which
+        // came back through OnTreeSelectionChanged as a fresh user
+        // selection and dragged the model back to the card the user had
+        // just left. Found by `ArrowingOntoAConnectionRowLeavesItReadable`.
+        _syncingSelection = true;
+        try
+        {
+            ApplySelectionCore(model);
+        }
+        finally
+        {
+            _syncingSelection = false;
+        }
+    }
+
+    private void ApplySelectionCore(CanvasDocumentViewModel model)
+    {
         if (_connectionHost is { } previous
             && !string.Equals(previous, model.Selection.Selected, StringComparison.Ordinal)
             && _byNode.TryGetValue(previous, out CanvasOutlineRowViewModel? host))
@@ -425,15 +447,7 @@ internal sealed class CanvasOutlineView : UserControl
                 line.IsExpanded = true;
             }
         }
-        _syncingSelection = true;
-        try
-        {
-            line.IsSelected = true;
-        }
-        finally
-        {
-            _syncingSelection = false;
-        }
+        line.IsSelected = true;
     }
 
     private void OnTreeSelectionChanged(
@@ -445,15 +459,23 @@ internal sealed class CanvasOutlineView : UserControl
         {
             return;
         }
+        // Connection lines are NOT canvas selection state, and arrowing
+        // onto one must not act (contract A11; spec behavior 3 gives
+        // them `Invoke` = follow, and mac's `returnOpensRow` is the same
+        // split). Following here made them unreadable: the arrow key
+        // that landed on the row immediately moved the model's
+        // selection to the other card, which rebuilt the connection
+        // children out from under the cursor — so the direction phrase
+        // a screen reader was about to speak was gone before it spoke
+        // it. Invoke and Enter both route through ActivateRow, which
+        // follows; arrowing is pure reading.
+        if (line.IsConnection)
+        {
+            return;
+        }
         // The echo is broken by the flag, not by a value compare: the
         // compare cannot tell "the model already agrees" from "another
         // pane set it to the same node" (contract A12).
-        if (line.Neighbor is { } neighbor)
-        {
-            // Connection lines are navigational, not selectable state.
-            model.FollowConnection(neighbor);
-            return;
-        }
         model.SelectNode(line.Id);
     }
 

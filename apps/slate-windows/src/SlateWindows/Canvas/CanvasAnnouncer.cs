@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Diagnostics;
 using System.Windows.Threading;
 using uniffi.slate_uniffi;
 
@@ -45,6 +46,25 @@ internal sealed class CanvasAnnouncer
     private readonly TimeSpan _window;
 
     /// <summary>
+    /// The dispatcher the coalescing timers run on, captured at
+    /// CONSTRUCTION rather than at first use.
+    /// </summary>
+    /// <remarks>
+    /// A <see cref="DispatcherTimer"/> binds to
+    /// <c>Dispatcher.CurrentDispatcher</c> of whatever thread creates
+    /// it, and these are created lazily on first debounce. The
+    /// announcer is built on the UI thread by the canvas registry, but
+    /// a first navigation announcement arriving from a scheduler body
+    /// would otherwise have created a timer on a POOL thread — whose
+    /// dispatcher nothing ever pumps, so the queued line would never
+    /// fire and the move would simply never be spoken. Binding the
+    /// timers to this dispatcher makes the hazard unreachable; the
+    /// assert below makes a caller that is off it loud in Debug rather
+    /// than merely survivable.
+    /// </remarks>
+    private readonly Dispatcher _dispatcher;
+
+    /// <summary>
     /// The seam is a RENDERED line rather than an event because the
     /// window's winner is decided after the render and the loser is
     /// dropped without ever being spoken — the mac announcer's
@@ -58,6 +78,7 @@ internal sealed class CanvasAnnouncer
         ArgumentNullException.ThrowIfNull(post);
         _post = post;
         _window = coalesceWindow ?? DefaultWindow;
+        _dispatcher = Dispatcher.CurrentDispatcher;
     }
 
     /// <summary>The only announcement API canvas code may use.</summary>
@@ -95,9 +116,22 @@ internal sealed class CanvasAnnouncer
 
     private void Emit(A11yEvent @event, EventClass? eventClass)
     {
+        Debug.Assert(
+            _dispatcher.CheckAccess(),
+            "CanvasAnnouncer must be driven from the thread it was built on: its "
+            + "coalescing timers are bound to that dispatcher, and the publishes "
+            + "it feeds are UI state.");
         RenderedAnnouncement rendered = SlateUniffiMethods.A11yRender(@event);
         if (rendered.Text.Length == 0)
         {
+            // No canvas template renders empty, so this arm is
+            // defensive (mac's `guard !rendered.text.isEmpty` twin) —
+            // and a silent drop is the worst possible way to learn that
+            // a template started rendering nothing, because the symptom
+            // is an announcement that simply does not happen.
+            Debug.Fail(
+                $"the vocabulary rendered an empty string for {@event.GetType().Name}; "
+                + "an announcement was dropped silently.");
             return;
         }
         if (eventClass is { } coalesced)
@@ -138,7 +172,7 @@ internal sealed class CanvasAnnouncer
     {
         if (!_pending.TryGetValue(eventClass, out PendingLine? line))
         {
-            line = new PendingLine(_window, () => Fire(eventClass));
+            line = new PendingLine(_window, _dispatcher, () => Fire(eventClass));
             _pending[eventClass] = line;
         }
         line.Restart(rendered);
@@ -186,9 +220,15 @@ internal sealed class CanvasAnnouncer
         private readonly DispatcherTimer _timer;
         private RenderedAnnouncement? _rendered;
 
-        internal PendingLine(TimeSpan window, Action onElapsed)
+        internal PendingLine(TimeSpan window, Dispatcher dispatcher, Action onElapsed)
         {
-            _timer = new DispatcherTimer { Interval = window };
+            // The four-argument ctor binds the timer to the GIVEN
+            // dispatcher; the parameterless one would bind it to
+            // whatever thread got here first.
+            _timer = new DispatcherTimer(DispatcherPriority.Normal, dispatcher)
+            {
+                Interval = window,
+            };
             _timer.Tick += (_, _) =>
             {
                 _timer.Stop();

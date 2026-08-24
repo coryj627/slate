@@ -125,6 +125,83 @@ public sealed class CanvasAnnouncerTests
         Assert.Single(_posted);
     }
 
+    /// <summary>
+    /// Contract A9/A10 drift control. <c>CanvasPhrase.CardReference</c>
+    /// and <c>CanvasPhrase.RowStatus</c> are host LABEL-class copies of
+    /// clauses core also composes — <c>a11y.rs::card_ref</c> and the
+    /// positional clause of <c>CanvasMovedTo</c> — because no exported
+    /// accessor renders either on its own (0a-10). A copy nothing
+    /// compares is a copy that drifts, so this pins them against core's
+    /// OWN rendering of the same data.
+    /// </summary>
+    /// <remarks>
+    /// At Standard, <c>CanvasMovedTo</c> renders exactly
+    /// <c>⟨card⟩, ⟨n⟩ of ⟨m⟩ in ⟨container‖canvas⟩</c> — which is
+    /// <c>CardReference</c> followed by <c>RowStatus</c> with both
+    /// optional clauses absent, so the assertion is a full equality and
+    /// a core wording change to "card", to the quoting, to " of ", to
+    /// " in ", or to the comma joining fails here. Verbose adds a
+    /// connections clause the outline's status slot deliberately omits
+    /// (t0 §3 gives the row position, colour and marked state), so its
+    /// two ends are pinned instead: the head is the card reference and
+    /// the tail is the colour and marked clauses RowStatus spells.
+    /// </remarks>
+    [Theory]
+    [InlineData("text")]
+    [InlineData("file")]
+    [InlineData("image")]
+    [InlineData("link")]
+    [InlineData("group")]
+    public void TheCardReferenceMatchesCoresOwnComposition(string kind)
+    {
+        const string title = "Research";
+        const string container = "Q3";
+        const uint ordinalN = 2;
+        const uint totalM = 5;
+
+        string standard = Render(new CanvasA11yEvent.CanvasMovedTo(
+            CanvasVerbosity.Standard, kind, title, ordinalN, totalM, container,
+            ConnectionCount: 3, ColorName: "red", Marked: true));
+        Assert.Equal(
+            CanvasPhrase.CardReference(kind, title)
+            + ", "
+            + CanvasPhrase.RowStatus(
+                ordinalN, totalM, container, colorName: null, marked: false),
+            standard);
+
+        string verbose = Render(new CanvasA11yEvent.CanvasMovedTo(
+            CanvasVerbosity.Verbose, kind, title, ordinalN, totalM, container,
+            ConnectionCount: 3, ColorName: "red", Marked: true));
+        Assert.StartsWith(
+            CanvasPhrase.CardReference(kind, title) + ", ",
+            verbose,
+            StringComparison.Ordinal);
+        // The colour and marked clauses, in core's order and spelling.
+        Assert.EndsWith(", red, marked", verbose, StringComparison.Ordinal);
+        Assert.EndsWith(
+            ", red, marked",
+            CanvasPhrase.RowStatus(
+                ordinalN, totalM, container, colorName: "red", marked: true),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The container fallback is core's word, not the host's guess: an
+    /// ungrouped card reads "in canvas" on both sides.
+    /// </summary>
+    [Fact]
+    public void TheRowStatusFallbackContainerMatchesCore()
+    {
+        string standard = Render(new CanvasA11yEvent.CanvasMovedTo(
+            CanvasVerbosity.Standard, "text", "Loose", 1, 4, Container: null,
+            ConnectionCount: 0, ColorName: null, Marked: false));
+        Assert.Equal(
+            CanvasPhrase.CardReference("text", "Loose")
+            + ", "
+            + CanvasPhrase.RowStatus(1, 4, null, null, false),
+            standard);
+    }
+
     [Fact]
     public void LabelRenderingPostsNothingAndReturnsCoresText()
     {
