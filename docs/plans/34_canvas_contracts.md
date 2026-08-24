@@ -1468,6 +1468,24 @@ carries a chord, so `Scope` resolves to `None` through `Reg`'s own rule
 and `ChordScope.Canvas` has no delivery site until PR C — which is why
 the scope's doc comment names PR C as the first surface that uses it.
 
+**The switcher is ONE named group in the UIA tree, and that required a
+peer (round 8).** The three choices sit in a container carrying
+AutomationId "CanvasSurfaceSwitcher" and the name "Canvas view". That
+container was a bare `StackPanel`, which WPF gives no automation peer, so
+BOTH properties were inert: a client saw no switcher element at all and
+the three radio buttons appeared flattened directly under
+`CanvasSurface`. It is now an `AutomationNamedGroupPanel` (the shared
+peered-container idiom in `AutomationLandmark.cs`, whose own comment
+records the W4-5 lesson that produced it), exposing
+`ControlType.Group` with the name, and the three choices are its UIA
+children. Evidence: the
+`CanvasSurfaces_OutlineTreeSelectionAndActivation_AreClean` journey
+asserts the element resolves and is named "Canvas view", and
+`CanvasAutomationPropertyCensus` pins the general rule structurally —
+mutation-verified both ways (reverting the switcher to a `StackPanel`
+fails it on both property lines; adding a name to any other bare panel
+fails it naming that line).
+
 **A19 — Canvas tabs are never dirty, and the close gate is bypassed by
 construction.** `WorkspaceTabViewModel.IsDirty` is only ever set by the
 editor session, which a non-markdown tab never creates, so `CanCloseTab`
@@ -4065,4 +4083,72 @@ its AutomationId and its "Canvas view" name never reach a client. Contract
 A18's "one named group" is not met. Same root class as the Invoke defect:
 `AutomationProperties` set on an element WPF never peers. Not fixed here
 because it is production a11y behaviour needing its own contract evidence
-and mutation-verified test.
+and mutation-verified test. *(Fixed in round 8, below, along with the
+class-wide sweep and the census that ends it.)*
+
+### PR A — Round 8 — the class ended: inert a11y properties
+
+The switcher defect reported above is fixed, and — the point of this round
+— the CLASS behind it is closed rather than the instance.
+
+**The fix.** The switcher is an `AutomationNamedGroupPanel`, the shared
+peered-container idiom from `AutomationLandmark.cs`. It exposes
+`ControlType.Group` carrying the "Canvas view" name and the
+`CanvasSurfaceSwitcher` AutomationId, with the three radio buttons as its
+UIA children. Verified in-process before and after: the tree went from
+`CanvasSurface | .CanvasShowOutline | .CanvasShowTable | .CanvasShowVisual`
+(flattened, no switcher) to
+`CanvasSurface | .CanvasSurfaceSwitcher[Group]name='Canvas view' |
+..CanvasShowOutline | ..CanvasShowTable | ..CanvasShowVisual`.
+
+**The sweep.** Every `AutomationProperties` usage across all canvas
+surfaces was enumerated and its target's element type resolved. There is
+no XAML under `Canvas/` (CD-31 builds these views in code), so the sweep is
+the five `.cs` files. Result: **one** peerless target — the switcher — and
+every other site already sat on a peered type (`TreeView`, `UserControl`,
+`TextBlock`, `TextBox`, `ListBox`, `RadioButton`, and a `Style` targeting
+`TreeViewItem`). Nothing was deleted as decorative; the full hit list and
+disposition are in the task report. The in-process peer walk corroborates
+the static sweep — every AutomationId in the canvas surfaces now resolves
+to a real node.
+
+**The census that ends the class.** `CanvasAutomationPropertyCensus`
+asserts structurally that no `AutomationProperties.Set*` in the canvas
+sources targets an element type without an automation peer, with peered
+types allow-listed BY NAME so a new element type is a conscious decision
+rather than a silent pass. It is deliberately fail-closed — a target whose
+type it cannot resolve is a failure, not a skip, because a blind spot here
+is indistinguishable from the bug. It also carries a floor on the number
+of sites scanned, so a refactor that moved these calls elsewhere cannot
+leave it passing over nothing. Mutation-verified twice: reverting the
+switcher to a `StackPanel` fails it on both property lines, and adding a
+name to any other bare panel fails it naming that line.
+
+*(One false positive was caught and fixed while writing it: a file-wide
+identifier map let `SetBanner`'s `string text` parameter shadow
+`BannerText`'s local `TextBlock text`. Resolution is scope-aware now —
+locals, then parameters, then fields. A census that cries wolf gets
+suppressed, which would cost more than the bug it guards.)*
+
+**Three defects, one journey, none catchable before it ran.** The
+`CanvasSurfaces_OutlineTreeSelectionAndActivation_AreClean` journey had
+never executed a single assertion: its fixture lookup walked up to
+`Cargo.toml`, and the gate runs on downloaded binaries with no checkout,
+so it threw in 4 ms on every run since it was written. Behind that setup
+failure sat (1) the fixture lookup itself, (2) the outline's Invoke
+sitting on a peer no client reads, and (3) the switcher's inert
+properties. Each was found only by fixing the one in front of it. The
+lesson recorded for the rest of the series: **a journey that has never
+reached its assertions is not evidence of anything**, and a green gate
+containing one is green about the setup, not the behaviour. Codex round
+6's SAFE TO MERGE was reached in exactly that state.
+
+**The false-green tally, closed out.** Instances 1–3 were tests that
+supplied their own mechanism (an unwired seam behind injected sinks, the
+media gate behind a stubbed closure, a focus guard calling
+`RequestFocusLanding` itself). Instance 4 was the Invoke fact
+interrogating a container peer no client sees. Instance 5 is this one —
+properties that reach no client at all. Instances 4 and 5 share a root
+that the earlier three did not: **the assertion targeted a real object,
+but not the object the consumer reads.** That is what the two new censuses
+guard, and it is the form to watch for in PRs B–E.

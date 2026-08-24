@@ -39,6 +39,41 @@ internal sealed class AutomationNamedRowBorder : Border
         new AutomationNamedRowPeer(this);
 }
 
+/// <summary>
+/// A named grouping container. A plain <see cref="StackPanel"/> creates
+/// NO automation peer, so an AutomationId or Name set on one is dropped
+/// from UIA in silence — the same W4-5 lesson that produced
+/// <see cref="AutomationLandmarkBorder"/>, which recurred on the canvas
+/// surface switcher (round 8: the switcher's "Canvas view" name and its
+/// AutomationId reached no client, and its three radio buttons appeared
+/// flattened rather than grouped). This exposes ONE Group element
+/// carrying the name, with the panel's children beneath it.
+/// </summary>
+internal sealed class AutomationNamedGroupPanel : StackPanel
+{
+    protected override AutomationPeer OnCreateAutomationPeer() =>
+        new AutomationNamedGroupPeer(this);
+}
+
+internal sealed class AutomationNamedGroupPeer : FrameworkElementAutomationPeer
+{
+    internal AutomationNamedGroupPeer(FrameworkElement owner)
+        : base(owner)
+    {
+    }
+
+    protected override AutomationControlType GetAutomationControlTypeCore() =>
+        AutomationControlType.Group;
+
+    protected override string GetClassNameCore() => "SlateGroup";
+
+    protected override bool IsControlElementCore() =>
+        Owner is UIElement { Visibility: Visibility.Visible };
+
+    protected override bool IsContentElementCore() =>
+        Owner is UIElement { Visibility: Visibility.Visible };
+}
+
 internal sealed class AutomationNamedRowPeer : FrameworkElementAutomationPeer
 {
     internal AutomationNamedRowPeer(FrameworkElement owner)

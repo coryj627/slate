@@ -65,7 +65,12 @@ internal sealed class CanvasSurfaceView : UserControl
             "CanvasShowVisual", CanvasPhrase.VisualSurfaceLabel, CanvasPhrase.VisualShipsLater);
         _outlineChoice.Checked += (_, _) => RequestSurface(CanvasSurfaceKind.Outline);
 
-        var switcher = new StackPanel
+        // A named GROUP, not a bare StackPanel (A18, round 8). A plain
+        // panel gets no automation peer, so the AutomationId and Name set
+        // below reached no client at all and the three choices appeared
+        // flattened under the surface — inert a11y properties, which is
+        // the class this and the Invoke defect share.
+        var switcher = new AutomationNamedGroupPanel
         {
             Orientation = Orientation.Horizontal,
             Margin = new Thickness(12, 0, 0, 0),
