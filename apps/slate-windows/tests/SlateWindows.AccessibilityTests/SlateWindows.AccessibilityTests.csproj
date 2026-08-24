@@ -28,6 +28,17 @@
     <Content Include="..\..\..\..\demo-vault\csl\ieee.csl"
              Link="fixtures\ieee.csl"
              CopyToOutputDirectory="PreserveNewest" />
+
+    <!-- W6-1 PR A (#745): the canvas outline journey seeds its temp vault
+         with committed demo-vault canvases, byte-exact. Same reason as the
+         CSL style above — no checkout at run time — so they must travel in
+         the output directory too. The §K benchmark fixture
+         (large_2000.canvas, ~385 KB) is excluded: no journey reads it, and
+         it is pure artifact weight. -->
+    <Content Include="..\..\..\..\demo-vault\canvas\*.canvas"
+             Exclude="..\..\..\..\demo-vault\canvas\large_2000.canvas"
+             Link="fixtures\canvas\%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

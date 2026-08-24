@@ -6384,23 +6384,25 @@ public sealed class ShellAccessibilityTests
         return items;
     }
 
-    /// <summary>The committed demo-vault canvases. Walk UP to the
-    /// workspace <c>Cargo.toml</c> rather than counting directory hops —
-    /// a hop count breaks on a TFM, RID or runner change.</summary>
+    /// <summary>
+    /// The committed demo-vault canvases.
+    ///
+    /// Read from the OUTPUT DIRECTORY, never by walking up to a repo root
+    /// — the same rule as <see cref="CitationStyleFixture"/>, and for the
+    /// same reason: this gate downloads built binaries and runs with no
+    /// checkout, so the repo does not exist at run time. The first version
+    /// of THIS helper walked up to <c>Cargo.toml</c>; it passed locally
+    /// and failed on CI in 4 ms, which is precisely the failure
+    /// <c>CitationStyleFixture</c>'s comment already warned about.
+    /// </summary>
     private static string DemoVaultCanvasDirectory()
     {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null
-            && !File.Exists(Path.Combine(directory.FullName, "Cargo.toml")))
-        {
-            directory = directory.Parent;
-        }
-        string root = directory?.FullName
-            ?? throw new Xunit.Sdk.XunitException("repository root not found");
-        string canvases = Path.Combine(root, "demo-vault", "canvas");
+        string canvases = Path.Combine(AppContext.BaseDirectory, "fixtures", "canvas");
         Assert.True(
             Directory.Exists(canvases),
-            $"the demo vault's canvas fixtures are missing at {canvases}");
+            $"The canvas fixtures are missing at {canvases}. They are linked "
+            + "Content items in SlateWindows.AccessibilityTests.csproj and "
+            + "must be copied to the output directory.");
         return canvases;
     }
 
