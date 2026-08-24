@@ -1161,6 +1161,13 @@ asserts it found call sites at all, and it asserts every exclusion still
 calls a scanned query, so a stale excuse cannot sit there hiding the
 next one.
 
+It binds SOURCE and TEST membership, not just source (codex 0b round 6):
+the same test parses the two-column test's `selectionBearing` /
+`selectionFree` arrays and requires `selectionBearing` to equal the
+source-derived set of selection-first verbs in both directions, so the
+matrix cannot lose a row or miss a newly gated verb. The parse anchors
+on those binding names and fails loudly if they move.
+
 **Its reach, stated rather than implied** (the doctrine 0a's source scan
 settled on). It matches the query as a MEMBER TOKEN on a session-ish
 receiver, with no call paren required — `let read = session.canvasBounds`

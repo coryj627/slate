@@ -371,11 +371,19 @@ final class CanvasNavigatorTests: XCTestCase {
                     "\(label) / \(verb): selection moved")
             }
 
-            /// The four verbs that ask about the selection before the
-            /// document, and the members that never do.
-            /// `every_mac_canvas_read_is_gated_or_named` holds this
-            /// split to the code: a verb that can say "Nothing
-            /// selected." is exactly a verb that gates on it first.
+            // The verbs that ask about the selection before the
+            // document, and the members that never do.
+            //
+            // These two arrays are PARSED by
+            // `every_mac_canvas_read_is_gated_or_named`, which requires
+            // `selectionBearing` to equal the set of mac functions that
+            // announce `.nothingSelected` through the precedence gate —
+            // in both directions, so neither a verb dropped from the
+            // matrix nor one that gains the gate in source can pass
+            // unnoticed. The bindings' names and their
+            // `[(String, () -> Void)]` type are the guard's anchors:
+            // renaming or reshaping them fails it loudly rather than
+            // quietly unhooking the check.
             let selectionBearing: [(String, () -> Void)] = [
                 ("enter group", { state.canvasEnterGroup() }),
                 ("exit group", { state.canvasExitGroup() }),

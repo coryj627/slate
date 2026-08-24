@@ -13761,7 +13761,7 @@ mod canvas_mirror_tests {
     /// every exclusion still calls one.
     #[test]
     fn every_mac_canvas_read_is_gated_or_named() {
-        use std::collections::BTreeMap;
+        use std::collections::{BTreeMap, BTreeSet};
 
         /// The generated Swift names of the handle-based canvas read
         /// queries — the ones whose answer depends on a live handle, so
@@ -13988,31 +13988,28 @@ mod canvas_mirror_tests {
         // that consults the snapshot-visibility predicate; announcing it
         // on some other path is how a verb ends up reciting the state's
         // sentence at a user who is looking at rows.
-        //
-        // This also holds the mac test's two verb groups to the code:
-        // "selection-bearing" is not a list anyone maintains, it is the
-        // set of functions this assertion admits.
         const ANNOUNCER: &str = "canvasAnnounceSelectionUnresolvable";
         const PRECEDENCE_GATE: &str = "canvasAnsweredMissingSelection";
-        let announcing: Vec<&str> = bodies
+        // The gate itself is excluded alongside the announcer: it
+        // announces BY CONSTRUCTION, so counting it would let the floor
+        // below be met by the gate plus one fewer verb (codex 0b round
+        // 6). What is left is exactly the selection-first verbs.
+        let selection_first: BTreeSet<&str> = bodies
             .iter()
-            .filter(|(name, body)| name.as_str() != ANNOUNCER && body.contains(ANNOUNCER))
+            .filter(|(name, body)| {
+                name.as_str() != ANNOUNCER
+                    && name.as_str() != PRECEDENCE_GATE
+                    && body.contains(ANNOUNCER)
+            })
             .map(|(name, _)| name.as_str())
             .collect();
-        assert!(
-            announcing.len() >= 4,
-            "expected at least the four selection-bearing verbs to announce an \
-             unresolvable selection, found {announcing:?}; the scan or the name is wrong \
-             and this assertion would pass vacuously"
-        );
-        let unordered: Vec<&str> = announcing
+        let unordered: Vec<&str> = selection_first
             .iter()
             .copied()
             .filter(|name| {
-                *name != PRECEDENCE_GATE
-                    && !bodies
-                        .get(*name)
-                        .is_some_and(|body| body.contains(PRECEDENCE_GATE))
+                !bodies
+                    .get(*name)
+                    .is_some_and(|body| body.contains(PRECEDENCE_GATE))
             })
             .collect();
         assert!(
@@ -14020,6 +14017,114 @@ mod canvas_mirror_tests {
             "these mac verbs can say \"Nothing selected.\" without asking the selection \
              question first via `{PRECEDENCE_GATE}`, so on a state whose snapshot is on \
              screen they would answer with the state's sentence instead: {unordered:?}"
+        );
+
+        // The mac two-column test needs to know which verbs are
+        // selection-first, and it had that as a handwritten array —
+        // a third copy of a fact this guard already derives, free to
+        // drift in either direction: a verb could vanish from the
+        // matrix, or gain the gate in source, with nothing failing
+        // (codex 0b round 6). So the array is read and required to
+        // AGREE, both ways. That equality also replaces the old `>= 4`
+        // floor, which was a constant guessing at the same number.
+        let test_path =
+            manifest.join("../../apps/slate-mac/Tests/SlateMacTests/CanvasNavigatorTests.swift");
+        let test_source = std::fs::read_to_string(&test_path)
+            .unwrap_or_else(|err| panic!("{}: {err}", test_path.display()));
+
+        /// The `canvasFoo` receivers named inside one `[(String, () ->
+        /// Void)]` array literal — the verb each row drives.
+        fn verbs_in_array(source: &str, binding: &str, path: &std::path::Path) -> BTreeSet<String> {
+            let anchor = format!("let {binding}: [(String, () -> Void)] = [");
+            let start = source.find(&anchor).unwrap_or_else(|| {
+                panic!(
+                    "{}: `{anchor}` not found — the two-column test's verb groups were \
+                     renamed or reshaped, and this guard will not silently stop checking \
+                     what it can no longer find",
+                    path.display()
+                )
+            }) + anchor.len();
+            let mut depth = 1usize;
+            let mut end = None;
+            for (offset, ch) in source[start..].char_indices() {
+                match ch {
+                    '[' => depth += 1,
+                    ']' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = Some(start + offset);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let end = end.unwrap_or_else(|| {
+                panic!("{}: `{binding}`'s array literal never closes", path.display())
+            });
+            let mut verbs = BTreeSet::new();
+            for line in source[start..end].lines() {
+                let code = line.split("//").next().unwrap_or("");
+                for (offset, _) in code.match_indices(".canvas") {
+                    verbs.insert(
+                        code[offset + 1..]
+                            .chars()
+                            .take_while(|c| c.is_alphanumeric() || *c == '_')
+                            .collect::<String>(),
+                    );
+                }
+            }
+            verbs
+        }
+
+        let test_bearing = verbs_in_array(&test_source, "selectionBearing", &test_path);
+        let test_free = verbs_in_array(&test_source, "selectionFree", &test_path);
+        assert!(
+            !test_bearing.is_empty() && !test_free.is_empty(),
+            "one of the two-column test's verb groups parsed empty ({test_bearing:?} / \
+             {test_free:?}); the comparison below would pass vacuously"
+        );
+
+        let derived: BTreeSet<String> =
+            selection_first.iter().map(|name| (*name).to_owned()).collect();
+        let untested: Vec<&String> = derived.difference(&test_bearing).collect();
+        let unbacked: Vec<&String> = test_bearing.difference(&derived).collect();
+        assert!(
+            untested.is_empty() && unbacked.is_empty(),
+            "`selectionBearing` in {} disagrees with the source-derived selection-first \
+             set. A verb missing from the test is a matrix row nobody drives; a verb in \
+             the test that is no longer selection-first is an expectation that will pass \
+             for the wrong reason. Selection-first in source, absent from the test: \
+             {untested:?}. In the test, not selection-first in source: {unbacked:?}",
+            test_path.display()
+        );
+
+        let miscategorized: Vec<&String> = test_free.intersection(&derived).collect();
+        assert!(
+            miscategorized.is_empty(),
+            "`selectionFree` claims these never ask the selection question, but they \
+             announce `.nothingSelected` in source, so the test expects the state's \
+             sentence where the verb says \"Nothing selected.\": {miscategorized:?}"
+        );
+        let unknown: Vec<&String> = test_free
+            .iter()
+            .chain(test_bearing.iter())
+            .filter(|name| !bodies.contains_key(name.as_str()))
+            .collect();
+        assert!(
+            unknown.is_empty(),
+            "the two-column test drives verbs with no such function in the mac sources — \
+             renamed, or the scan is broken: {unknown:?}"
+        );
+        let ungated: Vec<&String> = test_free
+            .iter()
+            .filter(|name| !gated(name.as_str()))
+            .collect();
+        assert!(
+            ungated.is_empty(),
+            "`selectionFree` drives these as members of the state mapping, but they do \
+             not route through it, so the test's per-state expectations are not theirs \
+             to hold: {ungated:?}"
         );
     }
 
