@@ -277,94 +277,69 @@ final class CanvasNavigatorTests: XCTestCase {
             "a cached adjacency answer survives the window: \(posted)")
     }
 
-    /// `LoadState` has FOUR cases and each is materialized here through
-    /// the real lifecycle methods and DRIVEN, because "what happens in
-    /// this state" is a claim about pressing the key, not about a state
-    /// enum. The earlier version of this test said "all three" — the
-    /// drift that let `.loading` go unexamined.
+    /// Every NON-READY load state, driven — one test, because splitting
+    /// them is what let `.loading` go unexamined behind an "all three"
+    /// claim, and then behind a "four cases" one. `LoadState` is
+    /// `.loading`, `.ready`, `.degraded`, `.failed`, `.retargetFailed`:
+    /// one readable, FOUR not, and all four of those are here.
     ///
-    /// `.loading` announces VA-2; the other three are silent, which is
-    /// the pre-existing t0 §5 gap filed in the contracts.
-    func testNonReadyCanvasesAnswerPerStateNotAllTheSame() async throws {
-        let state = try await makeState()
-        let doc = try XCTUnwrap(state.activeCanvasDocument)
-        doc.selection.selected = "g1"
+    /// Each is materialized through the real lifecycle method, and each
+    /// drives every VA member, because "what this state does" is a
+    /// claim about pressing the key rather than about a state enum.
+    /// `.loading` owes VA-2; the other three are silent, which is the
+    /// pre-existing t0 §5 gap filed in the contracts — not a PR 0b
+    /// behaviour.
+    func testEveryNonReadyLoadStateAnswersItsOwnWay() async throws {
+        let loadingSentence = "This canvas is loading. Try again in a moment."
 
-        // `.loading` — a prepared replacement installed over an open
-        // tab keeps the snapshot on screen while the state flips.
-        _ = doc.beginPreparedReplacement()
-        guard case .loading = doc.state else {
-            return XCTFail("expected .loading, got \(doc.state)")
-        }
-        XCTAssertNil(state.activeCanvasDocument, "`.ready` is still the gate for the verbs")
-
-        func assertAnnouncesLoading(_ label: String, _ verb: () -> Void) {
-            self.posted = []
-            verb()
-            state.canvasAnnouncer.flushForTests()
-            XCTAssertEqual(
-                self.posted, ["This canvas is loading. Try again in a moment."],
-                "\(label) in `.loading` must speak VA-2, not VA-1 and not silence")
-        }
-        assertAnnouncesLoading("enter group") { state.canvasEnterGroup() }
-        assertAnnouncesLoading("exit group") { state.canvasExitGroup() }
-        assertAnnouncesLoading("trace path") { state.canvasTracePath() }
-        assertAnnouncesLoading("fit canvas") { state.canvasFitCanvas() }
-        assertAnnouncesLoading("where am I") { state.canvasWhereAmI() }
-        assertAnnouncesLoading("follow connection") {
-            state.canvasFollowConnection(forward: true)
-        }
-    }
-
-    /// B4: the document gate and the selection are different questions.
-    /// On an ordinary READY canvas with nothing selected, follow
-    /// connection answers like its three siblings instead of going
-    /// silent — it is palette-reachable, so the press is real.
-    func testFollowConnectionWithoutASelectionAnswersLikeItsSiblings() async throws {
-        let state = try await makeState()
-        let doc = try XCTUnwrap(state.activeCanvasDocument)
-        doc.selection.selected = nil
-
-        for (label, verb) in [("follow forward", true), ("follow back", false)] {
-            posted = []
-            state.canvasFollowConnection(forward: verb)
-            state.canvasAnnouncer.flushForTests()
-            XCTAssertEqual(posted, ["Nothing selected."], "\(label): \(posted)")
-        }
-
-        posted = []
-        state.canvasEnterGroup()
-        state.canvasAnnouncer.flushForTests()
-        XCTAssertEqual(posted, ["Nothing selected."], "the sibling it must match")
-    }
-
-    /// The counterpart: the states 0b-2's report wrongly named are gated
-    /// out one level higher, so no navigator verb has ever run in them.
-    /// All three are materialized through the real lifecycle methods and
-    /// each is DRIVEN, because "unreachable" is a claim about what
-    /// happens when you press the key, not about a state enum.
-    func testNonReadyCanvasesAreUnreachableByEveryNavigatorVerb() async throws {
-        /// Drive one verb per state and prove it neither speaks nor
-        /// moves the caret.
-        func assertInert(
-            _ label: String, _ state: AppState, _ doc: CanvasDocument, _ verb: () -> Void
+        /// Drive all six VA members and assert this state's answer at
+        /// each, plus that none of them moved the caret.
+        func driveMembers(
+            _ label: String,
+            _ state: AppState,
+            _ doc: CanvasDocument,
+            expecting expected: [String]
         ) {
+            XCTAssertNil(
+                state.activeCanvasDocument,
+                "\(label): `.ready` is the gate the verbs pass")
             let selectionBefore = doc.selection.selected
-            self.posted = []
-            verb()
-            state.canvasAnnouncer.flushForTests()
-            XCTAssertTrue(self.posted.isEmpty, "\(label): announced \(self.posted)")
-            XCTAssertEqual(
-                doc.selection.selected, selectionBefore, "\(label): selection moved")
-            XCTAssertNil(state.activeCanvasDocument, "\(label): `.ready` is the gate")
+            func check(_ verb: String, _ body: () -> Void) {
+                self.posted = []
+                body()
+                state.canvasAnnouncer.flushForTests()
+                XCTAssertEqual(self.posted, expected, "\(label) / \(verb)")
+                XCTAssertEqual(
+                    doc.selection.selected, selectionBefore,
+                    "\(label) / \(verb): selection moved")
+            }
+            check("enter group") { state.canvasEnterGroup() }
+            check("exit group") { state.canvasExitGroup() }
+            check("trace path") { state.canvasTracePath() }
+            check("fit canvas") { state.canvasFitCanvas() }
+            check("where am I") { state.canvasWhereAmI() }
+            check("follow connection") { state.canvasFollowConnection(forward: true) }
         }
 
-        // Each selection is set AFTER the state transition — a prepared
-        // install resets interaction state, so setting it first would
-        // leave `selectionBefore` nil and make the "did not move" check
-        // vacuous.
+        // Selections are set AFTER each transition: a prepared install
+        // resets interaction state, so setting one first would leave
+        // `selectionBefore` nil and make the caret check vacuous.
 
-        // --- .failed (moved to Trash) --------------------------------
+        // --- .loading — VA-2 ------------------------------------------
+        // A prepared replacement over an already-open tab: the snapshot
+        // stays on screen while the state flips.
+        let loadingState = try await makeState()
+        let loading = try XCTUnwrap(loadingState.activeCanvasDocument)
+        _ = loading.beginPreparedReplacement()
+        guard case .loading = loading.state else {
+            return XCTFail("expected .loading, got \(loading.state)")
+        }
+        loading.selection.selected = "g1"
+        driveMembers("loading", loadingState, loading, expecting: [loadingSentence])
+        // VA-2 is not VA-1: "reopening" would be false for a first open.
+        XCTAssertFalse(posted.contains("This canvas is reopening. Try again in a moment."))
+
+        // --- .failed (moved to Trash) — silent ------------------------
         let trashedState = try await makeState()
         let trashed = try XCTUnwrap(trashedState.activeCanvasDocument)
         XCTAssertFalse(trashed.outline.isEmpty)
@@ -376,11 +351,9 @@ final class CanvasNavigatorTests: XCTestCase {
             trashed.outline.isEmpty,
             "the published snapshot survives — which is why it looked navigable")
         trashed.selection.selected = "g1"
-        assertInert("trashed / enter group", trashedState, trashed) {
-            trashedState.canvasEnterGroup()
-        }
+        driveMembers("failed", trashedState, trashed, expecting: [])
 
-        // --- .degraded ------------------------------------------------
+        // --- .degraded — silent ---------------------------------------
         let degradedState = try await makeState()
         let degraded = try XCTUnwrap(degradedState.activeCanvasDocument)
         degraded.applyPreparedLoad(
@@ -392,11 +365,9 @@ final class CanvasNavigatorTests: XCTestCase {
             degraded.outline.isEmpty,
             "a degraded load CLEARS the outline — the pre-existing t0 §5 gap")
         degraded.selection.selected = "g1"
-        assertInert("degraded / trace path", degradedState, degraded) {
-            degradedState.canvasTracePath()
-        }
+        driveMembers("degraded", degradedState, degraded, expecting: [])
 
-        // --- .retargetFailed ------------------------------------------
+        // --- .retargetFailed — silent ---------------------------------
         let failedState = try await makeState()
         let failed = try XCTUnwrap(failedState.activeCanvasDocument)
         let reservation = failed.beginBatchRetarget(to: failed.path)
@@ -411,9 +382,29 @@ final class CanvasNavigatorTests: XCTestCase {
         XCTAssertFalse(
             failed.outline.isEmpty, "the last good snapshot is retained, not blanked")
         failed.selection.selected = "g1"
-        assertInert("retarget failed / exit group", failedState, failed) {
-            failedState.canvasExitGroup()
+        driveMembers("retargetFailed", failedState, failed, expecting: [])
+    }
+
+    /// The document gate and the selection are different questions. On
+    /// an ordinary READY canvas with nothing selected, follow connection
+    /// answers like its three siblings instead of going silent — it is
+    /// palette-reachable, so the press is real.
+    func testFollowConnectionWithoutASelectionAnswersLikeItsSiblings() async throws {
+        let state = try await makeState()
+        let doc = try XCTUnwrap(state.activeCanvasDocument)
+        doc.selection.selected = nil
+
+        for (label, forward) in [("follow forward", true), ("follow back", false)] {
+            posted = []
+            state.canvasFollowConnection(forward: forward)
+            state.canvasAnnouncer.flushForTests()
+            XCTAssertEqual(posted, ["Nothing selected."], "\(label): \(posted)")
         }
+
+        posted = []
+        state.canvasEnterGroup()
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertEqual(posted, ["Nothing selected."], "the sibling it must match")
     }
 
     func testEnterExitGroupBoundaries() async throws {

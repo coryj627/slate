@@ -238,8 +238,12 @@ extension AppState {
         // core constants; only the width and the floor come from
         // `canvas_constants`.
         let geometry = Self.canvasGeometry
-        let fetched = try? currentSession?.canvasNodeText(handle: doc.handle ?? 0, nodeId: id)
-        let text: String = (fetched ?? nil) ?? ""
+        // One `??`, not two: optional CHAINING flattens as well as
+        // `try?` (SE-0230), so this is `String?` and never `String??`.
+        // The extra `?? nil` was dead, and dead unwraps are how a
+        // reader — and a review — come to believe the code tells two
+        // outcomes apart when it cannot.
+        let text = (try? currentSession?.canvasNodeText(handle: doc.handle ?? 0, nodeId: id)) ?? ""
         let lines = max(1, text.count / 32 + text.filter { $0 == "\n" }.count)
         let height = min(600, max(Double(lines) * 24 + 40, geometry.minCardSize))
         canvasApplyResizePreset(

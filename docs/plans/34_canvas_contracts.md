@@ -866,9 +866,15 @@ which must still give the real dead-end phrase — VA-1 must not
 over-fire),
 `testFilterInTheReopeningWindowNeverAnnouncesAWrongCount` (the filter
 family's three rules and the displayed-equals-announced invariant) and
-`testNonReadyCanvasesAreUnreachableByEveryNavigatorVerb` (the `.ready`
-gate, which is what makes any reachability claim about these verbs
-checkable; all three non-ready states materialized and driven).
+`testEveryNonReadyLoadStateAnswersItsOwnWay` (ALL FOUR non-ready
+states — `.loading`, `.degraded`, `.failed`, `.retargetFailed` —
+materialized through their real lifecycle methods and each driving
+every VA member: VA-2 for `.loading`, silence for the other three. One
+test, because splitting the states across two is what let `.loading` go
+unexamined twice) and
+`testFollowConnectionWithoutASelectionAnswersLikeItsSiblings` (the
+selection question, answered the same on a ready canvas as its
+siblings answer it).
 
 ---
 
@@ -1042,7 +1048,9 @@ coalescing class list did not change, because `CanvasStatus` is
 *"This canvas is loading. Try again in a moment."* — Medium, status
 family, uncoalesced. VA-1's sibling, same membership, different state.
 
-`LoadState` has FOUR cases and VA-1 only ever answered for one of them.
+`LoadState` is `.loading`, `.ready`, `.degraded`, `.failed` and
+`.retargetFailed` — one readable state and FOUR non-ready ones — and
+VA-1 only ever answered for the readable one.
 `.loading` is reachable two ways: a first open, and a prepared
 replacement installed over an already-open tab
 (`beginPreparedReplacement`), where the previous snapshot stays on
@@ -1063,9 +1071,20 @@ closes. Where-am-I reaches the same decision through its own
 `.notReadable` guard, because "not readable" is false for a canvas that
 simply has not finished opening.
 
-Arrow movement and the viewport verbs are deliberately NOT members of
-either VA: they read the published snapshot rather than a core query,
-so they have no handle to be missing.
+**Membership, named rather than gestured at.** The VA members are
+enter group, exit group, trace path, **fit canvas**, Where-am-I,
+follow-connection, and the filter family. Fit canvas IS one — it
+answers from `canvas_bounds`, so it takes `canvasReadTarget()` and both
+VA tests require its sentence.
+
+What is outside is the SNAPSHOT-ONLY subset: arrow movement
+(`canvasSelectAdjacent`) and the zoom/pan verbs — `canvasZoomIn`,
+`canvasZoomOut`, `canvasActualSize`, `canvasZoomToSelection`,
+`canvasToggleFollowSelection`. Each of those reads published state
+(`doc.outline`, `doc.scene`, `doc.viewport`) rather than a core query,
+so there is no handle for them to be missing and nothing for a VA
+sentence to be about. "The viewport verbs" as a category would be
+wrong, because fit canvas is one of them and is a member.
 
 Same five-place lockstep as VA-1, and the §W-D artifact diff is again
 **five lines, purely additive**.
@@ -1913,7 +1932,7 @@ every deleted symbol was re-grepped to zero afterwards.
   FAILURE now:
   `testOnlyTheBatchRetargetWindowPairsReadyWithNoHandle` asserts the
   sentence at each VA-1 member, and
-  `testNonReadyCanvasesAreUnreachableByEveryNavigatorVerb` pins the
+  `testEveryNonReadyLoadStateAnswersItsOwnWay` pins the
   `.ready` gate that makes the reachability claim checkable rather than
   merely asserted.
 
@@ -1951,6 +1970,18 @@ every deleted symbol was re-grepped to zero afterwards.
   the reviewer expects to see is not always there, and the failure is
   silent in prose review because the code reads as if it distinguishes
   what it cannot.
+
+  **The mechanical check reported zero once before it was true.** Its
+  first closure matched only `receiver.method(…) ?? nil` — a bare
+  receiver with the unwrap inline — and so missed both shapes the one
+  remaining site used: an optional-CHAINED receiver
+  (`currentSession?.canvasNodeText`, where chaining flattens too), and
+  an unwrap applied to a bound variable on a later line. The zero was a
+  property of the closure, not of the tree. Widened to cover any
+  receiver shape and unwrap-via-binding, it finds that site in the
+  pre-fix tree and reports zero after — which is the only order in
+  which a zero means anything. Recorded because "the automated check
+  says zero" is exactly the reassurance that stops a reviewer looking.
 - **One row-F caller is not behind admission, and the cost is
   cosmetic.** `canvasInReadingOrder` answers `[]` without a handle, and
   its first doc comment claimed every caller was behind

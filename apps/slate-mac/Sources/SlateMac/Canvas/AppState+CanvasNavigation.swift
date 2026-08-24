@@ -25,7 +25,9 @@ extension AppState {
     /// The document a structural READ verb may work from, or `nil`
     /// after announcing what its state owes the user.
     ///
-    /// `LoadState` has FOUR cases, and each answers differently:
+    /// `LoadState` is `.loading`, `.ready`, `.degraded`, `.failed`,
+    /// `.retargetFailed` — one readable and four not. Each answers
+    /// differently:
     ///
     /// - `.ready` — the document, for the verb to use;
     /// - `.loading` — **VA-2**. Reachable as a first open, and as a
@@ -40,10 +42,15 @@ extension AppState {
     ///
     /// Membership is VA-1's membership: the same verbs that say
     /// "reopening" for a detached handle say "loading" for a document
-    /// that has not finished opening. Arrow movement and the viewport
-    /// verbs are deliberately NOT members — they read the published
-    /// snapshot rather than a core query, so they have no handle to be
-    /// missing.
+    /// that has not finished opening — enter group, exit group, trace
+    /// path, fit canvas, Where-am-I, follow-connection, plus the filter
+    /// family on its own path.
+    ///
+    /// Outside it is the SNAPSHOT-ONLY subset: `canvasSelectAdjacent`
+    /// and the zoom/pan verbs, which read `doc.outline` / `doc.scene` /
+    /// `doc.viewport` rather than a core query, so they have no handle
+    /// to be missing. Note fit canvas is NOT in that subset even though
+    /// it is a viewport command — it answers from `canvas_bounds`.
     func canvasReadTarget() -> CanvasDocument? {
         guard let tab = workspace.activeTab, case .canvas(let path) = tab.item else {
             return nil

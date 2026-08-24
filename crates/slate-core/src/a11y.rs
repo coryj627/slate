@@ -463,9 +463,10 @@ pub enum CanvasStatusNote {
     Reopening,
     /// The same read verbs, on a canvas that is still LOADING — a first
     /// open, or a prepared replacement installed over an already-open
-    /// tab (`beginPreparedReplacement`). `LoadState` has four cases and
-    /// this is the fourth; the window `Reopening` names is a REopen, so
-    /// its copy would be false the first time a canvas is opened.
+    /// tab (`beginPreparedReplacement`). The host's `LoadState` is
+    /// `loading`, `ready`, `degraded`, `failed`, `retargetFailed`, and
+    /// this covers the first; the window `Reopening` names is a REopen,
+    /// so its copy would be false the first time a canvas is opened.
     ///
     /// Same shape as its sibling for the same reason (W6-1 0b-2, codex
     /// round 1): distinct from `CanvasMutationRefusal::Opening`, which
@@ -6036,7 +6037,15 @@ mod tests {
         // Written with escaped quotes rather than as raw strings
         // BECAUSE the noun derivation above lexes this whole file, and
         // the lexer refuses raw strings by design.
-        for probe in ["\"{count} card\\x73\"", "\"{count} card\\u{73}\""] {
+        // The third probe is a continuation across a BLANK line, with
+        // the noun split by both escape families — rustc joins it to
+        // `{count} cards`, and a decoder that skips only indentation
+        // leaves a newline in the middle where the plural should be.
+        for probe in [
+            "\"{count} card\\x73\"",
+            "\"{count} card\\u{73}\"",
+            "\"{count} car\\u{64}\\\n\n\\x73\"",
+        ] {
             assert_eq!(
                 string_literals(probe)
                     .first()
@@ -6225,15 +6234,30 @@ mod tests {
                                 Some(b't') => text.push(b'\t'),
                                 Some(b'r') => text.push(b'\r'),
                                 Some(b'0') => text.push(0),
-                                // Continuation: the newline AND the
-                                // indentation after it are swallowed,
-                                // exactly as rustc does — which is how
-                                // a template split across source lines
-                                // is read as one logical string.
-                                Some(b'\n') => {
-                                    line += 1;
-                                    index += 1;
-                                    while matches!(bytes.get(index), Some(b' ' | b'\t')) {
+                                // String-continuation escape: `\` before
+                                // a newline swallows that newline AND
+                                // every whitespace character after it —
+                                // which is how a template split across
+                                // source lines reads as one logical
+                                // string.
+                                //
+                                // The set is rustc's, not "spaces and
+                                // tabs": BLANK LINES and carriage
+                                // returns are whitespace too, so a
+                                // continuation followed by an empty line
+                                // joins straight through it. Skipping
+                                // only indentation left a stray newline
+                                // in the decoded text, which is enough
+                                // to hide a hardcoded plural from the
+                                // scan below (codex 0b round 2).
+                                Some(b'\n' | b'\r') => {
+                                    while matches!(
+                                        bytes.get(index),
+                                        Some(b' ' | b'\t' | b'\n' | b'\r')
+                                    ) {
+                                        if bytes[index] == b'\n' {
+                                            line += 1;
+                                        }
                                         index += 1;
                                     }
                                     continue;
