@@ -171,6 +171,9 @@ final class ParityHarnessTests: XCTestCase {
         // W6-1 PR 0b (§W-A `canvas_queries`): its own corpus, its own
         // vault, so nothing above it moves. Mirrors Program.cs exactly.
         artifacts["canvas_queries.json"] = Data(try canvasQueriesArtifact().utf8)
+        // W6-1 PR A (§W-A `canvas_read`, contract A20): the READ side of
+        // the same corpus, from its own temp vault. Mirrors Program.cs.
+        artifacts["canvas_read.json"] = Data(try canvasReadArtifact().utf8)
         return artifacts
     }
 
@@ -1090,6 +1093,250 @@ final class ParityHarnessTests: XCTestCase {
         }
         j.raw("]}")
         return j.output + "\n"
+    }
+
+    // MARK: - W6-1 PR A: the canvas_read section (contract A20)
+
+    /// The READ side of the canvas surface — the Swift twin of
+    /// `SurfaceSerializer.CanvasReadArtifact`. Same corpus, same
+    /// exclusions and its own temp vault, exactly as `canvas_queries`
+    /// (0b-15): the open info with its warnings, then the three
+    /// projections PR A/B/D consume, then per node in reading order the
+    /// two per-node reads the outline and the navigator make.
+    ///
+    /// Every emission below mirrors the C# one key for key and in the
+    /// same order; the committed golden arbitrates, and a drift in
+    /// either direction fails `testHarnessArtifactsMatchCommittedGoldensByteForByte`
+    /// on whichever lane runs second.
+    private static func canvasReadArtifact() throws -> String {
+        let fm = FileManager.default
+        let canvasFiles = try fm.contentsOfDirectory(atPath: canvasFixturesDir.path)
+            .filter { $0.hasSuffix(".canvas") && !canvasArtifactExclusions.contains($0) }
+            .sorted { Array($0.utf16).lexicographicallyPrecedes(Array($1.utf16)) }
+        XCTAssertFalse(
+            canvasFiles.isEmpty, "no .canvas fixtures at \(canvasFixturesDir.path)")
+
+        let vaultRoot = fm.temporaryDirectory
+            .appendingPathComponent("parity-canvas-read-\(UUID().uuidString)")
+        try fm.createDirectory(at: vaultRoot, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: vaultRoot) }
+        for f in canvasFiles {
+            try fm.copyItem(
+                at: canvasFixturesDir.appendingPathComponent(f),
+                to: vaultRoot.appendingPathComponent(f))
+        }
+        let session = try VaultSession.openFilesystem(rootPath: vaultRoot.path)
+        let cancel = CancelToken()
+        _ = try session.scanInitial(cancel: cancel)
+
+        let j = CanonicalJson()
+        j.raw("{\"canvases\":[")
+        for (f, rel) in canvasFiles.enumerated() {
+            if f > 0 { j.raw(",") }
+            let info = try session.openCanvas(path: rel)
+            defer { session.closeCanvas(handle: info.handle) }
+
+            j.raw("{\"file\":").str(slash(rel))
+                .raw(",\"node_count\":").num(UInt64(info.nodeCount))
+                .raw(",\"edge_count\":").num(UInt64(info.edgeCount))
+                .raw(",\"degraded\":").bool(info.degraded)
+                .raw(",\"warnings\":[")
+            for (w, warning) in info.warnings.enumerated() {
+                if w > 0 { j.raw(",") }
+                j.raw("{\"kind\":").str(loadWarningKindName(warning.kind))
+                    .raw(",\"detail\":").str(warning.detail)
+                    .raw("}")
+            }
+            j.raw("]")
+
+            // A degraded open has nothing worth reading: core returns an
+            // empty canvas and the host releases the handle at once
+            // (contract A3, CD-28). The sections stay present and EMPTY
+            // rather than absent, so the artifact's shape never varies
+            // with the fixture.
+            var outline: [CanvasOutlineRow] = []
+            var tableRows: [CanvasTableRow] = []
+            var scene = CanvasScene(nodes: [], edges: [])
+            if !info.degraded {
+                outline = try session.canvasOutline(handle: info.handle)
+                tableRows = try session.canvasTableRows(handle: info.handle)
+                scene = try session.canvasScene(handle: info.handle)
+            }
+
+            j.raw(",\"outline\":[")
+            for (i, row) in outline.enumerated() {
+                if i > 0 { j.raw(",") }
+                j.raw("{\"node_id\":").str(row.nodeId)
+                    .raw(",\"depth\":").num(UInt64(row.depth))
+                    .raw(",\"kind\":").str(row.kind)
+                    .raw(",\"title\":").str(row.title)
+                    .raw(",\"speakable_name\":").str(row.speakableName)
+                    .raw(",\"group_path\":")
+                appendStrings(j, row.groupPath)
+                j.raw(",\"ordinal_n\":").num(UInt64(row.ordinalN))
+                    .raw(",\"total_m\":").num(UInt64(row.totalM))
+                    .raw(",\"connection_count\":").num(UInt64(row.connectionCount))
+                    .raw(",\"color_name\":")
+                appendOptionalString(j, row.colorName)
+                j.raw("}")
+            }
+            j.raw("]")
+
+            j.raw(",\"table\":[")
+            for (i, row) in tableRows.enumerated() {
+                if i > 0 { j.raw(",") }
+                j.raw("{\"node_id\":").str(row.nodeId)
+                    .raw(",\"kind\":").str(row.kind)
+                    .raw(",\"title\":").str(row.title)
+                    .raw(",\"speakable_name\":").str(row.speakableName)
+                    .raw(",\"group_path\":")
+                appendStrings(j, row.groupPath)
+                j.raw(",\"target\":").str(row.target)
+                    .raw(",\"connection_count\":").num(UInt64(row.connectionCount))
+                    .raw(",\"color_name\":")
+                appendOptionalString(j, row.colorName)
+                j.raw("}")
+            }
+            j.raw("]")
+
+            j.raw(",\"scene\":{\"nodes\":[")
+            for (i, node) in scene.nodes.enumerated() {
+                if i > 0 { j.raw(",") }
+                j.raw("{\"node_id\":").str(node.nodeId)
+                    .raw(",\"kind\":").str(node.kind)
+                    .raw(",\"title\":").str(node.title)
+                    .raw(",\"speakable_name\":").str(node.speakableName)
+                    .raw(",\"x\":").num(node.x)
+                    .raw(",\"y\":").num(node.y)
+                    .raw(",\"width\":").num(node.width)
+                    .raw(",\"height\":").num(node.height)
+                    .raw(",\"color\":")
+                appendOptionalString(j, node.color)
+                j.raw(",\"color_name\":")
+                appendOptionalString(j, node.colorName)
+                j.raw(",\"subpath\":")
+                appendOptionalString(j, node.subpath)
+                j.raw("}")
+            }
+            j.raw("],\"edges\":[")
+            for (i, edge) in scene.edges.enumerated() {
+                if i > 0 { j.raw(",") }
+                j.raw("{\"edge_id\":").str(edge.edgeId)
+                    .raw(",\"from_node\":").str(edge.fromNode)
+                    .raw(",\"from_side\":")
+                appendSide(j, edge.fromSide)
+                j.raw(",\"to_node\":").str(edge.toNode)
+                    .raw(",\"to_side\":")
+                appendSide(j, edge.toSide)
+                j.raw(",\"from_arrow\":").bool(edge.fromArrow)
+                    .raw(",\"to_arrow\":").bool(edge.toArrow)
+                    .raw(",\"label\":")
+                appendOptionalString(j, edge.label)
+                j.raw(",\"color\":")
+                appendOptionalString(j, edge.color)
+                j.raw("}")
+            }
+            j.raw("]}")
+
+            j.raw(",\"nodes\":[")
+            for (i, row) in outline.enumerated() {
+                if i > 0 { j.raw(",") }
+                j.raw("{\"node_id\":").str(row.nodeId)
+                    .raw(",\"where_am_i\":")
+                appendWhereAmI(j, session, info.handle, row.nodeId)
+                j.raw(",\"neighbors\":[")
+                let neighbors = try session.canvasNeighbors(
+                    handle: info.handle, nodeId: row.nodeId)
+                for (n, neighbor) in neighbors.enumerated() {
+                    if n > 0 { j.raw(",") }
+                    j.raw("{\"edge_id\":").str(neighbor.edgeId)
+                        .raw(",\"other_node\":").str(neighbor.otherNode)
+                        .raw(",\"other_title\":").str(neighbor.otherTitle)
+                        .raw(",\"direction\":").str(edgeDirectionName(neighbor.direction))
+                        .raw(",\"self_side\":")
+                    appendSide(j, neighbor.selfSide)
+                    j.raw(",\"label\":")
+                    appendOptionalString(j, neighbor.label)
+                    j.raw(",\"self_is_from\":").bool(neighbor.selfIsFrom)
+                        .raw("}")
+                }
+                j.raw("]}")
+            }
+            j.raw("]}")
+        }
+        j.raw("]}")
+        return j.output + "\n"
+    }
+
+    /// Where-am-I is MODEL-backed, so under the 0b-6 skew it refuses for
+    /// an id the SQLite-served outline rows still name. The artifact has
+    /// to be able to express that shape, so a refusal serializes as
+    /// `null` rather than aborting the run (contracts A16/A20) — the C#
+    /// side's `catch (VaultException)` arm.
+    private static func appendWhereAmI(
+        _ j: CanonicalJson, _ session: VaultSession, _ handle: UInt64, _ nodeId: String
+    ) {
+        guard let context = try? session.canvasWhereAmI(handle: handle, nodeId: nodeId) else {
+            _ = j.null()
+            return
+        }
+        j.raw("{\"title\":").str(context.title)
+            .raw(",\"speakable_name\":").str(context.speakableName)
+            .raw(",\"kind\":").str(context.kind)
+            .raw(",\"group_path\":")
+        appendStrings(j, context.groupPath)
+        j.raw(",\"ordinal_n\":").num(UInt64(context.ordinalN))
+            .raw(",\"total_m\":").num(UInt64(context.totalM))
+            .raw(",\"connection_count\":").num(UInt64(context.connectionCount))
+            .raw(",\"in_count\":").num(UInt64(context.inCount))
+            .raw(",\"out_count\":").num(UInt64(context.outCount))
+            .raw(",\"color_name\":")
+        appendOptionalString(j, context.colorName)
+        j.raw("}")
+    }
+
+    private static func appendStrings(_ j: CanonicalJson, _ values: [String]) {
+        j.raw("[")
+        for (i, value) in values.enumerated() {
+            if i > 0 { j.raw(",") }
+            j.str(value)
+        }
+        j.raw("]")
+    }
+
+    private static func appendSide(_ j: CanonicalJson, _ side: CanvasSide?) {
+        if let side {
+            _ = j.str(sideName(side))
+        } else {
+            _ = j.null()
+        }
+    }
+
+    private static func sideName(_ side: CanvasSide) -> String {
+        switch side {
+        case .top: return "top"
+        case .right: return "right"
+        case .bottom: return "bottom"
+        case .left: return "left"
+        }
+    }
+
+    private static func edgeDirectionName(_ direction: CanvasEdgeDirection) -> String {
+        switch direction {
+        case .outgoing: return "outgoing"
+        case .incoming: return "incoming"
+        case .bidirectional: return "bidirectional"
+        case .undirected: return "undirected"
+        }
+    }
+
+    private static func loadWarningKindName(_ kind: CanvasLoadWarningKind) -> String {
+        switch kind {
+        case .parseFailed: return "parse_failed"
+        case .skippedEntry: return "skipped_entry"
+        case .danglingEdge: return "dangling_edge"
+        case .ignoredValue: return "ignored_value"
+        }
     }
 
     private static func relativeDescName(_ desc: CanvasRelativeDesc) -> String {

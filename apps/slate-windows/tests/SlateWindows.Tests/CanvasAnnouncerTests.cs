@@ -202,6 +202,106 @@ public sealed class CanvasAnnouncerTests
             standard);
     }
 
+    /// <summary>
+    /// The REAL coalescer, with no <c>FlushForTests</c> anywhere: a
+    /// pending navigation line fires by itself, on the dispatcher the
+    /// announcer captured at construction.
+    /// </summary>
+    /// <remarks>
+    /// Every other fact in this suite flushes manually, so all of them
+    /// stay green with <c>_timer.Start()</c> deleted or the constructor's
+    /// dispatcher capture reverted — while in production every coalesced
+    /// line silently never fires. That is the W4-5 lesson ("test the
+    /// mode users run") in its exact shape, and this is the one fact
+    /// that runs the production timer. Mutation-verified both ways.
+    /// </remarks>
+    [Fact]
+    public void APendingNavigationLineFiresOnItsOwnWithoutAFlush() => RunSta(() =>
+    {
+        var posted = new List<RenderedAnnouncement>();
+        var announcer = new CanvasAnnouncer(posted.Add, TimeSpan.FromMilliseconds(20));
+
+        announcer.Announce(MovedTo("A"));
+        announcer.Announce(MovedTo("B"));
+        Assert.Empty(posted);
+
+        PumpUntil(() => posted.Count > 0, TimeSpan.FromSeconds(5));
+
+        // Latest-wins, and exactly once — the held-arrow resting
+        // position of t0 §1.5.
+        RenderedAnnouncement spoken = Assert.Single(posted);
+        Assert.Equal(Render(MovedTo("B")), spoken.Text);
+    });
+
+    /// <summary>
+    /// And the class is drained by firing: a second burst after the
+    /// window elapsed is a new line, not a re-post of the old one.
+    /// </summary>
+    [Fact]
+    public void AFiredClassStartsEmptyForTheNextBurst() => RunSta(() =>
+    {
+        var posted = new List<RenderedAnnouncement>();
+        var announcer = new CanvasAnnouncer(posted.Add, TimeSpan.FromMilliseconds(20));
+
+        announcer.Announce(MovedTo("A"));
+        PumpUntil(() => posted.Count > 0, TimeSpan.FromSeconds(5));
+        announcer.Announce(MovedTo("B"));
+        PumpUntil(() => posted.Count > 1, TimeSpan.FromSeconds(5));
+
+        Assert.Equal(
+            [Render(MovedTo("A")), Render(MovedTo("B"))],
+            posted.Select(line => line.Text).ToArray());
+    });
+
+    /// <summary>Run the dispatcher until the condition holds — the only
+    /// way a DispatcherTimer ever ticks in a test.</summary>
+    private static void PumpUntil(Func<bool> condition, TimeSpan timeout)
+    {
+        var frame = new System.Windows.Threading.DispatcherFrame();
+        var deadline = DateTime.UtcNow + timeout;
+        var poll = new System.Windows.Threading.DispatcherTimer(
+            System.Windows.Threading.DispatcherPriority.Background,
+            System.Windows.Threading.Dispatcher.CurrentDispatcher)
+        {
+            Interval = TimeSpan.FromMilliseconds(5),
+        };
+        poll.Tick += (_, _) =>
+        {
+            if (condition() || DateTime.UtcNow > deadline)
+            {
+                poll.Stop();
+                frame.Continue = false;
+            }
+        };
+        poll.Start();
+        System.Windows.Threading.Dispatcher.PushFrame(frame);
+        poll.Stop();
+        Assert.True(condition(), "the coalescer never fired on its own within the timeout");
+    }
+
+    private static void RunSta(Action body)
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                body();
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(60)), "STA test body timed out.");
+        if (failure is not null)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
+        }
+    }
+
     [Fact]
     public void LabelRenderingPostsNothingAndReturnsCoresText()
     {

@@ -18,6 +18,7 @@
 // SHIPPING call expressions instead.
 
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace SlateWindows.Tests.Censuses;
@@ -71,6 +72,45 @@ public sealed class AnnouncementSeamCensus
             },
             "the vault lifecycle must forward its own stored rendered seam; it "
             + $"forwards `{argument.Expression}`.");
+    }
+
+    /// <summary>
+    /// Hop 2b — the vault lifecycle STORES the parameter it was given.
+    /// </summary>
+    /// <remarks>
+    /// The one assignment between two syntax-checked hops, and the last
+    /// place a seam could be dropped without any other fact noticing:
+    /// <c>_announceRendered = announceRendered ?? (_ => { })</c>. Replace
+    /// the left of that <c>??</c> with a bare <c>_ => { }</c> and hops 1,
+    /// 2 and 3 all still pass — every argument is still passed, every
+    /// field is still forwarded, and nothing is ever spoken. The
+    /// workspace's twin assignment needs no equivalent: it is covered at
+    /// RUNTIME by <c>ACanvasLoadPostsThroughARealDispatcher</c>, which
+    /// constructs the workspace with a real sink and hears the line come
+    /// back.
+    /// </remarks>
+    [Fact]
+    public void TheVaultLifecycleStoresTheRenderedSeamItWasGiven()
+    {
+        CSharpSource source = CSharpSource.Load("VaultLifecycleViewModel.cs");
+        AssignmentExpressionSyntax[] assignments = source.Root
+            .DescendantNodes()
+            .OfType<AssignmentExpressionSyntax>()
+            .Where(assignment => assignment.Left is IdentifierNameSyntax
+            {
+                Identifier.ValueText: "_announceRendered",
+            })
+            .ToArray();
+        AssignmentExpressionSyntax assignment = Assert.Single(assignments);
+        Assert.True(
+            assignment.Right is BinaryExpressionSyntax
+            {
+                RawKind: (int)SyntaxKind.CoalesceExpression,
+                Left: IdentifierNameSyntax { Identifier.ValueText: "announceRendered" },
+            },
+            "the vault lifecycle must store the rendered seam it was handed, "
+            + "falling back to a no-op only when it was handed none; it stores "
+            + $"`{assignment.Right}`.");
     }
 
     /// <summary>

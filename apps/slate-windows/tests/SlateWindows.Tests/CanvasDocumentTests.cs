@@ -345,17 +345,22 @@ public sealed class CanvasDocumentTests : IDisposable
 
         Assert.Equal(CanvasLoadState.Ready, document.State);
         Assert.Empty(document.Outline);
-        // 0a-13 LABEL class: core composes it, the host supplies only
-        // the display chord it owns (contract 0a-9).
+        // 0a-13 LABEL class, core-rendered. NOT CanvasEmptyOnboarding:
+        // its template says "Press ⟨chord⟩ to create your first card"
+        // unconditionally, and PR A has no create command — so any chord
+        // in that slot tells a screen-reader user to press a key that
+        // creates nothing. The t2 rule the spec cites in the same
+        // sentence forbids exactly that; PR E swaps the event in with
+        // the real chord (CD-37).
         Assert.Equal(
             SlateUniffiMethods.A11yRender(new A11yEvent.Canvas(
-                new CanvasA11yEvent.CanvasEmptyOnboarding(
-                    CanvasDocumentViewModel.PaletteChord,
-                    CanvasDocumentViewModel.PaletteChord))).Text,
+                new CanvasA11yEvent.CanvasStatus(
+                    new CanvasStatusNote.Empty()))).Text,
             document.EmptyOnboardingText);
-        // The t2 rule: until PR E ships New Card, the copy never
-        // advertises a chord that does nothing.
-        Assert.Contains(CanvasDocumentViewModel.PaletteChord, document.EmptyOnboardingText);
+        Assert.DoesNotContain(
+            "create your first card",
+            document.EmptyOnboardingText,
+            StringComparison.Ordinal);
         document.Shutdown();
     }
 
@@ -1185,6 +1190,401 @@ public sealed class CanvasDocumentTests : IDisposable
 
         public System.Windows.Input.ICommand ToggleSearchCommand =>
             throw new NotSupportedException();
+    }
+
+    // --- B2: a disk change the shell made must reach the surface -----------
+
+    /// <summary>
+    /// The site named "reload open tab from disk" reloads a canvas from
+    /// disk. Attach is a registry HIT for an already-open path and a hit
+    /// returns the document exactly as it stands, so the outline used to
+    /// keep rendering the PRE-restore rows right after this shell
+    /// announced the restore.
+    /// </summary>
+    /// <remarks>
+    /// Driven at the reload site rather than through the whole History
+    /// restore: W4-7's restore carries its own preconditions for a
+    /// non-markdown tab (the CAS basis is the history head hash), and a
+    /// `.canvas` tab does not satisfy them end to end in this harness —
+    /// an observation about W4-7's path, recorded rather than worked
+    /// around, and orthogonal to whether THIS site reloads.
+    /// </remarks>
+    [Fact]
+    public void RestoringAVersionReloadsAnOpenCanvasTab()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        CanvasDocumentViewModel document = Assert.IsType<CanvasDocumentViewModel>(
+            workspace.ActiveGroup.ActiveTab!.Canvas);
+        Assert.Contains(document.Outline, row => row.NodeId == "question");
+        document.SelectNode("evidence", announce: false);
+
+        // What a restore does: the bytes on disk change under an open
+        // tab, and the shell then routes its reload site.
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "board.canvas"),
+            """
+            {
+              "nodes": [
+                {"id":"evidence","type":"text","text":"Evidence so far","x":0,"y":0,"width":220,"height":140},
+                {"id":"after","type":"text","text":"Restored body","x":0,"y":200,"width":240,"height":140}
+              ],
+              "edges": []
+            }
+            """);
+        workspace.ReloadOpenTabFromDiskForTests("board.canvas");
+
+        // Same shared document object — and it now agrees with disk.
+        Assert.Same(document, workspace.ActiveGroup.ActiveTab!.Canvas);
+        Assert.Equal(CanvasLoadState.Ready, document.State);
+        Assert.Contains(document.Outline, row => row.NodeId == "after");
+        Assert.DoesNotContain(document.Outline, row => row.NodeId == "question");
+        // Selection survives where the node did (the reload keeps it).
+        Assert.Equal("evidence", document.Selection.Selected);
+    }
+
+    /// <summary>The registry hit is what made the stale render
+    /// possible, and it is still a hit: the reload must work THROUGH
+    /// the shared document, not by replacing it.</summary>
+    [Fact]
+    public void TheReloadKeepsTheSharedDocumentObject()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel first =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        ((System.Windows.Input.ICommand)workspace.DuplicateTabCommand).Execute(null);
+        WorkspaceTabViewModel second =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel shared =
+            Assert.IsType<CanvasDocumentViewModel>(first.Canvas);
+        Assert.Same(shared, second.Canvas);
+
+        workspace.ReloadOpenTabFromDiskForTests("board.canvas");
+
+        Assert.Same(shared, first.Canvas);
+        Assert.Same(shared, second.Canvas);
+        Assert.Equal(CanvasLoadState.Ready, shared.State);
+    }
+
+    // --- M1: activation routes on the TARGET, not the kind -----------------
+
+    /// <summary>
+    /// An image card opens in its default app, never in a Markdown
+    /// editor tab. `ItemForPath` calls every extension that is not
+    /// `.canvas`/`.base` Markdown, so routing image cards through the
+    /// note-open seam replaced the canvas tab with an editor over the
+    /// PNG's bytes. The mac reference routes on the target's extension
+    /// (`CanvasContainerView.swift:168–187`), and the vocabulary's
+    /// `CanvasOpenTarget.DefaultApp` arm exists for exactly this.
+    /// </summary>
+    [Fact]
+    public void ActivatingAnImageCardOpensItInTheDefaultAppNotAnEditorTab()
+    {
+        File.WriteAllBytes(
+            Path.Combine(_fixture.Root, "diagram.png"),
+            [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "media.canvas"),
+            """
+            {"nodes":[
+              {"id":"pic","type":"file","file":"diagram.png","x":0,"y":0,"width":10,"height":10},
+              {"id":"doc","type":"file","file":"note0.md","x":0,"y":40,"width":10,"height":10}
+            ],"edges":[]}
+            """);
+        using var cancel = new CancelToken();
+        _session.ScanInitial(cancel);
+
+        CanvasDocumentViewModel document = NewDocument("media.canvas");
+        document.Load();
+        _announced.Clear();
+        string? media = null;
+        string? navigated = null;
+        document.OpenMediaCardFromSurface = target =>
+        {
+            media = target;
+            return true;
+        };
+        document.OpenFileCardFromSurface = (target, _) =>
+        {
+            navigated = target;
+            return true;
+        };
+
+        // The image: the shell's default app, announced as such.
+        Assert.Equal(CanvasActivation.Opened, document.Activate(Row(document, "pic")));
+        Assert.Equal("diagram.png", media);
+        Assert.Null(navigated);
+        document.Announcer.FlushForTests();
+        Assert.Equal(
+            SlateUniffiMethods.A11yRender(new A11yEvent.Canvas(
+                new CanvasA11yEvent.CanvasOpened(
+                    Row(document, "pic").Title, CanvasOpenTarget.DefaultApp))).Text,
+            _announced[^1].Text);
+
+        // A Markdown target still opens the note tab.
+        media = null;
+        Assert.Equal(CanvasActivation.Navigated, document.Activate(Row(document, "doc")));
+        Assert.Equal("note0.md", navigated);
+        Assert.Null(media);
+        document.Shutdown();
+    }
+
+    /// <summary>The routing predicate itself — mac's `hasSuffix` test,
+    /// including the case-insensitivity that makes `.MD` a note.</summary>
+    [Theory]
+    [InlineData("note.md", true)]
+    [InlineData("NOTE.MD", true)]
+    [InlineData("deep/path/note.markdown", true)]
+    [InlineData("diagram.png", false)]
+    [InlineData("clip.mp4", false)]
+    [InlineData("no-extension", false)]
+    public void MarkdownTargetsAreTheOnesThatOpenAsNotes(string target, bool expected) =>
+        Assert.Equal(expected, CanvasDocumentViewModel.IsMarkdownTarget(target));
+
+    /// <summary>A media target that escapes the vault is refused rather
+    /// than handed to the shell: a `.canvas` file is untrusted input and
+    /// `../../` in a file node would otherwise open anything on the
+    /// disk.</summary>
+    [Fact]
+    public void AMediaTargetOutsideTheVaultIsNeverHandedToTheShell()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        CanvasDocumentViewModel document = Assert.IsType<CanvasDocumentViewModel>(
+            workspace.ActiveGroup.ActiveTab!.Canvas);
+        Func<string, bool> open = Assert.IsType<Func<string, bool>>(
+            document.OpenMediaCardFromSurface);
+
+        Assert.False(open("../outside.png"));
+        Assert.False(open("../../etc/passwd"));
+        Assert.False(open("nowhere.png"));
+    }
+
+    // --- M2: focus lands when the user asks, and only then -----------------
+
+    /// <summary>
+    /// A retarget publishes without anyone asking, and must not pull
+    /// focus out of whatever the user was doing — the invariant the
+    /// old code's own comment stated and broke, because focus was a
+    /// side effect of the first publish while visible.
+    /// </summary>
+    [Fact]
+    public void ARetargetPublishNeverStealsFocus() => RunSta(() =>
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        var surface = new CanvasSurfaceView { Model = tab.Canvas };
+        var elsewhere = new TextBox();
+        var panel = new StackPanel();
+        panel.Children.Add(elsewhere);
+        panel.Children.Add(surface);
+        using var host = Host(panel);
+        Assert.True(elsewhere.Focus());
+        Assert.Same(elsewhere, host.FocusedElement());
+
+        File.Move(
+            Path.Combine(_fixture.Root, "board.canvas"),
+            Path.Combine(_fixture.Root, "renamed.canvas"));
+        workspace.RetargetPath("board.canvas", "renamed.canvas");
+        surface.Model = tab.Canvas;
+        host.UpdateLayout();
+
+        // A fresh document published rows; focus stayed where the user
+        // put it.
+        Assert.Equal(CanvasLoadState.Ready, tab.Canvas!.State);
+        Assert.NotEmpty(tab.Canvas.Outline);
+        Assert.Same(elsewhere, host.FocusedElement());
+    });
+
+    /// <summary>
+    /// The inverse hole: a second tab on an ALREADY-open path is a
+    /// registry hit, so no publish will ever come — and focus landing
+    /// keyed on "first publish" never happened for it. It is keyed on
+    /// the workspace's user-initiated open funnel instead.
+    /// </summary>
+    [Fact]
+    public void ASecondTabOnAnOpenPathStillLandsFocus() => RunSta(() =>
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel first =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        var surface = new CanvasSurfaceView { Model = first.Canvas };
+        using var host = Host(surface);
+
+        // The document is already loaded and published; the surface
+        // mounts onto a registry HIT.
+        Assert.Equal(CanvasLoadState.Ready, first.Canvas!.State);
+        Assert.Null(FocusedRow(host));
+
+        // The open funnel every user-initiated open already calls.
+        workspace.RequestActiveEditorFocus();
+        host.UpdateLayout();
+
+        CanvasOutlineRowViewModel landed = Assert.IsType<CanvasOutlineRowViewModel>(
+            FocusedRow(host));
+        Assert.Equal(first.Canvas.Outline[0].NodeId, landed.Id);
+    });
+
+    /// <summary>An empty canvas has no row to land on; focus goes to the
+    /// onboarding region rather than nowhere (m4).</summary>
+    [Fact]
+    public void AnEmptyCanvasLandsFocusOnTheOnboardingRegion() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = NewDocument("blank.canvas");
+        document.Load();
+        var surface = new CanvasSurfaceView { Model = document };
+        using var host = Host(surface);
+
+        document.RequestFocusLanding();
+        host.UpdateLayout();
+        Assert.Same(surface.OnboardingForTests, host.FocusedElement());
+        document.Shutdown();
+    });
+
+    /// <summary>t0 §3: a failure a keyboard user cannot reach is a
+    /// failure nobody reported (m7).</summary>
+    [Fact]
+    public void TheFailureBannerIsAFocusableRegion() => RunSta(() =>
+    {
+        CanvasDocumentViewModel broken = NewDocument("broken.canvas");
+        broken.Load();
+        var surface = new CanvasSurfaceView { Model = broken };
+        Assert.True(surface.StateBannerForTests.Focusable);
+        Assert.True(System.Windows.Input.KeyboardNavigation.GetIsTabStop(
+            surface.StateBannerForTests));
+
+        CanvasDocumentViewModel ready = NewDocument("board.canvas");
+        ready.Load();
+        surface.Model = ready;
+        // A transient "Opening canvas…" is not a tab stop that vanishes
+        // under the cursor.
+        Assert.False(surface.StateBannerForTests.Focusable);
+        broken.Shutdown();
+        ready.Shutdown();
+    });
+
+    // --- M3: the production scheduling mode's own interleavings -------------
+
+    /// <summary>
+    /// The W4-5 lesson, applied to teardown: a shutdown landing while a
+    /// load body is in flight must publish nothing and still close the
+    /// handle exactly once. Synchronous mode orders the body before the
+    /// shutdown can interleave at all, so this fact only exists in the
+    /// production mode.
+    /// </summary>
+    [Fact]
+    public async Task AShutdownDuringAnInFlightLoadNeverPublishesAndClosesTheHandle()
+    {
+        CanvasDocumentViewModel document = NewAsyncDocument("board.canvas");
+        int published = 0;
+        document.OutlinePublished += (_, _) => published++;
+
+        document.Load();
+        document.Shutdown();
+        await QuiesceAsync(document);
+        await document.WhenHandleClosed();
+
+        // Either the body bailed at its generation check or its publish
+        // did; what must never happen is a Ready surface after teardown.
+        Assert.NotEqual(CanvasLoadState.Ready, document.State);
+        Assert.Equal(0, published);
+        Assert.Empty(document.Outline);
+        // Refused afterwards, forever.
+        document.Load();
+        await QuiesceAsync(document);
+        Assert.NotEqual(CanvasLoadState.Ready, document.State);
+    }
+
+    /// <summary>
+    /// Two loads in flight: the generation guard drops the first body's
+    /// publish, so the surface is published exactly once and from the
+    /// LATER open. Without the guard both would publish and the second's
+    /// rows could be overwritten by the first's.
+    /// </summary>
+    [Fact]
+    public async Task ASecondLoadSupersedesTheFirstPublish()
+    {
+        CanvasDocumentViewModel document = NewAsyncDocument("board.canvas");
+        int published = 0;
+        document.OutlinePublished += (_, _) => published++;
+
+        document.Load();
+        document.Load();
+        await QuiesceAsync(document);
+
+        Assert.Equal(CanvasLoadState.Ready, document.State);
+        Assert.Equal(1, published);
+        Assert.NotEmpty(document.Outline);
+        document.Shutdown();
+        await document.WhenHandleClosed();
+    }
+
+    /// <summary>
+    /// A retarget while the old document is still loading: the old one
+    /// is shut down mid-flight and the new one at the new path is the
+    /// only thing that publishes.
+    /// </summary>
+    [Fact]
+    public async Task ARetargetDuringAnInFlightLoadPublishesOnlyTheNewDocument()
+    {
+        CanvasDocumentViewModel stale = NewAsyncDocument("board.canvas");
+        int stalePublished = 0;
+        stale.OutlinePublished += (_, _) => stalePublished++;
+        stale.Load();
+        stale.Shutdown();
+
+        CanvasDocumentViewModel fresh = NewAsyncDocument("skipped.canvas");
+        int freshPublished = 0;
+        fresh.OutlinePublished += (_, _) => freshPublished++;
+        fresh.Load();
+
+        await QuiesceAsync(stale);
+        await QuiesceAsync(fresh);
+        await stale.WhenHandleClosed();
+
+        Assert.Equal(0, stalePublished);
+        Assert.NotEqual(CanvasLoadState.Ready, stale.State);
+        Assert.Equal(1, freshPublished);
+        Assert.Equal(CanvasLoadState.Ready, fresh.State);
+        fresh.Shutdown();
+        await fresh.WhenHandleClosed();
+    }
+
+    /// <summary>Production scheduling, a NULL SynchronizationContext so
+    /// publishes run inline on the worker: after a drain every publish
+    /// has been applied (with xunit's context they would still be
+    /// queued) — the history async-suite pattern.</summary>
+    private CanvasDocumentViewModel NewAsyncDocument(string path)
+    {
+        SynchronizationContext? previous = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(null);
+        try
+        {
+            return new CanvasDocumentViewModel(
+                _session,
+                path,
+                new CanvasAnnouncer(_announced.Add, TimeSpan.FromMinutes(1)),
+                synchronousForTests: false);
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previous);
+        }
+    }
+
+    /// <summary>Drain repeatedly: a drained body can have queued
+    /// follow-up work the drain's snapshot missed.</summary>
+    private static async Task QuiesceAsync(CanvasDocumentViewModel document)
+    {
+        for (int round = 0; round < 20; round++)
+        {
+            await document.DrainForTests();
+            await Task.Delay(2);
+        }
     }
 
     // --- A17: the §K budget, in BOTH scheduling modes ------------------------

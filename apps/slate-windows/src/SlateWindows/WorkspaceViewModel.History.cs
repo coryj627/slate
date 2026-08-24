@@ -228,6 +228,15 @@ internal sealed partial class WorkspaceViewModel
     /// existing in-place replace path; contract H7's verification
     /// flag records that it also resets transient tab state, as mac's
     /// reload does).</summary>
+    /// <summary>The reload site itself, for the fact that pins its
+    /// canvas arm (W6-1 B2). The restore CONTINUATION that normally
+    /// calls it carries W4-7's own preconditions — the CAS basis for a
+    /// non-markdown tab is the history head hash — which a canvas tab
+    /// does not currently satisfy end to end; that is W4-7's question,
+    /// and this seam is the one PR A owns.</summary>
+    internal void ReloadOpenTabFromDiskForTests(string path) =>
+        ReloadOpenTabFromDisk(path);
+
     private void ReloadOpenTabFromDisk(string path)
     {
         WorkspaceTabViewModel? tab = FindPathBackedTab(path);
@@ -235,6 +244,12 @@ internal sealed partial class WorkspaceViewModel
         {
             tab.ReplaceItem(tab.Item);
             AttachTabDocumentsIfNeeded(tab);
+            // Attach is a registry HIT for an already-open canvas, and a
+            // hit returns the document exactly as it was — so the site
+            // named "reload open tab from disk" left the outline
+            // rendering the PRE-restore rows, contradicting the restore
+            // this shell had just announced. The reload is explicit.
+            ReloadCanvasDocumentAt(path);
         }
     }
 

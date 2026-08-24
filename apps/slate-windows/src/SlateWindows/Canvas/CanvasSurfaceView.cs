@@ -44,7 +44,7 @@ internal sealed class CanvasSurfaceView : UserControl
     private readonly TextBlock _detailHeading;
     private readonly TextBox _detailText;
     private bool _synchronizingSwitcher;
-    private bool _landedFocus;
+    private bool _focusLandingPending;
 
     public CanvasSurfaceView()
     {
@@ -168,6 +168,8 @@ internal sealed class CanvasSurfaceView : UserControl
 
     internal TextBlock OnboardingForTests => _onboarding;
 
+    internal TextBlock StateBannerForTests => _stateBanner;
+
     internal RadioButton TableChoiceForTests => _tableChoice;
 
     private static RadioButton SurfaceChoice(
@@ -211,14 +213,16 @@ internal sealed class CanvasSurfaceView : UserControl
         {
             oldModel.PropertyChanged -= view.OnModelPropertyChanged;
             oldModel.OutlinePublished -= view.OnOutlinePublished;
+            oldModel.FocusLandingRequested -= view.OnFocusLandingRequested;
             oldModel.Selection.PropertyChanged -= view.OnSelectionPropertyChanged;
-            view._landedFocus = false;
+            view._focusLandingPending = false;
         }
         view._outline.Model = e.NewValue as CanvasDocumentViewModel;
         if (e.NewValue is CanvasDocumentViewModel model)
         {
             model.PropertyChanged += view.OnModelPropertyChanged;
             model.OutlinePublished += view.OnOutlinePublished;
+            model.FocusLandingRequested += view.OnFocusLandingRequested;
             model.Selection.PropertyChanged += view.OnSelectionPropertyChanged;
         }
         view.Render();
@@ -227,15 +231,43 @@ internal sealed class CanvasSurfaceView : UserControl
     private void OnOutlinePublished(object? sender, EventArgs e)
     {
         Render();
-        // Contract A14: focus lands on the outline the first time this
-        // document has rows to land on, and not again — a background
-        // reload must never yank focus out from under the user.
-        if (!_landedFocus
-            && Model is { State: CanvasLoadState.Ready, Outline.Count: > 0 }
-            && IsVisible)
+        // The DEFERRED half of contract A14: a focus request that
+        // arrived while the canvas was still loading lands here, on the
+        // first publish with rows to land on — once, and only because
+        // the user asked. A publish nobody asked for (a retarget, a
+        // reload, a restored pane the user is not in) lands nothing.
+        if (_focusLandingPending)
         {
-            _landedFocus = _outline.FocusLandingRow() is not null;
+            TryLandFocus();
         }
+    }
+
+    /// <summary>
+    /// Contract A14: a user-initiated open asked for focus. Land it now
+    /// if there is a row, else arm the next publish.
+    /// </summary>
+    private void OnFocusLandingRequested(object? sender, EventArgs e)
+    {
+        _focusLandingPending = true;
+        TryLandFocus();
+    }
+
+    private void TryLandFocus()
+    {
+        if (Model is not { State: CanvasLoadState.Ready } model || !IsVisible)
+        {
+            return;
+        }
+        if (model.Outline.Count == 0)
+        {
+            // An empty canvas has no row to land on, and the onboarding
+            // region is the only thing to read (m4): land there instead
+            // of leaving focus wherever it was.
+            _focusLandingPending = false;
+            _ = _onboarding.Focus();
+            return;
+        }
+        _focusLandingPending = _outline.FocusLandingRow() is null;
     }
 
     private void OnModelPropertyChanged(
@@ -284,6 +316,20 @@ internal sealed class CanvasSurfaceView : UserControl
             _ => model.StateMessage ?? string.Empty,
         };
         SetBanner(_stateBanner, state);
+        // t0 §3's error-region discipline: a failure a user cannot
+        // reach with the keyboard is as good as unreported. ParseError,
+        // Failed and RetargetAbsent make the banner a tab stop; Loading
+        // does not (it is transient, and a stop that vanishes under the
+        // cursor is its own defect).
+        bool errorState = model.State
+            is CanvasLoadState.ParseError
+            or CanvasLoadState.Failed
+            or CanvasLoadState.RetargetAbsent;
+        _stateBanner.Focusable = errorState;
+        KeyboardNavigation.SetIsTabStop(_stateBanner, errorState);
+        AutomationProperties.SetLiveSetting(
+            _stateBanner,
+            errorState ? AutomationLiveSetting.Assertive : AutomationLiveSetting.Off);
         SetBanner(_degradedBanner, model.DegradedBannerText ?? string.Empty);
         SetBanner(_onboarding, model.EmptyOnboardingText ?? string.Empty);
 

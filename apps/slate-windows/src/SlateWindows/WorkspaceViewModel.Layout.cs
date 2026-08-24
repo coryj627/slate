@@ -675,8 +675,20 @@ internal sealed partial class WorkspaceViewModel
     /// <summary>Internal for the window's overlay-close focus
     /// fallback (the Bases overlays restore here when their captured
     /// element died in a republish).</summary>
-    internal void RequestActiveEditorFocus() =>
+    /// <summary>
+    /// The ONE focus-request funnel: every user-initiated open calls it,
+    /// and no background path does. W6-1 PR A hangs the canvas's focus
+    /// landing here (contract A14) for exactly that property — a
+    /// retarget, a session restore of a pane the user is not in, and a
+    /// history reload all publish without asking, and must not steal
+    /// focus; a second tab on an already-open path is a registry hit
+    /// that never publishes, and must still land it.
+    /// </summary>
+    internal void RequestActiveEditorFocus()
+    {
+        ActiveGroup.ActiveTab?.Canvas?.RequestFocusLanding();
         EditorPaneFocusRequested?.Invoke(this, ActiveGroup);
+    }
 
     private void AnnounceActivePane()
     {

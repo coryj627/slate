@@ -66,12 +66,15 @@ internal enum CanvasActivation
 /// on that path (contract A1); the workspace registry owns creation and
 /// shutdown.
 ///
-/// Threading (contract A17): every FFI touch runs inside a
-/// <see cref="PanelWorkScheduler.StartWork"/> body under one lock, so a
-/// handle replacement can never race an in-flight read; publications
-/// marshal through <c>Post</c> and re-check the generation. The handle
-/// is closed exactly once — on replacement inside the load body, or on
-/// shutdown.
+/// Threading (contract A17), stated as it is: the LOAD and the CLOSE run
+/// inside <see cref="PanelWorkScheduler.StartWork"/> bodies, marshal
+/// their publications through <c>Post</c> and re-check the generation;
+/// the per-node DETAIL reads (<see cref="NeighborsOf"/>,
+/// <see cref="NodeTextOf"/>) and the activation identity read are
+/// synchronous UI-thread calls. Every one of them — scheduled or not —
+/// holds <c>_ffiLock</c> for its FFI section, which is what makes a
+/// handle replacement unable to race a read. The handle is closed
+/// exactly once: on replacement inside the load body, or on shutdown.
 ///
 /// Canvas tabs are never dirty: mutations write through on commit
 /// (PR E), so the U1 close gate is bypassed for canvas tabs
@@ -202,15 +205,25 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 new CanvasA11yEvent.CanvasLoadedDegraded((uint)PreservedItemCount))
             : null;
 
-    /// <summary>The empty-state onboarding copy (0a-13 LABEL class).
-    /// PR E ships New Card; until then the New Card slot carries the
-    /// palette chord too, so the copy never advertises a command that
-    /// does not exist (the t2 rule).</summary>
+    /// <summary>
+    /// The empty-state region's text (0a-13 LABEL class, core-rendered).
+    /// </summary>
+    /// <remarks>
+    /// `CanvasEmptyOnboarding` is the event this region is FOR, and PR E
+    /// installs it with the real New Card chord. It cannot ship here:
+    /// its template renders "Press ⟨chord⟩ to create your first card"
+    /// unconditionally, and PR A has no create command, so any chord in
+    /// that slot — including the palette's — tells a screen-reader user
+    /// to press a key that will not create anything. That is exactly the
+    /// t2 rule the spec cites in the same sentence ("don't advertise a
+    /// command that doesn't exist yet"), so until the command exists the
+    /// region renders the true statement the vocabulary already has.
+    /// CD-37.
+    /// </remarks>
     public string? EmptyOnboardingText =>
         State == CanvasLoadState.Ready && _outline.Count == 0
             ? CanvasAnnouncer.RenderLabel(
-                new CanvasA11yEvent.CanvasEmptyOnboarding(
-                    NewCardChord: PaletteChord, PaletteChord: PaletteChord))
+                new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.Empty()))
             : null;
 
     /// <summary>The host-owned display chord the vocabulary takes as a
@@ -258,6 +271,25 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// persisted token for every tab on this path (contract A15).</summary>
     internal event EventHandler<CanvasSurfaceKind>? SurfaceChanged;
 
+    /// <summary>
+    /// A USER-INITIATED open wants keyboard focus on this canvas
+    /// (contract A14).
+    /// </summary>
+    /// <remarks>
+    /// Raised from the workspace's one focus-request funnel, which every
+    /// open path already calls and no background path does. Focus used
+    /// to be a side effect of the first publish while visible, which got
+    /// both halves wrong: a retarget or a session restore published and
+    /// STOLE focus from wherever the user was (defeating the guard
+    /// comment right beside it), while a second tab on an already-open
+    /// path is a registry hit that never publishes — so it never landed
+    /// focus at all.
+    /// </remarks>
+    internal event EventHandler? FocusLandingRequested;
+
+    internal void RequestFocusLanding() =>
+        FocusLandingRequested?.Invoke(this, EventArgs.Empty);
+
     /// <summary>The ONE surface switch (contracts A15/A18): the header
     /// switcher and the three <c>slate.canvas.show*</c> commands share
     /// it, so the state, the persisted token and the spoken sentence
@@ -283,6 +315,12 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// allowlist is applied HERE (contract A13) so the canvas cannot
     /// hand the shell a target the shared policy would refuse.</summary>
     internal Func<string, bool>? OpenExternalLinkFromSurface { get; set; }
+
+    /// <summary>The default-app route for a non-Markdown attachment
+    /// (contract A13, the mac media arm). Takes the VAULT-RELATIVE path:
+    /// only the workspace knows the vault root, and only it should be
+    /// composing an absolute one.</summary>
+    internal Func<string, bool>? OpenMediaCardFromSurface { get; set; }
 
     private void NotifyStateChanged()
     {
@@ -370,7 +408,15 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 scene = _session.CanvasScene(info.Handle);
             }
         }
-        catch (VaultException exception)
+        // Not just VaultException (m6): the scheduler's contract is that
+        // bodies catch their own failures, and a panic-class uniffi
+        // exception escaping here faults the tracked task silently and
+        // leaves the tab reading "Opening canvas…" forever. Anything the
+        // process cannot survive still propagates.
+        catch (Exception exception) when (
+            exception is not OutOfMemoryException
+                and not StackOverflowException
+                and not AccessViolationException)
         {
             Post(() =>
             {
@@ -684,6 +730,20 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         return CanvasActivation.Refused;
     }
 
+    /// <summary>
+    /// File and image cards route on the TARGET, not on the kind — the
+    /// mac reference (<c>CanvasContainerView.swift:168–187</c>): a
+    /// Markdown target opens a note tab, at its subpath anchor; anything
+    /// else opens in whatever app owns the type.
+    /// </summary>
+    /// <remarks>
+    /// Routing on the KIND instead sent every image card through the
+    /// note-open seam, and <c>ItemForPath</c> calls any extension that is
+    /// not <c>.canvas</c>/<c>.base</c> Markdown — so activating an image
+    /// replaced the canvas tab with an editor over the PNG's bytes. The
+    /// vocabulary's never-used <c>CanvasOpenTarget.DefaultApp</c> arm was
+    /// the tell that a whole branch was missing.
+    /// </remarks>
     private CanvasActivation ActivateFileCard(CanvasOutlineRow row)
     {
         string target = TargetOf(row.NodeId);
@@ -695,17 +755,50 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 target.Length == 0 ? row.Title : target));
             return CanvasActivation.Refused;
         }
+        if (!IsMarkdownTarget(target))
+        {
+            // Media and every other non-Markdown attachment. NOT the
+            // link allowlist: that gates URLs handed to a browser, and a
+            // vault-relative file is a different hand-off with a
+            // different failure mode.
+            if (OpenMediaCardFromSurface?.Invoke(target) == true)
+            {
+                LastActivatedNode = row.NodeId;
+                Announcer.Announce(new CanvasA11yEvent.CanvasOpened(
+                    row.Title, CanvasOpenTarget.DefaultApp));
+                return CanvasActivation.Opened;
+            }
+            Announcer.Announce(new CanvasA11yEvent.CanvasFileNotFound(target));
+            return CanvasActivation.Refused;
+        }
         LastActivatedNode = row.NodeId;
         return OpenFileCardFromSurface?.Invoke(target, AnchorFor(row.NodeId)) == true
             ? CanvasActivation.Navigated
             : CanvasActivation.Refused;
     }
 
+    /// <summary>Mac's own test (<c>target.lowercased().hasSuffix</c>),
+    /// transliterated — and the same set <c>ItemForPath</c> treats as an
+    /// editable note.</summary>
+    internal static bool IsMarkdownTarget(string target) =>
+        target.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
+        || target.EndsWith(".markdown", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Whether the vault knows this target. A session-level identity
+    /// read — it touches no handle — but it runs under <c>_ffiLock</c>
+    /// anyway (contract A17): "every FFI section holds the lock" is a
+    /// rule worth being able to state without an exception, and the cost
+    /// is one uncontended acquire on an activation.
+    /// </summary>
     private bool TargetExistsInVault(string target)
     {
         try
         {
-            return _session.CanonicalPath(target) is not null;
+            lock (_ffiLock)
+            {
+                return _session.CanonicalPath(target) is not null;
+            }
         }
         catch (VaultException)
         {
@@ -848,9 +941,11 @@ internal static class CanvasPhrase
     /// and checked rather than asserted: the only argument is core's
     /// <c>kind_label</c>, a closed set of five ASCII words, and
     /// <c>TheCardReferenceMatchesCoresOwnComposition</c> renders all
-    /// five through core. The split is on the first TEXT ELEMENT rather
-    /// than the first UTF-16 unit, so a surrogate pair is at least not
-    /// cut in half if the input set ever widens.
+    /// five through core. The split takes two UTF-16 units when the
+    /// first is a high surrogate, which keeps a surrogate PAIR intact —
+    /// not the same thing as a text element, which is what an earlier
+    /// version of this remark wrongly claimed: a combining mark or a ZWJ
+    /// sequence is still split. Nothing reaches it.
     /// </remarks>
     private static string Capitalized(string word)
     {
@@ -885,22 +980,33 @@ internal static class CanvasPhrase
     public static string ConnectionStatus(int ordinal, int total) =>
         $"connection {ordinal} of {total}";
 
-    /// <summary>The mac <c>activationHint</c> inventory, verbatim.</summary>
+    /// <summary>
+    /// The mac <c>activationHint</c> inventory, verbatim — except the
+    /// media one (CD-36).
+    /// </summary>
+    /// <remarks>
+    /// Mac's image hint says media "arriving in a later milestone
+    /// slice", while mac's own activate opens a non-Markdown target in
+    /// its default app today. A HelpText that contradicts what the row
+    /// does fails the one job this inventory has, so Windows describes
+    /// the behaviour both hosts actually have; the mac hint is filed as
+    /// an upstream note.
+    /// </remarks>
     public static string ActivationHint(string kind) => kind switch
     {
         "group" => "Group. Cards inside follow in the outline.",
         "text" => "Opens the card text.",
         "file" => "Opens the note in this tab.",
-        "image" => "Media cards open with canvas actions, arriving in a later milestone slice.",
+        "image" => "Opens the media file in its default app.",
         "link" => "Opens the link in your browser.",
         _ => string.Empty,
     };
 
     public static string ConnectionHint => "Opens the connected card's row.";
 
-    public static string OpenFailed(string path, VaultException exception) =>
+    public static string OpenFailed(string path, Exception exception) =>
         $"This canvas could not be opened: {exception.Message} ({path})";
 
-    public static string RetargetAbsent(string from, string to, VaultException exception) =>
+    public static string RetargetAbsent(string from, string to, Exception exception) =>
         $"{from} moved to {to}, which could not be reopened: {exception.Message}";
 }

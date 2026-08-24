@@ -88,6 +88,28 @@ internal sealed partial class WorkspaceViewModel
             return navigated;
         };
         document.OpenExternalLinkFromSurface = target => _externalOpener(target);
+        // The media hand-off (contract A13): the document holds a
+        // VAULT-RELATIVE target and the workspace owns the root, so the
+        // absolute path is composed exactly here. A target that escapes
+        // the vault is refused rather than handed to the shell — a
+        // `.canvas` file is untrusted input, and `../../` in a `file`
+        // node would otherwise open anything on the disk.
+        document.OpenMediaCardFromSurface = target =>
+        {
+            string root = System.IO.Path.GetFullPath(_vaultRoot);
+            string absolute = System.IO.Path.GetFullPath(
+                System.IO.Path.Combine(root, target));
+            if (!absolute.StartsWith(
+                    root.EndsWith(System.IO.Path.DirectorySeparatorChar)
+                        ? root
+                        : root + System.IO.Path.DirectorySeparatorChar,
+                    StringComparison.Ordinal)
+                || !System.IO.File.Exists(absolute))
+            {
+                return false;
+            }
+            return _externalOpener(absolute);
+        };
         // Contract A15: the persisted token follows the shared surface
         // for EVERY tab on this path, since they share the document.
         document.SurfaceChanged += (sender, surface) =>
@@ -106,6 +128,24 @@ internal sealed partial class WorkspaceViewModel
             }
             Persist();
         };
+    }
+
+    /// <summary>
+    /// Force the open document at this path to re-read the file
+    /// (W6-1 B2). The registry is keyed by path and a hit returns the
+    /// document as it stands, so a disk change the shell itself made —
+    /// a history restore is the reachable one today; PR E's funnel and
+    /// the file watcher are next — leaves the surface contradicting the
+    /// bytes. Selection survives wherever the node id still exists:
+    /// <c>PublishReady</c> only re-seats when the selected node is gone.
+    /// </summary>
+    private void ReloadCanvasDocumentAt(string path)
+    {
+        if (_canvasDocuments.TryGetValue(
+            CanvasKey(path), out CanvasDocumentViewModel? document))
+        {
+            document.Load();
+        }
     }
 
     /// <summary>The Bases sweep, verbatim in shape (contract A1): the

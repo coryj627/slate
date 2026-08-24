@@ -904,6 +904,32 @@ drops the selection and the marks with the object (spec behavior 1's
 registry down and drains its closes into the same bounded teardown
 drain the Bases documents use (INV-2's Windows twin).
 
+**A registry HIT must not serve stale content.** The registry keys by
+path and a hit returns the document as it stands, which is right for
+sharing and wrong the moment the bytes change underneath it. The
+attach funnel's fifth site — `ReloadOpenTabFromDisk`, the history
+restore's — is the reachable one today: it re-attached the same
+document and the outline went on rendering the PRE-restore rows,
+directly after this shell announced the restore. So the canvas arm of
+that site reloads explicitly (`ReloadCanvasDocumentAt`). Selection
+survives wherever the node id still exists, because `PublishReady`
+re-seats only when the selected node is gone. Pinned by
+`RestoringAVersionReloadsAnOpenCanvasTab` and
+`TheReloadKeepsTheSharedDocumentObject`, and mutation-verified: dropping
+the reload call brings the stale rows back.
+
+**Scope, stated honestly.** The fact drives the reload SITE, not the
+whole History restore: W4-7's restore carries its own preconditions for
+a non-markdown tab (the CAS basis is the history head hash, not a tab
+buffer hash), and a `.canvas` tab does not satisfy them end to end in
+this harness. Whether History should restore a canvas at all is W4-7's
+question and is recorded in "verified during implementation" rather than
+answered here. The Bases and dashboard arms of the same site have the
+same registry-hit hole at BASE; that is pre-existing and not this PR's
+to fix, but PR A adopted the shape into new code at the exact site whose
+enumeration was a controller ruling, which is why the canvas arm is
+closed now.
+
 **"Refcount" is the sweep's live-key set, stated exactly.** The spec
 says refcount; this registry has no counter, because the Bases
 precedent proved a counter and a tab list can disagree and the tab list
@@ -948,6 +974,13 @@ apart:
 | open succeeded | `Ready` | rows; the A4 banner rides on top when any entry was skipped |
 | a retarget's reopen threw | `RetargetAbsent` | the message names both spellings |
 | before the first publish | `Loading` | the spinner label |
+
+The three FAILURE states put the banner in the tab order with
+`LiveSetting=Assertive` — t0 §3's error-region discipline is "focusable,
+never announcement-only", and a plain `TextBlock` satisfies neither
+half. `Loading` does not: it is transient, and a tab stop that vanishes
+under the cursor is its own defect. Pinned by
+`TheFailureBannerIsAFocusableRegion`.
 
 `canvas::is_load_degraded` (`crates/slate-core/src/canvas/mod.rs:356`)
 is `any(ParseFailed)`, and every `ParseFailed` arm of `canvas::parse`
@@ -1211,15 +1244,39 @@ either way. `not_a_group` and `bad_node` are ONE refusal discriminated
 by message (0b-12's API note) and are treated as one: no host string
 matching, anywhere.
 
-**A17 — The scheduler conventions are the panel conventions.**
-`CanvasDocumentViewModel : PanelWorkScheduler`: every FFI touch runs
-inside a `StartWork` body under one `_ffiLock`, publishes marshal
-through `Post`, every publish re-reads a `_generation` bumped with
-`Interlocked.Increment` at dispatch, `Shutdown()` bumps the generation
-and closes the handle off the dispatcher (exposed as
-`WhenHandleClosed()` for the bounded teardown drain), and synchronous
-test mode runs bodies inline. The handle is closed exactly once — on
-replacement inside the load body, or on shutdown.
+**A17 — The scheduler conventions are the panel conventions, and the
+threading rule is stated as the code has it.**
+`CanvasDocumentViewModel : PanelWorkScheduler`. **Every FFI section
+holds `_ffiLock`** — that is the invariant, and it is what makes a
+handle replacement unable to race a read. What is SCHEDULED is narrower
+than that, and the first wording of this row claimed otherwise ("every
+FFI touch runs inside a `StartWork` body"), which the shipped code never
+did:
+
+| Call | Thread | Lock |
+|---|---|---|
+| `Load` / `LoadBody` (open, outline, table, scene) | `StartWork` body | yes |
+| `Shutdown`'s close | `Task.Run` (inline in sync test mode) | yes |
+| `NeighborsOf`, `NodeTextOf` | UI thread, synchronous | yes |
+| `TargetExistsInVault` (`canonical_path`) | UI thread, synchronous | yes |
+
+The two per-node detail reads are synchronous on purpose: they answer a
+selection or an activation the user just made, they are single indexed
+lookups, and the mac twin caches them the same way (`neighborsCache`).
+`canonical_path` touches no handle at all and needed no lock for
+correctness — it takes one anyway, so the rule above has no exception to
+remember. The cost of the whole exception class is bounded UI-thread
+blocking behind a large load; moving these into scheduled bodies is a
+design change PR A does not need and PR C can make if the navigator's
+volume warrants it.
+
+Publishes marshal through `Post`, every publish re-reads a
+`_generation` bumped with `Interlocked.Increment` at dispatch,
+`Shutdown()` bumps the generation and closes the handle off the
+dispatcher (exposed as `WhenHandleClosed()` for the bounded teardown
+drain), and synchronous test mode runs bodies inline. The handle is
+closed exactly once — on replacement inside the load body, or on
+shutdown.
 
 **The 2,000-node budget fact runs BOTH modes.** The W4-5 lesson is
 "test the mode users run": the synchronous mode orders the load body
@@ -1265,10 +1322,23 @@ then outline rows, table rows, the scene, and per node in reading order
 stays out of the golden for the reason 0b-15 gives. A node whose
 `canvas_where_am_i` refuses serializes as `null` rather than aborting
 the artifact — A16's skew is a shape the artifact must be able to
-express. The Swift twin is PR A's mac cross-reference and is NOT in this
-task's scope: the golden lands here and the mac lane arbitrates, the
-same sequencing 0a used for the C# corpus mirror and 0b used for
-`canvas_queries`. §K is `CanvasOpenBenchmarks` over `large_2000.canvas`
+express. **The Swift twin lands in this PR** (`ParityHarnessTests
+.canvasReadArtifact`), written blind against the mac binding and
+arbitrated by the committed golden.
+
+**The twin has to be same-PR, and the earlier plan to defer it was a
+misread of the precedent it cited.** 0a and 0b both say "the twin lands
+later and the mac lane arbitrates", and in both the twin landed in the
+SAME pull request, before CI ever ran the pair — 0b's own ledger says
+the mac census "was RED between Task 0b-1 and Task 0b-2", two tasks
+inside one PR. Across a PR boundary the sentence means something else
+entirely: `testHarnessArtifactsMatchCommittedGoldensByteForByte`
+asserts golden↔produced name-set equality in BOTH directions, so a
+golden with no Swift producer fails the mac lane deterministically on
+the first run, with no coincidences. The coverage test was built to
+refuse a golden nothing produces, and it would have. **Recorded as the
+rule for every remaining PR in this series: a §W-A artifact and both of
+its producers land together.** §K is `CanvasOpenBenchmarks` over `large_2000.canvas`
 — open, open+outline, open+table, open+scene — recorded in
 `BENCHMARKS.md` against the mac core-path figure of 5.62 ms, the C#
 delta being marshalling.
@@ -1294,8 +1364,19 @@ drives the registrar over a live workspace rather than a null-workspace
 stub.
 `apps/slate-windows/tests/SlateWindows.Tests/CanvasAnnouncerTests.cs`:
 latest-wins per class, the two classes independent, the High
-flush-and-drop, the relay's priority pass-through, and the label render
-used by the banner.
+flush-and-drop, the relay's priority pass-through, the label render used
+by the banner, the phrase-drift pins (rows P/Q), and — the one fact with
+no `FlushForTests` in it —
+`APendingNavigationLineFiresOnItsOwnWithoutAFlush`, which pumps a real
+dispatcher so the production `DispatcherTimer` actually ticks. Every
+other fact in that file stays green with `_timer.Start()` deleted; this
+one does not, which is the W4-5 lesson applied to the coalescer.
+`CanvasDocumentTests` carries the production-mode interleavings for the
+same reason:
+`AShutdownDuringAnInFlightLoadNeverPublishesAndClosesTheHandle`,
+`ASecondLoadSupersedesTheFirstPublish` and
+`ARetargetDuringAnInFlightLoadPublishesOnlyTheNewDocument` are the only
+facts in which A17's generation guards are live code.
 `apps/slate-windows/tests/SlateWindows.Tests/Censuses/CanvasAnnouncerCensus.cs`:
 A6's funnel guard, plus A2's attach-funnel doc-comment twin.
 `apps/slate-windows/tests/SlateWindows.Tests/Censuses/AnnouncementSeamCensus.cs`:
@@ -2007,9 +2088,19 @@ that moves `CanvasOutlineTests.testOutlineRowsCarryDerivedLabelsAndValues`.
 Task 0b-2 therefore consumes the field at the renderer's peer names
 only — the second surviving card-reference spelling 0a-10's scope table
 left standing with §W-G row L as its owner — and leaves the other three
-surfaces reading `title`. Both hosts do the same thing, which is what
-parity requires; the field being available on all four is what stops a
-later host from re-deriving it.
+surfaces reading `title`. The field being available on all four is what
+stops a later host from re-deriving it.
+
+**Amended by PR A: the hosts no longer do the same thing here.** This
+row originally closed "both hosts do the same thing, which is what
+parity requires". CD-30 then took the Windows OUTLINE to
+`speakable_name` on a controller ruling (t0 §4's Voice Control
+uniqueness row, on Windows' only canvas surface in PR A), so the two
+outlines differ on any canvas with repeated titles — mac's renderer
+already spelled `speakable_name`, which makes mac's outline the odd one
+out rather than Windows'. The sentence is corrected rather than deleted:
+what it asserted was true when written and is the reason CD-30 had to be
+a recorded divergence instead of a quiet change.
 
 **CD-24 — `canvas_group_rect_around` returns `Option`.** Mac's bbox
 fold aborts on `guard minX.isFinite` when no member resolves — a silent
@@ -2203,12 +2294,21 @@ system reaches the divergence.
 `TheCardReferenceMatchesCoresOwnComposition` renders all five through
 core and compares, which turns "unreachable" from a claim into a
 per-kind check that fails the day a sixth kind arrives with a
-non-ASCII initial. The host splits on the first TEXT ELEMENT rather
-than the first UTF-16 unit, so a surrogate pair would at least not be
-cut in half if the set ever widened. Recorded rather than worked
-around: emulating Rust's full mapping in C# means hand-coding the
-special-casing table, which is a real second copy of a Unicode rule for
-a case no caller can produce.
+non-ASCII initial.
+
+**What the host actually does, since the first wording of this row said
+otherwise.** It splits on the first UTF-16 unit, taking two when that
+unit is a high surrogate — which keeps a surrogate PAIR intact but is
+not the same thing as a text element: a base character followed by a
+combining mark is one grapheme and this splits it, and so does an
+emoji ZWJ sequence. Saying "first text element" was simply false, and
+the same false sentence was in the code remark. Both are corrected.
+Nothing depends on it — the argument is `kind_label`, five ASCII words
+— and the per-kind test is what keeps that a check. Recorded rather
+than worked around: emulating Rust's full mapping in C# means
+hand-coding the special-casing table, which is a real second copy of a
+Unicode rule for a case no caller can produce, and grapheme-correct
+splitting would be a third.
 
 **CD-35 — The canvas link card has no confirmation step, and neither
 does the policy it reuses.** Spec §PR A behavior 5 says *"link ⇒
@@ -2232,6 +2332,32 @@ surfaces and from mac, introduced by PR A, on the strength of one
 ambiguous word. If an owner wants a confirmation, it belongs on
 `ExternalLinkPolicy` for every surface at once, which is a decision, not
 a canvas detail.
+
+**CD-36 — The media activation hint is corrected on Windows; mac's is
+stale.** The mac label inventory gives every kind an activation hint and
+A10 takes them verbatim. Mac's image hint is *"Media cards open with
+canvas actions, arriving in a later milestone slice."* — but mac's own
+`activate` opens a non-Markdown target in its default app TODAY
+(`CanvasContainerView.swift:180–186`), so the hint has been describing a
+deferral that is not there. Windows does what the mac CODE does (M1),
+and a HelpText contradicting its row's behaviour fails the one job the
+§W-C label inventory has, so Windows spells it *"Opens the media file in
+its default app."* Filed as a mac note rather than fixed there: this
+issue's Windows lane does not edit mac copy, and the hint is the
+divergence, not the behaviour.
+
+**CD-37 — The empty canvas renders `CanvasStatus{Empty}`, not
+`CanvasEmptyOnboarding`.** Spec behavior 2 asks for an onboarding region
+"whose text leads with the New Card chord … until then the copy is the
+palette sentence". The event cannot deliver that in PR A: its template
+renders *"Press ⟨chord⟩ to create your first card."* unconditionally, so
+whatever goes in that slot — the palette chord included — tells a
+screen-reader user to press a key that creates nothing, and PR A ships
+no create command. The t2 rule the spec cites in the same sentence
+("don't advertise a command that doesn't exist yet") is the tie-breaker,
+so the region renders the true sentence the vocabulary already has, and
+PR E swaps `CanvasEmptyOnboarding` in with the real New Card chord.
+No host prose either way: both are core renders.
 
 ---
 
@@ -2918,6 +3044,51 @@ written for a different finding:
   plenty of real identifiers that live outside the C# tree (WPF, the mac
   twins), so the census lists those explicitly rather than loosening the
   rule until it passes.
+
+**Fix round 2 (red team round 1).** Three blockers, and two of them are
+the same class: a record that outran the code.
+
+- **The `canvas_read` golden had no Swift producer**, and mac's
+  `ParityHarnessTests` asserts golden↔produced name-set equality BOTH
+  directions — so the mac lane would have failed deterministically on
+  this PR's first CI run. A20's "the twin lands later" was copied from
+  0a/0b, where "later" meant a later TASK inside the same PR. The twin
+  is written (blind, against symbols verified one by one in the mac
+  sources), and the same-PR rule is now stated in A20 for the rest of
+  the series.
+- **A17 claimed every FFI touch was scheduled; three were not**, and one
+  of those held no lock. The lock is now universal and the contract
+  carries the actual table. This is the 0a record-drift class, caught
+  before codex rather than by it.
+- **The history reload site did not reload a canvas** — a registry hit
+  returned the document untouched, so the outline kept the pre-restore
+  rows right after the shell announced the restore.
+- **Image cards opened as Markdown.** `ItemForPath` calls every
+  non-`.canvas`/`.base` extension Markdown, so activating an image
+  replaced the canvas tab with an editor over the PNG's bytes. Mac
+  routes on the TARGET, not the kind; the unreachable
+  `CanvasOpenTarget.DefaultApp` arm was the tell that a whole branch was
+  missing. (CD-36 records the stale mac hint that hid it.)
+- **Focus was a side effect of publishing**, which stole it on retarget
+  and never landed it on a registry hit — both halves of A14 wrong at
+  once, one of them contradicting the guard comment beside the code.
+- **The real coalescer had no test.** Every announcer fact flushed
+  manually, so deleting `_timer.Start()` left the whole suite green.
+  One fact now pumps a real dispatcher; mutation-verified.
+
+**What generalises.** Four of these six are the same failure: a
+mechanism whose absence is silent (a no-op default, a registry hit, a
+manual flush, a deferred twin) tested only through a path that supplies
+the mechanism. The guards added here — the seam census, the citation
+census, the real-timer fact, the production-mode interleavings — all
+exist to make absence loud.
+
+**Also this round.** The History restore of a `.canvas` tab does not
+complete end to end in the harness: `RequestRestoreVersion` stages the
+history head hash as the CAS basis for a non-markdown tab and the
+restore does not reach disk. Unresolved here and NOT PR A's to answer —
+W4-7 owns that path, and PR A's obligation is that its own reload site
+reloads, which is where the fact is pinned. Flagged for close-out.
 
 **Deferred to PR E (m5, ledgered, no action here).** `Rebuild()`
 force-expands every group with members so a first read is the whole

@@ -1356,6 +1356,10 @@ internal sealed class WorkspacePaneNodeViewModel : BindableBase
 internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
 {
     private readonly VaultSession _session;
+    /// <summary>The vault's absolute root — the one place that composes
+    /// an absolute path from a vault-relative one (W6-1 PR A: the canvas
+    /// media hand-off to the shell).</summary>
+    private readonly string _vaultRoot;
     private readonly Action<A11yEvent> _announce;
     /// <summary>W6-1 PR A (contract A5): the canvas coalescer's post
     /// seam. It queues RENDERED lines — the window's winner is decided
@@ -1457,6 +1461,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     {
         _session = session;
         _persistence = new WorkspacePersistence(vaultRoot);
+        _vaultRoot = vaultRoot;
         _expandedDirectoryPaths = expandedDirectoryPaths;
         _announce = announce;
         _announceRendered = announceRendered ?? (_ => { });

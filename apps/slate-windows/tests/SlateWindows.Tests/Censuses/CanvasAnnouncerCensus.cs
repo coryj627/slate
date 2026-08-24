@@ -109,19 +109,28 @@ public sealed class CanvasAnnouncerCensus
     public void TheAttachFunnelDocCommentNamesEveryCallSite()
     {
         const string funnel = "AttachTabDocumentsIfNeeded";
-        string[] partials =
-        [
-            "WorkspaceViewModel.cs",
-            "WorkspaceViewModel.Bases.cs",
-            "WorkspaceViewModel.Layout.cs",
-            "WorkspaceViewModel.Persistence.cs",
-            "WorkspaceViewModel.History.cs",
-        ];
+
+        // The file set is DERIVED, not listed: a call site moving into a
+        // new partial (say the canvas one) would have escaped a
+        // hardcoded list while the count floor still passed.
+        string[] partials = Directory
+            .EnumerateFiles(
+                SourceText.ShellSourceRoot(),
+                "WorkspaceViewModel*.cs",
+                SearchOption.AllDirectories)
+            .OrderBy(file => file, StringComparer.Ordinal)
+            .ToArray();
+        Assert.True(
+            partials.Length >= 5,
+            $"only {partials.Length} WorkspaceViewModel partials were found; the "
+            + "scrape would be reading almost nothing.");
 
         var callSites = new HashSet<string>(StringComparer.Ordinal);
         foreach (string partial in partials)
         {
-            CSharpSource source = CSharpSource.Load(partial);
+            CSharpSource source = CSharpSource.Load(
+                Path.GetRelativePath(SourceText.ShellSourceRoot(), partial)
+                    .Split(Path.DirectorySeparatorChar));
             foreach (InvocationExpressionSyntax invocation in source.Root
                 .DescendantNodes()
                 .OfType<InvocationExpressionSyntax>())
@@ -139,39 +148,48 @@ public sealed class CanvasAnnouncerCensus
             }
         }
 
-        // The guard's own sanity: a rename that made the scrape find
+        // The guard's own premise: a rename that made the scrape find
         // nothing would otherwise pass with two empty sets.
         Assert.True(
             callSites.Count >= 5,
             $"only {callSites.Count} call sites of {funnel} were found; the W4-6 "
-            + "lesson is that sweeps miss sites, and a scrape that finds fewer "
-            + "than the recorded five is either a real removal or a broken query.");
+            + "lesson is that sweeps miss sites, and a scrape finding fewer than "
+            + "the recorded five is either a real removal or a broken query.");
 
+        // The comment's own list is SCRAPED, not probed against a fixed
+        // set of names — a stale comment naming a sixth, nonexistent
+        // site used to pass, because nothing ever read what it said.
         MethodDeclarationSyntax declaration =
             CSharpSource.Load("WorkspaceViewModel.Bases.cs").Method(funnel);
         string docComment = declaration.GetLeadingTrivia().ToFullString();
-        var named = callSites
-            .Where(site => docComment.Contains(site, StringComparison.Ordinal))
-            .ToHashSet(StringComparer.Ordinal);
+        // Only the <summary>: that is where the enumeration lives, and
+        // the <remarks> paragraph is prose about the history and the
+        // guard, which cites names that are not call sites.
+        System.Text.RegularExpressions.Match summary =
+            System.Text.RegularExpressions.Regex.Match(
+                docComment,
+                @"<summary>(.*?)</summary>",
+                System.Text.RegularExpressions.RegexOptions.Singleline);
+        Assert.True(
+            summary.Success,
+            $"{funnel} has no <summary> for the call-site list to live in.");
+        var named = new HashSet<string>(
+            System.Text.RegularExpressions.Regex
+                .Matches(summary.Groups[1].Value, @"<c>([A-Za-z_][A-Za-z0-9_]*)</c>")
+                .Select(match => match.Groups[1].Value),
+            StringComparer.Ordinal);
+
         Assert.True(
             named.SetEquals(callSites),
-            $"{funnel}'s doc comment does not name every call site. Missing: "
-            + string.Join(", ", callSites.Except(named)));
+            $"{funnel}'s doc comment and its real call sites disagree. "
+            + $"Named but not a call site: {Join(named.Except(callSites))}. "
+            + $"A call site but not named: {Join(callSites.Except(named))}.");
+    }
 
-        // And the other direction: a comment that keeps naming a site
-        // which no longer calls the funnel is the same lie inverted.
-        foreach (string mentioned in new[]
-        {
-            "TryOpenItem", "AddTab", "DuplicateActiveTab", "RestoreNode",
-            "ReloadOpenTabFromDisk",
-        })
-        {
-            Assert.True(
-                docComment.Contains(mentioned, StringComparison.Ordinal)
-                    == callSites.Contains(mentioned),
-                $"{funnel}'s doc comment and its real call sites disagree about "
-                + $"{mentioned}.");
-        }
+    private static string Join(IEnumerable<string> names)
+    {
+        string joined = string.Join(", ", names.OrderBy(n => n, StringComparer.Ordinal));
+        return joined.Length == 0 ? "(none)" : joined;
     }
 
     private static IEnumerable<string> CanvasSources()
