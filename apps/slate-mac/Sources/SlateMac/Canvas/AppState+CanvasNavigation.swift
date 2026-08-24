@@ -62,6 +62,12 @@ extension AppState {
     /// | `.loading` | `.loading` (VA-2) |
     /// | `.degraded`, `.failed`, `.retargetFailed` | `.notReadable` |
     ///
+    /// A verb may still owe its OWN question first — see
+    /// `canvasAnsweredMissingSelection`, which outranks this table on
+    /// any state whose retained rows the container actually renders
+    /// (`.ready` and `.retargetFailed`). This is what each state owes
+    /// once that question is settled.
+    ///
     /// This exists because the alternative did not survive contact:
     /// three review rounds in a row found a member missing from a
     /// handwritten list, or a state missing from a handwritten
@@ -130,17 +136,24 @@ extension AppState {
     /// question before the state's — but only on a canvas whose
     /// snapshot the user is actually looking at.
     ///
-    /// That is `.ready`, the reopening window included: its outline and
-    /// selection are on screen, so "Nothing selected." is both truthful
-    /// and more useful there than "reopening". Every other state either
-    /// cleared its snapshot (`.degraded`) or never built one, so a
-    /// selection question has nothing to be about and the mapping's
-    /// sentence is the only honest answer — which is why this is gated
-    /// on the state rather than run unconditionally.
+    /// "Actually looking at" is `LoadState.rendersRetainedSnapshot`,
+    /// which is derived from `CanvasContainerView`'s own switch and
+    /// pinned against it by a guard. It is NOT `.ready`: writing the
+    /// condition out by hand made this gate miss `.retargetFailed`,
+    /// whose retained rows the container renders read-only and whose
+    /// navigation is palette-reachable, so a no-selection press there
+    /// answered with the state instead of the caret (codex 0b round 5 —
+    /// the curated-condition class, again).
+    ///
+    /// Where the predicate is false the snapshot is not on screen at
+    /// all, so a selection question has nothing to be about and the
+    /// mapping's sentence is the only honest answer.
     ///
     /// Returns true HAVING ANNOUNCED, so the caller returns.
     func canvasAnsweredMissingSelection(_ doc: CanvasDocument) -> Bool {
-        guard case .ready = doc.state, doc.selection.selected == nil else { return false }
+        guard doc.state.rendersRetainedSnapshot, doc.selection.selected == nil else {
+            return false
+        }
         canvasAnnounceSelectionUnresolvable()
         return true
     }

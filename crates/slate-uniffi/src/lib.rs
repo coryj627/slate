@@ -13981,5 +13981,241 @@ mod canvas_mirror_tests {
             stale.is_empty(),
             "these exclusions no longer call any canvas read query — delete them: {stale:?}"
         );
+
+        // The selection question and the document question are a
+        // PRECEDENCE, not two independent checks. A verb that can say
+        // "Nothing selected." must ask that FIRST, through the one gate
+        // that consults the snapshot-visibility predicate; announcing it
+        // on some other path is how a verb ends up reciting the state's
+        // sentence at a user who is looking at rows.
+        //
+        // This also holds the mac test's two verb groups to the code:
+        // "selection-bearing" is not a list anyone maintains, it is the
+        // set of functions this assertion admits.
+        const ANNOUNCER: &str = "canvasAnnounceSelectionUnresolvable";
+        const PRECEDENCE_GATE: &str = "canvasAnsweredMissingSelection";
+        let announcing: Vec<&str> = bodies
+            .iter()
+            .filter(|(name, body)| name.as_str() != ANNOUNCER && body.contains(ANNOUNCER))
+            .map(|(name, _)| name.as_str())
+            .collect();
+        assert!(
+            announcing.len() >= 4,
+            "expected at least the four selection-bearing verbs to announce an \
+             unresolvable selection, found {announcing:?}; the scan or the name is wrong \
+             and this assertion would pass vacuously"
+        );
+        let unordered: Vec<&str> = announcing
+            .iter()
+            .copied()
+            .filter(|name| {
+                *name != PRECEDENCE_GATE
+                    && !bodies
+                        .get(*name)
+                        .is_some_and(|body| body.contains(PRECEDENCE_GATE))
+            })
+            .collect();
+        assert!(
+            unordered.is_empty(),
+            "these mac verbs can say \"Nothing selected.\" without asking the selection \
+             question first via `{PRECEDENCE_GATE}`, so on a state whose snapshot is on \
+             screen they would answer with the state's sentence instead: {unordered:?}"
+        );
+    }
+
+    /// The snapshot-visibility predicate says what the container's
+    /// switch actually does.
+    ///
+    /// `LoadState.rendersRetainedSnapshot` decides whether a verb's
+    /// selection question outranks the state's, and its truth is a
+    /// claim about the VIEW: does `CanvasContainerView` render retained
+    /// rows for this state? Written out by hand it was wrong —
+    /// `.retargetFailed` renders its snapshot read-only and the
+    /// predicate said otherwise (codex 0b round 5). So it is pinned
+    /// against the switch here instead of trusted.
+    ///
+    /// The reachability is transitive within the one file: an arm calls
+    /// a helper, the helper may call another, and reaching `canvasBody`
+    /// is what "renders rows" means. Same doctrine as the other scans —
+    /// it can be defeated by indirection this file does not contain,
+    /// and it cannot go quietly green, because it asserts it found
+    /// every case arm and that both sides are non-empty.
+    #[test]
+    fn the_snapshot_visibility_predicate_matches_the_container_switch() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mac = manifest.join("../../apps/slate-mac/Sources/SlateMac/Canvas");
+        let view = std::fs::read_to_string(mac.join("CanvasContainerView.swift"))
+            .expect("container source");
+        let document =
+            std::fs::read_to_string(mac.join("CanvasDocument.swift")).expect("document source");
+
+        // --- the view: state -> the identifiers its arm reaches -------
+        let body = view
+            .split_once("switch document.state {")
+            .expect("the container's state switch")
+            .1;
+        let body = body.split_once("\n        }").expect("switch end").0;
+
+        let mut arms: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut current: Option<String> = None;
+        for line in body.lines() {
+            let trimmed = line.trim();
+            if let Some(rest) = trimmed.strip_prefix("case .") {
+                let name: String = rest
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                current = Some(name.clone());
+                arms.entry(name).or_default();
+                continue;
+            }
+            if let Some(name) = &current {
+                let mut identifier = String::new();
+                for character in trimmed.chars() {
+                    if character.is_alphanumeric() || character == '_' {
+                        identifier.push(character);
+                    } else {
+                        if !identifier.is_empty() {
+                            arms.get_mut(name).expect("arm").push(identifier.clone());
+                            identifier.clear();
+                        }
+                    }
+                }
+                if !identifier.is_empty() {
+                    arms.get_mut(name).expect("arm").push(identifier);
+                }
+            }
+        }
+        assert_eq!(
+            arms.len(),
+            5,
+            "expected one arm per LoadState case in the container switch, found {:?}",
+            arms.keys().collect::<Vec<_>>()
+        );
+
+        // --- transitive reachability to `canvasBody` ------------------
+        // Every `func`/`var` in the view file, with the identifiers its
+        // own body mentions.
+        let mut definitions: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut defining: Option<(String, i32)> = None;
+        let mut entered = false;
+        let mut depth: i32 = 0;
+        for line in view.lines() {
+            let code = line.trim().split("//").next().unwrap_or("");
+            if defining.is_none() {
+                for keyword in ["func ", "var "] {
+                    if let Some(rest) = code.split_once(keyword)
+                        && let Some(name) = rest
+                            .1
+                            .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                            .find(|s| !s.is_empty())
+                    {
+                        defining = Some((name.to_string(), depth));
+                        entered = false;
+                        break;
+                    }
+                }
+            } else if let Some((name, _)) = &defining {
+                let name = name.clone();
+                let mut identifier = String::new();
+                for character in code.chars() {
+                    if character.is_alphanumeric() || character == '_' {
+                        identifier.push(character);
+                    } else {
+                        if !identifier.is_empty() {
+                            definitions
+                                .entry(name.clone())
+                                .or_default()
+                                .push(std::mem::take(&mut identifier));
+                        }
+                    }
+                }
+                if !identifier.is_empty() {
+                    definitions.entry(name).or_default().push(identifier);
+                }
+            }
+            depth += code.matches('{').count() as i32;
+            depth -= code.matches('}').count() as i32;
+            if let Some((_, opened)) = &defining {
+                if depth > *opened {
+                    entered = true;
+                } else if entered {
+                    defining = None;
+                }
+            }
+        }
+        assert!(
+            definitions.contains_key("canvasBody"),
+            "the container no longer defines `canvasBody`; this guard is measuring nothing"
+        );
+
+        fn reaches(
+            start: &[String],
+            target: &str,
+            definitions: &BTreeMap<String, Vec<String>>,
+            seen: &mut BTreeSet<String>,
+        ) -> bool {
+            for name in start {
+                if name == target {
+                    return true;
+                }
+                if !seen.insert(name.clone()) {
+                    continue;
+                }
+                if let Some(body) = definitions.get(name)
+                    && reaches(body, target, definitions, seen)
+                {
+                    return true;
+                }
+            }
+            false
+        }
+
+        let mut rendered: BTreeSet<String> = BTreeSet::new();
+        for (state, mentions) in &arms {
+            let mut seen = BTreeSet::new();
+            if reaches(mentions, "canvasBody", &definitions, &mut seen) {
+                rendered.insert(state.clone());
+            }
+        }
+
+        // --- the predicate's own true set ----------------------------
+        let predicate = document
+            .split_once("var rendersRetainedSnapshot: Bool {")
+            .expect("the predicate")
+            .1;
+        let predicate = predicate
+            .split_once("return true")
+            .expect("the predicate's true arm")
+            .0;
+        let declared: BTreeSet<String> = predicate
+            .split(".case")
+            .flat_map(|chunk| chunk.split("case "))
+            .flat_map(|chunk| chunk.split(','))
+            .filter_map(|chunk| {
+                let chunk = chunk.trim();
+                chunk.strip_prefix('.').map(|name| {
+                    name.chars()
+                        .take_while(|c| c.is_alphanumeric() || *c == '_')
+                        .collect::<String>()
+                })
+            })
+            .filter(|name| !name.is_empty())
+            .collect();
+
+        assert!(
+            !rendered.is_empty() && !declared.is_empty(),
+            "one side of the comparison is empty, so this guard would pass vacuously: \
+             view {rendered:?}, predicate {declared:?}"
+        );
+        assert_eq!(
+            declared, rendered,
+            "`LoadState.rendersRetainedSnapshot` disagrees with what \
+             `CanvasContainerView` renders. The view is the authority: a state whose arm \
+             reaches `canvasBody` shows retained rows and its selection question outranks \
+             the state's sentence."
+        );
     }
 }

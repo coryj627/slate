@@ -326,21 +326,42 @@ final class CanvasNavigatorTests: XCTestCase {
     ///
     /// `LoadState` is `.loading`, `.ready`, `.degraded`, `.failed`,
     /// `.retargetFailed`; every non-ready one is materialized here
-    /// through its real lifecycle method.
+    /// through its real lifecycle method, and each is driven in BOTH
+    /// selection columns — present and absent — because the two
+    /// questions have different answers wherever the state's snapshot
+    /// is actually on screen.
     func testEveryNonReadyLoadStateAnswersWhatTheMappingSays() async throws {
-        /// Drive every VA member and assert it speaks the mapping's
-        /// note — once — and moved no caret.
+        /// Drive every VA member in both selection columns and assert
+        /// each speaks what the recorded precedence owes — once — and
+        /// moved no caret.
+        ///
+        /// Column 1 (a card is selected): every member speaks the
+        /// state's note.
+        ///
+        /// Column 2 (nothing selected): the selection-bearing verbs
+        /// answer the SELECTION question wherever the user can see rows
+        /// to select in, and the state's note where they cannot. Which
+        /// states those are is read from `rendersRetainedSnapshot` —
+        /// the same predicate the gate asks, itself checked against
+        /// `CanvasContainerView` by a uniffi guard — so this test
+        /// cannot re-curate the matrix it is meant to be policing.
+        /// Members with no selection precondition speak the state's
+        /// note in both columns.
         func driveMembers(_ label: String, _ state: AppState, _ doc: CanvasDocument) {
             let note = state.canvasReadRefusal(for: doc)
             XCTAssertNotNil(note, "\(label): a non-ready state owes a sentence")
-            let expected = note.map {
+            let stateSentence = note.map {
                 [a11yRender(event: .canvas(event: .canvasStatus(note: $0))).text]
             }
+            let selectionQuestion = [
+                a11yRender(event: .canvas(event: .canvasStatus(note: .nothingSelected))).text
+            ]
             XCTAssertNil(
                 state.activeCanvasDocument,
                 "\(label): `.ready` is the gate the verbs pass")
-            let selectionBefore = doc.selection.selected
-            func check(_ verb: String, _ body: () -> Void) {
+
+            func check(_ verb: String, _ expected: [String]?, _ body: () -> Void) {
+                let selectionBefore = doc.selection.selected
                 self.posted = []
                 body()
                 state.canvasAnnouncer.flushForTests()
@@ -349,22 +370,53 @@ final class CanvasNavigatorTests: XCTestCase {
                     doc.selection.selected, selectionBefore,
                     "\(label) / \(verb): selection moved")
             }
-            check("enter group") { state.canvasEnterGroup() }
-            check("exit group") { state.canvasExitGroup() }
-            check("trace path") { state.canvasTracePath() }
-            check("fit canvas") { state.canvasFitCanvas() }
-            check("where am I") { state.canvasWhereAmI() }
-            check("follow connection") { state.canvasFollowConnection(forward: true) }
-            // The filter family is a member too, and it reaches the
-            // same mapping by its own path.
-            doc.filterText = "gamma"
-            check("filter count") { state.canvasAnnounceFilterCount(doc: doc) }
-            doc.filterText = ""
+
+            /// The four verbs that ask about the selection before the
+            /// document, and the members that never do.
+            /// `every_mac_canvas_read_is_gated_or_named` holds this
+            /// split to the code: a verb that can say "Nothing
+            /// selected." is exactly a verb that gates on it first.
+            let selectionBearing: [(String, () -> Void)] = [
+                ("enter group", { state.canvasEnterGroup() }),
+                ("exit group", { state.canvasExitGroup() }),
+                ("trace path", { state.canvasTracePath() }),
+                ("follow connection", { state.canvasFollowConnection(forward: true) }),
+            ]
+            let selectionFree: [(String, () -> Void)] = [
+                ("fit canvas", { state.canvasFitCanvas() }),
+                ("where am I", { state.canvasWhereAmI() }),
+            ]
+
+            func runColumn(_ column: String, selectionBearingOwes: [String]?) {
+                for (verb, body) in selectionBearing {
+                    check("\(column) / \(verb)", selectionBearingOwes, body)
+                }
+                for (verb, body) in selectionFree {
+                    check("\(column) / \(verb)", stateSentence, body)
+                }
+                // The filter family is a member too, and it reaches the
+                // same mapping by its own path. It reads no selection,
+                // so it owes the state's note in both columns.
+                doc.filterText = "gamma"
+                check("\(column) / filter count", stateSentence) {
+                    state.canvasAnnounceFilterCount(doc: doc)
+                }
+                doc.filterText = ""
+            }
+
+            doc.selection.selected = "g1"
+            runColumn("selected", selectionBearingOwes: stateSentence)
+
+            doc.selection.selected = nil
+            runColumn(
+                "no selection",
+                selectionBearingOwes: doc.state.rendersRetainedSnapshot
+                    ? selectionQuestion : stateSentence)
         }
 
-        // Selections are set AFTER each transition: a prepared install
-        // resets interaction state, so setting one first would leave
-        // `selectionBefore` nil and make the caret check vacuous.
+        // `driveMembers` sets each column's selection itself, AFTER the
+        // transition: a prepared install resets interaction state, so a
+        // selection set before it would not survive to be asserted on.
 
         // --- .loading — VA-2 ------------------------------------------
         let loadingState = try await makeState()
@@ -373,7 +425,6 @@ final class CanvasNavigatorTests: XCTestCase {
         guard case .loading = loading.state else {
             return XCTFail("expected .loading, got \(loading.state)")
         }
-        loading.selection.selected = "g1"
         // Two spot-checks are handwritten ON PURPOSE, here and at
         // `.failed` below. Everything else in this test derives its
         // expectation from the mapping, which is what stops the test
@@ -396,8 +447,11 @@ final class CanvasNavigatorTests: XCTestCase {
         XCTAssertFalse(
             trashed.outline.isEmpty,
             "the published snapshot survives — which is why it looked navigable")
-        trashed.selection.selected = "g1"
         XCTAssertEqual(trashedState.canvasReadRefusal(for: trashed), .notReadable)
+        XCTAssertFalse(
+            trashed.state.rendersRetainedSnapshot,
+            "the rows survive but the view shows only the message, so there is "
+                + "nothing on screen to have a selection in")
         driveMembers("failed", trashedState, trashed)
 
         // --- .degraded — `.notReadable` -------------------------------
@@ -410,10 +464,10 @@ final class CanvasNavigatorTests: XCTestCase {
         }
         XCTAssertTrue(
             degraded.outline.isEmpty, "a degraded load CLEARS the outline")
-        degraded.selection.selected = "g1"
         driveMembers("degraded", degradedState, degraded)
 
-        // --- .retargetFailed — `.notReadable` -------------------------
+        // --- .retargetFailed — `.notReadable`, but the snapshot IS on
+        // screen, so its selection question outranks that note --------
         let failedState = try await makeState()
         let failed = try XCTUnwrap(failedState.activeCanvasDocument)
         let reservation = failed.beginBatchRetarget(to: failed.path)
@@ -427,7 +481,21 @@ final class CanvasNavigatorTests: XCTestCase {
         }
         XCTAssertFalse(
             failed.outline.isEmpty, "the last good snapshot is retained, not blanked")
-        failed.selection.selected = "g1"
+        // The predicate is pinned by hand for the one state where it is
+        // true and the state is not `.ready`. Without this, a predicate
+        // that went false everywhere would take the derived
+        // no-selection column down with it and the whole matrix would
+        // collapse to the state's note while still passing.
+        XCTAssertTrue(
+            failed.state.rendersRetainedSnapshot,
+            "the retained snapshot is rendered read-only, so a caret lives in it")
+        failed.selection.selected = nil
+        posted = []
+        failedState.canvasEnterGroup()
+        failedState.canvasAnnouncer.flushForTests()
+        XCTAssertEqual(
+            posted, ["Nothing selected."],
+            "the selection question wins over the state's sentence here")
         driveMembers("retargetFailed", failedState, failed)
     }
 

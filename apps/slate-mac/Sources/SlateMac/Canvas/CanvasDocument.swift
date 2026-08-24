@@ -184,6 +184,35 @@ final class CanvasDocument: ObservableObject {
         /// published snapshot remains visible but has no writable native handle;
         /// retrying the same retarget generation can restore it.
         case retargetFailed(String)
+
+        /// Whether `CanvasContainerView` renders the document's RETAINED
+        /// ROWS for this state — i.e. whether the user is looking at an
+        /// outline they can have a selection *in*.
+        ///
+        /// **Derived from the view, not from the state's name.** The
+        /// container's `body` switch sends `.ready` to `readyBody` and
+        /// `.retargetFailed` to `retargetFailureSnapshot`, and both
+        /// reach `canvasBody`; `.loading` shows a spinner, and
+        /// `.degraded` / `.failed` show `stateMessage` only — those
+        /// three never render a row even when the data survives
+        /// (`markMovedToTrash` keeps `outline`, and it is still not
+        /// shown). `the_snapshot_visibility_predicate_matches_the_container_switch`
+        /// in `slate-uniffi` parses that switch and fails if this list
+        /// and the view ever disagree.
+        ///
+        /// The navigator's selection-precedence gate asks THIS rather
+        /// than testing `.ready`: a verb's own selection question
+        /// outranks the state's wherever the snapshot is on screen, and
+        /// approximating that with one state name is what codex 0b
+        /// round 5 caught.
+        var rendersRetainedSnapshot: Bool {
+            switch self {
+            case .ready, .retargetFailed:
+                return true
+            case .loading, .degraded, .failed:
+                return false
+            }
+        }
     }
 
     @Published private(set) var state: LoadState = .loading

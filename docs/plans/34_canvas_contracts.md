@@ -1096,11 +1096,44 @@ answers its OWN preconditions, and only then asks the mapping —
 otherwise the eager announcement inverts the recorded precedence and a
 no-selection press in the reopening window says "reopening" where m6
 says "Nothing selected." That precedence is itself one function,
-`canvasAnsweredMissingSelection`, gated on `.ready`: the reopening
-window keeps its snapshot on screen, so a selection question is
-meaningful there, while a state that cleared or never built a snapshot
-has nothing for such a question to be about and the mapping's sentence
-is the only honest answer. Where-am-I and fit canvas take admission
+`canvasAnsweredMissingSelection`, and **what it asks is a question about
+the VIEW**: `LoadState.rendersRetainedSnapshot` — does
+`CanvasContainerView` put this state's retained rows on screen? A
+selection question is meaningful exactly where the user can see rows to
+have a caret in; everywhere else the mapping's sentence is the only
+honest answer. The predicate was first written as `state == .ready`,
+which was wrong: `.retargetFailed` renders its snapshot read-only, so a
+no-selection press there said "cannot be read" where the selection-first
+rule requires "Nothing selected." (codex 0b round 5). The per-state
+truth is derived from the container's own switch, not from the state's
+name:
+
+| State | Container arm | Renders retained rows | No-selection press says |
+|---|---|---|---|
+| `.ready` | `readyBody` → `canvasBody` | yes | "Nothing selected." |
+| `.retargetFailed` | `retargetFailureSnapshot` → banner + `canvasBody(readOnly: true)` | yes | "Nothing selected." |
+| `.loading` | `ProgressView` | no | `.loading` |
+| `.degraded` | `degradedState` → `stateMessage` | no | `.notReadable` |
+| `.failed` | `stateMessage` | no | `.notReadable` |
+
+`.failed` is the case worth stating plainly, because the earlier
+analysis stopped one step short: a trashed canvas KEEPS its outline
+(`markMovedToTrash` does not blank it), yet the view renders only the
+message, so there is nothing on screen for a selection question to be
+about and `.notReadable` is right. Data survival is not visibility. The
+mapping's `.notReadable` arm therefore stands unchanged for every
+predicate-false state; only the precedence moved.
+
+Two guards hold this down, both mutation-verified in both directions.
+`the_snapshot_visibility_predicate_matches_the_container_switch` parses
+the container's `switch document.state` arms, computes transitive
+reachability to `canvasBody` within the file, and fails if the predicate
+and the view disagree — the VIEW is the authority, so changing what a
+state renders forces the predicate to follow. And
+`every_mac_canvas_read_is_gated_or_named` gained a second assertion: a
+verb whose body can announce `.nothingSelected` must reach it through
+`canvasAnsweredMissingSelection`, so "the selection-bearing verbs" is a
+derived set rather than a list in a test. Where-am-I and fit canvas take admission
 first: neither has a precondition that outranks the state (Where-am-I's
 "nothing selected" falls back to the first row by design). The last row is Where-am-I's old per-state answer becoming
 everyone's; it also closes the announcement half of the t0 §5 gap filed
@@ -2015,14 +2048,26 @@ every deleted symbol was re-grepped to zero afterwards.
   still narrates in the reopening window (the filtered outline serves
   the displayed rows), and mutations are still refused audibly
   (`CanvasMutationRefusal::Reopening`). A verb's own selection question
-  still outranks the state's on a canvas whose snapshot is on screen,
-  which is `.ready` including that window.
+  still outranks the state's on a canvas whose snapshot is on screen —
+  which is `.ready` including that window, AND `.retargetFailed`, whose
+  retained rows the container renders read-only. Round 5 corrected that
+  last clause: it had been written as "`.ready`", a hand-curated
+  restatement of a fact that belongs to the view, and it was wrong by
+  one state. "On screen" is now `LoadState.rendersRetainedSnapshot`,
+  derived from `CanvasContainerView`'s switch and pinned to it by
+  `the_snapshot_visibility_predicate_matches_the_container_switch`. Per
+  the same lesson, which verbs ask that question is no longer a list
+  either — `every_mac_canvas_read_is_gated_or_named` asserts that any
+  verb able to announce `.nothingSelected` reaches it through the gate.
 
   Silence is a test failure now:
   `testOnlyTheBatchRetargetWindowPairsReadyWithNoHandle` asserts the
   sentence at each VA-1 member, and
   `testEveryNonReadyLoadStateAnswersWhatTheMappingSays` drives every
-  non-ready state with its expectations taken FROM the mapping.
+  non-ready state with its expectations taken FROM the mapping, in BOTH
+  selection columns — the round-5 miss was a test that forced a
+  selection before exercising each state and so never asked the
+  absent-selection half.
 
   **Retaining the detached handle for READS is refused permanently, and
   this is the reasoning so it is not re-proposed.** It is the cheapest
