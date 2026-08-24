@@ -2580,11 +2580,28 @@ struct are DELETED (codex round 5, controller ruling: take the strongest
 form). `IdentityOfHandle` is now `FileIdInfo` or `null`, and a failed
 identity query REFUSES the media like every other failure in this gate.
 
-**The minimum-OS rationale.** Deleting the fallback costs no supported
-platform: this app is .NET 10 WPF, whose minimum OS is Windows 10 1607,
-which postdates `FileIdInfo` (Windows 8) by years. The fallback served no
-host the app runs on; its only effect was to exist, and its existence WAS
-the mixed-method class.
+**The real constraint is the FILESYSTEM, not the OS version — and it has
+an availability cost, stated plainly.** An earlier draft of this row
+justified the deletion by minimum OS (Windows 10 1607 postdates
+`FileIdInfo`'s Windows 8). That argument is the wrong KIND: `FileIdInfo`
+is not a function of OS version but of what the volume's filesystem
+answers, and FAT32 and exFAT commonly fail it, as do some redirectors and
+virtual filesystems. The correct statement:
+
+- **Supported volumes for opening vault media are NTFS and ReFS.**
+- **On a vault whose volume does not answer `FileIdInfo` — a FAT32/exFAT
+  stick, some network or virtual mounts — every media open REFUSES,
+  audibly.**
+- This is a **known, recorded fail-CLOSED limitation**, and a real
+  availability regression against the round-4 code, which would have
+  opened those files through the legacy index.
+
+It is accepted deliberately. The only alternative is deciding containment
+on a weaker identity, which is precisely the fail-OPEN codex round 5
+killed: a per-call downgrade fires exactly when something is already
+wrong. Refusing to open a photo is recoverable; launching a file that
+escaped the vault is not. The fallback's existence WAS the mixed-method
+class, so the choice is refusal or a hole, and this gate refuses.
 
 `IdentityIsThe128BitFileIdInfoNotThe64BitIndex` pins that the 128-bit
 class succeeds on a live handle (mutation-verified against a wrong class
@@ -2710,6 +2727,14 @@ codex named is closed. Round 4 found three fail modes in the identity/
 snapshot logic (a check→capture window, a ReFS-unsafe 64-bit id, a
 mis-applied depth cap) and round 5 found that round 4's own fix for the
 second one still carried a per-call downgrade; all four are fixed.
+
+**One recorded fail-CLOSED limitation, not a residual risk.** On a vault
+volume whose filesystem does not answer `FileIdInfo` (FAT32, exFAT, some
+redirectors and virtual filesystems), media open refuses audibly rather
+than downgrading to a weaker identity — supported volumes are NTFS/ReFS.
+Listed here because it is a real availability regression introduced by
+round 5 and belongs where the other bounded statements live; it is the
+deliberate price of closing the fail-open.
 
 **The capability-fallback sweep (round 5 #4).** No primitive in this gate
 weakens itself on failure. Identity is `FileIdInfo` or refusal — no second
@@ -3789,6 +3814,10 @@ predicate; this round replaces the substrate.
   (`BY_HANDLE_FILE_INFORMATION`: volume serial + file index) captured at
   check and re-compared immediately before launch. The residual shrinks
   to the re-open→ShellExecute gap and is recorded.
+  > **Superseded:** the identity primitive named here is no longer the one
+  > shipped. Round 4 replaced it with the 128-bit `FILE_ID_INFO` (ReFS
+  > safety) and round 5 deleted the `BY_HANDLE_FILE_INFORMATION` path
+  > entirely — see the round-5 entry and CD-38.
 - **Defect 3 (case-sensitive-directory sibling).** The `GetRelativePath`
   OrdinalIgnoreCase prefix falsely accepted an adjacent case-different
   directory under per-directory case sensitivity. Ended by identity: the
@@ -3897,11 +3926,18 @@ something is already wrong. Strictly worse than having no fallback.
 
 **Controller ruling: strongest form — delete it.** `IdentityOfHandle` is
 now `FileIdInfo` or `null`; the `GetFileInformationByHandle` P/Invoke, its
-`BY_HANDLE_FILE_INFORMATION` struct and the legacy test seam are gone. The
-minimum-OS rationale is recorded in CD-38: .NET 10 WPF's minimum host
-(Windows 10 1607) postdates `FileIdInfo` (Windows 8) by years, so the
-fallback served no supported platform — deleting it is removing dead code,
-not narrowing support.
+`BY_HANDLE_FILE_INFORMATION` struct and the legacy test seam are gone.
+
+**The rationale, corrected in the micro-round that followed.** My first
+write-up justified the deletion by minimum OS — that .NET 10 WPF's Windows
+10 1607 floor postdates `FileIdInfo`'s Windows 8 — and concluded the
+deletion cost nothing. Wrong KIND of argument: `FileIdInfo` depends on the
+FILESYSTEM, not the OS version, and FAT32/exFAT and some redirectors and
+virtual filesystems do not answer it. So the deletion DOES have a cost:
+supported media-open volumes are NTFS/ReFS, and on any other volume every
+media open now refuses audibly — a fail-CLOSED availability regression
+against round 4, recorded in CD-38 rather than glossed. Accepted
+deliberately, because the alternative is the fail-open just killed.
 
 - **The failure-injection fact.**
   `IdentityQueryFailureRefusesRatherThanDowngrading` injects a

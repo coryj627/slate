@@ -395,12 +395,22 @@ internal static class CanvasMediaPolicy
     /// failure of the primary query — not just an old host — silently
     /// downgrades that one read to the non-unique index, which on ReFS is
     /// a fail-open, and it does so exactly when something is already
-    /// wrong. Nor is a per-host capability probe warranted: this app is
-    /// .NET 10 WPF, whose minimum OS (Windows 10 1607) postdates
-    /// <c>FileIdInfo</c> (Windows 8) by years, so the fallback served no
-    /// supported platform. Its mere existence WAS the mixed-method class.
-    /// A failure here refuses the media, audibly, like every other
-    /// failure in this gate.
+    /// wrong. Its mere existence WAS the mixed-method class.
+    /// </para>
+    /// <para>
+    /// <b>The constraint is the FILESYSTEM, not the OS version.</b>
+    /// <c>FileIdInfo</c> is not answered by every filesystem: FAT32 and
+    /// exFAT commonly fail it, as do some redirectors and virtual
+    /// filesystems. So the supported volumes for opening vault media are
+    /// NTFS and ReFS. On a vault whose volume does not answer
+    /// <c>FileIdInfo</c> — a FAT32/exFAT stick, some network or virtual
+    /// mounts — <b>every media open refuses, audibly</b>. That is a known,
+    /// recorded fail-CLOSED limitation, and it is a real availability
+    /// regression against the round-4 code, which would have opened those
+    /// files via the legacy index. It is accepted deliberately: the only
+    /// alternative is deciding containment on a weaker identity, which is
+    /// the fail-OPEN codex round 5 killed. Refusing to open a photo is
+    /// recoverable; launching a file that escaped the vault is not.
     /// </para>
     /// </remarks>
     private static FileIdentity? IdentityOfHandle(SafeFileHandle handle)
@@ -583,6 +593,14 @@ internal static class CanvasMediaPolicy
     /// mutation `IdentityQueryFailureRefusesRatherThanDowngrading`
     /// detects.
     /// </remarks>
+    /// <seealso cref="BetweenCheckAndLaunchForTests"/>
+    // Static mutable state: while this is set, EVERY identity query in the
+    // process refuses. That is safe only because the test assembly runs
+    // serially — `[assembly: CollectionBehavior(DisableTestParallelization
+    // = true)]` in AssemblyInfo.cs. If assembly-wide parallelization is
+    // ever enabled, this seam (and BetweenCheckAndLaunchForTests, which has
+    // the same exposure) must become scoped state rather than a static
+    // flag, or it will fail unrelated facts nondeterministically.
     internal static bool FailIdentityQueryForTests { get; set; }
 
     /// <summary>Test seam over the volume-GUID resolution (Major-4): the

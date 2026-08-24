@@ -125,13 +125,25 @@ public sealed class CanvasMediaGateCensus
 
     /// <summary>
     /// Round 5: there is exactly ONE identity method in the gate. The
-    /// legacy 64-bit <c>BY_HANDLE_FILE_INFORMATION</c> path is DELETED,
-    /// not merely unreached — a per-call fallback downgraded any transient
-    /// primary failure to the ReFS-non-unique <c>nFileIndex</c>, and the
-    /// app's minimum OS postdates <c>FileIdInfo</c> by years, so it served
-    /// no supported platform. Its existence WAS the mixed-method class, so
-    /// the symbols must be absent rather than dormant.
+    /// legacy 64-bit <c>BY_HANDLE_FILE_INFORMATION</c> path is deleted — a
+    /// per-call fallback downgraded any transient primary failure to the
+    /// ReFS-non-unique <c>nFileIndex</c>, and its existence WAS the
+    /// mixed-method class.
     /// </summary>
+    /// <remarks>
+    /// What this actually proves, stated precisely: it is an
+    /// IDENTIFIER-USAGE scan, so it shows the legacy names appear nowhere
+    /// in the gate's syntax tree — neither called nor declared. It does not
+    /// reason about reachability, so "dormant vs live" is not something it
+    /// can distinguish directly. It catches a re-declaration anyway,
+    /// because a reintroduced P/Invoke must name its parameter/return
+    /// STRUCT type, and that type name is in the banned set — which is how
+    /// the round-5 mutation was caught even though the mutation renamed the
+    /// method itself. A fallback written entirely in terms of new names
+    /// would evade this scan; the behavioural fact
+    /// (<c>IdentityQueryFailureRefusesRatherThanDowngrading</c>) is what
+    /// covers that case, and the two are meant to be read together.
+    /// </remarks>
     [Fact]
     public void TheGateHasExactlyOneIdentityMethod()
     {
