@@ -13990,27 +13990,42 @@ mod canvas_mirror_tests {
         // sentence at a user who is looking at rows.
         const ANNOUNCER: &str = "canvasAnnounceSelectionUnresolvable";
         const PRECEDENCE_GATE: &str = "canvasAnsweredMissingSelection";
-        // The gate itself is excluded alongside the announcer: it
-        // announces BY CONSTRUCTION, so counting it would let the floor
-        // below be met by the gate plus one fewer verb (codex 0b round
-        // 6). What is left is exactly the selection-first verbs.
+
+        // **A verb is selection-first iff it CALLS THE GATE.** That is
+        // the behaviour: the gate announces, so calling it is what makes
+        // "Nothing selected." reachable from a verb, whether or not the
+        // verb also names the announcer itself. Deriving instead from
+        // announcer mentions described only the verbs with their own
+        // throw arms, and left a verb that adopted the gate alone —
+        // most plausibly one already in `selectionFree` — changing no
+        // set anyone compared (codex 0b round 7).
+        //
+        // The gate is excluded from its own set: its declaration line
+        // names it, and it announces by construction, which is also how
+        // the round-6 floor was satisfiable by the gate plus one fewer
+        // verb.
+        let gate_call = format!("{PRECEDENCE_GATE}(");
         let selection_first: BTreeSet<&str> = bodies
+            .iter()
+            .filter(|(name, body)| {
+                name.as_str() != PRECEDENCE_GATE && body.contains(&gate_call)
+            })
+            .map(|(name, _)| name.as_str())
+            .collect();
+
+        // The converse direction, kept: naming the announcer WITHOUT
+        // calling the gate is the original round-5 fault — a verb that
+        // can say "Nothing selected." on some path that never consults
+        // the snapshot-visibility predicate.
+        let unordered: Vec<&str> = bodies
             .iter()
             .filter(|(name, body)| {
                 name.as_str() != ANNOUNCER
                     && name.as_str() != PRECEDENCE_GATE
                     && body.contains(ANNOUNCER)
+                    && !body.contains(&gate_call)
             })
             .map(|(name, _)| name.as_str())
-            .collect();
-        let unordered: Vec<&str> = selection_first
-            .iter()
-            .copied()
-            .filter(|name| {
-                !bodies
-                    .get(*name)
-                    .is_some_and(|body| body.contains(PRECEDENCE_GATE))
-            })
             .collect();
         assert!(
             unordered.is_empty(),
@@ -14102,9 +14117,9 @@ mod canvas_mirror_tests {
         let miscategorized: Vec<&String> = test_free.intersection(&derived).collect();
         assert!(
             miscategorized.is_empty(),
-            "`selectionFree` claims these never ask the selection question, but they \
-             announce `.nothingSelected` in source, so the test expects the state's \
-             sentence where the verb says \"Nothing selected.\": {miscategorized:?}"
+            "`selectionFree` claims these never ask the selection question, but they call \
+             `{PRECEDENCE_GATE}` in source, so the test expects the state's sentence \
+             where the verb says \"Nothing selected.\": {miscategorized:?}"
         );
         let unknown: Vec<&String> = test_free
             .iter()
@@ -14125,6 +14140,25 @@ mod canvas_mirror_tests {
             "`selectionFree` drives these as members of the state mapping, but they do \
              not route through it, so the test's per-state expectations are not theirs \
              to hold: {ungated:?}"
+        );
+
+        // Coverage, stated separately from the equality above: no gate
+        // caller may sit outside the two-column matrix entirely. Today
+        // the equality implies it — `selectionBearing` IS the gate
+        // callers — and it is asserted anyway, because the equality is
+        // the sort of thing a later round relaxes to a subset relation
+        // when some verb wants an exception, and this is the property
+        // that must survive that: a verb able to say "Nothing selected."
+        // is driven in both selection columns by name.
+        let undriven: Vec<&String> = derived
+            .iter()
+            .filter(|name| !test_bearing.contains(*name) && !test_free.contains(*name))
+            .collect();
+        assert!(
+            undriven.is_empty(),
+            "these mac verbs call `{PRECEDENCE_GATE}`, so they can say \"Nothing \
+             selected.\", but the two-column test drives them in neither group — nothing \
+             checks which question they answer per state: {undriven:?}"
         );
     }
 
