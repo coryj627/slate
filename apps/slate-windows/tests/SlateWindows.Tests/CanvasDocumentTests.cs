@@ -805,13 +805,32 @@ public sealed class CanvasDocumentTests : IDisposable
     });
 
     /// <summary>
-    /// Contract A8's UIA surface, pinned locally as well as in the
-    /// journey: the item is a Tree/TreeItem pair with ExpandCollapse
-    /// and SelectionItem from WPF, and Invoke from
-    /// <c>CanvasOutlineItemAutomationPeer</c> — which exists because
-    /// <c>TreeViewItemAutomationPeer</c> implements the first three and
-    /// not the fourth. The journey is CI-arbitrated; this is not.
+    /// Contract A8's UIA surface, read the way ASSISTIVE TECHNOLOGY reads
+    /// it: down <c>treePeer.GetChildren()</c> to the row peers that are
+    /// actually projected into the UIA tree, asserting every pattern on
+    /// those — Tree/TreeItem, ExpandCollapse and SelectionItem from WPF,
+    /// and Invoke from <c>CanvasOutlineRowDataPeer</c>.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The previous version of this fact interrogated the CONTAINER peer
+    /// (<c>CreatePeerForElement(container)</c>) and passed for three
+    /// rounds while the shipped surface was broken. WPF projects each row
+    /// as a <c>TreeViewDataItemAutomationPeer</c>, which implements
+    /// SelectionItem/ExpandCollapse itself and does NOT forward a custom
+    /// Invoke, so a screen reader saw <c>invoke=NULL</c> on every row
+    /// while this test read a peer no client ever sees.
+    /// </para>
+    /// <para>
+    /// That is the supplies-its-own-mechanism false-green class, FOURTH
+    /// instance in this PR, and the reason it survived codex round 6's
+    /// verdict is that the journey which would have caught it had never
+    /// once run past its fixture lookup. The rule this restates: assert on
+    /// the surface the consumer reads, not the object you constructed.
+    /// Mutation-verified — reverting either <c>CreateItemAutomationPeer</c>
+    /// override fails this on <c>invoke=NULL</c>.
+    /// </para>
+    /// </remarks>
     [Fact]
     public void TheTreeItemsCarryTreeSelectionItemExpandCollapseAndInvoke() => RunSta(() =>
     {
@@ -826,26 +845,54 @@ public sealed class CanvasDocumentTests : IDisposable
         Assert.Equal(AutomationControlType.Tree, treePeer.GetAutomationControlType());
         Assert.Equal(CanvasPhrase.OutlineName, treePeer.GetName());
 
+        // The PRODUCTION topology: what a UIA client walks.
+        List<AutomationPeer> rowPeers = treePeer.GetChildren() ?? [];
+        Assert.NotEmpty(rowPeers);
+
         CanvasOutlineRowViewModel group =
             Assert.Single(view.RootsForTests, row => row.Id == "grp");
-        var container = Assert.IsType<CanvasOutlineItem>(
-            view.TreeForTests.ItemContainerGenerator.ContainerFromItem(group));
-        AutomationPeer peer = Assert.IsAssignableFrom<AutomationPeer>(
-            UIElementAutomationPeer.CreatePeerForElement(container));
-        Assert.Equal(AutomationControlType.TreeItem, peer.GetAutomationControlType());
-        Assert.Equal(group.Name, peer.GetName());
-        Assert.Equal(group.Status, peer.GetItemStatus());
-        Assert.Equal(group.Hint, peer.GetHelpText());
-        Assert.NotNull(peer.GetPattern(PatternInterface.ExpandCollapse));
-        Assert.NotNull(peer.GetPattern(PatternInterface.SelectionItem));
-        // The one WPF does not give a TreeViewItem.
+        AutomationPeer groupPeer = Assert.Single(
+            rowPeers, peer => peer.GetName() == group.Name);
+
+        // Every row peer a client sees is the data-item peer, not the
+        // container peer — pinning the topology itself, so a refactor
+        // that reverts to container peers is caught here and not by a
+        // screen-reader user.
+        Assert.All(
+            rowPeers,
+            peer => Assert.IsType<CanvasOutlineRowDataPeer>(peer));
+
+        Assert.Equal(AutomationControlType.TreeItem, groupPeer.GetAutomationControlType());
+        Assert.Equal(group.Status, groupPeer.GetItemStatus());
+        Assert.Equal(group.Hint, groupPeer.GetHelpText());
+        Assert.NotNull(groupPeer.GetPattern(PatternInterface.ExpandCollapse));
+        Assert.NotNull(groupPeer.GetPattern(PatternInterface.SelectionItem));
+        // The one WPF gives neither the container nor the data peer.
         var invoke = Assert.IsAssignableFrom<IInvokeProvider>(
-            peer.GetPattern(PatternInterface.Invoke));
+            groupPeer.GetPattern(PatternInterface.Invoke));
 
         // And it really activates: Invoke on a group expands it.
         group.IsExpanded = false;
         invoke.Invoke();
         Assert.True(group.IsExpanded);
+
+        // NESTED rows are projected by the ITEM peer, so they need the
+        // same override one level down — the half of the fix a top-level
+        // assertion alone would miss. The group's peer children also
+        // include its template's expander ToggleButton, so the ROW peers
+        // are selected by type rather than by position.
+        group.IsExpanded = true;
+        surface.UpdateLayout();
+        List<CanvasOutlineRowDataPeer> nestedRows =
+            (groupPeer.GetChildren() ?? [])
+                .OfType<CanvasOutlineRowDataPeer>()
+                .ToList();
+        Assert.NotEmpty(nestedRows);
+        Assert.All(
+            nestedRows,
+            row => Assert.IsAssignableFrom<IInvokeProvider>(
+                row.GetPattern(PatternInterface.Invoke)));
+
         document.Shutdown();
     });
 

@@ -142,6 +142,67 @@ internal sealed class CanvasOutlineTree : TreeView
 
     protected override bool IsItemItsOwnContainerOverride(object item) =>
         item is CanvasOutlineItem;
+
+    protected override AutomationPeer OnCreateAutomationPeer() =>
+        new CanvasOutlineTreeAutomationPeer(this);
+}
+
+/// <summary>
+/// The tree's peer, which exists ONLY to override
+/// <see cref="CreateItemAutomationPeer"/>.
+/// </summary>
+/// <remarks>
+/// This is the fix for the round-7 defect. A container peer's patterns
+/// are NOT what assistive technology reads: WPF projects each row into
+/// the UIA tree as a <see cref="TreeViewDataItemAutomationPeer"/>, and
+/// that data peer implements SelectionItem, ExpandCollapse and ScrollItem
+/// ITSELF rather than forwarding everything to the container. So the
+/// <c>Invoke</c> added to <see cref="CanvasOutlineItemAutomationPeer"/>
+/// was real but invisible — a screen reader saw <c>invoke=NULL</c> on
+/// every row. Overriding the item-peer factory here and on the item peer
+/// puts Invoke on the peer that is actually exposed.
+/// </remarks>
+internal sealed class CanvasOutlineTreeAutomationPeer : TreeViewAutomationPeer
+{
+    public CanvasOutlineTreeAutomationPeer(CanvasOutlineTree owner)
+        : base(owner)
+    {
+    }
+
+    protected override ItemAutomationPeer CreateItemAutomationPeer(object item) =>
+        new CanvasOutlineRowDataPeer(item, this, null);
+}
+
+/// <summary>
+/// The peer a screen reader actually reads for a row: WPF's tree data
+/// item peer, plus the <c>Invoke</c> the outline's contract A8 requires.
+/// </summary>
+/// <remarks>
+/// Name, ItemStatus and HelpText are deliberately NOT overridden — the
+/// base forwards them to the realized container's peer, which is where
+/// contracts A9/A10 already put them, and the journey's name/status
+/// assertions pass on that path today.
+/// </remarks>
+internal sealed class CanvasOutlineRowDataPeer
+    : TreeViewDataItemAutomationPeer, IInvokeProvider
+{
+    public CanvasOutlineRowDataPeer(
+        object item,
+        ItemsControlAutomationPeer itemsControlAutomationPeer,
+        TreeViewDataItemAutomationPeer? parentDataItemAutomationPeer)
+        : base(item, itemsControlAutomationPeer, parentDataItemAutomationPeer)
+    {
+    }
+
+    public override object? GetPattern(PatternInterface patternInterface) =>
+        patternInterface == PatternInterface.Invoke
+            ? this
+            : base.GetPattern(patternInterface);
+
+    /// <summary>The ONE activation route — the same
+    /// <see cref="CanvasOutlineRowViewModel.RaiseActivate"/> Enter and
+    /// double-click reach, so UIA activation cannot drift from them.</summary>
+    public void Invoke() => (Item as CanvasOutlineRowViewModel)?.RaiseActivate();
 }
 
 /// <summary>
@@ -180,6 +241,17 @@ internal sealed class CanvasOutlineItemAutomationPeer
         patternInterface == PatternInterface.Invoke
             ? this
             : base.GetPattern(patternInterface);
+
+    /// <summary>
+    /// NESTED rows — a group's children, and the selected card's
+    /// connection rows — are projected by THIS peer, so it must build the
+    /// same Invoke-carrying data peer the tree's peer does. Without this
+    /// override only top-level rows would answer Invoke, which is the
+    /// same defect one level down.
+    /// </summary>
+    protected override ItemAutomationPeer CreateItemAutomationPeer(object item) =>
+        new CanvasOutlineRowDataPeer(
+            item, this, EventsSource as TreeViewDataItemAutomationPeer);
 
     public void Invoke() => ((CanvasOutlineItem)Owner).InvokeRow();
 }

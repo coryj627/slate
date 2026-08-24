@@ -1119,12 +1119,32 @@ One `TreeViewItem` per `CanvasOutlineRow` in `canvas_outline` order,
 re-parented by the `depth` column with a stack — the host computes no
 containment (R-D; 0b-8 owns the tree). `ControlType.TreeItem` under a
 `ControlType.Tree` named "Canvas outline"; `SelectionItem` and
-`ExpandCollapse` come from WPF's `TreeViewItemAutomationPeer`, and
-`Invoke` is added by `CanvasOutlineItemAutomationPeer` because
-`TreeViewItemAutomationPeer` implements ExpandCollapse/SelectionItem/
-ScrollItem and NOT `IInvokeProvider` — putting an invokable child
-element inside the row instead would violate the journeys' recorded
-peered-elements-only trap. Virtualization is
+`ExpandCollapse` come from WPF, and `Invoke` is added by the host because
+WPF's tree peers implement ExpandCollapse/SelectionItem/ScrollItem and
+NOT `IInvokeProvider` — putting an invokable child element inside the row
+instead would violate the journeys' recorded peered-elements-only trap.
+
+**Invoke must live on the DATA-ITEM peer, not the container peer (round
+7).** WPF does not project a `TreeViewItem`'s own peer into the UIA tree;
+it projects each row through WPF's tree *data-item* peer, which
+implements SelectionItem/ExpandCollapse/ScrollItem ITSELF and does not
+forward a custom pattern to the container. So `Invoke` added only to
+`CanvasOutlineItemAutomationPeer` was real but invisible — a client saw
+`invoke=NULL` on every row. `CanvasOutlineRowDataPeer` supplies it, and
+BOTH item-peer factories are overridden
+(`CanvasOutlineTreeAutomationPeer.CreateItemAutomationPeer` for top-level
+rows and `CanvasOutlineItemAutomationPeer.CreateItemAutomationPeer` for
+nested group children and connection rows). Activation routes to
+`CanvasOutlineRowViewModel.RaiseActivate`, the same path Enter and
+double-click take, so UIA activation cannot drift from them. Evidence:
+`TheTreeItemsCarryTreeSelectionItemExpandCollapseAndInvoke`, which walks
+`treePeer.GetChildren()` — the production topology a client reads —
+asserting the row peers ARE `CanvasOutlineRowDataPeer` and carry all four
+patterns at both levels; mutation-verified against reverting either
+override. The `CanvasSurfaces_OutlineTreeSelectionAndActivation_AreClean`
+journey is the CI-arbitrated half.
+
+Virtualization is
 `VirtualizingStackPanel.IsVirtualizing=true` with
 `VirtualizationMode=Standard`, the W4-1 UIA-safe setting (the files
 tree uses `Recycling`; a recycled container re-uses one peer for
@@ -3995,3 +4015,54 @@ deleting dead code that serves no supported platform is not a product
 decision, and codex specified the closure shape rather than disputing it —
 so the loop continues to a scoped re-review and codex round 6. Recorded in
 the ledger and reversible until the user says otherwise.
+
+### PR A — Round 7 — the outline's Invoke never reached assistive technology
+
+Found while fixing a CI failure, not by review. The
+`CanvasSurfaces_OutlineTreeSelectionAndActivation_AreClean` journey had
+never once executed its assertions: `DemoVaultCanvasDirectory()` walked up
+to `Cargo.toml`, and the shell a11y gate runs on downloaded binaries with
+no checkout, so it threw "repository root not found" in 4 ms on every run.
+With the fixture lookup repaired (linked `Content` items read from
+`AppContext.BaseDirectory`, the mechanism `CitationStyleFixture` already
+proved — and whose comment already warned about exactly this mistake), the
+journey ran its assertions for the first time and immediately failed on
+`Invoke`.
+
+**The defect.** WPF projects a TreeView row into the UIA tree as a
+`TreeViewDataItemAutomationPeer`, not as the `TreeViewItem`'s own peer.
+That data peer implements SelectionItem, ExpandCollapse and ScrollItem
+itself and does NOT forward a custom pattern to the container peer. The
+`Invoke` this PR added to `CanvasOutlineItemAutomationPeer` was therefore
+invisible: an in-process peer walk showed `invoke=NULL` on every row while
+`sel=OK exp=OK`. Contract A8's activation pattern was absent from the only
+surface assistive technology reads. Fixed by overriding both item-peer
+factories to build `CanvasOutlineRowDataPeer` (see A8).
+
+**The false-green class, FOURTH instance — and the one that matters
+most.** `TheTreeItemsCarryTreeSelectionItemExpandCollapseAndInvoke` passed
+throughout by calling `CreatePeerForElement(container)` and interrogating
+the CONTAINER peer — an object no UIA client ever sees. It constructed the
+mechanism it was meant to be checking, exactly like the three earlier
+instances (the unwired seam behind injected sinks, the gate behind a
+stubbed closure, the focus guard calling `RequestFocusLanding` itself).
+The fact now walks `treePeer.GetChildren()` and asserts on the projected
+row peers at both nesting levels; both halves are mutation-verified.
+
+**Codex round 6's SAFE TO MERGE predates this journey's first execution.**
+That verdict was reached while the only test capable of catching this
+defect was dying in setup — so it was never evidence about the outline's
+UIA surface. Recorded plainly because the review ledger should not read as
+though the gauntlet cleared something it never examined.
+
+**A third defect, found and NOT fixed in this round (reported, awaiting
+scope).** With Invoke working the journey advances to its surface-switcher
+assertion and fails deterministically there. Verified in-process: the UIA
+tree exposes `CanvasShowOutline/Table/Visual` flattened directly under
+`CanvasSurface`, with **no `CanvasSurfaceSwitcher` node at all** — the
+switcher is a bare `StackPanel`, which WPF gives no automation peer, so
+its AutomationId and its "Canvas view" name never reach a client. Contract
+A18's "one named group" is not met. Same root class as the Invoke defect:
+`AutomationProperties` set on an element WPF never peers. Not fixed here
+because it is production a11y behaviour needing its own contract evidence
+and mutation-verified test.
