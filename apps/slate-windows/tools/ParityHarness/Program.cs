@@ -8,7 +8,12 @@
 // artifact per fixture plus vault-level search + links artifacts.
 //
 //   dotnet run --project apps/slate-windows/tools/ParityHarness -- \
-//     --fixtures crates/slate-core/tests/fixtures/markdown --out <dir>
+//     --fixtures crates/slate-core/tests/fixtures/markdown --out <dir> \
+//     [--canvas-fixtures crates/slate-core/tests/fixtures/canvas]
+//
+// `--canvas-fixtures` adds the W6-1 PR 0b `canvas_queries` section
+// (§W-A). The canvas corpus gets its OWN temp vault: mixing it into the
+// markdown vault would change what every other artifact sees.
 //
 // Diff against another platform's artifacts (or the committed goldens)
 // with scripts/diff-parity-artifacts.py.
@@ -19,6 +24,7 @@ using uniffi.slate_uniffi;
 string? fixtures = null;
 string? outDir = null;
 string? scenarios = null;
+string? canvasFixtures = null;
 bool mutations = args.Contains("--mutations");
 for (int i = 0; i < args.Length - 1; i++)
 {
@@ -33,6 +39,10 @@ for (int i = 0; i < args.Length - 1; i++)
     if (args[i] == "--scenarios")
     {
         scenarios = args[i + 1];
+    }
+    if (args[i] == "--canvas-fixtures")
+    {
+        canvasFixtures = args[i + 1];
     }
 }
 
@@ -132,7 +142,22 @@ try
         Path.Combine(outDir, "bibliography.json"),
         SurfaceSerializer.BibliographyArtifact(session, bibWarnings));
 
-    Console.WriteLine($"parity-harness: {files.Count + 6} artifacts -> {outDir}");
+    int artifacts = files.Count + 6;
+
+    // W6-1 PR 0b (§W-A `canvas_queries`): the canvas corpus lives in a
+    // DIFFERENT fixture directory, and it gets its own temp vault — a
+    // canvas dropped into the markdown vault would change what every
+    // other artifact sees (search hits, the file list) and move goldens
+    // this section has no business touching.
+    if (canvasFixtures != null)
+    {
+        WriteArtifact(
+            Path.Combine(outDir, "canvas_queries.json"),
+            CanvasQueries(canvasFixtures));
+        artifacts += 1;
+    }
+
+    Console.WriteLine($"parity-harness: {artifacts} artifacts -> {outDir}");
     return 0;
 }
 finally
@@ -146,6 +171,47 @@ finally
     }
     catch (UnauthorizedAccessException)
     {
+    }
+}
+
+static string CanvasQueries(string canvasFixtures)
+{
+    var canvasFiles = Directory.EnumerateFiles(canvasFixtures, "*.canvas")
+        .Select(Path.GetFileName)
+        .Where(f => f != null && !SurfaceSerializer.CanvasArtifactExclusions.Contains(f))
+        .Select(f => f!)
+        .OrderBy(f => f, StringComparer.Ordinal)
+        .ToList();
+    if (canvasFiles.Count == 0)
+    {
+        throw new InvalidOperationException($"no .canvas fixtures under {canvasFixtures}");
+    }
+
+    string root = Path.Combine(Path.GetTempPath(), $"parity-canvas-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(root);
+    try
+    {
+        foreach (var f in canvasFiles)
+        {
+            File.Copy(Path.Combine(canvasFixtures, f), Path.Combine(root, f));
+        }
+        using var session = VaultSession.OpenFilesystem(root);
+        using var cancel = new CancelToken();
+        session.ScanInitial(cancel);
+        return SurfaceSerializer.CanvasQueriesArtifact(session, canvasFiles);
+    }
+    finally
+    {
+        try
+        {
+            Directory.Delete(root, recursive: true);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
     }
 }
 

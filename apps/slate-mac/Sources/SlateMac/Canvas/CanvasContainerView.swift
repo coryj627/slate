@@ -344,11 +344,7 @@ struct CanvasContainerView: View {
                     )
                 if document.filterActive {
                     // t0 §3: the result summary is pull-readable.
-                    Text(
-                        "\(document.filteredOutline.count) of "
-                            + "\(CountCopy.counted(document.outline.count, "card", "cards")) "
-                            + CountCopy.verb(
-                                document.filteredOutline.count, "matches", "match"))
+                    Text(filterSummary)
                         .font(Tokens.Typography.caption)
                         .foregroundStyle(Tokens.ColorRole.textSecondary)
                     Button("Clear") { clearFilter() }
@@ -374,6 +370,29 @@ struct CanvasContainerView: View {
         }
         .padding(.horizontal, Tokens.Spacing.md)
         .padding(.vertical, Tokens.Spacing.xs)
+    }
+
+    /// The pull-readable filter summary (t0 §3), counted from the view
+    /// the surfaces are DISPLAYING so the label, the rows and the
+    /// announced count are one answer.
+    ///
+    /// While a reopening window keeps core from answering the needle in
+    /// the field, the previous rows are still on screen — so the label
+    /// renders VA-1's sentence rather than claiming those rows matched
+    /// what the user just typed. Same string the announcement speaks:
+    /// one render, no second composition (the CD-3 banner precedent).
+    private var filterSummary: String {
+        let view = document.filterView(session: appState.currentSession)
+        guard view.current else {
+            // The same sentence the announcement gives, from the same
+            // state mapping — one render, no second composition, and no
+            // second opinion about which sentence the state owes.
+            let note = appState.canvasReadRefusal(for: document) ?? .reopening
+            return a11yRender(event: .canvas(event: .canvasStatus(note: note))).text
+        }
+        return "\(view.rows.count) of "
+            + "\(CountCopy.counted(document.outline.count, "card", "cards")) "
+            + CountCopy.verb(view.rows.count, "matches", "match")
     }
 
     private var filterBinding: Binding<String> {

@@ -7665,6 +7665,8 @@ pub enum CanvasStatusNote {
     NoOutgoingPath { title: String },
     NotInAGroup { title: String },
     NoConnection { forward: bool, ordinal: Option<u32> },
+    Reopening,
+    Loading,
 }
 
 impl From<CanvasStatusNote> for core::a11y::CanvasStatusNote {
@@ -7698,6 +7700,8 @@ impl From<CanvasStatusNote> for core::a11y::CanvasStatusNote {
             F::NoOutgoingPath { title } => C::NoOutgoingPath { title },
             F::NotInAGroup { title } => C::NotInAGroup { title },
             F::NoConnection { forward, ordinal } => C::NoConnection { forward, ordinal },
+            F::Reopening => C::Reopening,
+            F::Loading => C::Loading,
         }
     }
 }
@@ -8570,6 +8574,30 @@ pub fn canvas_color_name(color: CanvasColor) -> String {
     core::canvas::color_name(&color.into())
 }
 
+/// A grouped count plus its English noun — core's `count_noun`
+/// (`sidebar_filter.rs`), the single definition of both the thousands
+/// grouping (`1,000`, ASCII comma, locale-independent) and the
+/// singular-only-at-exactly-one agreement rule (zero stays plural).
+///
+/// Exported because a host sometimes composes a string that is read
+/// back BESIDE a core sentence counting the same number, and the two
+/// must agree. The shipped case is the canvas undo-stack action name:
+/// it rides into `CanvasHistoryApplied.name` as a payload and is spoken
+/// verbatim, so `Undid delete 1,000 cards.` has to follow
+/// `Deleted 1,000 cards.` (W6-1 CD-6). Before this export the mac host
+/// mirrored `group_thousands` in Swift; that mirror is deleted, which
+/// is the whole point — never a host re-implementation where a pure
+/// core function can be called (§W-G).
+///
+/// A caller that formats the number itself (locale decimals, ungrouped
+/// byte counts) wants the bare noun instead, which stays host-side
+/// because it is a two-branch ternary with no formatting to disagree
+/// about.
+#[uniffi::export]
+pub fn count_noun(count: u64, singular: String, plural: String) -> String {
+    core::sidebar_filter::count_noun(count, &singular, &plural)
+}
+
 /// Core Debug identity of the event — the exact string the corpus artifact
 /// pins in its `event` field. Host censuses assert this to prove they
 /// constructed the SAME semantic event (variant + parameters), not merely
@@ -9402,6 +9430,8 @@ pub struct CanvasOutlineRow {
     /// "text" | "file" | "image" | "link" | "group" (t0 §1.1 type word).
     pub kind: String,
     pub title: String,
+    /// The title made unique across the canvas (W6-1 0b-5).
+    pub speakable_name: String,
     pub group_path: Vec<String>,
     pub ordinal_n: u32,
     pub total_m: u32,
@@ -9416,6 +9446,7 @@ impl From<core::CanvasOutlineRow> for CanvasOutlineRow {
             depth: r.depth,
             kind: r.kind,
             title: r.title,
+            speakable_name: r.speakable_name,
             group_path: r.group_path,
             ordinal_n: r.ordinal_n,
             total_m: r.total_m,
@@ -9431,6 +9462,8 @@ pub struct CanvasTableRow {
     pub node_id: String,
     pub kind: String,
     pub title: String,
+    /// The title made unique across the canvas (W6-1 0b-5).
+    pub speakable_name: String,
     pub group_path: Vec<String>,
     pub target: String,
     pub connection_count: u32,
@@ -9443,6 +9476,7 @@ impl From<core::CanvasTableRow> for CanvasTableRow {
             node_id: r.node_id,
             kind: r.kind,
             title: r.title,
+            speakable_name: r.speakable_name,
             group_path: r.group_path,
             target: r.target,
             connection_count: r.connection_count,
@@ -9574,6 +9608,8 @@ impl From<core::CanvasNeighbor> for CanvasNeighbor {
 pub struct CanvasWhereAmI {
     pub node_id: String,
     pub title: String,
+    /// The title made unique across the canvas (W6-1 0b-5).
+    pub speakable_name: String,
     pub kind: String,
     pub group_path: Vec<String>,
     pub ordinal_n: u32,
@@ -9589,6 +9625,7 @@ impl From<core::CanvasWhereAmI> for CanvasWhereAmI {
         CanvasWhereAmI {
             node_id: w.node_id,
             title: w.title,
+            speakable_name: w.speakable_name,
             kind: w.kind,
             group_path: w.group_path,
             ordinal_n: w.ordinal_n,
@@ -10228,6 +10265,9 @@ pub struct CanvasSceneNode {
     pub node_id: String,
     pub kind: String,
     pub title: String,
+    /// The title made unique across the canvas (W6-1 0b-5) — the
+    /// renderer's AX peer name (CD-23).
+    pub speakable_name: String,
     pub x: f64,
     pub y: f64,
     pub width: f64,
@@ -10243,6 +10283,7 @@ impl From<core::CanvasSceneNode> for CanvasSceneNode {
             node_id: n.node_id,
             kind: n.kind,
             title: n.title,
+            speakable_name: n.speakable_name,
             x: n.x,
             y: n.y,
             width: n.width,
@@ -10289,6 +10330,123 @@ impl From<core::CanvasSceneEdge> for CanvasSceneEdge {
 pub struct CanvasScene {
     pub nodes: Vec<CanvasSceneNode>,
     pub edges: Vec<CanvasSceneEdge>,
+}
+
+// ---------------------------------------------------------------------------
+// Canvas structural queries (W6-1 PR 0b, #745): the §W-G row B–M rules,
+// mirrored 1:1. Same rule as above — no logic here.
+
+/// One hop of a traced connection path (0b-9). The start node is not a
+/// hop, so `hops.len() + 1` is mac's "cards visited".
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct CanvasTraceHop {
+    pub edge_id: String,
+    pub node_id: String,
+    pub title: String,
+    pub label: Option<String>,
+}
+
+impl From<core::CanvasTraceHop> for CanvasTraceHop {
+    fn from(h: core::CanvasTraceHop) -> Self {
+        CanvasTraceHop {
+            edge_id: h.edge_id,
+            node_id: h.node_id,
+            title: h.title,
+            label: h.label,
+        }
+    }
+}
+
+/// The attachment sides an auto-routed connection uses (0b-3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct CanvasSidePair {
+    pub from: CanvasSide,
+    pub to: CanvasSide,
+}
+
+/// Where a card lands inside a group, or why it cannot (0b-12).
+#[derive(Debug, Clone, Copy, PartialEq, uniffi::Enum)]
+pub enum CanvasInsideGroupPlacement {
+    /// A free slot fully inside the group frame.
+    Placed { x: f64, y: f64 },
+    /// No candidate slot fits inside the group; the point is mac's
+    /// `(x + 20, y + 40)` inset, NOT checked for overlap.
+    TooSmall { x: f64, y: f64 },
+    /// Slots fit, but every one examined is occupied.
+    Full,
+}
+
+impl From<core::canvas::placement::InsideGroupPlacement> for CanvasInsideGroupPlacement {
+    fn from(p: core::canvas::placement::InsideGroupPlacement) -> Self {
+        use core::canvas::placement::InsideGroupPlacement as P;
+        match p {
+            P::Placed { x, y } => CanvasInsideGroupPlacement::Placed { x, y },
+            P::TooSmall { x, y } => CanvasInsideGroupPlacement::TooSmall { x, y },
+            P::Full => CanvasInsideGroupPlacement::Full,
+        }
+    }
+}
+
+/// The canvas grid/sizing constants (0b-4). Every field is the
+/// `slate_core::canvas::placement` constant of that name — a host that
+/// re-types one of these numbers has re-derived it (R-D).
+#[derive(Debug, Clone, Copy, PartialEq, uniffi::Record)]
+pub struct CanvasConstants {
+    pub grid_step: f64,
+    pub grid_step_large: f64,
+    pub default_card_w: f64,
+    pub default_card_h: f64,
+    pub default_group_w: f64,
+    pub default_group_h: f64,
+    pub default_gap: f64,
+    pub min_card_size: f64,
+}
+
+impl From<core::canvas::placement::Constants> for CanvasConstants {
+    fn from(c: core::canvas::placement::Constants) -> Self {
+        CanvasConstants {
+            grid_step: c.grid_step,
+            grid_step_large: c.grid_step_large,
+            default_card_w: c.default_card_w,
+            default_card_h: c.default_card_h,
+            default_group_w: c.default_group_w,
+            default_group_h: c.default_group_h,
+            default_gap: c.default_gap,
+            min_card_size: c.min_card_size,
+        }
+    }
+}
+
+/// The canvas grid/sizing constants. Handle-free by ruling R-0b-2
+/// (CD-17): a host needs `min_card_size` to construct its mode
+/// controller, before any canvas is open.
+#[uniffi::export]
+pub fn canvas_constants() -> CanvasConstants {
+    core::canvas::placement::constants().into()
+}
+
+/// A fresh JSON-Canvas node/edge id: 16 lowercase hex from a v4 UUID,
+/// so index 12 is always `'4'` and the id carries 60 bits (0b-4).
+/// Handle-free, and deliberately unchecked against any canvas — mac
+/// mints the same way.
+#[uniffi::export]
+pub fn canvas_new_id() -> String {
+    core::canvas::queries::new_id()
+}
+
+/// The attachment sides for a connection between two RECTS (0b-3).
+/// Rects, not node ids: create-connected-card asks about a card that
+/// does not exist yet (CD-16). Horizontal wins only on a strict
+/// `|dx| > |dy|`, so a diagonal tie — and a self-loop — answers
+/// `(Top, Bottom)`.
+#[uniffi::export]
+pub fn canvas_auto_sides(from: CanvasRect, to: CanvasRect) -> CanvasSidePair {
+    let rect = |r: CanvasRect| core::canvas::model::Rect::new(r.x, r.y, r.width, r.height);
+    let (from, to) = core::canvas::queries::auto_sides(rect(from), rect(to));
+    CanvasSidePair {
+        from: from.into(),
+        to: to.into(),
+    }
 }
 
 #[uniffi::export]
@@ -10437,6 +10595,115 @@ impl VaultSession {
         Ok(self
             .inner
             .canvas_check_overlap(handle, rect.into(), exclude)?)
+    }
+}
+
+/// The W6-1 PR 0b structural queries (§W-G rows B–M).
+#[uniffi::export]
+impl VaultSession {
+    /// The node's containing group, `None` at canvas level (0b-8).
+    pub fn canvas_parent_of(
+        &self,
+        handle: u64,
+        node_id: String,
+    ) -> Result<Option<String>, VaultError> {
+        Ok(self.inner.canvas_parent_of(handle, &node_id)?)
+    }
+
+    /// The group's direct children in reading order (0b-8).
+    pub fn canvas_children_of(
+        &self,
+        handle: u64,
+        group_id: String,
+    ) -> Result<Vec<String>, VaultError> {
+        Ok(self.inner.canvas_children_of(handle, &group_id)?)
+    }
+
+    /// Project a set of node ids onto reading order (0b-10).
+    pub fn canvas_order_nodes(
+        &self,
+        handle: u64,
+        ids: Vec<String>,
+    ) -> Result<Vec<String>, VaultError> {
+        Ok(self.inner.canvas_order_nodes(handle, ids)?)
+    }
+
+    /// The cycle-safe outgoing walk from `node_id` (0b-9).
+    pub fn canvas_trace_path(
+        &self,
+        handle: u64,
+        node_id: String,
+    ) -> Result<Vec<CanvasTraceHop>, VaultError> {
+        Ok(self
+            .inner
+            .canvas_trace_path(handle, &node_id)?
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
+
+    /// Where `rect` sits relative to its nearest neighbours (0b-7).
+    pub fn canvas_describe_relative(
+        &self,
+        handle: u64,
+        rect: CanvasRect,
+        exclude: Vec<String>,
+    ) -> Result<Vec<CanvasRelativeDesc>, VaultError> {
+        Ok(self
+            .inner
+            .canvas_describe_relative(handle, rect.into(), exclude)?
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
+
+    /// Bounding box of every node, group frames included (0b-11).
+    pub fn canvas_bounds(&self, handle: u64) -> Result<Option<CanvasRect>, VaultError> {
+        Ok(self.inner.canvas_bounds(handle)?.map(|r| CanvasRect {
+            x: r.x,
+            y: r.y,
+            width: r.width,
+            height: r.height,
+        }))
+    }
+
+    /// The group frame enclosing `members` — union plus `default_gap`
+    /// on all four sides (0b-11).
+    pub fn canvas_group_rect_around(
+        &self,
+        handle: u64,
+        members: Vec<String>,
+    ) -> Result<Option<CanvasRect>, VaultError> {
+        Ok(self
+            .inner
+            .canvas_group_rect_around(handle, members)?
+            .map(|r| CanvasRect {
+                x: r.x,
+                y: r.y,
+                width: r.width,
+                height: r.height,
+            }))
+    }
+
+    /// A free slot INSIDE the group, or a typed refusal (0b-12).
+    pub fn canvas_place_inside_group(
+        &self,
+        handle: u64,
+        group_id: String,
+        width: f64,
+        height: f64,
+        exclude: Vec<String>,
+    ) -> Result<CanvasInsideGroupPlacement, VaultError> {
+        Ok(self
+            .inner
+            .canvas_place_inside_group(handle, &group_id, width, height, exclude)?
+            .into())
+    }
+
+    /// Node ids matching `query`, in reading order; an empty query
+    /// matches everything (0b-13).
+    pub fn canvas_filter(&self, handle: u64, query: String) -> Result<Vec<String>, VaultError> {
+        Ok(self.inner.canvas_filter(handle, &query)?)
     }
 }
 
@@ -10845,6 +11112,150 @@ mod tests {
                  vocabulary has {want}"
             );
         }
+    }
+
+    /// The mac coalescer's class switch must agree with the ONE list
+    /// core pins (contracts doc 0a-8, and 0b-17 which adds this test).
+    ///
+    /// Coalescing TIMING is host-side by design — a pure render has no
+    /// clock — but the class MEMBERSHIP is not: both hosts collapse the
+    /// same bursts only if they route the same events into the same
+    /// classes. 0a-8 put that list in one Rust doc comment and asked
+    /// the hosts to copy it, and nothing checked that the copy stayed
+    /// faithful. A core event added to the navigation or filter class
+    /// that mac's switch does not route now fails `cargo test`, in the
+    /// same fast lane as the two corpus-mirror tripwires — rather than
+    /// after a full `generate-bindings` + host round trip, or never.
+    ///
+    /// SCOPE: membership per class, both directions. The 200 ms window,
+    /// the latest-wins rule and the High-flushes-and-drops rule stay
+    /// the hosts' own tests (`CanvasAnnouncerTests`).
+    #[test]
+    fn the_mac_coalescing_switch_matches_the_pinned_class_list() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let core_source = std::fs::read_to_string(manifest.join("../slate-core/src/a11y.rs"))
+            .expect("core a11y source");
+        let swift = std::fs::read_to_string(
+            manifest.join("../../apps/slate-mac/Sources/SlateMac/Canvas/CanvasAnnouncer.swift"),
+        )
+        .expect("mac announcer source");
+
+        /// uniffi lower-camelises Swift case names; every name in this
+        /// vocabulary is CamelCase, so lowering the first character is
+        /// the same transform.
+        fn lower_first(name: &str) -> String {
+            let mut chars = name.chars();
+            match chars.next() {
+                Some(first) => first.to_ascii_lowercase().to_string() + chars.as_str(),
+                None => String::new(),
+            }
+        }
+
+        // --- The pinned list: core's own doc comment -----------------
+        // Bounded to the class-key section so a variant named anywhere
+        // else in the module doc cannot be counted.
+        let pinned_section = core_source
+            .split_once("// ## Coalescing class keys")
+            .expect("the coalescing class-key section")
+            .1;
+        let pinned_section = pinned_section
+            .split_once("// - Everything else posts immediately")
+            .expect("the section's terminator")
+            .0;
+
+        let mut pinned: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut current: Option<String> = None;
+        for chunk in pinned_section.split("// - **`") {
+            let Some((class, rest)) = chunk.split_once("`**") else {
+                continue;
+            };
+            current = Some(class.to_string());
+            let entry = pinned.entry(class.to_string()).or_default();
+            for (at, marker) in rest.match_indices("[`CanvasA11yEvent::") {
+                let name: String = rest[at + marker.len()..]
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric())
+                    .collect();
+                entry.insert(lower_first(&name));
+            }
+        }
+        assert!(
+            current.is_some() && pinned.values().all(|names| !names.is_empty()),
+            "the class-key doc comment parsed to nothing; its shape changed"
+        );
+
+        // Every name the doc comment comes from must still BE a variant
+        // — a rename that misses the comment is the other way this rots.
+        let variants: BTreeSet<String> = {
+            let decl = core_source
+                .find("pub enum CanvasA11yEvent {")
+                .expect("CanvasA11yEvent declaration");
+            let body = &core_source[decl..];
+            let body = &body[..body.find("\n}\n").expect("enum terminator")];
+            body.lines()
+                .map(str::trim)
+                .filter(|line| line.starts_with(|c: char| c.is_ascii_uppercase()))
+                .map(|line| {
+                    lower_first(
+                        &line
+                            .chars()
+                            .take_while(|c| c.is_ascii_alphanumeric())
+                            .collect::<String>(),
+                    )
+                })
+                .collect()
+        };
+        for (class, names) in &pinned {
+            for name in names {
+                assert!(
+                    variants.contains(name),
+                    "the {class} class lists {name}, which is not a CanvasA11yEvent variant"
+                );
+            }
+        }
+
+        // --- The copy: mac's switch ----------------------------------
+        let switch = swift
+            .split_once("func coalescingClass(of event: CanvasA11yEvent) -> EventClass?")
+            .expect("mac coalescing switch")
+            .1;
+        let switch = switch
+            .split_once("default:")
+            .expect("the switch's default arm")
+            .0;
+
+        let mut mac: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for arm in switch.split("case ").skip(1) {
+            let (cases, tail) = arm.split_once(':').expect("case arm ends in a colon");
+            let class: String = tail
+                .split_once("return .")
+                .expect("case arm returns a class")
+                .1
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric())
+                .collect();
+            let entry = mac.entry(class).or_default();
+            for (at, _) in cases.match_indices('.') {
+                let name: String = cases[at + 1..]
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric())
+                    .collect();
+                if !name.is_empty() {
+                    entry.insert(name);
+                }
+            }
+        }
+
+        assert_eq!(
+            mac, pinned,
+            "mac's coalescing switch and the class list core pins (0a-8) disagree. \
+             Left is CanvasAnnouncer.swift, right is the a11y.rs doc comment; a core \
+             event in either class that the switch does not route is spoken \
+             uncoalesced on mac and coalesced on Windows, which is a §W-D difference \
+             no corpus entry can show."
+        );
     }
 
     /// The FFI mirror must carry EVERY core variant.
@@ -13303,6 +13714,650 @@ mod canvas_mirror_tests {
             frame.iteration > 0 && frame.iteration <= 10,
             "at most one ≤10 chunk runs after a mid-flight cancel (got {})",
             frame.iteration
+        );
+    }
+
+    /// Every mac call of a canvas READ query routes through the one
+    /// state mapping, or is named as an exclusion with a reason.
+    ///
+    /// **Why this is a parser and not a list.** VA-1/VA-2 membership and
+    /// the per-state responses were handwritten in four places, and
+    /// three consecutive review rounds found the same class of defect:
+    /// a member missing from a list, a state missing from a response
+    /// set, two lists disagreeing. Red-team protocol rule 4 says stop
+    /// fixing the sentences and implement the invariant. Membership is
+    /// DERIVED here: a Swift function that calls a canvas read query
+    /// either mentions `canvasReadTarget` / `canvasReadContext` /
+    /// `canvasReadRefusal` in its body, or it is on `EXCLUSIONS` with a
+    /// stated reason. Adding an ungated read verb fails this test and
+    /// names the function.
+    ///
+    /// Scope is the canvas READ set — the queries whose answer depends
+    /// on a live handle. Mutating entry points (`canvas_apply`,
+    /// `open_canvas`) are outside it: they are gated by
+    /// `admitCanvasMutation`, a different ladder with its own spoken
+    /// refusals.
+    ///
+    /// **What it catches, and what it cannot** — stated rather than
+    /// implied, the same doctrine 0a's source scan settled on.
+    ///
+    /// It matches the query as a MEMBER TOKEN on a session-ish
+    /// receiver, with no call paren required: `let read =
+    /// session.canvasBounds` then `try? read(handle)` is a use, and
+    /// requiring the paren let exactly that shape past (codex 0b round
+    /// 4). The receiver is the discriminator because these are
+    /// `VaultSession` methods — which is also what keeps
+    /// `appState?.canvasTracePath()`, the navigator's own verb of the
+    /// same name, out of the results.
+    ///
+    /// It CANNOT follow indirect flow: a session handed to a helper
+    /// that calls the query, a method reference stored in a property
+    /// and invoked elsewhere, or a closure capturing either. Answering
+    /// those needs symbol resolution across functions — a real
+    /// front end, which this text scan is not and should not grow into.
+    /// The bound on the damage is the same as every scan here: it can
+    /// miss a NEW evasion, it cannot go quietly green on the code it
+    /// does see, because it asserts it found call sites at all and that
+    /// every exclusion still calls one.
+    #[test]
+    fn every_mac_canvas_read_is_gated_or_named() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        /// The generated Swift names of the handle-based canvas read
+        /// queries — the ones whose answer depends on a live handle, so
+        /// the ones a state mapping can have an opinion about.
+        ///
+        /// `canvasAutoSides` is deliberately absent: it takes no handle
+        /// and cannot fail, so there is no state for a mapping to
+        /// answer about and nothing to gate.
+        const READ_QUERIES: &[&str] = &[
+            "canvasParentOf",
+            "canvasChildrenOf",
+            "canvasTracePath",
+            "canvasOrderNodes",
+            "canvasFilter",
+            "canvasBounds",
+            "canvasDescribeRelative",
+            "canvasNeighbors",
+            "canvasGroupRectAround",
+            "canvasWhereAmI",
+        ];
+
+        /// The one place membership is allowed to be a list — and every
+        /// entry states why the mapping does not apply. Function names,
+        /// not files, so moving a function does not silently excuse it.
+        /// An entry that stops calling a scanned query fails the
+        /// anti-rot assertion below, because a stale excuse is how the
+        /// next ungated verb hides.
+        ///
+        /// `canvasSelectAdjacent` is NOT here, and that is a decision
+        /// rather than an omission: it reaches `canvas_filter` only
+        /// through `filteredOutline`, so this scan never sees it, and
+        /// `FilterView.current` already separates a live answer from a
+        /// retained one — which is what keeps arrow movement working on
+        /// the displayed rows in the reopening window, as VA-1's tests
+        /// require. Recorded in the contracts (codex 0b round 3).
+        const EXCLUSIONS: &[(&str, &str)] = &[
+            // The document's own data layer RETURNS un-answerability
+            // (`FilterView.current`, `neighborsIfKnown`'s `nil`) rather
+            // than announcing it, so its callers can route through the
+            // mapping. Gating here too would announce twice.
+            (
+                "filterView",
+                "returns `current: false`; the caller announces",
+            ),
+            ("neighborsIfKnown", "returns nil; the caller announces"),
+            // Write verbs sit behind `admitCanvasMutation`, a different
+            // ladder with its own spoken refusals; routing them through
+            // the read mapping would double-announce.
+            (
+                "canvasRemoveFromGroup",
+                "write verb behind admitCanvasMutation",
+            ),
+            ("canvasGroupMarked", "write verb behind admitCanvasMutation"),
+            ("canvasDuplicate", "write verb behind admitCanvasMutation"),
+            (
+                "canvasInReadingOrder",
+                "projection for write verbs behind admission",
+            ),
+            (
+                "canvasRelativeDescription",
+                "move-mode narration behind admission",
+            ),
+        ];
+
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let root = manifest.join("../../apps/slate-mac/Sources/SlateMac");
+        let mut sources: Vec<std::path::PathBuf> = Vec::new();
+        let mut stack = vec![root.clone()];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).expect("mac sources") {
+                let path = entry.expect("dir entry").path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().and_then(|e| e.to_str()) == Some("swift")
+                    // The generated bindings DECLARE the queries; they
+                    // are not a host call site.
+                    && path.file_name().and_then(|n| n.to_str()) != Some("slate_uniffi.swift")
+                {
+                    sources.push(path);
+                }
+            }
+        }
+        assert!(
+            !sources.is_empty(),
+            "no mac Swift sources found under {}; this guard would pass vacuously",
+            root.display()
+        );
+
+        // Enclosing `func` per line, by brace depth: a function owns
+        // every line until its body closes.
+        let mut callers: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut bodies: BTreeMap<String, String> = BTreeMap::new();
+        for path in &sources {
+            let text = std::fs::read_to_string(path).expect("swift source");
+            let file = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default()
+                .to_string();
+            let lines: Vec<&str> = text.lines().collect();
+            let mut current: Option<(String, i32)> = None;
+            // A Swift signature may put its opening brace on a later
+            // line, so "the body closed" only means something once the
+            // body has been ENTERED — without this, every such function
+            // was dropped on its own declaration line and its calls
+            // went unattributed.
+            let mut entered = false;
+            let mut depth: i32 = 0;
+            for line in &lines {
+                let trimmed = line.trim_start();
+                let code = trimmed.split("//").next().unwrap_or("");
+                if current.is_none()
+                    && let Some(rest) = code.split_once("func ")
+                    && let Some(name) = rest
+                        .1
+                        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                        .find(|s| !s.is_empty())
+                {
+                    current = Some((name.to_string(), depth));
+                    entered = false;
+                }
+                if let Some((name, _)) = &current {
+                    let name = name.clone();
+                    for query in READ_QUERIES {
+                        // `.canvasFoo(` — a CALL, not the declaration.
+                        // A MEMBER TOKEN, with no call paren required:
+                        // `let read = session.canvasBounds` followed by
+                        // `try? read(handle)` is a use of the query, and
+                        // demanding the paren let exactly that shape
+                        // walk past the guard (codex 0b round 4).
+                        //
+                        // The receiver is the discriminator instead —
+                        // these are `VaultSession` methods, so a
+                        // session-ish receiver is what separates the FFI
+                        // query from a host verb that happens to share
+                        // its name (`appState?.canvasTracePath()` is the
+                        // navigator's own).
+                        for (offset, _) in code.match_indices(&format!(".{query}")) {
+                            let after = offset + 1 + query.len();
+                            // `.canvasBounds` must not match
+                            // `.canvasBoundsSomethingElse`.
+                            if code[after..].starts_with(|c: char| c.is_alphanumeric() || c == '_')
+                            {
+                                continue;
+                            }
+                            let before = &code[..offset];
+                            let before = before.strip_suffix('?').unwrap_or(before);
+                            let receiver: String = before
+                                .chars()
+                                .rev()
+                                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                                .collect::<Vec<char>>()
+                                .into_iter()
+                                .rev()
+                                .collect();
+                            if !receiver.to_ascii_lowercase().contains("session") {
+                                continue;
+                            }
+                            callers
+                                .entry(name.clone())
+                                .or_default()
+                                .push(format!("{file}: {}", trimmed.trim_end()));
+                        }
+                    }
+                    bodies.entry(name).or_default().push_str(code);
+                }
+                depth += code.matches('{').count() as i32;
+                depth -= code.matches('}').count() as i32;
+                if let Some((_, opened)) = &current {
+                    if depth > *opened {
+                        entered = true;
+                    } else if entered {
+                        current = None;
+                    }
+                }
+            }
+        }
+
+        assert!(
+            !callers.is_empty(),
+            "no canvas read-query call sites found in the mac tree; the query names or \
+             the scan are wrong, and this guard would pass vacuously"
+        );
+
+        let gated = |name: &str| -> bool {
+            bodies.get(name).is_some_and(|body| {
+                body.contains("canvasReadTarget")
+                    || body.contains("canvasReadContext")
+                    || body.contains("canvasReadRefusal")
+            })
+        };
+        let excluded: BTreeMap<&str, &str> = EXCLUSIONS.iter().copied().collect();
+
+        let mut ungated: Vec<String> = Vec::new();
+        for (name, sites) in &callers {
+            if gated(name) || excluded.contains_key(name.as_str()) {
+                continue;
+            }
+            ungated.push(format!("{name} — {}", sites.join("; ")));
+        }
+        assert!(
+            ungated.is_empty(),
+            "these mac functions call a canvas read query without routing through the \
+             state mapping (`canvasReadTarget`/`canvasReadContext`/`canvasReadRefusal`) \
+             and are not on the named exclusion list: {ungated:#?}"
+        );
+
+        // Anti-rot: an exclusion that no longer calls a read query is a
+        // stale excuse, and a stale excuse is how the next ungated verb
+        // hides.
+        let stale: Vec<&str> = EXCLUSIONS
+            .iter()
+            .map(|(name, _)| *name)
+            .filter(|name| !callers.contains_key(*name))
+            .collect();
+        assert!(
+            stale.is_empty(),
+            "these exclusions no longer call any canvas read query — delete them: {stale:?}"
+        );
+
+        // The selection question and the document question are a
+        // PRECEDENCE, not two independent checks. A verb that can say
+        // "Nothing selected." must ask that FIRST, through the one gate
+        // that consults the snapshot-visibility predicate; announcing it
+        // on some other path is how a verb ends up reciting the state's
+        // sentence at a user who is looking at rows.
+        const ANNOUNCER: &str = "canvasAnnounceSelectionUnresolvable";
+        const PRECEDENCE_GATE: &str = "canvasAnsweredMissingSelection";
+
+        // **A verb is selection-first iff it CALLS THE GATE.** That is
+        // the behaviour: the gate announces, so calling it is what makes
+        // "Nothing selected." reachable from a verb, whether or not the
+        // verb also names the announcer itself. Deriving instead from
+        // announcer mentions described only the verbs with their own
+        // throw arms, and left a verb that adopted the gate alone —
+        // most plausibly one already in `selectionFree` — changing no
+        // set anyone compared (codex 0b round 7).
+        //
+        // The gate is excluded from its own set: its declaration line
+        // names it, and it announces by construction, which is also how
+        // the round-6 floor was satisfiable by the gate plus one fewer
+        // verb.
+        let gate_call = format!("{PRECEDENCE_GATE}(");
+        let selection_first: BTreeSet<&str> = bodies
+            .iter()
+            .filter(|(name, body)| name.as_str() != PRECEDENCE_GATE && body.contains(&gate_call))
+            .map(|(name, _)| name.as_str())
+            .collect();
+
+        // The converse direction, kept: naming the announcer WITHOUT
+        // calling the gate is the original round-5 fault — a verb that
+        // can say "Nothing selected." on some path that never consults
+        // the snapshot-visibility predicate.
+        let unordered: Vec<&str> = bodies
+            .iter()
+            .filter(|(name, body)| {
+                name.as_str() != ANNOUNCER
+                    && name.as_str() != PRECEDENCE_GATE
+                    && body.contains(ANNOUNCER)
+                    && !body.contains(&gate_call)
+            })
+            .map(|(name, _)| name.as_str())
+            .collect();
+        assert!(
+            unordered.is_empty(),
+            "these mac verbs can say \"Nothing selected.\" without asking the selection \
+             question first via `{PRECEDENCE_GATE}`, so on a state whose snapshot is on \
+             screen they would answer with the state's sentence instead: {unordered:?}"
+        );
+
+        // The mac two-column test needs to know which verbs are
+        // selection-first, and it had that as a handwritten array —
+        // a third copy of a fact this guard already derives, free to
+        // drift in either direction: a verb could vanish from the
+        // matrix, or gain the gate in source, with nothing failing
+        // (codex 0b round 6). So the array is read and required to
+        // AGREE, both ways. That equality also replaces the old `>= 4`
+        // floor, which was a constant guessing at the same number.
+        let test_path =
+            manifest.join("../../apps/slate-mac/Tests/SlateMacTests/CanvasNavigatorTests.swift");
+        let test_source = std::fs::read_to_string(&test_path)
+            .unwrap_or_else(|err| panic!("{}: {err}", test_path.display()));
+
+        /// The `canvasFoo` receivers named inside one `[(String, () ->
+        /// Void)]` array literal — the verb each row drives.
+        fn verbs_in_array(source: &str, binding: &str, path: &std::path::Path) -> BTreeSet<String> {
+            let anchor = format!("let {binding}: [(String, () -> Void)] = [");
+            let start = source.find(&anchor).unwrap_or_else(|| {
+                panic!(
+                    "{}: `{anchor}` not found — the two-column test's verb groups were \
+                     renamed or reshaped, and this guard will not silently stop checking \
+                     what it can no longer find",
+                    path.display()
+                )
+            }) + anchor.len();
+            let mut depth = 1usize;
+            let mut end = None;
+            for (offset, ch) in source[start..].char_indices() {
+                match ch {
+                    '[' => depth += 1,
+                    ']' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = Some(start + offset);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let end = end.unwrap_or_else(|| {
+                panic!(
+                    "{}: `{binding}`'s array literal never closes",
+                    path.display()
+                )
+            });
+            let mut verbs = BTreeSet::new();
+            for line in source[start..end].lines() {
+                let code = line.split("//").next().unwrap_or("");
+                for (offset, _) in code.match_indices(".canvas") {
+                    verbs.insert(
+                        code[offset + 1..]
+                            .chars()
+                            .take_while(|c| c.is_alphanumeric() || *c == '_')
+                            .collect::<String>(),
+                    );
+                }
+            }
+            verbs
+        }
+
+        let test_bearing = verbs_in_array(&test_source, "selectionBearing", &test_path);
+        let test_free = verbs_in_array(&test_source, "selectionFree", &test_path);
+        assert!(
+            !test_bearing.is_empty() && !test_free.is_empty(),
+            "one of the two-column test's verb groups parsed empty ({test_bearing:?} / \
+             {test_free:?}); the comparison below would pass vacuously"
+        );
+
+        let derived: BTreeSet<String> = selection_first
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect();
+        let untested: Vec<&String> = derived.difference(&test_bearing).collect();
+        let unbacked: Vec<&String> = test_bearing.difference(&derived).collect();
+        assert!(
+            untested.is_empty() && unbacked.is_empty(),
+            "`selectionBearing` in {} disagrees with the source-derived selection-first \
+             set. A verb missing from the test is a matrix row nobody drives; a verb in \
+             the test that is no longer selection-first is an expectation that will pass \
+             for the wrong reason. Selection-first in source, absent from the test: \
+             {untested:?}. In the test, not selection-first in source: {unbacked:?}",
+            test_path.display()
+        );
+
+        let miscategorized: Vec<&String> = test_free.intersection(&derived).collect();
+        assert!(
+            miscategorized.is_empty(),
+            "`selectionFree` claims these never ask the selection question, but they call \
+             `{PRECEDENCE_GATE}` in source, so the test expects the state's sentence \
+             where the verb says \"Nothing selected.\": {miscategorized:?}"
+        );
+        let unknown: Vec<&String> = test_free
+            .iter()
+            .chain(test_bearing.iter())
+            .filter(|name| !bodies.contains_key(name.as_str()))
+            .collect();
+        assert!(
+            unknown.is_empty(),
+            "the two-column test drives verbs with no such function in the mac sources — \
+             renamed, or the scan is broken: {unknown:?}"
+        );
+        let ungated: Vec<&String> = test_free
+            .iter()
+            .filter(|name| !gated(name.as_str()))
+            .collect();
+        assert!(
+            ungated.is_empty(),
+            "`selectionFree` drives these as members of the state mapping, but they do \
+             not route through it, so the test's per-state expectations are not theirs \
+             to hold: {ungated:?}"
+        );
+
+        // Coverage, stated separately from the equality above: no gate
+        // caller may sit outside the two-column matrix entirely. Today
+        // the equality implies it — `selectionBearing` IS the gate
+        // callers — and it is asserted anyway, because the equality is
+        // the sort of thing a later round relaxes to a subset relation
+        // when some verb wants an exception, and this is the property
+        // that must survive that: a verb able to say "Nothing selected."
+        // is driven in both selection columns by name.
+        let undriven: Vec<&String> = derived
+            .iter()
+            .filter(|name| !test_bearing.contains(*name) && !test_free.contains(*name))
+            .collect();
+        assert!(
+            undriven.is_empty(),
+            "these mac verbs call `{PRECEDENCE_GATE}`, so they can say \"Nothing \
+             selected.\", but the two-column test drives them in neither group — nothing \
+             checks which question they answer per state: {undriven:?}"
+        );
+    }
+
+    /// The snapshot-visibility predicate says what the container's
+    /// switch actually does.
+    ///
+    /// `LoadState.rendersRetainedSnapshot` decides whether a verb's
+    /// selection question outranks the state's, and its truth is a
+    /// claim about the VIEW: does `CanvasContainerView` render retained
+    /// rows for this state? Written out by hand it was wrong —
+    /// `.retargetFailed` renders its snapshot read-only and the
+    /// predicate said otherwise (codex 0b round 5). So it is pinned
+    /// against the switch here instead of trusted.
+    ///
+    /// The reachability is transitive within the one file: an arm calls
+    /// a helper, the helper may call another, and reaching `canvasBody`
+    /// is what "renders rows" means. Same doctrine as the other scans —
+    /// it can be defeated by indirection this file does not contain,
+    /// and it cannot go quietly green, because it asserts it found
+    /// every case arm and that both sides are non-empty.
+    #[test]
+    fn the_snapshot_visibility_predicate_matches_the_container_switch() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mac = manifest.join("../../apps/slate-mac/Sources/SlateMac/Canvas");
+        let view = std::fs::read_to_string(mac.join("CanvasContainerView.swift"))
+            .expect("container source");
+        let document =
+            std::fs::read_to_string(mac.join("CanvasDocument.swift")).expect("document source");
+
+        // --- the view: state -> the identifiers its arm reaches -------
+        let body = view
+            .split_once("switch document.state {")
+            .expect("the container's state switch")
+            .1;
+        let body = body.split_once("\n        }").expect("switch end").0;
+
+        let mut arms: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut current: Option<String> = None;
+        for line in body.lines() {
+            let trimmed = line.trim();
+            if let Some(rest) = trimmed.strip_prefix("case .") {
+                let name: String = rest
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                current = Some(name.clone());
+                arms.entry(name).or_default();
+                continue;
+            }
+            if let Some(name) = &current {
+                let mut identifier = String::new();
+                for character in trimmed.chars() {
+                    if character.is_alphanumeric() || character == '_' {
+                        identifier.push(character);
+                    } else {
+                        if !identifier.is_empty() {
+                            arms.get_mut(name).expect("arm").push(identifier.clone());
+                            identifier.clear();
+                        }
+                    }
+                }
+                if !identifier.is_empty() {
+                    arms.get_mut(name).expect("arm").push(identifier);
+                }
+            }
+        }
+        assert_eq!(
+            arms.len(),
+            5,
+            "expected one arm per LoadState case in the container switch, found {:?}",
+            arms.keys().collect::<Vec<_>>()
+        );
+
+        // --- transitive reachability to `canvasBody` ------------------
+        // Every `func`/`var` in the view file, with the identifiers its
+        // own body mentions.
+        let mut definitions: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut defining: Option<(String, i32)> = None;
+        let mut entered = false;
+        let mut depth: i32 = 0;
+        for line in view.lines() {
+            let code = line.trim().split("//").next().unwrap_or("");
+            if defining.is_none() {
+                for keyword in ["func ", "var "] {
+                    if let Some(rest) = code.split_once(keyword)
+                        && let Some(name) = rest
+                            .1
+                            .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                            .find(|s| !s.is_empty())
+                    {
+                        defining = Some((name.to_string(), depth));
+                        entered = false;
+                        break;
+                    }
+                }
+            } else if let Some((name, _)) = &defining {
+                let name = name.clone();
+                let mut identifier = String::new();
+                for character in code.chars() {
+                    if character.is_alphanumeric() || character == '_' {
+                        identifier.push(character);
+                    } else {
+                        if !identifier.is_empty() {
+                            definitions
+                                .entry(name.clone())
+                                .or_default()
+                                .push(std::mem::take(&mut identifier));
+                        }
+                    }
+                }
+                if !identifier.is_empty() {
+                    definitions.entry(name).or_default().push(identifier);
+                }
+            }
+            depth += code.matches('{').count() as i32;
+            depth -= code.matches('}').count() as i32;
+            if let Some((_, opened)) = &defining {
+                if depth > *opened {
+                    entered = true;
+                } else if entered {
+                    defining = None;
+                }
+            }
+        }
+        assert!(
+            definitions.contains_key("canvasBody"),
+            "the container no longer defines `canvasBody`; this guard is measuring nothing"
+        );
+
+        fn reaches(
+            start: &[String],
+            target: &str,
+            definitions: &BTreeMap<String, Vec<String>>,
+            seen: &mut BTreeSet<String>,
+        ) -> bool {
+            for name in start {
+                if name == target {
+                    return true;
+                }
+                if !seen.insert(name.clone()) {
+                    continue;
+                }
+                if let Some(body) = definitions.get(name)
+                    && reaches(body, target, definitions, seen)
+                {
+                    return true;
+                }
+            }
+            false
+        }
+
+        let mut rendered: BTreeSet<String> = BTreeSet::new();
+        for (state, mentions) in &arms {
+            let mut seen = BTreeSet::new();
+            if reaches(mentions, "canvasBody", &definitions, &mut seen) {
+                rendered.insert(state.clone());
+            }
+        }
+
+        // --- the predicate's own true set ----------------------------
+        let predicate = document
+            .split_once("var rendersRetainedSnapshot: Bool {")
+            .expect("the predicate")
+            .1;
+        let predicate = predicate
+            .split_once("return true")
+            .expect("the predicate's true arm")
+            .0;
+        let declared: BTreeSet<String> = predicate
+            .split(".case")
+            .flat_map(|chunk| chunk.split("case "))
+            .flat_map(|chunk| chunk.split(','))
+            .filter_map(|chunk| {
+                let chunk = chunk.trim();
+                chunk.strip_prefix('.').map(|name| {
+                    name.chars()
+                        .take_while(|c| c.is_alphanumeric() || *c == '_')
+                        .collect::<String>()
+                })
+            })
+            .filter(|name| !name.is_empty())
+            .collect();
+
+        assert!(
+            !rendered.is_empty() && !declared.is_empty(),
+            "one side of the comparison is empty, so this guard would pass vacuously: \
+             view {rendered:?}, predicate {declared:?}"
+        );
+        assert_eq!(
+            declared, rendered,
+            "`LoadState.rendersRetainedSnapshot` disagrees with what \
+             `CanvasContainerView` renders. The view is the authority: a state whose arm \
+             reaches `canvasBody` shows retained rows and its selection question outranks \
+             the state's sentence."
         );
     }
 }

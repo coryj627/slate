@@ -13,11 +13,18 @@ import Foundation
 /// step, never per-nudge entries); Esc discards the transient with no
 /// backend call. Marked sets move as a rigid unit.
 extension AppState {
-    /// Grid steps mirror the backend constants (#517 exports them;
-    /// values pinned by the cross-checking test).
-    static let canvasGridStep: Double = 20
-    static let canvasGridStepLarge: Double = 100
-    static let canvasMinCardSize: Double = 40
+    /// Placement geometry, straight from core (`canvas_constants`,
+    /// §W-G row H / contract 0b-4). A free FFI function with no
+    /// handle (CD-17), so a mode can read `minCardSize` before any
+    /// canvas is open. The three Swift mirrors that stood here are
+    /// gone — `canvasMinCardSize` among them, which had no core
+    /// counterpart at all until 0b-1 added `MIN_CARD_SIZE`.
+    ///
+    /// Computed rather than stored: the call builds a record out of
+    /// module constants, and a lazily-initialized static of an FFI
+    /// record type is a concurrency question this does not need to
+    /// answer.
+    static var canvasGeometry: CanvasConstants { canvasConstants() }
 
     /// `Int(Double)` traps on NaN/Inf/≥2^63 — reachable via hostile
     /// .canvas geometry the parser tolerates (red-team #521 finding 3).
@@ -161,13 +168,19 @@ extension AppState {
     func canvasModeStep(dx: Double, dy: Double, large: Bool) {
         guard let doc = activeCanvasDocument, var transient = canvasTransient else { return }
         guard admitCanvasMutation(for: doc) else { return }
-        let step = large ? Self.canvasGridStepLarge : Self.canvasGridStep
+        let geometry = Self.canvasGeometry
+        let step = large ? geometry.gridStepLarge : geometry.gridStep
 
         if transient.isResize {
             guard let id = transient.ids.first, var rect = transient.rects[id] else { return }
             let newWidth = rect.width + dx * step
             let newHeight = rect.height + dy * step
-            if newWidth < Self.canvasMinCardSize || newHeight < Self.canvasMinCardSize {
+            // Reject-the-step, not clamp-to-min: neither dimension
+            // moves when either would fall below the minimum. The
+            // CONSTANT is core's; this rule is the host's and PR F
+            // copies it (contracts doc, "Mac details recorded while
+            // reading").
+            if newWidth < geometry.minCardSize || newHeight < geometry.minCardSize {
                 canvasAnnouncer.announce(.canvasResizeClamped)
                 return
             }
@@ -207,7 +220,10 @@ extension AppState {
 
     /// Resize presets (M6-friendly: palette commands, no arrows needed).
     func canvasResizeDefaultSize() {
-        canvasApplyResizePreset(width: 260, height: 140, preset: .defaultSize)
+        let geometry = Self.canvasGeometry
+        canvasApplyResizePreset(
+            width: geometry.defaultCardW, height: geometry.defaultCardH,
+            preset: .defaultSize)
     }
 
     func canvasResizeFitContent() {
@@ -216,12 +232,22 @@ extension AppState {
         else { return }
         guard admitCanvasMutation(for: doc) else { return }
         // Approximation: default width; height from the text length
-        // (the real editor's metrics land with the Wave-4 editor).
-        let fetched = try? currentSession?.canvasNodeText(handle: doc.handle ?? 0, nodeId: id)
-        let text: String = (fetched ?? nil) ?? ""
+        // (the real editor's metrics land with the Wave-4 editor). The
+        // formula's own numbers — 32, 24, 40, the 600 cap — are D-5's
+        // host-designated placeholder, identical on both hosts and NOT
+        // core constants; only the width and the floor come from
+        // `canvas_constants`.
+        let geometry = Self.canvasGeometry
+        // One `??`, not two: optional CHAINING flattens as well as
+        // `try?` (SE-0230), so this is `String?` and never `String??`.
+        // The extra `?? nil` was dead, and dead unwraps are how a
+        // reader — and a review — come to believe the code tells two
+        // outcomes apart when it cannot.
+        let text = (try? currentSession?.canvasNodeText(handle: doc.handle ?? 0, nodeId: id)) ?? ""
         let lines = max(1, text.count / 32 + text.filter { $0 == "\n" }.count)
-        let height = min(600, max(Double(lines) * 24 + 40, Self.canvasMinCardSize))
-        canvasApplyResizePreset(width: 260, height: height, preset: .fitToContent)
+        let height = min(600, max(Double(lines) * 24 + 40, geometry.minCardSize))
+        canvasApplyResizePreset(
+            width: geometry.defaultCardW, height: height, preset: .fitToContent)
     }
 
     private func canvasApplyResizePreset(
@@ -319,57 +345,29 @@ extension AppState {
         canvasAnnouncer.announce(event)
     }
 
-    /// Relative description from the nearest non-moving neighbors, as
-    /// core's OWN `CanvasRelativeDesc` list — core phrases it
-    /// (`Below "Research", right of "Ideas"`), the host only picks the
-    /// neighbours (§W-G row B; PR 0b moves the pick itself into
-    /// `canvas_describe_relative`). `nil` means there is nothing to
-    /// describe against at all, which stays silent; an EMPTY list is a
-    /// real fix — core speaks `Alone on the canvas`.
+    /// Relative description from the nearest non-moving neighbours —
+    /// core's `canvas_describe_relative` (§W-G row B, contract 0b-7).
+    /// The nearest-neighbour walk that lived here is gone: core picks
+    /// the neighbours AND phrases them (`Below "Research", right of
+    /// "Ideas"`), and its `(squared distance, document index)` order
+    /// pins the tie-break Swift's unstable `sort(by:)` left undefined
+    /// (CD-19).
+    ///
+    /// `nil` means there is nothing to describe against at all, which
+    /// stays silent; an EMPTY list is a real fix — core speaks
+    /// `Alone on the canvas`.
     func canvasRelativeDescription(doc: CanvasDocument, transient: CanvasTransientState)
         -> [CanvasRelativeDesc]?
     {
         guard let primaryId = transient.ids.first,
-            let rect = transient.rects[primaryId]
+            let rect = transient.rects[primaryId],
+            let session = currentSession,
+            let handle = doc.handle
         else { return nil }
-        let cx: Double = rect.x + rect.width / 2
-        let cy: Double = rect.y + rect.height / 2
-        typealias NeighborFix = (node: CanvasSceneNode, dx: Double, dy: Double)
-        var neighbors: [NeighborFix] = []
-        for node in doc.scene.nodes {
-            if transient.ids.contains(node.nodeId) || node.kind == "group" { continue }
-            let dx: Double = node.x + node.width / 2 - cx
-            let dy: Double = node.y + node.height / 2 - cy
-            neighbors.append((node: node, dx: dx, dy: dy))
-        }
-        neighbors.sort { lhs, rhs in
-            let ld: Double = lhs.dx * lhs.dx + lhs.dy * lhs.dy
-            let rd: Double = rhs.dx * rhs.dx + rhs.dy * rhs.dy
-            return ld < rd
-        }
-        guard let nearest = neighbors.first else { return [] }
-
-        func desc(_ neighbor: NeighborFix) -> CanvasRelativeDesc {
-            if abs(neighbor.dy) >= abs(neighbor.dx) {
-                return neighbor.dy < 0
-                    ? .below(anchorTitle: neighbor.node.title)
-                    : .above(anchorTitle: neighbor.node.title)
-            }
-            return neighbor.dx < 0
-                ? .rightOf(anchorTitle: neighbor.node.title)
-                : .leftOf(anchorTitle: neighbor.node.title)
-        }
-
-        var descs = [desc(nearest)]
-        // A second axis-distinct neighbor completes the fix. Core
-        // capitalises the first phrase and lower-cases the rest.
-        let vertical = abs(nearest.dy) >= abs(nearest.dx)
-        if let second = neighbors.dropFirst().first(where: {
-            (abs($0.dy) >= abs($0.dx)) != vertical
-        }) {
-            descs.append(desc(second))
-        }
-        return descs
+        // The moving set is the exclusion list: a card is never
+        // described relative to itself or to the rest of its rigid unit.
+        return try? session.canvasDescribeRelative(
+            handle: handle, rect: rect, exclude: transient.ids)
     }
 
     /// The mode a transient verb belongs to (`Move ended — nothing
@@ -393,6 +391,9 @@ extension AppState {
     private static func canvasActionObject(_ object: CanvasModeObject) -> String {
         switch object {
         case .card(let title): return "\"\(title)\""
+        // Deliberately UNGROUPED (CD-6): the mode object renders
+        // through core's `plural`, so `Placed ⟨n⟩ cards.` and the
+        // `move ⟨n⟩ cards` undo entry it pairs with agree.
         case .cards(let count): return CountCopy.counted(count, "card", "cards")
         }
     }

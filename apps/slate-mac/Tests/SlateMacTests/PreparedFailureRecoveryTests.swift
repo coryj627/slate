@@ -260,6 +260,11 @@ final class PreparedFailureRecoveryTests: XCTestCase {
                     depth: 0,
                     kind: "text",
                     title: "Alpha",
+                    // W6-1 0b-1 added `speakableName` to the four card
+                    // records; a hand-built fixture row has to carry it
+                    // too. One card, so the unique title IS its
+                    // speakable name (contract 0b-5).
+                    speakableName: "Alpha",
                     groupPath: [],
                     ordinalN: 1,
                     totalM: 1,
@@ -271,6 +276,7 @@ final class PreparedFailureRecoveryTests: XCTestCase {
                     nodeId: "card-1",
                     kind: "text",
                     title: "Alpha",
+                    speakableName: "Alpha",
                     groupPath: [],
                     target: "",
                     connectionCount: 0,

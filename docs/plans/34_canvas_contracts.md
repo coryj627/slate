@@ -262,12 +262,12 @@ one.
 the boundaries — one, the empty collection, and zero where a host
 reaches it. Values in between are not witnessed one at a time. What
 stands in for witnessing them is part 4, which routes count
-interpolations through the shared helpers **to the limit of
-line-scoped lexical verification** — it reads one logical line at a
-time and its helper provenance is line-wide (see the residual list
-below), so it is a check, not a proof. The noun-bound proof — this
-literal is that call's argument, therefore this count agrees at every
-`n` — needs the parser PR 0b builds. Parts 2–3 are retroactive: they
+interpolations through the shared helpers **to the limit of what a
+lexer over this module's string literals can see** — it is now
+noun-bound (a plural literal is excused only when THAT literal is an
+argument of a helper call), so it is a stronger check than the
+line-scoped scan 0a-1 shipped, but it is still a check over source
+text, not a proof about runtime values. Parts 2–3 are retroactive: they
 catch a regression in an arm that HAS a witness, while part 4 catches
 the new arm that has none.
 
@@ -283,39 +283,50 @@ mac's M3 inspectable value and its undo-action names route through
 templates here, leaves the count ungrouped (CD-6). (Adopted after the
 codex adversarial round found arms hardcoding the plural; CD-15.)
 
-**What part 4 is, and is not.** It is a LEXICAL scan, not a parser. It
-normalizes Rust's `\`-continued string literals before matching and
-recognizes two shapes: an interpolation immediately followed by a
-hardcoded plural, and a bare plural-noun literal on a line that names no
-pluralization helper. Named residual classes it cannot see:
+**What part 4 is, and is not (amended by PR 0b — contract 0b-16).** It
+is a LEXER over this module's string literals, not a line scan and not
+a Rust parser. It walks the source character by character tracking
+string state and the identifier that opened each enclosing call, so
+every literal is known WITH its call. Two of the three artefacts the
+0a-1 version declared are now derived from the source:
 
-- a logical format string assembled at runtime, or a template built by
-  `push_str`/`concat!` rather than written as one literal;
-- a plural noun this vocabulary does not yet use (the noun list is
-  fixed: `cards`, `marks`, `items`, `connections`);
-- a helper call wrapped so its literal leaves the call's line — which
-  surfaces as a FALSE POSITIVE rather than a hole, deliberately: the
-  test fails and says to put them back on one line;
-- **line-wide helper provenance** — one genuine `plural(` on a line
-  vouches for every plural literal on that line. Comments no longer
-  count toward it (they are stripped, not merely skipped when they start
-  the line: a trailing `// plural(` used to be enough), but a line
-  carrying a real helper call AND a second, hardcoded plural still
-  passes. This is the largest named residual, and closing it is 0b's
-  parser.
+- the **countable-noun list** is the set of `one`/`many` arguments the
+  module's own `plural` / `plural_len` / `counted` call sites pass. A
+  noun enters the list by being pluralized somewhere, not by being
+  typed into the test — so a template that starts speaking a NEW noun
+  correctly also starts guarding it;
+- **helper provenance is bound to the noun literal**: a plural literal
+  is excused only when it is an argument of one of those calls. A line
+  carrying a real helper call no longer vouches for a second,
+  hardcoded plural beside it — which the 0a-1 version named as its
+  largest residual;
+- format strings are reconstructed by the lexer's own handling of
+  Rust's `\`-continuation (backslash-newline swallows the newline and
+  the following indentation, exactly as rustc does), rather than by
+  joining source lines, so a template split across lines is read as
+  the one logical string it is, and the "put the helper call back on
+  one line" FALSE POSITIVE the 0a-1 scan produced is gone.
 
-Reconstructing logical format strings needs the parser PR 0b builds.
-**No independence claim is made for parts 3 and 4**: the scan's helper
-provenance is LINE-WIDE, not bound to the noun it vouches for — a line
-naming `plural(` anywhere clears every plural literal on it — so the two
-parts are not shown to be independent guards, and this document does not
-say they are. Binding provenance to the noun is a parser problem (which
-argument of which call is this literal?), and that parser is 0b's. The
-general version — every count interpolation
-anywhere in the vocabulary proved to reach a helper — is 0b's, alongside
-the Rust-parses-Swift coalescing-class tripwire already queued there;
-carried in the SDD ledger (the 0a-2 codex round-1 entry, "Recorded for
-0b: structural parser guard enforcing 0a-14").
+Residual classes it still cannot see, named honestly:
+
+- a logical format string assembled at RUNTIME — `push_str`,
+  `concat!`, a `match` returning noun fragments, or a plural noun
+  living in a `&str` binding that the template interpolates;
+- a plural noun no helper call in this module passes, hardcoded in a
+  template — the derived list is derived from what IS routed, so a
+  vocabulary-wide first use of a noun is guarded only from its second
+  use onward;
+- non-English or irregular agreement (verbs, articles), which is what
+  CR-3's two shipped defects are and why they are allow-listed by
+  (arm, string) in part 3 rather than by anything part 4 can see.
+
+**Independence of parts 3 and 4 is still not claimed.** Part 4 is
+source-shaped and part 3 is render-shaped, and binding provenance to
+the noun makes part 4 strictly stronger than the scan it replaced —
+but "stronger" is not "independent", and this document does not say it
+is. `ZERO_REACHABLE` remains the one DECLARED artefact in the whole
+invariant: host reachability is a property of the mac call sites, and
+no parser over this crate can derive it.
 
 ### The event enumeration (the PR's contract)
 
@@ -444,6 +455,429 @@ WIDENED funnel guard), `A11yResidueCensusTests` (`pinnedResidueSites`
 
 ---
 
+## PR 0b — the canvas structural rules move to core
+
+**Goal (spec §PR 0b).** §W-G rows B–M become pure core queries over the
+existing `CanvasModel`: containment, trace path, reading-order
+projection, relative description, auto-sides, bounds, group geometry,
+the filter predicate, the speakable name and id minting. Task 0b-1 is
+the Rust + FFI + Windows-harness half; Task 0b-2 is the mac
+consumption half (every Swift copy named in §2 deleted there).
+
+### Contracts
+
+**0b-1 — One derivation per structural rule.** Every rule §2 rows B–M
+names lives once, in `crates/slate-core/src/canvas/queries.rs`, as a
+pure function of the derived model (plus `placement.rs` for the
+constants and `model.rs` for `CardSummary.speakable_name` /
+`CardSummary.target`, which are part of the derivation itself). The
+session layer adds handle-based methods that resolve the handle and
+delegate; `slate-uniffi` adds 1:1 mirrors with no logic. Nothing in a
+host recomputes any of them (R-D). **Task 0b-2 deleted the Swift
+copies** — §W-G rows B–M all read "closed", with the per-row before/after
+counts in "Verified during implementation"; the Windows host had none to
+delete because it has not been written yet, which is the point of
+ordering 0b before PR C.
+
+**0b-2 — The query surface.** Handle-based unless the row says
+otherwise; every one of them reads `OpenCanvasState.model` (the one
+exception, `speakable_name` on the two SQLite-served row types, is
+0b-6).
+
+| Query | Shape | Reads |
+|---|---|---|
+| `canvas_parent_of` | `(h, node) -> Option<String>` | `tree.parent` |
+| `canvas_children_of` | `(h, group) -> Vec<String>` | `tree.children` (sibling order) |
+| `canvas_order_nodes` | `(h, ids) -> Vec<String>` | `reading_order` |
+| `canvas_trace_path` | `(h, node) -> Vec<CanvasTraceHop>` | `adjacency` + `summaries` |
+| `canvas_describe_relative` | `(h, rect, exclude) -> Vec<CanvasRelativeDesc>` | `spatial` + `summaries` |
+| `canvas_bounds` | `(h) -> Option<CanvasRect>` | `SpatialIndex::bounds` |
+| `canvas_group_rect_around` | `(h, members) -> Option<CanvasRect>` | `SpatialIndex::rect_of` |
+| `canvas_place_inside_group` | `(h, group, w, h, exclude) -> CanvasInsideGroupPlacement` | `spatial` + `tree` |
+| `canvas_filter` | `(h, query) -> Vec<String>` | `reading_order` + `summaries` |
+| `canvas_auto_sides` | `(from: CanvasRect, to: CanvasRect) -> CanvasSidePair` | **free function** — geometry only |
+| `canvas_constants` | `() -> CanvasConstants` | **free function** — `placement.rs` |
+| `canvas_new_id` | `() -> String` | **free function** — OS randomness |
+
+**0b-3 — `canvas_auto_sides` is keyed by RECTS, not node ids**
+(controller ruling R-0b-1; CD-16). `dx = to.centre.x − from.centre.x`,
+`dy = to.centre.y − from.centre.y`; `|dx| > |dy|` **strictly** ⇒
+horizontal (`dx > 0` ⇒ `(Right, Left)`, else `(Left, Right)`);
+otherwise vertical (`dy > 0` ⇒ `(Bottom, Top)`, else `(Top, Bottom)`).
+The tie (`|dx| == |dy|`, including the diagonal and the self-loop
+`dx == dy == 0`) therefore resolves **vertical**, and `dy > 0` is false
+at zero, so a self-loop answers `(Top, Bottom)`. Mac's two copies
+(`AppState+CanvasConnect.swift:24–33`,
+`CanvasRendererView.swift:582–600`) were verified to agree by
+substitution — this is a duplication deleted, not a defect fixed. The
+renderer's per-endpoint `case nil` arm needs no second entry point: the
+side for one endpoint is `auto_sides(that_rect, other_rect).from`.
+
+**0b-4 — `canvas_constants()` and `canvas_new_id()` take no handle**
+(R-0b-2; CD-17). `CanvasConstants` carries `grid_step`,
+`grid_step_large`, `default_card_w/h`, `default_group_w/h`,
+`default_gap`, `min_card_size`, and its every field is the
+`placement.rs` constant of that name — never a re-typed literal, which
+a test asserts field by field. `MIN_CARD_SIZE = 40.0` and
+`DEFAULT_GROUP_WIDTH/HEIGHT = 400.0/300.0` are new there; the rest
+already existed. `canvas_new_id()` is the first 16 hex characters of a
+lowercased v4 UUID — 16 lowercase hex, `'4'` at index 12, 60 bits of
+entropy — with **no** collision check against the canvas (mac parity),
+pinned by a shape test over many draws rather than by a golden value.
+
+**0b-5 — `speakable_name` is one algorithm, on `CardSummary`.** It is
+`display_title` when that spelling is free, and
+`⟨display_title⟩ ⟨k⟩` for the k-th node (k ≥ 2) in **document order**
+that wants an already-assigned spelling — skipping any ordinal whose
+spelling is a real `display_title` of some node. That skip is core's
+existing `taken` guard from the untitled-ordinal loop.
+
+**What it buys, stated exactly** (an earlier draft of this row, and the
+research report it came from, said mac's loop yields a DUPLICATE on
+`A`, `A`, `A 2`; that is wrong, and the correction is recorded rather
+than quietly edited). Mac's loop increments until the candidate is
+unused, so its names ARE unique. What it does not check is the set of
+real titles, so a generated ordinal can spell some OTHER card's actual
+title: `A`, `A`, `A 2` becomes `A`, `A 2`, `A 2 2` on mac, and a Voice
+Control user who reads `A 2` on the third card and says it selects the
+second. Core's guard makes that unreachable — `A`, `A 3`, `A 2` — at
+the cost of an ordinal that "skips a number", which is exactly the
+trade core's `Untitled N` allocator already made for the same reason.
+Untitled cards are unchanged: `display_title` = `Untitled N` from that
+same allocator.
+
+Both properties are census assertions rather than claims here —
+uniqueness, and separately that no generated name spells another card's
+display title. Uniqueness alone would not have caught a missing guard,
+because mac's names satisfy it too. The `A`, `A`, `A 2` document order
+is a committed fixture (`cycle.canvas`), with its reverse pinned beside
+it so the answer cannot pass for the wrong reason.
+
+**0b-6 — `speakable_name` reaches the outline and table by an
+in-memory join, not a schema bump.** `canvas_outline` /
+`canvas_table_rows` keep their single indexed `SELECT` over
+`canvas_nodes` unchanged; `speakable_name` is added to their row
+records from the handle's model after the query returns.
+
+**What the join actually does**, rather than what "join" suggests: one
+`node_id → speakable_name` `HashMap` is BUILT PER CALL from
+`OpenCanvasState.model.summaries` — a linear pass and two `String`
+clones per node — and then hit once per row. It is a copy, not a
+borrow, because the alternative is holding the registry lock across the
+SQLite read, which would invert this module's canvases → conn order.
+That is the same order of work as the row materialization it feeds, so
+the §K "one indexed query" budget and the query's plan are untouched;
+it is not free, and this row says so rather than implying a bare
+lookup.
+
+**Rationale for the decision the spec does not make:** (1) a derived
+column would put a second copy of the algorithm's OUTPUT in the index,
+where it can rot against the model the same rows are derived from —
+0b-1 exists to stop exactly that; (2) a column costs a migration plus
+the upgrade fence (`c559810`) plus a full canvas reindex on upgrade,
+for data that is already in memory whenever a handle is open; (3) no
+existing row field changes, so no committed golden or host binding
+moves.
+
+**The limit of (2), stated exactly.** Holding a handle guarantees a
+MODEL. It does not guarantee that the model and the rows agree about
+which nodes exist: `canvas_nodes` is scanner-managed, and a rescan
+rewrites it while the handle stays open on its open-time snapshot. An
+external edit that changes a node id, followed by a rescan, leaves rows
+whose ids the snapshot never had — the join misses. Those rows fall
+back to **the row's own title**, never to the empty string: an empty
+speakable name is a card Voice Control cannot address at all, and
+addressability is what this field exists for. The fallback gives up
+UNIQUENESS for the skewed rows, not addressability, and the host
+recovers both by reopening the handle on the change event.
+`speakable_name_falls_back_to_the_title_when_the_rows_outrun_the_handle`
+materializes exactly that skew — external write plus rescan with the
+handle open — and asserts the title, not `""`.
+
+The cost is that the two row types are no longer pure projections of
+one `SELECT`; that cost is named here rather than hidden.
+
+**The model-backed surfaces do not skew the same way — they refuse.**
+`CanvasSceneNode` and `CanvasWhereAmI` read the new field off the
+model they are already derived from, so their `speakable_name` can
+never disagree with their own `title`; there is no fallback arm on
+those two. What the same skew does to them instead is make them
+UNREACHABLE for the affected ids: under an external write plus rescan,
+`canvas_where_am_i` answers `bad_node` for a node the outline rows name
+and `canvas_scene` simply does not list it. That is pre-existing
+handle-snapshot behaviour, not something `speakable_name` introduced —
+it is stated here because "cannot skew" reads as "is fine", and a host
+walking outline rows into `canvas_where_am_i` will see the refusal.
+The recovery is the same one 0b-6's fallback assumes: reopen the handle
+on the change event.
+
+**0b-7 — Relative description reproduces mac, with its latent
+nondeterminism pinned** (CD-19). Candidates are every node that is not
+in `exclude` and not a group. For each, `dx`/`dy` are the centre delta
+**from the subject rect to the candidate**, and the phrase describes
+where the SUBJECT sits, so the sense is inverted: vertical when
+`|dy| >= |dx|` (ties vertical), then `dy < 0` ⇒ `Below`, else `Above`;
+horizontal, `dx < 0` ⇒ `RightOf`, else `LeftOf`. The nearest candidate
+by squared distance yields the first phrase; the first later candidate
+whose axis classification differs yields an optional second. Mac sorts
+with `sort(by:)`, which is **not stable**, so equidistant candidates
+ordered arbitrarily run to run; core's order is `(squared distance,
+document index)` with non-finite distances sorting last (the
+`canvasSafeInt` precedent). An empty candidate set returns an EMPTY
+list — `Alone on the canvas` is 0a's `CanvasMoveRelative` rendering of
+that empty list, not a string this query invents.
+
+**0b-8 — Containment queries expose the tree core already derives**
+(CD-18). `canvas_parent_of` is `tree.parent`; `canvas_children_of` is
+`tree.children`, already sibling-sorted `(y, x, document index)`, and
+is empty for a childless group or a non-group node. Both reject an
+unknown node id with `bad_node`, which is how a caller tells "no
+parent" from "no such node". Core's containment rule — strict centre
+containment, smallest area wins, **equal areas resolve to the LATER
+document order**, group-in-group made acyclic by requiring the parent
+to be strictly greater in the `(area, doc)` total order — is
+authoritative where mac's three copies disagreed; mac's `min(by:)`
+kept the FIRST equal-area group.
+
+**0b-9 — `canvas_trace_path` is the greedy first-unseen walk.**
+Eligible neighbours are `Outgoing` and `Bidirectional` only —
+`Undirected` (no arrowheads at either end) is not traversable and is
+excluded, exactly as mac has it. Neighbours are visited in edge
+document order, the seen set is keyed by NODE, and the walk stops at
+the first node whose eligible neighbours are all seen, so it terminates
+on any canvas and a self-loop ends the walk at once. The returned hops
+EXCLUDE the start node (a dead end returns an empty list; mac's
+`visited.count` is `hops.len() + 1`), and each carries
+`edge_id, node_id, title, label` with `title` = `display_title`.
+Unknown node ⇒ `bad_node`. Cycle fixtures are committed
+(`tests/fixtures/canvas/cycle.canvas`).
+
+**0b-10 — `canvas_order_nodes` is a projection, not a filter with
+opinions.** One pass over `reading_order` keeping ids present in the
+input set: unknown ids are dropped **silently** (mac drops stale marks
+the same way, and an error would make a stale mark fatal), duplicates
+collapse to the single reading-order position, and an empty input gives
+an empty output. O(N + M), never O(N·M).
+
+**0b-11 — Bounds and group geometry.** `canvas_bounds` is
+`SpatialIndex::bounds` verbatim — every node including group frames,
+`None` on an empty canvas. `canvas_group_rect_around` is the union of
+the resolvable members' rects inflated by `DEFAULT_GAP` on all four
+sides; **mac's literal `pad = 40.0` IS `placement::DEFAULT_GAP`**, and
+a test asserts that identity rather than restating the number. Members
+that are not in the canvas are skipped, and a set with no resolvable
+member returns `None` — mac's `guard minX.isFinite else { return }`
+typed rather than left as a silent no-op (CD-24).
+
+**0b-12 — `canvas_place_inside_group` is clipped to the group and has
+a typed no-room outcome** (CD-21). Candidate slots form a lattice
+anchored at `(g.x0 + GRID_STEP, g.y0 + 2·GRID_STEP)` — mac's
+`(x + 20, y + 40)` inset — stepping by `ceil_to_grid(w + DEFAULT_GAP)`
+in x and `ceil_to_grid(h + DEFAULT_GAP)` in y, and only slots lying
+fully inside the group rect are candidates. They are visited COLUMN by
+column, each column top to bottom — `place_new`'s `Below` before
+`RightOf` preference applied to a lattice instead of a ring, which is
+a recorded divergence from the ruling's literal wording and is
+CD-25; `Above`/`LeftOf` are unreachable because the lattice starts at
+the group's inset top-left, which is what clipping to the group means.
+The outcome is one of three, so a host never receives a point that is
+outside the group it asked about:
+
+| Outcome | When |
+|---|---|
+| `Placed { x, y }` | a candidate slot is free of card overlap (`exclude` honoured; group frames never block, as in `place_new`) |
+| `TooSmall { x, y }` | **no** candidate slot fits inside the group — the fallback point is the inset itself, unchecked for overlap |
+| `Full` | slots fit but every one examined is occupied |
+
+The scan examines at most `placement::RING_LIMIT` candidates, the same
+budget `place_new`'s ring search spends, so a pathological group cannot
+make the query unbounded.
+
+Two id errors are refused before any geometry runs, and they are
+DIFFERENT errors because they send a caller to different fixes: an id
+that is not in the canvas is `bad_node`, and an id that IS in the
+canvas but is not a group is `not_a_group`. A card's rect is not a
+container, and answering geometry for one would hand the caller a
+position "inside" something that cannot hold it — PR E is the first
+consumer, so the refusal is cheaper now than the confusion later.
+
+**API note for PR E — the two refusals are two MESSAGES, not two
+variants.** Both are `VaultError::InvalidArgument { message }`, like
+every other canvas id error, so across the FFI a host receives one
+error case whose text differs. **A host cannot discriminate them
+without matching on the string, and no host should.** PR E's guidance
+is to treat both as one refusal — the id the user picked cannot take a
+card — and say so once. If a future surface genuinely needs to tell
+them apart (offering "create a group here" only for the second, say),
+that is an escalation: a typed variant or a machine-readable code on
+the error, decided then, not a `contains("not a group")` in a host.
+`place_inside_group_refuses_a_node_that_is_not_a_group` asserts the
+two messages stay distinct so the escalation remains possible; it is
+not a licence to parse them. The mac consumer added in Task 0b-2
+relies on neither: `canvasMoveIntoGroup` only ever receives ids from a
+picker built out of `kind == "group"` rows, and its `catch` announces
+one `CanvasActionFailed` either way.
+
+**0b-13 — `canvas_filter` matches mac's field set, in reading order.**
+The needle is the query trimmed of whitespace; an **empty needle
+matches EVERYTHING** (mac's `filteredOutline` short-circuits to the
+unfiltered list, and a `canvas_filter("")` returning `[]` would invert
+every consuming UI) — that is the single easiest thing to get
+backwards, so it is pinned by its own test. A non-empty needle matches
+if it is contained, case-folded, in the node's `display_title`, its
+`kind` type word, ANY ONE element of its `group_path`, or its `target`.
+Consequences that are mac behaviour and are preserved deliberately, not
+oversights: typing `group` selects every group and `link` matches every
+link card *and* any title containing "link"; and because the group path
+is matched per element, a needle spanning the `›` separator never
+matches. `target` comes from `CardSummary.target`, the same derivation
+`canvas_table_rows` serves and `canvas_db` writes, so the filter and
+the table cannot disagree about what a card points at.
+
+**0b-14 — Case handling diverges from Foundation AND from case
+folding, by a recorded amount** (CD-22). Core lowercases both sides
+with `str::to_lowercase` and tests containment. That is Unicode's
+`Lowercase_Mapping`: locale-independent, and **full** in the sense that
+one scalar may become several — but it is NOT a case fold, simple or
+otherwise, and the earlier phrase "full Unicode simple lowercase" was
+self-contradictory. Three rules, three answers:
+
+- vs mac's `localizedCaseInsensitiveContains` (locale-sensitive, no
+  full mapping): they differ on the Turkish dotless `ı` and on `İ`
+  (U+0130), whose Rust lowering is `i` + combining dot above, so a
+  plain `istanbul` needle does not match it;
+- vs a case FOLD: they differ on `ß`, which folds to `ss` but
+  lowercases to itself, so `strasse` does not match `Straße` here.
+
+All three agree across ASCII and Latin-1, which is the entire fixture
+corpus, so the §W-A census cannot see any of it. Core trims with Rust's
+`trim` (all Unicode whitespace, newlines included) where Swift trimmed
+`.whitespaces` (no newlines). Both divergences are pinned by tests
+(`filter_folds_case_the_unicode_way_not_the_turkish_way`,
+`filter_lowercases_rather_than_case_folds`), so they are witnessed
+rather than asserted.
+
+**0b-15 — The §W-A `canvas_queries` section.** The harness gains a
+canvas pass: a SECOND temp vault holding only the `.canvas` fixtures
+(so no existing golden's vault contents change), one artifact
+`canvas_queries.json`, one object per fixture in filename order,
+carrying `bounds`, then per node in reading order
+`speakable_name` / `parent` / `children` / `trace`, then the filter
+results for a fixed query list, then `describe_relative` for a fixed
+rect list. The query and rect lists are `public static readonly` data
+on `SurfaceSerializer` so the Swift twin copies one list; the twin is
+Task 0b-2's and is named in a comment beside them.
+`large_2000.canvas` is deliberately NOT in the artifact: it is the §K
+performance fixture, and at 2,000 nodes its rows would commit a
+golden no reviewer reads. Its coverage is the in-crate census, which
+runs the same queries over it. The mac parity census was RED between
+Task 0b-1 and Task 0b-2 — the golden landed with the Windows twin and
+the Swift twin that reproduces it is 0b-2's, the same sequencing 0a
+used for the C# corpus mirror. **Task 0b-2 landed that twin**
+(`ParityHarnessTests.canvasQueriesArtifact`, with its own temp vault
+and its own copies of the three pinned lists), so the deliberate gap is
+closed and the artifact is produced from both sides. The mac lane runs
+only in CI, so this artifact is where the twins' equality is actually
+decided — as with every other §W-A section, the committed golden
+arbitrates and the Swift half is unproven until that lane runs.
+
+**0b-16 — The totality parser guard replaces 0a-14's interim scan.**
+Contract 0a-14 part (d) was a line-scoped lexical scan with two
+DECLARED artefacts — a hand-written list of countable nouns and
+line-wide helper provenance. Both are now derived. The guard lexes the
+canvas render section into string literals with their enclosing call,
+so: the countable-noun list is **the set of `one`/`many` arguments
+every `plural` / `plural_len` / `counted` call site in the module
+actually passes** (a noun enters the list by being pluralized
+somewhere, not by being typed into the test); and a plural literal is
+excused only when THAT literal is an argument of one of those calls —
+a line carrying a real helper call no longer vouches for a second,
+hardcoded plural sitting beside it, which 0a-14 named as its largest
+residual. Format strings are reconstructed by the lexer's own
+`\`-continuation rule rather than by joining source lines, so a
+template split across lines is read as the one logical string it is.
+`ZERO_REACHABLE` stays declared — host reachability is a property of
+the mac call sites, not of this crate, and no parser over this crate
+can derive it. 0a-14's residual list is narrowed accordingly, in
+place.
+
+**0b-17 — Rust parses mac's coalescing switch.** 0a-8 pins the
+`navigation` / `filter` class membership in one Rust doc comment and
+mac's `CanvasAnnouncer.coalescingClass(of:)` copies it; nothing checked
+that the copy was still faithful. A `slate-uniffi` test now parses both
+— the doc comment's `[`CanvasA11yEvent::…`]` links and the Swift
+switch's case lists — and fails `cargo test` when they disagree, in
+either direction. It is the same shape as the two corpus-mirror
+tripwires (0a-3): a Rust test that reads a Swift file so a forgotten
+host edit fails in the fast lane rather than after a full
+`generate-bindings` + `dotnet test` round trip.
+
+### Tests that pin PR 0b (Task 0b-1)
+
+`crates/slate-core/src/canvas/queries_tests.rs`: per-query behaviour
+tables over the committed fixtures (ties, empties, cycles, Unicode),
+the `redteam_*` hostile-geometry cases, and censuses over
+`model_tests`' random-canvas generator (trace path terminates and never
+repeats a node; `order_nodes` is the reading-order projection of the
+input set; `filter` output is a reading-order subsequence and the empty
+query returns everything; `speakable_name` is injective).
+`crates/slate-core/src/canvas/placement_tests.rs`: the constants-source
+test and the inside-group placement table.
+`crates/slate-core/src/canvas/model_tests.rs`: `speakable_name` /
+`target` derivation, including the `A, A, A 2` fixture.
+`crates/slate-core/src/a11y.rs`:
+`canvas_count_speaking_arms_have_boundary_witnesses_and_agreement`
+part (d), now the parser (0b-16).
+`crates/slate-uniffi/src/lib.rs`: the FFI-mirror coverage test and
+`the_mac_coalescing_switch_matches_the_pinned_class_list` (0b-17).
+`apps/slate-windows/tests/SlateWindows.Tests/Censuses/ParityHarnessCensus.cs`:
+the `canvas_queries.json` golden, byte-for-byte.
+
+### Tests that pin PR 0b (Task 0b-2, the mac half)
+
+`apps/slate-mac/Tests/SlateMacTests/CanvasFFITests.swift`: one test per
+query family over the `t.canvas` fixture — the containment pair with
+both its refusals, `order_nodes`' silent drop and collapse,
+`trace_path`'s start-excluding hops, `filter`'s empty-matches-everything
+rule and its four fields, `describe_relative`'s inverted sense, bounds,
+the padded group rect, `place_inside_group`'s lattice slot and BOTH id
+errors, and `speakable_name` on all four record types — plus one for
+the three handle-free exports (`canvas_constants` field by field,
+`canvas_new_id`'s shape over many draws, `canvas_auto_sides` including
+the self-loop tie).
+`apps/slate-mac/Tests/SlateMacTests/ParityHarnessTests.swift`: the
+`canvas_queries` section's Swift twin, asserted against the same
+committed golden the Windows census uses.
+`apps/slate-mac/Tests/SlateMacTests/CountCopyTests.swift`: the
+boundary between the host's ungrouped `counted` and core's exported
+`count_noun` — identical below 1000, different at and above it
+(CD-6's carried half, CD-26).
+`apps/slate-mac/Tests/SlateMacTests/CanvasRendererTests.swift`:
+speakable-name uniqueness, and CD-20's renumbering as the one moved
+expectation.
+`apps/slate-mac/Tests/SlateMacTests/CanvasNavigatorTests.swift`:
+`testOnlyTheBatchRetargetWindowPairsReadyWithNoHandle` (the one
+`.ready`-with-no-handle window: movement still narrates, mutations
+still refuse audibly, and every VA-1 member — the four structural verbs,
+Where-am-I and follow-connection — speaks rather than going quiet),
+`testWhereAmIAndFollowConnectionAreUnchangedWithALiveHandle` (the same
+two OUTSIDE the window, including a WARM adjacency cache inside it,
+which must still give the real dead-end phrase — VA-1 must not
+over-fire),
+`testFilterInTheReopeningWindowNeverAnnouncesAWrongCount` (the filter
+family's three rules and the displayed-equals-announced invariant) and
+`testEveryNonReadyLoadStateAnswersWhatTheMappingSays` (every non-ready
+state — `.loading`, `.degraded`, `.failed`, `.retargetFailed` —
+materialized through its real lifecycle method, each driving every VA
+member, and every expectation taken FROM `canvasReadRefusal(for:)`
+rather than written beside it, so the test cannot drift from the
+mapping) and
+`testFollowConnectionWithoutASelectionAnswersLikeItsSiblings` (the
+selection question, answered the same on a ready canvas as its
+siblings answer it).
+
+---
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same
@@ -455,20 +889,353 @@ table.
 | # | Swift-derived pocket (file:line) | Core today | Tier | Target (PR) | State |
 |---|---|---|---|---|---|
 | A | The entire announcer grammar: verbosity matrix, group entered/left, connection traversed (direction phrases, duplicated again in `CanvasOutlineView.swift:335–347`), confirmations, destructive "— ⌘Z to undo", error, filter count, mode entered/cancelled/committed, undid/redid, Where-am-I readback (`CanvasAnnouncer.swift:104–213`, `AppState+CanvasActions.swift:328–819` prose sites, `AppState+CanvasConnect.swift:62,127–181`); preset-name dictionary duplicated (`AppState+CanvasActions.swift:340,766`) | `HostComposed` residue; core supplies every payload (`CardSummary`, `Neighbor.direction`, `RelativeDesc`, `color_name`) | **1** | `A11yEvent::Canvas*` family + `CanvasVerbosity` (0a) | **closed** — core half + mac consumption both landed (0a-1, 0a-2) |
-| B | Relative-position description in move mode — nearest neighbours by squared centre distance, `Below "X", right of "Y"` (`AppState+CanvasModes.swift:299–339`) | `RelativeDesc` exists for placement only | 2 | `canvas_describe_relative(h, rect, exclude) -> Vec<CanvasRelativeDesc>` (0b) | open — 0a's `CanvasMoveRelative { descs }` already takes that list |
-| C | Auto-side selection for new connections, **two copies** (`AppState+CanvasConnect.swift:24–33`, `CanvasRendererView.swift:582–600`) | none | 2 | `canvas_auto_sides` (0b) | open |
-| D | Containment / parent-group resolution, **three copies** (`AppState+CanvasCreate.swift:296–305`, `AppState+CanvasExtras.swift:131–147`, `AppState+CanvasActions.swift:439–441`) | `GroupTree` exists, not exposed | 2 | `canvas_parent_of`, `canvas_children_of` (0b) | open — 0a-CD-4 depends on `children_of` for the group card count |
-| E | Enter/exit group + group card count from outline `depth` walks; trace-path walk (`AppState+CanvasNavigation.swift:55–90,129–156,170–181`) | `reading_order`/`adjacency` exist | 2 | D's queries + `canvas_trace_path` (0b) | open |
-| F | Selection model + reading-order re-projection of the marked set | none (correct) | 3 / 2 | host state; `canvas_order_nodes` (0b) | open |
+| B | Relative-position description in move mode — nearest neighbours by squared centre distance, `Below "X", right of "Y"` (`AppState+CanvasModes.swift:299–339`) | `RelativeDesc` exists for placement only | 2 | `canvas_describe_relative(h, rect, exclude) -> Vec<CanvasRelativeDesc>` (0b) | **closed** — 0b-7; mac's nearest-neighbour walk deleted (0b-2), CD-19 |
+| C | Auto-side selection for new connections, **two copies** (`AppState+CanvasConnect.swift:24–33`, `CanvasRendererView.swift:582–600`) | none | 2 | `canvas_auto_sides` (0b) | **closed** — 0b-3, rect-keyed (CD-16); BOTH Swift copies deleted (0b-2) |
+| D | Containment / parent-group resolution, **three copies** (`AppState+CanvasCreate.swift:296–305`, `AppState+CanvasExtras.swift:131–147`, `AppState+CanvasActions.swift:439–441`) | `GroupTree` exists, not exposed | 2 | `canvas_parent_of`, `canvas_children_of` (0b) | **closed** — 0b-8; all THREE Swift copies deleted (0b-2 — the title-keyed one with `place_inside_group`), CD-18, CD-27. CD-4 no longer needs `children_of` (0a-2 deleted the walk) |
+| E | Enter/exit group + group card count from outline `depth` walks; trace-path walk (`AppState+CanvasNavigation.swift:55–90,129–156,170–181`) | `reading_order`/`adjacency` exist | 2 | D's queries + `canvas_trace_path` (0b) | **closed** — 0b-8, 0b-9; the depth walks and the trace walk deleted (0b-2) |
+| F | Selection model + reading-order re-projection of the marked set | none (correct) | 3 / 2 | host state; `canvas_order_nodes` (0b) | **closed** — 0b-10; both re-projections deleted (0b-2). Selection model stays host state |
 | G | Undo/redo stacks, depth/session policy, menu-title composition (`AppState.swift:3987`) | `apply()` returns inverse + names | 3 | host stack; **menu title** = `CanvasUndoMenuTitle{verb,name}` | **menu title landed (0a)** |
-| H | Placement math leaks; `MIN_CARD_SIZE` only in Swift | constants in `placement.rs` | 2 | `canvas_constants()`, `canvas_group_rect_around`, `canvas_place_inside_group`, `canvas_bounds` (0b) | open |
+| H | Placement math leaks; `MIN_CARD_SIZE` only in Swift | constants in `placement.rs` | 2 | `canvas_constants()`, `canvas_group_rect_around`, `canvas_place_inside_group`, `canvas_bounds` (0b) | **closed** — 0b-4, 0b-11, 0b-12; mirrored constants, the fit re-union, the bbox fold and the move-into-group math deleted (0b-2), CD-21/CD-24. `MIN_CARD_SIZE`'s reject-not-clamp ENFORCEMENT stays host-side |
 | I | Viewport math — clamp 0.1–4.0, step 1.25, fit padding 40/120 | none | 3 | host rendering; constants pinned here; zoom % announced via `CanvasZoom` | **event landed (0a)** |
 | J | Table column order/sort comparators/summary sentence; outline interleave | rows from core | 3 | host projection config; summary sentence stays a **static label** (never announced on mac) | resolved as label class (0a-13) |
-| K | Filter predicate — title/kind/groupPath/target, case-insensitive contains | none | 2 | `canvas_filter` (0b) | open |
-| L | Speakable-name dedup vs core's untitled-only allocation — two uniqueness algorithms | partial, conflicting | 2 | one algorithm in core: `CardSummary.speakable_name` (0b, D-3) | open |
-| M | Node/edge id minting | none | 2 | `canvas_new_id()` (0b) | open |
+| K | Filter predicate — title/kind/groupPath/target, case-insensitive contains | none | 2 | `canvas_filter` (0b) | **closed** — 0b-13, 0b-14; `matchesFilter` deleted (0b-2), CD-22. `filterActive` stays host UI state |
+| L | Speakable-name dedup vs core's untitled-only allocation — two uniqueness algorithms | partial, conflicting | 2 | one algorithm in core: `CardSummary.speakable_name` (0b, D-3) | **closed** — 0b-5, 0b-6, CD-20, CD-23; the renderer's used-set walk and its per-view sticky map deleted (0b-2) |
+| M | Node/edge id minting | none | 2 | `canvas_new_id()` (0b) | **closed** — 0b-4; `newCanvasEntityID` deleted, nine call sites (0b-2) |
 | N | Overlap onset/offset transition tracking | query exposed | 3 | host state machine (two-state, pinned); the CLAUSE is core's (`CanvasOverlapTransition`) | **clause landed (0a)** |
 | O | Resize → Fit to Content text-metrics approximation | none | 3 (D-5) | host, identical placeholder formula both hosts; the LABEL is core's (`CanvasResizePreset::FitToContent`) | **label landed (0a)** |
+
+---
+
+## Vocabulary additions (new copy, not migrated strings)
+
+The `CD-n` register below records where core DIVERGES from a shipped mac
+string. This section is the other thing: sentences this programme
+**adds**, which no mac string corresponds to. Kept separate on purpose —
+calling an addition a divergence would imply a mac behaviour to compare
+it against, and a reviewer checking parity would go looking for one.
+
+**VA-1 — `CanvasStatusNote::Reopening`** (W6-1 0b-2 fix round 2).
+*"This canvas is reopening. Try again in a moment."* — Medium, status
+family, uncoalesced like every other `CanvasStatus`.
+
+Spoken when a structural READ verb is used during
+`beginBatchRetarget`'s window: the canvas is `.ready` and its snapshot
+is visible, but the path-bound handle is detached until the background
+reopen lands, so the queries those verbs delegate to have no handle to
+answer from.
+
+**VA-1's members** — written here for a reader; the list a REVIEWER
+should trust is the one `every_mac_canvas_read_is_gated_or_named`
+derives from the Swift source (see VA-2's section). Handwritten
+membership is what rule 4 was invoked over, and this table is now a
+description of the derivation rather than the authority:
+
+| Member | Site | What it would otherwise do |
+|---|---|---|
+| Enter group | `canvasEnterGroup` | silence |
+| Exit group | `canvasExitGroup` | silence |
+| Trace path | `canvasTracePath` | silence |
+| Fit canvas | `canvasFitCanvas` | silence |
+| The filter family | `filterView` / `canvasAnnounceFilterCount` / the summary label | announce a count for rows that answer a different needle |
+| **Where am I** | `canvasWhereAmI` | silence — and it is the PULL surface, so silence is the one failure t0 §1.4 exists to prevent |
+| **Follow connection** | `canvasFollowConnection` | speak `No connection…`, a fact the adjacency list never returned, when the cache is cold and no handle can fill it — **and, in the other direction, refuse with VA-1 when the cache CAN answer.** Its order is fixed: (1) the selection precondition, via the precedence gate; (2) `neighborsIfKnown` — a non-nil list answers normally, traversal or accurate dead end, whatever the state; (3) the mapping's refusal, and only when (2) came back nil |
+
+The last two were present at BASE and PR 0b did not change either site;
+they are in VA-1 because the sentence is the right answer for the state,
+not because 0b broke them. Where-am-I needed its `.ready` check moved
+ahead of its handle check — reversed, it also made the `.notReadable`
+arm below it unreachable, so a canvas that never opened cleanly said
+nothing at all. Follow-connection needed adjacency to distinguish "no
+connections" from "no answer": `neighborsIfKnown` returns `nil` for the
+second, and only a real list may produce the dead-end phrase.
+
+**The order took a CI run to become executable** (PR #1155). The
+context-as-proof rewiring put the mapping first, so a WARM cache lost
+to `.reopening` — the accurate phrase refused in favour of a refusal,
+which is the rule backwards. Asking the data first is not a second
+state reader: the consult reads no state, and it cannot escalate a
+refusal into a live read, because `neighborsIfKnown`'s query arm needs
+a handle and every non-`.ready` state has already dropped it. It is the
+same shape the filter family has had since VA-1 — `FilterView.current`
+first, mapping only when the needle went unanswered — and those two are
+the only members with a cache-answerable path.
+
+**The invariant that makes it safe: a read cache never outlives the
+rows it describes.** `neighborsCache` and `filterMatchCache` were
+already emptied by every reload and by the successful retarget; PR 0b
+adds the two transitions that BLANK the surface without reloading —
+`beginPreparedReplacement` (the container shows a spinner) and
+`markMovedToTrash` (it shows a message). Both cost nothing, since every
+path out of those states clears the caches again, and both close the
+gap where a stale answer could speak for rows the user cannot see. What
+remains warm is exactly `.ready` and `.retargetFailed` — the two states
+whose retained rows the container renders, per the matrix in VA-2's
+section.
+
+**Why an addition rather than silence.** The verbs answered from
+Swift-side outline walks before PR 0b, so the window used to produce an
+answer; consuming core's queries made it produce nothing. t0's
+never-silent principle governs: a keypress that does nothing must say
+so. The window is transient but genuinely user-reachable — the canvas
+commands carry no enablement predicate (rule R1: commands are always
+reachable), and a batch rename's background reopens are not
+instantaneous.
+
+**Why not the existing sentence.** `CanvasMutationRefusal::Reopening`
+covers the same window for WRITES and keeps its
+*"Wait for it to finish before making changes."* tail. Reusing it here
+would tell a user who pressed a navigation key and changed nothing to
+wait before making changes — the wrong sentence for the trigger. The two
+now differ exactly where the user's intent differs: the write refusal
+names the changes, the read refusal names the retry.
+
+**It also covers the FILTER family.** `canvas_filter` is a structural
+query like the other four, and the filter has a second failure mode the
+navigation verbs do not: a stale answer that still looks like an answer.
+The rule is *never a wrong number*:
+
+- an ACTIVE filter whose needle is UNCHANGED keeps serving the memoized
+  match set — those ids are still correct, so nothing is announced
+  differently;
+- a needle CHANGE that no handle can answer does **not** apply. The
+  previous rows stay on screen and VA-1 is announced instead of a count.
+  Widening silently back to the full outline — which is what a naive
+  "no answer ⇒ no filter" fallback does — would show every card while
+  the field still claims to be filtering, and then speak that number as
+  a match count;
+- the count the host announces is read from the view the surfaces are
+  DISPLAYING, never recomputed, so *displayed rows == announced count*
+  holds by construction. `CanvasDocument.FilterView` is that one value,
+  and the outline rows, the table rows, the FILTER summary label, the
+  count announcement and Where-am-I's matched count all read it. (The
+  table's OTHER summary — the grid's `Canvas table: N cards, M groups.`
+  composition label — counts unfiltered rows and always has. It is a
+  never-announced label describing the canvas, not a match count, so it
+  is outside this invariant; named here because "the table reads it"
+  was too broad to be checkable.);
+- `NoCardsMatchFilter` is unaffected outside the window.
+
+**And it sets the rule for THROW arms.** A structural query can fail two
+ways, and they get different sentences because they are different facts:
+
+| Failure | Sentence | Why |
+|---|---|---|
+| No handle (the reopening window) | VA-1 | the query never ran |
+| The query THREW with a live handle | `Nothing selected.` | `bad_node` — the selection does not name a card this canvas can answer for (0b-6's row/model skew) |
+| The query SUCCEEDED and came back empty | the verb's own phrase — `Group "X" is empty.`, `At canvas level.`, `No outgoing path from "X".` | that fact was actually learned |
+
+Silence is not on the list. The middle row is the one that was wrong
+before: a throw fell into the verb's empty-answer branch, so a card core
+could not resolve was reported as an empty group, or as being at canvas
+level, or (trace path) as nothing at all. Announcing a verb-specific
+phrase for a query that never answered asserts something no query
+returned.
+
+**Two sites are outside the table by decision, both recorded rather than
+left to be rediscovered.**
+
+- `canvasFitCanvas` swallows a `bad_handle` throw silently
+  (`(try? canvas_bounds) ?? nil`, then return). Its `nil` is dominated
+  by the EMPTY canvas, which was silent before PR 0b too
+  (`guard !doc.scene.nodes.isEmpty`), and `canvas_bounds` has no
+  `bad_node` path — its only error is `bad_handle`, which needs a
+  stale-handle race to reach. Distinguishing the two would mean a
+  `do`/`catch` for a state the public surface cannot construct; the
+  no-handle case is already VA-1 via the guard above it.
+- `canvasMoveOutOfGroup` collapses a `canvas_parent_of` throw into
+  `NotInAGroup` through `try?` — the shape the middle row outlaws. It is
+  unreachable today: the node must be in `doc.scene`, which derives from
+  the same model the query reads, so `bad_node` cannot fire, and the
+  verb is a write behind `admitCanvasMutation`. **Flagged for PR E/F:
+  do not copy the collapse.** A Windows re-implementation whose scene
+  and query can come from different snapshots makes it live.
+
+**A behaviour change this rule carries, recorded so it is not read as
+incidental:** enter-group, exit-group and trace-path now announce
+`Nothing selected.` where BASE returned SILENTLY — for a missing
+selection as well as an unresolvable one. At BASE all three were silent
+and no test covered it; ~8 sibling verbs (`canvasEnterMoveMode`,
+`canvasEditCard`, `canvasRemoveFromGroup`, …) already announce exactly
+that string in exactly that situation, and the never-silent principle
+above decides the tie. It needs no vocabulary work — the arm was already
+in the corpus.
+
+**Lockstep.** Five places moved together: the `CanvasStatusNote` arm and
+its render, the corpus entry (**appended**, so no pre-existing corpus
+index moves — contract 0a-2), the in-file golden table, the regenerated
+`corpus.json`, and both host censuses. The §W-D artifact diff is **five
+lines, purely additive**: one new entry, no existing entry's identity,
+priority or text touched. The uniffi mirror gained the arm; the
+coalescing class list did not change, because `CanvasStatus` is
+"everything else, posts immediately".
+
+**VA-2 — `CanvasStatusNote::Loading`** (W6-1 0b-2, codex round 1).
+*"This canvas is loading. Try again in a moment."* — Medium, status
+family, uncoalesced. VA-1's sibling, same membership, different state.
+
+`LoadState` is `.loading`, `.ready`, `.degraded`, `.failed` and
+`.retargetFailed`; only `.ready` can answer a query, and VA-1 answered
+for that one alone.
+`.loading` is reachable two ways: a first open, and a prepared
+replacement installed over an already-open tab
+(`beginPreparedReplacement`), where the tab and its document object
+survive while the state flips. (An earlier draft of this sentence said
+the previous SNAPSHOT stays on screen; the container renders a
+`ProgressView` for `.loading`, so it does not — the round-5 matrix in
+this section is the authority, and this was the same kind of
+hand-written claim about the view that round 5 was called on.)
+**VA-1's copy would be false there** — a
+first open is not a REopen — so the state gets its own sentence rather
+than a stretched one. That is the same decision VA-1 made against
+`CanvasMutationRefusal::Reopening`, applied one level down.
+
+`CanvasMutationRefusal::Opening` covers `.loading` for WRITES and keeps
+its *"Wait for it to finish before making changes."* tail, untouched.
+
+**One mapping, and membership is DERIVED — red-team rule 4.**
+
+Three consecutive review rounds found the same class of defect in this
+subsystem: `.loading` bypassing VA-1, then the state census drifting,
+then the merged test's heterogeneous expectations plus a filter path
+that announced `.reopening` in every non-ready state. The class was
+never the individual sentence — it was **VA membership and per-state
+responses written by hand in four places**. Rule 4 says stop patching
+and implement the invariant.
+
+**`AppState.canvasReadRefusal(for:)` is now the single state → response
+authority**, total over `LoadState` with no `default`, so a new case
+fails to compile there rather than falling into somebody's silent arm:
+
+| State | Answer |
+|---|---|
+| `.ready`, handle live | proceed |
+| `.ready`, handle detached | `.reopening` (VA-1) |
+| `.loading` | `.loading` (VA-2) |
+| `.degraded`, `.failed`, `.retargetFailed` | `.notReadable` |
+
+Every member routes through it — `canvasReadContext(for:)` announces
+and returns `nil`, or hands back a `CanvasReadContext` whose existence
+IS the proof the mapping said yes, so no verb re-derives session and
+handle.
+
+**Discovery is separated from admission**, because admission announces.
+A verb resolves its document with `activeCanvasDocumentAnyState`,
+answers its OWN preconditions, and only then asks the mapping —
+otherwise the eager announcement inverts the recorded precedence and a
+no-selection press in the reopening window says "reopening" where m6
+says "Nothing selected." That precedence is itself one function,
+`canvasAnsweredMissingSelection`, and **what it asks is a question about
+the VIEW**: `LoadState.rendersRetainedSnapshot` — does
+`CanvasContainerView` put this state's retained rows on screen? A
+selection question is meaningful exactly where the user can see rows to
+have a caret in; everywhere else the mapping's sentence is the only
+honest answer. The predicate was first written as `state == .ready`,
+which was wrong: `.retargetFailed` renders its snapshot read-only, so a
+no-selection press there said "cannot be read" where the selection-first
+rule requires "Nothing selected." (codex 0b round 5). The per-state
+truth is derived from the container's own switch, not from the state's
+name:
+
+| State | Container arm | Renders retained rows | No-selection press says |
+|---|---|---|---|
+| `.ready` | `readyBody` → `canvasBody` | yes | "Nothing selected." |
+| `.retargetFailed` | `retargetFailureSnapshot` → banner + `canvasBody(readOnly: true)` | yes | "Nothing selected." |
+| `.loading` | `ProgressView` | no | `.loading` |
+| `.degraded` | `degradedState` → `stateMessage` | no | `.notReadable` |
+| `.failed` | `stateMessage` | no | `.notReadable` |
+
+`.failed` is the case worth stating plainly, because the earlier
+analysis stopped one step short: a trashed canvas KEEPS its outline
+(`markMovedToTrash` does not blank it), yet the view renders only the
+message, so there is nothing on screen for a selection question to be
+about and `.notReadable` is right. Data survival is not visibility. The
+mapping's `.notReadable` arm therefore stands unchanged for every
+predicate-false state; only the precedence moved.
+
+Two guards hold this down, both mutation-verified in both directions.
+`the_snapshot_visibility_predicate_matches_the_container_switch` parses
+the container's `switch document.state` arms, computes transitive
+reachability to `canvasBody` within the file, and fails if the predicate
+and the view disagree — the VIEW is the authority, so changing what a
+state renders forces the predicate to follow. And
+`every_mac_canvas_read_is_gated_or_named` gained a second assertion: a
+verb whose body can announce `.nothingSelected` must reach it through
+`canvasAnsweredMissingSelection`, so "the selection-bearing verbs" is a
+derived set rather than a list in a test. Where-am-I and fit canvas take admission
+first: neither has a precondition that outranks the state (Where-am-I's
+"nothing selected" falls back to the first row by design). The last row is Where-am-I's old per-state answer becoming
+everyone's; it also closes the announcement half of the t0 §5 gap filed
+in "Mac details recorded while reading" (those canvases now SAY they
+cannot be read — they are still not navigable, which is what remains
+filed).
+
+**The filter family routes through it too.** `canvasAnnounceFilterCount`
+and the summary label used to hardcode `.reopening` when the needle went
+unanswered, which was simply false in `.loading` and in the three
+unreadable states. They ask the mapping now. The one arm the mapping
+cannot speak to — a state that CAN answer, meaning the handle went
+stale inside the call — keeps `.reopening` as the honest "not now", and
+says so at the site.
+
+**Membership is enforced, not curated.**
+`every_mac_canvas_read_is_gated_or_named` (`slate-uniffi`, sibling to
+the coalescing tripwire) scans the mac tree for calls to the
+handle-based canvas read queries and asserts each calling function
+either mentions `canvasReadTarget` / `canvasReadContext` /
+`canvasReadRefusal`, or appears on a NAMED exclusion list with a stated
+reason. Adding an ungated read verb fails the test and names the
+function — mutation-verified. Two properties make it non-vacuous: it
+asserts it found call sites at all, and it asserts every exclusion still
+calls a scanned query, so a stale excuse cannot sit there hiding the
+next one.
+
+It binds SOURCE and TEST membership, not just source (codex 0b rounds
+6–7): the same test parses the two-column test's `selectionBearing` /
+`selectionFree` arrays and requires `selectionBearing` to equal the
+source-derived set of selection-first verbs in both directions, so the
+matrix cannot lose a row or miss a newly gated verb. The anchor symbol
+is `canvasAnsweredMissingSelection` — a verb is selection-first iff it
+CALLS THE GATE, because the gate is what announces; deriving from
+`canvasAnnounceSelectionUnresolvable` mentions instead described only
+the verbs with their own throw arms and let a verb adopting the gate
+alone change no compared set. No gate caller may sit outside both
+arrays. The parse anchors on the two binding declarations and fails
+loudly if they move.
+
+**Its reach, stated rather than implied** (the doctrine 0a's source scan
+settled on). It matches the query as a MEMBER TOKEN on a session-ish
+receiver, with no call paren required — `let read = session.canvasBounds`
+then `try? read(handle)` is a use, and demanding the paren let exactly
+that shape past until codex round 4 found it. The receiver is the
+discriminator because these are `VaultSession` methods, which is also
+what keeps the navigator's own same-named verb out of the results. What
+it CANNOT follow is indirect flow: a session passed into a helper that
+calls the query, a method reference stored in a property and invoked
+elsewhere, or a closure capturing either. Those need symbol resolution
+across functions — a real front end, which this scan is not and should
+not become. The bound is the usual one: it can miss a NEW evasion, it
+cannot go quietly green on the code it does see.
+
+The exclusions, each with its reason: `filterView` and
+`neighborsIfKnown` (the document's data layer RETURNS un-answerability
+instead of announcing it, so their callers can route through the
+mapping); and `canvasRemoveFromGroup`, `canvasGroupMarked`,
+`canvasDuplicate`, `canvasInReadingOrder`, `canvasRelativeDescription`
+(write paths behind `admitCanvasMutation`, a different ladder with its
+own spoken refusals — routing them here would double-announce).
+
+`canvasSelectAdjacent` is deliberately NOT an exclusion. It reaches
+`canvas_filter` only through `filteredOutline`, so the scan never sees
+it, and `FilterView.current` already separates a live answer from a
+retained one — which is exactly what keeps arrow movement working on
+the displayed rows in the reopening window, as VA-1's tests require.
+Decided by reading the path, recorded here rather than left implicit.
+
+`canvasAutoSides` is outside the scanned set: it takes no handle and
+cannot fail, so there is no state for a mapping to answer about.
+
+Same five-place lockstep as VA-1, and the §W-D artifact diff is again
+**five lines, purely additive**.
 
 ---
 
@@ -500,6 +1267,14 @@ Likewise `CanvasEmptyOnboarding` renders the **AX spelled-out** form
 (`CanvasContainerView.swift:492–494`) as the canonical text — the glyph
 form (`:481–483`) stays a host label, because the spelled-out one is
 what a screen reader actually receives. (R-0a-4.)
+
+**This closes t0 §5's ANNOUNCEMENT for a degraded load, not its
+navigability.** A degraded canvas is still unreachable by every
+navigator verb on mac — `activeCanvasDocument` gates on `.ready`, and
+the degraded branch clears `outline` outright. That is a separate,
+pre-existing gap no PR has owned; it is filed in "Mac details recorded
+while reading" (Task 0b-2's entry) for close-out, so nobody reads CD-3
+as evidence that §5 is satisfied end to end.
 
 **CD-4 — Group entry speaks the group's CHILD count.** t0 §1.2 specifies
 `Entering group "X", ⟨m⟩ cards`; mac passes the entered row's SIBLING
@@ -685,6 +1460,197 @@ inspectable value (`CanvasModeController`) and three undo-action names
 and the Edit-menu title. No test pinned any `1 cards` string (checked
 across the mac, Windows and Rust suites).
 
+### PR 0b
+
+**CD-16 — `canvas_auto_sides` takes rects, not node ids** (controller
+ruling R-0b-1). §2 row C proposes `canvas_auto_sides(h, from, to)` keyed
+by node ids, and that signature cannot serve one of its own three call
+sites: `AppState+CanvasExtras.swift:61–65` (create-connected-card)
+builds a **synthetic `CanvasSceneNode` that is not in the model yet** —
+it computes the placement first, then asks for the sides. A rect-keyed
+pure function serves all three, needs no handle, and lets the renderer
+resolve one endpoint at a time (0b-3). The id-keyed convenience is not
+added: a caller that has ids has the scene, and adding a second spelling
+of the same rule is what §W-G exists to prevent.
+
+**CD-17 — `canvas_constants()` and `canvas_new_id()` are free
+functions** (R-0b-2). §PR 0b says "all `#[uniffi::export]` on
+`VaultSession`". Both are pure, and making them methods would force a
+caller to have an open canvas to read a constant — Windows' document VM
+needs `min_card_size` before any canvas is open, to construct the mode
+controller. They join `a11y_render` / `canvas_color_name` as free
+exports (the `SlateUniffiMethods.*` shape the C# harness already uses).
+
+**CD-18 — Equal-area containment ties resolve to the LATER document
+order.** Core's `min_by(area_cmp).then_with(|| b.doc.cmp(&a.doc))`
+(`model.rs`) keeps the later group; Swift's `min(by:)`
+(`AppState+CanvasCreate.swift:296–305`) keeps the first. Observable only
+for exactly-coincident group rects — the shape
+`model_tests.rs:coincident_groups_are_acyclic_and_deterministic`
+deliberately constructs — so migrating mac onto `canvas_parent_of`
+silently changes its answer there. Core's rule wins: it is the one the
+reading order and the acyclicity refinement already use, and mac's is
+an accident of which overload was reached for.
+
+**CD-19 — `describe_relative`'s tie-break is pinned where mac's was
+undefined.** Swift's `sort(by:)` is introsort with no stability
+guarantee, so two equidistant neighbours could order either way run to
+run and mac could speak a different fix for the same geometry twice.
+Core orders by `(squared distance, document index)`, with non-finite
+distances last (`canvasSafeInt`'s precedent for hostile geometry). This
+is a latent nondeterminism fixed, not a phrasing change: every fixture
+mac's tests exercise has a unique nearest neighbour.
+
+**CD-20 — `speakable_name` ordinals renumber on delete** (owner
+decision D-3, settled here). Core's derivation is recomputed from
+scratch on every `open_canvas` / `canvas_apply`, so deleting the first
+of two same-titled cards renumbers the second. T R21's "ordinals hold
+for the session" survives today only in `CanvasRendererView`'s
+per-VIEW `assignedSpeakable` map — two panes on one canvas already hold
+independent ordinals, so the stickiness was never a document- or
+session-level property to preserve. D-3's first branch is therefore
+taken: **deterministic by document order, identical on both platforms**,
+and the renumbering is this divergence from R21. The alternative — a
+session-scoped sticky map in `OpenCanvasState` — would make the answer
+depend on the handle's history, which is exactly the property that makes
+a §W-A golden impossible to write.
+
+**CD-21 — `place_inside_group`'s fallback fires on SIZE, not on
+childlessness.** Mac's fallback (`AppState+CanvasActions.swift:439–461`)
+triggers when the group has **no children at all**, regardless of size,
+and when the group *does* have a child it delegates to plain
+`place_new`, which is not clipped to the group — a full group pushes the
+card outside and containment silently un-parents it. The spec's rule
+("falls back to `(x + 20, y + 40)` only when the group is smaller than
+one slot") is better defined and wins, so **geometry outcomes for
+empty-but-large groups differ from legacy mac**: mac drops the card at
+the inset, core walks the group's interior lattice from that inset and
+takes the first free slot (0b-12). Coordinates are never announced, so
+no §W-D string moves; §W-A pins cross-host equality of the NEW rule.
+The spec is also silent on the group that fits slots but is full, which
+mac leaves undefined — 0b-12's third outcome (`Full`) closes it rather
+than returning a point outside the group.
+
+**CD-22 — Case handling and whitespace trimming are Rust's, not
+Foundation's — and not case folding either.** `canvas_filter`
+lowercases both sides with `str::to_lowercase` (Unicode
+`Lowercase_Mapping`, locale-independent) where mac used
+`localizedCaseInsensitiveContains` (current locale, no full mapping),
+and trims with `str::trim` (all Unicode whitespace) where Swift trimmed
+`.whitespaces` (newlines NOT trimmed).
+
+The spec's §2 row K and §PR 0b both ask for "Unicode simple
+case-folding". **What shipped is lowercasing, which is a third rule**,
+and the difference is recorded rather than glossed: a case fold
+collapses `ß` to `ss`, lowercasing leaves it alone, so `strasse` does
+not match `Straße` here. Lowercasing was kept because it is what the
+rest of this crate's case-insensitive matching already uses, and
+switching one predicate to `to_lowercase`-plus-folding for one letter
+would put a second case rule in core. All three rules agree across
+ASCII and Latin-1, which is the whole fixture corpus; the recorded
+differences are Turkish dotless `ı`, `İ` (U+0130, whose Rust lowering
+is `i` + combining dot), `ß`, and a query carrying a newline. Each is
+pinned by test rather than merely described (0b-14).
+
+**CD-23 — `speakable_name` is exposed on four records; which surface
+SPEAKS it stays the host's.** Mac's speakable names reach only the
+renderer's AX peer names (`CanvasRendererView.swift:403,447`) — the
+outline, table and Where-am-I all use raw `title`. Surfacing the field
+on all four records is plumbing; switching the outline's or table's item
+name from `title` to `speakable_name` would be a behaviour expansion
+that moves `CanvasOutlineTests.testOutlineRowsCarryDerivedLabelsAndValues`.
+Task 0b-2 therefore consumes the field at the renderer's peer names
+only — the second surviving card-reference spelling 0a-10's scope table
+left standing with §W-G row L as its owner — and leaves the other three
+surfaces reading `title`. Both hosts do the same thing, which is what
+parity requires; the field being available on all four is what stops a
+later host from re-deriving it.
+
+**CD-24 — `canvas_group_rect_around` returns `Option`.** Mac's bbox
+fold aborts on `guard minX.isFinite` when no member resolves — a silent
+no-op with no announcement at all. `None` is that outcome typed, so a
+host can decide what to say instead of inheriting silence by accident.
+The non-empty case is byte-identical arithmetic.
+
+**CD-25 — the inside-group search is a column-major LATTICE, not a
+ring.** Controller ruling R-0b (§PR 0b) said "ring search inside the
+group rect with `place_new`'s preference order". A ring search is what
+`place_new` does around an anchor: for ring *r*, try the four
+directions at distance *r*. Clipped to a group and anchored at the
+group's inset top-left, three of those four directions leave the frame
+at every ring, so the ring degenerates to two arms and never reaches
+the interior's diagonal slots — a two-column, two-row group would leave
+its far corner unreachable. The implemented rule is a lattice over the
+interior, visited column by column and each column top to bottom, which
+preserves the part of the ruling that carries meaning — `Below` is
+preferred to `RightOf`, `place_new`'s first two preferences — and drops
+the part that does not survive clipping. Adopted by controller ruling
+in fix round 1: one deterministic order, pinned by fixtures
+(`inside_group_prefers_below_then_right`) and by the §W-A goldens, and
+both hosts consume core rather than re-deriving it, so there is no
+second implementation for it to disagree with. `Above` and `LeftOf`
+remain unreachable by construction, which is what clipping to the group
+means.
+
+**CD-26 — `count_noun` is an FFI export, because CD-6's other half is a
+host string.** CD-6 routes the canvas ANNOUNCEMENTS through core's
+grouped `count_noun`. Three of the undo-stack action names pair with
+announcements that group — bulk delete, bulk colour, group-marked — and
+those names are SPOKEN, because `CanvasHistoryApplied.name` is a
+payload rendered verbatim. So `Undid delete 1000 cards.` followed
+`Deleted 1,000 cards.` from the same action.
+
+Task 0b-2 first closed that with a four-line `CountCopy.countedGrouped`
+mirroring `group_thousands` in Swift. **That was wrong and is
+retracted**: a host re-implementation where a pure core function can be
+called is precisely the failure §W-G exists to prevent, and the fact
+that it was small and test-pinned did not make it a second definition
+any less. `slate_core::sidebar_filter::count_noun` is now `pub` and
+`slate-uniffi` exports it as a free function (`count_noun(count,
+singular, plural)`), joining `canvas_constants` / `canvas_new_id` /
+`canvas_color_name` in the handle-free family (CD-17). The Swift
+mirror is deleted; the three names call the export.
+
+`CountCopy` keeps its ungrouped `counted` — that divergence is
+deliberate and documented for host copy with no core counterpart — and
+its doc comment now names the export and says not to add a grouped
+helper beside it. The mac host still owns the two-branch agreement
+ternary (`noun`/`verb`), which carries no formatting to disagree about.
+
+Nothing corpus-visible moved: the export renders no event, so no
+corpus entry, golden, census or §W-A artifact changed — verified by
+regenerating all 29 parity artifacts on the rebuilt library and
+diffing them byte-for-byte against the committed goldens.
+
+**CD-27 — Duplicate's group expansion answers from the tree, not from
+"centre inside a picked group".** Mac's copy 2
+(`AppState+CanvasExtras.swift:131–147`) asked, for every node, whether
+its centre fell strictly inside ANY picked group, and included it if so.
+That is the same set as "is a descendant of a picked group" only while
+groups NEST. Concretely, with groups `A` (large) and `B` (small)
+overlapping without either containing the other's centre, and card `c`
+whose centre lies inside BOTH:
+
+- core's `GroupTree` gives `c` exactly ONE parent — the smaller area,
+  `B` — so `canvas_children_of(A)` does not contain `c`, and duplicating
+  `A` alone copies the frame without `c`;
+- mac's test included `c` when `A` was picked, so duplicating `A` alone
+  copied `c` too — while the outline, derived from the same tree,
+  showed `c` under `B`.
+
+Core's answer wins per decision 14 (one derivation) and is the one the
+user can already see: the outline, the group path, `depth`, and every
+other containment surface are that tree. Mac's answer additionally
+contradicted its own outline, which is the stronger argument.
+
+**No mac test pinned the old answer** — `testDuplicateGroupExpandsToMembersAsOneAction`
+uses one group with two plainly-nested children, where both rules agree
+— so the migration moved no expectation. Cross-reference CD-18, which
+records the OTHER disagreement between mac's containment copies and
+core's tree (the equal-area tie-break); CD-18 is about which group
+wins a tie, CD-27 about a node whose membership two rules answer
+differently without any tie.
+
 ---
 
 ## Accepted risks (owner-recorded; off-limits for re-litigation)
@@ -791,6 +1757,67 @@ adding a residue site of its own — the count is 29, not 30.
   the structural lookup runs BEFORE the apply and a miss returns
   without deleting — see CD-7's behaviour note.
 
+Read during PR 0b (Task 0b-1), none of it this task's to fix:
+
+- **The move-into-group first-child anchor is title-keyed**
+  (`AppState+CanvasActions.swift:439–441`:
+  `$0.groupPath.last == group.title`) — the same repeated-label
+  miscount Codoki #613 flagged, still live at that one site after 0a-2
+  retired the other two. `canvas_children_of` is id-keyed and retires
+  it in Task 0b-2; the fix is free with the migration.
+- **Group-around-marked is a silent no-op when no member resolves**
+  (`AppState+CanvasActions.swift:791–812`: `guard minX.isFinite else
+  { return }` — no announcement of any kind). `canvas_group_rect_around`
+  types the outcome as `None` (CD-24); deciding what the host SAYS
+  there is PR G's, not core's.
+- **`MIN_CARD_SIZE` is enforced as REJECT-the-step, not clamp-to-min.**
+  `canvasModeStep` (`AppState+CanvasModes.swift:171–174`) refuses the
+  whole step — neither dimension changes — and announces
+  `Minimum size.` when EITHER new dimension would fall below 40. §PR F
+  of the spec says "clamp at `min_card_size`", which is a different
+  behaviour; the constant is core's (0b-4), the reject rule is PR F's
+  to copy. Recorded here so PR F does not read the spec's word
+  literally. Fit-to-content separately floors height at the same 40 and
+  caps it at 600 (`:213`) — part of D-5's shared formula.
+- **The trace-path walk leaves the selection on the last hop**
+  (`AppState+CanvasNavigation.swift:160`, announcement-suppressed).
+  `canvas_trace_path` returns the hop list and nothing about selection;
+  where the caret lands is host state (§2 row F, Tier 3).
+
+Read during PR 0b (Task 0b-2), not this issue's to fix — **file at
+close-out**:
+
+- **A degraded or unavailable canvas is ANNOUNCED but still not
+  NAVIGABLE, and t0 §5 wants both.** The state story itself lives in
+  VA-2's section — `canvasReadRefusal(for:)`'s table — and this entry
+  cites it rather than restating it; what is filed here is only the
+  half that remains open.
+
+  **Closed by PR 0b:** the silence. `.degraded`, `.failed` and
+  `.retargetFailed` answer `.notReadable` at every read verb now, so a
+  keypress on such a canvas says why it did nothing instead of doing
+  nothing quietly.
+
+  **Still open:** those canvases cannot be READ. `activeCanvasDocument`
+  gates the snapshot-only verbs on `.ready`
+  (`AppState+CanvasNavigation.swift:24–33`), and the deeper obstacle is
+  not the gate — `CanvasDocument.load` (`:431–444`) *releases the handle
+  and sets `outline = []`* on a degraded load (Codoki #608's resource
+  fix), so there is nothing left to navigate even if the gate opened.
+  (The published snapshot DOES survive on the trashed and
+  retarget-failed paths — `markMovedToTrash` `:590–600` clears the
+  handle but not `outline` — which is what made the code look navigable
+  on a first read.)
+
+  t0 §5 wants a degraded canvas readable, so a user can inspect what
+  survived a bad file rather than facing a dead tab. Closing it means
+  deciding whether a degraded load keeps a read-only handle: a
+  core-adjacent design question with a §W-D announcement surface, a
+  piece of work in its own right, and no PR has owned it. **Filed
+  rather than absorbed into W6-1:** PR 0b did not cause it, and the
+  window PR 0b DID change (`beginBatchRetarget`'s) is a different state
+  with its own answer (VA-1).
+
 ---
 
 ## Owner decisions (adopted by controller ruling 2026-08-22, autonomous run)
@@ -799,7 +1826,7 @@ adding a residue site of its own — the count is 29, not 30.
 |---|---|---|
 | D-1 | §2 tiering (Tier 1+2 move to core with mac consumption; Tier 3 host-by-designation) | **Accepted as listed.** Any demotion of a Tier-2 row is a recorded divergence naming the duplicated rule. |
 | D-2 | Chord collisions | **`whereAmI` = Ctrl+Alt+Shift+I** (G18 precedent, `Divergence` recorded on the row); **`connectTo` keeps Ctrl+Alt+C** in `ChordScope.Canvas` (disjoint delivery site from Reading — the Ctrl+F precedent). |
-| D-3 | `speakable_name` session stickiness (T R21) | **Core deterministic by document order**; R21 stickiness preserved by the same mechanism core uses for untitled ordinals if it is session-held, else "ordinals may renumber on delete" is a two-platform divergence. Settled in 0b. |
+| D-3 | `speakable_name` session stickiness (T R21) | **Core deterministic by document order**; R21 stickiness preserved by the same mechanism core uses for untitled ordinals if it is session-held, else "ordinals may renumber on delete" is a two-platform divergence. **Settled in 0b-1: the second branch.** Mac's stickiness lives in a per-VIEW map, so it was never session-held; ordinals renumber on delete, identically on both platforms — CD-20. |
 | D-4 | `canvasColorMarked` unregistered on mac | **File the mac issue; Windows ships Color Marked only if mac registers it** (parity = the registry). |
 | D-5 | Resize → Fit to Content placeholder formula | **Both hosts use the identical formula**, host-designated and recorded; a real text-measure API is a future core query. 0a owns only the spoken label. |
 | D-6 | Canvas undo/redo chords | **Ctrl+Z / Ctrl+Y** (decision 12 + the structural-undo precedent); `Ctrl+Shift+Z` only if the editor already aliases it. |
@@ -920,6 +1947,275 @@ adding a residue site of its own — the count is 29, not 30.
   "once per open" is "once per mounted container"; the banner renders
   the SAME event, so the two spellings cannot drift.
 
+### Task 0b-1 (the Rust + FFI + Windows-harness half)
+
+- **Mac's speakable names are NOT duplicated; the defect is narrower.**
+  The research report claimed mac's loop yields `A`, `A 2`, `A 2` on
+  document order `A`, `A`, `A 2`. Re-deriving both algorithms side by
+  side shows it does not: its `while used.contains(candidate)` keeps
+  incrementing, so mac produces `A`, `A 2`, `A 2 2` — unique. What it
+  lacks is the check against REAL titles, so a generated ordinal can
+  spell a different card's actual title and a Voice Control user who
+  says what they read lands on the wrong card. 0b-5 records the
+  correction rather than editing the claim away, because the wrong
+  version reached a commit message on this branch first.
+- **A census can assert the wrong property and look green.** The
+  speakable-name census asserted uniqueness, which mac satisfies too;
+  deleting the taken-guard left it passing and failed only the three
+  fixture tests. It now also asserts that no GENERATED name spells
+  another card's display title, which is the property the guard exists
+  for, and deleting the guard fails it.
+- **`(y, x)` order is not `Below` → `RightOf`.** Contract 0b-12's first
+  draft said the inside-group lattice is visited in `(y, x)` order and
+  called that `place_new`'s preference; `(y, x)` exhausts a ROW first,
+  which is `RightOf`. Caught by having to write
+  `inside_group_prefers_below_then_right`, which had to pick one. The
+  code walks a column top to bottom before moving right.
+- **`speakable_name` had to reach `CardSummary`, not just the session.**
+  Putting it in the session layer would have meant computing it per
+  query and twice for a row type that also feeds the scene; on the
+  summary it is derived once per model, which is also what makes the
+  0b-6 join a hash lookup rather than a second derivation.
+- **`target` moved into `CardSummary` too.** The filter matches it, and
+  `canvas_db` had its own `match` on node kind for the column. Two
+  spellings of "what does this card point at" is exactly the §W-G
+  failure mode, inside core this time; the column now writes the
+  summary's field.
+- **`getrandom` was already in the lock** (via `tempfile`, a direct
+  slate-core dependency), so `canvas_new_id` cost no new crate. It is
+  the whole dependency: the id is 16 hex characters with `'4'` at index
+  12, which needs randomness and no UUID type at all.
+- **The parity harness needed a second vault, not a second loop.**
+  Copying the canvas fixtures into the markdown vault would have
+  changed what `search`, `links`, `tasks` and `properties` see. With
+  its own vault, regenerating produced exactly one new artifact and
+  left the other twenty-eight byte-identical.
+- **Not built, deliberately:** `canvas_containing_group_of_rect` (the
+  transient-rect form of `parent_of`) and `canvas_roots`. The research
+  report suggests both; neither is in PR 0b's deliverable list, and
+  PR F is the first caller that would need the former. Recorded here so
+  the omission is a decision rather than an oversight.
+
+### Task 0b-2 (the mac consumption half)
+
+**Per-row site counts — what was deleted, and what consumes core now.**
+Every "before" number is a grep over the mac tree at BASE `8564946`;
+every deleted symbol was re-grepped to zero afterwards.
+
+| Row | Swift derivations deleted | Core call sites now |
+|---|---|---|
+| B | 1 — `canvasRelativeDescription`'s candidate filter, squared-distance sort and axis phrasing (`AppState+CanvasModes`) | 1 `canvas_describe_relative` |
+| C | 2 — `AppState.canvasAutoSides` and `CanvasRendererView.anchorPoint`'s `case nil` arm | 3 `canvas_auto_sides` (connect, create-connected-card, renderer) |
+| D | 3 — the enclosing-group filter (`+CanvasCreate`), the inside-a-picked-group test (`+CanvasExtras`), the title-keyed first-child lookup (`+CanvasActions`, deleted with row H's placement rewrite) | 1 `canvas_parent_of` + 1 transitive `canvas_children_of` walk |
+| E | 3 — the `depth + 1` enter walk, the `depth − 1` exit scan, the greedy trace loop (`+CanvasNavigation`) | 1 `canvas_children_of`, 1 `canvas_parent_of`, 1 `canvas_trace_path` |
+| F | 2 — `canvasMovingSet`'s and `canvasMarkedInOrder`'s outline projections | 1 `canvasInReadingOrder` helper over `canvas_order_nodes`, called by both |
+| H | 3 mirrored `static let`s + 21 retyped size literals + 1 bounds re-union + 1 bbox fold (with its literal `pad = 40`) + 1 move-into-group placement block (with its `(x + 20, y + 40)`) | 26 `canvas_constants()` field reads (5 replacing the statics, 21 the literals), 1 `canvas_bounds`, 1 `canvas_group_rect_around`, 1 `canvas_place_inside_group` |
+| K | 1 — `CanvasDocument.matchesFilter` | 1 `canvas_filter`, memoized per needle |
+| L | 1 two-pass walk + 2 per-view maps (`speakableNames`, `assignedSpeakable`) | 2 reads of `CanvasSceneNode.speakableName` |
+| M | 1 — `AppState.newCanvasEntityID` | 9 `canvas_new_id()` |
+
+- **One mac expectation moved, and CD-20 is why.**
+  `CanvasRendererTests.testRenameRefreshesLabelAndSurvivorsKeepOrdinals`
+  asserted that renaming the first of two `Ideas` cards left the second
+  as `Ideas 2`. Core recomputes speakable names from document order on
+  every derivation, so the survivor is now plain `Ideas` — the ordinal
+  existed only to disambiguate against the card that was renamed. Two
+  assertions flip and the test is renamed to
+  `…AndOrdinalsFollowDocumentOrder`. **No other expectation in any mac
+  suite changed**; the only other test-file edits are the four
+  `filteredOutline` call sites gaining the `session:` argument (the
+  asserted values are untouched) and new tests.
+- **The three containment copies were not three copies of one
+  question.** Copy 1 asked "which group contains this card" (parent),
+  copy 3 asked "what is in this group" (children) — but copy 2 asked
+  "is this node inside any PICKED group", which is only the same as
+  "is it a descendant" while groups nest. Two groups that overlap
+  without nesting answer differently: mac included a node whose centre
+  fell in the picked group even when the outline showed it inside the
+  other one. Core's tree answers the question the outline shows, and
+  Duplicate now walks `canvas_children_of` transitively. **CD-27**
+  records the scenario and both answers; no mac test pinned the old
+  one.
+- **`canvas_place_inside_group`'s `TooSmall` still needs a host
+  overlap check.** The contract says its point is the inset, unchecked
+  — so `canvasMoveIntoGroup` runs `canvas_check_overlap` on that rect
+  and keeps mac's shipped `No free space inside "X".` refusal. `Full`
+  takes the same refusal directly. Without the check the host would
+  have silently stacked a card in a group too small to hold it.
+- **One degenerate navigation path was held byte-identical; the other
+  was SUPERSEDED and this bullet used to assert the old one.** The
+  surviving half: trace-path still names its start card from the outline
+  row, so the `No outgoing path from "X".` string is composed where it
+  always was.
+
+  The retracted half said exit-group "returns silently for a selection
+  the canvas no longer holds", on the reasoning that announcing anything
+  there would be a new sentence rather than a migration. **VA-1's
+  throw-arm table replaced that**: a `bad_node` throw now answers
+  `Nothing selected.` at exit-group, enter-group and trace-path alike,
+  because a card core cannot resolve has no level, no children and no
+  path — and silence is the outcome the never-silent principle rules
+  out. The behaviour was already changed in code when this bullet still
+  described the old one, which is exactly the drift a PR C/E author
+  copying "silent by design" into the Windows navigator would have
+  shipped as a t0 violation. Retracted in place rather than deleted,
+  because the reasoning that produced it — "a new sentence is out of
+  scope for a migration" — is the tempting one to repeat.
+- **Structural navigation's state answers moved twice, and this entry
+  is the history — VA-2's section owns the CURRENT story.** For the
+  mapping, the membership guard and the per-state sentences, read there
+  (`canvasReadRefusal(for:)`'s table); what is recorded here is how the
+  claims got wrong, because the failure mode outlived each individual
+  correction.
+
+  The first draft of this note said the silence affected "a canvas
+  moved to Trash, or one whose retarget failed". Both were wrong:
+  `activeCanvasDocument` gated on `case .ready`, so those states were
+  unreachable by every navigator verb — the claim was written from the
+  shape of the code rather than from its reachability, the same class
+  of error the round record already carries twice.
+
+  The second version scoped the answer to `beginBatchRetarget`'s window
+  alone — the one state pairing `.ready` with a detached handle, where
+  the snapshot stays visible while nothing may save through the
+  moved-away path. True, and still incomplete: `.loading` had no answer
+  at all, and the three unreadable states kept their silence.
+
+  **What is true now** (codex 0b rounds 1–4, rule 4): one total mapping
+  answers every state, `.loading` included, and the three unreadable
+  states say `.notReadable` instead of nothing — which closes the
+  ANNOUNCEMENT half of the t0 §5 gap filed in "Mac details recorded
+  while reading", leaving only navigability open there. Arrow movement
+  still narrates in the reopening window (the filtered outline serves
+  the displayed rows), and mutations are still refused audibly
+  (`CanvasMutationRefusal::Reopening`). A verb's own selection question
+  still outranks the state's on a canvas whose snapshot is on screen —
+  which is `.ready` including that window, AND `.retargetFailed`, whose
+  retained rows the container renders read-only. Round 5 corrected that
+  last clause: it had been written as "`.ready`", a hand-curated
+  restatement of a fact that belongs to the view, and it was wrong by
+  one state. "On screen" is now `LoadState.rendersRetainedSnapshot`,
+  derived from `CanvasContainerView`'s switch and pinned to it by
+  `the_snapshot_visibility_predicate_matches_the_container_switch`. Per
+  the same lesson, which verbs ask that question is no longer a list
+  either — `every_mac_canvas_read_is_gated_or_named` asserts that any
+  verb able to announce `.nothingSelected` reaches it through the gate.
+
+  Silence is a test failure now:
+  `testOnlyTheBatchRetargetWindowPairsReadyWithNoHandle` asserts the
+  sentence at each VA-1 member, and
+  `testEveryNonReadyLoadStateAnswersWhatTheMappingSays` drives every
+  non-ready state with its expectations taken FROM the mapping, in BOTH
+  selection columns — the round-5 miss was a test that forced a
+  selection before exercising each state and so never asked the
+  absent-selection half.
+
+  **Retaining the detached handle for READS is refused permanently, and
+  this is the reasoning so it is not re-proposed.** It is the cheapest
+  way to restore full navigability in that window and it was
+  considered. Today, "no edit can save through the moved-away path" is
+  a STRUCTURAL invariant: there is no handle, so `canvas_apply` cannot
+  be reached at all. Handing the verbs a read-only handle would
+  downgrade that to a host-enforced one — `admitCanvasMutation`'s
+  refusal would become the only thing standing between a mis-sequenced
+  call and a canvas re-created at the path the user just moved away
+  from. Trading a structural write-safety invariant for an
+  announcement is disqualified: the announcement was obtainable
+  another way, and safety invariants that depend on every caller
+  remembering a guard are the ones that fail quietly. (Controller
+  ruling, W6-1 0b-2 fix round 2.)
+- **`try?` on an optional-returning FFI call FLATTENS (SE-0230), and a
+  scoped review blessed the shape anyway.** `canvas_parent_of` returns
+  `String?`, so `try? session.canvasParentOf(…)` is `String?`, NOT
+  `String??`. Two consequences, and 0b-2 hit both: the two-step
+  `guard let` shape it was written with does not COMPILE, and — the
+  reason it matters after the compile error is fixed — a throw and a
+  `nil` result arrive as the same `nil`, erasing exactly the
+  distinction VA-1's throw-arm table exists to make. The scoped
+  re-review looked at this hunk and recorded that "the trap was
+  avoided"; it was not. Every such site now uses `do`/`catch` where the
+  distinction is load-bearing, and the sites where it is NOT (CD-24's
+  group-rect silence, VA-1's recorded `canvas_bounds` exclusion) carry
+  a comment saying so instead of a `?? nil` that implies a second level
+  of optionality that never existed.
+
+  **For future Swift reviews:** check every `try?` against its
+  function's RETURN type, not against the call's shape. The optional
+  the reviewer expects to see is not always there, and the failure is
+  silent in prose review because the code reads as if it distinguishes
+  what it cannot.
+
+  **The mechanical check reported zero once before it was true.** Its
+  first closure matched only `receiver.method(…) ?? nil` — a bare
+  receiver with the unwrap inline — and so missed both shapes the one
+  remaining site used: an optional-CHAINED receiver
+  (`currentSession?.canvasNodeText`, where chaining flattens too), and
+  an unwrap applied to a bound variable on a later line. The zero was a
+  property of the closure, not of the tree. Widened to cover any
+  receiver shape and unwrap-via-binding, it finds that site in the
+  pre-fix tree and reports zero after — which is the only order in
+  which a zero means anything. Recorded because "the automated check
+  says zero" is exactly the reassurance that stops a reviewer looking.
+- **One row-F caller is not behind admission, and the cost is
+  cosmetic.** `canvasInReadingOrder` answers `[]` without a handle, and
+  its first doc comment claimed every caller was behind
+  `admitCanvasMutation`. Not true: the card picker's `excluded:`
+  argument is a sheet BODY, re-evaluated on every SwiftUI pass, so a
+  reopening window opening while the sheet is up leaves it empty and the
+  picker stops hiding the moving set. Picking one of those rows is still
+  refused downstream — `canvasPlaceRelative` guards
+  `!moving.contains(target)` and announces
+  `Pick a card outside the moving set.` — so no wrong placement is
+  reachable through it; the user is offered rows that would otherwise be
+  omitted. Left as-is deliberately (the alternative is threading a
+  handle into a sheet body for a transient cosmetic), with the comment
+  corrected to say what is true.
+- **`filterActive` did not move, and that is a decision.** It is UI
+  state — the Clear button, the summary, the Esc rung — not the match
+  rule, so it keeps Foundation's `.whitespaces` trimming. The one input
+  where host and core disagree is a needle of nothing but newlines:
+  active by the host's test, empty by core's, therefore matching
+  everything. CD-22 already lists newline trimming among the recorded
+  differences; this is where a user could see it.
+- **The filter needed a memo, not just a call.** `filteredOutline` is
+  read several times per SwiftUI body pass, and at the §K 2,000-node
+  budget each read would be another `canvas_filter` round trip. It is
+  memoized per needle and invalidated exactly where `neighborsCache`
+  is — six sites, the same lifetime rule.
+- **CD-6's carried half was three sites, not six.** The undo-stack
+  action names are SPOKEN (`CanvasHistoryApplied.name` is a payload),
+  so each must count the way the sentence it undoes counts. Delete,
+  colour and group render through core's grouped `counted`, so their
+  names call core's `count_noun` over the FFI (CD-26); move, duplicate
+  and the mode object render through core's ungrouped `plural`, so
+  leaving them on the host's `counted` is what makes them agree. A
+  blanket "group everything" would have broken the pairing in the other
+  direction. Below 1000 the two are byte-identical, which a test
+  asserts rather than assumes.
+- **The first fix for that was a host mirror, and it was wrong.** The
+  grouped counting initially landed as a four-line
+  `CountCopy.countedGrouped` re-deriving `group_thousands` in Swift,
+  on the reading that core was out of scope. Corrected by controller
+  ruling: `count_noun` is now an FFI export and the Swift mirror is
+  deleted (CD-26). Recorded as a correction rather than edited away —
+  "small, pinned by test, and the alternative was out of scope" is
+  exactly the reasoning that puts a second definition of a core rule in
+  a host.
+- **Two Swift-side helpers survive by design.** The renderer's
+  `Group ⟨name⟩` prefix is §W-C label class, not a spoken card
+  reference; and `MIN_CARD_SIZE`'s reject-the-whole-step enforcement
+  stays host-side, with the CONSTANT coming from core. Both are
+  commented at the site so PR F copies the rule and not the spec's
+  looser "clamp".
+- **The §W-A Swift twin was verified mechanically, not by eye.** The
+  ordered sequence of `Raw(...)` literals in the two serializers is
+  identical (40 tokens); the full emission sequence aligns 1:1 apart
+  from the two places C# spells an if/else where Swift calls
+  `appendOptionalString`; and the three pinned lists — filter queries,
+  relative rects, the `large_2000.canvas` exclusion — compare equal
+  value for value. The equality that matters is still the committed
+  golden, which only the mac CI lane can decide.
+
 ---
 
 ## Round record
@@ -990,6 +2286,43 @@ than the sentence — nested exhaustiveness, value-level classification,
 zero witnesses where a host reaches zero, (arm, string) provenance,
 continuation-joining plus bare-literal detection, and the guard's
 residual classes named in 0a-14 rather than implied away.
+
+**Codex 0b rounds 1–3 — PROTOCOL RULE 4 (second invocation this
+programme).** Three consecutive rounds of blockers in one subsystem: the
+VA/reopening family. Round 1 found `.loading` bypassing VA-1 entirely
+(plus a `try?`-flattening compile break and an auto-side pair read
+twice); round 2 found the state census drifting — "four cases" where
+`LoadState` has five — after round 1 had just fixed a membership list;
+round 3 found the merged test asserting handwritten per-state
+expectations while the filter family announced `.reopening` in every
+non-ready state.
+
+**The class was never the sentence.** It was *VA membership and
+per-state responses maintained as handwritten lists in four places* —
+the same shape as 0a's round-4 finding (hand-quantified prose over a
+machine-enumerable corpus), and each round's fix corrected the named
+list and left the next copy of it standing.
+
+Per rule 4 the patching stopped and the invariant was implemented:
+`canvasReadRefusal(for:)` is one total mapping over `LoadState`; every
+member reaches it through `canvasReadContext(for:)`, whose return value
+is the proof it said yes; the filter family routes through it; the test
+takes its expectations FROM it rather than restating them; and
+`every_mac_canvas_read_is_gated_or_named` derives membership from the
+Swift source, failing when a canvas read query is called from a
+function that neither routes through the mapping nor appears on a named
+exclusion list with a reason.
+
+Mutation-verified: an ungated read verb fails the guard by name; an
+exclusion that stops calling a query fails the anti-rot assertion. Both
+were observed failing and reverted.
+
+Round 3's non-membership findings landed with it: rustc's
+string-continuation escape skips blank lines and CRs, not just
+indentation (the decoder now matches, with codex's multi-newline probe
+as a witness, mutation-verified both ways); the surviving "four"
+counts became names; and the SE-0230 sweep's zero became true rather
+than a property of its closure.
 
 **Codex adversarial round 6 — the final strengthening wave.** NOT SAFE.
 `ZERO_REACHABLE` recorded that no bulk verb can reach zero, and codex

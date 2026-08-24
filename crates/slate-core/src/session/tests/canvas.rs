@@ -597,3 +597,309 @@ fn canvas_apply_journals_named_semantic_entries() {
     let replayed = crate::oplog::reconstruct_at_tail(&entries).unwrap();
     assert_eq!(replayed, session.read_text("board.canvas").unwrap());
 }
+
+// --- W6-1 PR 0b: the structural queries over a handle ---------------------
+
+/// The queries answer through the handle, and every one of them refuses
+/// a closed handle and an unknown node the same way (0b-2, 0b-8).
+#[test]
+fn canvas_structural_queries_answer_through_the_handle() {
+    let (_tmp, session) = canvas_vault();
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let info = session.open_canvas("board.canvas").unwrap();
+    let h = info.handle;
+
+    assert_eq!(
+        session.canvas_parent_of(h, "card-question").unwrap(),
+        Some("grp-research".to_string())
+    );
+    assert_eq!(session.canvas_parent_of(h, "card-loose").unwrap(), None);
+    assert_eq!(
+        session.canvas_children_of(h, "grp-research").unwrap(),
+        ["card-question", "card-evidence", "card-notes", "card-spec"]
+    );
+    assert_eq!(
+        session
+            .canvas_order_nodes(
+                h,
+                vec![
+                    "card-loose".into(),
+                    "ghost".into(),
+                    "grp-research".into(),
+                    "card-loose".into()
+                ]
+            )
+            .unwrap(),
+        ["grp-research", "card-loose"]
+    );
+    let hops = session.canvas_trace_path(h, "card-question").unwrap();
+    assert_eq!(
+        hops.iter()
+            .map(|hop| (hop.edge_id.as_str(), hop.node_id.as_str()))
+            .collect::<Vec<_>>(),
+        [("edge-q-evidence", "card-evidence")]
+    );
+    let bounds = session.canvas_bounds(h).unwrap().expect("not empty");
+    assert_eq!((bounds.x, bounds.y), (-40.0, -40.0));
+    let around = session
+        .canvas_group_rect_around(h, vec!["card-question".into()])
+        .unwrap()
+        .expect("member resolves");
+    assert_eq!((around.x, around.y), (-40.0, -40.0));
+    assert_eq!(
+        session
+            .canvas_group_rect_around(h, vec!["ghost".into()])
+            .unwrap(),
+        None
+    );
+    // Inspiration is (600, -40) 320 × 400 holding two 240 × 140 cards:
+    // a small card fits at the inset, a card the width of the existing
+    // ones does not fit anywhere and answers `Full` rather than a point
+    // outside the frame.
+    assert_eq!(
+        session
+            .canvas_place_inside_group(h, "grp-inspiration", 20.0, 20.0, Vec::new())
+            .unwrap(),
+        crate::canvas::placement::InsideGroupPlacement::Placed { x: 620.0, y: 0.0 }
+    );
+    assert_eq!(
+        session
+            .canvas_place_inside_group(h, "grp-inspiration", 100.0, 50.0, Vec::new())
+            .unwrap(),
+        crate::canvas::placement::InsideGroupPlacement::Full
+    );
+    assert_eq!(
+        session.canvas_filter(h, "  ReSeArCh ").unwrap(),
+        [
+            "grp-research",
+            "card-question",
+            "card-evidence",
+            "card-notes",
+            "card-spec"
+        ]
+    );
+    assert_eq!(
+        session.canvas_filter(h, "").unwrap().len(),
+        session.canvas_outline(h).unwrap().len(),
+        "an empty query matches everything"
+    );
+    let descs = session
+        .canvas_describe_relative(
+            h,
+            CanvasRectArg {
+                x: 0.0,
+                y: 600.0,
+                width: 200.0,
+                height: 100.0,
+            },
+            vec!["card-loose".to_string()],
+        )
+        .unwrap();
+    assert!(!descs.is_empty());
+
+    // An unknown node is `bad_node` wherever a node is named — that is
+    // how a caller tells "no parent" from "no such node".
+    for outcome in [
+        session.canvas_parent_of(h, "ghost").err(),
+        session.canvas_children_of(h, "ghost").err(),
+        session.canvas_trace_path(h, "ghost").err(),
+        session
+            .canvas_place_inside_group(h, "ghost", 10.0, 10.0, Vec::new())
+            .err(),
+    ] {
+        assert!(
+            matches!(outcome, Some(VaultError::InvalidArgument { .. })),
+            "unknown node must be rejected"
+        );
+    }
+
+    // …and a closed handle is `bad_handle` everywhere.
+    session.close_canvas(h);
+    assert!(session.canvas_parent_of(h, "card-loose").is_err());
+    assert!(session.canvas_children_of(h, "grp-research").is_err());
+    assert!(session.canvas_order_nodes(h, Vec::new()).is_err());
+    assert!(session.canvas_trace_path(h, "card-loose").is_err());
+    assert!(session.canvas_bounds(h).is_err());
+    assert!(session.canvas_group_rect_around(h, Vec::new()).is_err());
+    assert!(
+        session
+            .canvas_place_inside_group(h, "grp-research", 10.0, 10.0, Vec::new())
+            .is_err()
+    );
+    assert!(session.canvas_filter(h, "x").is_err());
+    assert!(
+        session
+            .canvas_describe_relative(
+                h,
+                CanvasRectArg {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 1.0,
+                    height: 1.0
+                },
+                Vec::new()
+            )
+            .is_err()
+    );
+}
+
+/// Contract 0b-6: `speakable_name` reaches the two SQLite-served row
+/// types by an in-memory join against the handle's model, and the four
+/// record types therefore agree on one answer per node.
+#[test]
+fn speakable_names_join_onto_the_indexed_rows() {
+    let (_tmp, session) = make_vault(|p| {
+        // Two cards share a title and a third owns the obvious ordinal
+        // — the case that separates core's algorithm from mac's.
+        p.write_file(
+            "twins.canvas",
+            br#"{"nodes":[
+                {"id":"t1","type":"text","text":"Same","x":0,"y":0,"width":10,"height":10},
+                {"id":"t2","type":"text","text":"Same","x":0,"y":40,"width":10,"height":10},
+                {"id":"t3","type":"text","text":"Same 2","x":0,"y":80,"width":10,"height":10}
+            ],"edges":[]}"#,
+        )
+        .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let info = session.open_canvas("twins.canvas").unwrap();
+    let h = info.handle;
+
+    let outline = session.canvas_outline(h).unwrap();
+    let spoken: Vec<(&str, &str)> = outline
+        .iter()
+        .map(|r| (r.node_id.as_str(), r.speakable_name.as_str()))
+        .collect();
+    assert_eq!(spoken, [("t1", "Same"), ("t2", "Same 3"), ("t3", "Same 2")]);
+    // The title column is UNCHANGED — the join adds a field, it does
+    // not rewrite one (0b-6, CD-23).
+    assert!(outline.iter().all(|r| r.title.starts_with("Same")));
+    assert_eq!(outline[1].title, "Same");
+
+    // Table rows, scene nodes and Where-am-I agree with the outline.
+    for row in session.canvas_table_rows(h).unwrap() {
+        let expected = spoken
+            .iter()
+            .find(|(id, _)| *id == row.node_id)
+            .expect("row is in the outline")
+            .1;
+        assert_eq!(row.speakable_name, expected);
+    }
+    let (scene_nodes, _) = session.canvas_scene(h).unwrap();
+    for node in scene_nodes {
+        let expected = spoken
+            .iter()
+            .find(|(id, _)| *id == node.node_id)
+            .expect("node is in the outline")
+            .1;
+        assert_eq!(node.speakable_name, expected);
+        let where_am_i = session.canvas_where_am_i(h, &node.node_id).unwrap();
+        assert_eq!(where_am_i.speakable_name, expected);
+    }
+}
+
+/// Contract 0b-6's join reads the handle's OPEN-TIME model, and a
+/// rescan rewrites `canvas_nodes` underneath it. Holding a handle
+/// therefore guarantees a model, but not that the model and the rows
+/// agree about which nodes exist — so the join can miss, and a missing
+/// name must not leave a card unaddressable.
+#[test]
+fn speakable_name_falls_back_to_the_title_when_the_rows_outrun_the_handle() {
+    let (tmp, session) = make_vault(|p| {
+        p.write_file(
+            "board.canvas",
+            br#"{"nodes":[
+                {"id":"before","type":"text","text":"Original","x":0,"y":0,"width":10,"height":10}
+            ],"edges":[]}"#,
+        )
+        .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let info = session.open_canvas("board.canvas").unwrap();
+    let h = info.handle;
+    assert_eq!(
+        session.canvas_outline(h).unwrap()[0].speakable_name,
+        "Original"
+    );
+
+    // An external writer replaces the card with one carrying a
+    // DIFFERENT id, and a rescan re-derives the index rows. The open
+    // handle's model still knows only `before`.
+    let provider = FsVaultProvider::new(tmp.path().to_path_buf());
+    provider
+        .write_file(
+            "board.canvas",
+            br#"{"nodes":[
+                {"id":"after","type":"text","text":"Replaced","x":0,"y":0,"width":10,"height":10}
+            ],"edges":[]}"#,
+        )
+        .unwrap();
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let outline = session.canvas_outline(h).unwrap();
+    assert_eq!(outline.len(), 1);
+    assert_eq!(outline[0].node_id, "after", "the rows moved on");
+    assert_eq!(
+        outline[0].speakable_name, "Replaced",
+        "a joined name that misses falls back to the row's own title, never to \
+         the empty string — an empty speakable name is a card Voice Control \
+         cannot address at all"
+    );
+    let table = session.canvas_table_rows(h).unwrap();
+    assert_eq!(table[0].speakable_name, "Replaced");
+
+    // Reopening reconciles both halves, which is the host's recovery.
+    let reopened = session.open_canvas("board.canvas").unwrap();
+    assert_eq!(
+        session.canvas_outline(reopened.handle).unwrap()[0].speakable_name,
+        "Replaced"
+    );
+}
+
+/// A card's rect is not a container: `canvas_place_inside_group`
+/// refuses a non-group id rather than answering geometry "inside"
+/// something that cannot hold it (0b-12; PR E is the first consumer).
+#[test]
+fn place_inside_group_refuses_a_node_that_is_not_a_group() {
+    let (_tmp, session) = canvas_vault();
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let info = session.open_canvas("board.canvas").unwrap();
+
+    let refused = session
+        .canvas_place_inside_group(info.handle, "card-question", 10.0, 10.0, Vec::new())
+        .expect_err("a text card is not a group");
+    match refused {
+        VaultError::InvalidArgument { ref message } => {
+            assert!(message.contains("not a group"), "{message}");
+            // Distinct from the unknown-node message: the two send a
+            // caller to different fixes.
+            assert!(!message.contains("not found"), "{message}");
+        }
+        other => panic!("expected InvalidArgument, got {other:?}"),
+    }
+
+    // Both halves of the distinctness, or it is not distinctness: an id
+    // the canvas does not hold must still say "not found". Asserting
+    // only that `not_a_group` avoids that phrase lets a `bad_node`
+    // rewording vacate the property silently — and 0b-12's API note
+    // leans on the two messages staying different, because it is what
+    // keeps the escalation to a typed variant possible for PR E.
+    let unknown = session
+        .canvas_place_inside_group(info.handle, "no-such-node", 10.0, 10.0, Vec::new())
+        .expect_err("an id the canvas does not hold is refused");
+    match unknown {
+        VaultError::InvalidArgument { ref message } => {
+            assert!(message.contains("not found"), "{message}");
+            assert!(!message.contains("not a group"), "{message}");
+        }
+        other => panic!("expected InvalidArgument, got {other:?}"),
+    }
+
+    // The real group still answers.
+    assert!(matches!(
+        session
+            .canvas_place_inside_group(info.handle, "grp-inspiration", 20.0, 20.0, Vec::new())
+            .unwrap(),
+        crate::canvas::placement::InsideGroupPlacement::Placed { .. }
+    ));
+}

@@ -36,6 +36,9 @@ public class ParityHarnessCensus
     private static string FixturesDir =>
         Path.Combine(RepoRoot, "crates", "slate-core", "tests", "fixtures", "markdown");
 
+    private static string CanvasFixturesDir =>
+        Path.Combine(RepoRoot, "crates", "slate-core", "tests", "fixtures", "canvas");
+
     private static string GoldenDir =>
         Path.Combine(RepoRoot, "crates", "slate-core", "tests", "fixtures", "parity_golden");
 
@@ -69,6 +72,7 @@ public class ParityHarnessCensus
                     $"artifact {name} differs from golden (regenerate deliberately if the surface changed: " +
                     "dotnet run --project apps/slate-windows/tools/ParityHarness -- " +
                     "--fixtures crates/slate-core/tests/fixtures/markdown " +
+                    "--canvas-fixtures crates/slate-core/tests/fixtures/canvas " +
                     "--out crates/slate-core/tests/fixtures/parity_golden)");
             }
         }
@@ -184,6 +188,53 @@ public class ParityHarnessCensus
             try
             {
                 Directory.Delete(vaultRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+        }
+
+        RunCanvasQueries(outDir);
+    }
+
+    /// <summary>
+    /// W6-1 PR 0b (§W-A `canvas_queries`), identical to
+    /// <c>Program.cs</c>'s canvas pass: the canvas corpus lives in a
+    /// different fixture directory and gets its OWN temp vault, because
+    /// a canvas dropped into the markdown vault would change what every
+    /// other artifact sees.
+    /// </summary>
+    private static void RunCanvasQueries(string outDir)
+    {
+        var canvasFiles = Directory.EnumerateFiles(CanvasFixturesDir, "*.canvas")
+            .Select(Path.GetFileName)
+            .Where(f => f != null && !SurfaceSerializer.CanvasArtifactExclusions.Contains(f))
+            .Select(f => f!)
+            .OrderBy(f => f, StringComparer.Ordinal)
+            .ToList();
+        Assert.NotEmpty(canvasFiles);
+
+        string root = Path.Combine(Path.GetTempPath(), $"parity-canvas-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            foreach (var f in canvasFiles)
+            {
+                File.Copy(Path.Combine(CanvasFixturesDir, f), Path.Combine(root, f));
+            }
+            using var session = VaultSession.OpenFilesystem(root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+            File.WriteAllBytes(
+                Path.Combine(outDir, "canvas_queries.json"),
+                System.Text.Encoding.UTF8.GetBytes(
+                    SurfaceSerializer.CanvasQueriesArtifact(session, canvasFiles)));
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(root, recursive: true);
             }
             catch (IOException)
             {

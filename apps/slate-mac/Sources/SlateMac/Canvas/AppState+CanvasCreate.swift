@@ -198,12 +198,13 @@ extension AppState {
             let session = currentSession,
             let handle = doc.handle
         else { return }
-        let id = Self.newCanvasEntityID()
+        let id = canvasNewId()
+        let geometry = Self.canvasGeometry
         do {
             let placement = try session.canvasPlaceNew(
                 handle: handle,
                 anchor: doc.selection.selected,
-                width: 260, height: 140,
+                width: geometry.defaultCardW, height: geometry.defaultCardH,
                 directionHint: nil, exclude: [])
             let ok = canvasApply(
                 CanvasAction(
@@ -212,7 +213,8 @@ extension AppState {
                         .createNode(
                             id: id, content: content,
                             x: placement.x, y: placement.y,
-                            width: 260, height: 140, color: nil)
+                            width: geometry.defaultCardW, height: geometry.defaultCardH,
+                            color: nil)
                     ]),
                 to: doc)
             guard ok else { return }
@@ -292,18 +294,30 @@ extension AppState {
                 .canvasStatus(note: .notInAGroup(title: row.title)))
             return
         }
-        // Enclosing group by t1 containment: center inside, smallest
-        // area wins (title lookups would break on duplicate labels).
-        let cx = node.x + node.width / 2
-        let cy = node.y + node.height / 2
-        let parent = doc.scene.nodes
-            .filter {
-                $0.kind == "group" && $0.nodeId != selected
-                    && cx > $0.x && cx < $0.x + $0.width
-                    && cy > $0.y && cy < $0.y + $0.height
-            }
-            .min { $0.width * $0.height < $1.width * $1.height }
-        guard let parent else {
+        // §W-G row D: the enclosing group is core's `canvas_parent_of`
+        // (contract 0b-8) — the same `GroupTree` the outline's depth
+        // and group path already come from, so this verb and the rows
+        // it moves can no longer disagree about who contains what. The
+        // strict-centre / smallest-area filter that lived here is
+        // gone, and with it mac's equal-area tie-break: core keeps the
+        // LATER document order (CD-18), observable only for exactly
+        // coincident group rects.
+        // `do`/`catch`, not `try?`: SE-0230 flattens `try?` on an
+        // optional-returning call, so `try?` here would report a THROWN
+        // query as "not in a group" — a fact the query never returned.
+        // Same collapse as the one codex found at exit-group, in a verb
+        // where it was previously recorded as an unreachable exclusion;
+        // removing it is cheaper than keeping the exclusion true.
+        let parentId: String?
+        do {
+            parentId = try session.canvasParentOf(handle: handle, nodeId: selected)
+        } catch {
+            canvasAnnouncer.announce(.canvasStatus(note: .nothingSelected))
+            return
+        }
+        guard let parentId,
+            let parent = doc.scene.nodes.first(where: { $0.nodeId == parentId })
+        else {
             canvasAnnouncer.announce(
                 .canvasStatus(note: .notInAGroup(title: row.title)))
             return

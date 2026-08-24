@@ -44,6 +44,25 @@ final class CountCopyTests: XCTestCase {
         XCTAssertEqual(CountCopy.counted(1_234_567, "row", "rows"), "1234567 rows")
     }
 
+    /// The grouped counterpart is core's `countNoun` FFI export, not a
+    /// second helper here (CD-26). This pins the boundary between them
+    /// so neither drifts: identical below 1000 — which is what keeps
+    /// every shipped canvas undo-name expectation true — and different
+    /// at and above it, which is the whole reason the export exists
+    /// (CD-6).
+    func testCoreGroupsWhereCountedDoesNotAndAgreesBelowAThousand() {
+        for value in [0, 1, 2, 7, 42, 100, 999] {
+            XCTAssertEqual(
+                countNoun(
+                    count: UInt64(value), singular: "card", plural: "cards"),
+                CountCopy.counted(value, "card", "cards"),
+                "grouping is a no-op below 1000 (\(value))")
+        }
+        XCTAssertEqual(
+            countNoun(count: 1000, singular: "card", plural: "cards"), "1,000 cards")
+        XCTAssertEqual(CountCopy.counted(1000, "card", "cards"), "1000 cards")
+    }
+
     /// The composed shape used by the "X of Y" summaries: the noun
     /// agrees with the TOTAL, the verb with the shown count.
     func testOfTotalTemplateAgreesNounWithTotalAndVerbWithSubject() {

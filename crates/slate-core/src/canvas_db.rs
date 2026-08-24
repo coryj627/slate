@@ -19,7 +19,7 @@ use rusqlite::{Transaction, params};
 
 use crate::VaultError;
 use crate::canvas::model::{CanvasModel, FileTitleSource, derive_with};
-use crate::canvas::{self, CanvasColor, NodeKind, Side, color_name};
+use crate::canvas::{self, CanvasColor, Side, color_name};
 
 /// Serialize the ancestor-path list as a JSON array for the
 /// `group_path` column (denormalized so outline reads are one query).
@@ -86,11 +86,11 @@ pub(crate) fn replace_canvas_for_file(
         )?;
         for node in &parsed.nodes {
             let summary = &model.summaries[&node.id];
-            let target = match &node.kind {
-                NodeKind::File { file, .. } => file.clone(),
-                NodeKind::Link { url } => url.clone(),
-                _ => String::new(),
-            };
+            // `target` is the model's derivation, not a second `match`
+            // here: the filter predicate (W6-1 0b-13) reads the same
+            // field, so the column and the filter cannot disagree about
+            // what a card points at.
+            let target = &summary.target;
             stmt.execute(params![
                 file_id,
                 node.id.0,

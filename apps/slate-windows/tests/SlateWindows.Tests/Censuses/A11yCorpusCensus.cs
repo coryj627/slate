@@ -488,6 +488,10 @@ public sealed class A11yCorpusCensus
         new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasFilterCount(Matched: 0)),
         new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasFilterCleared(Total: 0)),
         new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasWhereAmI(KindLabel: "text", Title: "Loose", GroupPath: [], OrdinalN: 1, TotalM: 1, ConnectionCount: 0, InCount: 0, OutCount: 0, ColorName: null, Marked: false, Mode: null, Filter: new CanvasFilterState.Inactive())),
+        // Read-verb refusal during the reopening window (W6-1 0b-2).
+        new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasStatus(Note: new CanvasStatusNote.Reopening())),
+        // …and during a first load or a prepared replacement.
+        new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasStatus(Note: new CanvasStatusNote.Loading())),
     ];
 
     [Fact]

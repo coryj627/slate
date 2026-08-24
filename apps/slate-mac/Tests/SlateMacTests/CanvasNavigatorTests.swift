@@ -153,6 +153,453 @@ final class CanvasNavigatorTests: XCTestCase {
         XCTAssertEqual(doc.selection.selected, "c")
     }
 
+    /// The state machine behind "which documents can the navigator
+    /// verbs even reach" — the coverage whose absence let W6-1 0b-2
+    /// describe the wrong states in its own report.
+    ///
+    /// `activeCanvasDocument` gates on `.ready`, so a degraded load, a
+    /// canvas moved to Trash and a failed retarget are ALL unreachable
+    /// by every navigator verb — before and after the PR 0b migration.
+    /// Exactly one state pairs `.ready` with no native handle: the
+    /// window `beginBatchRetarget` opens between a physical move
+    /// landing and its background reopen. That window is what any claim
+    /// about handle-less navigation is actually about, and in it the
+    /// structural verbs ANNOUNCE rather than go quiet (t0 never-silent;
+    /// `CanvasStatusNote.reopening`).
+    func testOnlyTheBatchRetargetWindowPairsReadyWithNoHandle() async throws {
+        let state = try await makeState()
+        let doc = try XCTUnwrap(state.activeCanvasDocument)
+        XCTAssertNotNil(doc.handle, "a ready canvas owns its handle")
+
+        // The reopening window: the snapshot stays visible and READY,
+        // the path-bound handle is detached for the caller to close
+        // off-main, and the replacement is prepared in the background.
+        let reservation = doc.beginBatchRetarget(to: doc.path)
+        XCTAssertNotNil(reservation.replacedHandle, "the old handle is handed over, not leaked")
+        XCTAssertEqual(doc.state, .ready, "the snapshot stays visible — no blank pane")
+        XCTAssertNil(doc.handle, "…but nothing may write through the moved-away path")
+        XCTAssertTrue(doc.hasPendingRetargetPreparation)
+        XCTAssertTrue(
+            state.activeCanvasDocument === doc,
+            "the verbs can still reach it: this is the one window that matters")
+
+        // Movement still works and still SPEAKS here — the filtered
+        // outline falls back to the published snapshot when no handle
+        // can answer, so the window is not an announcement blackout.
+        posted = []
+        state.canvasSelectAdjacent(offset: 1)
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertEqual(doc.selection.selected, "g1")
+        XCTAssertFalse(posted.isEmpty, "arrow movement narrates in the reopening window")
+
+        // Mutations are refused with a spoken reason, not silently
+        // dropped — the admission ladder already covers this window.
+        guard case .canvas(.reopening)? = state.canvasMutationRefusal(for: doc) else {
+            return XCTFail(
+                "the reopening window must refuse mutations audibly, got "
+                    + "\(String(describing: state.canvasMutationRefusal(for: doc)))")
+        }
+
+        // The four STRUCTURAL verbs answer from core queries that need
+        // the handle, so they cannot do the work here — and t0's
+        // never-silent principle says a keypress that does nothing has
+        // to say so. They announce core's own sentence for this window
+        // rather than going quiet; silence is now a FAILURE, which is
+        // what stops the regression this test was written for from
+        // coming back.
+        func assertAnnouncesReopening(_ label: String, _ verb: () -> Void) {
+            self.posted = []
+            verb()
+            state.canvasAnnouncer.flushForTests()
+            XCTAssertEqual(
+                self.posted, ["This canvas is reopening. Try again in a moment."],
+                "\(label) must speak, exactly once, in the reopening window")
+        }
+        assertAnnouncesReopening("enter group") { state.canvasEnterGroup() }
+        assertAnnouncesReopening("exit group") { state.canvasExitGroup() }
+        assertAnnouncesReopening("trace path") { state.canvasTracePath() }
+        assertAnnouncesReopening("fit canvas") { state.canvasFitCanvas() }
+
+        // The read sentence is NOT the write refusal: a user who
+        // changed nothing must not be told to wait "before making
+        // changes".
+        XCTAssertNotEqual(
+            state.canvasMutationRefusal(for: doc)?.text,
+            "This canvas is reopening. Try again in a moment.")
+
+        // VA-1's other two members. Where-am-I is the PULL surface, so
+        // silence there is the failure t0 §1.4 exists to prevent; and
+        // follow-connection must not report a dead end it never
+        // learned — the adjacency cache is cold for this card, so the
+        // truth is unknowable, not "none".
+        assertAnnouncesReopening("where am I") { state.canvasWhereAmI() }
+        assertAnnouncesReopening("follow connection") {
+            state.canvasFollowConnection(forward: true)
+        }
+    }
+
+    /// The recorded precedence (m6) inside the reopening window: a
+    /// verb's own selection question is answered before the state's.
+    ///
+    /// Its own test, because the window test above SETS a selection
+    /// first — which is exactly how the regression slipped through when
+    /// `canvasReadTarget()` started announcing eagerly. The snapshot is
+    /// still on screen here, so "Nothing selected." is the truthful and
+    /// more useful answer; "reopening" would describe the canvas when
+    /// the user asked about the caret.
+    func testNoSelectionInTheReopeningWindowAnswersTheSelectionQuestion() async throws {
+        let state = try await makeState()
+        let doc = try XCTUnwrap(state.activeCanvasDocument)
+        doc.selection.selected = nil
+        _ = doc.beginBatchRetarget(to: doc.path)
+        XCTAssertNil(doc.handle, "the window: ready, snapshot on screen, handle detached")
+        XCTAssertEqual(state.canvasReadRefusal(for: doc), .reopening)
+
+        func check(_ label: String, _ verb: () -> Void) {
+            self.posted = []
+            verb()
+            state.canvasAnnouncer.flushForTests()
+            XCTAssertEqual(self.posted, ["Nothing selected."], "\(label): \(self.posted)")
+        }
+        check("enter group") { state.canvasEnterGroup() }
+        check("exit group") { state.canvasExitGroup() }
+        check("trace path") { state.canvasTracePath() }
+        check("follow connection") { state.canvasFollowConnection(forward: true) }
+
+        // Fit canvas has no selection question, so the state's answer
+        // stands — the precedence is about preconditions, not a blanket
+        // reordering.
+        posted = []
+        state.canvasFitCanvas()
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertEqual(posted, ["This canvas is reopening. Try again in a moment."])
+    }
+
+    /// The same two verbs OUTSIDE the window answer exactly as they did
+    /// before VA-1 reached them — the sentence is for the state, not a
+    /// new default.
+    func testWhereAmIAndFollowConnectionAreUnchangedWithALiveHandle() async throws {
+        let state = try await makeState()
+        let doc = try XCTUnwrap(state.activeCanvasDocument)
+
+        state.canvasSelect(nodeId: "a", in: doc, announce: false)
+        posted = []
+        state.canvasWhereAmI()
+        state.canvasAnnouncer.flushForTests()
+        let readback = try XCTUnwrap(state.canvasWhereAmIReadback)
+        XCTAssertTrue(readback.contains("Alpha"), readback)
+        XCTAssertFalse(
+            posted.contains("This canvas is reopening. Try again in a moment."), "\(posted)")
+
+        // A real dead end still says so: 'd' has no incoming connection,
+        // and that IS a fact the adjacency list returned.
+        state.canvasSelect(nodeId: "d", in: doc, announce: false)
+        posted = []
+        state.canvasFollowConnection(forward: false)
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertEqual(doc.selection.selected, "d")
+        XCTAssertTrue(
+            posted.contains { $0.contains("No incoming connection") }, "\(posted)")
+        XCTAssertFalse(
+            posted.contains("This canvas is reopening. Try again in a moment."), "\(posted)")
+
+        // And a warm cache keeps answering inside the window: the fact
+        // is real, so the dead-end phrase is still the right one.
+        _ = doc.beginBatchRetarget(to: doc.path)
+        posted = []
+        state.canvasFollowConnection(forward: false)
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertTrue(
+            posted.contains { $0.contains("No incoming connection") },
+            "a cached adjacency answer survives the window: \(posted)")
+    }
+
+    /// The other half of the same rule, which nothing executed until
+    /// #1155's CI: a warm answer wins for a TRAVERSAL too, not only for
+    /// the accurate dead end. Both are facts the adjacency list
+    /// returned, and VA-1 refuses only when the truth is unknowable.
+    func testAWarmAdjacencyAnswerTraversesInsideTheReopeningWindow() async throws {
+        let state = try await makeState()
+        let doc = try XCTUnwrap(state.activeCanvasDocument)
+
+        // Premise: warm the cache for 'a' through the live handle, then
+        // put the caret back where it started.
+        state.canvasSelect(nodeId: "a", in: doc, announce: false)
+        state.canvasFollowConnection(forward: true)
+        XCTAssertEqual(doc.selection.selected, "b", "the live traversal is the premise")
+        state.canvasSelect(nodeId: "a", in: doc, announce: false)
+
+        _ = doc.beginBatchRetarget(to: doc.path)
+        XCTAssertNil(doc.handle, "the window detaches the handle: no live query can answer")
+        posted = []
+        state.canvasFollowConnection(forward: true)
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertEqual(doc.selection.selected, "b", "the cached traversal still moves the caret")
+        XCTAssertFalse(
+            posted.contains("This canvas is reopening. Try again in a moment."), "\(posted)")
+        XCTAssertTrue(posted.contains { $0.contains("Beta") }, "\(posted)")
+    }
+
+    /// The invariant that makes "answer from the cache" safe to ask
+    /// BEFORE the state mapping: a read cache never outlives the rows it
+    /// describes. Both transitions here blank the canvas surface — the
+    /// container renders a spinner or a message, not retained rows — so
+    /// a previously warm adjacency answer must not keep answering, and
+    /// the mapping's sentence is what the press owes.
+    func testTheReadCachesDoNotOutliveTheRowsOnScreen() async throws {
+        func warmThenBlank(
+            _ label: String,
+            _ blank: (AppState, CanvasDocument) -> Void
+        ) async throws {
+            let state = try await self.makeState()
+            let doc = try XCTUnwrap(state.activeCanvasDocument)
+            state.canvasSelect(nodeId: "d", in: doc, announce: false)
+            self.posted = []
+            state.canvasFollowConnection(forward: false)
+            state.canvasAnnouncer.flushForTests()
+            XCTAssertTrue(
+                self.posted.contains { $0.contains("No incoming connection") },
+                "\(label): the warm cache is the premise — \(self.posted)")
+
+            blank(state, doc)
+            XCTAssertEqual(
+                doc.selection.selected, "d",
+                "\(label): the caret is untouched, so only the cache can differ")
+            let note = try XCTUnwrap(
+                state.canvasReadRefusal(for: doc),
+                "\(label): a blanked canvas owes a sentence")
+            self.posted = []
+            state.canvasFollowConnection(forward: false)
+            state.canvasAnnouncer.flushForTests()
+            XCTAssertEqual(
+                self.posted,
+                [a11yRender(event: .canvas(event: .canvasStatus(note: note))).text],
+                "\(label): a stale cached answer spoke for rows that are not on screen")
+        }
+
+        try await warmThenBlank("moved to Trash") { state, doc in
+            doc.markMovedToTrash(session: state.currentSession)
+        }
+        try await warmThenBlank("prepared replacement") { _, doc in
+            _ = doc.beginPreparedReplacement()
+        }
+    }
+
+    /// Every non-ready load state, driven, with the expectations taken
+    /// FROM the mapping rather than written out beside it.
+    ///
+    /// `canvasReadRefusal(for:)` is the single state → response
+    /// authority. This test asks it what each state owes and then
+    /// asserts every VA member says exactly that — so the test cannot
+    /// drift from the code the way three rounds of handwritten lists
+    /// did, and a mapping change shows up here as a behaviour change
+    /// rather than as a stale expectation.
+    ///
+    /// `LoadState` is `.loading`, `.ready`, `.degraded`, `.failed`,
+    /// `.retargetFailed`; every non-ready one is materialized here
+    /// through its real lifecycle method, and each is driven in BOTH
+    /// selection columns — present and absent — because the two
+    /// questions have different answers wherever the state's snapshot
+    /// is actually on screen.
+    func testEveryNonReadyLoadStateAnswersWhatTheMappingSays() async throws {
+        /// Drive every VA member in both selection columns and assert
+        /// each speaks what the recorded precedence owes — once — and
+        /// moved no caret.
+        ///
+        /// Column 1 (a card is selected): every member speaks the
+        /// state's note.
+        ///
+        /// Column 2 (nothing selected): the selection-bearing verbs
+        /// answer the SELECTION question wherever the user can see rows
+        /// to select in, and the state's note where they cannot. Which
+        /// states those are is read from `rendersRetainedSnapshot` —
+        /// the same predicate the gate asks, itself checked against
+        /// `CanvasContainerView` by a uniffi guard — so this test
+        /// cannot re-curate the matrix it is meant to be policing.
+        /// Members with no selection precondition speak the state's
+        /// note in both columns.
+        func driveMembers(_ label: String, _ state: AppState, _ doc: CanvasDocument) {
+            let note = state.canvasReadRefusal(for: doc)
+            XCTAssertNotNil(note, "\(label): a non-ready state owes a sentence")
+            let stateSentence = note.map {
+                [a11yRender(event: .canvas(event: .canvasStatus(note: $0))).text]
+            }
+            let selectionQuestion = [
+                a11yRender(event: .canvas(event: .canvasStatus(note: .nothingSelected))).text
+            ]
+            XCTAssertNil(
+                state.activeCanvasDocument,
+                "\(label): `.ready` is the gate the verbs pass")
+
+            func check(_ verb: String, _ expected: [String]?, _ body: () -> Void) {
+                let selectionBefore = doc.selection.selected
+                self.posted = []
+                body()
+                state.canvasAnnouncer.flushForTests()
+                XCTAssertEqual(self.posted, expected, "\(label) / \(verb)")
+                XCTAssertEqual(
+                    doc.selection.selected, selectionBefore,
+                    "\(label) / \(verb): selection moved")
+            }
+
+            // The verbs that ask about the selection before the
+            // document, and the members that never do.
+            //
+            // These two arrays are PARSED by
+            // `every_mac_canvas_read_is_gated_or_named`, which requires
+            // `selectionBearing` to equal the set of mac functions that
+            // announce `.nothingSelected` through the precedence gate —
+            // in both directions, so neither a verb dropped from the
+            // matrix nor one that gains the gate in source can pass
+            // unnoticed. The bindings' names and their
+            // `[(String, () -> Void)]` type are the guard's anchors:
+            // renaming or reshaping them fails it loudly rather than
+            // quietly unhooking the check.
+            let selectionBearing: [(String, () -> Void)] = [
+                ("enter group", { state.canvasEnterGroup() }),
+                ("exit group", { state.canvasExitGroup() }),
+                ("trace path", { state.canvasTracePath() }),
+                ("follow connection", { state.canvasFollowConnection(forward: true) }),
+            ]
+            let selectionFree: [(String, () -> Void)] = [
+                ("fit canvas", { state.canvasFitCanvas() }),
+                ("where am I", { state.canvasWhereAmI() }),
+            ]
+
+            func runColumn(_ column: String, selectionBearingOwes: [String]?) {
+                for (verb, body) in selectionBearing {
+                    check("\(column) / \(verb)", selectionBearingOwes, body)
+                }
+                for (verb, body) in selectionFree {
+                    check("\(column) / \(verb)", stateSentence, body)
+                }
+                // The filter family is a member too, and it reaches the
+                // same mapping by its own path. It reads no selection,
+                // so it owes the state's note in both columns.
+                doc.filterText = "gamma"
+                check("\(column) / filter count", stateSentence) {
+                    state.canvasAnnounceFilterCount(doc: doc)
+                }
+                doc.filterText = ""
+            }
+
+            doc.selection.selected = "g1"
+            runColumn("selected", selectionBearingOwes: stateSentence)
+
+            doc.selection.selected = nil
+            runColumn(
+                "no selection",
+                selectionBearingOwes: doc.state.rendersRetainedSnapshot
+                    ? selectionQuestion : stateSentence)
+        }
+
+        // `driveMembers` sets each column's selection itself, AFTER the
+        // transition: a prepared install resets interaction state, so a
+        // selection set before it would not survive to be asserted on.
+
+        // --- .loading — VA-2 ------------------------------------------
+        let loadingState = try await makeState()
+        let loading = try XCTUnwrap(loadingState.activeCanvasDocument)
+        _ = loading.beginPreparedReplacement()
+        guard case .loading = loading.state else {
+            return XCTFail("expected .loading, got \(loading.state)")
+        }
+        // Two spot-checks are handwritten ON PURPOSE, here and at
+        // `.failed` below. Everything else in this test derives its
+        // expectation from the mapping, which is what stops the test
+        // drifting — but a derived assertion also passes if the mapping
+        // swaps two sentences, because both sides move together. These
+        // two pin the note each state actually owes, so a swap fails
+        // here rather than passing everywhere. One per sentence is
+        // enough to anchor the table.
+        XCTAssertEqual(loadingState.canvasReadRefusal(for: loading), .loading)
+        driveMembers("loading", loadingState, loading)
+
+        // --- .failed (moved to Trash) — `.notReadable` ----------------
+        let trashedState = try await makeState()
+        let trashed = try XCTUnwrap(trashedState.activeCanvasDocument)
+        XCTAssertFalse(trashed.outline.isEmpty)
+        trashed.markMovedToTrash(session: trashedState.currentSession)
+        guard case .failed = trashed.state else {
+            return XCTFail("a trashed canvas lands in .failed, got \(trashed.state)")
+        }
+        XCTAssertFalse(
+            trashed.outline.isEmpty,
+            "the published snapshot survives — which is why it looked navigable")
+        XCTAssertEqual(trashedState.canvasReadRefusal(for: trashed), .notReadable)
+        XCTAssertFalse(
+            trashed.state.rendersRetainedSnapshot,
+            "the rows survive but the view shows only the message, so there is "
+                + "nothing on screen to have a selection in")
+        driveMembers("failed", trashedState, trashed)
+
+        // --- .degraded — `.notReadable` -------------------------------
+        let degradedState = try await makeState()
+        let degraded = try XCTUnwrap(degradedState.activeCanvasDocument)
+        degraded.applyPreparedLoad(
+            .degraded(warnings: [], message: "the file is not valid JSON Canvas"))
+        guard case .degraded = degraded.state else {
+            return XCTFail("expected .degraded, got \(degraded.state)")
+        }
+        XCTAssertTrue(
+            degraded.outline.isEmpty, "a degraded load CLEARS the outline")
+        driveMembers("degraded", degradedState, degraded)
+
+        // --- .retargetFailed — `.notReadable`, but the snapshot IS on
+        // screen, so its selection question outranks that note --------
+        let failedState = try await makeState()
+        let failed = try XCTUnwrap(failedState.activeCanvasDocument)
+        let reservation = failed.beginBatchRetarget(to: failed.path)
+        let generation = try XCTUnwrap(failed.claimRetargetPreparation())
+        XCTAssertEqual(generation, reservation.generation)
+        XCTAssertTrue(
+            failed.applyRetargetPreparation(
+                .failed("could not reopen"), generation: generation, path: failed.path))
+        guard case .retargetFailed = failed.state else {
+            return XCTFail("expected .retargetFailed, got \(failed.state)")
+        }
+        XCTAssertFalse(
+            failed.outline.isEmpty, "the last good snapshot is retained, not blanked")
+        // The predicate is pinned by hand for the one state where it is
+        // true and the state is not `.ready`. Without this, a predicate
+        // that went false everywhere would take the derived
+        // no-selection column down with it and the whole matrix would
+        // collapse to the state's note while still passing.
+        XCTAssertTrue(
+            failed.state.rendersRetainedSnapshot,
+            "the retained snapshot is rendered read-only, so a caret lives in it")
+        failed.selection.selected = nil
+        posted = []
+        failedState.canvasEnterGroup()
+        failedState.canvasAnnouncer.flushForTests()
+        XCTAssertEqual(
+            posted, ["Nothing selected."],
+            "the selection question wins over the state's sentence here")
+        driveMembers("retargetFailed", failedState, failed)
+    }
+
+    /// The document gate and the selection are different questions. On
+    /// an ordinary READY canvas with nothing selected, follow connection
+    /// answers like its three siblings instead of going silent — it is
+    /// palette-reachable, so the press is real.
+    func testFollowConnectionWithoutASelectionAnswersLikeItsSiblings() async throws {
+        let state = try await makeState()
+        let doc = try XCTUnwrap(state.activeCanvasDocument)
+        doc.selection.selected = nil
+
+        for (label, forward) in [("follow forward", true), ("follow back", false)] {
+            posted = []
+            state.canvasFollowConnection(forward: forward)
+            state.canvasAnnouncer.flushForTests()
+            XCTAssertEqual(posted, ["Nothing selected."], "\(label): \(posted)")
+        }
+
+        posted = []
+        state.canvasEnterGroup()
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertEqual(posted, ["Nothing selected."], "the sibling it must match")
+    }
+
     func testEnterExitGroupBoundaries() async throws {
         let state = try await makeState()
         let doc = try XCTUnwrap(state.activeCanvasDocument)
@@ -1408,12 +1855,14 @@ extension CanvasNavigatorTests {
         XCTAssertTrue(posted.contains("Updated \"Alpha\"."), "\(posted)")
         let text = try state.currentSession?.canvasNodeText(
             handle: doc.handle ?? 0, nodeId: "a")
-        XCTAssertEqual(text ?? nil, "Alpha revised")
+        // One `?`: optional chaining flattens, so this is `String?`
+        // and the second unwrap was dead (SE-0230).
+        XCTAssertEqual(text, "Alpha revised")
 
         state.canvasUndo()
         let reverted = try state.currentSession?.canvasNodeText(
             handle: doc.handle ?? 0, nodeId: "a")
-        XCTAssertEqual(reverted ?? nil, "Alpha")
+        XCTAssertEqual(reverted, "Alpha")
     }
 
     func testEditCardNoChangeWritesNothing() async throws {
@@ -1646,8 +2095,12 @@ extension CanvasNavigatorTests {
 extension CanvasNavigatorTests {
     func testFilterNarrowsOutlineAndTableAndNavigatorHonorsIt() async throws {
         let (state, doc) = try await normalizedState()
+        // The MATCH is core's `canvas_filter` (§W-G row K), so the
+        // filtered rows are asked for with the session that owns the
+        // handle — the same shape as `neighbors(of:session:)`.
+        let session = state.currentSession
         doc.filterText = "gamma"
-        XCTAssertEqual(doc.filteredOutline.map(\.title), ["Gamma"])
+        XCTAssertEqual(doc.filteredOutline(session: session).map(\.title), ["Gamma"])
 
         // Navigator walks ONLY matches while active.
         doc.selection.selected = nil
@@ -1661,11 +2114,77 @@ extension CanvasNavigatorTests {
         // Kind + group-label matches work; the file stays untouched
         // (a view, never a mutation).
         doc.filterText = "group"
-        XCTAssertEqual(doc.filteredOutline.map(\.nodeId), ["g1"])
+        XCTAssertEqual(doc.filteredOutline(session: session).map(\.nodeId), ["g1"])
         doc.filterText = "zone"
-        XCTAssertTrue(Set(doc.filteredOutline.map(\.nodeId)).isSuperset(of: ["g1", "a", "b"]))
+        XCTAssertTrue(
+            Set(doc.filteredOutline(session: session).map(\.nodeId))
+                .isSuperset(of: ["g1", "a", "b"]))
         doc.filterText = ""
-        XCTAssertEqual(doc.filteredOutline.count, doc.outline.count)
+        XCTAssertEqual(doc.filteredOutline(session: session).count, doc.outline.count)
+    }
+
+    /// The filter in the reopening window. The rule is *never a wrong
+    /// number*: whatever the surfaces display is what gets counted and
+    /// announced, and a needle core could not answer is said out loud
+    /// rather than counted as if it had been applied.
+    func testFilterInTheReopeningWindowNeverAnnouncesAWrongCount() async throws {
+        let (state, doc) = try await normalizedState()
+        doc.filterText = "gamma"
+        // Answer it once while the handle is live, so the window has a
+        // memoized answer to keep serving.
+        XCTAssertEqual(
+            doc.filteredOutline(session: state.currentSession).map(\.title), ["Gamma"])
+
+        _ = doc.beginBatchRetarget(to: doc.path)
+        XCTAssertNil(doc.handle)
+
+        // (a) UNCHANGED needle: the memoized answer is still correct, so
+        // it keeps being served — NOT widened back to the whole canvas,
+        // which is the bug this test exists for.
+        let held = doc.filterView(session: state.currentSession)
+        XCTAssertEqual(held.rows.map(\.title), ["Gamma"])
+        XCTAssertTrue(held.narrowed)
+        XCTAssertTrue(held.current, "an unchanged needle is still answered")
+        posted = []
+        state.canvasAnnounceFilterCount(doc: doc)
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertEqual(posted, ["1 card match."], "\(posted)")
+
+        // (b) CHANGED needle: it cannot be applied, so the PRIOR view is
+        // retained and the announcement says why instead of counting.
+        doc.filterText = "alp"
+        let stale = doc.filterView(session: state.currentSession)
+        XCTAssertEqual(
+            stale.rows.map(\.title), ["Gamma"], "the prior view is retained, not widened")
+        XCTAssertFalse(stale.current, "…and it is marked as not answering the new needle")
+        posted = []
+        state.canvasAnnounceFilterCount(doc: doc)
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertEqual(
+            posted, ["This canvas is reopening. Try again in a moment."],
+            "a needle core could not answer is spoken, never counted: \(posted)")
+
+        // The invariant, asserted where it was broken: what the
+        // navigator walks, what the surfaces display and what any count
+        // would report are one and the same set.
+        XCTAssertEqual(
+            doc.filteredOutline(session: state.currentSession).map(\.nodeId),
+            stale.rows.map(\.nodeId))
+        doc.selection.selected = nil
+        state.canvasSelectAdjacent(offset: 1)
+        XCTAssertEqual(
+            doc.selection.selected, "c",
+            "movement walks the displayed rows, not the full canvas")
+
+        // (c) Outside the window nothing changed: clearing the needle
+        // restores the full outline, and the no-match narration is
+        // still reachable — `testFilterCountAnnouncesAndClearRestores`
+        // pins both against a live handle.
+        doc.filterText = ""
+        let cleared = doc.filterView(session: state.currentSession)
+        XCTAssertFalse(cleared.narrowed)
+        XCTAssertTrue(cleared.current)
+        XCTAssertEqual(cleared.rows.count, doc.outline.count)
     }
 
     func testFilterCountAnnouncesAndClearRestores() async throws {

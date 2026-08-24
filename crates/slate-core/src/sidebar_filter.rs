@@ -466,7 +466,13 @@ pub fn sidebar_filter_audio_summary(
 /// A grouped count plus its English noun, taking the singular only at
 /// exactly one — zero stays plural (`"0 tags."`). Announcement copy is
 /// assembled from this so noun agreement has a single definition.
-pub(crate) fn count_noun(value: u64, singular: &str, plural: &str) -> String {
+///
+/// `pub`, not `pub(crate)`, because `slate-uniffi` exports it: a host
+/// that composes a string which is later read back BESIDE a core
+/// sentence counting the same number has to count the same way, and the
+/// only alternative is a host re-implementation of the grouping rule —
+/// which is what §W-G exists to prevent (W6-1 CD-6, CD-26).
+pub fn count_noun(value: u64, singular: &str, plural: &str) -> String {
     format!(
         "{} {}",
         group_thousands(value),

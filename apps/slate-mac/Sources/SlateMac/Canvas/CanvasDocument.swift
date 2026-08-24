@@ -184,6 +184,35 @@ final class CanvasDocument: ObservableObject {
         /// published snapshot remains visible but has no writable native handle;
         /// retrying the same retarget generation can restore it.
         case retargetFailed(String)
+
+        /// Whether `CanvasContainerView` renders the document's RETAINED
+        /// ROWS for this state — i.e. whether the user is looking at an
+        /// outline they can have a selection *in*.
+        ///
+        /// **Derived from the view, not from the state's name.** The
+        /// container's `body` switch sends `.ready` to `readyBody` and
+        /// `.retargetFailed` to `retargetFailureSnapshot`, and both
+        /// reach `canvasBody`; `.loading` shows a spinner, and
+        /// `.degraded` / `.failed` show `stateMessage` only — those
+        /// three never render a row even when the data survives
+        /// (`markMovedToTrash` keeps `outline`, and it is still not
+        /// shown). `the_snapshot_visibility_predicate_matches_the_container_switch`
+        /// in `slate-uniffi` parses that switch and fails if this list
+        /// and the view ever disagree.
+        ///
+        /// The navigator's selection-precedence gate asks THIS rather
+        /// than testing `.ready`: a verb's own selection question
+        /// outranks the state's wherever the snapshot is on screen, and
+        /// approximating that with one state name is what codex 0b
+        /// round 5 caught.
+        var rendersRetainedSnapshot: Bool {
+            switch self {
+            case .ready, .retargetFailed:
+                return true
+            case .loading, .degraded, .failed:
+                return false
+            }
+        }
     }
 
     @Published private(set) var state: LoadState = .loading
@@ -205,6 +234,10 @@ final class CanvasDocument: ObservableObject {
     /// Per-node adjacency, fetched lazily on first selection and
     /// cached (invalidated on reload).
     private var neighborsCache: [String: [CanvasNeighbor]] = [:]
+
+    /// `canvas_filter`'s answer for the needle it was asked about —
+    /// same lifetime rules as `neighborsCache`.
+    private var filterMatchCache: (needle: String, ids: Set<String>)?
 
     /// The row whose activation opened a card — focus restoration
     /// target when the user returns (WCAG 2.4.3, #362).
@@ -234,27 +267,97 @@ final class CanvasDocument: ObservableObject {
     /// (the t0 M5 ladder rung between mode and surface).
     @Published var filterText: String = ""
 
-    /// True when a non-empty filter narrows the surfaces.
+    /// True when a non-empty filter narrows the surfaces. This is UI
+    /// state — whether to show the Clear button, the result summary and
+    /// the Esc rung — not the match rule, which is core's. It keeps
+    /// Foundation's `.whitespaces` (newlines NOT trimmed), where core
+    /// trims all Unicode whitespace; a needle of nothing but a newline
+    /// therefore reads as active and matches everything, which CD-22
+    /// records among the trimming differences.
     var filterActive: Bool {
         !filterText.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
-    /// Rows matching the filter (title / kind / group / target — the
-    /// quick-open-style contains match). Full outline when inactive.
-    var filteredOutline: [CanvasOutlineRow] {
-        guard filterActive else { return outline }
-        return outline.filter(matchesFilter)
+    /// What the surfaces are showing for the filter, and whether that
+    /// answers the needle now in the field.
+    ///
+    /// Every consumer reads this one value, so the rows on screen, the
+    /// summary's number and the announced count cannot come from three
+    /// different answers — the invariant is *displayed rows == announced
+    /// count*, always.
+    struct FilterView {
+        /// Exactly what the surfaces display.
+        let rows: [CanvasOutlineRow]
+        /// True when a filter narrowed `rows` at all.
+        let narrowed: Bool
+        /// True when `rows` answer the needle in the field. False means
+        /// no handle could answer it and the PREVIOUS answer is still on
+        /// screen — the caller must say so rather than count these rows
+        /// as if they matched what the user just typed.
+        let current: Bool
     }
 
-    func matchesFilter(_ row: CanvasOutlineRow) -> Bool {
-        let needle = filterText.trimmingCharacters(in: .whitespaces)
-        guard !needle.isEmpty else { return true }
-        if row.title.localizedCaseInsensitiveContains(needle) { return true }
-        if row.kind.localizedCaseInsensitiveContains(needle) { return true }
-        if row.groupPath.contains(where: { $0.localizedCaseInsensitiveContains(needle) }) {
-            return true
+    /// What the surfaces show for the current needle, in reading order.
+    ///
+    /// The MATCH is core's
+    /// `canvas_filter` (§W-G row K, contracts 0b-13 / 0b-14): title,
+    /// the `kind` type word, any ONE element of the group path, and the
+    /// activation target — the same four fields, and the same
+    /// consequences (typing `group` selects every group; a needle
+    /// spanning the group separator matches nothing). The
+    /// `localizedCaseInsensitiveContains` chain that lived here is
+    /// gone, and with it its dependence on the current locale (CD-22).
+    ///
+    /// The needle goes over UNTRIMMED: core trims it and an empty
+    /// needle matches everything, so whitespace answers the full
+    /// outline exactly as `filterActive` says it should.
+    ///
+    /// **The reopening window** (`beginBatchRetarget`: `.ready`, no
+    /// handle) is why this returns a view rather than rows. An
+    /// unchanged needle keeps serving the memoized answer, which is
+    /// still correct. A CHANGED needle cannot be answered, so the
+    /// previous answer stays on screen and `current` is false — never
+    /// the full outline, which would silently widen the display while
+    /// the field still claims to be filtering.
+    ///
+    /// The answer is memoized per needle: SwiftUI reads the filtered
+    /// rows several times per body pass, and at the §K 2,000-node budget
+    /// each read would otherwise be another `canvas_filter` round trip.
+    /// The memo is invalidated wherever `neighborsCache` is, because the
+    /// ids can move under an unchanged needle — and deliberately NOT by
+    /// `beginBatchRetarget`, which is what lets the window keep serving
+    /// a correct answer for an unchanged needle.
+    func filterView(session: VaultSession?) -> FilterView {
+        guard filterActive else {
+            return FilterView(rows: outline, narrowed: false, current: true)
         }
-        return target(of: row.nodeId).localizedCaseInsensitiveContains(needle)
+        if let cached = filterMatchCache, cached.needle == filterText {
+            return FilterView(rows: rows(matching: cached.ids), narrowed: true, current: true)
+        }
+        if let session, let handle,
+            let matched = try? session.canvasFilter(handle: handle, query: filterText)
+        {
+            let ids = Set(matched)
+            filterMatchCache = (needle: filterText, ids: ids)
+            return FilterView(rows: rows(matching: ids), narrowed: true, current: true)
+        }
+        if let cached = filterMatchCache {
+            return FilterView(rows: rows(matching: cached.ids), narrowed: true, current: false)
+        }
+        // Nothing was ever applied, so the unfiltered outline IS the
+        // prior view. `narrowed: false` keeps the summary from claiming
+        // these rows matched anything.
+        return FilterView(rows: outline, narrowed: false, current: false)
+    }
+
+    /// The rows the surfaces show — `filterView`'s rows, for the callers
+    /// that need nothing else.
+    func filteredOutline(session: VaultSession?) -> [CanvasOutlineRow] {
+        filterView(session: session).rows
+    }
+
+    private func rows(matching ids: Set<String>) -> [CanvasOutlineRow] {
+        outline.filter { ids.contains($0.nodeId) }
     }
 
     /// Hypothetical geometry while a move/resize mode is active
@@ -364,6 +467,7 @@ final class CanvasDocument: ObservableObject {
             targets = Dictionary(
                 uniqueKeysWithValues: preparedTableRows.map { ($0.nodeId, $0.target) })
             neighborsCache = [:]
+            filterMatchCache = nil
             state = .ready
             retargetPreparationPending = false
         case .degraded(_, let message):
@@ -420,6 +524,7 @@ final class CanvasDocument: ObservableObject {
             targets = Dictionary(
                 uniqueKeysWithValues: tableRows.map { ($0.nodeId, $0.target) })
             neighborsCache = [:]
+            filterMatchCache = nil
             state = .ready
         } catch {
             handle = nil
@@ -429,6 +534,7 @@ final class CanvasDocument: ObservableObject {
             scene = CanvasScene(nodes: [], edges: [])
             targets = [:]
             neighborsCache = [:]
+            filterMatchCache = nil
             state = .failed(Self.friendlyMessage(path: path, for: error))
         }
     }
@@ -441,6 +547,14 @@ final class CanvasDocument: ObservableObject {
         handle = nil
         awaitingPreparedLoad = true
         preparedActivationPending = false
+        // The read caches describe rows this state stops rendering, and
+        // a reader that finds one warm is entitled to answer from it
+        // (follow-connection's step 2). Emptying them here costs
+        // nothing — every path out of `.loading` clears them again — and
+        // it keeps the one invariant those readers rely on: warm means
+        // the rows are still on screen.
+        neighborsCache = [:]
+        filterMatchCache = nil
         state = .loading
         return replacedHandle
     }
@@ -483,6 +597,7 @@ final class CanvasDocument: ObservableObject {
             state = .failed(message)
         }
         neighborsCache = [:]
+        filterMatchCache = nil
     }
 
     /// Returns true while activation must trust the background-prepared state.
@@ -519,6 +634,7 @@ final class CanvasDocument: ObservableObject {
         undoStack = []
         redoStack = []
         neighborsCache = [:]
+        filterMatchCache = nil
         filterText = ""
         transientRects = nil
         viewport.scale = 1.0
@@ -536,6 +652,7 @@ final class CanvasDocument: ObservableObject {
         targets = Dictionary(
             uniqueKeysWithValues: tableRows.map { ($0.nodeId, $0.target) })
         neighborsCache = [:]
+        filterMatchCache = nil
     }
 
     /// Release the FFI handle (idempotent).
@@ -561,6 +678,12 @@ final class CanvasDocument: ObservableObject {
         handle = nil
         awaitingPreparedLoad = false
         preparedActivationPending = false
+        // Same reason as `beginPreparedReplacement`: the outline object
+        // survives, but the view renders only the message, so nothing
+        // may answer a reader from these rows as though they were on
+        // screen. A later successful reopen refills them.
+        neighborsCache = [:]
+        filterMatchCache = nil
         state = .failed(
             "\(displayName) was moved to Trash and is no longer available.")
     }
@@ -592,14 +715,32 @@ final class CanvasDocument: ObservableObject {
         targets[nodeId] ?? ""
     }
 
-    /// Adjacency for one node (cached; empty on any failure — the
-    /// outline degrades to no connection rows, never an error state).
-    func neighbors(of nodeId: String, session: VaultSession?) -> [CanvasNeighbor] {
+    /// Adjacency for one node when it can be ANSWERED — the cache, or a
+    /// live query that succeeded. `nil` means neither could: no handle
+    /// and a cold cache (the reopening window), or a query that refused
+    /// the id.
+    ///
+    /// The distinction matters to exactly one caller. Follow-connection
+    /// reports "no connection in that direction" when the list comes
+    /// back without an nth candidate — a fact it may only assert if the
+    /// list is real. An unanswerable lookup flattened to `[]` makes that
+    /// sentence a claim nothing returned, which is what VA-1's table
+    /// forbids.
+    func neighborsIfKnown(of nodeId: String, session: VaultSession?) -> [CanvasNeighbor]? {
         if let cached = neighborsCache[nodeId] { return cached }
-        guard let session, let handle else { return [] }
-        let result = (try? session.canvasNeighbors(handle: handle, nodeId: nodeId)) ?? []
+        guard let session, let handle,
+            let result = try? session.canvasNeighbors(handle: handle, nodeId: nodeId)
+        else { return nil }
         neighborsCache[nodeId] = result
         return result
+    }
+
+    /// Adjacency for one node (cached; empty when it cannot be answered
+    /// — the outline degrades to no connection rows, never an error
+    /// state). Callers that must tell "no connections" from "no answer"
+    /// take `neighborsIfKnown` instead.
+    func neighbors(of nodeId: String, session: VaultSession?) -> [CanvasNeighbor] {
+        neighborsIfKnown(of: nodeId, session: session) ?? []
     }
 
     /// Filename without extension — never a raw path in UI copy.

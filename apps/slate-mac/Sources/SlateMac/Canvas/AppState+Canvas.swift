@@ -326,13 +326,15 @@ extension AppState {
     /// selected card's full context — announced AND rendered in a
     /// focusable transient panel so braille users read it at leisure.
     func canvasWhereAmI() {
-        guard let tab = workspace.activeTab, case .canvas(let path) = tab.item else { return }
-        let doc = canvasDocument(for: path)
-        guard let handle = doc.handle, let session = currentSession else { return }
-        guard case .ready = doc.state else {
-            canvasAnnouncer.announce(.canvasStatus(note: .notReadable))
-            return
-        }
+        // Through the one state mapping, like every other read verb.
+        // Where-am-I used to carry its own per-state answers — that is
+        // where `.notReadable` came from, and the mapping now gives it
+        // to everyone (t0 §1.4: this is the pull surface, and a pull
+        // that yields silence is the failure it exists to prevent).
+        guard let target = canvasReadTarget() else { return }
+        let doc = target.doc
+        let session = target.session
+        let handle = target.handle
         // Fall back to the first card in reading order when nothing is
         // selected yet (fresh landing) — "where am I" always answers.
         guard let nodeId = doc.selection.selected ?? doc.outline.first?.nodeId else {
@@ -357,7 +359,7 @@ extension AppState {
                 mode: canvasModeControllers[doc.path]?.active?.mode,
                 filter: doc.filterActive
                     ? .active(
-                        matched: UInt32(clamping: doc.filteredOutline.count),
+                        matched: UInt32(clamping: doc.filteredOutline(session: session).count),
                         total: UInt32(clamping: doc.outline.count))
                     : .inactive)
             // The panel shows the SAME string the announcement speaks —

@@ -1145,4 +1145,237 @@ public static class SurfaceSerializer
     };
 
     private static string Slash(string path) => path.Replace('\\', '/');
+
+    // --- W6-1 PR 0b: the canvas_queries section (contract 0b-15) ----------
+    //
+    // The three pinned input lists below are DUPLICATED in the mac twin
+    // (apps/slate-mac/Tests/SlateMacTests/ParityHarnessTests.swift), the
+    // same way `PinnedSearchQueries` is: the twins cannot share a
+    // declaration across languages, and the committed golden arbitrates
+    // — two lists that drift produce different artifacts and the mac
+    // census fails on the same golden this one passes.
+
+    /// <summary>
+    /// Filter queries the canvas artifact pins. The set is chosen for
+    /// what each proves, not for coverage: the EMPTY query (which
+    /// matches everything — the easiest rule to get backwards), a plain
+    /// ASCII needle, the same needle mixed-case and whitespace-padded
+    /// (case folding and trimming), a group-path element, the `kind`
+    /// type word (typing "group" selects every group — shipped mac
+    /// behaviour), and one that matches nothing.
+    /// </summary>
+    public static readonly string[] PinnedCanvasFilterQueries =
+    {
+        "",
+        "card",
+        "ReSeArCh",
+        "  research  ",
+        "Q3",
+        "group",
+        "zzz-nothing",
+    };
+
+    /// <summary>
+    /// Rects the canvas artifact describes relatively. The last one
+    /// coincides exactly with a card in <c>sample.canvas</c>, which is
+    /// the zero-delta case whose axis rule is pinned in contract 0b-7.
+    /// </summary>
+    public static readonly CanvasRect[] PinnedCanvasRelativeRects =
+    {
+        new CanvasRect(0.0, 0.0, 240.0, 140.0),
+        new CanvasRect(300.0, 150.0, 240.0, 140.0),
+        new CanvasRect(-1000.0, -1000.0, 10.0, 10.0),
+        new CanvasRect(640.0, 180.0, 240.0, 140.0),
+    };
+
+    /// <summary>
+    /// Canvas fixtures deliberately kept OUT of the artifact.
+    /// <c>large_2000.canvas</c> is the §K performance fixture; at 2,000
+    /// nodes its per-node rows would commit a golden no reviewer reads.
+    /// Its coverage is the in-crate census, which runs the same queries
+    /// over it.
+    /// </summary>
+    public static readonly string[] CanvasArtifactExclusions = { "large_2000.canvas" };
+
+    /// <summary>
+    /// Vault-level artifact: the W6-1 PR 0b structural queries over
+    /// every canvas fixture — bounds, then per node in reading order
+    /// its speakable name, parent, children and traced path, then the
+    /// pinned filter results and relative descriptions.
+    /// </summary>
+    public static string CanvasQueriesArtifact(
+        VaultSession session,
+        IReadOnlyList<string> canvasFiles)
+    {
+        var j = new CanonicalJson();
+        j.Raw("{\"canvases\":[");
+        for (int f = 0; f < canvasFiles.Count; f++)
+        {
+            if (f > 0)
+            {
+                j.Raw(",");
+            }
+
+            string rel = canvasFiles[f];
+            CanvasOpenInfo info = session.OpenCanvas(rel);
+            try
+            {
+                j.Raw("{\"file\":").Str(Slash(rel))
+                 .Raw(",\"degraded\":").Bool(info.Degraded)
+                 .Raw(",\"bounds\":");
+                CanvasRect? bounds = session.CanvasBounds(info.Handle);
+                if (bounds == null)
+                {
+                    j.Null();
+                }
+                else
+                {
+                    AppendCanvasRect(j, bounds);
+                }
+
+                j.Raw(",\"nodes\":[");
+                var outline = session.CanvasOutline(info.Handle);
+                for (int i = 0; i < outline.Length; i++)
+                {
+                    if (i > 0)
+                    {
+                        j.Raw(",");
+                    }
+                    string nodeId = outline[i].NodeId;
+                    j.Raw("{\"node_id\":").Str(nodeId)
+                     .Raw(",\"speakable_name\":").Str(outline[i].SpeakableName)
+                     .Raw(",\"parent\":");
+                    string? parent = session.CanvasParentOf(info.Handle, nodeId);
+                    if (parent == null)
+                    {
+                        j.Null();
+                    }
+                    else
+                    {
+                        j.Str(parent);
+                    }
+
+                    j.Raw(",\"children\":[");
+                    var children = session.CanvasChildrenOf(info.Handle, nodeId);
+                    for (int c = 0; c < children.Length; c++)
+                    {
+                        if (c > 0)
+                        {
+                            j.Raw(",");
+                        }
+                        j.Str(children[c]);
+                    }
+                    j.Raw("]");
+
+                    j.Raw(",\"trace\":[");
+                    var hops = session.CanvasTracePath(info.Handle, nodeId);
+                    for (int t = 0; t < hops.Length; t++)
+                    {
+                        if (t > 0)
+                        {
+                            j.Raw(",");
+                        }
+                        j.Raw("{\"edge_id\":").Str(hops[t].EdgeId)
+                         .Raw(",\"node_id\":").Str(hops[t].NodeId)
+                         .Raw(",\"title\":").Str(hops[t].Title)
+                         .Raw(",\"label\":");
+                        if (hops[t].Label == null)
+                        {
+                            j.Null();
+                        }
+                        else
+                        {
+                            j.Str(hops[t].Label!);
+                        }
+                        j.Raw("}");
+                    }
+                    j.Raw("]}");
+                }
+                j.Raw("]");
+
+                j.Raw(",\"filters\":[");
+                for (int q = 0; q < PinnedCanvasFilterQueries.Length; q++)
+                {
+                    if (q > 0)
+                    {
+                        j.Raw(",");
+                    }
+                    j.Raw("{\"query\":").Str(PinnedCanvasFilterQueries[q])
+                     .Raw(",\"matched\":[");
+                    var matched = session.CanvasFilter(info.Handle, PinnedCanvasFilterQueries[q]);
+                    for (int m = 0; m < matched.Length; m++)
+                    {
+                        if (m > 0)
+                        {
+                            j.Raw(",");
+                        }
+                        j.Str(matched[m]);
+                    }
+                    j.Raw("]}");
+                }
+                j.Raw("]");
+
+                j.Raw(",\"relative\":[");
+                for (int r = 0; r < PinnedCanvasRelativeRects.Length; r++)
+                {
+                    if (r > 0)
+                    {
+                        j.Raw(",");
+                    }
+                    j.Raw("{\"rect\":");
+                    AppendCanvasRect(j, PinnedCanvasRelativeRects[r]);
+                    j.Raw(",\"descs\":[");
+                    var descs = session.CanvasDescribeRelative(
+                        info.Handle, PinnedCanvasRelativeRects[r], Array.Empty<string>());
+                    for (int d = 0; d < descs.Length; d++)
+                    {
+                        if (d > 0)
+                        {
+                            j.Raw(",");
+                        }
+                        j.Raw("{\"kind\":").Str(RelativeDescName(descs[d]))
+                         .Raw(",\"anchor\":").Str(RelativeDescAnchor(descs[d]))
+                         .Raw("}");
+                    }
+                    j.Raw("]}");
+                }
+                j.Raw("]}");
+            }
+            finally
+            {
+                session.CloseCanvas(info.Handle);
+            }
+        }
+        j.Raw("]}");
+        return j + "\n";
+    }
+
+    public static string RelativeDescName(CanvasRelativeDesc desc) => desc switch
+    {
+        CanvasRelativeDesc.Below => "below",
+        CanvasRelativeDesc.RightOf => "right_of",
+        CanvasRelativeDesc.Above => "above",
+        CanvasRelativeDesc.LeftOf => "left_of",
+        CanvasRelativeDesc.AtOrigin => "at_origin",
+        _ => throw new InvalidOperationException($"unmapped CanvasRelativeDesc {desc}"),
+    };
+
+    public static string RelativeDescAnchor(CanvasRelativeDesc desc) => desc switch
+    {
+        CanvasRelativeDesc.Below b => b.AnchorTitle,
+        CanvasRelativeDesc.RightOf r => r.AnchorTitle,
+        CanvasRelativeDesc.Above a => a.AnchorTitle,
+        CanvasRelativeDesc.LeftOf l => l.AnchorTitle,
+        CanvasRelativeDesc.AtOrigin => string.Empty,
+        _ => throw new InvalidOperationException($"unmapped CanvasRelativeDesc {desc}"),
+    };
+
+    private static void AppendCanvasRect(CanonicalJson j, CanvasRect rect)
+    {
+        j.Raw("{\"x\":").Num(rect.X)
+         .Raw(",\"y\":").Num(rect.Y)
+         .Raw(",\"width\":").Num(rect.Width)
+         .Raw(",\"height\":").Num(rect.Height)
+         .Raw("}");
+    }
 }

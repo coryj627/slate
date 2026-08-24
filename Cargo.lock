@@ -2003,6 +2003,7 @@ dependencies = [
  "blake3",
  "chrono",
  "criterion",
+ "getrandom 0.4.3",
  "hayagriva",
  "libc",
  "log",

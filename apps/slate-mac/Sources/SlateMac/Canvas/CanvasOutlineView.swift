@@ -75,7 +75,9 @@ struct CanvasOutlineView: View {
         }
     }
 
-    private var rows: [CanvasOutlineRow] { document.filteredOutline }
+    private var rows: [CanvasOutlineRow] {
+        document.filteredOutline(session: appState.currentSession)
+    }
 
     private var lines: [Line] {
         var out: [Line] = []

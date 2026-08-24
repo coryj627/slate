@@ -21,6 +21,7 @@ serde = { workspace = true }
 chrono = { workspace = true }
 regex = { workspace = true }
 memchr = { workspace = true }
+getrandom = { workspace = true }
 ropey = { workspace = true }
 similar = { workspace = true }
 unicode-normalization = { workspace = true }
