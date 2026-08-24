@@ -812,6 +812,42 @@
       "reason": "PR-4: overlay-scoped interaction of an already-open surface (the arrow-keys-in-a-list rule), not an app command. The Windows builder sheet owns the row verbs."
     },
     {
+      "id": "slate.canvas.showOutline",
+      "label": "Canvas: Show Outline",
+      "section": "Canvas",
+      "hint": "Show the canvas as an outline of its cards, groups and connections.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.showTable",
+      "label": "Canvas: Show Table",
+      "section": "Canvas",
+      "hint": "Show the canvas as a sortable table of its cards.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.showVisual",
+      "label": "Canvas: Show Visual",
+      "section": "Canvas",
+      "hint": "Show the canvas as its spatial board.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
       "id": "slate.sidebar.open",
       "label": "Open",
       "section": "Sidebar",

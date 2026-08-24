@@ -461,6 +461,16 @@ internal static class SlateCommandRegistrar
                 host => host.Workspace?.BasesCopyMarkdownCommand,
             [ChordTable.Ids.BasesResultsPopover] = host => host.Workspace?.BasesResultsCommand,
             [ChordTable.Ids.BasesRefresh] = host => host.Workspace?.BasesRefreshCommand,
+
+            // Canvas (W6-1 #745, contract A18). showTable/showVisual
+            // resolve to a command whose CanExecute is false until PR B
+            // and PR D ship their projections.
+            [ChordTable.Ids.CanvasShowOutline] =
+                host => host.Workspace?.CanvasShowOutlineCommand,
+            [ChordTable.Ids.CanvasShowTable] =
+                host => host.Workspace?.CanvasShowTableCommand,
+            [ChordTable.Ids.CanvasShowVisual] =
+                host => host.Workspace?.CanvasShowVisualCommand,
             [ChordTable.Ids.BasesNewQuery] = host => host.Workspace?.BasesNewQueryCommand,
             [ChordTable.Ids.BasesEditViewFilters] =
                 host => host.Workspace?.BasesEditViewFiltersCommand,
