@@ -143,14 +143,14 @@ internal static class CanvasMediaPolicy
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Four codex rounds converged on this design. The class codex named
+    /// Five codex rounds converged on this design. The class codex named
     /// is <b>filesystem identity reduced to path text</b>; path text is
     /// retired as the decision substrate. Containment, revalidation and
     /// launch decide on OS file identity — the 128-bit
     /// <c>FILE_ID_INFO</c> (volume serial + 128-bit file id, ReFS-safe;
-    /// the 64-bit <c>nFileIndex</c> is NOT unique on ReFS), with a
-    /// documented 64-bit fallback only where <c>FileIdInfo</c> is
-    /// unavailable.
+    /// the 64-bit <c>nFileIndex</c> is NOT unique on ReFS). That is the
+    /// ONLY identity method: there is no fallback, and a failed identity
+    /// query refuses rather than downgrading (round 5).
     /// </para>
     /// <para>
     /// <b>One coherent snapshot (round 4, B1).</b> The leaf is opened
@@ -375,36 +375,44 @@ internal static class CanvasMediaPolicy
     }
 
     /// <summary>
-    /// The identity of an OPEN handle: the 128-bit <c>FILE_ID_INFO</c>
-    /// (ReFS-safe), falling back to the 64-bit
-    /// <c>BY_HANDLE_FILE_INFORMATION</c> index only where
-    /// <c>FileIdInfo</c> is unavailable.
+    /// The identity of an OPEN handle: the 128-bit <c>FILE_ID_INFO</c>,
+    /// or NULL. There is no second identity method — a failure is a
+    /// refusal, never a downgrade.
     /// </summary>
     /// <remarks>
-    /// <c>nFileIndex</c> is documented as NOT unique on ReFS and its ids
-    /// are reused, so a 64-bit compare can call two different files the
-    /// same — a fail-OPEN. <c>GetFileInformationByHandleEx(FileIdInfo)</c>
-    /// returns a 128-bit file id that is stable and unique on NTFS and
-    /// ReFS alike. The fallback exists only for a pre-Windows-8 host where
-    /// the Ex class is absent; ReFS postdates that, so the fallback never
-    /// meets a volume where its non-uniqueness matters.
+    /// <para>
+    /// <c>nFileIndex</c> from <c>BY_HANDLE_FILE_INFORMATION</c> is
+    /// documented as NOT unique on ReFS and its ids are reused, so a
+    /// 64-bit compare can call two different files the same — a fail-OPEN
+    /// in the gate this identity anchors.
+    /// <c>GetFileInformationByHandleEx(FileIdInfo)</c> returns a 128-bit
+    /// file id that is stable and unique on NTFS and ReFS alike, and it is
+    /// the ONLY identity this gate accepts.
+    /// </para>
+    /// <para>
+    /// There is deliberately NO legacy fallback (codex round 5). A
+    /// per-CALL fallback is strictly worse than none: any transient
+    /// failure of the primary query — not just an old host — silently
+    /// downgrades that one read to the non-unique index, which on ReFS is
+    /// a fail-open, and it does so exactly when something is already
+    /// wrong. Nor is a per-host capability probe warranted: this app is
+    /// .NET 10 WPF, whose minimum OS (Windows 10 1607) postdates
+    /// <c>FileIdInfo</c> (Windows 8) by years, so the fallback served no
+    /// supported platform. Its mere existence WAS the mixed-method class.
+    /// A failure here refuses the media, audibly, like every other
+    /// failure in this gate.
+    /// </para>
     /// </remarks>
     private static FileIdentity? IdentityOfHandle(SafeFileHandle handle)
     {
-        if (NativeIo.TryGetFileIdInfo(handle, out NativeIo.FileIdInformation idInfo))
+        if (FailIdentityQueryForTests
+            || !NativeIo.TryGetFileIdInfo(handle, out NativeIo.FileIdInformation idInfo))
         {
-            return new FileIdentity(
-                idInfo.VolumeSerialNumber, idInfo.FileIdLow, idInfo.FileIdHigh);
+            // No downgrade. FileIdInfo or nothing.
+            return null;
         }
-        if (NativeIo.GetFileInformationByHandle(
-            handle, out NativeIo.ByHandleFileInformation info))
-        {
-            return new FileIdentity(
-                info.VolumeSerialNumber,
-                ((ulong)info.FileIndexHigh << 32) | info.FileIndexLow,
-                0);
-        }
-        return null;
+        return new FileIdentity(
+            idInfo.VolumeSerialNumber, idInfo.FileIdLow, idInfo.FileIdHigh);
     }
 
     /// <summary>
@@ -463,8 +471,8 @@ internal static class CanvasMediaPolicy
 
     /// <summary>The OS's identity for a file object: same triple ⇒ same
     /// file, regardless of the path spelling used to reach it. The file
-    /// id is 128-bit (ReFS-safe); the legacy fallback leaves the high
-    /// half zero.</summary>
+    /// id is always the 128-bit ReFS-safe one — there is no other identity
+    /// method, so no value of this type is ever a weaker id.</summary>
     internal readonly record struct FileIdentity(
         ulong VolumeSerial, ulong FileIdLow, ulong FileIdHigh);
 
@@ -531,38 +539,11 @@ internal static class CanvasMediaPolicy
             "kernel32.dll", SetLastError = true)]
         [return: System.Runtime.InteropServices.MarshalAs(
             System.Runtime.InteropServices.UnmanagedType.Bool)]
-        internal static extern bool GetFileInformationByHandle(
-            SafeFileHandle hFile,
-            out ByHandleFileInformation lpFileInformation);
-
-        [System.Runtime.InteropServices.DllImport(
-            "kernel32.dll", SetLastError = true)]
-        [return: System.Runtime.InteropServices.MarshalAs(
-            System.Runtime.InteropServices.UnmanagedType.Bool)]
         private static extern bool GetFileInformationByHandleEx(
             SafeFileHandle hFile,
             int fileInformationClass,
             out FileIdInformation lpFileInformation,
             uint dwBufferSize);
-
-        [System.Runtime.InteropServices.StructLayout(
-            System.Runtime.InteropServices.LayoutKind.Sequential)]
-        internal struct ByHandleFileInformation
-        {
-            public uint FileAttributes;
-            public uint CreationTimeLow;
-            public uint CreationTimeHigh;
-            public uint LastAccessTimeLow;
-            public uint LastAccessTimeHigh;
-            public uint LastWriteTimeLow;
-            public uint LastWriteTimeHigh;
-            public uint VolumeSerialNumber;
-            public uint FileSizeHigh;
-            public uint FileSizeLow;
-            public uint NumberOfLinks;
-            public uint FileIndexHigh;
-            public uint FileIndexLow;
-        }
 
         /// <summary>FILE_ID_INFO: 64-bit volume serial + 128-bit file id
         /// (two ulongs = the 16-byte FILE_ID_128).</summary>
@@ -580,31 +561,29 @@ internal static class CanvasMediaPolicy
     /// pin the identity primitive the whole gate stands on.</summary>
     internal static FileIdentity? IdentityForTests(string path) => IdentityOf(path);
 
-    /// <summary>Whether the 128-bit <c>FileIdInfo</c> path is taken on
-    /// this box (Major-2): pins that identity is ReFS-safe, not the
-    /// 64-bit legacy fallback.</summary>
+    /// <summary>Whether the 128-bit <c>FileIdInfo</c> query succeeds on
+    /// this box: pins that the ReFS-safe primitive is real and available,
+    /// so refusing on its failure costs nothing on a supported host.</summary>
     internal static bool UsesFileIdInfoForTests(string path)
     {
         using SafeFileHandle handle = OpenForQuery(path);
         return !handle.IsInvalid && NativeIo.TryGetFileIdInfo(handle, out _);
     }
 
-    /// <summary>The identity via the LEGACY 64-bit path, so a fact can
-    /// prove the fallback also distinguishes files.</summary>
-    internal static FileIdentity? LegacyIdentityForTests(string path)
-    {
-        using SafeFileHandle handle = OpenForQuery(path);
-        if (handle.IsInvalid
-            || !NativeIo.GetFileInformationByHandle(
-                handle, out NativeIo.ByHandleFileInformation info))
-        {
-            return null;
-        }
-        return new FileIdentity(
-            info.VolumeSerialNumber,
-            ((ulong)info.FileIndexHigh << 32) | info.FileIndexLow,
-            0);
-    }
+    /// <summary>
+    /// Set only by tests: makes the PRIMARY identity query fail, so a
+    /// fact can prove the whole resolution REFUSES rather than falling
+    /// back to a weaker identity (codex round 5).
+    /// </summary>
+    /// <remarks>
+    /// This injects failure at the one place a fallback would be
+    /// reintroduced — between the primary query failing and the method
+    /// returning null. A fallback arm added there would satisfy the
+    /// injection and hand back a 64-bit identity, which is exactly the
+    /// mutation `IdentityQueryFailureRefusesRatherThanDowngrading`
+    /// detects.
+    /// </remarks>
+    internal static bool FailIdentityQueryForTests { get; set; }
 
     /// <summary>Test seam over the volume-GUID resolution (Major-4): the
     /// fallback path when a driveless volume has no DOS name.</summary>

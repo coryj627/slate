@@ -2557,25 +2557,44 @@ SUBST, and which spelling reached it.
 `FileIdentityIsStableAcrossSpellingsAndDistinctAcrossObjects` pins the
 primitive (same object ⇒ equal, different objects ⇒ unequal).
 
-**The identity is the 128-bit `FILE_ID_INFO`, not the 64-bit
-`nFileIndex` (round 4, fail-open #2).** `nFileIndex` from
+**The identity is the 128-bit `FILE_ID_INFO`, and it is the ONLY identity
+method (round 4 #2, completed by round 5).** `nFileIndex` from
 `GetFileInformationByHandle` is documented as NOT unique on ReFS and its
 ids are reused, so a 64-bit compare can call two different files the same
-— a fail-OPEN in the very gate it anchors. The identity is now
+— a fail-OPEN in the very gate it anchors. The identity is
 `GetFileInformationByHandleEx(FileIdInfo)` → `FILE_ID_INFO`: a 64-bit
 `VolumeSerialNumber` plus a 128-bit `FileId`, stable and unique on NTFS
-and ReFS alike. The 64-bit `BY_HANDLE_FILE_INFORMATION` index survives as
-a documented fallback ONLY where `FileIdInfo` is unavailable
-(pre-Windows-8); ReFS postdates that, so the fallback never meets a volume
-where its non-uniqueness matters. On NTFS the two forms coincide (the
-128-bit id's low half is the MFT index, high half zero), so a host that
-mixed classes would still compare a file equal to itself; a genuinely
-mixed 128-vs-64 comparison of different files differs in the high half and
-fails CLOSED, never open. `IdentityIsThe128BitFileIdInfoNotThe64BitIndex`
-pins that the 128-bit class is the one taken on a live handle here
-(mutation-verified against a wrong class value), and
-`TheLegacy64BitFallbackAlsoDistinguishesFiles` pins the fallback is not
-dead code.
+and ReFS alike.
+
+**There is NO legacy fallback, and the round-4 record's claim that there
+was a safe one is corrected.** Round 4 shipped a 64-bit
+`BY_HANDLE_FILE_INFORMATION` arm and this document described it as a
+capability selection confined to pre-Windows-8 hosts. That description was
+WRONG, and the scoped re-review that endorsed it was wrong to: the arm was
+per-CALL, not per-host. It triggered on ANY failure of the primary query —
+a transient error, a handle race, an unusual filesystem — and silently
+downgraded that individual read to the non-unique index. On ReFS that is a
+fail-open that arrives precisely when something is already wrong, which is
+strictly worse than no fallback at all. The arm, its P/Invoke and its
+struct are DELETED (codex round 5, controller ruling: take the strongest
+form). `IdentityOfHandle` is now `FileIdInfo` or `null`, and a failed
+identity query REFUSES the media like every other failure in this gate.
+
+**The minimum-OS rationale.** Deleting the fallback costs no supported
+platform: this app is .NET 10 WPF, whose minimum OS is Windows 10 1607,
+which postdates `FileIdInfo` (Windows 8) by years. The fallback served no
+host the app runs on; its only effect was to exist, and its existence WAS
+the mixed-method class.
+
+`IdentityIsThe128BitFileIdInfoNotThe64BitIndex` pins that the 128-bit
+class succeeds on a live handle (mutation-verified against a wrong class
+value). `IdentityQueryFailureRefusesRatherThanDowngrading` injects a
+primary-query failure into the containment flow and pins that the identity
+primitive, `ResolveInsideVault` and `OpenMediaInVault` ALL refuse, with
+nothing handed to the shell — mutation-verified by reintroducing a
+fallback arm. `CanvasMediaGateCensus.TheGateHasExactlyOneIdentityMethod`
+pins the legacy symbols absent rather than dormant, two-sided against the
+surviving `TryGetFileIdInfo`.
 
 **Containment reaches the root by identity, with NO depth cap on the
 lexical walk (round 4, fail-closed #3).** The resolved terminal path names
@@ -2689,10 +2708,20 @@ undrivable unprivileged); and the sub-millisecond launch-time re-resolution
 gap (needs a handle-based launcher). None is a path-text defect; the class
 codex named is closed. Round 4 found three fail modes in the identity/
 snapshot logic (a check→capture window, a ReFS-unsafe 64-bit id, a
-mis-applied depth cap); all three are fixed, and the full identity/snapshot
-sweep for further fail-opens found none — the mixed-class comparison, UNC
-and device forms all fail CLOSED, and a too-small final-path buffer is
-grown and re-read rather than refusing a legitimate long path.
+mis-applied depth cap) and round 5 found that round 4's own fix for the
+second one still carried a per-call downgrade; all four are fixed.
+
+**The capability-fallback sweep (round 5 #4).** No primitive in this gate
+weakens itself on failure. Identity is `FileIdInfo` or refusal — no second
+method exists. The two surviving retry/alternate shapes are NOT downgrades:
+the final-path buffer growth re-invokes the SAME method with a larger
+buffer, and the `VOLUME_NAME_DOS` → `VOLUME_NAME_GUID` step is the same
+`GetFinalPathNameByHandle` asked for a different SPELLING of the same
+resolved object (identity is still read from the held handle, and
+`TheVolumeGuidResolutionReturnsAWellFormedPath` pins the two spellings name
+one identity). Everything else fails CLOSED: a mixed-class comparison would
+differ in the high half; UNC and `\\.\`/`\\?\` device forms never reach an
+identity chain under a local vault root; an unopenable ancestor refuses.
 
 **Every failure mode is a refusal** — a NUL character, a reserved device
 name, a path too long, a link cycle, a permission error — because an
@@ -3821,6 +3850,16 @@ swept end to end for any further fail-open and none remains.
   `IdentityIsThe128BitFileIdInfoNotThe64BitIndex` (the 128-bit class is the
   one taken on a live handle, mutation-verified against a wrong class value)
   and `TheLegacy64BitFallbackAlsoDistinguishesFiles`.
+  > **CORRECTED BY ROUND 5.** The claim above — that the retained 64-bit
+  > arm was a pre-Windows-8 capability selection — is FALSE. The arm was
+  > per-CALL: it triggered on any failure of the primary query and
+  > downgraded that individual read to the non-unique index, a fail-open on
+  > ReFS. The scoped re-review that endorsed this wording did not catch it
+  > either. The fallback is deleted in round 5 and
+  > `TheLegacy64BitFallbackAlsoDistinguishesFiles` is replaced by
+  > `IdentityQueryFailureRefusesRatherThanDowngrading`. This entry is left
+  > standing, with its error marked, because the record of what was claimed
+  > is part of the record.
 - **B3 (depth cap — fail-CLOSED availability).** The `ResolveRounds=64`
   reparse-cycle bound had been mis-applied to the lexical ParentOf walk,
   refusing valid media more than 64 directories deep. Removed: the walk
@@ -3845,3 +3884,52 @@ the one residual and no longer implies the check→capture gap is covered.
 containment; it converged (three concrete fixes, a clean sweep) rather than
 surfacing another instance of a closed class, so the loop ends here rather
 than escalating the design decision to the user.
+
+### PR A — Codex adversarial round 5 — 1 blocker, introduced by round 4's own fix
+
+Genuine, and mine: round 4 replaced the 64-bit identity with the 128-bit
+`FILE_ID_INFO` but RETAINED the old one as a fallback, and this document
+described that fallback as a per-host capability selection confined to
+pre-Windows-8. It was per-CALL. Any transient failure of the primary query
+— not an old OS, just an error — downgraded that single read to the
+ReFS-non-unique `nFileIndex`, i.e. a fail-open that fires exactly when
+something is already wrong. Strictly worse than having no fallback.
+
+**Controller ruling: strongest form — delete it.** `IdentityOfHandle` is
+now `FileIdInfo` or `null`; the `GetFileInformationByHandle` P/Invoke, its
+`BY_HANDLE_FILE_INFORMATION` struct and the legacy test seam are gone. The
+minimum-OS rationale is recorded in CD-38: .NET 10 WPF's minimum host
+(Windows 10 1607) postdates `FileIdInfo` (Windows 8) by years, so the
+fallback served no supported platform — deleting it is removing dead code,
+not narrowing support.
+
+- **The failure-injection fact.**
+  `IdentityQueryFailureRefusesRatherThanDowngrading` injects a
+  primary-identity-query failure into the containment flow and pins that
+  the primitive, `ResolveInsideVault` and `OpenMediaInVault` all refuse and
+  nothing reaches the shell — with a before/after premise so a broken
+  fixture cannot pass it. Mutation-verified: reintroducing ANY fallback arm
+  makes the injected failure resolve successfully again, failing both this
+  fact and `TheGateHasExactlyOneIdentityMethod`.
+- **The structural pin.** `CanvasMediaGateCensus.TheGateHasExactlyOneIdentityMethod`
+  requires the legacy symbols ABSENT rather than merely unreached
+  (dormant dead code is how this returned), two-sided against the surviving
+  `TryGetFileIdInfo` so deleting identity altogether cannot satisfy it.
+- **Sweep — no other per-call downgrade.** Recorded in CD-38: the
+  final-path buffer growth retries the SAME method, and the DOS→GUID step
+  is the same call asking for a different spelling of the same object.
+  Neither weakens a primitive; nothing else in the gate does either.
+
+**On the record.** Round 4's entry above is left in place with its error
+marked rather than rewritten, and the fact that the scoped re-review
+endorsed the wrong claim is recorded with it. The claims-match-powers
+doctrine applies to this document too: a fallback described as narrower
+than it was is the same defect class as a guard described as stronger than
+it is.
+
+**Stop condition.** The round-4 stop was pre-declared for a FIFTH
+containment fail-open. The controller adjudicated it unmet in spirit —
+deleting dead code that serves no supported platform is not a product
+decision, and codex specified the closure shape rather than disputing it —
+so the loop continues to a scoped re-review and codex round 6. Recorded in
+the ledger and reversible until the user says otherwise.

@@ -123,6 +123,49 @@ public sealed class CanvasMediaGateCensus
             name => name.Identifier.ValueText == "ResolveRounds");
     }
 
+    /// <summary>
+    /// Round 5: there is exactly ONE identity method in the gate. The
+    /// legacy 64-bit <c>BY_HANDLE_FILE_INFORMATION</c> path is DELETED,
+    /// not merely unreached — a per-call fallback downgraded any transient
+    /// primary failure to the ReFS-non-unique <c>nFileIndex</c>, and the
+    /// app's minimum OS postdates <c>FileIdInfo</c> by years, so it served
+    /// no supported platform. Its existence WAS the mixed-method class, so
+    /// the symbols must be absent rather than dormant.
+    /// </summary>
+    [Fact]
+    public void TheGateHasExactlyOneIdentityMethod()
+    {
+        CSharpSource gate = CSharpSource.Load(GateFile);
+        string[] banned =
+        [
+            "GetFileInformationByHandle",
+            "ByHandleFileInformation",
+            "FileIndexHigh",
+            "FileIndexLow",
+        ];
+
+        var found = gate.Root.DescendantNodes()
+            .OfType<SimpleNameSyntax>()
+            .Select(name => name.Identifier.ValueText)
+            .Where(name => banned.Contains(name, StringComparer.Ordinal))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.True(
+            found.Length == 0,
+            "the legacy 64-bit identity path must not exist in the media gate — a "
+            + "per-call fallback turns any transient FileIdInfo failure into a "
+            + "ReFS-unsafe identity (codex round 5). Found: "
+            + string.Join(", ", found));
+
+        // Two-sided: the ONE identity method is still here. Without this,
+        // deleting identity queries altogether would satisfy the ban above.
+        Assert.True(
+            CSharpSource.References(gate.Root, "TryGetFileIdInfo"),
+            "the gate must still query the 128-bit FILE_ID_INFO identity; the "
+            + "ban above would otherwise pass with no identity method at all.");
+    }
+
     /// <summary>Whether <paramref name="node"/> calls a bare, un-qualified
     /// method of this name — <c>Name(...)</c>, not <c>x.Name(...)</c>.
     /// The gate's own helpers are called bare.</summary>

@@ -2525,13 +2525,14 @@ public sealed class CanvasDocumentTests : IDisposable
         File.WriteAllBytes(Path.Combine(dir, "a.png"), [0x89]);
         File.WriteAllBytes(Path.Combine(dir, "b.png"), [0x89]);
 
-        // The 128-bit class is the one taken on a real handle here — not
-        // the legacy fallback. If this is false, the whole gate is
-        // deciding on the ReFS-unsafe 64-bit index.
+        // The 128-bit class is available and succeeds on a real handle
+        // here. Since round 5 there is no other identity method, so this
+        // failing would mean the gate refuses ALL media on this box —
+        // which is the safe direction, but still a defect worth catching.
         Assert.True(
             CanvasMediaPolicy.UsesFileIdInfoForTests(Path.Combine(dir, "a.png")),
-            "the 128-bit FILE_ID_INFO primitive did not run — the gate would "
-            + "be comparing the 64-bit nFileIndex, which is not unique on ReFS.");
+            "the 128-bit FILE_ID_INFO primitive did not run — with no fallback "
+            + "by design, the gate would now refuse every media file on this host.");
 
         // And the 128-bit identity distinguishes two different objects.
         CanvasMediaPolicy.FileIdentity? a =
@@ -2543,34 +2544,63 @@ public sealed class CanvasDocumentTests : IDisposable
     }
 
     /// <summary>
-    /// The 64-bit legacy fallback is not dead code: where
-    /// <c>FileIdInfo</c> is unavailable (pre-Windows-8), the
-    /// <c>BY_HANDLE_FILE_INFORMATION</c> index must still distinguish two
-    /// files and still agree across spellings of one file. This pins the
-    /// fallback DIRECTLY so its correctness does not ride on the primary
-    /// path.
+    /// Round 5 — a failure of the PRIMARY identity query refuses the whole
+    /// resolution; it never downgrades to a weaker identity. There is no
+    /// legacy 64-bit path left to fall back to, and this proves the
+    /// absence behaviourally rather than by reading the source.
     /// </summary>
+    /// <remarks>
+    /// The round-4 fallback was per-CALL, not the per-host capability
+    /// selection its record claimed: ANY transient failure of
+    /// <c>FileIdInfo</c> silently downgraded that one read to the
+    /// non-unique <c>nFileIndex</c> — on ReFS a fail-open, arriving
+    /// exactly when something was already wrong. The fallback is deleted
+    /// (the app's minimum OS postdates <c>FileIdInfo</c> by years, so it
+    /// served no supported platform). Mutation-verified: reintroducing ANY
+    /// fallback arm makes the injected failure resolve successfully again
+    /// and fails this fact.
+    /// </remarks>
     [Fact]
-    public void TheLegacy64BitFallbackAlsoDistinguishesFiles()
+    public void IdentityQueryFailureRefusesRatherThanDowngrading()
     {
-        string dir = Path.Combine(_fixture.Root, "idlegacy");
+        string dir = Path.Combine(_fixture.Root, "idfail");
         Directory.CreateDirectory(dir);
-        File.WriteAllBytes(Path.Combine(dir, "a.png"), [0x89]);
-        File.WriteAllBytes(Path.Combine(dir, "b.png"), [0x89]);
+        File.WriteAllBytes(Path.Combine(dir, "shot.png"), [0x89, 0x50, 0x4E, 0x47]);
 
-        CanvasMediaPolicy.FileIdentity? a1 =
-            CanvasMediaPolicy.LegacyIdentityForTests(Path.Combine(dir, "a.png"));
-        CanvasMediaPolicy.FileIdentity? a2 =
-            CanvasMediaPolicy.LegacyIdentityForTests(Path.Combine(dir, ".", "A.PNG"));
-        CanvasMediaPolicy.FileIdentity? b =
-            CanvasMediaPolicy.LegacyIdentityForTests(Path.Combine(dir, "b.png"));
+        // The premise: without injection this media resolves and opens.
+        // Without this the fact could pass because the path was never
+        // openable in the first place.
+        Assert.NotNull(CanvasMediaPolicy.ResolveInsideVault(_fixture.Root, "idfail/shot.png"));
 
-        Assert.NotNull(a1);
-        Assert.Equal(a1, a2);   // same object, different spelling
-        Assert.NotEqual(a1, b); // different objects
-        // The legacy form leaves the 128-bit high half zero — it is the
-        // documented reduced identity, not the same value as the primary.
-        Assert.Equal(0UL, a1!.Value.FileIdHigh);
+        var launched = new List<string>();
+        try
+        {
+            CanvasMediaPolicy.FailIdentityQueryForTests = true;
+
+            // The identity primitive itself yields NOTHING — not a
+            // weaker id.
+            Assert.Null(
+                CanvasMediaPolicy.IdentityForTests(Path.Combine(dir, "shot.png")));
+            // The containment flow refuses outright...
+            Assert.Null(
+                CanvasMediaPolicy.ResolveInsideVault(_fixture.Root, "idfail/shot.png"));
+            // ...and nothing is ever handed to the shell.
+            Assert.False(CanvasMediaPolicy.OpenMediaInVault(
+                _fixture.Root, "idfail/shot.png", target =>
+                {
+                    launched.Add(target);
+                    return true;
+                }));
+            Assert.Empty(launched);
+        }
+        finally
+        {
+            CanvasMediaPolicy.FailIdentityQueryForTests = false;
+        }
+
+        // And the injection is reversible — the gate still works after,
+        // so the refusal above was the injection and not a broken fixture.
+        Assert.NotNull(CanvasMediaPolicy.ResolveInsideVault(_fixture.Root, "idfail/shot.png"));
     }
 
     /// <summary>
