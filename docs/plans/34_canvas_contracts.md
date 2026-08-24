@@ -878,6 +878,371 @@ siblings answer it).
 
 ---
 
+## PR A — the canvas document, the tab, and the outline
+
+**Goal (spec §PR A).** Opening a `.canvas` shows a real surface: a
+per-path document view model over the FFI, the outline projection as a
+UIA tree, the load states of t0 §5, canvas-open announcements through
+the PR 0a vocabulary, and focus landing. Default landing is the outline
+(t2 #369 decision 3). The table (PR B) and visual (PR D) projections
+are commands here and projections later.
+
+### Contracts
+
+**A1 — One document per open path; the registry owns its lifetime.**
+`WorkspaceViewModel` keys canvas documents by the byte-exact
+vault-relative path (`Ordinal`, `"canvas:" + path`) exactly as it keys
+Bases documents (`WorkspaceViewModel.cs`, `_baseDocuments` /
+`BaseDocumentFor`), so every tab and every pane showing that path holds
+the SAME `CanvasDocumentViewModel` and therefore the same
+`CanvasSelection` (R-B). Release is the Bases sweep, not a hand-kept
+integer: `ReleaseUnreferencedCanvasDocuments()` runs at every tab-close
+funnel, computes the live key set from the open tabs, and shuts down
+every document no tab references — which closes `close_canvas` and
+drops the selection and the marks with the object (spec behavior 1's
+"marks cleared when the last tab closes"). `Dispose` shuts the whole
+registry down and drains its closes into the same bounded teardown
+drain the Bases documents use (INV-2's Windows twin).
+
+**"Refcount" is the sweep's live-key set, stated exactly.** The spec
+says refcount; this registry has no counter, because the Bases
+precedent proved a counter and a tab list can disagree and the tab list
+is the one a user can see. Everything the spec asks a refcount for is a
+property of the sweep: 0→1 is the `CanvasDocumentFor` miss that
+constructs and loads (A4 hangs the once-per-open announcement there),
+and N→0 is the sweep finding no live tab. Pinned by
+`OneDocumentIsSharedByEveryTabOnThePath`,
+`TheLastTabClosingClosesTheHandleAndClearsTheMarks`.
+
+**A2 — The attach funnel has FIVE call sites, and the list is derived.**
+Controller ruling. `AttachBaseDocumentIfNeeded`'s doc comment
+(`WorkspaceViewModel.Bases.cs:1042–1046`) named four — "AddTab, restore,
+duplicate, and the in-place REPLACE arm" — and there were five: the
+active-tab replace arm in `TryOpenItem` (`Layout.cs:161`), `AddTab`
+(`Layout.cs:210`), `DuplicateActiveTab` (`Layout.cs:441`), `RestoreNode`
+(`Persistence.cs:83`) and `ReloadOpenTabFromDisk` (`History.cs:237`).
+The W4-6 round-1 lesson was that two sweeps missed sites; a comment one
+site behind is the same failure in slower motion. This PR renames the
+funnel `AttachTabDocumentsIfNeeded` (it attaches Bases, dashboards and
+now canvases), fixes the enumeration, and replaces "trust the comment"
+with a Roslyn twin: `TheAttachFunnelDocCommentNamesEveryCallSite` parses
+the three partial files, collects the enclosing method of every
+invocation, and asserts the comment's named set EQUALS the derived set
+in both directions. A sixth site that forgets the comment fails; a
+comment naming a site that no longer exists fails too.
+
+**A3 — Five load states, and `degraded` is the PARSE-ERROR one.**
+`CanvasLoadState { Loading, Ready, ParseError, Failed, RetargetAbsent }`
+is the mac `CanvasDocument.LoadState` twin
+(`apps/slate-mac/Sources/SlateMac/Canvas/CanvasDocument.swift:174–186`)
+with mac's `.degraded` renamed, because on Windows two different things
+were both called degraded and the reviewer has to be able to tell them
+apart:
+
+| Source fact | State | What the user gets |
+|---|---|---|
+| `open_canvas` threw | `Failed` | the failure message, retry-able |
+| `CanvasOpenInfo.degraded` | `ParseError` | the `ParseFailed` warning's detail; handle closed at once; read-only by construction |
+| open succeeded | `Ready` | rows; the A4 banner rides on top when any entry was skipped |
+| a retarget's reopen threw | `RetargetAbsent` | the message names both spellings |
+| before the first publish | `Loading` | the spinner label |
+
+`canvas::is_load_degraded` (`crates/slate-core/src/canvas/mod.rs:356`)
+is `any(ParseFailed)`, and every `ParseFailed` arm of `canvas::parse`
+returns `Canvas::default()` — so a degraded open carries **no** skipped
+entries, and rendering `CanvasLoadedDegraded { skipped }` for it would
+speak a count of zero for a file that was not loaded at all. t0 §5
+agrees: its sentence is introduced as "Parse warnings (#359 tolerant
+contract)", i.e. the warnings, not the flag. Mac reads it the same way —
+`preservedItemCount` counts `.skippedEntry`
+(`CanvasDocument.swift:486–490`) and the banner renders only in
+`.ready` (`CanvasContainerView.swift:354`). The spec's PR A behavior
+row 2 folds the two facts into one sentence; this row unfolds them and
+takes mac's shipped shape, which is the reference implementation for
+both. (CD-28.)
+
+**A4 — `CanvasLoadedDegraded` is announced once per document OPEN.**
+Controller ruling on CD-3's Windows reading: the announcement belongs to
+the registry's 0→1 transition (A1), not to a mounted view. It is
+therefore posted by `CanvasDocumentViewModel` at the end of the publish
+that reaches `Ready`, behind a one-shot the `Load()` entry point resets
+— so a reload re-announces (a reload IS an open) and a second pane
+mounting the same document does not. Mac's one-shot is a view-level
+`@State` (`CanvasContainerView.swift:470–487`), which is per-container;
+the mac per-container behaviour stays a recorded platform note (CD-29).
+`skipped` is the SkippedEntry warning count, and the banner renders the
+SAME event through `A11yRender` rather than composing a second copy —
+the mac CD-3 precedent, so banner and speech cannot drift. Pinned by
+`TwoPanesOnOneDocumentAnnounceTheDegradedLoadOnce` and
+`TheDegradedBannerTextIsTheRenderedEvent`.
+
+**A5 — `CanvasAnnouncer` is a relay and a clock, and nothing else.**
+R-C. It takes a typed `CanvasA11yEvent`, wraps it in
+`A11yEvent.Canvas`, renders it through `SlateUniffiMethods.A11yRender`,
+and posts the rendered `(text, priority)` pair. The class keys are the
+one list pinned core-side (0a-8) copied verbatim: `navigation` =
+`CanvasMovedTo`, `CanvasGroupEntered`, `CanvasGroupLeft`,
+`CanvasConnectionTraversed`, `CanvasMoveRelative`,
+`CanvasResizeGeometry`; `filter` = `CanvasFilterCount`,
+`CanvasFilterCleared`; everything else posts immediately; a `High`
+canvas event cancels and DROPS both pending classes rather than
+flushing them (navigation context is re-derivable by moving again).
+The window is 200 ms latest-wins, each class independent. `Relay` takes
+a non-canvas `A11yEvent` (the shared grid's own events, PR B) and
+carries its core priority through unwrapped — the mac
+`testRelayCarriesTheCorePriorityOfANonCanvasEvent` fact.
+
+**The post seam is `(text, priority)`, so the dispatcher gained an
+overload.** `AccessibilityNotificationDispatcher.Post(A11yEvent)`
+rendered internally, which a coalescer cannot use: the window's winner
+is decided AFTER the render and the loser is dropped without ever being
+spoken, so the queue holds rendered lines. `Post(RenderedAnnouncement)`
+is now the primitive and `Post(A11yEvent)` delegates to it — the same
+seam shape mac's announcer takes (`CanvasAnnouncer.swift`, the
+`(String, NSAccessibilityPriorityLevel)` closure), for the same reason.
+
+**A6 — The census is the funnel guard, and it reads syntax, not text.**
+The Windows twin of mac's `testNoDirectAnnouncementsUnderCanvas`
+(`CanvasAnnouncerTests.swift:138`) is `CanvasAnnouncerCensus`, a Roslyn
+pass over every `.cs` under `src/SlateWindows/Canvas/` **recursively**
+(the mac round-1 m-F lesson: `Canvas/CanvasPickers/` arrives in PR E)
+with `CanvasAnnouncer.cs` as the single exempt file. It fails on any
+`AccessibilityNotificationDispatcher` reference, any
+`RaiseNotificationEvent`, any `A11yRender` call, and any
+`A11yEvent.HostComposed` construction. Syntax, not `Contains`: a
+comment naming a bypass is trivia and cannot trip the guard, and a
+string literal spelling one is a literal node, not a call — the #1108
+rationale that `CSharpSource` exists for. Windows has no residue census
+of its own (`A11yResidueCensusTests` has no twin); this is the first,
+and it is scoped to `Canvas/` deliberately rather than pretending to be
+the general one.
+
+**A7 — Verbosity is a parameter at every announce site.**
+`CanvasDocumentViewModel.Verbosity` defaults to
+`CanvasVerbosity.Standard` and is passed into every event that takes it
+(today: `CanvasMovedTo`). PR C replaces the field with the persisted,
+live-switchable preference and changes no call site. The m7 lesson is
+recorded rather than papered over: **no unit guard asserts that a new
+announce site threads verbosity** — a `CanvasA11yEvent` variant that
+takes the parameter cannot be constructed without one, and which VALUE
+it gets is not a property any source scan can see. The coverage is the
+end-to-end-through-render facts (`ADeeperRowAnnouncesItsCoreRendered…`),
+exactly as mac has it.
+
+**A8 — The outline is a tree of core's rows, nested by `depth`.**
+One `TreeViewItem` per `CanvasOutlineRow` in `canvas_outline` order,
+re-parented by the `depth` column with a stack — the host computes no
+containment (R-D; 0b-8 owns the tree). `ControlType.TreeItem` under a
+`ControlType.Tree` named "Canvas outline"; `SelectionItem` and
+`ExpandCollapse` come from WPF's `TreeViewItemAutomationPeer`, and
+`Invoke` is added by `CanvasOutlineItemAutomationPeer` because
+`TreeViewItemAutomationPeer` implements ExpandCollapse/SelectionItem/
+ScrollItem and NOT `IInvokeProvider` — putting an invokable child
+element inside the row instead would violate the journeys' recorded
+peered-elements-only trap. Virtualization is
+`VirtualizingStackPanel.IsVirtualizing=true` with
+`VirtualizationMode=Standard`, the W4-1 UIA-safe setting (the files
+tree uses `Recycling`; a recycled container re-uses one peer for
+different data, which is what the canvas outline must not do).
+
+**A9 — The row's Name is the t0 §1.1 card reference, composed from
+core's parts, and it is LABEL class.** `⟨Kind⟩ card "⟨speakable_name⟩"`,
+groups as `Group "⟨speakable_name⟩"` — `kind` is core's type word
+(`CanvasOutlineRow.kind`, the t0 §1.1 word) and `speakable_name` is
+core's one uniqueness algorithm (0b-5). The composition is
+`CanvasPhrase.CardReference`, one function, the `BasePhrase` precedent
+for the label class.
+
+**No core accessor for this exists, and 0a-10 says so.** Its scope
+table records mac's outline `accessibilityLabel` as *"survives —
+`CanvasCardRef` moved into that file; §W-C label class (0a-13), and no
+vocabulary event renders a bare card reference"*, and tells a PR-A
+implementer to *"expect a core accessor for spoken card references and
+NOT for label-class peer names"*. So this is host label composition
+**by designation** (0a-13's list: the outline node value, the renderer's
+peer names, the degraded message and the panel headings are all §W-C
+label class and deliberately outside the vocabulary), not a missed core
+query. §W-G row L is its named owner. The controller ruling's phrase
+"core-rendered composition" is satisfied in the sense the ruling's own
+parenthesis gives it — every PART is core's — and this row states the
+residue plainly rather than letting "core-rendered" imply an
+`a11y_render` call that does not exist. (CD-30 records the one place
+Windows and mac differ here: mac's outline label spells `title`, this
+one spells `speakable_name`.)
+
+**A10 — The row's ItemStatus is the t0 §3 inspectability slot.**
+`⟨n⟩ of ⟨m⟩ in ⟨container‖canvas⟩[, ⟨color⟩][, marked]` — mac's
+`nodeValue` (`CanvasOutlineView.swift:309–318`) minus the `, filtered`
+clause, which has nothing to describe until PR C ships the filter.
+`AutomationProperties.ItemStatus` is the Windows slot for mac's
+`accessibilityValue`; `TreeViewItem` supports no Value pattern, and the
+spec's "ItemStatus/Value" names the pair for exactly that reason.
+`HelpText` is the per-kind activation hint (mac `activationHint`,
+verbatim). Every ingredient is core's except the joining commas and the
+two English words `in` and `marked` — label class, A9's designation.
+
+**A11 — Connection rows are core-rendered, under the selected card
+only.** A selected row's children are its connection rows FIRST, then
+its structural children — which reproduces mac's flat reading order
+(`[row][its connection lines][its members]`) as a depth-first tree
+walk. Their Name is `A11yRender(CanvasConnectionTraversed { direction,
+kind_label, title, label })` — the same event the navigator speaks when
+it traverses that connection (CD-14, and the reason mac's second copy
+died). ItemStatus is `connection ⟨i⟩ of ⟨n⟩`; Invoke follows the
+connection, which selects the other card and announces the move.
+Neighbours are `canvas_neighbors`, fetched lazily per node and cached,
+cache dropped on every load — the mac `neighborsCache` shape.
+
+**A12 — One selection, both directions, no echo.** The tree's
+`SelectedItemChanged` writes `CanvasSelection.Selected`; the selection's
+change event re-seats the tree. The echo is broken by a
+re-entrancy flag on the view, not by comparing values, because the
+value-compare version cannot tell "the model already agrees" from "the
+model was set to the same node by another pane". A selection change
+announces `CanvasMovedTo` at A7's verbosity, preceded by
+`CanvasGroupEntered` / `CanvasGroupLeft` when the container changed —
+`CanvasGroupEntered.count` is the arrived-at row's `total_m`, which is
+the entered group's own card count (CD-4's fix, not the sibling count).
+
+**The landing selection is silent.** Opening seats selection on the
+first row so the tree has a selected item, and announces nothing: the
+focus lands there and the screen reader reads the row it lands on, so a
+`CanvasMovedTo` on top of it is the t0 §1.5 doubling rule broken at the
+first keystroke of the surface's life. Pinned by
+`OpeningACanvasSeatsTheFirstRowWithoutAnnouncingAMove`.
+
+**A13 — Activation is per kind, and every arm speaks canvas
+vocabulary.** Text ⇒ the interim read-only detail region seeded from
+`canvas_node_text` (`TextBox IsReadOnly`, focusable, named for the card;
+PR E swaps in the editor). File/image ⇒ the workspace's ONE navigation
+seam (`OpenEditorNavigation`), with the scene node's `subpath` mapped to
+a `LinkAnchor` — `#^id` ⇒ `("block", id)`, `#…` ⇒ `("heading", …)` —
+so the W3-5 anchor resolution lands the caret at the heading rather
+than at the note top. Link ⇒ the existing external-link policy's
+allowlist (`http`/`https`/`mailto`, `WorkspaceViewModel.Citations.cs:338`)
+and injected opener, announcing `CanvasOpened { Browser }`,
+`CanvasBlocked { LinkOpenFailed }` or `CanvasBlocked { NotAUrl }`.
+Group ⇒ expand. A file card whose target is gone announces
+`CanvasFileNotFound`; a text card whose `canvas_node_text` refuses
+announces `CanvasBlocked { CardTextUnreadable }` — the 0b never-silent
+table, and the reason A16 exists.
+
+**A14 — Focus lands, and focus comes back (WCAG 2.4.3).** Opening lands
+keyboard focus on the outline's first item. Activating a file card
+records the row on the document (`LastActivatedNode`, mac's field), and
+the surface re-mounting restores focus to that row rather than the top.
+
+**A15 — `ActiveCanvasSurface` round-trips, and outline is ABSENT.**
+The persisted token stays `"table" | "visual"` with outline written as
+nothing at all (`WorkspacePersistence.cs:385–395, 549–551`) — the mac
+sparse-map shape. `WorkspaceTabViewModel.ActiveCanvasSurface` gains a
+setter the surface switcher drives; `Snapshot()` already carries it. The
+forward-compat drop test (an unrecognised token collapsing to `null`)
+is asserted to still pass, because the switcher now WRITES the field
+that test reads.
+
+**A16 — The document survives the 0b-6 skew.** Outline and table rows
+are SQLite-served and their `speakable_name` falls back to the row title
+when the handle's model does not know the id (0b-6); the model-backed
+surfaces refuse instead — `canvas_where_am_i` answers `bad_node` for an
+id the outline names. The document therefore treats every per-node
+detail query as fallible: `NeighborsOf` and `NodeText` catch
+`VaultException`, cache nothing on failure, and the surface renders the
+accurate absent phrase from the vocabulary. The row stays selectable
+either way. `not_a_group` and `bad_node` are ONE refusal discriminated
+by message (0b-12's API note) and are treated as one: no host string
+matching, anywhere.
+
+**A17 — The scheduler conventions are the panel conventions.**
+`CanvasDocumentViewModel : PanelWorkScheduler`: every FFI touch runs
+inside a `StartWork` body under one `_ffiLock`, publishes marshal
+through `Post`, every publish re-reads a `_generation` bumped with
+`Interlocked.Increment` at dispatch, `Shutdown()` bumps the generation
+and closes the handle off the dispatcher (exposed as
+`WhenHandleClosed()` for the bounded teardown drain), and synchronous
+test mode runs bodies inline. The handle is closed exactly once — on
+replacement inside the load body, or on shutdown.
+
+**The 2,000-node budget fact runs BOTH modes.** The W4-5 lesson is
+"test the mode users run": the synchronous mode orders the load body
+deterministically and makes every generation guard dead code, so
+`LargeCanvasOutlineBuildsUnderBudget` is a `[Theory]` over
+`synchronousForTests: true` and `startInteractionBackgroundWork: true`,
+and the asynchronous arm drains before asserting.
+
+**A18 — `ChordScope.Canvas` and three surface commands.**
+`ChordScope.Canvas` joins the delivery enum (the file did not contain
+the string "Canvas" at BASE). `slate.canvas.showOutline`,
+`slate.canvas.showTable` and `slate.canvas.showVisual` register now in
+`CommandSection.Canvas` (which core already exports,
+`commands.rs:38`) with resolvers on the active tab's canvas document,
+so all three are palette-reachable from this PR (drift test 1). Table
+and visual are `CanExecute == false` until their projections ship, so
+`SlateCommandRegistrar.DisabledReason` answers the canonical
+`UnavailableReason` — the palette's own vocabulary, not a per-PR
+sentence, because a registered row may not carry a `Reason` (that field
+belongs to `Unreg`) and "ships in PR B" is not copy any user should
+hear. The reason those two are disabled is recorded HERE and pinned by
+`ShowTableAndShowVisualRegisterAndStayDisabledUntilTheirProjectionsShip`;
+`showTable` enables in PR B and `showVisual` in PR D. None of the three
+carries a chord, so `Scope` resolves to `None` through `Reg`'s own rule
+and `ChordScope.Canvas` has no delivery site until PR C — which is why
+the scope's doc comment names PR C as the first surface that uses it.
+
+**A19 — Canvas tabs are never dirty, and the close gate is bypassed by
+construction.** `WorkspaceTabViewModel.IsDirty` is only ever set by the
+editor session, which a non-markdown tab never creates, so `CanCloseTab`
+returns true before it consults `_dirtyCloseDecision`. That is a
+property of the existing code, not new code, and it is exactly the kind
+of claim that rots silently — so it is pinned by a fact that installs a
+throwing close decision and closes a canvas tab
+(`ClosingACanvasTabNeverConsultsTheDirtyCloseGate`).
+
+**A20 — §W-A gains `canvas_read`; §K gains `CanvasOpenBenchmarks`.**
+The serializer gains `CanvasReadArtifact`: per fixture in filename
+order, the `open_canvas` info (node/edge counts, degraded, warnings),
+then outline rows, table rows, the scene, and per node in reading order
+`canvas_where_am_i` **and** `canvas_neighbors`. It shares
+`CanvasArtifactExclusions` with `canvas_queries`, so `large_2000.canvas`
+stays out of the golden for the reason 0b-15 gives. A node whose
+`canvas_where_am_i` refuses serializes as `null` rather than aborting
+the artifact — A16's skew is a shape the artifact must be able to
+express. The Swift twin is PR A's mac cross-reference and is NOT in this
+task's scope: the golden lands here and the mac lane arbitrates, the
+same sequencing 0a used for the C# corpus mirror and 0b used for
+`canvas_queries`. §K is `CanvasOpenBenchmarks` over `large_2000.canvas`
+— open, open+outline, open+table, open+scene — recorded in
+`BENCHMARKS.md` against the mac core-path figure of 5.62 ms, the C#
+delta being marshalling.
+
+### Tests that pin PR A
+
+`apps/slate-windows/tests/SlateWindows.Tests/CanvasDocumentTests.cs`:
+the registry facts (sharing, close-and-clear, retarget, vault-close
+teardown), the five load states through a real `VaultSession` over the
+committed fixtures, the once-per-open degraded announcement across two
+panes, selection sync both ways, activation per kind, focus land and
+restore, `ActiveCanvasSurface` round-trip and its forward-compat drop,
+the close-gate bypass, and the 2,000-node outline budget in both
+scheduling modes.
+`apps/slate-windows/tests/SlateWindows.Tests/CanvasAnnouncerTests.cs`:
+latest-wins per class, the two classes independent, the High
+flush-and-drop, the relay's priority pass-through, and the label render
+used by the banner.
+`apps/slate-windows/tests/SlateWindows.Tests/Censuses/CanvasAnnouncerCensus.cs`:
+A6's funnel guard, plus A2's attach-funnel doc-comment twin.
+`apps/slate-windows/tests/SlateWindows.Tests/ChordTableTests.cs` /
+`CommandDriftTests.cs`: green with the three new rows.
+`apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs`:
+`Canvas_OutlineJourney` — tree and tree-item control types, the row
+names and ItemStatus, expand/collapse, selection, Enter activation,
+focus landing, the degraded banner reachable, axe 0 failures. CI
+arbitrates; it is never run locally beside the unit suite.
+`apps/slate-windows/tests/SlateWindows.Tests/Censuses/ParityHarnessCensus.cs`:
+`canvas_read.json` byte-for-byte against the committed golden.
+
+---
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same
@@ -1650,6 +2015,96 @@ records the OTHER disagreement between mac's containment copies and
 core's tree (the equal-area tie-break); CD-18 is about which group
 wins a tie, CD-27 about a node whose membership two rules answer
 differently without any tie.
+
+### PR A
+
+**CD-28 — `CanvasOpenInfo.degraded` is the PARSE-ERROR state, not the
+"unsupported items" banner.** The spec's PR A behavior row 2 reads
+*"`degraded=true` ⇒ … banner 'N unsupported items are preserved in the
+file but not shown'"*, which joins two facts core keeps apart.
+`is_load_degraded` is `any(ParseFailed)` (`canvas/mod.rs:356`) and every
+`ParseFailed` arm of `parse` returns `Canvas::default()`, so a degraded
+open has zero skipped entries and zero nodes: its banner would say
+"0 unsupported items are preserved" about a file that produced no rows
+at all. t0 §5 introduces the sentence as *"Parse warnings (#359 tolerant
+contract)"* — the warnings — and mac implements exactly that
+(`preservedItemCount` counts `.skippedEntry`; the banner renders only in
+`.ready`; `info.degraded` closes the handle and enters a read-only error
+state). Windows takes mac's shape and names the two states apart:
+`ParseError` for the flag, the A4 banner for the skipped count. The
+spec sentence is the thing that is wrong here; t0 and the shipped mac
+behaviour agree with each other and with core.
+
+**CD-29 — The degraded announcement is once per DOCUMENT on Windows and
+once per CONTAINER on mac.** Controller ruling, resolving the ledgered
+m2 wording question in favour of the contract as written: CD-3 says
+"once per open", and on Windows an open is the registry's 0→1
+transition (A1), so the post lives on the document and two panes on one
+canvas hear it once. Mac's one-shot is `@State` on
+`CanvasContainerView` (`:470–487`), so a second container on the same
+document announces again. The mac per-container behaviour is recorded
+here as the platform note rather than changed: this issue does not
+re-open a mac view's state ownership, and the difference is audible only
+when a user splits a pane onto a canvas that has skipped entries.
+
+**CD-30 — The outline row's Name spells `speakable_name`; mac's spells
+`title`.** Mac's outline `accessibilityLabel` builds
+`CanvasCardRef(kind:title:)` from the raw `title`
+(`CanvasOutlineView.swift:220, 12–21`) and reserves `speakable_name` for
+the renderer's peer names (CD-23). Windows spells `speakable_name` in
+the outline too, on the controller ruling, because the outline is
+Windows' primary and (in PR A) only canvas surface, and t0 §4's Voice
+Control row asks for *"no duplicate speakable names per surface"* — two
+cards both titled `Research` are two rows a dictated "click Research"
+cannot disambiguate. 0b-5's algorithm returns `display_title` verbatim
+whenever that spelling is free, so the two hosts differ only on the
+canvases where mac's outline is ambiguous. Recorded as an upstream note
+rather than a mac change: mac's renderer already spells it this way, so
+the mac outline is the odd one out, and aligning it is a mac-side edit
+this issue's Windows lane must not make.
+
+**CD-31 — The surface view is a code-built `UserControl`, not a
+`.xaml(.cs)` pair.** Spec §1's file layout names
+`CanvasSurfaceView.xaml(.cs)`. The Windows shell has no XAML surface
+view: `BaseSurfaceView.cs`, `DashboardSurfaceView.cs`,
+`HistorySurfaceView.cs`, `SyncDiagnosticsSurfaceView.cs` and
+`ReadingSurface.cs` are all code-built controls, and the project's only
+XAML is the window, the app, the shared templates and the themes. A
+XAML pair here would be the single one of its kind, and the brief's
+"match the Workspace/Bases idioms" is the stronger instruction: the
+sibling surfaces are the idiom. Every other name in the layout is
+literal.
+
+**CD-32 — A retarget re-keys the registry; it does not mutate the
+document's path.** Mac's `CanvasDocument` retargets in place, keeps its
+last published snapshot visible while the reopen runs, and can land in
+`.retargetFailed` still showing rows. The Windows registry keys
+documents by path and a document's `Path` is immutable — the Bases
+precedent, whose round-2 blocker was exactly the alternative (a renamed
+tab keeping a document that reopens the OLD path forever). So
+`RetargetCanvasDocuments` shuts the old document down and attaches a
+fresh one at the new path, carrying the previous `CanvasSelection`
+(selected node and marks) across so a rename does not silently drop a
+user's marks. What does NOT carry is the retained snapshot: a failed
+reopen shows `RetargetAbsent` with the message, not the old rows. The
+snapshot-retention machinery is 0b-2's `beginBatchRetarget` family and
+the surfaces that consume it are PR C/E's; adopting it here would be
+inventing PR C.
+
+**CD-33 — The Windows outline NESTS; mac's is flat with indentation.**
+Mac renders a `List` of lines and indents by `depth * spacing`
+(`CanvasOutlineView.swift:207`), so a VoiceOver user hears reading order
+with no structural nesting and no collapse. The spec's PR A behavior
+row 3 asks Windows for a `TreeView` with `ExpandCollapse` on groups and
+items "nested by `depth`", which is a real capability difference, not a
+divergence in what is spoken: a depth-first walk of the Windows tree
+visits exactly mac's line order, including A11's connection-rows-first
+rule inside a selected group. Two consequences are recorded rather than
+discovered: a selected LEAF card also becomes expandable, because its
+connection rows are its children (the surface auto-expands it, so the
+rows are never hidden behind a collapse the user did not ask for), and
+a collapsed group hides its members from the tree walk, which is what a
+tree is for and what mac's flat list cannot offer.
 
 ---
 
