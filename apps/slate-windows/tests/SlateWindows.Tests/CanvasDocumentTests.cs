@@ -2499,6 +2499,119 @@ public sealed class CanvasDocumentTests : IDisposable
     }
 
     /// <summary>
+    /// Round 4 #2 — the identity primitive is the 128-bit
+    /// <c>FILE_ID_INFO</c> (volume serial + 128-bit file id), NOT the
+    /// 64-bit <c>nFileIndex</c>, which is documented as NON-UNIQUE on ReFS
+    /// and would let two different files compare equal — a fail-OPEN in
+    /// the containment gate. This pins that the ReFS-safe class is the one
+    /// actually taken on a live handle here.
+    /// </summary>
+    /// <remarks>
+    /// A ReFS volume cannot be created unprivileged, so the ReFS collision
+    /// itself is recorded as manual in CD-38. What is pinned is the
+    /// PRIMITIVE: <c>GetFileInformationByHandleEx(FileIdInfo=18)</c> with
+    /// the 24-byte <c>FILE_ID_INFO</c> layout succeeds on this box (so the
+    /// class value, the struct size and the P/Invoke are all correct and
+    /// the 64-bit fallback is NOT what runs), and the 128-bit id it
+    /// returns distinguishes two genuinely different files. Mutation:
+    /// pointing the primitive at the 64-bit path (or a wrong class value)
+    /// makes <c>UsesFileIdInfoForTests</c> return false and trips this.
+    /// </remarks>
+    [Fact]
+    public void IdentityIsThe128BitFileIdInfoNotThe64BitIndex()
+    {
+        string dir = Path.Combine(_fixture.Root, "id128");
+        Directory.CreateDirectory(dir);
+        File.WriteAllBytes(Path.Combine(dir, "a.png"), [0x89]);
+        File.WriteAllBytes(Path.Combine(dir, "b.png"), [0x89]);
+
+        // The 128-bit class is the one taken on a real handle here — not
+        // the legacy fallback. If this is false, the whole gate is
+        // deciding on the ReFS-unsafe 64-bit index.
+        Assert.True(
+            CanvasMediaPolicy.UsesFileIdInfoForTests(Path.Combine(dir, "a.png")),
+            "the 128-bit FILE_ID_INFO primitive did not run — the gate would "
+            + "be comparing the 64-bit nFileIndex, which is not unique on ReFS.");
+
+        // And the 128-bit identity distinguishes two different objects.
+        CanvasMediaPolicy.FileIdentity? a =
+            CanvasMediaPolicy.IdentityForTests(Path.Combine(dir, "a.png"));
+        CanvasMediaPolicy.FileIdentity? b =
+            CanvasMediaPolicy.IdentityForTests(Path.Combine(dir, "b.png"));
+        Assert.NotNull(a);
+        Assert.NotEqual(a, b);
+    }
+
+    /// <summary>
+    /// The 64-bit legacy fallback is not dead code: where
+    /// <c>FileIdInfo</c> is unavailable (pre-Windows-8), the
+    /// <c>BY_HANDLE_FILE_INFORMATION</c> index must still distinguish two
+    /// files and still agree across spellings of one file. This pins the
+    /// fallback DIRECTLY so its correctness does not ride on the primary
+    /// path.
+    /// </summary>
+    [Fact]
+    public void TheLegacy64BitFallbackAlsoDistinguishesFiles()
+    {
+        string dir = Path.Combine(_fixture.Root, "idlegacy");
+        Directory.CreateDirectory(dir);
+        File.WriteAllBytes(Path.Combine(dir, "a.png"), [0x89]);
+        File.WriteAllBytes(Path.Combine(dir, "b.png"), [0x89]);
+
+        CanvasMediaPolicy.FileIdentity? a1 =
+            CanvasMediaPolicy.LegacyIdentityForTests(Path.Combine(dir, "a.png"));
+        CanvasMediaPolicy.FileIdentity? a2 =
+            CanvasMediaPolicy.LegacyIdentityForTests(Path.Combine(dir, ".", "A.PNG"));
+        CanvasMediaPolicy.FileIdentity? b =
+            CanvasMediaPolicy.LegacyIdentityForTests(Path.Combine(dir, "b.png"));
+
+        Assert.NotNull(a1);
+        Assert.Equal(a1, a2);   // same object, different spelling
+        Assert.NotEqual(a1, b); // different objects
+        // The legacy form leaves the 128-bit high half zero — it is the
+        // documented reduced identity, not the same value as the primary.
+        Assert.Equal(0UL, a1!.Value.FileIdHigh);
+    }
+
+    /// <summary>
+    /// Round 4 #3 — a valid in-vault media file 70 directories deep OPENS.
+    /// The reparse-cycle bound (<c>ResolveRounds=64</c>) was wrongly
+    /// applied to the LEXICAL parent walk, refusing legitimate media more
+    /// than 64 dirs deep — a fail-CLOSED availability bug. The lexical
+    /// walk shortens strictly and terminates at the volume root, so a
+    /// fixed-point guard suffices and no depth cap belongs on it.
+    /// </summary>
+    /// <remarks>
+    /// Mutation-verified: reinstating a 64-iteration cap on the ancestor
+    /// walk makes this file (70 levels down) resolve null and refuse.
+    /// </remarks>
+    [Fact]
+    public void MediaSeventyDirectoriesDeepStillOpens()
+    {
+        string deep = _fixture.Root;
+        for (var level = 0; level < 70; level++)
+        {
+            deep = Path.Combine(deep, $"d{level}");
+        }
+        Directory.CreateDirectory(deep);
+        File.WriteAllBytes(Path.Combine(deep, "buried.png"), [0x89, 0x50, 0x4E, 0x47]);
+
+        string relative = Path.GetRelativePath(_fixture.Root, Path.Combine(deep, "buried.png"));
+        string? resolved = CanvasMediaPolicy.ResolveInsideVault(_fixture.Root, relative);
+
+        Assert.NotNull(resolved);
+        Assert.Equal(
+            CanvasMediaPolicy.IdentityForTests(Path.Combine(deep, "buried.png")),
+            CanvasMediaPolicy.IdentityForTests(resolved!));
+
+        // And it launches by the identity gate all the way down.
+        string? handed = null;
+        Assert.True(CanvasMediaPolicy.OpenMediaInVault(
+            _fixture.Root, relative, target => { handed = target; return true; }));
+        Assert.NotNull(handed);
+    }
+
+    /// <summary>
     /// Containment is decided by IDENTITY, so two adjacent directories
     /// that differ only in case — which a text prefix over an
     /// OrdinalIgnoreCase relative path falsely accepted (codex round-3

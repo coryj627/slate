@@ -2551,22 +2551,51 @@ containment defects, and codex named the class: *filesystem identity
 reduced to path text*, where two normalization or case rules on the same
 string disagree. Path text is retired as the decision substrate. The gate
 resolves the target through an OPENED HANDLE and answers every
-containment and every "unchanged since check" question with
-`GetFileInformationByHandle`'s `(dwVolumeSerialNumber, nFileIndex)` — the
-64-bit key the OS uses to say two handles name the same file. Immune to
-case, trailing dots, per-directory case sensitivity, SUBST, and which
-spelling reached it. `FileIdentityIsStableAcrossSpellingsAndDistinctAcrossObjects`
-pins the primitive (same object ⇒ equal, different objects ⇒ unequal).
+containment and every "unchanged since check" question with OS file
+identity. Immune to case, trailing dots, per-directory case sensitivity,
+SUBST, and which spelling reached it.
+`FileIdentityIsStableAcrossSpellingsAndDistinctAcrossObjects` pins the
+primitive (same object ⇒ equal, different objects ⇒ unequal).
 
-**Containment reaches the root by identity.** The resolved terminal path
-names canonical ancestors; each is opened and its identity compared to
-the vault root's, up to a depth bound. A case-sensitive-directory
-sibling — `C:\work\VAULT` vs `C:\work\vault`, which an
-`OrdinalIgnoreCase` text prefix falsely accepts when per-directory case
-sensitivity is on (codex defect 3) — is a DIFFERENT object with a
-different identity and does not match. That feature is non-default and
-needs admin to enable, so the exploit itself is recorded as a manual
-residual; the SAME rule is pinned reproducibly by
+**The identity is the 128-bit `FILE_ID_INFO`, not the 64-bit
+`nFileIndex` (round 4, fail-open #2).** `nFileIndex` from
+`GetFileInformationByHandle` is documented as NOT unique on ReFS and its
+ids are reused, so a 64-bit compare can call two different files the same
+— a fail-OPEN in the very gate it anchors. The identity is now
+`GetFileInformationByHandleEx(FileIdInfo)` → `FILE_ID_INFO`: a 64-bit
+`VolumeSerialNumber` plus a 128-bit `FileId`, stable and unique on NTFS
+and ReFS alike. The 64-bit `BY_HANDLE_FILE_INFORMATION` index survives as
+a documented fallback ONLY where `FileIdInfo` is unavailable
+(pre-Windows-8); ReFS postdates that, so the fallback never meets a volume
+where its non-uniqueness matters. On NTFS the two forms coincide (the
+128-bit id's low half is the MFT index, high half zero), so a host that
+mixed classes would still compare a file equal to itself; a genuinely
+mixed 128-vs-64 comparison of different files differs in the high half and
+fails CLOSED, never open. `IdentityIsThe128BitFileIdInfoNotThe64BitIndex`
+pins that the 128-bit class is the one taken on a live handle here
+(mutation-verified against a wrong class value), and
+`TheLegacy64BitFallbackAlsoDistinguishesFiles` pins the fallback is not
+dead code.
+
+**Containment reaches the root by identity, with NO depth cap on the
+lexical walk (round 4, fail-closed #3).** The resolved terminal path names
+canonical ancestors; each is opened, its handle HELD (see the coherent
+snapshot below), and its identity compared to the vault root's. The walk
+is purely lexical — `ParentOf` strictly shortens and terminates at the
+volume root — so a fixed-point/shortening guard suffices and it carries no
+arbitrary iteration bound. An earlier `ResolveRounds=64` reparse-cycle
+bound had been mis-applied to this walk, refusing valid in-vault media
+more than 64 directories deep (a fail-CLOSED availability bug); it is
+removed. `MediaSeventyDirectoriesDeepStillOpens` opens a media file 70
+directories down (mutation-verified against reinstating a 64-iteration
+cap), and `TheAncestorWalkCarriesNoDepthCap` pins the `ResolveRounds`
+symbol gone from the gate. A case-sensitive-directory sibling —
+`C:\work\VAULT` vs `C:\work\vault`, which an `OrdinalIgnoreCase` text
+prefix falsely accepts when per-directory case sensitivity is on (codex
+defect 3) — is a DIFFERENT object with a different identity and does not
+match. That feature is non-default and needs admin to enable, so the
+exploit itself is recorded as a manual residual; the SAME rule is pinned
+reproducibly by
 `IdentityContainmentAcceptsAJunctionRootedVaultAtextPrefixWouldReject`,
 where a vault rooted at a junction is contained by identity and would be
 REJECTED by a text prefix — mutation-verified against a text-prefix
@@ -2579,20 +2608,42 @@ extended prefix is exactly what stops `ShellExecute` renormalizing
 another was a real bug. `ATrailingDotVaultComponentLaunchesTheVerifiedIdentity`
 pins it and is mutation-verified against stripping the prefix.
 
-**The TOCTOU window, narrowed by IDENTITY (B1).** The target's identity
-is captured at check time; immediately before launch the resolved path
-is re-opened and its identity compared, and the launch happens only if
-the 64-bit identity is unchanged — an OS "same file" guarantee, not a
-string compare, so it is immune to the case/normalization tricks a text
-revalidation was not. A swap in the window redirects the re-open to a
-different object whose identity differs, and the launch refuses.
-`ASwapInTheTocTouWindowIsCaughtByRevalidation` drives the swap through a
-test seam, mutation-verified. **The irreducible residual** is now the
-re-open→`ShellExecute` gap: a path-taking launcher re-opens by name, and
-closing that needs a handle-based launcher (a verb invoked against the
-open handle), which `ShellExecute` is not. Precondition: hostile in-vault
-write access — the peer the gate defends against — against which the
-exploit is a sub-millisecond race on an already-identity-checked path.
+**One coherent snapshot: capture is fused with containment (round 4,
+fail-open #1).** The leaf is opened ONCE; its resolved terminal path AND
+its identity come from THAT handle; and every ancestor up to the vault
+root is opened and HELD simultaneously while its identity is compared —
+one coherent view, not three independent opens. Revalidation re-checks the
+identity captured from the containment handle. An earlier shape captured
+the check identity by RE-OPENING the resolved path after containment,
+which opened a second window: a swap between the containment open and that
+re-open made the captured identity the OUTSIDE object, and revalidating
+outside-against-outside passed — a fail-OPEN. Fusing capture into
+containment closes that sub-window by construction. The property is pinned
+STRUCTURALLY — `CanvasMediaGateCensus.TheSnapshotCapturesIdentityFromThe
+HeldHandleNotAReopen` proves `ResolveContained` reads identity only off
+held handles (`IdentityOfHandle`) and never re-opens by path
+(`IdentityOf`), mutation-verified against reinstating the re-open — because
+an unprivileged in-process race cannot drive a swap inside a single
+method's handle-held region; the swap-during-capture E2E is a manual
+residual.
+
+**The TOCTOU window, narrowed by IDENTITY (B1).** Immediately before
+launch the resolved path is re-opened and its identity compared to the
+snapshot's, and the launch happens only if the identity is unchanged — an
+OS "same file" guarantee, not a string compare, so it is immune to the
+case/normalization tricks a text revalidation was not. A swap in the
+window redirects the re-open to a different object whose identity differs,
+and the launch refuses. `ASwapInTheTocTouWindowIsCaughtByRevalidation`
+drives the swap through a test seam, mutation-verified. **The single
+remaining residual** is now exactly the launch-time re-resolution: the
+snapshot is coherent and the revalidation reads the containment handle's
+own identity, so the ONLY window left is that `ShellExecute` re-opens the
+verified path BY NAME and resolves it itself — a path-taking launcher
+cannot be handed the verified handle, and closing this needs a
+handle-based launcher (a verb invoked against the open handle), which
+`ShellExecute` is not. Precondition: hostile in-vault write access — the
+peer the gate defends against — against which the exploit is a
+sub-millisecond race on an already-identity-checked path.
 
 **Driveless folder-mounted volumes open their media (Major-4).**
 `GetFinalPathNameByHandle` with the default DOS-name flag returns
@@ -2627,11 +2678,21 @@ volume-GUID/UNC resolution does not reach a file whose identity chain
 lands under a local vault root. Noted so a later change does not
 regress it.
 
-**The manual/bounded residuals, gathered** (each pinned at the primitive,
-E2E deferred because the feature needs privilege): per-directory case
-sensitivity (defect 3, `fsutil`), driveless folder-mount (Major-4,
-admin), and the sub-millisecond TOCTOU re-open gap (needs a handle-based
-launcher). None is a path-text defect; the class codex named is closed.
+**The manual/bounded residuals, gathered** (each pinned at the primitive
+or structurally, E2E deferred because the feature needs privilege or a
+race that cannot be driven unprivileged): per-directory case sensitivity
+(defect 3, `fsutil`); driveless folder-mount (Major-4, admin); the ReFS
+128-bit id (round 4 #2, needs an ReFS volume — the 128-bit primitive is
+pinned, the ReFS collision is the deferred E2E); the swap-during-capture
+race (round 4 #1, closed by construction and pinned structurally, its E2E
+undrivable unprivileged); and the sub-millisecond launch-time re-resolution
+gap (needs a handle-based launcher). None is a path-text defect; the class
+codex named is closed. Round 4 found three fail modes in the identity/
+snapshot logic (a check→capture window, a ReFS-unsafe 64-bit id, a
+mis-applied depth cap); all three are fixed, and the full identity/snapshot
+sweep for further fail-opens found none — the mixed-class comparison, UNC
+and device forms all fail CLOSED, and a too-small final-path buffer is
+grown and re-read rather than refusing a legitimate long path.
 
 **Every failure mode is a refusal** — a NUL character, a reserved device
 name, a path too long, a link cycle, a permission error — because an
@@ -3724,3 +3785,63 @@ passing E2E that does not exercise the feature.
 `\?\` retention (strip → trailing-dot launches the sibling), identity
 containment (text prefix → junction-rooted vault refused), and the
 identity primitive itself (distinct objects → distinct identities).
+
+### PR A — Codex adversarial round 4 — containment's 4th round, converged (3 blockers)
+
+The FOURTH consecutive codex round with a containment finding — but not a
+new instance of a closed class. Round 3 moved the substrate from path text
+to OS file identity; round 4 found that the identity implementation itself
+still had three fail modes. All three are fixed and, per the pre-declared
+stopping rule for this subsystem, the identity/snapshot logic was then
+swept end to end for any further fail-open and none remains.
+
+- **B1 (snapshot coherence — fail-OPEN).** Containment and the identity
+  CAPTURE were two separate opens: containment resolved through one handle,
+  then the check identity was captured by RE-OPENING the resolved path. A
+  swap between those two opens made the captured identity the OUTSIDE
+  object, and revalidating outside-against-outside passed. Fixed by fusing
+  capture into containment: the leaf is opened ONCE, its identity and
+  resolved path come from THAT handle, and every ancestor handle up to the
+  vault root is opened and HELD simultaneously — one coherent snapshot, and
+  revalidation re-checks the containment handle's own identity. The
+  sub-window is closed by construction. It cannot be driven by an
+  unprivileged in-process race (the swap would have to land inside a single
+  method's handle-held region), so the property is pinned STRUCTURALLY by
+  `CanvasMediaGateCensus.TheSnapshotCapturesIdentityFromTheHeldHandleNotAReopen`
+  (`ResolveContained` reads identity only off held handles, never re-opens
+  by path), mutation-verified against reinstating the re-open; the
+  swap-during-capture E2E is a manual residual. Per the coordinator's
+  instruction, no passing race test was manufactured.
+- **B2 (128-bit identity for ReFS — fail-OPEN).** `nFileIndex` is not
+  unique on ReFS, so the 64-bit identity could call two different files the
+  same. Switched to `GetFileInformationByHandleEx(FileIdInfo)` →
+  `FILE_ID_INFO` (64-bit volume serial + 128-bit file id); the 64-bit
+  `BY_HANDLE_FILE_INFORMATION` index remains only as a pre-Windows-8
+  fallback, which never meets ReFS. Pinned by
+  `IdentityIsThe128BitFileIdInfoNotThe64BitIndex` (the 128-bit class is the
+  one taken on a live handle, mutation-verified against a wrong class value)
+  and `TheLegacy64BitFallbackAlsoDistinguishesFiles`.
+- **B3 (depth cap — fail-CLOSED availability).** The `ResolveRounds=64`
+  reparse-cycle bound had been mis-applied to the lexical ParentOf walk,
+  refusing valid media more than 64 directories deep. Removed: the walk
+  strictly shortens and terminates at the volume root, so a
+  fixed-point/shortening guard suffices. Pinned by
+  `MediaSeventyDirectoriesDeepStillOpens` (70 levels deep, mutation-verified
+  against reinstating a cap) and `TheAncestorWalkCarriesNoDepthCap` (the
+  symbol is gone).
+
+**The sweep for further fail-opens found none.** A mixed 128-vs-64-bit
+comparison of different files differs in the high half and fails CLOSED;
+UNC and `\\.\`/`\\?\` device forms resolve to a volume whose identity chain
+never lands under a local vault root, and fail CLOSED; an unopenable
+ancestor fails CLOSED; and a final-path buffer too small is grown and
+re-read rather than refusing a legitimate long path (the availability
+sibling of B3). **The single remaining residual** is exactly the
+launch-time re-resolution: `ShellExecute` re-opens the verified path BY
+NAME, which a path-taking launcher cannot avoid; CD-38 now states that as
+the one residual and no longer implies the check→capture gap is covered.
+
+**Stopping rule honoured.** This was the pre-declared final codex round for
+containment; it converged (three concrete fixes, a clean sweep) rather than
+surfacing another instance of a closed class, so the loop ends here rather
+than escalating the design decision to the user.
