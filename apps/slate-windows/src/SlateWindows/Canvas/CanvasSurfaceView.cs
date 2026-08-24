@@ -234,7 +234,7 @@ internal sealed class CanvasSurfaceView : UserControl
             && Model is { State: CanvasLoadState.Ready, Outline.Count: > 0 }
             && IsVisible)
         {
-            _landedFocus = _outline.FocusLandingRow();
+            _landedFocus = _outline.FocusLandingRow() is not null;
         }
     }
 

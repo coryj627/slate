@@ -564,7 +564,10 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         {
             return;
         }
-        AnnounceGroupBoundary(previous?.GroupPath ?? [], row);
+        if (GroupBoundaryEvent(previous?.GroupPath ?? [], row) is { } boundary)
+        {
+            Announcer.Announce(boundary);
+        }
         Announcer.Announce(new CanvasA11yEvent.CanvasMovedTo(
             Verbosity: Verbosity,
             KindLabel: row.Kind,
@@ -577,27 +580,41 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             Marked: Selection.IsMarked(row.NodeId)));
     }
 
-    private void AnnounceGroupBoundary(
+    /// <summary>
+    /// The group-boundary event a move crosses into, or null when the
+    /// container did not change (contract A12). PURE, so the CD-4 count
+    /// rule is unit-tested without a coalescer in the way — the mac
+    /// <c>CanvasOutlineView.returnOpensRow</c> pattern.
+    ///
+    /// Note the audible consequence, which is mac's too: this event and
+    /// the <c>CanvasMovedTo</c> that follows it share the
+    /// <c>navigation</c> coalescing class (0a-8), so within the 200 ms
+    /// window the move supersedes the boundary. The membership list is
+    /// pinned core-side and is not this host's to change; both hosts
+    /// therefore behave identically, which is the property §W-D exists
+    /// to protect.
+    /// </summary>
+    internal static CanvasA11yEvent? GroupBoundaryEvent(
         IReadOnlyList<string> previousPath, CanvasOutlineRow row)
     {
+        ArgumentNullException.ThrowIfNull(row);
         if (row.GroupPath.SequenceEqual(previousPath, StringComparer.Ordinal))
         {
-            return;
+            return null;
         }
         if (row.GroupPath.Length > 0
             && !previousPath.Contains(row.GroupPath[^1], StringComparer.Ordinal))
         {
             // CD-4: the ENTERED group's own card count is exactly the
             // arrived-at row's container size — never the sibling count.
-            Announcer.Announce(new CanvasA11yEvent.CanvasGroupEntered(
-                row.GroupPath[^1], row.TotalM));
-            return;
+            return new CanvasA11yEvent.CanvasGroupEntered(row.GroupPath[^1], row.TotalM);
         }
         if (previousPath.Count > 0
             && !row.GroupPath.Contains(previousPath[^1], StringComparer.Ordinal))
         {
-            Announcer.Announce(new CanvasA11yEvent.CanvasGroupLeft(previousPath[^1]));
+            return new CanvasA11yEvent.CanvasGroupLeft(previousPath[^1]);
         }
+        return null;
     }
 
     /// <summary>Follow a connection row (contract A11): select the other

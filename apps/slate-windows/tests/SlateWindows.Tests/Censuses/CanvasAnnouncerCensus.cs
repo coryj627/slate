@@ -1,0 +1,188 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// W6-1 PR A (#745): the Windows twin of mac's DoD §H funnel guard
+// (`CanvasAnnouncerTests.testNoDirectAnnouncementsUnderCanvas`), plus
+// the attach-funnel doc-comment twin contract A2 requires.
+//
+// Windows has no residue census of its own — `A11yResidueCensusTests`
+// has no twin here — so this is the first, and it is scoped to
+// `Canvas/` deliberately rather than pretending to be the general one.
+
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+
+namespace SlateWindows.Tests.Censuses;
+
+[Trait("census", "canvas-funnel")]
+public sealed class CanvasAnnouncerCensus
+{
+    private static string CanvasSourceRoot() =>
+        Path.Combine(SourceText.ShellSourceRoot(), "Canvas");
+
+    /// <summary>The one file allowed to reach the dispatcher and the
+    /// renderer: it IS the funnel.</summary>
+    private const string TheRelay = "CanvasAnnouncer.cs";
+
+    /// <summary>
+    /// Contract A6/R-C: no canvas source announces on its own.
+    ///
+    /// Syntax, not <c>Contains</c> (the #1108 rationale <c>CSharpSource</c>
+    /// exists for): a comment naming a bypass is trivia and cannot trip
+    /// the guard, and a string literal spelling one is a literal node,
+    /// not a call. The walk is RECURSIVE — <c>Canvas/CanvasPickers/</c>
+    /// arrives in PR E, and mac's round-1 m-F was exactly a
+    /// one-level walk.
+    /// </summary>
+    [Fact]
+    public void NoCanvasSourceAnnouncesOutsideTheRelay()
+    {
+        var offenders = new List<string>();
+        foreach (string file in CanvasSources())
+        {
+            if (Path.GetFileName(file) == TheRelay)
+            {
+                continue;
+            }
+            string label = Path.GetRelativePath(CanvasSourceRoot(), file);
+            CSharpSource source = CSharpSource.Load("Canvas", label);
+
+            foreach (string name in source.Root.DescendantNodes()
+                .OfType<IdentifierNameSyntax>()
+                .Select(identifier => identifier.Identifier.ValueText))
+            {
+                if (name is "AccessibilityNotificationDispatcher")
+                {
+                    offenders.Add($"{label}: {name}");
+                }
+            }
+
+            foreach (MemberAccessExpressionSyntax access in source.Root
+                .DescendantNodes()
+                .OfType<MemberAccessExpressionSyntax>())
+            {
+                string member = access.Name.Identifier.ValueText;
+                if (member is "RaiseNotificationEvent" or "A11yRender")
+                {
+                    offenders.Add($"{label}: {member}");
+                }
+            }
+
+            foreach (ObjectCreationExpressionSyntax creation in source.Root
+                .DescendantNodes()
+                .OfType<ObjectCreationExpressionSyntax>())
+            {
+                if (creation.Type.ToString().EndsWith("HostComposed", StringComparison.Ordinal))
+                {
+                    offenders.Add($"{label}: A11yEvent.HostComposed");
+                }
+            }
+        }
+
+        Assert.True(
+            offenders.Count == 0,
+            "canvas code must announce through CanvasAnnouncer (DoD §H, "
+            + "contract A5/A6), never directly:\n" + string.Join("\n", offenders));
+    }
+
+    /// <summary>The relay is the only file that needs the exemption, so
+    /// the exemption must actually be load-bearing: if
+    /// <c>CanvasAnnouncer.cs</c> ever stopped rendering, this guard
+    /// would be scanning for a symbol nothing uses and would pass for
+    /// the wrong reason.</summary>
+    [Fact]
+    public void TheRelayIsTheOneFileThatRenders()
+    {
+        CSharpSource relay = CSharpSource.Load("Canvas", TheRelay);
+        Assert.Contains(
+            relay.Root.DescendantNodes().OfType<MemberAccessExpressionSyntax>(),
+            access => access.Name.Identifier.ValueText == "A11yRender");
+    }
+
+    /// <summary>
+    /// Contract A2: the attach funnel's doc comment enumerates its call
+    /// sites, and the enumeration is DERIVED, not trusted. It listed
+    /// four of five from W4-6 until this PR, which is the same failure
+    /// the "two sweeps missed sites" lesson names, in slower motion.
+    /// </summary>
+    [Fact]
+    public void TheAttachFunnelDocCommentNamesEveryCallSite()
+    {
+        const string funnel = "AttachTabDocumentsIfNeeded";
+        string[] partials =
+        [
+            "WorkspaceViewModel.cs",
+            "WorkspaceViewModel.Bases.cs",
+            "WorkspaceViewModel.Layout.cs",
+            "WorkspaceViewModel.Persistence.cs",
+            "WorkspaceViewModel.History.cs",
+        ];
+
+        var callSites = new HashSet<string>(StringComparer.Ordinal);
+        foreach (string partial in partials)
+        {
+            CSharpSource source = CSharpSource.Load(partial);
+            foreach (InvocationExpressionSyntax invocation in source.Root
+                .DescendantNodes()
+                .OfType<InvocationExpressionSyntax>())
+            {
+                if (invocation.Expression is not IdentifierNameSyntax identifier
+                    || identifier.Identifier.ValueText != funnel)
+                {
+                    continue;
+                }
+                MethodDeclarationSyntax? owner = invocation.Ancestors()
+                    .OfType<MethodDeclarationSyntax>()
+                    .FirstOrDefault();
+                Assert.NotNull(owner);
+                _ = callSites.Add(owner.Identifier.ValueText);
+            }
+        }
+
+        // The guard's own sanity: a rename that made the scrape find
+        // nothing would otherwise pass with two empty sets.
+        Assert.True(
+            callSites.Count >= 5,
+            $"only {callSites.Count} call sites of {funnel} were found; the W4-6 "
+            + "lesson is that sweeps miss sites, and a scrape that finds fewer "
+            + "than the recorded five is either a real removal or a broken query.");
+
+        MethodDeclarationSyntax declaration =
+            CSharpSource.Load("WorkspaceViewModel.Bases.cs").Method(funnel);
+        string docComment = declaration.GetLeadingTrivia().ToFullString();
+        var named = callSites
+            .Where(site => docComment.Contains(site, StringComparison.Ordinal))
+            .ToHashSet(StringComparer.Ordinal);
+        Assert.True(
+            named.SetEquals(callSites),
+            $"{funnel}'s doc comment does not name every call site. Missing: "
+            + string.Join(", ", callSites.Except(named)));
+
+        // And the other direction: a comment that keeps naming a site
+        // which no longer calls the funnel is the same lie inverted.
+        foreach (string mentioned in new[]
+        {
+            "TryOpenItem", "AddTab", "DuplicateActiveTab", "RestoreNode",
+            "ReloadOpenTabFromDisk",
+        })
+        {
+            Assert.True(
+                docComment.Contains(mentioned, StringComparison.Ordinal)
+                    == callSites.Contains(mentioned),
+                $"{funnel}'s doc comment and its real call sites disagree about "
+                + $"{mentioned}.");
+        }
+    }
+
+    private static IEnumerable<string> CanvasSources()
+    {
+        string root = CanvasSourceRoot();
+        Assert.True(Directory.Exists(root), $"the canvas source root is missing: {root}");
+        string[] files = Directory
+            .EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
+            .OrderBy(file => file, StringComparer.Ordinal)
+            .ToArray();
+        Assert.NotEmpty(files);
+        return files;
+    }
+}

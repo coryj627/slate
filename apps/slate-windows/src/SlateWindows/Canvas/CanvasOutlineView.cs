@@ -252,8 +252,9 @@ internal sealed class CanvasOutlineView : UserControl
 
     /// <summary>Contract A14: opening lands keyboard focus on the first
     /// item; coming back from an opened card lands on the row that
-    /// opened it, never the top.</summary>
-    internal bool FocusLandingRow()
+    /// opened it, never the top. Returns the row it landed on, or null
+    /// when there is nothing to land on.</summary>
+    internal CanvasOutlineRowViewModel? FocusLandingRow()
     {
         CanvasOutlineRowViewModel? target =
             (Model?.LastActivatedNode is { } last
@@ -262,20 +263,46 @@ internal sealed class CanvasOutlineView : UserControl
                 : _roots.FirstOrDefault();
         if (target is null)
         {
-            return false;
+            return null;
         }
         target.IsSelected = true;
-        return FocusContainerFor(target);
+        // Containers materialize lazily under virtualization; the
+        // landing row is the one the user is about to read, so it has
+        // to exist before focus can reach it.
+        _tree.UpdateLayout();
+        if (FindContainer(_tree, target) is { } container)
+        {
+            _ = container.Focus();
+        }
+        else
+        {
+            _ = _tree.Focus();
+        }
+        return target;
     }
 
-    private bool FocusContainerFor(CanvasOutlineRowViewModel row)
+    /// <summary>The container for a row at ANY depth. A tree's own
+    /// generator answers only for its direct items, and the row a
+    /// restore lands on is routinely nested inside a group.</summary>
+    private static CanvasOutlineItem? FindContainer(ItemsControl parent, object item)
     {
-        if (_tree.ItemContainerGenerator.ContainerFromItem(row)
-            is CanvasOutlineItem container)
+        for (int index = 0; index < parent.Items.Count; index++)
         {
-            return container.Focus();
+            if (parent.ItemContainerGenerator.ContainerFromIndex(index)
+                is not CanvasOutlineItem container)
+            {
+                continue;
+            }
+            if (ReferenceEquals(container.DataContext, item))
+            {
+                return container;
+            }
+            if (FindContainer(container, item) is { } nested)
+            {
+                return nested;
+            }
         }
-        return _tree.Focus();
+        return null;
     }
 
     private static void OnModelChanged(
