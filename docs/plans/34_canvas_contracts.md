@@ -1088,7 +1088,21 @@ fails to compile there rather than falling into somebody's silent arm:
 Every member routes through it — `canvasReadContext(for:)` announces
 and returns `nil`, or hands back a `CanvasReadContext` whose existence
 IS the proof the mapping said yes, so no verb re-derives session and
-handle. The last row is Where-am-I's old per-state answer becoming
+handle.
+
+**Discovery is separated from admission**, because admission announces.
+A verb resolves its document with `activeCanvasDocumentAnyState`,
+answers its OWN preconditions, and only then asks the mapping —
+otherwise the eager announcement inverts the recorded precedence and a
+no-selection press in the reopening window says "reopening" where m6
+says "Nothing selected." That precedence is itself one function,
+`canvasAnsweredMissingSelection`, gated on `.ready`: the reopening
+window keeps its snapshot on screen, so a selection question is
+meaningful there, while a state that cleared or never built a snapshot
+has nothing for such a question to be about and the mapping's sentence
+is the only honest answer. Where-am-I and fit canvas take admission
+first: neither has a precondition that outranks the state (Where-am-I's
+"nothing selected" falls back to the first row by design). The last row is Where-am-I's old per-state answer becoming
 everyone's; it also closes the announcement half of the t0 §5 gap filed
 in "Mac details recorded while reading" (those canvases now SAY they
 cannot be read — they are still not navigable, which is what remains
@@ -1113,6 +1127,20 @@ function — mutation-verified. Two properties make it non-vacuous: it
 asserts it found call sites at all, and it asserts every exclusion still
 calls a scanned query, so a stale excuse cannot sit there hiding the
 next one.
+
+**Its reach, stated rather than implied** (the doctrine 0a's source scan
+settled on). It matches the query as a MEMBER TOKEN on a session-ish
+receiver, with no call paren required — `let read = session.canvasBounds`
+then `try? read(handle)` is a use, and demanding the paren let exactly
+that shape past until codex round 4 found it. The receiver is the
+discriminator because these are `VaultSession` methods, which is also
+what keeps the navigator's own same-named verb out of the results. What
+it CANNOT follow is indirect flow: a session passed into a helper that
+calls the query, a method reference stored in a property and invoked
+elsewhere, or a closure capturing either. Those need symbol resolution
+across functions — a real front end, which this scan is not and should
+not become. The bound is the usual one: it can miss a NEW evasion, it
+cannot go quietly green on the code it does see.
 
 The exclusions, each with its reason: `filterView` and
 `neighborsIfKnown` (the document's data layer RETURNS un-answerability
@@ -1685,29 +1713,36 @@ Read during PR 0b (Task 0b-1), none of it this task's to fix:
 Read during PR 0b (Task 0b-2), not this issue's to fix — **file at
 close-out**:
 
-- **A degraded or unavailable canvas is not navigable on mac at all,
-  which t0 §5 says it should be.** `AppState+CanvasNavigation.swift:16–23`
-  (`activeCanvasDocument`) ends `guard case .ready = doc.state else
-  { return nil }`, so EVERY navigator verb — next/previous, enter/exit
-  group, follow connection, trace path, Where-am-I, every viewport
-  command — is a silent no-op on `.degraded`, `.failed` and
-  `.retargetFailed`. It is not only the gate: `CanvasDocument.load`
-  (`:431–444`) *releases the handle and sets `outline = []`* on a
-  degraded load (Codoki #608's resource fix), so there is nothing left
-  to navigate even if the gate were opened. The published snapshot DOES
-  survive on the trashed and retarget-failed paths
-  (`markMovedToTrash` `:590–600` clears the handle but not `outline`),
-  which is what makes the code look navigable on a first read — it is
-  not.
+- **A degraded or unavailable canvas is ANNOUNCED but still not
+  NAVIGABLE, and t0 §5 wants both.** The state story itself lives in
+  VA-2's section — `canvasReadRefusal(for:)`'s table — and this entry
+  cites it rather than restating it; what is filed here is only the
+  half that remains open.
 
-  t0 §5 wants a degraded canvas readable and announced, so a user can
-  inspect what survived a bad file rather than facing a dead tab. Fixing
-  it means deciding whether a degraded load keeps a read-only handle,
-  which is a core-adjacent design question with a §W-D announcement
-  surface — a piece of work in its own right, and no PR has ever owned
-  it. **Recorded here rather than absorbed into W6-1:** PR 0b did not
-  cause it and did not change it, and the one window PR 0b DID change
-  (`beginBatchRetarget`'s) is a different state with its own fix (VA-1).
+  **Closed by PR 0b:** the silence. `.degraded`, `.failed` and
+  `.retargetFailed` answer `.notReadable` at every read verb now, so a
+  keypress on such a canvas says why it did nothing instead of doing
+  nothing quietly.
+
+  **Still open:** those canvases cannot be READ. `activeCanvasDocument`
+  gates the snapshot-only verbs on `.ready`
+  (`AppState+CanvasNavigation.swift:24–33`), and the deeper obstacle is
+  not the gate — `CanvasDocument.load` (`:431–444`) *releases the handle
+  and sets `outline = []`* on a degraded load (Codoki #608's resource
+  fix), so there is nothing left to navigate even if the gate opened.
+  (The published snapshot DOES survive on the trashed and
+  retarget-failed paths — `markMovedToTrash` `:590–600` clears the
+  handle but not `outline` — which is what made the code look navigable
+  on a first read.)
+
+  t0 §5 wants a degraded canvas readable, so a user can inspect what
+  survived a bad file rather than facing a dead tab. Closing it means
+  deciding whether a degraded load keeps a read-only handle: a
+  core-adjacent design question with a §W-D announcement surface, a
+  piece of work in its own right, and no PR has owned it. **Filed
+  rather than absorbed into W6-1:** PR 0b did not cause it, and the
+  window PR 0b DID change (`beginBatchRetarget`'s) is a different state
+  with its own answer (VA-1).
 
 ---
 
@@ -1952,35 +1987,42 @@ every deleted symbol was re-grepped to zero afterwards.
   shipped as a t0 violation. Retracted in place rather than deleted,
   because the reasoning that produced it — "a new sentence is out of
   scope for a migration" — is the tempting one to repeat.
-- **Structural navigation on a handle-less snapshot went silent, in ONE
-  window — not the three the first draft of this note named — and now
-  answers (VA-1).** That draft said "a canvas moved to Trash, or one
-  whose retarget failed",
-  and both are wrong: `activeCanvasDocument` gates on `case .ready`, so
-  a degraded load, a trashed canvas and a failed retarget are
-  unreachable by EVERY navigator verb, before and after this migration.
-  (t0 §5's degraded-canvas navigability is therefore a pre-existing mac
-  gap — a degraded load clears `outline` and releases the handle — not
-  something PR 0b changed; it is filed for close-out in "Mac details
-  recorded while reading".) The claim was written from the shape of the
-  code rather than from its reachability, which is the same class of
-  error the round record already carries twice.
-  **The one state that pairs `.ready` with no handle is
-  `beginBatchRetarget`'s window**: between a physical move landing and
-  its background reopen, the snapshot stays visible and READY while the
-  path-bound handle is detached so nothing can save through the
-  moved-away path. Arrow movement still narrates there (the filtered
-  outline falls back to the published snapshot), and mutations are
-  refused audibly (`CanvasMutationRefusal::Reopening`).
-  **The four structural verbs now announce rather than go quiet** —
-  `CanvasStatusNote::Reopening`, new copy added for exactly this
-  trigger (see "Vocabulary additions" below). Silence is a test
-  FAILURE now:
+- **Structural navigation's state answers moved twice, and this entry
+  is the history — VA-2's section owns the CURRENT story.** For the
+  mapping, the membership guard and the per-state sentences, read there
+  (`canvasReadRefusal(for:)`'s table); what is recorded here is how the
+  claims got wrong, because the failure mode outlived each individual
+  correction.
+
+  The first draft of this note said the silence affected "a canvas
+  moved to Trash, or one whose retarget failed". Both were wrong:
+  `activeCanvasDocument` gated on `case .ready`, so those states were
+  unreachable by every navigator verb — the claim was written from the
+  shape of the code rather than from its reachability, the same class
+  of error the round record already carries twice.
+
+  The second version scoped the answer to `beginBatchRetarget`'s window
+  alone — the one state pairing `.ready` with a detached handle, where
+  the snapshot stays visible while nothing may save through the
+  moved-away path. True, and still incomplete: `.loading` had no answer
+  at all, and the three unreadable states kept their silence.
+
+  **What is true now** (codex 0b rounds 1–4, rule 4): one total mapping
+  answers every state, `.loading` included, and the three unreadable
+  states say `.notReadable` instead of nothing — which closes the
+  ANNOUNCEMENT half of the t0 §5 gap filed in "Mac details recorded
+  while reading", leaving only navigability open there. Arrow movement
+  still narrates in the reopening window (the filtered outline serves
+  the displayed rows), and mutations are still refused audibly
+  (`CanvasMutationRefusal::Reopening`). A verb's own selection question
+  still outranks the state's on a canvas whose snapshot is on screen,
+  which is `.ready` including that window.
+
+  Silence is a test failure now:
   `testOnlyTheBatchRetargetWindowPairsReadyWithNoHandle` asserts the
   sentence at each VA-1 member, and
-  `testEveryNonReadyLoadStateAnswersWhatTheMappingSays` pins the
-  `.ready` gate that makes the reachability claim checkable rather than
-  merely asserted.
+  `testEveryNonReadyLoadStateAnswersWhatTheMappingSays` drives every
+  non-ready state with its expectations taken FROM the mapping.
 
   **Retaining the detached handle for READS is refused permanently, and
   this is the reasoning so it is not re-proposed.** It is the cheapest

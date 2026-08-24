@@ -32,6 +32,22 @@ extension AppState {
         return doc
     }
 
+    /// The active tab's canvas whatever its load state — DISCOVERY,
+    /// separated from admission.
+    ///
+    /// A read verb needs its document before it may ask the mapping,
+    /// because the recorded precedence (m6) puts a verb's own selection
+    /// question ahead of the state's: pressing Enter-group with nothing
+    /// selected answers "Nothing selected." in the reopening window,
+    /// not "reopening". Acquiring the read context first announced
+    /// eagerly and inverted that.
+    var activeCanvasDocumentAnyState: CanvasDocument? {
+        guard let tab = workspace.activeTab, case .canvas(let path) = tab.item else {
+            return nil
+        }
+        return canvasDocument(for: path)
+    }
+
     /// **The one state → response mapping for canvas READ verbs.**
     ///
     /// `nil` means the document can answer a core query. Anything else
@@ -109,6 +125,26 @@ extension AppState {
         return canvasReadContext(for: canvasDocument(for: path))
     }
 
+    /// The recorded precedence (m6), in one place beside the mapping
+    /// that owns the state story: a verb answers its OWN selection
+    /// question before the state's — but only on a canvas whose
+    /// snapshot the user is actually looking at.
+    ///
+    /// That is `.ready`, the reopening window included: its outline and
+    /// selection are on screen, so "Nothing selected." is both truthful
+    /// and more useful there than "reopening". Every other state either
+    /// cleared its snapshot (`.degraded`) or never built one, so a
+    /// selection question has nothing to be about and the mapping's
+    /// sentence is the only honest answer — which is why this is gated
+    /// on the state rather than run unconditionally.
+    ///
+    /// Returns true HAVING ANNOUNCED, so the caller returns.
+    func canvasAnsweredMissingSelection(_ doc: CanvasDocument) -> Bool {
+        guard case .ready = doc.state, doc.selection.selected == nil else { return false }
+        canvasAnnounceSelectionUnresolvable()
+        return true
+    }
+
     /// The other never-silent arm: the query THREW while the handle was
     /// live. Every structural query in this file refuses an id the model
     /// does not hold with `bad_node`, so a throw here means the
@@ -168,7 +204,12 @@ extension AppState {
     /// selected" answers the same way in every state — the reopening
     /// window must not turn a selection question into a reopening one.
     func canvasEnterGroup() {
-        guard let target = canvasReadTarget() else { return }
+        // Discovery, then admission: the selection question is this
+        // verb's own and outranks the state's on a canvas the user can
+        // see (m6's recorded precedence).
+        guard let found = activeCanvasDocumentAnyState else { return }
+        if canvasAnsweredMissingSelection(found) { return }
+        guard let target = canvasReadContext(for: found) else { return }
         let doc = target.doc
         guard let selected = doc.selection.selected,
             let row = doc.outline.first(where: { $0.nodeId == selected })
@@ -203,7 +244,9 @@ extension AppState {
     /// `canvas_parent_of` (contract 0b-8) answers it, and `nil` — no
     /// parent — is exactly "at canvas level".
     func canvasExitGroup() {
-        guard let target = canvasReadTarget() else { return }
+        guard let found = activeCanvasDocumentAnyState else { return }
+        if canvasAnsweredMissingSelection(found) { return }
+        guard let target = canvasReadContext(for: found) else { return }
         let doc = target.doc
         guard let selected = doc.selection.selected else {
             return canvasAnnounceSelectionUnresolvable()
@@ -250,7 +293,9 @@ extension AppState {
         // nothing-selected press SILENT on an ordinary ready canvas —
         // palette-reachable, and out of step with the three sibling
         // verbs that answer it.
-        guard let target = canvasReadTarget() else { return }
+        guard let found = activeCanvasDocumentAnyState else { return }
+        if canvasAnsweredMissingSelection(found) { return }
+        guard let target = canvasReadContext(for: found) else { return }
         let doc = target.doc
         guard let selected = doc.selection.selected else {
             return canvasAnnounceSelectionUnresolvable()
@@ -300,7 +345,9 @@ extension AppState {
     /// ended it. The hops EXCLUDE the start card, so an empty list is
     /// the dead end mac spelled as `visited.count == 1`.
     func canvasTracePath() {
-        guard let target = canvasReadTarget() else { return }
+        guard let found = activeCanvasDocumentAnyState else { return }
+        if canvasAnsweredMissingSelection(found) { return }
+        guard let target = canvasReadContext(for: found) else { return }
         let doc = target.doc
         guard let start = doc.selection.selected else {
             return canvasAnnounceSelectionUnresolvable()

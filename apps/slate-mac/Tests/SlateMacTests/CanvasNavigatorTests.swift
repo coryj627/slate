@@ -238,6 +238,43 @@ final class CanvasNavigatorTests: XCTestCase {
         }
     }
 
+    /// The recorded precedence (m6) inside the reopening window: a
+    /// verb's own selection question is answered before the state's.
+    ///
+    /// Its own test, because the window test above SETS a selection
+    /// first — which is exactly how the regression slipped through when
+    /// `canvasReadTarget()` started announcing eagerly. The snapshot is
+    /// still on screen here, so "Nothing selected." is the truthful and
+    /// more useful answer; "reopening" would describe the canvas when
+    /// the user asked about the caret.
+    func testNoSelectionInTheReopeningWindowAnswersTheSelectionQuestion() async throws {
+        let state = try await makeState()
+        let doc = try XCTUnwrap(state.activeCanvasDocument)
+        doc.selection.selected = nil
+        _ = doc.beginBatchRetarget(to: doc.path)
+        XCTAssertNil(doc.handle, "the window: ready, snapshot on screen, handle detached")
+        XCTAssertEqual(state.canvasReadRefusal(for: doc), .reopening)
+
+        func check(_ label: String, _ verb: () -> Void) {
+            self.posted = []
+            verb()
+            state.canvasAnnouncer.flushForTests()
+            XCTAssertEqual(self.posted, ["Nothing selected."], "\(label): \(self.posted)")
+        }
+        check("enter group") { state.canvasEnterGroup() }
+        check("exit group") { state.canvasExitGroup() }
+        check("trace path") { state.canvasTracePath() }
+        check("follow connection") { state.canvasFollowConnection(forward: true) }
+
+        // Fit canvas has no selection question, so the state's answer
+        // stands — the precedence is about preconditions, not a blanket
+        // reordering.
+        posted = []
+        state.canvasFitCanvas()
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertEqual(posted, ["This canvas is reopening. Try again in a moment."])
+    }
+
     /// The same two verbs OUTSIDE the window answer exactly as they did
     /// before VA-1 reached them — the sentence is for the state, not a
     /// new default.
@@ -337,6 +374,14 @@ final class CanvasNavigatorTests: XCTestCase {
             return XCTFail("expected .loading, got \(loading.state)")
         }
         loading.selection.selected = "g1"
+        // Two spot-checks are handwritten ON PURPOSE, here and at
+        // `.failed` below. Everything else in this test derives its
+        // expectation from the mapping, which is what stops the test
+        // drifting — but a derived assertion also passes if the mapping
+        // swaps two sentences, because both sides move together. These
+        // two pin the note each state actually owes, so a swap fails
+        // here rather than passing everywhere. One per sentence is
+        // enough to anchor the table.
         XCTAssertEqual(loadingState.canvasReadRefusal(for: loading), .loading)
         driveMembers("loading", loadingState, loading)
 

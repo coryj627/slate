@@ -13737,6 +13737,28 @@ mod canvas_mirror_tests {
     /// `open_canvas`) are outside it: they are gated by
     /// `admitCanvasMutation`, a different ladder with its own spoken
     /// refusals.
+    ///
+    /// **What it catches, and what it cannot** — stated rather than
+    /// implied, the same doctrine 0a's source scan settled on.
+    ///
+    /// It matches the query as a MEMBER TOKEN on a session-ish
+    /// receiver, with no call paren required: `let read =
+    /// session.canvasBounds` then `try? read(handle)` is a use, and
+    /// requiring the paren let exactly that shape past (codex 0b round
+    /// 4). The receiver is the discriminator because these are
+    /// `VaultSession` methods — which is also what keeps
+    /// `appState?.canvasTracePath()`, the navigator's own verb of the
+    /// same name, out of the results.
+    ///
+    /// It CANNOT follow indirect flow: a session handed to a helper
+    /// that calls the query, a method reference stored in a property
+    /// and invoked elsewhere, or a closure capturing either. Answering
+    /// those needs symbol resolution across functions — a real
+    /// front end, which this text scan is not and should not grow into.
+    /// The bound on the damage is the same as every scan here: it can
+    /// miss a NEW evasion, it cannot go quietly green on the code it
+    /// does see, because it asserts it found call sites at all and that
+    /// every exclusion still calls one.
     #[test]
     fn every_mac_canvas_read_is_gated_or_named() {
         use std::collections::BTreeMap;
@@ -13848,16 +13870,9 @@ mod canvas_mirror_tests {
             // went unattributed.
             let mut entered = false;
             let mut depth: i32 = 0;
-            for (index, line) in lines.iter().enumerate() {
+            for line in &lines {
                 let trimmed = line.trim_start();
                 let code = trimmed.split("//").next().unwrap_or("");
-                // Every query in the read set is handle-based, so a
-                // `handle:` argument is what separates the FFI call from
-                // a host verb that happens to share its name
-                // (`appState?.canvasTracePath()` is the navigator's).
-                // Three lines, because these calls wrap.
-                let window = lines[index..(index + 3).min(lines.len())].join(" ");
-                let handle_keyed = window.contains("handle:");
                 if current.is_none()
                     && let Some(rest) = code.split_once("func ")
                     && let Some(name) = rest
@@ -13872,7 +13887,39 @@ mod canvas_mirror_tests {
                     let name = name.clone();
                     for query in READ_QUERIES {
                         // `.canvasFoo(` — a CALL, not the declaration.
-                        if code.contains(&format!(".{query}(")) && handle_keyed {
+                        // A MEMBER TOKEN, with no call paren required:
+                        // `let read = session.canvasBounds` followed by
+                        // `try? read(handle)` is a use of the query, and
+                        // demanding the paren let exactly that shape
+                        // walk past the guard (codex 0b round 4).
+                        //
+                        // The receiver is the discriminator instead —
+                        // these are `VaultSession` methods, so a
+                        // session-ish receiver is what separates the FFI
+                        // query from a host verb that happens to share
+                        // its name (`appState?.canvasTracePath()` is the
+                        // navigator's own).
+                        for (offset, _) in code.match_indices(&format!(".{query}")) {
+                            let after = offset + 1 + query.len();
+                            // `.canvasBounds` must not match
+                            // `.canvasBoundsSomethingElse`.
+                            if code[after..].starts_with(|c: char| c.is_alphanumeric() || c == '_')
+                            {
+                                continue;
+                            }
+                            let before = &code[..offset];
+                            let before = before.strip_suffix('?').unwrap_or(before);
+                            let receiver: String = before
+                                .chars()
+                                .rev()
+                                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                                .collect::<Vec<char>>()
+                                .into_iter()
+                                .rev()
+                                .collect();
+                            if !receiver.to_ascii_lowercase().contains("session") {
+                                continue;
+                            }
                             callers
                                 .entry(name.clone())
                                 .or_default()
