@@ -158,9 +158,10 @@ internal sealed partial class WorkspaceViewModel
             // dead pane (red team round 1 blocker). Attach before the
             // release sweep so a shared document is never shut down
             // between the two steps.
-            AttachBaseDocumentIfNeeded(active);
+            AttachTabDocumentsIfNeeded(active);
             ReleaseUnreferencedBaseDocuments();
             ReleaseUnreferencedDashboards();
+            ReleaseUnreferencedCanvasDocuments();
             if (peer is not null)
             {
                 active.MirrorDocumentStateFrom(peer);
@@ -207,7 +208,7 @@ internal sealed partial class WorkspaceViewModel
             EditorPreferences,
             startInteractionBackgroundWork: _startInteractionBackgroundWork);
         tab.TaskRepairs = _taskIndexRepairs;
-        AttachBaseDocumentIfNeeded(tab);
+        AttachTabDocumentsIfNeeded(tab);
         if (peer is not null)
         {
             tab.MirrorDocumentStateFrom(peer);
@@ -317,6 +318,7 @@ internal sealed partial class WorkspaceViewModel
         tab.Dispose();
         ReleaseUnreferencedBaseDocuments();
         ReleaseUnreferencedDashboards();
+        ReleaseUnreferencedCanvasDocuments();
         WorkspaceTabViewModel? successor = group.Tabs.Count == 0
             ? null
             : group.Tabs[Math.Min(index, group.Tabs.Count - 1)];
@@ -398,6 +400,7 @@ internal sealed partial class WorkspaceViewModel
         group.Tabs.Clear();
         ReleaseUnreferencedBaseDocuments();
         ReleaseUnreferencedDashboards();
+        ReleaseUnreferencedCanvasDocuments();
         RemoveEmptyGroup(group);
         AnnounceActivePane();
         RequestActiveEditorFocus();
@@ -438,7 +441,7 @@ internal sealed partial class WorkspaceViewModel
             startInteractionBackgroundWork: _startInteractionBackgroundWork);
         // The registry, not a fresh document: a duplicated tab shares
         // its source's ONE document (contract C3).
-        AttachBaseDocumentIfNeeded(duplicate);
+        AttachTabDocumentsIfNeeded(duplicate);
         duplicate.MirrorDocumentStateFrom(tab);
         ActiveGroup.Tabs.Insert(index + 1, duplicate);
         ActiveGroup.ActiveTab = duplicate;

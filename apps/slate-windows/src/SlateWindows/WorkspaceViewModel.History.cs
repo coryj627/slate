@@ -234,7 +234,7 @@ internal sealed partial class WorkspaceViewModel
         if (tab is { IsDirty: false })
         {
             tab.ReplaceItem(tab.Item);
-            AttachBaseDocumentIfNeeded(tab);
+            AttachTabDocumentsIfNeeded(tab);
         }
     }
 

@@ -1039,12 +1039,25 @@ internal sealed partial class WorkspaceViewModel
         }
     }
 
-    /// <summary>ONE attach funnel for every site that gives a tab its
-    /// item (AddTab, restore, duplicate, and the in-place REPLACE arm —
-    /// the duplicate site's target-typed `new` hid from the first
-    /// sweep, and the replace arm from the second; a helper cannot be
-    /// skipped).</summary>
-    private void AttachBaseDocumentIfNeeded(WorkspaceTabViewModel tab)
+    /// <summary>
+    /// ONE attach funnel for every site that gives a tab its item.
+    /// The FIVE call sites, by their enclosing methods:
+    /// <c>TryOpenItem</c> (the in-place replace arm on the active tab),
+    /// <c>AddTab</c>, <c>DuplicateActiveTab</c>, <c>RestoreNode</c>,
+    /// <c>ReloadOpenTabFromDisk</c> (the history retarget).
+    /// </summary>
+    /// <remarks>
+    /// The W4-6 lesson was that two sweeps missed sites — the duplicate
+    /// site's target-typed <c>new</c> hid from the first, the replace
+    /// arm from the second — and this comment then listed FOUR of the
+    /// five for the whole of W4-6/W4-7 (W6-1 controller ruling). A
+    /// comment one site behind is the same failure in slower motion, so
+    /// the list is no longer trusted: <c>CanvasAnnouncerCensus</c>'s
+    /// <c>TheAttachFunnelDocCommentNamesEveryCallSite</c> derives the
+    /// call sites from the source and asserts this enumeration equals
+    /// them in both directions.
+    /// </remarks>
+    private void AttachTabDocumentsIfNeeded(WorkspaceTabViewModel tab)
     {
         if (tab.IsBase)
         {
@@ -1059,6 +1072,10 @@ internal sealed partial class WorkspaceViewModel
         {
             tab.AttachDashboard(
                 DashboardFor(dashboardId, tab.Item.Name ?? "Dashboard"));
+        }
+        else if (tab.IsCanvas)
+        {
+            tab.AttachCanvasDocument(CanvasDocumentFor(tab.Path));
         }
     }
 

@@ -80,7 +80,7 @@ internal sealed partial class WorkspaceViewModel
                 {
                     TaskRepairs = _taskIndexRepairs,
                 };
-                AttachBaseDocumentIfNeeded(restoredTab);
+                AttachTabDocumentsIfNeeded(restoredTab);
                 group.Tabs.Add(restoredTab);
             }
 

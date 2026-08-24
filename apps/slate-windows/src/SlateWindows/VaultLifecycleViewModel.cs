@@ -39,6 +39,7 @@ internal sealed class VaultLifecycleViewModel
     private readonly Func<RecentVault, Task<bool>> _confirmRemoveMissingRecent;
     private readonly Action<Action> _enqueueUi;
     private readonly Action<A11yEvent> _announce;
+    private readonly Action<RenderedAnnouncement> _announceRendered;
     private readonly Action<string> _copyText;
     private readonly Func<VaultCloseDecision> _confirmUnsavedClose;
     private readonly Func<WorkspaceTabViewModel, WorkspaceItemState, WorkspaceDirtyNavigationDecision>
@@ -149,11 +150,17 @@ internal sealed class VaultLifecycleViewModel
             Func<(ScanReport Report, SwitcherFile[] SwitcherFiles)>,
             Task<(ScanReport Report, SwitcherFile[] SwitcherFiles)>>? sessionLoadWorker = null,
         Func<Action, Task>? syncArmWorker = null,
-        TimeSpan? syncMarkerDebounce = null)
+        TimeSpan? syncMarkerDebounce = null,
+        Action<RenderedAnnouncement>? announceRendered = null)
     {
         _pickVault = pickVault;
         _enqueueUi = enqueueUi;
         _announce = announce ?? (_ => { });
+        // W6-1 PR A (contract A5): the canvas coalescer queues RENDERED
+        // lines, so it needs the dispatcher's rendered-pair overload.
+        // Absent (headless facts) it is a no-op, the same shape the
+        // event seam above already takes.
+        _announceRendered = announceRendered ?? (_ => { });
         _copyText = copyText ?? (_ => { });
         _confirmUnsavedClose = confirmUnsavedClose ?? (() => VaultCloseDecision.Cancel);
         _confirmDirtyNavigation = confirmDirtyNavigation
@@ -965,7 +972,8 @@ internal sealed class VaultLifecycleViewModel
             _announce,
             _confirmDirtyNavigation,
             _confirmDirtyClose,
-            preferencesStore: new AppPreferencesStore());
+            preferencesStore: new AppPreferencesStore(),
+            announceRendered: _announceRendered);
         // W4-8 (SD6/SDR-5): hand the workspace an admission gate over
         // the LIFECYCLE's per-path set instead of letting it keep its
         // own flag, which would die with it. Installed before the
