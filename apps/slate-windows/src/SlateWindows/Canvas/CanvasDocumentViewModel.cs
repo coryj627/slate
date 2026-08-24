@@ -285,10 +285,18 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// path is a registry hit that never publishes — so it never landed
     /// focus at all.
     /// </remarks>
-    internal event EventHandler? FocusLandingRequested;
+    /// <remarks>
+    /// The payload is the TAB that asked. One document is shared by
+    /// every pane showing the path, so a bare broadcast reached every
+    /// mounted surface and each one landed — opening a canvas in pane B
+    /// pulled focus in pane A too. The surface compares the payload
+    /// against its own <c>DataContext</c> and ignores a request meant
+    /// for a sibling.
+    /// </remarks>
+    internal event Action<object?>? FocusLandingRequested;
 
-    internal void RequestFocusLanding() =>
-        FocusLandingRequested?.Invoke(this, EventArgs.Empty);
+    internal void RequestFocusLanding(object? owner = null) =>
+        FocusLandingRequested?.Invoke(owner);
 
     /// <summary>The ONE surface switch (contracts A15/A18): the header
     /// switcher and the three <c>slate.canvas.show*</c> commands share
@@ -757,10 +765,23 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         }
         if (!IsMarkdownTarget(target))
         {
-            // Media and every other non-Markdown attachment. NOT the
-            // link allowlist: that gates URLs handed to a browser, and a
-            // vault-relative file is a different hand-off with a
-            // different failure mode.
+            // The shell-execution gate (CD-38). A canvas is untrusted
+            // input and ShellExecute EXECUTES what it is handed, so only
+            // media opens; everything else is refused, audibly. NOT the
+            // link allowlist — that gates URLs handed to a browser, a
+            // different hand-off with a different failure mode.
+            if (!CanvasMediaPolicy.IsOpenableMedia(target))
+            {
+                // The vocabulary has no "this file type is not openable"
+                // reason, so the refusal rides the generic failed-action
+                // arm with the TARGET as its dynamic detail — never a
+                // host-authored sentence (0a-1). The gap is recorded in
+                // CD-38 as a STOP point: the typed reason is a core
+                // change this task may not make.
+                Announcer.Announce(new CanvasA11yEvent.CanvasActionFailed(
+                    CanvasFailedAction.CanvasAction, target));
+                return CanvasActivation.Refused;
+            }
             if (OpenMediaCardFromSurface?.Invoke(target) == true)
             {
                 LastActivatedNode = row.NodeId;

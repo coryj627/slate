@@ -1194,11 +1194,30 @@ first keystroke of the surface's life. Pinned by
 **A13 — Activation is per kind, and every arm speaks canvas
 vocabulary.** Text ⇒ the interim read-only detail region seeded from
 `canvas_node_text` (`TextBox IsReadOnly`, focusable, named for the card;
-PR E swaps in the editor). File/image ⇒ the workspace's ONE navigation
-seam (`OpenEditorNavigation`), with the scene node's `subpath` mapped to
-a `LinkAnchor` — `#^id` ⇒ `("block", id)`, `#…` ⇒ `("heading", …)` —
-so the W3-5 anchor resolution lands the caret at the heading rather
-than at the note top. Link ⇒ `ExternalLinkPolicy.IsLaunchable` —
+PR E swaps in the editor). File/image ⇒ routed on the TARGET, not the
+kind, exactly as mac routes it
+(`CanvasContainerView.swift:168–187`): a `.md`/`.markdown` target goes
+to the workspace's ONE navigation seam (`OpenEditorNavigation`), with
+the scene node's `subpath` mapped to a `LinkAnchor` — `#^id` ⇒
+`("block", id)`, `#…` ⇒ `("heading", …)` — so the W3-5 anchor
+resolution lands the caret at the heading rather than at the note top;
+anything else goes to the shell as `CanvasOpened { DefaultApp }` **if
+and only if it is media** (CD-38's extension gate), and a non-media
+target is refused audibly and never launched.
+
+**Routing on the KIND was a defect, and the vocabulary said so.**
+`image` fell into the `file` arm, and `ItemForPath` calls every
+extension that is not `.canvas`/`.base` Markdown — so activating an
+image card replaced the canvas tab with an editor over the PNG's bytes,
+while the row's own HelpText said media arrives in a later slice. The
+tell was `CanvasOpenTarget.DefaultApp`: an arm of the canvas vocabulary
+that no Windows code path could reach. The media hand-off resolves the
+vault-relative target against the vault root in the WORKSPACE (the only
+holder of the root) and refuses anything that escapes the vault — a
+`.canvas` file is untrusted input and `../../` in a `file` node would
+otherwise open anything on the disk. It does NOT go through
+`ExternalLinkPolicy`, which gates URLs handed to a browser and is a
+different hand-off with a different failure mode. Link ⇒ `ExternalLinkPolicy.IsLaunchable` —
 the ONE scheme allowlist (`http`/`https`/`mailto`) — and the injected
 opener, announcing `CanvasOpened { Browser }`,
 `CanvasBlocked { LinkOpenFailed }` or `CanvasBlocked { NotAUrl }`.
@@ -1218,10 +1237,33 @@ Group ⇒ expand. A file card whose target is gone announces
 announces `CanvasBlocked { CardTextUnreadable }` — the 0b never-silent
 table, and the reason A16 exists.
 
-**A14 — Focus lands, and focus comes back (WCAG 2.4.3).** Opening lands
-keyboard focus on the outline's first item. Activating a file card
-records the row on the document (`LastActivatedNode`, mac's field), and
-the surface re-mounting restores focus to that row rather than the top.
+**A14 — Focus lands when the USER opens, and comes back (WCAG 2.4.3).**
+Opening lands keyboard focus on the outline's first item (on an empty
+canvas, on the onboarding region — the only thing there is to read).
+Activating a file card records the row on the document
+(`LastActivatedNode`, mac's field), and the surface re-mounting restores
+focus to that row rather than the top.
+
+**The trigger is the workspace's open funnel, not a publish, and it is
+ADDRESSED.** Focus keyed on "first publish while this view is visible"
+got both directions wrong at once: a retarget attached a fresh document
+whose publish yanked focus out of the files tree the user was renaming
+in, and a session restore did the same from a pane the user was not in;
+meanwhile a second tab or pane on an ALREADY-open path is a registry hit
+that never publishes, so it never landed focus at all — A14's own
+sentence, unimplemented for that case. Focus is a request now:
+`RequestActiveEditorFocus` — the one funnel every user-initiated open
+already calls and no background path does — asks the active tab's
+document, which raises `FocusLandingRequested` **carrying the tab that
+asked**; the surface compares that against its own `DataContext` and
+ignores a request meant for a sibling, because one document serves every
+pane on the path and an unaddressed broadcast landed focus in all of
+them. The surface lands immediately if the rows are there and arms the
+next publish if the canvas is still loading. Pinned by
+`ARetargetPublishNeverStealsFocus`,
+`ASecondTabOnAnOpenPathStillLandsFocus`,
+`OpeningACanvasInOnePaneNeverLandsFocusInAnother` and
+`AnEmptyCanvasLandsFocusOnTheOnboardingRegion`.
 
 **A15 — `ActiveCanvasSurface` round-trips, and outline is ABSENT.**
 The persisted token stays `"table" | "visual"` with outline written as
@@ -1277,6 +1319,13 @@ dispatcher (exposed as `WhenHandleClosed()` for the bounded teardown
 drain), and synchronous test mode runs bodies inline. The handle is
 closed exactly once — on replacement inside the load body, or on
 shutdown.
+
+**The interleaving facts assert safety, not liveness.**
+`AShutdownDuringAnInFlightLoadNeverPublishesAndClosesTheHandle` asserts
+that no publish lands and the handle closes — it does NOT assert which
+side won the race, because either order is correct and the scheduler
+may legitimately refuse the body before it starts; a fact that demanded
+the load reach the FFI first would be a timing bet, not a contract.
 
 **The 2,000-node budget fact runs BOTH modes.** The W4-5 lesson is
 "test the mode users run": the synchronous mode orders the load body
@@ -2358,6 +2407,55 @@ no create command. The t2 rule the spec cites in the same sentence
 so the region renders the true sentence the vocabulary already has, and
 PR E swaps `CanvasEmptyOnboarding` in with the real New Card chord.
 No host prose either way: both are core renders.
+**Ratified by controller ruling** (fix round 3): the core-rendered empty
+copy beats the spec's interim palette sentence, and the deviation from
+spec behavior 2's literal wording stands as recorded.
+
+**CD-38 — Windows will not shell-execute a non-media file card; mac
+will** (controller security ruling, fix round 3). PR A's media arm
+(M1, CD-36) handed any non-Markdown in-vault target to
+`Process.Start(UseShellExecute: true)`. On Windows that is
+`ShellExecute`, which EXECUTES what it is given, and a canvas is
+untrusted input — it arrives over sync, from a shared vault, from
+Obsidian — so a `{"type":"file","file":"setup.exe"}` node ran on one
+Enter. The default-app open is therefore gated to MEDIA by extension;
+everything else is refused, audibly, and never launched.
+
+**The gate's set is core's, copied because core does not export it.**
+`canvas::model::media_class` (`model.rs:661`) is the same private
+function whose answer becomes the `image` kind label and the
+`Image:`/`Audio:`/`Video:` title prefixes, and it carries no
+`#[uniffi::export]`. `CanvasMediaPolicy` transliterates it in ONE place,
+including both of its edge rules (the BASENAME's real extension; a
+dotfile like `.mov` is a hidden file, not a video), and
+`TheMediaGateIsCoresClassification` pins the set and both edges.
+**Drift note:** PR E is the first PR that needs the classification for
+its own reasons (the spec's Add Media row — "media kinds by extension
+set — core's `media_class` decides the label"), so PR E exports it and
+deletes this copy.
+
+**Deliberately stricter than mac, because the threat models differ.**
+Mac opens any non-Markdown target through `NSWorkspace`
+(`CanvasContainerView.swift:180–186`), where Gatekeeper, quarantine and
+notarization adjudicate an execution; `ShellExecute` adjudicates
+nothing. Matching mac here would import a decision that only holds under
+mac's protections. Mac's laxer arm goes on the upstream-notes list, not
+fixed here.
+
+**STOP point recorded: the vocabulary has no reason for this refusal.**
+Nothing in `CanvasBlockedReason` or `CanvasStatusNote` says "this file
+type is not openable from a canvas" — `CanvasFileNotFound` is false (the
+file is present), `LinkOpenFailed` is false (it is not a link), and a
+host-authored clause in `CanvasActionFailed`'s `detail` would be exactly
+the prose 0a deleted. So the refusal rides
+`CanvasActionFailed { CanvasAction, detail: target }` — High priority,
+never silent, dynamic data only — rendering *"Canvas action failed:
+setup.exe"*. That is accurate and uninformative, and it is the best the
+shipped vocabulary can do. Adding the typed reason is a core change this
+task may not make (the brief's hard rule), so it is flagged rather than
+smuggled: **the vocabulary needs a `CanvasBlockedReason` arm for a
+refused file-type open, and PR E or a 0a follow-up should add it.** The
+SAFETY behaviour does not wait on that; only the sentence does.
 
 ---
 
@@ -3089,6 +3187,33 @@ history head hash as the CAS basis for a non-markdown tab and the
 restore does not reach disk. Unresolved here and NOT PR A's to answer —
 W4-7 owns that path, and PR A's obligation is that its own reload site
 reloads, which is where the fact is pinned. Flagged for close-out.
+
+**Fix round 3 (scoped re-review).** The round-2 fixes introduced three
+of their own, which is the stopping rule's own warning shape — a fix
+that creates the next round's finding counts double. None of these
+created a NEW blocker class, but they are recorded plainly:
+
+- **M1's media arm was a shell-execution hole.** Opening "anything
+  non-Markdown" in its default app is right on mac and wrong on Windows,
+  because `ShellExecute` executes. The gate (CD-38) is the fix; the
+  lesson is that "match the reference implementation" is not a safety
+  argument when the platforms' adjudicators differ.
+- **The gate's own tests were stubbed.** The activation facts replace
+  `OpenMediaCardFromSurface`, so they could never have seen a gate in
+  the production closure — the same silent-absence shape as round 2's
+  unwired seam, one layer down.
+  `TheProductionMediaSeamOpensMediaAndRefusesEverythingElse` drives the
+  real closure on both arms.
+- **M2's addressing was still a broadcast.** One document serves every
+  pane, so `RequestFocusLanding` reached every mounted surface and each
+  landed. The request carries the asking tab now.
+- Two contract amendments from round 2 (A13's routing, A14's trigger)
+  were **lost when their edit script aborted on a later assertion** and
+  the file was never written — the code shipped, the record did not.
+  Caught by re-reading §A against the diff in this round and reapplied.
+  A script that edits a document in several places must write what it
+  has before it can fail; recorded because the same shape would have
+  silently dropped any of the other rows.
 
 **Deferred to PR E (m5, ledgered, no action here).** `Rebuild()`
 force-expands every group with members so a first read is the whole

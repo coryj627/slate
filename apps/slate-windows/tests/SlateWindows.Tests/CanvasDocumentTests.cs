@@ -1361,6 +1361,162 @@ public sealed class CanvasDocumentTests : IDisposable
         Assert.False(open("nowhere.png"));
     }
 
+    /// <summary>
+    /// The shell-execution gate (CD-38), through the PRODUCTION closure
+    /// the workspace installs — not a stub. A benign in-vault media file
+    /// reaches the opener seam with the path it should; a non-media
+    /// extension never reaches it at all.
+    /// </summary>
+    /// <remarks>
+    /// `Process.Start(UseShellExecute: true)` is `ShellExecute`, which
+    /// EXECUTES what it is handed. A canvas is untrusted input — it
+    /// arrives over sync, from a shared vault, from Obsidian — so a
+    /// `{"type":"file","file":"setup.exe"}` node would have launched on
+    /// one Enter. The stubbed activation facts above cannot see this:
+    /// they replace the very closure that carries the gate.
+    /// </remarks>
+    [Fact]
+    public void TheProductionMediaSeamOpensMediaAndRefusesEverythingElse()
+    {
+        File.WriteAllBytes(
+            Path.Combine(_fixture.Root, "diagram.png"),
+            [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+        File.WriteAllBytes(
+            Path.Combine(_fixture.Root, "setup.exe"), [0x4D, 0x5A, 0x90, 0x00]);
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "shell.canvas"),
+            """
+            {"nodes":[
+              {"id":"pic","type":"file","file":"diagram.png","x":0,"y":0,"width":10,"height":10},
+              {"id":"exe","type":"file","file":"setup.exe","x":0,"y":40,"width":10,"height":10}
+            ],"edges":[]}
+            """);
+
+        var launched = new List<string>();
+        using var workspace = new WorkspaceViewModel(
+            _session,
+            _fixture.Root,
+            () => [],
+            _ => { },
+            startInteractionBackgroundWork: false,
+            announceRendered: _announced.Add,
+            externalOpener: target =>
+            {
+                launched.Add(target);
+                return true;
+            });
+        workspace.OpenPath("shell.canvas");
+        CanvasDocumentViewModel document = Assert.IsType<CanvasDocumentViewModel>(
+            workspace.ActiveGroup.ActiveTab!.Canvas);
+        _announced.Clear();
+
+        // Media: the real closure resolves it under the vault root and
+        // hands the shell an absolute path to THAT file.
+        Assert.Equal(CanvasActivation.Opened, document.Activate(Row(document, "pic")));
+        string handed = Assert.Single(launched);
+        Assert.Equal(
+            Path.GetFullPath(Path.Combine(_fixture.Root, "diagram.png")),
+            handed);
+        document.Announcer.FlushForTests();
+        Assert.Equal(
+            SlateUniffiMethods.A11yRender(new A11yEvent.Canvas(
+                new CanvasA11yEvent.CanvasOpened(
+                    Row(document, "pic").Title, CanvasOpenTarget.DefaultApp))).Text,
+            _announced[^1].Text);
+
+        // The executable: refused before the closure is consulted, and
+        // audibly — never silent, never launched.
+        launched.Clear();
+        _announced.Clear();
+        Assert.Equal(CanvasActivation.Refused, document.Activate(Row(document, "exe")));
+        Assert.Empty(launched);
+        document.Announcer.FlushForTests();
+        RenderedAnnouncement refusal = Assert.Single(_announced);
+        Assert.Equal(A11yPriority.High, refusal.Priority);
+        Assert.Equal(
+            SlateUniffiMethods.A11yRender(new A11yEvent.Canvas(
+                new CanvasA11yEvent.CanvasActionFailed(
+                    CanvasFailedAction.CanvasAction, "setup.exe"))).Text,
+            refusal.Text);
+    }
+
+    /// <summary>
+    /// The gate's set is core's `media_class`, transliterated because it
+    /// is not exported — including both of core's edge rules: the
+    /// BASENAME's real extension, and a dotfile like `.mov` being a
+    /// hidden file rather than a video.
+    /// </summary>
+    [Theory]
+    [InlineData("diagram.png", true)]
+    [InlineData("photo.JPEG", true)]
+    [InlineData("clip.mp4", true)]
+    [InlineData("theme.mov", true)]
+    [InlineData("song.flac", true)]
+    [InlineData("deep/path/art.webp", true)]
+    [InlineData("deep\\path\\art.avif", true)]
+    [InlineData("setup.exe", false)]
+    [InlineData("run.bat", false)]
+    [InlineData("script.ps1", false)]
+    [InlineData("payload.lnk", false)]
+    [InlineData("archive.zip", false)]
+    [InlineData("doc.pdf", false)]
+    // Core: "a file with no `.` in its basename (even one literally
+    // named `mov`) is not media".
+    [InlineData("mov", false)]
+    [InlineData("deep.dir/plainfile", false)]
+    // Core: a dotfile like `.mov` is hidden, not media.
+    [InlineData(".mov", false)]
+    [InlineData("deep/.png", false)]
+    [InlineData("", false)]
+    public void TheMediaGateIsCoresClassification(string target, bool expected) =>
+        Assert.Equal(expected, CanvasMediaPolicy.IsOpenableMedia(target));
+
+    /// <summary>
+    /// M2's last hole: one document serves every pane on the path, so an
+    /// unaddressed focus request landed in all of them. Opening in pane
+    /// B must not pull focus out of pane A.
+    /// </summary>
+    [Fact]
+    public void OpeningACanvasInOnePaneNeverLandsFocusInAnother() => RunSta(() =>
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel paneA =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        ((System.Windows.Input.ICommand)workspace.SplitRightCommand).Execute(null);
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel paneB =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        Assert.NotSame(paneA, paneB);
+        // The registry shares ONE document across the two panes — which
+        // is what made a broadcast reach both surfaces.
+        Assert.Same(paneA.Canvas, paneB.Canvas);
+
+        // Two mounted surfaces, each carrying its own tab as DataContext
+        // exactly as the tab template gives it.
+        var surfaceA = new CanvasSurfaceView { DataContext = paneA, Model = paneA.Canvas };
+        var surfaceB = new CanvasSurfaceView { DataContext = paneB, Model = paneB.Canvas };
+        var panel = new StackPanel();
+        panel.Children.Add(surfaceA);
+        panel.Children.Add(surfaceB);
+        using var host = Host(panel);
+
+        // The user opened in pane B: the workspace addresses the request
+        // to pane B's tab.
+        paneB.Canvas!.RequestFocusLanding(paneB);
+        host.UpdateLayout();
+
+        CanvasOutlineRowViewModel? focused = FocusedRow(host);
+        Assert.NotNull(focused);
+        // The focused row belongs to B's tree, not A's.
+        Assert.Contains(focused, AllRows(surfaceB.OutlineForTests.RootsForTests));
+        Assert.DoesNotContain(focused, AllRows(surfaceA.OutlineForTests.RootsForTests));
+    });
+
+    private static IEnumerable<CanvasOutlineRowViewModel> AllRows(
+        IEnumerable<CanvasOutlineRowViewModel> rows) =>
+        rows.SelectMany(row => new[] { row }.Concat(AllRows(row.Children)));
+
     // --- M2: focus lands when the user asks, and only then -----------------
 
     /// <summary>
@@ -1412,7 +1568,10 @@ public sealed class CanvasDocumentTests : IDisposable
         workspace.OpenPath("board.canvas");
         WorkspaceTabViewModel first =
             Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
-        var surface = new CanvasSurfaceView { Model = first.Canvas };
+        // DataContext is the tab, exactly as the tab template gives it —
+        // the focus request is ADDRESSED, so a view that does not know
+        // which tab it belongs to is not the production shape.
+        var surface = new CanvasSurfaceView { DataContext = first, Model = first.Canvas };
         using var host = Host(surface);
 
         // The document is already loaded and published; the surface

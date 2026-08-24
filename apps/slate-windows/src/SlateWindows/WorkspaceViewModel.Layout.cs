@@ -686,7 +686,11 @@ internal sealed partial class WorkspaceViewModel
     /// </summary>
     internal void RequestActiveEditorFocus()
     {
-        ActiveGroup.ActiveTab?.Canvas?.RequestFocusLanding();
+        // Addressed to the tab that asked: one document serves every
+        // pane on the path, and an unaddressed request lands focus in
+        // all of them.
+        WorkspaceTabViewModel? active = ActiveGroup.ActiveTab;
+        active?.Canvas?.RequestFocusLanding(active);
         EditorPaneFocusRequested?.Invoke(this, ActiveGroup);
     }
 

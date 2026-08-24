@@ -246,8 +246,18 @@ internal sealed class CanvasSurfaceView : UserControl
     /// Contract A14: a user-initiated open asked for focus. Land it now
     /// if there is a row, else arm the next publish.
     /// </summary>
-    private void OnFocusLandingRequested(object? sender, EventArgs e)
+    /// <remarks>
+    /// Only if the request was for THIS view. The document is shared by
+    /// every pane on the path, so the request is addressed to the tab
+    /// that asked; a sibling pane showing the same canvas ignores it,
+    /// and does not land focus for an open that happened somewhere else.
+    /// </remarks>
+    private void OnFocusLandingRequested(object? owner)
     {
+        if (!ReferenceEquals(owner, DataContext))
+        {
+            return;
+        }
         _focusLandingPending = true;
         TryLandFocus();
     }

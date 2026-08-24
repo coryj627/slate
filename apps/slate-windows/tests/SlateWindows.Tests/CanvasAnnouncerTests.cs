@@ -209,11 +209,25 @@ public sealed class CanvasAnnouncerTests
     /// </summary>
     /// <remarks>
     /// Every other fact in this suite flushes manually, so all of them
-    /// stay green with <c>_timer.Start()</c> deleted or the constructor's
-    /// dispatcher capture reverted — while in production every coalesced
-    /// line silently never fires. That is the W4-5 lesson ("test the
-    /// mode users run") in its exact shape, and this is the one fact
-    /// that runs the production timer. Mutation-verified both ways.
+    /// stay green with <c>_timer.Start()</c> deleted — while in
+    /// production every coalesced line silently never fires. That is the
+    /// W4-5 lesson ("test the mode users run") in its exact shape, and
+    /// this is the one fact that runs the production timer.
+    ///
+    /// <para>
+    /// <b>What the mutation check proves, exactly.</b> Deleting
+    /// <c>_timer.Start()</c> fails this fact and
+    /// <c>AFiredClassStartsEmptyForTheNextBurst</c>, and nothing else —
+    /// verified. It does NOT independently prove the constructor's
+    /// dispatcher capture: this body runs on the same STA thread that
+    /// constructs the announcer, so a reverted capture would land on
+    /// that thread anyway and stay green. The capture's real failure
+    /// mode is a first announcement arriving from a scheduler body, and
+    /// nothing here reproduces it; what protects it is the four-argument
+    /// <c>DispatcherTimer</c> ctor making the wrong binding
+    /// unexpressible, plus the Debug assert. Said plainly rather than
+    /// folded into "both ways".
+    /// </para>
     /// </remarks>
     [Fact]
     public void APendingNavigationLineFiresOnItsOwnWithoutAFlush() => RunSta(() =>
