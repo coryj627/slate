@@ -880,8 +880,8 @@ public sealed class CanvasDocumentTests : IDisposable
             host.FocusedRow());
         Assert.Equal(document.Outline[0].NodeId, landed.Id);
         Assert.Equal(document.Outline[0].NodeId, document.Selection.Selected);
-        // MainWindow's subscriber DID run — the canvas keeping focus is
-        // the handler standing aside, not the handler never firing.
+        // The pane-focus event DID fire, so the canvas keeping focus is
+        // not an artefact of the competing authority never being invoked.
         Assert.NotEmpty(host.PaneFocusRequests);
 
         // WCAG 2.4.3: activating a card records the row; coming back
@@ -1010,10 +1010,13 @@ public sealed class CanvasDocumentTests : IDisposable
                 ShowActivated = false,
             };
             _window.Show();
-            // MainWindow's subscriber, in the shape that matters: the
-            // production handler returns early for a canvas tab (A14),
-            // so recording the call here proves it RAN and stood aside
-            // rather than that it never fired.
+            // MainWindow's subscriber. Recording the call proves only
+            // that the workspace RAISED it — that the canvas keeping
+            // focus is not an artefact of the event never firing. What
+            // the production handler then does with a canvas tab is a
+            // source fact
+            // (`TheEditorPaneFocusFallbackStandsAsideForACanvasTab`),
+            // because MainWindow is not reachable from this project.
             workspace.EditorPaneFocusRequested += OnPaneFocusRequested;
         }
 
@@ -2244,6 +2247,194 @@ public sealed class CanvasDocumentTests : IDisposable
         document.Announcer.FlushForTests();
         Assert.NotEmpty(_announced);
         Assert.Equal(A11yPriority.High, _announced[^1].Priority);
+    }
+
+    /// <summary>
+    /// The bypass leaf-only resolution left open: a DIRECTORY junction
+    /// inside the vault pointing outside it, holding an ordinary
+    /// <c>.png</c>. The leaf is not a link, so <c>ResolveLinkTarget</c>
+    /// answers null for it and the lexical path still begins with the
+    /// vault root — the file opens.
+    /// </summary>
+    /// <remarks>
+    /// Junctions need neither elevation nor Developer Mode, which is why
+    /// the symlink fact's "this box may not be able to" caveat does not
+    /// apply here and this one has no escape hatch. Mutation-verified
+    /// against the ancestor walk.
+    /// </remarks>
+    [Fact]
+    public void AJunctionInsideTheVaultPointingOutsideIsRefused()
+    {
+        string outside = Path.Combine(
+            Path.GetTempPath(), $"slate-junction-outside-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outside);
+        try
+        {
+            // An ordinary media file, outside the vault.
+            File.WriteAllBytes(
+                Path.Combine(outside, "leaf.png"), [0x89, 0x50, 0x4E, 0x47]);
+
+            // A junction inside the vault pointing at it. No elevation,
+            // no Developer Mode — this is the whole point.
+            string junction = Path.Combine(_fixture.Root, "assets");
+            RunCommand($"mklink /J \"{junction}\" \"{outside}\"");
+            Assert.True(
+                Directory.Exists(junction) && File.Exists(Path.Combine(junction, "leaf.png")),
+                "the junction was not created, so the bypass went unchecked");
+
+            // In-vault by every lexical measure; outside it physically.
+            Assert.Null(
+                CanvasMediaPolicy.ResolveInsideVault(_fixture.Root, "assets/leaf.png"));
+
+            // ...while a real in-vault file under a real directory still
+            // opens, so the check is containment and not a blanket no.
+            string real = Path.Combine(_fixture.Root, "media");
+            Directory.CreateDirectory(real);
+            File.WriteAllBytes(Path.Combine(real, "ok.png"), [0x89, 0x50, 0x4E, 0x47]);
+            Assert.NotNull(
+                CanvasMediaPolicy.ResolveInsideVault(_fixture.Root, "media/ok.png"));
+        }
+        finally
+        {
+            try
+            {
+                // Remove the junction itself, never its target's contents.
+                string junction = Path.Combine(_fixture.Root, "assets");
+                if (Directory.Exists(junction))
+                {
+                    Directory.Delete(junction);
+                }
+                Directory.Delete(outside, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+        }
+    }
+
+    /// <summary>A nested junction — the target of a junction itself
+    /// under another — still resolves, because the walk substitutes the
+    /// deepest linked ancestor and starts again.</summary>
+    [Fact]
+    public void ANestedJunctionChainStillResolvesOutsideTheVault()
+    {
+        string outside = Path.Combine(
+            Path.GetTempPath(), $"slate-junction-nested-{Guid.NewGuid():N}");
+        string inner = Path.Combine(outside, "inner");
+        Directory.CreateDirectory(inner);
+        try
+        {
+            File.WriteAllBytes(
+                Path.Combine(inner, "leaf.png"), [0x89, 0x50, 0x4E, 0x47]);
+            string hop = Path.Combine(_fixture.Root, "hop");
+            RunCommand($"mklink /J \"{hop}\" \"{outside}\"");
+            Assert.True(Directory.Exists(hop), "the junction was not created");
+
+            Assert.Null(
+                CanvasMediaPolicy.ResolveInsideVault(_fixture.Root, "hop/inner/leaf.png"));
+        }
+        finally
+        {
+            try
+            {
+                string hop = Path.Combine(_fixture.Root, "hop");
+                if (Directory.Exists(hop))
+                {
+                    Directory.Delete(hop);
+                }
+                Directory.Delete(outside, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+        }
+    }
+
+    private static void RunCommand(string command)
+    {
+        using var process = System.Diagnostics.Process.Start(
+            new System.Diagnostics.ProcessStartInfo("cmd.exe", $"/c {command}")
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+            });
+        Assert.NotNull(process);
+        Assert.True(process!.WaitForExit(15_000), $"`{command}` did not finish");
+    }
+
+    /// <summary>
+    /// The dismissal routes (palette, search, properties, templates…)
+    /// fall back to the editor pane "rather than stranding focus on the
+    /// window root" — their own words. With a canvas tab active that
+    /// fallback must land on the outline row, not return bare.
+    /// </summary>
+    /// <remarks>
+    /// Driven at the workspace seam MainWindow's handler calls, since
+    /// MainWindow itself is not reachable from this project: the canvas
+    /// arm asks the document for a landing, and this asserts a bare
+    /// request with no other trigger delivers one.
+    /// </remarks>
+    [Fact]
+    public void ADismissalFallbackLandsOnTheCanvasRatherThanStranding() => RunSta(() =>
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        var surface = new CanvasSurfaceView { DataContext = tab, Model = document };
+        var elsewhere = new TextBox();
+        var panel = new StackPanel();
+        panel.Children.Add(elsewhere);
+        panel.Children.Add(surface);
+        using var host = Host(panel);
+
+        // A sheet had focus and is dismissing; focus is nowhere useful.
+        Assert.True(elsewhere.Focus());
+        Assert.Null(FocusedRow(host));
+
+        // What MainWindow's canvas arm does.
+        document.RequestFocusLanding(tab);
+        host.UpdateLayout();
+
+        Assert.Null(document.FocusRequest);
+        Assert.NotNull(FocusedRow(host));
+    });
+
+    /// <summary>
+    /// A rename opens the destination ONCE. The re-key loop's
+    /// <c>CanvasDocumentFor</c> loads on a miss, so an unconditional
+    /// reload after it read the file twice and spoke the degraded-load
+    /// sentence twice.
+    /// </summary>
+    [Fact]
+    public void ARenameOfADegradedCanvasAnnouncesTheLoadOnce()
+    {
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "renameme.canvas"),
+            File.ReadAllText(Path.Combine(_fixture.Root, "skipped.canvas")));
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("renameme.canvas");
+        CanvasDocumentViewModel before = Assert.IsType<CanvasDocumentViewModel>(
+            workspace.ActiveGroup.ActiveTab!.Canvas);
+        before.Announcer.FlushForTests();
+        Assert.Single(_announced);
+        _announced.Clear();
+
+        File.Move(
+            Path.Combine(_fixture.Root, "renameme.canvas"),
+            Path.Combine(_fixture.Root, "renamed-degraded.canvas"));
+        workspace.RetargetPath("renameme.canvas", "renamed-degraded.canvas");
+
+        CanvasDocumentViewModel after = Assert.IsType<CanvasDocumentViewModel>(
+            workspace.ActiveGroup.ActiveTab!.Canvas);
+        after.Announcer.FlushForTests();
+        Assert.Equal(CanvasLoadState.Ready, after.State);
+        // ONE open, one sentence.
+        Assert.Single(_announced);
     }
 
     // --- B5: the announcer is retired with its document --------------------

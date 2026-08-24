@@ -1494,15 +1494,22 @@ public partial class MainWindow : Window
         WorkspaceTabViewModel? activeTab = group.ActiveTab;
         // W6-1 PR A (contract A14): a canvas tab's focus belongs to the
         // canvas surface, which realizes an outline row and places focus
-        // there. This handler is queued at Input priority, i.e. it runs
-        // AFTER that delivery, and its fallbacks below (the TabItem, then
-        // the TabControl) would take focus straight back off the row —
-        // deterministically, every time. One authority per tab kind; the
-        // canvas surface has a landing place for every one of its states
-        // (a row, the onboarding region, or the failure banner), so
-        // standing aside here never leaves focus nowhere.
-        if (activeTab is { IsCanvas: true })
+        // there. The fallbacks below (the TabItem, then the TabControl)
+        // would take focus straight back off that row, and this handler
+        // is queued at Input priority — i.e. strictly AFTER the canvas
+        // delivery — so they would win deterministically.
+        //
+        // But it must not return BARE. Seven routes reach here as a
+        // last resort after a dismissal whose own comments say the
+        // fallback exists "rather than stranding focus on the window
+        // root" — the palette, search, properties and template sheets
+        // among them — and for those the canvas delivery has not been
+        // asked for at all. So the canvas arm ASKS: one authority per
+        // tab kind, and every route that wanted "put focus somewhere
+        // sensible" gets the outline row.
+        if (activeTab is { IsCanvas: true, Canvas: { } canvas })
         {
+            canvas.RequestFocusLanding(activeTab);
             return;
         }
         SlateTextEditor? editor = FindVisualDescendants<SlateTextEditor>(ContentPaneBorder)

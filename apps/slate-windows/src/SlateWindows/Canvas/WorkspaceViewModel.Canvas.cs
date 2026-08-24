@@ -174,6 +174,13 @@ internal sealed partial class WorkspaceViewModel
     /// </summary>
     private void RetargetCanvasDocuments(string source, string destination)
     {
+        // Whether a document is ALREADY open at the destination decides
+        // whether the reload below is redundant: the re-key loop's
+        // `CanvasDocumentFor` LOADS on a miss, so reloading after it
+        // would open the same file twice and speak the degraded-load
+        // sentence twice with it.
+        bool destinationWasOpen =
+            _canvasDocuments.ContainsKey(CanvasKey(destination));
         foreach (string oldKey in _canvasDocuments.Keys
             .Where(key => TryRetargetPath(
                 key[CanvasKeyPrefix.Length..], source, destination, out _))
@@ -197,15 +204,22 @@ internal sealed partial class WorkspaceViewModel
             }
         }
         // A rename lands NEW BYTES at the DESTINATION, and a document
-        // open there is now stale (W6-1 B3). Two shapes reach this:
-        // an atomic save (write `x.tmp`, rename it onto the open
+        // ALREADY open there is now stale (W6-1 B3). Two shapes reach
+        // this: an atomic save (write `x.tmp`, rename it onto the open
         // `board.canvas` — the source was never open, so the loop above
         // did nothing at all), and both-open, where the loop re-keyed
         // the source's tabs onto the destination's existing document
         // without re-reading it. Same answer for both, and it must come
         // AFTER the re-key so the surviving document is the one that
         // reloads.
-        ReloadCanvasDocumentAt(destination);
+        //
+        // A destination that was NOT open is skipped: the loop just
+        // constructed and loaded it, and loading again would re-read the
+        // file and announce the degraded-load sentence a second time.
+        if (destinationWasOpen)
+        {
+            ReloadCanvasDocumentAt(destination);
+        }
     }
 
     /// <summary>Vault close: every document holds the shared session and

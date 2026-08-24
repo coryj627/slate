@@ -138,13 +138,40 @@ internal static class CanvasMediaPolicy
     /// </summary>
     /// <remarks>
     /// <para>
-    /// A textual prefix check is not containment. A symlink, junction or
-    /// hardlink inside the vault can name a file anywhere on the disk,
-    /// and its path still starts with the vault root — so the link chain
-    /// is followed to its terminal target and it is the RESOLVED
-    /// identity that has to be inside the vault. `ResolveLinkTarget`
-    /// with `returnFinalTarget` walks the whole chain; a file that is
-    /// not a link resolves to itself.
+    /// A textual prefix check is not containment: a symlink or a
+    /// directory junction inside the vault names a file anywhere on the
+    /// disk while its path still starts with the vault root. Every
+    /// reparse point on the way — the leaf AND every ancestor directory
+    /// — is resolved, and it is the fully resolved identity that has to
+    /// be inside the resolved vault root.
+    /// </para>
+    /// <para>
+    /// <b>What this does not cover, stated rather than implied.</b>
+    /// HARDLINKS are invisible to it: a hardlink is a second directory
+    /// entry for the same file data, not a reparse point, so
+    /// <c>ResolveLinkTarget</c> returns null for one and there is no
+    /// "real" path to resolve to — the in-vault name IS a real name for
+    /// that file. An earlier version of this comment claimed hardlink
+    /// coverage; that was false. The residual is bounded by what a
+    /// hardlink can be: same volume only, no directories, and it must be
+    /// created by something that already has write access inside the
+    /// vault. What it cannot do is reach a file the vault's own
+    /// filesystem cannot reach, and the extension gate still applies to
+    /// the name being opened. Closing it needs file-identity comparison
+    /// (volume serial + file index) against a vault-wide enumeration,
+    /// which is a different and much more expensive check; recorded in
+    /// CD-38 as the accepted residual rather than pretended away.
+    /// </para>
+    /// <para>
+    /// Path comparison is ORDINAL while Windows paths are
+    /// case-insensitive, so a casing difference between the resolved
+    /// root and the resolved target refuses a file that is in fact
+    /// inside the vault. That is a false REFUSAL — the fail-closed
+    /// direction — and it is left as it is: both sides come from
+    /// <c>GetFullPath</c> over the same root, so it needs a filesystem
+    /// that reported two spellings, and admitting a case-insensitive
+    /// compare here would widen what reaches the shell to buy back a
+    /// case nobody has hit.
     /// </para>
     /// <para>
     /// Every failure mode is a refusal, including the ones the framework
@@ -166,25 +193,23 @@ internal static class CanvasMediaPolicy
             {
                 return null;
             }
-            string root = Path.TrimEndingDirectorySeparator(
-                Path.GetFullPath(vaultRoot));
+            string root = ResolveVaultRoot(vaultRoot);
             string absolute = Path.GetFullPath(Path.Combine(root, target));
-            var file = new FileInfo(absolute);
-            if (!file.Exists)
+            if (!File.Exists(absolute))
             {
                 return null;
             }
-            // The PHYSICAL identity: a link resolves to its terminal
-            // target, a plain file to itself.
-            string resolved = Path.GetFullPath(
-                file.ResolveLinkTarget(returnFinalTarget: true)?.FullName
-                ?? file.FullName);
+            if (ResolveUnderRoot(absolute, root) is not { } resolved)
+            {
+                return null;
+            }
             if (!resolved.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal))
             {
                 return null;
             }
-            // The resolved identity must still BE media: a `.png` that
-            // links to a `.exe` is the whole point of resolving.
+            // The RESOLVED identity must still be media: a `.png` whose
+            // link chain ends at an `.exe` is the case resolution exists
+            // for.
             return IsOpenableMedia(resolved) ? resolved : null;
         }
         catch (Exception exception) when (
@@ -195,6 +220,137 @@ internal static class CanvasMediaPolicy
             return null;
         }
     }
+
+    /// <summary>
+    /// The vault root's own final identity: the root may itself be a
+    /// link. Ancestors ABOVE it are deliberately not walked — every one
+    /// of them is shared with the target, so a link up there moves both
+    /// sides identically and cannot move a file out of the vault.
+    /// </summary>
+    /// <remarks>
+    /// Not walking them is also what keeps this off the volume root:
+    /// <c>ResolveLinkTarget</c> on <c>C:\</c> throws, and a version of
+    /// this that interrogated it refused every file in the vault. A
+    /// throw here degrades to the unresolved root rather than refusing,
+    /// because the root is the reference point both sides are measured
+    /// against — an attacker gains nothing from it.
+    /// </remarks>
+    private static string ResolveVaultRoot(string vaultRoot)
+    {
+        string current = Path.TrimEndingDirectorySeparator(Path.GetFullPath(vaultRoot));
+        for (int round = 0; round < ResolveRounds; round++)
+        {
+            FileSystemInfo? target;
+            try
+            {
+                target = new DirectoryInfo(current).ResolveLinkTarget(returnFinalTarget: true);
+            }
+            catch (IOException)
+            {
+                return current;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return current;
+            }
+            if (target is null)
+            {
+                return current;
+            }
+            string next = Path.TrimEndingDirectorySeparator(
+                Path.GetFullPath(target.FullName));
+            if (string.Equals(next, current, StringComparison.Ordinal))
+            {
+                return current;
+            }
+            current = next;
+        }
+        return current;
+    }
+
+    /// <summary>
+    /// The target's final identity, resolving the leaf and every
+    /// reparse point on the way down from <paramref name="root"/>. Null
+    /// when the chain cannot be resolved — fail closed.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Resolving only the leaf is not enough, and the gap is trivially
+    /// reachable: a DIRECTORY junction inside the vault whose target is
+    /// outside it, holding an ordinary `.png`. The leaf is not a link,
+    /// so <c>ResolveLinkTarget</c> answers null for it, and the lexical
+    /// path still begins with the vault root — the file opens. Junctions
+    /// need neither elevation nor Developer Mode (<c>mklink /J</c>), so
+    /// the "symlinks are privileged" argument never covered them.
+    /// </para>
+    /// <para>
+    /// Only ancestors strictly INSIDE the vault are interrogated: one
+    /// at or above the root is shared with the root itself and cannot
+    /// move anything out. The walk substitutes the deepest linked
+    /// ancestor and starts again, since a resolved target can sit under
+    /// another link; the round budget bounds a cycle. Any exception
+    /// inside the subtree is a refusal — this decides what reaches
+    /// <c>ShellExecute</c>.
+    /// </para>
+    /// </remarks>
+    private static string? ResolveUnderRoot(string absolute, string root)
+    {
+        string prefix = root + Path.DirectorySeparatorChar;
+        string current = Path.TrimEndingDirectorySeparator(Path.GetFullPath(absolute));
+        for (int round = 0; round < ResolveRounds; round++)
+        {
+            FileSystemInfo leaf = Directory.Exists(current)
+                ? new DirectoryInfo(current)
+                : new FileInfo(current);
+            if (leaf.ResolveLinkTarget(returnFinalTarget: true) is { } leafTarget)
+            {
+                string next = Path.TrimEndingDirectorySeparator(
+                    Path.GetFullPath(leafTarget.FullName));
+                if (string.Equals(next, current, StringComparison.Ordinal))
+                {
+                    return current;
+                }
+                current = next;
+                continue;
+            }
+
+            string? rewritten = null;
+            for (DirectoryInfo? ancestor = Directory.GetParent(current);
+                ancestor is not null;
+                ancestor = ancestor.Parent)
+            {
+                string ancestorPath = Path.TrimEndingDirectorySeparator(
+                    Path.GetFullPath(ancestor.FullName));
+                if (!ancestorPath.StartsWith(prefix, StringComparison.Ordinal))
+                {
+                    // At or outside the root: nothing above here can
+                    // move the target out of a vault it is measured
+                    // against with the same ancestors.
+                    break;
+                }
+                if (ancestor.ResolveLinkTarget(returnFinalTarget: true)
+                    is not { } ancestorTarget)
+                {
+                    continue;
+                }
+                rewritten = Path.TrimEndingDirectorySeparator(
+                    Path.GetFullPath(ancestorTarget.FullName))
+                    + current[ancestorPath.Length..];
+                break;
+            }
+            if (rewritten is null
+                || string.Equals(rewritten, current, StringComparison.Ordinal))
+            {
+                return current;
+            }
+            current = rewritten;
+        }
+        // A chain this deep is a cycle or an attack; fail closed.
+        return null;
+    }
+
+    /// <summary>Bounds a link cycle.</summary>
+    private const int ResolveRounds = 32;
 
     /// <summary>
     /// Core's <c>to_ascii_lowercase</c>, not .NET's

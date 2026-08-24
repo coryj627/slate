@@ -1307,13 +1307,20 @@ the sites and write the design.
    the previous code fell back to focusing the tree and returned success,
    so the request was consumed, the row was never read, and nothing
    retried. A failed delivery leaves the request pending.
-4. **One authority per tab kind.** `MainWindow.FocusEditorPane` returns
-   early for a canvas tab. It is queued at `Input` priority — strictly
-   after the canvas delivery — and its fallbacks (the `TabItem`, then
-   the `TabControl`) would take focus straight back off the row, every
-   time. The ordering is what makes this provable rather than a race:
-   the canvas delivers synchronously on the funnel call, the pane
-   handler runs later and declines. Standing aside is safe because the
+4. **One authority per tab kind.** `MainWindow.FocusEditorPane` hands a
+   canvas tab to the canvas delivery — it RAISES a focus request and
+   returns, rather than returning bare. Returning bare stranded the
+   seven dismissal routes that reach it as a last resort (the palette,
+   search, properties and template sheets among them), whose own
+   comments say the fallback exists "rather than stranding focus on the
+   window root"; for those the canvas delivery had not been asked for at
+   all. It still must not fall THROUGH: it is queued at `Input`
+   priority — strictly after the canvas delivery — and its fallbacks
+   (the `TabItem`, then the `TabControl`) would take focus straight back
+   off the row, every time. The ordering is what makes this provable
+   rather than a race: the canvas delivers synchronously on the funnel
+   call, the pane handler runs later and re-asks instead of competing.
+   Handing over is safe because the
    canvas surface has a landing place for **every** state — a realized
    row when Ready with rows, the onboarding region when Ready and empty,
    the (focusable) failure banner otherwise, and nothing at all while
@@ -2528,13 +2535,58 @@ set — core's `media_class` decides the label"), so PR E exports it,
 deletes this copy, and retires the pin above with it.
 
 **Containment is PHYSICAL, and the whole decision fails closed.** A
-textual prefix check is not containment: a symlink, junction or hardlink
-inside the vault can name a file anywhere on the disk and its path still
-starts with the vault root. `ResolveInsideVault` follows the link chain
-to its terminal target (`FileInfo.ResolveLinkTarget(returnFinalTarget)`)
-and requires the RESOLVED identity to be inside the root — and re-checks
-that the resolved name is still media, because a `.png` that links to a
-`.exe` is the case the resolution exists for. The whole closure is
+textual prefix check is not containment: a symlink or a directory
+junction inside the vault names a file anywhere on the disk while its
+path still starts with the vault root. `ResolveInsideVault` resolves
+EVERY reparse point on the way — the leaf and every ancestor directory,
+substituting the deepest linked ancestor and starting again, with a
+round budget bounding a cycle — and requires the fully resolved identity
+to be inside the resolved vault root. It re-checks that the resolved
+name is still media, because a `.png` whose chain ends at an `.exe` is
+the case resolution exists for.
+
+**Leaf-only resolution was not enough, and the gap was demonstrated.**
+The first cut resolved the leaf. A DIRECTORY junction inside the vault
+pointing outside it, holding an ordinary `.png`, defeats that
+completely: the leaf is not a link, so `ResolveLinkTarget` answers null,
+the lexical path still begins with the vault root, and the file opens.
+Junctions need neither elevation nor Developer Mode (`mklink /J`), so
+the "symlinks are privileged" mitigation never applied to them.
+`AJunctionInsideTheVaultPointingOutsideIsRefused` builds exactly that
+construction (`mklink /J`, no elevation) and
+`ANestedJunctionChainStillResolvesOutsideTheVault` the nested one; both
+are mutation-verified against the ancestor walk.
+
+**Only ancestors strictly INSIDE the vault are interrogated**, and that
+is a correctness point rather than an optimisation: an ancestor at or
+above the root is shared with the root itself, so a link up there moves
+both sides of the comparison identically and cannot move a file out of
+the vault. It is also what keeps the walk off the volume root —
+`ResolveLinkTarget` throws on `C:\`, and the first cut of this walk did
+interrogate it, so the outer fail-closed handler refused **every** file
+in the vault. The root's own resolution degrades to the unresolved root
+on a throw (it is the reference point, not an input); anything that
+throws inside the subtree refuses.
+
+**Hardlinks are NOT covered, and the earlier claim that they were is
+withdrawn.** A hardlink is a second directory entry for the same file
+data, not a reparse point: `ResolveLinkTarget` returns null for one and
+there is no "real" path to resolve to — the in-vault name IS a real name
+for that file. The residual is bounded by what a hardlink can be: same
+volume only, never a directory, and it must be created by something that
+already has write access inside the vault. What it cannot do is reach a
+file the vault's own filesystem cannot reach, and the extension gate
+still applies to the name being opened. Closing it needs file-identity
+comparison (volume serial + file index) against a vault-wide
+enumeration, which is a different and far more expensive check. Recorded
+as the accepted residual rather than pretended away.
+
+**Path comparison is ordinal on a case-insensitive filesystem**, so a
+casing difference between the resolved root and the resolved target
+refuses a file that is in fact inside the vault. That is a false
+REFUSAL — the fail-closed direction — and it stands: both sides come
+from `GetFullPath` over the same root, and a case-insensitive compare
+would widen what reaches the shell to buy back a case nobody has hit. The whole closure is
 wrapped: a NUL character in the target, a reserved device name, a path
 too long, a link cycle, a permission error reading the link — every one
 of them throws somewhere in that path, and an exception escaping into
@@ -3336,6 +3388,28 @@ failed.
   so an unaddressed call is a compile error rather than a convention —
   which is what turned the defect up in the first place, since removing
   the default broke exactly that one call site.
+
+**Fix round 6 (scoped re-review).** B4 was half-fixed and the round-5
+focus fix carried a regression.
+
+- **Leaf-only resolution was bypassed empirically**: a directory
+  junction inside the vault with an ordinary `.png` leaf. Junctions need
+  no elevation, so the privilege argument never covered them. The walk
+  resolves the whole chain now, bounded to the vault subtree — and the
+  first attempt at that bound refused everything, because interrogating
+  `C:\` throws and the fail-closed handler caught it. Both the bypass
+  and the over-refusal are pinned.
+- **The hardlink claim was false** and is withdrawn with the residual
+  stated rather than implied.
+- **The canvas early return stranded focus.** Seven dismissal routes
+  reach `FocusEditorPane` as a last resort — their own comments say the
+  fallback exists "rather than stranding focus on the window root" — and
+  a bare return left them with nowhere. The canvas arm RAISES a request
+  instead, so every route lands on the outline row.
+- **The rename double-loaded**: the re-key's `CanvasDocumentFor` loads
+  on a miss and the unconditional reload after it read the file again,
+  speaking the degraded-load sentence twice. The reload is now skipped
+  when the re-key just created the document.
 
 - Two contract amendments from round 2 (A13's routing, A14's trigger)
   were **lost when their edit script aborted on a later assertion** and
