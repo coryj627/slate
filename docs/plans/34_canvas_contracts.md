@@ -1292,8 +1292,13 @@ the sites and write the design.
    superseded request cannot clear a live one.
 2. **Every surface retries on every condition that can change the
    answer**: the model changing, a publish landing, the view loading,
-   the view becoming visible, the request being raised, and the tree
-   realizing containers. None of these is "the" moment — assuming one
+   the view becoming visible, the request being raised, the tree
+   realizing containers, and — B2 — the presenter REBINDING its
+   `DataContext`. That last one is not covered by the model changing: two
+   panes on a path share one document, so a presenter swapped from tab A
+   to tab B keeps an identical `Model` reference and `OnModelChanged`
+   never fires, yet a request addressed to B must now deliver.
+   `ARequestDeliversWhenThePresenterRebindsToItsOwner` pins it. None of these is "the" moment — assuming one
    was is what the edge design got wrong — so each simply asks again.
    A surface whose `DataContext` is not the request's owner ignores it,
    which is what stops one document's request landing in every pane
@@ -1344,7 +1349,13 @@ failure. `OpeningACanvasInOnePaneNeverLandsFocusInAnother` pins the
 addressing, `AnEmptyCanvasLandsFocusOnTheOnboardingRegion` and
 `TheFailureBannerIsAFocusableRegion` the non-Ready landings, and
 `TheEditorPaneFocusFallbackStandsAsideForACanvasTab` pins point 4 in the
-source, because no in-process fact can reach `MainWindow`.
+source, because no in-process fact can reach `MainWindow` — and it is
+TWO-SIDED (fix round 7, Major-2): it asserts both the early return AND
+that the canvas arm RAISES `RequestFocusLanding`, because a one-sided
+"it returns" went green while the raise was missing and the seven
+dismissal routes stranded. The delivery half a raised request relies on
+is a separate fact, `ABareFocusRequestDeliversWithoutAnyOtherTrigger`,
+so neither supplies the other's mechanism.
 **Mutation-verified**: removing the funnel's canvas request fails three
 of them; restoring the tree-focus fallback fails the realization fact;
 deleting MainWindow's early return fails the source guard.
@@ -2534,66 +2545,94 @@ its own reasons (the spec's Add Media row — "media kinds by extension
 set — core's `media_class` decides the label"), so PR E exports it,
 deletes this copy, and retires the pin above with it.
 
-**Containment is PHYSICAL, and the whole decision fails closed.** A
-textual prefix check is not containment: a symlink or a directory
-junction inside the vault names a file anywhere on the disk while its
-path still starts with the vault root. `ResolveInsideVault` resolves
-EVERY reparse point on the way — the leaf and every ancestor directory,
-substituting the deepest linked ancestor and starting again, with a
-round budget bounding a cycle — and requires the fully resolved identity
-to be inside the resolved vault root. It re-checks that the resolved
-name is still media, because a `.png` whose chain ends at an `.exe` is
-the case resolution exists for.
+**Containment is PHYSICAL and TOCTOU-narrowed, and the whole decision
+fails closed.** A textual prefix check is not containment: a symlink or
+a directory junction inside the vault names a file anywhere on the disk
+while its path still starts with the vault root. Resolution goes through
+an OPENED HANDLE — `CreateFile` with `FILE_FLAG_BACKUP_SEMANTICS`, then
+`GetFinalPathNameByHandle` — which is the OS's own resolution of every
+reparse point on the way (leaf and every ancestor), not a hand-rolled
+ancestor walk; the earlier walk was a correct-enough approximation of
+exactly this call and is replaced by it. The fully-resolved terminal
+identity must be inside the resolved vault root and must still be media,
+because a `.png` whose chain ends at an `.exe` is the case resolution
+exists for.
 
-**Leaf-only resolution was not enough, and the gap was demonstrated.**
-The first cut resolved the leaf. A DIRECTORY junction inside the vault
-pointing outside it, holding an ordinary `.png`, defeats that
-completely: the leaf is not a link, so `ResolveLinkTarget` answers null,
-the lexical path still begins with the vault root, and the file opens.
-Junctions need neither elevation nor Developer Mode (`mklink /J`), so
-the "symlinks are privileged" mitigation never applied to them.
-`AJunctionInsideTheVaultPointingOutsideIsRefused` builds exactly that
-construction (`mklink /J`, no elevation) and
-`ANestedJunctionChainStillResolvesOutsideTheVault` the nested one; both
-are mutation-verified against the ancestor walk.
+**The TOCTOU window, narrowed and its residual recorded (B1).** The
+threat model is precise: an untrusted sync peer with write access inside
+the vault, racing the local click. The naive gate resolved a path
+*string* and handed the vault-relative path to `ShellExecute`, which
+re-opens by path and re-resolves the namespace from scratch — so the
+peer could swap a checked in-vault directory for an outward junction in
+between and the shell would follow the swap. Two things shrink the
+window to near-zero: the path handed to the launcher is the
+handle-resolved TERMINAL path, so `ShellExecute`'s own re-resolution has
+no reparse point left in it that the click named; and containment is
+RE-checked by re-resolving the named path immediately before the launch,
+nothing between that check and `Process.Start`. A swap in that window
+changes the re-resolution and the launch is refused —
+`ASwapInTheTocTouWindowIsCaughtByRevalidation` drives exactly that
+through a test seam and is mutation-verified against the revalidation;
+`TheLaunchedPathIsTheFullyResolvedTerminalIdentity` pins that the
+launched path is the resolved one.
 
-**Only ancestors strictly INSIDE the vault are interrogated**, and that
-is a correctness point rather than an optimisation: an ancestor at or
-above the root is shared with the root itself, so a link up there moves
-both sides of the comparison identically and cannot move a file out of
-the vault. It is also what keeps the walk off the volume root —
-`ResolveLinkTarget` throws on `C:\`, and the first cut of this walk did
-interrogate it, so the outer fail-closed handler refused **every** file
-in the vault. The root's own resolution degrades to the unresolved root
-on a throw (it is the reference point, not an input); anything that
-throws inside the subtree refuses.
+**The irreducible residual, stated rather than pretended closed.** The
+sub-instruction gap between that final re-resolution and `ShellExecute`'s
+own resolution cannot be closed with a path-taking launcher:
+`ShellExecute` takes a path, not a handle, and will resolve it itself.
+Closing it needs a launcher that acts on the OPEN HANDLE (a handle-based
+verb invocation), which is a different shell API and a larger change;
+recorded as the future-work shape. The precondition is hostile in-vault
+write access — the same peer the whole gate defends against — and the
+mitigation above makes the exploit a sub-millisecond race against an
+already-resolved path.
+
+**Junctions, pinned.** `AJunctionInsideTheVaultPointingOutsideIsRefused`
+builds the reviewer's construction (`mklink /J`, no elevation, a plain
+`.png` leaf) and `ANestedJunctionChainStillResolvesOutsideTheVault` the
+nested one; both are mutation-verified against the handle resolution.
+
+**Drive-root vaults open their media (Major-1).** A vault whose root IS
+a drive root (`C:\`, or a mounted/SUBST'd letter) refused EVERY media
+file, because containment built a `root + separator` prefix — `C:\\` —
+that no in-vault path starts with. `IsInsideRoot` uses
+`Path.GetRelativePath` now, which treats a drive root correctly and is
+case-insensitive on Windows: inside is a relative result that is not
+`.`, does not escape with `..`, and is not rooted (a rooted result means
+another volume). `ContainmentTreatsTheDriveRootCorrectly` pins nine
+cases including both drive-root ones and is mutation-verified.
 
 **Hardlinks are NOT covered, and the earlier claim that they were is
 withdrawn.** A hardlink is a second directory entry for the same file
-data, not a reparse point: `ResolveLinkTarget` returns null for one and
-there is no "real" path to resolve to — the in-vault name IS a real name
-for that file. The residual is bounded by what a hardlink can be: same
-volume only, never a directory, and it must be created by something that
-already has write access inside the vault. What it cannot do is reach a
-file the vault's own filesystem cannot reach, and the extension gate
-still applies to the name being opened. Closing it needs file-identity
-comparison (volume serial + file index) against a vault-wide
-enumeration, which is a different and far more expensive check. Recorded
-as the accepted residual rather than pretended away.
+data, not a reparse point: it has no "real" path to resolve to — the
+in-vault name IS a real name for that file. The residual is bounded by
+what a hardlink can be: same volume only, never a directory, and it must
+be created by something that already has write access inside the vault.
+What it cannot do is reach a file the vault's own filesystem cannot
+reach, and the extension gate still applies to the name being opened.
+Closing it needs file-identity comparison (volume serial + file index)
+against a vault-wide enumeration, a different and far more expensive
+check. Accepted residual.
 
-**Path comparison is ordinal on a case-insensitive filesystem**, so a
-casing difference between the resolved root and the resolved target
-refuses a file that is in fact inside the vault. That is a false
-REFUSAL — the fail-closed direction — and it stands: both sides come
-from `GetFullPath` over the same root, and a case-insensitive compare
-would widen what reaches the shell to buy back a case nobody has hit. The whole closure is
-wrapped: a NUL character in the target, a reserved device name, a path
-too long, a link cycle, a permission error reading the link — every one
-of them throws somewhere in that path, and an exception escaping into
-the activation would abort it silently rather than refuse it audibly.
-Any failure at all answers "no". Pinned by
+**Two more residuals codex verified, recorded.** An alternate-data-stream
+syntax leaf (`photo.png:stream`) can satisfy the extension gate — the
+extension is read off the part before the colon — but codex found no
+boundary-escape or execution path through it (the resolved terminal path
+is still the in-vault base file, and the stream name rides along to a
+shell that opens that base file); recorded as a policy residual, not a
+hole. UNC and the `\\?\` / `\\.\` device-namespace forms were verified to
+FAIL CLOSED: `GetFinalPathNameByHandle` returns the `\\?\UNC\` form, which
+the local-vault containment check refuses, and a device path does not
+resolve to a file under the root. That property is noted so a later
+change does not quietly regress it.
+
+**Every failure mode is a refusal** — a NUL character, a reserved device
+name, a path too long, a link cycle, a permission error — because an
+exception escaping into the activation would abort it silently rather
+than refuse it audibly; the whole closure is wrapped and any failure
+answers "no". Pinned by
 `AnInVaultSymlinkPointingOutsideTheVaultIsRefused` (which FAILS rather
-than skipping when the box cannot make symlinks, so the arm is never
+than skips when the box cannot make symlinks, so the arm is never
 silently unchecked) and `AMalformedMediaTargetIsRefusedRatherThanThrown`
 over six hostile shapes, with `AMalformedMediaTargetRefusesAudibly` for
 the never-silent half.
@@ -3591,3 +3630,48 @@ tree-focus fallback fails the realization fact; deleting MainWindow's
 early return fails the source guard; dropping the announcer's
 shut-down flag fails the late-post half of the lifecycle fact; deleting
 the media gate opens an `.exe`.
+
+### PR A — Codex adversarial round 2 — NOT SAFE, 2 blockers + 2 majors
+
+All four valid; none re-opened a design, so point fixes (the focus
+design pass held — codex found no new instance of the delivery class,
+which was round 1's rule-4 subject).
+
+- **B1 (TOCTOU in the media gate).** The gate resolved a path string and
+  `ShellExecute` re-resolved the namespace later, so an in-vault-write
+  attacker — exactly this gate's threat model — could swap a checked
+  directory for an outward junction in between. Narrowed both ways the
+  ruling named: resolution is through an OPENED HANDLE
+  (`GetFinalPathNameByHandle`) and the launcher is handed the
+  fully-resolved terminal path, and containment is revalidated
+  immediately before `Process.Start` with nothing in between. The
+  irreducible residual (a path-taking launcher re-resolves; closing it
+  needs a handle-based launcher) is recorded in CD-38 with its
+  precondition and future-work shape — the same claims-match-powers
+  doctrine as the hardlink residual. The handle resolution also replaced
+  the hand-rolled ancestor walk, which was an approximation of exactly
+  that call.
+- **B2 (focus retry incomplete under DataContext churn).**
+  `DataContextChanged` joins the retry triggers: a presenter rebinding
+  A→B with an identical shared `Model` never fired `OnModelChanged`, so a
+  request for B stranded. Pinned.
+- **Major-1 (drive-root vault rejected all media).** The `root +
+  separator` containment prefix produced `C:\` for a drive-root vault.
+  Replaced with `GetRelativePath`, which is root- and case-correct;
+  pinned by a nine-case predicate theory, mutation-verified. (The
+  end-to-end SUBST route could not test it — `GetFinalPathNameByHandle`
+  collapses a SUBST drive to its real path — so the predicate is tested
+  directly, which is the honest discriminating shape.)
+- **Major-2 (round-6 guard false-green, the supplies-its-own-mechanism
+  class a THIRD time).** The dismissal fact called `RequestFocusLanding`
+  itself and never touched MainWindow's arm; the census proved only the
+  early return. The census is two-sided now — early return AND the raise
+  — and mutation-fails when the raise is removed with the bare return
+  left; the delivery half is a separate fact. This class has now appeared
+  in rounds 4, 5 and 6/7; the standing rule for the rest of the series:
+  a guard may not exercise the mechanism it is guarding, and where the
+  production seam is unreachable in-process it is pinned two-sided in the
+  source.
+- **Residuals recorded** (codex-verified, not holes): an ADS-syntax leaf
+  satisfies the extension gate with no escape/execution path found; UNC
+  and device-namespace forms fail closed. Both in CD-38.

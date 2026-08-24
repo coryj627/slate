@@ -2365,19 +2365,182 @@ public sealed class CanvasDocumentTests : IDisposable
     }
 
     /// <summary>
-    /// The dismissal routes (palette, search, properties, templates…)
-    /// fall back to the editor pane "rather than stranding focus on the
-    /// window root" — their own words. With a canvas tab active that
-    /// fallback must land on the outline row, not return bare.
+    /// B1 — the revalidation catches a namespace swap in the TOCTOU
+    /// window. The gate resolves the target, then an attacker (the test
+    /// seam, standing in for a hostile in-vault sync peer) swaps the
+    /// checked directory for an outward junction; the immediate
+    /// re-resolution before launch sees the change and refuses.
     /// </summary>
     /// <remarks>
-    /// Driven at the workspace seam MainWindow's handler calls, since
-    /// MainWindow itself is not reachable from this project: the canvas
-    /// arm asks the document for a landing, and this asserts a bare
-    /// request with no other trigger delivers one.
+    /// Mutation-verified: removing the revalidation launches the swapped
+    /// target. This does not close the residual — the sub-instruction
+    /// gap between the final check and ShellExecute's own resolution is
+    /// irreducible with a path-taking launcher (CD-38) — it shrinks the
+    /// window to near-zero and proves the shrink.
     /// </remarks>
     [Fact]
-    public void ADismissalFallbackLandsOnTheCanvasRatherThanStranding() => RunSta(() =>
+    public void ASwapInTheTocTouWindowIsCaughtByRevalidation()
+    {
+        string outside = Path.Combine(
+            Path.GetTempPath(), $"slate-toctou-outside-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outside);
+        File.WriteAllBytes(Path.Combine(outside, "evil.png"), [0x89, 0x50, 0x4E, 0x47]);
+        string safe = Path.Combine(_fixture.Root, "safe");
+        Directory.CreateDirectory(safe);
+        File.WriteAllBytes(Path.Combine(safe, "ok.png"), [0x89, 0x50, 0x4E, 0x47]);
+        // The click names a plain in-vault directory: `real/ok.png`.
+        string real = Path.Combine(_fixture.Root, "real");
+        Directory.CreateDirectory(real);
+        File.WriteAllBytes(Path.Combine(real, "ok.png"), [0x89, 0x50, 0x4E, 0x47]);
+
+        var launched = new List<string>();
+        try
+        {
+            // In the window, swap `real` (a real directory, checked and
+            // valid) for a junction pointing outside the vault.
+            CanvasMediaPolicy.BetweenCheckAndLaunchForTests = () =>
+            {
+                Directory.Delete(real, recursive: true);
+                RunCommand($"mklink /J \"{real}\" \"{outside}\"");
+            };
+            bool opened = CanvasMediaPolicy.OpenMediaInVault(
+                _fixture.Root, "real/ok.png", target =>
+                {
+                    launched.Add(target);
+                    return true;
+                });
+
+            Assert.False(opened, "the swapped target was launched");
+            Assert.Empty(launched);
+        }
+        finally
+        {
+            CanvasMediaPolicy.BetweenCheckAndLaunchForTests = null;
+            try
+            {
+                if (Directory.Exists(real)
+                    && new DirectoryInfo(real).LinkTarget is not null)
+                {
+                    Directory.Delete(real);
+                }
+                Directory.Delete(outside, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+        }
+    }
+
+    /// <summary>
+    /// And without a swap, the gate launches the FULLY-RESOLVED terminal
+    /// path — not the vault-relative one the click named — so
+    /// ShellExecute's own re-resolution has no reparse point left to
+    /// redirect.
+    /// </summary>
+    [Fact]
+    public void TheLaunchedPathIsTheFullyResolvedTerminalIdentity()
+    {
+        string real = Path.Combine(_fixture.Root, "pics");
+        Directory.CreateDirectory(real);
+        File.WriteAllBytes(Path.Combine(real, "photo.png"), [0x89, 0x50, 0x4E, 0x47]);
+
+        string? handed = null;
+        bool opened = CanvasMediaPolicy.OpenMediaInVault(
+            _fixture.Root, "pics/photo.png", target =>
+            {
+                handed = target;
+                return true;
+            });
+
+        Assert.True(opened);
+        Assert.NotNull(handed);
+        // A fully-qualified path, and one that actually points at the
+        // file (GetFinalPathNameByHandle, prefix stripped).
+        Assert.True(Path.IsPathFullyQualified(handed!));
+        Assert.True(File.Exists(handed));
+        Assert.EndsWith("photo.png", handed, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Major-1: a vault whose root IS a drive root (C:\) refused EVERY
+    /// media file, because the containment prefix was built as
+    /// root + separator unconditionally — C:\\ — which no in-vault path
+    /// starts with. A drive-root vault is a real configuration (a mounted
+    /// volume, or a SUBST'd letter, opened as the vault).
+    /// </summary>
+    /// <remarks>
+    /// Tests the containment PREDICATE directly, with genuine drive-root
+    /// strings: GetFinalPathNameByHandle collapses a SUBST drive to its
+    /// underlying real path, so an end-to-end SUBST fact never exercises
+    /// the drive-root branch at all. Mutation-verified against the
+    /// corrected prefix.
+    /// </remarks>
+    [Theory]
+    [InlineData(@"C:\photo.png", @"C:\", true)]
+    [InlineData(@"C:\sub\photo.png", @"C:\", true)]
+    [InlineData(@"C:\vault\photo.png", @"C:\vault", true)]
+    [InlineData(@"C:\vault\deep\photo.png", @"C:\vault\", true)]
+    [InlineData(@"C:\", @"C:\", false)]
+    [InlineData(@"C:\vault", @"C:\vault", false)]
+    [InlineData(@"C:\other\photo.png", @"C:\vault", false)]
+    [InlineData(@"C:\vaultmore\photo.png", @"C:\vault", false)]
+    [InlineData(@"c:\VAULT\Photo.PNG", @"C:\vault", true)]
+    public void ContainmentTreatsTheDriveRootCorrectly(string path, string root, bool inside) =>
+        Assert.Equal(inside, CanvasMediaPolicy.IsInsideRoot(path, root));
+
+    /// <summary>
+    /// B2 — a request for owner B strands when the presenter rebinds
+    /// A→B while the Model is IDENTICAL (both panes share one document),
+    /// because OnModelChanged does not fire. The DataContextChanged
+    /// trigger delivers it.
+    /// </summary>
+    [Fact]
+    public void ARequestDeliversWhenThePresenterRebindsToItsOwner() => RunSta(() =>
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel paneA =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        ((System.Windows.Input.ICommand)workspace.SplitRightCommand).Execute(null);
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel paneB =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        // One document, two owners — the churn shape.
+        Assert.Same(paneA.Canvas, paneB.Canvas);
+
+        // A presenter mounted on A, then rebound to B: the Model
+        // reference never changes, only the DataContext.
+        var surface = new CanvasSurfaceView { DataContext = paneA, Model = paneA.Canvas };
+        using var host = Host(surface);
+
+        paneB.Canvas!.RequestFocusLanding(paneB);
+        Assert.NotNull(paneB.Canvas.FocusRequest);
+
+        surface.DataContext = paneB;
+        host.UpdateLayout();
+
+        // The rebind delivered B's request.
+        Assert.Null(paneB.Canvas.FocusRequest);
+        Assert.NotNull(FocusedRow(host));
+    });
+
+    /// <summary>
+    /// The DELIVERY half of the dismissal-fallback story: a bare focus
+    /// request — no publish, no open, no other trigger, exactly what
+    /// MainWindow's canvas arm raises — lands on the outline row.
+    /// </summary>
+    /// <remarks>
+    /// This does NOT exercise MainWindow's arm (that is not reachable
+    /// in-process); it proves the thing the arm relies on. That the arm
+    /// actually RAISES the request — and does not merely return bare — is
+    /// the two-sided source census
+    /// `TheEditorPaneFocusFallbackStandsAsideForACanvasTab`, which
+    /// mutation-fails when the raise is removed. Split this way on
+    /// purpose: an earlier single fact called `RequestFocusLanding`
+    /// itself and so proved nothing about the arm at all (Major-2).
+    /// </remarks>
+    [Fact]
+    public void ABareFocusRequestDeliversWithoutAnyOtherTrigger() => RunSta(() =>
     {
         using WorkspaceViewModel workspace = NewWorkspace();
         workspace.OpenPath("board.canvas");

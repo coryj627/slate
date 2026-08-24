@@ -224,6 +224,26 @@ public sealed class CanvasAnnouncerCensus
             guard!.Statement.DescendantNodesAndSelf().OfType<ReturnStatementSyntax>().Any(),
             "the canvas arm of FocusEditorPane must RETURN — falling through would "
             + "reach the TabItem fallback anyway.");
+        // TWO-SIDED (Major-2): a BARE return stands aside AND strands the
+        // seven dismissal routes that reach FocusEditorPane as their
+        // last resort. The canvas arm must also RAISE the focus request,
+        // so those routes land on the outline row. MainWindow is not
+        // reachable in-process, so this is asserted in the source; the
+        // one-sided version (return only) went green while the raise was
+        // missing, which is the supplies-its-own-mechanism class a third
+        // time.
+        Assert.True(
+            guard.Statement.DescendantNodesAndSelf()
+                .OfType<InvocationExpressionSyntax>()
+                .Any(invocation => invocation.Expression
+                    is MemberAccessExpressionSyntax
+                {
+                    Name.Identifier.ValueText: "RequestFocusLanding",
+                }),
+            "the canvas arm of FocusEditorPane must RAISE a focus request "
+            + "(`canvas.RequestFocusLanding(activeTab)`), or the palette/search/"
+            + "properties/template dismissal routes strand focus on the window "
+            + "root — the very thing their own fallback comment exists to prevent.");
         // And it has to come before the fallbacks it is protecting the
         // canvas from, not after them.
         Assert.True(

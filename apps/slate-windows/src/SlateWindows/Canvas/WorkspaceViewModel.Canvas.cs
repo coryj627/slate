@@ -89,13 +89,14 @@ internal sealed partial class WorkspaceViewModel
         };
         document.OpenExternalLinkFromSurface = target => _externalOpener(target);
         // The media hand-off (contract A13/CD-38): the document holds a
-        // VAULT-RELATIVE target and the workspace owns the root, so the
-        // absolute path is composed exactly here. Containment is checked
-        // against the PHYSICAL identity and the whole thing fails
-        // closed — see CanvasMediaPolicy.ResolveInsideVault.
+        // VAULT-RELATIVE target and the workspace owns the root. The
+        // policy resolves the target through an OPENED HANDLE,
+        // revalidates containment immediately before the launch, and
+        // hands `_externalOpener` the fully-resolved terminal path — so
+        // ShellExecute's own re-resolution has no reparse point left to
+        // redirect. Fail closed; the TOCTOU residual is CD-38.
         document.OpenMediaCardFromSurface = target =>
-            CanvasMediaPolicy.ResolveInsideVault(_vaultRoot, target) is { } absolute
-            && _externalOpener(absolute);
+            CanvasMediaPolicy.OpenMediaInVault(_vaultRoot, target, _externalOpener);
         // Contract A15: the persisted token follows the shared surface
         // for EVERY tab on this path, since they share the document.
         document.SurfaceChanged += (sender, surface) =>

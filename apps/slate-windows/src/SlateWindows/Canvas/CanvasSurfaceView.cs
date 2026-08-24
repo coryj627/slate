@@ -141,6 +141,12 @@ internal sealed class CanvasSurfaceView : UserControl
         // Every condition that can turn a pending request deliverable.
         Loaded += (_, _) => TryDeliverFocus();
         IsVisibleChanged += (_, _) => TryDeliverFocus();
+        // The presenter rebinding this surface from tab A to tab B while
+        // the Model stays identical (both panes share one document) is
+        // NOT caught by OnModelChanged — the model did not change — so a
+        // request addressed to B would strand. DataContext IS the owner
+        // key, so a change to it is exactly the moment to re-ask (B2).
+        DataContextChanged += (_, _) => TryDeliverFocus();
         _outline.ContainersRealized += TryDeliverFocus;
 
         var layout = new DockPanel();
