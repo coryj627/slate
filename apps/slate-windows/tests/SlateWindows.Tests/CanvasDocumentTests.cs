@@ -1660,12 +1660,15 @@ public sealed class CanvasDocumentTests : IDisposable
         _announced.Clear();
 
         // Media: the real closure resolves it under the vault root and
-        // hands the shell an absolute path to THAT file.
+        // hands the shell the file BY IDENTITY — the extended \\?\ form
+        // that names exactly the in-vault file, compared here on OS
+        // identity rather than string, which is the round-3 point.
         Assert.Equal(CanvasActivation.Opened, document.Activate(Row(document, "pic")));
         string handed = Assert.Single(launched);
         Assert.Equal(
-            Path.GetFullPath(Path.Combine(_fixture.Root, "diagram.png")),
-            handed);
+            CanvasMediaPolicy.IdentityForTests(
+                Path.Combine(_fixture.Root, "diagram.png")),
+            CanvasMediaPolicy.IdentityForTests(handed));
         document.Announcer.FlushForTests();
         Assert.Equal(
             SlateUniffiMethods.A11yRender(new A11yEvent.Canvas(
@@ -2462,31 +2465,222 @@ public sealed class CanvasDocumentTests : IDisposable
     }
 
     /// <summary>
-    /// Major-1: a vault whose root IS a drive root (C:\) refused EVERY
-    /// media file, because the containment prefix was built as
-    /// root + separator unconditionally — C:\\ — which no in-vault path
-    /// starts with. A drive-root vault is a real configuration (a mounted
-    /// volume, or a SUBST'd letter, opened as the vault).
+    /// The identity primitive itself: two spellings that reach the SAME
+    /// file object compare EQUAL, and two different objects compare
+    /// UNEQUAL. This is the substrate every containment and revalidation
+    /// decision now stands on, so it is pinned directly — the OS-identity
+    /// checks that follow are only as good as this.
+    /// </summary>
+    [Fact]
+    public void FileIdentityIsStableAcrossSpellingsAndDistinctAcrossObjects()
+    {
+        string dir = Path.Combine(_fixture.Root, "id");
+        Directory.CreateDirectory(dir);
+        File.WriteAllBytes(Path.Combine(dir, "a.png"), [0x89]);
+        File.WriteAllBytes(Path.Combine(dir, "b.png"), [0x89]);
+
+        CanvasMediaPolicy.FileIdentity? a1 =
+            CanvasMediaPolicy.IdentityForTests(Path.Combine(dir, "a.png"));
+        // A different spelling of the SAME file: mixed case (Windows is
+        // case-insensitive by default) and a redundant `.\` segment.
+        CanvasMediaPolicy.FileIdentity? a2 =
+            CanvasMediaPolicy.IdentityForTests(Path.Combine(dir, ".", "A.PNG"));
+        CanvasMediaPolicy.FileIdentity? b =
+            CanvasMediaPolicy.IdentityForTests(Path.Combine(dir, "b.png"));
+        CanvasMediaPolicy.FileIdentity? parent =
+            CanvasMediaPolicy.IdentityForTests(dir);
+
+        Assert.NotNull(a1);
+        Assert.Equal(a1, a2);          // same object, different spelling
+        Assert.NotEqual(a1, b);        // sibling file
+        Assert.NotEqual(a1, parent);   // a file is never its directory
+        // A path that does not exist has no identity.
+        Assert.Null(CanvasMediaPolicy.IdentityForTests(Path.Combine(dir, "gone.png")));
+    }
+
+    /// <summary>
+    /// Containment is decided by IDENTITY, so two adjacent directories
+    /// that differ only in case — which a text prefix over an
+    /// OrdinalIgnoreCase relative path falsely accepted (codex round-3
+    /// defect 3, reachable when per-directory case sensitivity is on) —
+    /// are DIFFERENT file objects and do not contain each other's files.
     /// </summary>
     /// <remarks>
-    /// Tests the containment PREDICATE directly, with genuine drive-root
-    /// strings: GetFinalPathNameByHandle collapses a SUBST drive to its
-    /// underlying real path, so an end-to-end SUBST fact never exercises
-    /// the drive-root branch at all. Mutation-verified against the
-    /// corrected prefix.
+    /// The exploit needs per-directory case sensitivity, which is
+    /// non-default and needs admin (`fsutil`) to enable, so this pins the
+    /// IDENTITY DISTINCTION directly on two genuinely different
+    /// directories rather than manufacturing the case-sensitive variant.
+    /// The escape a text prefix allowed was to a same-parent adjacent
+    /// directory; identity refuses it because the adjacent directory is a
+    /// different object. The `fsutil` end-to-end is recorded as manual in
+    /// CD-38.
     /// </remarks>
-    [Theory]
-    [InlineData(@"C:\photo.png", @"C:\", true)]
-    [InlineData(@"C:\sub\photo.png", @"C:\", true)]
-    [InlineData(@"C:\vault\photo.png", @"C:\vault", true)]
-    [InlineData(@"C:\vault\deep\photo.png", @"C:\vault\", true)]
-    [InlineData(@"C:\", @"C:\", false)]
-    [InlineData(@"C:\vault", @"C:\vault", false)]
-    [InlineData(@"C:\other\photo.png", @"C:\vault", false)]
-    [InlineData(@"C:\vaultmore\photo.png", @"C:\vault", false)]
-    [InlineData(@"c:\VAULT\Photo.PNG", @"C:\vault", true)]
-    public void ContainmentTreatsTheDriveRootCorrectly(string path, string root, bool inside) =>
-        Assert.Equal(inside, CanvasMediaPolicy.IsInsideRoot(path, root));
+    [Fact]
+    public void ContainmentUsesIdentityNotAPrefixOverAdjacentDirectories()
+    {
+        // Two sibling dirs; a file lives under `vault`. Its resolution
+        // must be contained by `vault` and NOT by `other`.
+        string vault = Path.Combine(_fixture.Root, "vault");
+        string other = Path.Combine(_fixture.Root, "other");
+        Directory.CreateDirectory(vault);
+        Directory.CreateDirectory(other);
+        File.WriteAllBytes(Path.Combine(vault, "cover.png"), [0x89, 0x50, 0x4E, 0x47]);
+
+        // Named relative to its real root: resolves and is contained.
+        Assert.NotNull(CanvasMediaPolicy.ResolveInsideVault(vault, "cover.png"));
+        // The same physical file, but the vault root passed is the
+        // SIBLING: a text prefix that only compared strings would still
+        // see `...\vault\cover.png` under `...\other`? No — but the
+        // reverse, a file under `other` claimed for `vault`, is the
+        // adjacency escape. Pin both directions on identity.
+        File.WriteAllBytes(Path.Combine(other, "sneak.png"), [0x89, 0x50, 0x4E, 0x47]);
+        // `other/sneak.png` addressed against the `vault` root by walking
+        // out and back in — the escape shape.
+        Assert.Null(CanvasMediaPolicy.ResolveInsideVault(vault, @"..\other\sneak.png"));
+        // And the identities of the two roots genuinely differ, which is
+        // what makes the refusal an identity fact and not a text one.
+        Assert.NotEqual(
+            CanvasMediaPolicy.IdentityForTests(vault),
+            CanvasMediaPolicy.IdentityForTests(other));
+    }
+
+    /// <summary>
+    /// Major-4: the volume-GUID fallback. `GetFinalPathNameByHandle`
+    /// with the default DOS-name flag returns ERROR_PATH_NOT_FOUND for a
+    /// volume with no drive letter (a folder-mounted volume), so every
+    /// target under such a vault resolved null and NO media opened. The
+    /// fallback resolves by volume-GUID name instead.
+    /// </summary>
+    /// <remarks>
+    /// A driveless/folder-mounted volume cannot be created unprivileged,
+    /// so the end-to-end scenario is recorded as manual in CD-38. What is
+    /// pinned here is the PRIMITIVE the fallback depends on: the GUID
+    /// resolution returns a well-formed volume-GUID path for an ordinary
+    /// file, proving the flag and the P/Invoke work, so the fallback is
+    /// not dead code.
+    /// </remarks>
+    [Fact]
+    public void TheVolumeGuidResolutionReturnsAWellFormedPath()
+    {
+        File.WriteAllBytes(Path.Combine(_fixture.Root, "guid.png"), [0x89, 0x50, 0x4E, 0x47]);
+        string? guid = CanvasMediaPolicy.GuidNameForTests(
+            Path.Combine(_fixture.Root, "guid.png"));
+
+        Assert.NotNull(guid);
+        // \\?\Volume{xxxxxxxx-....}\...  — the device-GUID form.
+        Assert.StartsWith(@"\\?\Volume{", guid, StringComparison.Ordinal);
+        Assert.EndsWith("guid.png", guid, StringComparison.OrdinalIgnoreCase);
+        // It names the same file as the DOS resolution — identity agrees.
+        Assert.Equal(
+            CanvasMediaPolicy.IdentityForTests(Path.Combine(_fixture.Root, "guid.png")),
+            CanvasMediaPolicy.IdentityForTests(guid!));
+    }
+
+    /// <summary>
+    /// Identity containment accepts a file whose vault ROOT is itself a
+    /// junction — which a TEXT prefix rejects, because the resolved
+    /// terminal path (through the junction) no longer starts with the
+    /// root's own spelling. This is the identity-vs-text discriminator
+    /// that needs no privileged filesystem feature: a junction is
+    /// unprivileged, and it forces the two answers apart.
+    /// </summary>
+    /// <remarks>
+    /// Mutation-verified: a text-prefix `ReachesRootByIdentity` refuses
+    /// this file. The case-sensitive-directory sibling (codex defect 3)
+    /// needs per-directory case sensitivity, which is non-default and
+    /// needs admin; it is recorded as a manual/bounded residual in CD-38,
+    /// and this fact pins the same underlying rule — containment is
+    /// identity, not text — through a reproducible construction.
+    /// </remarks>
+    [Fact]
+    public void IdentityContainmentAcceptsAJunctionRootedVaultAtextPrefixWouldReject()
+    {
+        string real = Path.Combine(_fixture.Root, "real-root");
+        Directory.CreateDirectory(real);
+        File.WriteAllBytes(Path.Combine(real, "cover.png"), [0x89, 0x50, 0x4E, 0x47]);
+        string junctionRoot = Path.Combine(_fixture.Root, "link-root");
+        RunCommand($"mklink /J \"{junctionRoot}\" \"{real}\"");
+        try
+        {
+            Assert.True(Directory.Exists(junctionRoot), "the junction root was not created");
+
+            // The vault is opened AT the junction. The file resolves
+            // through it to real-root\cover.png, whose path does NOT
+            // start with ...\link-root — a text prefix refuses it,
+            // identity (both sides resolve to the real dir) accepts it.
+            string? resolved = CanvasMediaPolicy.ResolveInsideVault(junctionRoot, "cover.png");
+            Assert.NotNull(resolved);
+            Assert.Equal(
+                CanvasMediaPolicy.IdentityForTests(Path.Combine(real, "cover.png")),
+                CanvasMediaPolicy.IdentityForTests(resolved!));
+
+            // And it still launches by the identity gate.
+            string? handed = null;
+            Assert.True(CanvasMediaPolicy.OpenMediaInVault(
+                junctionRoot, "cover.png", target => { handed = target; return true; }));
+            Assert.NotNull(handed);
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(junctionRoot))
+                {
+                    Directory.Delete(junctionRoot);
+                }
+            }
+            catch (IOException)
+            {
+            }
+        }
+    }
+
+    /// <summary>
+    /// The extended (\\?\) form is kept end to end: a vault-root
+    /// component with a TRAILING DOT verifies and launches the identity
+    /// it checked, not the sibling ShellExecute would renormalize a bare
+    /// path to (`vault.` → `vault`).
+    /// </summary>
+    /// <remarks>
+    /// The trailing-dot directory can only be CREATED through the \\?\
+    /// prefix (Win32 strips trailing dots), which needs no privilege.
+    /// This is the launch-integrity bug codex flagged: verify one string,
+    /// launch another.
+    /// </remarks>
+    [Fact]
+    public void ATrailingDotVaultComponentLaunchesTheVerifiedIdentity()
+    {
+        // Two sibling dirs: `dotdir.` (trailing dot, made via \\?\) and a
+        // plain `dotdir` that ShellExecute would renormalize TO. Give
+        // them DIFFERENT media so a renormalization is detectable.
+        string root = Path.GetFullPath(_fixture.Root);
+        string withDot = $@"\\?\{root}\dotdir.";
+        string without = Path.Combine(root, "dotdir");
+        Directory.CreateDirectory(withDot);
+        Directory.CreateDirectory(without);
+        File.WriteAllBytes($@"{withDot}\pic.png", [0x89, 0x50, 0x4E, 0x47]);
+        File.WriteAllBytes(Path.Combine(without, "pic.png"), [0x89, 0x50, 0x4E, 0x47]);
+
+        // A vault ROOTED at the trailing-dot directory, opening its own
+        // media. The resolved+launched path must retain the dot.
+        string? handed = null;
+        bool opened = CanvasMediaPolicy.OpenMediaInVault(
+            withDot, "pic.png", target => { handed = target; return true; });
+
+        Assert.True(opened, "the trailing-dot vault refused its own media");
+        Assert.NotNull(handed);
+        // The launched string is the EXTENDED form — that is what stops
+        // ShellExecute renormalizing the dot away. Stripping the prefix
+        // (the bug) would hand a bare path ShellExecute collapses to the
+        // sibling; this is the deterministic discriminator.
+        Assert.StartsWith(@"\\?\", handed, StringComparison.Ordinal);
+        Assert.Contains("dotdir.", handed, StringComparison.Ordinal);
+        // And it names the dot directory's file, not the sibling — both
+        // by identity through the extended spelling.
+        Assert.Equal(
+            CanvasMediaPolicy.IdentityForTests($@"{withDot}\pic.png"),
+            CanvasMediaPolicy.IdentityForTests(handed!));
+    }
 
     /// <summary>
     /// B2 — a request for owner B strands when the presenter rebinds

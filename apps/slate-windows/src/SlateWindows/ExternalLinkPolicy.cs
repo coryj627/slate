@@ -134,47 +134,42 @@ internal static class CanvasMediaPolicy
 
     /// <summary>
     /// Open a media file card in its default app, or refuse — the whole
-    /// containment decision, made against the target's PHYSICAL identity
-    /// through an OPENED HANDLE, revalidated immediately before the
-    /// launch, and failing closed. <paramref name="launch"/> is the
-    /// shell hand-off; it runs with NOTHING between it and the final
-    /// containment check. Returns whether the shell was handed the file.
+    /// containment decision, made against the target's OS FILE IDENTITY
+    /// (volume serial + file index), revalidated by that identity
+    /// immediately before the launch, and failing closed.
+    /// <paramref name="launch"/> is the shell hand-off; it runs with
+    /// NOTHING between it and the final identity check. Returns whether
+    /// the shell was handed the file.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// The threat model is precise: an untrusted sync peer with
-    /// write access inside the vault, racing the local click (CD-38).
-    /// The naive gate resolved a path STRING; <c>ShellExecute</c>
-    /// re-opens by path and re-resolves the namespace from scratch, so
-    /// the attacker could swap a checked in-vault directory for an
-    /// outward junction in between and the shell would follow the swap.
-    /// A full close is impossible: <c>ShellExecute</c> takes no handle,
-    /// it takes a path, and it will resolve that path itself.
+    /// Three consecutive codex rounds found containment defects, and
+    /// codex named the class: <b>filesystem identity reduced to path
+    /// text</b>, where two different normalization or case rules on the
+    /// same string disagree. Path text is retired as the decision
+    /// substrate. Every containment and every "unchanged since check"
+    /// question is answered by <c>GetFileInformationByHandle</c>'s
+    /// <c>dwVolumeSerialNumber</c> + <c>nFileIndex</c>, the 64-bit key
+    /// the OS uses to say two handles name the same file — immune to
+    /// case, to trailing dots, to per-directory case sensitivity, to
+    /// SUBST and to which spelling reached it.
     /// </para>
     /// <para>
-    /// Two things shrink the window to near-zero. First, resolution goes
-    /// through an OPENED HANDLE (<c>GetFinalPathNameByHandle</c> over a
-    /// handle opened with backup semantics, so directories resolve too),
-    /// and the path handed to <paramref name="launch"/> is the
-    /// FULLY-RESOLVED terminal path — so <c>ShellExecute</c>'s own
-    /// re-resolution walks a path with no reparse points left in it that
-    /// the click named, and swapping the named junction afterward
-    /// redirects nothing. Second, containment is checked once, and then
-    /// RE-checked by re-resolving the named path immediately before
-    /// launch with no work in between; a swap in that window changes the
-    /// re-resolution and the launch is refused.
+    /// Resolution keeps the handle-resolved EXTENDED (<c>\\?\</c>) form
+    /// end to end: it is verified and it is what is launched. The
+    /// extended prefix is exactly what stops <c>ShellExecute</c>
+    /// renormalizing <c>vault.\file</c> to <c>vault\file</c> — verifying
+    /// one string and launching another was a real launch-integrity bug.
     /// </para>
     /// <para>
-    /// The irreducible residual, stated rather than pretended closed
-    /// (CD-38): the sub-instruction gap between that final re-resolution
-    /// and <c>ShellExecute</c>'s own resolution cannot be closed with a
-    /// path-taking launcher. The future-work shape is a launcher that
-    /// accepts a HANDLE (or a verb executed against the open handle);
-    /// <c>ShellExecute</c> is not one. HARDLINKS remain invisible to any
-    /// path resolution (a second directory entry for the same data, not
-    /// a reparse point), bounded as before: same volume, never a
-    /// directory, requires existing in-vault write access, and the
-    /// extension gate still applies to the name opened.
+    /// The TOCTOU narrowing (CD-38): the target's identity is captured at
+    /// check time; immediately before launch the resolved path is
+    /// re-opened and its identity compared, and the launch happens only
+    /// if the 64-bit identity is unchanged. This makes "unchanged since
+    /// check" an OS guarantee rather than a string compare. The
+    /// irreducible residual shrinks to the re-open→<c>ShellExecute</c>
+    /// gap — a path-taking launcher re-opens by name, and closing that
+    /// needs a handle-based launcher, which <c>ShellExecute</c> is not.
     /// </para>
     /// <para>
     /// Every failure mode is a refusal — a NUL character, a device name,
@@ -193,26 +188,30 @@ internal static class CanvasMediaPolicy
             {
                 return false;
             }
-            string root = ResolveThroughHandle(Path.GetFullPath(vaultRoot))
-                ?? Path.TrimEndingDirectorySeparator(Path.GetFullPath(vaultRoot));
-            if (ResolveMediaTarget(root, target) is not { } resolved)
+            if (IdentityOf(Path.GetFullPath(vaultRoot)) is not { } rootIdentity)
+            {
+                return false;
+            }
+            if (ResolveMediaTarget(vaultRoot, target, rootIdentity)
+                is not var (resolved, checkIdentity))
             {
                 return false;
             }
 
-            // The TOCTOU window (CD-38): an in-vault attacker may swap
-            // the namespace here. The test seam simulates it.
+            // The TOCTOU window (CD-38): an in-vault attacker may swap the
+            // namespace here. The test seam simulates it.
             BetweenCheckAndLaunchForTests?.Invoke();
 
-            // Revalidate IMMEDIATELY before launch — nothing between this
-            // and launch(). Re-resolve the NAMED path (what the attacker
-            // controls) and require the identical terminal identity.
-            if (ResolveMediaTarget(root, target) is not { } revalidated
-                || !string.Equals(revalidated, resolved, StringComparison.OrdinalIgnoreCase))
+            // Revalidate by IDENTITY immediately before launch — nothing
+            // between this and launch(). Re-open the resolved path and
+            // require the SAME 64-bit file identity; a swap that
+            // redirected it changes the identity and the launch refuses.
+            if (IdentityOf(resolved) is not { } relaunchIdentity
+                || relaunchIdentity != checkIdentity)
             {
                 return false;
             }
-            return launch(revalidated);
+            return launch(resolved);
         }
         catch (Exception exception) when (NotFatal(exception))
         {
@@ -221,9 +220,10 @@ internal static class CanvasMediaPolicy
     }
 
     /// <summary>
-    /// The pure resolution, for the facts that assert containment
-    /// without launching: the fully-resolved terminal path when it is
-    /// media inside the vault, else null.
+    /// The resolved extended path for the facts that assert containment
+    /// without launching: the fully-resolved terminal <c>\\?\</c> path
+    /// when it is media whose identity chain reaches the vault root, else
+    /// null.
     /// </summary>
     internal static string? ResolveInsideVault(string vaultRoot, string target)
     {
@@ -233,9 +233,13 @@ internal static class CanvasMediaPolicy
             {
                 return null;
             }
-            string root = ResolveThroughHandle(Path.GetFullPath(vaultRoot))
-                ?? Path.TrimEndingDirectorySeparator(Path.GetFullPath(vaultRoot));
-            return ResolveMediaTarget(root, target);
+            if (IdentityOf(Path.GetFullPath(vaultRoot)) is not { } rootIdentity)
+            {
+                return null;
+            }
+            return ResolveMediaTarget(vaultRoot, target, rootIdentity) is var (resolved, _)
+                ? resolved
+                : null;
         }
         catch (Exception exception) when (NotFatal(exception))
         {
@@ -246,65 +250,170 @@ internal static class CanvasMediaPolicy
     /// <summary>
     /// Set only by tests: invoked once, after the first resolution and
     /// before the revalidation-and-launch, so a fact can act in the
-    /// TOCTOU window the revalidation exists to catch.
+    /// TOCTOU window the identity revalidation exists to catch.
     /// </summary>
     internal static Action? BetweenCheckAndLaunchForTests { get; set; }
 
-    private static string? ResolveMediaTarget(string root, string target)
+    /// <summary>
+    /// Resolve the vault-relative target to its terminal extended path
+    /// and capture its identity, requiring the resolved identity chain
+    /// to reach <paramref name="rootIdentity"/>. Null when it does not
+    /// resolve, is not media, or is not contained.
+    /// </summary>
+    private static (string Resolved, FileIdentity Identity)? ResolveMediaTarget(
+        string vaultRoot, string target, FileIdentity rootIdentity)
     {
-        string absolute = Path.GetFullPath(Path.Combine(root, target));
-        if (!File.Exists(absolute))
-        {
-            return null;
-        }
+        // Compose lexically only to name a starting point; the identity
+        // decision below does not trust this string.
+        string absolute = Path.GetFullPath(
+            Path.Combine(Path.GetFullPath(vaultRoot), target));
         if (ResolveThroughHandle(absolute) is not { } resolved)
-        {
-            return null;
-        }
-        if (!IsInsideRoot(resolved, root))
         {
             return null;
         }
         // The RESOLVED name must still be media: a `.png` whose chain
         // ends at an `.exe` is the case resolution exists for.
-        return IsOpenableMedia(resolved) ? resolved : null;
+        if (!IsOpenableMedia(resolved))
+        {
+            return null;
+        }
+        if (!ReachesRootByIdentity(resolved, rootIdentity))
+        {
+            return null;
+        }
+        return IdentityOf(resolved) is { } identity ? (resolved, identity) : null;
     }
 
     /// <summary>
-    /// Containment that treats the root correctly when it IS a drive
-    /// root. <c>C:\photo.png</c> is inside <c>C:\</c>; the file must be
-    /// UNDER the root, never BE it, and never on another volume.
+    /// Whether the resolved target's ancestor chain reaches the vault
+    /// root BY IDENTITY — the containment decision, made on OS file
+    /// identity, not path text.
     /// </summary>
     /// <remarks>
-    /// Major-1: a hand-built <c>root + separator</c> prefix produced
-    /// <c>C:\\</c> for a drive-root vault, which no in-vault path starts
-    /// with, so every media file under such a vault was refused.
-    /// <c>GetRelativePath</c> treats the root correctly whether or not it
-    /// is a drive root and is case-insensitive on Windows, so there is no
-    /// prefix to get wrong: a path inside the root gives a relative
-    /// result that neither is <c>.</c>, escapes upward with <c>..</c>,
-    /// nor comes back rooted (a rooted result means a different volume).
+    /// The resolved path names canonical ancestors; each is opened and
+    /// its <c>(volumeSerial, fileIndex)</c> compared to the root's. A
+    /// case-sensitive-directory sibling (<c>C:\work\VAULT</c> vs
+    /// <c>C:\work\vault</c>) that a text prefix falsely accepted is a
+    /// DIFFERENT file object with a different identity, so it does not
+    /// match — which is the defect this ends. The walk is depth-bounded
+    /// against a cycle and is O(depth) handle opens on a user-initiated
+    /// action.
     /// </remarks>
-    internal static bool IsInsideRoot(string path, string root)
+    private static bool ReachesRootByIdentity(string resolved, FileIdentity rootIdentity)
     {
-        string relative = Path.GetRelativePath(root, path);
-        return relative.Length > 0
-            && relative != "."
-            && !relative.StartsWith("..", StringComparison.Ordinal)
-            && !Path.IsPathRooted(relative);
+        string? current = ParentOf(resolved);
+        for (int depth = 0; depth < ResolveRounds && current is not null; depth++)
+        {
+            if (IdentityOf(current) is { } identity)
+            {
+                if (identity == rootIdentity)
+                {
+                    return true;
+                }
+            }
+            else
+            {
+                // An ancestor we cannot open cannot be confirmed as the
+                // root; fail closed rather than walk past it.
+                return false;
+            }
+            string? next = ParentOf(current);
+            if (next is null || string.Equals(next, current, StringComparison.Ordinal))
+            {
+                return false;
+            }
+            current = next;
+        }
+        return false;
+    }
+
+    /// <summary>The parent of an extended (<c>\\?\</c>) path, or null at
+    /// the volume root. Text is used only to name the parent to open;
+    /// the decision is identity.</summary>
+    private static string? ParentOf(string extendedPath)
+    {
+        const string localPrefix = @"\\?\";
+        bool extended = extendedPath.StartsWith(localPrefix, StringComparison.Ordinal);
+        string bare = extended ? extendedPath[localPrefix.Length..] : extendedPath;
+        string? parent = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(bare));
+        if (string.IsNullOrEmpty(parent))
+        {
+            return null;
+        }
+        return extended ? localPrefix + parent : parent;
     }
 
     /// <summary>
-    /// The terminal filesystem path of <paramref name="path"/> — EVERY
-    /// reparse point resolved (leaf and every ancestor) — via a handle
-    /// opened to it, or null when it cannot be opened. This is the OS's
-    /// own resolution, not a hand-rolled ancestor walk: the handle binds
-    /// to a file object and <c>GetFinalPathNameByHandle</c> reports that
-    /// object's canonical path.
+    /// The OS file identity of the object a handle to <paramref name="path"/>
+    /// names — <c>(dwVolumeSerialNumber, nFileIndex)</c>. Null when it
+    /// cannot be opened. Reparse points are followed, so this is the
+    /// identity of the TERMINAL object.
+    /// </summary>
+    /// <summary>Test seam over <see cref="IdentityOf"/>, so a fact can
+    /// pin the identity primitive the whole gate stands on.</summary>
+    internal static FileIdentity? IdentityForTests(string path) => IdentityOf(path);
+
+    /// <summary>Test seam over the volume-GUID resolution (Major-4): the
+    /// fallback path when a driveless volume has no DOS name.</summary>
+    internal static string? GuidNameForTests(string path)
+    {
+        using SafeFileHandle handle = OpenForQuery(path);
+        return handle.IsInvalid ? null : FinalPath(handle, NativeIo.VolumeNameGuid);
+    }
+
+    private static FileIdentity? IdentityOf(string path)
+    {
+        using SafeFileHandle handle = OpenForQuery(path);
+        if (handle.IsInvalid)
+        {
+            return null;
+        }
+        if (!NativeIo.GetFileInformationByHandle(
+            handle, out NativeIo.ByHandleFileInformation info))
+        {
+            return null;
+        }
+        ulong index = ((ulong)info.FileIndexHigh << 32) | info.FileIndexLow;
+        return new FileIdentity(info.VolumeSerialNumber, index);
+    }
+
+    /// <summary>
+    /// The terminal extended (<c>\\?\</c>) path of <paramref name="path"/>
+    /// — every reparse point resolved by the OS — or null. Kept in the
+    /// extended form: it is verified and launched unchanged, so
+    /// <c>ShellExecute</c> cannot renormalize a trailing dot or space out
+    /// from under the check. Falls back to the volume-GUID name when a
+    /// driveless (folder-mounted) volume has no DOS path.
     /// </summary>
     private static string? ResolveThroughHandle(string path)
     {
-        using SafeFileHandle handle = NativeIo.CreateFileW(
+        using SafeFileHandle handle = OpenForQuery(path);
+        if (handle.IsInvalid)
+        {
+            return null;
+        }
+        return FinalPath(handle, NativeIo.VolumeNameDos)
+            ?? FinalPath(handle, NativeIo.VolumeNameGuid);
+    }
+
+    private static string? FinalPath(SafeFileHandle handle, uint volumeNameFlag)
+    {
+        var buffer = new char[1024];
+        uint length = NativeIo.GetFinalPathNameByHandleW(
+            handle, buffer, (uint)buffer.Length, volumeNameFlag);
+        if (length == 0 || length >= buffer.Length)
+        {
+            // 0 = failure (e.g. ERROR_PATH_NOT_FOUND for a driveless
+            // volume under VOLUME_NAME_DOS — the caller falls back to
+            // the GUID name); >= length = it did not fit. Either way,
+            // null.
+            return null;
+        }
+        return new string(buffer, 0, (int)length);
+    }
+
+    private static SafeFileHandle OpenForQuery(string path) =>
+        NativeIo.CreateFileW(
             path,
             0,
             NativeIo.FileShareRead | NativeIo.FileShareWrite | NativeIo.FileShareDelete,
@@ -312,36 +421,18 @@ internal static class CanvasMediaPolicy
             NativeIo.OpenExisting,
             NativeIo.FileFlagBackupSemantics,
             IntPtr.Zero);
-        if (handle.IsInvalid)
-        {
-            return null;
-        }
-        var buffer = new char[1024];
-        uint length = NativeIo.GetFinalPathNameByHandleW(
-            handle, buffer, (uint)buffer.Length, 0);
-        if (length == 0 || length >= buffer.Length)
-        {
-            // 0 = failure; >= length = the path did not fit (a path we
-            // will not hand the shell anyway). Fail closed.
-            return null;
-        }
-        string resolved = new(buffer, 0, (int)length);
-        // GetFinalPathNameByHandle returns the \\?\ (or \\?\UNC\) form;
-        // strip the local prefix, leave UNC alone (it is refused by the
-        // containment check against a local vault root anyway).
-        const string localPrefix = @"\\?\";
-        if (resolved.StartsWith(localPrefix, StringComparison.Ordinal)
-            && !resolved.StartsWith(@"\\?\UNC\", StringComparison.Ordinal))
-        {
-            resolved = resolved[localPrefix.Length..];
-        }
-        return Path.TrimEndingDirectorySeparator(resolved);
-    }
+
+    /// <summary>The OS's identity for a file object: same 64-bit key ⇒
+    /// same file, regardless of the path spelling used to reach it.</summary>
+    internal readonly record struct FileIdentity(uint VolumeSerial, ulong FileIndex);
 
     private static bool NotFatal(Exception exception) =>
         exception is not OutOfMemoryException
             and not StackOverflowException
             and not AccessViolationException;
+
+    /// <summary>Bounds an ancestor-chain cycle.</summary>
+    private const int ResolveRounds = 64;
 
     private static class NativeIo
     {
@@ -350,10 +441,13 @@ internal static class CanvasMediaPolicy
         internal const uint FileShareDelete = 0x00000004;
         internal const uint OpenExisting = 3;
 
-        /// <summary>Lets a DIRECTORY handle be opened, so a junction leaf
-        /// resolves too; reparse points are followed (no
+        /// <summary>Lets a DIRECTORY handle be opened, so an ancestor
+        /// directory resolves too; reparse points are followed (no
         /// OPEN_REPARSE_POINT), which is the point.</summary>
         internal const uint FileFlagBackupSemantics = 0x02000000;
+
+        internal const uint VolumeNameDos = 0x0;
+        internal const uint VolumeNameGuid = 0x1;
 
         [System.Runtime.InteropServices.DllImport(
             "kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode,
@@ -375,6 +469,33 @@ internal static class CanvasMediaPolicy
             [System.Runtime.InteropServices.Out] char[] lpszFilePath,
             uint cchFilePath,
             uint dwFlags);
+
+        [System.Runtime.InteropServices.DllImport(
+            "kernel32.dll", SetLastError = true)]
+        [return: System.Runtime.InteropServices.MarshalAs(
+            System.Runtime.InteropServices.UnmanagedType.Bool)]
+        internal static extern bool GetFileInformationByHandle(
+            SafeFileHandle hFile,
+            out ByHandleFileInformation lpFileInformation);
+
+        [System.Runtime.InteropServices.StructLayout(
+            System.Runtime.InteropServices.LayoutKind.Sequential)]
+        internal struct ByHandleFileInformation
+        {
+            public uint FileAttributes;
+            public uint CreationTimeLow;
+            public uint CreationTimeHigh;
+            public uint LastAccessTimeLow;
+            public uint LastAccessTimeHigh;
+            public uint LastWriteTimeLow;
+            public uint LastWriteTimeHigh;
+            public uint VolumeSerialNumber;
+            public uint FileSizeHigh;
+            public uint FileSizeLow;
+            public uint NumberOfLinks;
+            public uint FileIndexHigh;
+            public uint FileIndexLow;
+        }
     }
 
     /// <summary>

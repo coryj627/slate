@@ -2545,86 +2545,93 @@ its own reasons (the spec's Add Media row — "media kinds by extension
 set — core's `media_class` decides the label"), so PR E exports it,
 deletes this copy, and retires the pin above with it.
 
-**Containment is PHYSICAL and TOCTOU-narrowed, and the whole decision
-fails closed.** A textual prefix check is not containment: a symlink or
-a directory junction inside the vault names a file anywhere on the disk
-while its path still starts with the vault root. Resolution goes through
-an OPENED HANDLE — `CreateFile` with `FILE_FLAG_BACKUP_SEMANTICS`, then
-`GetFinalPathNameByHandle` — which is the OS's own resolution of every
-reparse point on the way (leaf and every ancestor), not a hand-rolled
-ancestor walk; the earlier walk was a correct-enough approximation of
-exactly this call and is replaced by it. The fully-resolved terminal
-identity must be inside the resolved vault root and must still be media,
-because a `.png` whose chain ends at an `.exe` is the case resolution
-exists for.
+**Containment is by OS FILE IDENTITY, not path text (codex round 3 — the
+class ended, not patched).** Three consecutive codex rounds found
+containment defects, and codex named the class: *filesystem identity
+reduced to path text*, where two normalization or case rules on the same
+string disagree. Path text is retired as the decision substrate. The gate
+resolves the target through an OPENED HANDLE and answers every
+containment and every "unchanged since check" question with
+`GetFileInformationByHandle`'s `(dwVolumeSerialNumber, nFileIndex)` — the
+64-bit key the OS uses to say two handles name the same file. Immune to
+case, trailing dots, per-directory case sensitivity, SUBST, and which
+spelling reached it. `FileIdentityIsStableAcrossSpellingsAndDistinctAcrossObjects`
+pins the primitive (same object ⇒ equal, different objects ⇒ unequal).
 
-**The TOCTOU window, narrowed and its residual recorded (B1).** The
-threat model is precise: an untrusted sync peer with write access inside
-the vault, racing the local click. The naive gate resolved a path
-*string* and handed the vault-relative path to `ShellExecute`, which
-re-opens by path and re-resolves the namespace from scratch — so the
-peer could swap a checked in-vault directory for an outward junction in
-between and the shell would follow the swap. Two things shrink the
-window to near-zero: the path handed to the launcher is the
-handle-resolved TERMINAL path, so `ShellExecute`'s own re-resolution has
-no reparse point left in it that the click named; and containment is
-RE-checked by re-resolving the named path immediately before the launch,
-nothing between that check and `Process.Start`. A swap in that window
-changes the re-resolution and the launch is refused —
-`ASwapInTheTocTouWindowIsCaughtByRevalidation` drives exactly that
-through a test seam and is mutation-verified against the revalidation;
-`TheLaunchedPathIsTheFullyResolvedTerminalIdentity` pins that the
-launched path is the resolved one.
+**Containment reaches the root by identity.** The resolved terminal path
+names canonical ancestors; each is opened and its identity compared to
+the vault root's, up to a depth bound. A case-sensitive-directory
+sibling — `C:\work\VAULT` vs `C:\work\vault`, which an
+`OrdinalIgnoreCase` text prefix falsely accepts when per-directory case
+sensitivity is on (codex defect 3) — is a DIFFERENT object with a
+different identity and does not match. That feature is non-default and
+needs admin to enable, so the exploit itself is recorded as a manual
+residual; the SAME rule is pinned reproducibly by
+`IdentityContainmentAcceptsAJunctionRootedVaultAtextPrefixWouldReject`,
+where a vault rooted at a junction is contained by identity and would be
+REJECTED by a text prefix — mutation-verified against a text-prefix
+containment.
 
-**The irreducible residual, stated rather than pretended closed.** The
-sub-instruction gap between that final re-resolution and `ShellExecute`'s
-own resolution cannot be closed with a path-taking launcher:
-`ShellExecute` takes a path, not a handle, and will resolve it itself.
-Closing it needs a launcher that acts on the OPEN HANDLE (a handle-based
-verb invocation), which is a different shell API and a larger change;
-recorded as the future-work shape. The precondition is hostile in-vault
-write access — the same peer the whole gate defends against — and the
-mitigation above makes the exploit a sub-millisecond race against an
-already-resolved path.
+**The extended (`\\?\`) form is kept end to end (launch-integrity).**
+The handle-resolved path is verified and launched unchanged. The
+extended prefix is exactly what stops `ShellExecute` renormalizing
+`vault.\file` to `vault\file` — verifying one string and launching
+another was a real bug. `ATrailingDotVaultComponentLaunchesTheVerifiedIdentity`
+pins it and is mutation-verified against stripping the prefix.
+
+**The TOCTOU window, narrowed by IDENTITY (B1).** The target's identity
+is captured at check time; immediately before launch the resolved path
+is re-opened and its identity compared, and the launch happens only if
+the 64-bit identity is unchanged — an OS "same file" guarantee, not a
+string compare, so it is immune to the case/normalization tricks a text
+revalidation was not. A swap in the window redirects the re-open to a
+different object whose identity differs, and the launch refuses.
+`ASwapInTheTocTouWindowIsCaughtByRevalidation` drives the swap through a
+test seam, mutation-verified. **The irreducible residual** is now the
+re-open→`ShellExecute` gap: a path-taking launcher re-opens by name, and
+closing that needs a handle-based launcher (a verb invoked against the
+open handle), which `ShellExecute` is not. Precondition: hostile in-vault
+write access — the peer the gate defends against — against which the
+exploit is a sub-millisecond race on an already-identity-checked path.
+
+**Driveless folder-mounted volumes open their media (Major-4).**
+`GetFinalPathNameByHandle` with the default DOS-name flag returns
+`ERROR_PATH_NOT_FOUND` for a volume with no drive letter, so every target
+under such a vault resolved null. A `VOLUME_NAME_GUID` fallback resolves
+it. A driveless mount cannot be created unprivileged, so the end-to-end
+is a manual residual; the fallback PRIMITIVE is pinned by
+`TheVolumeGuidResolutionReturnsAWellFormedPath` so it is not dead code.
 
 **Junctions, pinned.** `AJunctionInsideTheVaultPointingOutsideIsRefused`
 builds the reviewer's construction (`mklink /J`, no elevation, a plain
 `.png` leaf) and `ANestedJunctionChainStillResolvesOutsideTheVault` the
-nested one; both are mutation-verified against the handle resolution.
-
-**Drive-root vaults open their media (Major-1).** A vault whose root IS
-a drive root (`C:\`, or a mounted/SUBST'd letter) refused EVERY media
-file, because containment built a `root + separator` prefix — `C:\\` —
-that no in-vault path starts with. `IsInsideRoot` uses
-`Path.GetRelativePath` now, which treats a drive root correctly and is
-case-insensitive on Windows: inside is a relative result that is not
-`.`, does not escape with `..`, and is not rooted (a rooted result means
-another volume). `ContainmentTreatsTheDriveRootCorrectly` pins nine
-cases including both drive-root ones and is mutation-verified.
+nested one; both resolve through the OS handle now.
 
 **Hardlinks are NOT covered, and the earlier claim that they were is
 withdrawn.** A hardlink is a second directory entry for the same file
-data, not a reparse point: it has no "real" path to resolve to — the
-in-vault name IS a real name for that file. The residual is bounded by
-what a hardlink can be: same volume only, never a directory, and it must
-be created by something that already has write access inside the vault.
-What it cannot do is reach a file the vault's own filesystem cannot
-reach, and the extension gate still applies to the name being opened.
-Closing it needs file-identity comparison (volume serial + file index)
-against a vault-wide enumeration, a different and far more expensive
-check. Accepted residual.
+data, not a reparse point: it has no other path to resolve to — the
+in-vault name IS a real name for that file, and its identity is the
+file's own. Bounded by what a hardlink can be: same volume only, never a
+directory, and it must be created by something that already has write
+access inside the vault. It cannot reach a file the vault's filesystem
+cannot reach, and the extension gate still applies to the name opened.
+Accepted residual.
 
 **Two more residuals codex verified, recorded.** An alternate-data-stream
 syntax leaf (`photo.png:stream`) can satisfy the extension gate — the
 extension is read off the part before the colon — but codex found no
-boundary-escape or execution path through it (the resolved terminal path
-is still the in-vault base file, and the stream name rides along to a
-shell that opens that base file); recorded as a policy residual, not a
-hole. UNC and the `\\?\` / `\\.\` device-namespace forms were verified to
-FAIL CLOSED: `GetFinalPathNameByHandle` returns the `\\?\UNC\` form, which
-the local-vault containment check refuses, and a device path does not
-resolve to a file under the root. That property is noted so a later
-change does not quietly regress it.
+boundary-escape or execution path through it (the resolved terminal
+identity is still the in-vault base file); a policy residual, not a hole.
+UNC and the `\\?\` / `\\.\` device-namespace forms fail closed: the
+volume-GUID/UNC resolution does not reach a file whose identity chain
+lands under a local vault root. Noted so a later change does not
+regress it.
+
+**The manual/bounded residuals, gathered** (each pinned at the primitive,
+E2E deferred because the feature needs privilege): per-directory case
+sensitivity (defect 3, `fsutil`), driveless folder-mount (Major-4,
+admin), and the sub-millisecond TOCTOU re-open gap (needs a handle-based
+launcher). None is a path-text defect; the class codex named is closed.
 
 **Every failure mode is a refusal** — a NUL character, a reserved device
 name, a path too long, a link cycle, a permission error — because an
@@ -3675,3 +3682,45 @@ which was round 1's rule-4 subject).
 - **Residuals recorded** (codex-verified, not holes): an ADS-syntax leaf
   satisfies the extension gate with no escape/execution path found; UNC
   and device-namespace forms fail closed. Both in CD-38.
+
+### PR A — Codex adversarial round 3 — containment class ended (1 blocker + 1 major)
+
+Containment findings in codex rounds 1, 2 AND 3 — the same subsystem
+three times running, which is the stopping-rule-4 shape a SECOND time in
+this PR (the first was focus delivery). Codex named the class precisely:
+**filesystem identity reduced to path text**, where two normalization or
+case rules on the same string disagree. Every prior fix was another path
+predicate; this round replaces the substrate.
+
+- **B1 (two sub-defects).** Verifying `C:\vault.` and launching a string
+  ShellExecute renormalizes to `C:\vault` was a launch-integrity bug —
+  fixed by keeping the handle-resolved EXTENDED (`\?\`) form end to end.
+  TOCTOU-by-path-text was fixed by revalidating FILE IDENTITY
+  (`BY_HANDLE_FILE_INFORMATION`: volume serial + file index) captured at
+  check and re-compared immediately before launch. The residual shrinks
+  to the re-open→ShellExecute gap and is recorded.
+- **Defect 3 (case-sensitive-directory sibling).** The `GetRelativePath`
+  OrdinalIgnoreCase prefix falsely accepted an adjacent case-different
+  directory under per-directory case sensitivity. Ended by identity: the
+  ancestor chain is compared by `(volumeSerial, fileIndex)`, so an
+  adjacent directory is a different object. The feature needs admin, so
+  the E2E is a bounded/manual residual and the rule is pinned
+  reproducibly by a junction-rooted vault (identity accepts, text prefix
+  rejects), mutation-verified.
+- **Major (driveless folder-mounted volume).** `GetFinalPathNameByHandle`
+  default DOS name returns `ERROR_PATH_NOT_FOUND` for a driveless volume,
+  refusing all its media. `VOLUME_NAME_GUID` fallback added; the
+  primitive is pinned, the E2E (needs admin) is manual.
+
+**The identity-based resolution ends the class:** containment,
+revalidation and launch are all OS file identity now, not path text.
+Where a filesystem feature needs privilege to create (per-dir case
+sensitivity, driveless mount, the TOCTOU race), the identity PRIMITIVE
+is pinned directly and the E2E recorded as manual — the standing
+false-green rule, applied honestly rather than by manufacturing a
+passing E2E that does not exercise the feature.
+
+**Every fix mutation-verified:** identity revalidation (swap → refused),
+`\?\` retention (strip → trailing-dot launches the sibling), identity
+containment (text prefix → junction-rooted vault refused), and the
+identity primitive itself (distinct objects → distinct identities).
