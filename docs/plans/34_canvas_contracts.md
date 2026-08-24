@@ -2705,10 +2705,31 @@ cannot reach, and the extension gate still applies to the name opened.
 Accepted residual.
 
 **Two more residuals codex verified, recorded.** An alternate-data-stream
-syntax leaf (`photo.png:stream`) can satisfy the extension gate — the
-extension is read off the part before the colon — but codex found no
-boundary-escape or execution path through it (the resolved terminal
-identity is still the in-vault base file); a policy residual, not a hole.
+syntax leaf can satisfy the extension gate, but only in a narrower shape
+than this row used to claim — and the correction matters because the old
+wording described a parser that does not exist.
+
+*What the parser actually does:* `IsOpenableMedia` takes everything after
+the LAST `.` in the basename, colon included, and compares that whole
+string to the media sets. It does not split on `:` and it does not read
+"the part before the colon". Verified against the shipped code:
+
+| leaf | gate | why |
+|---|---|---|
+| `photo.png:stream` | **refused** | extension parses as `png:stream` |
+| `photo:stream` | refused | extension parses as `stream` |
+| `photo:cover.png` | **accepted** | extension parses as `png` |
+| `photo.png:stream.png` | **accepted** | extension parses as `png` |
+
+So the example this row carried for three rounds (`photo.png:stream`) was
+REJECTED all along — the claim erred in the safe direction, but it
+described the wrong mechanism. The real shape is an ADS whose STREAM NAME
+ends in a media extension (`photo:cover.png`). Codex found no
+boundary-escape or execution path through it either way: the resolved
+terminal identity is still the in-vault base file, and containment is
+decided on that identity, not on the leaf's spelling. A policy residual,
+not a hole.
+
 UNC and the `\\?\` / `\\.\` device-namespace forms fail closed: the
 volume-GUID/UNC resolution does not reach a file whose identity chain
 lands under a local vault root. Noted so a later change does not
@@ -3797,6 +3818,11 @@ which was round 1's rule-4 subject).
 - **Residuals recorded** (codex-verified, not holes): an ADS-syntax leaf
   satisfies the extension gate with no escape/execution path found; UNC
   and device-namespace forms fail closed. Both in CD-38.
+  > **Example corrected (round 6 hygiene):** the leaf named here and in
+  > CD-38 was `photo.png:stream`, which the last-dot parser actually
+  > REFUSES (it reads `png:stream` as the extension). The accepted shape is
+  > an ADS whose stream name ends in a media extension, e.g.
+  > `photo:cover.png`. See CD-38 for the verified table.
 
 ### PR A — Codex adversarial round 3 — containment class ended (1 blocker + 1 major)
 

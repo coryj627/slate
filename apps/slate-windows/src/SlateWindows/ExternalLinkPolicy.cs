@@ -573,7 +573,9 @@ internal static class CanvasMediaPolicy
 
     /// <summary>Whether the 128-bit <c>FileIdInfo</c> query succeeds on
     /// this box: pins that the ReFS-safe primitive is real and available,
-    /// so refusing on its failure costs nothing on a supported host.</summary>
+    /// so refusing on its failure costs nothing on a vault volume this gate
+    /// supports (NTFS/ReFS — a filesystem that does not answer
+    /// <c>FileIdInfo</c> refuses every media open, by design).</summary>
     internal static bool UsesFileIdInfoForTests(string path)
     {
         using SafeFileHandle handle = OpenForQuery(path);

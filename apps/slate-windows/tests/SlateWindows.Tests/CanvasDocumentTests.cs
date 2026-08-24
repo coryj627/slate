@@ -2554,11 +2554,13 @@ public sealed class CanvasDocumentTests : IDisposable
     /// selection its record claimed: ANY transient failure of
     /// <c>FileIdInfo</c> silently downgraded that one read to the
     /// non-unique <c>nFileIndex</c> — on ReFS a fail-open, arriving
-    /// exactly when something was already wrong. The fallback is deleted
-    /// (the app's minimum OS postdates <c>FileIdInfo</c> by years, so it
-    /// served no supported platform). Mutation-verified: reintroducing ANY
-    /// fallback arm makes the injected failure resolve successfully again
-    /// and fails this fact.
+    /// exactly when something was already wrong. The fallback is deleted:
+    /// the constraint is the FILESYSTEM, not the OS version, so supported
+    /// vault volumes are NTFS/ReFS and one that does not answer
+    /// <c>FileIdInfo</c> refuses every media open — a recorded fail-CLOSED
+    /// limitation, deliberately preferred to a weaker identity.
+    /// Mutation-verified: reintroducing ANY fallback arm makes the injected
+    /// failure resolve successfully again and fails this fact.
     /// </remarks>
     [Fact]
     public void IdentityQueryFailureRefusesRatherThanDowngrading()
