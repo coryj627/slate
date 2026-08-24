@@ -60,7 +60,7 @@ internal static class ExternalLinkPolicy
 /// <para>
 /// Windows is deliberately stricter than mac here, which opens any
 /// non-Markdown target through <c>NSWorkspace</c>
-/// (<c>CanvasContainerView.swift:180–186</c>). The threat models are
+/// (<c>CanvasContainerView.swift:181–187</c>). The threat models are
 /// not the same — Gatekeeper and quarantine adjudicate an NSWorkspace
 /// open, and ShellExecute adjudicates nothing — so this is a divergence
 /// recorded as CD-38 rather than a parity break; mac's laxer arm is an
@@ -123,9 +123,37 @@ internal static class CanvasMediaPolicy
             // `.mov` is a hidden file, not a video.
             return false;
         }
-        string extension = basename[(dot + 1)..].ToLowerInvariant();
+        string extension = AsciiLowered(basename[(dot + 1)..]);
         return ImageExtensions.Contains(extension)
             || AudioExtensions.Contains(extension)
             || VideoExtensions.Contains(extension);
+    }
+
+    /// <summary>
+    /// Core's <c>to_ascii_lowercase</c>, not .NET's
+    /// <c>ToLowerInvariant</c>.
+    /// </summary>
+    /// <remarks>
+    /// The two differ outside ASCII — <c>ToLowerInvariant</c> lowers the
+    /// Kelvin sign to <c>k</c> and İ to <c>i̇</c>, Rust's leaves both
+    /// alone — and this set is compared against ASCII literals, so the
+    /// difference can only ever ADMIT something core would classify as
+    /// not-media. That is the wrong direction for a gate that decides
+    /// what reaches <c>ShellExecute</c>, so it matches core exactly
+    /// rather than approximately.
+    /// </remarks>
+    private static string AsciiLowered(string value)
+    {
+        Span<char> lowered = value.Length <= 32
+            ? stackalloc char[value.Length]
+            : new char[value.Length];
+        for (int index = 0; index < value.Length; index++)
+        {
+            char character = value[index];
+            lowered[index] = character is >= 'A' and <= 'Z'
+                ? (char)(character + 32)
+                : character;
+        }
+        return new string(lowered);
     }
 }

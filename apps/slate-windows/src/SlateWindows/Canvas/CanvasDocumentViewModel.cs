@@ -295,7 +295,14 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// </remarks>
     internal event Action<object?>? FocusLandingRequested;
 
-    internal void RequestFocusLanding(object? owner = null) =>
+    /// <param name="owner">
+    /// The view this request is FOR — the tab a surface carries as its
+    /// <c>DataContext</c>. Required, with no default: an unaddressed
+    /// request reaches every pane on the shared path and each one lands
+    /// focus, and a default made that the easy thing to write. The
+    /// off-shape call is now a compile error rather than a convention.
+    /// </param>
+    internal void RequestFocusLanding(object owner) =>
         FocusLandingRequested?.Invoke(owner);
 
     /// <summary>The ONE surface switch (contracts A15/A18): the header
@@ -740,7 +747,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
 
     /// <summary>
     /// File and image cards route on the TARGET, not on the kind — the
-    /// mac reference (<c>CanvasContainerView.swift:168–187</c>): a
+    /// mac reference (<c>CanvasContainerView.swift:169–187</c>): a
     /// Markdown target opens a note tab, at its subpath anchor; anything
     /// else opens in whatever app owns the type.
     /// </summary>

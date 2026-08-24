@@ -1196,14 +1196,26 @@ vocabulary.** Text ⇒ the interim read-only detail region seeded from
 `canvas_node_text` (`TextBox IsReadOnly`, focusable, named for the card;
 PR E swaps in the editor). File/image ⇒ routed on the TARGET, not the
 kind, exactly as mac routes it
-(`CanvasContainerView.swift:168–187`): a `.md`/`.markdown` target goes
+(`CanvasContainerView.swift:169–187`): a `.md`/`.markdown` target goes
 to the workspace's ONE navigation seam (`OpenEditorNavigation`), with
 the scene node's `subpath` mapped to a `LinkAnchor` — `#^id` ⇒
 `("block", id)`, `#…` ⇒ `("heading", …)` — so the W3-5 anchor
 resolution lands the caret at the heading rather than at the note top;
 anything else goes to the shell as `CanvasOpened { DefaultApp }` **if
 and only if it is media** (CD-38's extension gate), and a non-media
-target is refused audibly and never launched.
+target is refused audibly and never launched. Link ⇒
+`ExternalLinkPolicy.IsLaunchable` — the ONE scheme allowlist
+(`http`/`https`/`mailto`) — and the injected opener, announcing
+`CanvasOpened { Browser }`, `CanvasBlocked { LinkOpenFailed }` or
+`CanvasBlocked { NotAUrl }`.
+
+**Two hand-offs, two gates, and they are not the same gate.**
+`ExternalLinkPolicy` decides which URLs may be handed to a browser;
+`CanvasMediaPolicy` (CD-38) decides which vault FILES may be handed to
+the shell. A file card does not go through the scheme allowlist and a
+link card does not go through the media gate — different inputs,
+different failure modes, and folding them together would let either
+rule's reasoning excuse the other's.
 
 **Routing on the KIND was a defect, and the vocabulary said so.**
 `image` fell into the `file` arm, and `ItemForPath` calls every
@@ -1215,12 +1227,7 @@ that no Windows code path could reach. The media hand-off resolves the
 vault-relative target against the vault root in the WORKSPACE (the only
 holder of the root) and refuses anything that escapes the vault — a
 `.canvas` file is untrusted input and `../../` in a `file` node would
-otherwise open anything on the disk. It does NOT go through
-`ExternalLinkPolicy`, which gates URLs handed to a browser and is a
-different hand-off with a different failure mode. Link ⇒ `ExternalLinkPolicy.IsLaunchable` —
-the ONE scheme allowlist (`http`/`https`/`mailto`) — and the injected
-opener, announcing `CanvasOpened { Browser }`,
-`CanvasBlocked { LinkOpenFailed }` or `CanvasBlocked { NotAUrl }`.
+otherwise open anything on the disk.
 
 **The predicate is shared; the announcements deliberately are not.**
 The first cut of this row said "the shared external-link policy" while
@@ -2387,7 +2394,7 @@ stale.** The mac label inventory gives every kind an activation hint and
 A10 takes them verbatim. Mac's image hint is *"Media cards open with
 canvas actions, arriving in a later milestone slice."* — but mac's own
 `activate` opens a non-Markdown target in its default app TODAY
-(`CanvasContainerView.swift:180–186`), so the hint has been describing a
+(`CanvasContainerView.swift:181–187`), so the hint has been describing a
 deferral that is not there. Windows does what the mac CODE does (M1),
 and a HelpText contradicting its row's behaviour fails the one job the
 §W-C label inventory has, so Windows spells it *"Opens the media file in
@@ -2429,14 +2436,30 @@ function whose answer becomes the `image` kind label and the
 including both of its edge rules (the BASENAME's real extension; a
 dotfile like `.mov` is a hidden file, not a video), and
 `TheMediaGateIsCoresClassification` pins the set and both edges.
+The lowercasing is core's `to_ascii_lowercase`, hand-written rather than
+.NET's `ToLowerInvariant`: the two differ outside ASCII (the Kelvin sign
+lowers to `k`, `İ` to `i̇`) and every difference ADMITS something core
+calls not-media, which is the wrong direction for a gate deciding what
+reaches `ShellExecute`.
+
+**Half of it is pinned against core anyway, without waiting for the
+export.** Core does not export the classification, but it exports one of
+its ANSWERS: `kind_label` returns `"image"` exactly when `media_class`
+says Image (`model.rs:646`), and that reaches the host as
+`CanvasOutlineRow.kind`. `TheImageThirdOfTheGateAgreesWithCoresOwnKindLabel`
+opens a canvas of file cards over every image extension the host set
+claims plus six non-media ones, and asserts core's own row agrees in
+both directions. The audio and video thirds have no exported answer —
+`kind_label` calls them plain `"file"` — and stay unpinned until PR E.
+
 **Drift note:** PR E is the first PR that needs the classification for
 its own reasons (the spec's Add Media row — "media kinds by extension
-set — core's `media_class` decides the label"), so PR E exports it and
-deletes this copy.
+set — core's `media_class` decides the label"), so PR E exports it,
+deletes this copy, and retires the pin above with it.
 
 **Deliberately stricter than mac, because the threat models differ.**
 Mac opens any non-Markdown target through `NSWorkspace`
-(`CanvasContainerView.swift:180–186`), where Gatekeeper, quarantine and
+(`CanvasContainerView.swift:181–187`), where Gatekeeper, quarantine and
 notarization adjudicate an execution; `ShellExecute` adjudicates
 nothing. Matching mac here would import a decision that only holds under
 mac's protections. Mac's laxer arm goes on the upstream-notes list, not
@@ -3038,7 +3061,7 @@ every deleted symbol was re-grepped to zero afterwards.
   (0a-8), and every selection change announces the boundary and then the
   move in the same synchronous run — so inside the 200 ms window the
   move wins and the boundary line is dropped, never spoken. Mac's
-  `announceMove` (`CanvasOutlineView.swift:414–432`) has exactly the
+  `announceMove` (`CanvasOutlineView.swift:404–432`) has exactly the
   same shape, so this is inherited parity, not a Windows defect. The
   class membership is pinned core-side and is not a host's to change.
   Recorded rather than worked around: CD-4's count rule is pinned on the
@@ -3207,6 +3230,24 @@ created a NEW blocker class, but they are recorded plainly:
 - **M2's addressing was still a broadcast.** One document serves every
   pane, so `RequestFocusLanding` reached every mounted surface and each
   landed. The request carries the asking tab now.
+**Fix round 4 (scoped re-check).** Two test-integrity defects in round
+3's own focus facts, both the same shape: a test that could not have
+failed.
+
+- **The two-pane fact was addressed to the wrong pane.** It asked for
+  focus in B and asserted focus landed in B — but with the guard deleted
+  BOTH surfaces land and B, subscribed second, wins the last word, so
+  the fact passed either way. It addresses pane A now, the surface
+  mounted first, which is the one a broadcast loses to. Mutation-verified.
+- **`AnEmptyCanvasLandsFocusOnTheOnboardingRegion` had no
+  `DataContext`,** so it was asserting on a shape production never
+  builds; A14 cited it as a pin for behaviour it did not exercise. It
+  runs through the workspace's open funnel now. The enabler is gone
+  with it: `RequestFocusLanding`'s `owner` parameter lost its default,
+  so an unaddressed call is a compile error rather than a convention —
+  which is what turned the defect up in the first place, since removing
+  the default broke exactly that one call site.
+
 - Two contract amendments from round 2 (A13's routing, A14's trigger)
   were **lost when their edit script aborted on a later assertion** and
   the file was never written — the code shipped, the record did not.

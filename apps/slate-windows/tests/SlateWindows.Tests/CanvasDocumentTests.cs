@@ -1472,6 +1472,69 @@ public sealed class CanvasDocumentTests : IDisposable
         Assert.Equal(expected, CanvasMediaPolicy.IsOpenableMedia(target));
 
     /// <summary>
+    /// Half the transliteration, pinned against CORE — for free, and
+    /// without waiting for PR E to export `media_class`.
+    /// </summary>
+    /// <remarks>
+    /// Core does not export the classification, but it does export one
+    /// of its ANSWERS: `kind_label` returns `"image"` exactly when
+    /// `media_class` says Image (`model.rs:646`), and that reaches the
+    /// host as `CanvasOutlineRow.Kind`. So for every image extension the
+    /// host set claims, core's own row must agree — and for a
+    /// non-media extension core must say `"file"`, which catches the
+    /// gate widening in either direction. The audio and video thirds
+    /// have no exported answer and stay unpinned until PR E; CD-38
+    /// records that.
+    /// </remarks>
+    [Fact]
+    public void TheImageThirdOfTheGateAgreesWithCoresOwnKindLabel()
+    {
+        string[] imageExtensions =
+        [
+            "png", "jpg", "jpeg", "gif", "svg", "webp", "bmp", "heic", "avif", "tiff",
+        ];
+        string[] nonMediaExtensions = ["exe", "bat", "ps1", "zip", "pdf", "txt"];
+
+        var nodes = new List<string>();
+        foreach (string extension in imageExtensions.Concat(nonMediaExtensions))
+        {
+            File.WriteAllBytes(
+                Path.Combine(_fixture.Root, $"asset.{extension}"), [0x00]);
+            nodes.Add(
+                $"{{\"id\":\"{extension}\",\"type\":\"file\",\"file\":\"asset.{extension}\","
+                + "\"x\":0,\"y\":0,\"width\":10,\"height\":10}");
+        }
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "kinds.canvas"),
+            "{\"nodes\":[" + string.Join(",", nodes) + "],\"edges\":[]}");
+        using var cancel = new CancelToken();
+        _session.ScanInitial(cancel);
+
+        CanvasDocumentViewModel document = NewDocument("kinds.canvas");
+        document.Load();
+
+        foreach (string extension in imageExtensions)
+        {
+            // Core says image ⇒ the host gate must admit it.
+            Assert.Equal("image", Row(document, extension).Kind);
+            Assert.True(
+                CanvasMediaPolicy.IsOpenableMedia($"asset.{extension}"),
+                $"core classifies .{extension} as an image; the gate refuses it");
+        }
+        foreach (string extension in nonMediaExtensions)
+        {
+            // Core says plain file ⇒ the host gate must not admit it as
+            // an IMAGE. (Audio and video are also "file" to kind_label,
+            // which is why this direction only pins the image third.)
+            Assert.Equal("file", Row(document, extension).Kind);
+            Assert.False(
+                CanvasMediaPolicy.IsOpenableMedia($"asset.{extension}"),
+                $"the gate admits .{extension}, which core does not classify as media");
+        }
+        document.Shutdown();
+    }
+
+    /// <summary>
     /// M2's last hole: one document serves every pane on the path, so an
     /// unaddressed focus request landed in all of them. Opening in pane
     /// B must not pull focus out of pane A.
@@ -1501,16 +1564,18 @@ public sealed class CanvasDocumentTests : IDisposable
         panel.Children.Add(surfaceB);
         using var host = Host(panel);
 
-        // The user opened in pane B: the workspace addresses the request
-        // to pane B's tab.
-        paneB.Canvas!.RequestFocusLanding(paneB);
+        // Addressed to pane A — the surface mounted FIRST, and therefore
+        // the one a broadcast would lose to. With the guard, only A
+        // lands. Without it both land and B, subscribed second, wins the
+        // last word: asserting on A is what makes the deleted guard
+        // fail this fact rather than pass it.
+        paneA.Canvas!.RequestFocusLanding(paneA);
         host.UpdateLayout();
 
         CanvasOutlineRowViewModel? focused = FocusedRow(host);
         Assert.NotNull(focused);
-        // The focused row belongs to B's tree, not A's.
-        Assert.Contains(focused, AllRows(surfaceB.OutlineForTests.RootsForTests));
-        Assert.DoesNotContain(focused, AllRows(surfaceA.OutlineForTests.RootsForTests));
+        Assert.Contains(focused, AllRows(surfaceA.OutlineForTests.RootsForTests));
+        Assert.DoesNotContain(focused, AllRows(surfaceB.OutlineForTests.RootsForTests));
     });
 
     private static IEnumerable<CanvasOutlineRowViewModel> AllRows(
@@ -1532,7 +1597,10 @@ public sealed class CanvasDocumentTests : IDisposable
         workspace.OpenPath("board.canvas");
         WorkspaceTabViewModel tab =
             Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
-        var surface = new CanvasSurfaceView { Model = tab.Canvas };
+        // DataContext is the tab, as the tab template gives it — this
+        // fact does not raise a request, but a surface that cannot tell
+        // whose it is is not the production shape.
+        var surface = new CanvasSurfaceView { DataContext = tab, Model = tab.Canvas };
         var elsewhere = new TextBox();
         var panel = new StackPanel();
         panel.Children.Add(elsewhere);
@@ -1545,6 +1613,7 @@ public sealed class CanvasDocumentTests : IDisposable
             Path.Combine(_fixture.Root, "board.canvas"),
             Path.Combine(_fixture.Root, "renamed.canvas"));
         workspace.RetargetPath("board.canvas", "renamed.canvas");
+        surface.DataContext = tab;
         surface.Model = tab.Canvas;
         host.UpdateLayout();
 
@@ -1593,15 +1662,20 @@ public sealed class CanvasDocumentTests : IDisposable
     [Fact]
     public void AnEmptyCanvasLandsFocusOnTheOnboardingRegion() => RunSta(() =>
     {
-        CanvasDocumentViewModel document = NewDocument("blank.canvas");
-        document.Load();
-        var surface = new CanvasSurfaceView { Model = document };
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("blank.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        Assert.Empty(document.Outline);
+        var surface = new CanvasSurfaceView { DataContext = tab, Model = document };
         using var host = Host(surface);
 
-        document.RequestFocusLanding();
+        // The production route: the workspace's open funnel, addressed.
+        workspace.RequestActiveEditorFocus();
         host.UpdateLayout();
         Assert.Same(surface.OnboardingForTests, host.FocusedElement());
-        document.Shutdown();
     });
 
     /// <summary>t0 §3: a failure a keyboard user cannot reach is a
