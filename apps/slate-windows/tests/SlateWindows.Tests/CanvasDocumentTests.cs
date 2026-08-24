@@ -789,11 +789,13 @@ public sealed class CanvasDocumentTests : IDisposable
             Assert.Equal(Visibility.Visible, surface.OutlineForTests.Visibility);
             Assert.Equal(Visibility.Visible, surface.DegradedBannerForTests.Visibility);
             Assert.Equal(skipped.DegradedBannerText, surface.DegradedBannerForTests.Text);
-            // t0 §5's focusable detail rows, one per preserved entry.
+            // t0 §5's focusable detail rows: EVERY warning, which is
+            // wider than the banner's skipped-entry count on purpose.
             Assert.Equal(Visibility.Visible, surface.WarningRowsForTests.Visibility);
             Assert.Equal(
-                skipped.PreservedItemCount,
+                skipped.Warnings.Count,
                 surface.WarningRowsForTests.ItemsSource.Cast<object>().Count());
+            Assert.True(skipped.Warnings.Count >= skipped.PreservedItemCount);
             skipped.Shutdown();
 
             CanvasDocumentViewModel blank = NewDocument("blank.canvas");

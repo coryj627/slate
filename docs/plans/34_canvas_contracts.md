@@ -976,6 +976,17 @@ the mac CD-3 precedent, so banner and speech cannot drift. Pinned by
 `TwoPanesOnOneDocumentAnnounceTheDegradedLoadOnce` and
 `TheDegradedBannerTextIsTheRenderedEvent`.
 
+**The footer rows are wider than the banner's count, deliberately.**
+Spec behavior 2 asks for "a focusable detail row in the outline footer
+listing `warnings`" — every warning, which on `malformed.canvas` is
+eight where the banner's `skipped` is five. The footer lists all of
+them, because a dangling connection or an ignored side is a fact about
+the user's file that nothing else in this PR reports, and the banner
+keeps the vocabulary's number, because that is the parameter the event
+takes. The footer renders only under `Ready`: a parse error's state
+message IS its single `ParseFailed` detail (A3), so listing it below
+would say the same sentence twice.
+
 **A5 — `CanvasAnnouncer` is a relay and a clock, and nothing else.**
 R-C. It takes a typed `CanvasA11yEvent`, wraps it in
 `A11yEvent.Canvas`, renders it through `SlateUniffiMethods.A11yRender`,
@@ -2670,6 +2681,89 @@ every deleted symbol was re-grepped to zero afterwards.
   relative rects, the `large_2000.canvas` exclusion — compare equal
   value for value. The equality that matters is still the committed
   golden, which only the mac CI lane can decide.
+
+### Task A-1 (the Windows document, tab and outline)
+
+- **CD-28 is not a reading, it is measurable.** The committed
+  `malformed.canvas` — the fixture whose whole purpose is entries core
+  preserves but cannot show — comes back `degraded: false` with eight
+  warnings, five of them `SkippedEntry`, and two live rows. The banner
+  it drives says *five*. Meanwhile every `ParseFailed` arm of
+  `canvas::parse` returns `Canvas::default()`, so the state the flag
+  names can never carry a skipped entry at all. Both facts are visible
+  in the committed `canvas_read.json` golden, which is why that artifact
+  serializes the warnings rather than just their count.
+- **The group boundary is superseded by the move, on BOTH hosts.**
+  `CanvasGroupEntered` and `CanvasMovedTo` are both class `navigation`
+  (0a-8), and every selection change announces the boundary and then the
+  move in the same synchronous run — so inside the 200 ms window the
+  move wins and the boundary line is dropped, never spoken. Mac's
+  `announceMove` (`CanvasOutlineView.swift:414–432`) has exactly the
+  same shape, so this is inherited parity, not a Windows defect. The
+  class membership is pinned core-side and is not a host's to change.
+  Recorded rather than worked around: CD-4's count rule is pinned on the
+  PURE `GroupBoundaryEvent` (the mac `returnOpensRow` precedent) and the
+  audible outcome is pinned separately by
+  `TheMoveSupersedesTheBoundaryInsideTheCoalescingWindow`. **Worth an
+  upstream look at close-out** — t0 §1.2 specifies group entry/exit
+  narration, and neither host currently delivers it on the arrow path.
+- **The §K row's mac reference number is the wrong benchmark.** The spec
+  asks PR A to record its numbers "against the mac `5.62 ms` core path
+  (the C# delta is marshalling only)". `5.62 ms` is
+  `canvas_parse_derive_2000` — pure parse + derive, no persistence.
+  `open_canvas` additionally runs an indexed `canvas_nodes` write inside
+  `begin_fenced` and inserts into the session registry, and it measures
+  **36.27 ms** here. The C# delta this suite actually isolates is
+  **~4.6 ms** for all three projections behind one open. A like-for-like
+  ratio needs a Rust bench of `open_canvas`, which does not exist;
+  BENCHMARKS.md says so rather than printing a ratio that would mean
+  nothing. (The measuring box is also a QEMU VM, not the bare metal the
+  W2-x rows used — recorded in the same entry.)
+- **The warning footer is wider than the banner, and gated on Ready.**
+  Spec behavior 2 asks for "a focusable detail row in the outline footer
+  listing `warnings`", and the banner's count is core's `skipped`
+  parameter. Those are two different sets on the same fixture (eight
+  versus five on `malformed.canvas`), so the footer lists every warning
+  — a dangling connection is a fact about the user's file that nothing
+  else in this PR reports — while the banner keeps the vocabulary's
+  number. The footer renders only under `Ready`: a parse error's state
+  message IS its single `ParseFailed` detail, so listing it below would
+  say the same sentence twice.
+- **`TreeViewItemAutomationPeer` has no `IInvokeProvider`.** It
+  implements ExpandCollapse, SelectionItem and ScrollItem, and the
+  spec's outline needs Invoke on both the node rows and the connection
+  rows. The alternative — an invokable child element inside each row —
+  is what the journeys' peered-elements-only trap forbids, so the item
+  is a `CanvasOutlineItem` whose peer adds the pattern.
+- **A `RenderedAnnouncement` overload was unavoidable.**
+  `AccessibilityNotificationDispatcher.Post` rendered internally, and a
+  coalescer cannot use that: the window's winner is decided AFTER the
+  render and the loser is dropped without ever being spoken, so the
+  queue holds rendered lines. `Post(A11yEvent)` now delegates to
+  `Post(RenderedAnnouncement)`; the seam is threaded from `MainWindow`
+  through the vault lifecycle to the workspace with the same
+  `?? (_ => { })` shape the event seam already had.
+- **The attach funnel's doc comment was one site behind, and now cannot
+  be.** The controller ruling said four listed versus five real; that
+  was correct (`Layout.cs:161`, the active-tab replace arm in
+  `TryOpenItem`, was missing). Both the fix and the guard landed
+  together, and the guard was mutation-verified: dropping `TryOpenItem`
+  from the comment fails
+  `TheAttachFunnelDocCommentNamesEveryCallSite` with that name in the
+  message, and adding an `AccessibilityNotificationDispatcher` field to
+  a `Canvas/` file fails `NoCanvasSourceAnnouncesOutsideTheRelay`.
+- **`ChordScope.Canvas` has no scrape yet, and `ChordTableTests` says
+  so.** `EveryScopeIsEitherScrapedFromProductionOrDispositioned` demands
+  that a new scope be either scraped from a production key handler or
+  dispositioned with a reason. PR A's three canvas commands carry no
+  chord (rule R1: the switcher is a visible control and the palette is
+  always a path), so `Reg` gives them `ChordScope.None` and the scope
+  itself is dispositioned — PR C's navigator ships the first
+  Canvas-scoped row and the scrape that checks it.
+- **`dotnet format --verify-no-changes` is clean solution-wide** at
+  every commit; no unrelated file was rewritten. The ten xUnit2031
+  analyzer warnings the first cut of `CanvasDocumentTests` produced were
+  cleared rather than left in the log.
 
 ---
 

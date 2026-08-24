@@ -803,7 +803,10 @@ internal static class CanvasPhrase
     /// (<c>CanvasDocument.swift</c>, verbatim).</summary>
     public const string NotValidJsonCanvas = "the file is not valid JSON Canvas";
 
-    public const string WarningsRegionName = "Unsupported items";
+    /// <summary>The footer list holds EVERY load warning, so it is
+    /// named for that rather than for the banner's narrower
+    /// skipped-entry count.</summary>
+    public const string WarningsRegionName = "Canvas load warnings";
 
     public const string DetailRegionName = "Card text";
 

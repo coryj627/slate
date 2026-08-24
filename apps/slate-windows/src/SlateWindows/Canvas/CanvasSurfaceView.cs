@@ -287,10 +287,20 @@ internal sealed class CanvasSurfaceView : UserControl
         SetBanner(_degradedBanner, model.DegradedBannerText ?? string.Empty);
         SetBanner(_onboarding, model.EmptyOnboardingText ?? string.Empty);
 
-        string[] warnings = model.Warnings
-            .Where(warning => warning.Kind == CanvasLoadWarningKind.SkippedEntry)
-            .Select(warning => warning.Detail)
-            .ToArray();
+        // EVERY warning, not just the skipped entries (spec §PR A
+        // behavior 2: "a focusable detail row in the outline footer
+        // listing `warnings`"). The BANNER's count stays core's
+        // skipped-entry count, because that is the parameter the
+        // vocabulary takes; the list is wider on purpose — a dangling
+        // connection or an ignored side is a fact about the user's file
+        // that no other surface in this PR reports.
+        // ...and only under a READY load. A parse error's own message
+        // IS its single ParseFailed detail (contract A3), so listing it
+        // again below would say the same sentence twice: the states are
+        // "a message" or "a banner with its rows", never both.
+        string[] warnings = model.State == CanvasLoadState.Ready
+            ? model.Warnings.Select(warning => warning.Detail).ToArray()
+            : [];
         _warningRows.ItemsSource = warnings;
         _warningRows.Visibility = warnings.Length > 0
             ? Visibility.Visible
