@@ -1235,7 +1235,16 @@ committed fixtures, the once-per-open degraded announcement across two
 panes, selection sync both ways, activation per kind, focus land and
 restore, `ActiveCanvasSurface` round-trip and its forward-compat drop,
 the close-gate bypass, and the 2,000-node outline budget in both
-scheduling modes.
+scheduling modes. Two of its facts are the ones a CI-arbitrated journey
+would otherwise be the only witness for:
+`TheTreeItemsCarryTreeSelectionItemExpandCollapseAndInvoke` builds the
+real peers and asserts the four patterns, the control types and the
+three label properties (mutation-verified — dropping the
+`GetPattern` override makes Invoke null, which is why the custom peer
+exists at all), and
+`ShowTableAndShowVisualRegisterAndStayDisabledUntilTheirProjectionsShip`
+drives the registrar over a live workspace rather than a null-workspace
+stub.
 `apps/slate-windows/tests/SlateWindows.Tests/CanvasAnnouncerTests.cs`:
 latest-wins per class, the two classes independent, the High
 flush-and-drop, the relay's priority pass-through, and the label render

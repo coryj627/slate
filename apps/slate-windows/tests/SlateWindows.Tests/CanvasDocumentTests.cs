@@ -3,6 +3,8 @@
 
 using System.Diagnostics;
 using System.Windows;
+using System.Windows.Automation.Peers;
+using System.Windows.Automation.Provider;
 using System.Windows.Controls;
 using SlateWindows.Canvas;
 using uniffi.slate_uniffi;
@@ -738,6 +740,51 @@ public sealed class CanvasDocumentTests : IDisposable
         document.Shutdown();
     });
 
+    /// <summary>
+    /// Contract A8's UIA surface, pinned locally as well as in the
+    /// journey: the item is a Tree/TreeItem pair with ExpandCollapse
+    /// and SelectionItem from WPF, and Invoke from
+    /// <c>CanvasOutlineItemAutomationPeer</c> — which exists because
+    /// <c>TreeViewItemAutomationPeer</c> implements the first three and
+    /// not the fourth. The journey is CI-arbitrated; this is not.
+    /// </summary>
+    [Fact]
+    public void TheTreeItemsCarryTreeSelectionItemExpandCollapseAndInvoke() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = NewDocument("board.canvas");
+        document.Load();
+        var surface = new CanvasSurfaceView { Model = document };
+        using var host = Host(surface);
+        CanvasOutlineView view = surface.OutlineForTests;
+
+        AutomationPeer treePeer = Assert.IsAssignableFrom<AutomationPeer>(
+            UIElementAutomationPeer.CreatePeerForElement(view.TreeForTests));
+        Assert.Equal(AutomationControlType.Tree, treePeer.GetAutomationControlType());
+        Assert.Equal(CanvasPhrase.OutlineName, treePeer.GetName());
+
+        CanvasOutlineRowViewModel group =
+            Assert.Single(view.RootsForTests, row => row.Id == "grp");
+        var container = Assert.IsType<CanvasOutlineItem>(
+            view.TreeForTests.ItemContainerGenerator.ContainerFromItem(group));
+        AutomationPeer peer = Assert.IsAssignableFrom<AutomationPeer>(
+            UIElementAutomationPeer.CreatePeerForElement(container));
+        Assert.Equal(AutomationControlType.TreeItem, peer.GetAutomationControlType());
+        Assert.Equal(group.Name, peer.GetName());
+        Assert.Equal(group.Status, peer.GetItemStatus());
+        Assert.Equal(group.Hint, peer.GetHelpText());
+        Assert.NotNull(peer.GetPattern(PatternInterface.ExpandCollapse));
+        Assert.NotNull(peer.GetPattern(PatternInterface.SelectionItem));
+        // The one WPF does not give a TreeViewItem.
+        var invoke = Assert.IsAssignableFrom<IInvokeProvider>(
+            peer.GetPattern(PatternInterface.Invoke));
+
+        // And it really activates: Invoke on a group expands it.
+        group.IsExpanded = false;
+        invoke.Invoke();
+        Assert.True(group.IsExpanded);
+        document.Shutdown();
+    });
+
     [Fact]
     public void OpeningLandsFocusOnTheFirstRowAndReturningRestoresIt() => RunSta(() =>
     {
@@ -938,6 +985,147 @@ public sealed class CanvasDocumentTests : IDisposable
         ((System.Windows.Input.ICommand)workspace.CloseActiveTabCommand).Execute(null);
         Assert.False(consulted);
         Assert.Empty(workspace.ActiveGroup.Tabs);
+    }
+
+    // --- A18: the three surface commands ------------------------------------
+
+    /// <summary>
+    /// All three register so the palette lists the whole switcher from
+    /// this slice; the two whose projections have not shipped resolve
+    /// to a command whose CanExecute is false, so the registrar answers
+    /// its canonical unavailable sentence rather than a per-PR string
+    /// (contract A18).
+    /// </summary>
+    [Fact]
+    public void ShowTableAndShowVisualRegisterAndStayDisabledUntilTheirProjectionsShip()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        var host = new CanvasCommandHost(workspace);
+
+        foreach (string id in new[]
+        {
+            Commands.ChordTable.Ids.CanvasShowOutline,
+            Commands.ChordTable.Ids.CanvasShowTable,
+            Commands.ChordTable.Ids.CanvasShowVisual,
+        })
+        {
+            Commands.ChordTableEntry row = Assert.IsType<Commands.ChordTableEntry>(
+                Commands.ChordTable.Find(id));
+            Assert.True(row.IsRegistered, $"{id} must be a registered row");
+            Assert.Equal(CommandSection.Canvas, row.Section);
+            // No chord in PR A: the switcher is a visible control and
+            // the palette is always a path (rule R1), so Reg's own rule
+            // gives the row ChordScope.None.
+            Assert.Null(row.WindowsChord);
+            Assert.Equal(Commands.ChordScope.None, row.Scope);
+            Assert.Contains(id, Commands.SlateCommandRegistrar.ResolvableIds);
+        }
+
+        Assert.Null(Commands.SlateCommandRegistrar.DisabledReason(
+            host, Commands.ChordTable.Ids.CanvasShowOutline));
+        foreach (string unshipped in new[]
+        {
+            Commands.ChordTable.Ids.CanvasShowTable,
+            Commands.ChordTable.Ids.CanvasShowVisual,
+        })
+        {
+            Assert.Equal(
+                Commands.SlateCommandRegistrar.UnavailableReason,
+                Commands.SlateCommandRegistrar.DisabledReason(host, unshipped));
+        }
+
+        // The one that IS shipped switches the shared surface and
+        // speaks core's sentence.
+        _announced.Clear();
+        Commands.SlateCommandRegistrar
+            .Resolve(host, Commands.ChordTable.Ids.CanvasShowOutline)!
+            .Execute(null);
+        CanvasDocumentViewModel document = Assert.IsType<CanvasDocumentViewModel>(
+            workspace.ActiveGroup.ActiveTab!.Canvas);
+        Assert.Equal(CanvasSurfaceKind.Outline, document.Selection.ActiveSurface);
+        // Already on the outline, so the switch is a no-op and silent.
+        document.Announcer.FlushForTests();
+        Assert.Empty(_announced);
+
+        document.ShowSurface(CanvasSurfaceKind.Table);
+        document.Announcer.FlushForTests();
+        Assert.Equal(
+            SlateUniffiMethods.A11yRender(new A11yEvent.Canvas(
+                new CanvasA11yEvent.CanvasSurfaceShown(CanvasSurfaceKind.Table))).Text,
+            _announced[^1].Text);
+    }
+
+    /// <summary>Every canvas command dies with the vault: the tab and
+    /// the surface are gone, so a resolver that still answered would
+    /// hand the palette a command over a disposed session.</summary>
+    [Fact]
+    public void CanvasCommandsAreUnavailableWithNoCanvasTab()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("note0.md");
+        var host = new CanvasCommandHost(workspace);
+        Assert.Equal(
+            Commands.SlateCommandRegistrar.UnavailableReason,
+            Commands.SlateCommandRegistrar.DisabledReason(
+                host, Commands.ChordTable.Ids.CanvasShowOutline));
+    }
+
+    // --- A1/A17: vault-close teardown ----------------------------------------
+
+    /// <summary>
+    /// Vault close tears every canvas document down (spec behavior 1):
+    /// each holds the shared session and a native handle, and the
+    /// session is disposed right after this returns.
+    /// </summary>
+    [Fact]
+    public void DisposingTheWorkspaceShutsDownEveryCanvasDocument()
+    {
+        var workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        CanvasDocumentViewModel first = Assert.IsType<CanvasDocumentViewModel>(
+            workspace.ActiveGroup.ActiveTab!.Canvas);
+        ((System.Windows.Input.ICommand)workspace.SplitRightCommand).Execute(null);
+        workspace.OpenPath("skipped.canvas");
+        CanvasDocumentViewModel second = Assert.IsType<CanvasDocumentViewModel>(
+            workspace.ActiveGroup.ActiveTab!.Canvas);
+        Assert.NotSame(first, second);
+
+        workspace.Dispose();
+
+        // A shut-down scheduler refuses every body, so a post-teardown
+        // Load cannot reopen a handle over the dying session.
+        foreach (CanvasDocumentViewModel document in new[] { first, second })
+        {
+            CanvasLoadState before = document.State;
+            document.Load();
+            Assert.Equal(before, document.State);
+            Assert.True(document.WhenHandleClosed().IsCompleted);
+        }
+    }
+
+    /// <summary>The command bridge's host over a live workspace — the
+    /// registrar resolves through <c>Workspace</c>, so a null-workspace
+    /// stub could not see these rows at all.</summary>
+    private sealed class CanvasCommandHost(WorkspaceViewModel workspace)
+        : Commands.ISlateCommandHost
+    {
+        public WorkspaceViewModel? Workspace => workspace;
+
+        public FilesSidebarViewModel? FileSidebar => null;
+
+        public QuickSwitcherViewModel? QuickSwitcher => null;
+
+        public bool IsVaultOpen => true;
+
+        public System.Windows.Input.ICommand OpenVaultCommand =>
+            throw new NotSupportedException();
+
+        public System.Windows.Input.ICommand CloseVaultCommand =>
+            throw new NotSupportedException();
+
+        public System.Windows.Input.ICommand ToggleSearchCommand =>
+            throw new NotSupportedException();
     }
 
     // --- A17: the §K budget, in BOTH scheduling modes ------------------------
