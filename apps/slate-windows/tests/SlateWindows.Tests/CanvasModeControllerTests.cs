@@ -38,11 +38,17 @@ namespace SlateWindows.Tests;
 /// sheets, moves focus and lets the shell switch tabs. The bool is
 /// whether that effect then APPLIES.
 /// </param>
+/// <param name="NewThrowingDepartingSpec">
+/// The same, except the effect then THROWS — a mutation that faulted
+/// after focus had already moved. PR F's real modes commit through the
+/// funnel, so this is the shape a uniffi failure takes mid-effect.
+/// </param>
 internal sealed record CanvasModeProbe(
     CanvasModeController Controller,
     Func<CanvasModeSpec> NewSpec,
     Func<CanvasModeSpec> NewRefusingSpec,
     Func<bool, CanvasModeSpec> NewDepartingSpec,
+    Func<CanvasModeSpec> NewThrowingDepartingSpec,
     Func<IReadOnlyList<string>> Announced,
     Action Clear);
 
@@ -187,6 +193,55 @@ internal static class CanvasModeConformance
         Assert.Equal(2, refused.Count);
         Assert.DoesNotContain("cancelled", refused[0], StringComparison.Ordinal);
         Assert.Contains("cancelled", refused[1], StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Codex round 2, B2-continued: the deferred departure drains on the
+    /// EXCEPTIONAL exit too.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// An effect that threw applied nothing, which is the refused case by
+    /// another name — so the mode is retained by rule, and a mode may not
+    /// survive a focus departure. The departure the effect provoked
+    /// before failing therefore has to be honoured on the way out, with
+    /// its restoration and its sentence, and the slot has to be EMPTY
+    /// afterwards: a departure left behind would cancel a later commit's
+    /// mode, which is the same mode-lifecycle corruption one press later
+    /// and much harder to attribute.
+    /// </para>
+    /// <para>
+    /// The announcement stream is checked as a whole, not just its last
+    /// line, because the failure this guards produced no cancellation at
+    /// all — the user kept a mode whose focus had gone, with nothing said.
+    /// </para>
+    /// </remarks>
+    public static void ADepartureHeldAcrossAThrowingCommitStillCancels(
+        CanvasModeProbe probe)
+    {
+        Assert.True(probe.Controller.Enter(probe.NewThrowingDepartingSpec()));
+        probe.Clear();
+
+        // The failure PROPAGATES — the caller is owed it — and the
+        // controller still leaves a coherent stack behind.
+        _ = Assert.Throws<InvalidOperationException>(() => probe.Controller.Commit());
+        Assert.False(
+            probe.Controller.IsActive,
+            "an effect that threw applied nothing, so the mode is retained by "
+            + "rule — and the departure it provoked then cancels it (t0 §2 M4).");
+        Assert.Null(probe.Controller.ContainerValue);
+        string cancelled = Assert.Single(probe.Announced());
+        Assert.Contains("cancelled", cancelled, StringComparison.Ordinal);
+
+        // The slot is empty: the NEXT mode's commit is unaffected by the
+        // departure that belonged to the failed one.
+        probe.Clear();
+        Assert.True(probe.Controller.Enter(probe.NewSpec()));
+        Assert.True(probe.Controller.Commit());
+        Assert.False(probe.Controller.IsActive);
+        Assert.DoesNotContain(
+            probe.Announced(),
+            line => line.Contains("cancelled", StringComparison.Ordinal));
     }
 
     /// <summary>M3: the mode is INSPECTABLE, not merely announced.</summary>
@@ -381,6 +436,28 @@ public sealed class CanvasModeControllerTests
                 });
 
         /// <summary>
+        /// A spec whose commit effect departs and then FAULTS — the
+        /// exceptional exit from the transition.
+        /// </summary>
+        public CanvasModeSpec ThrowingDepartingSpec(
+            CanvasMode mode, CanvasModeController controller) =>
+            new(
+                mode,
+                new CanvasModeObject.Card("Research"),
+                () =>
+                {
+                    _ = controller.HandleFocusDeparture(
+                        CanvasFocusDeparture.PaneFocus);
+                    Refused = true;
+                    throw new InvalidOperationException("the mutation faulted.");
+                },
+                () =>
+                {
+                    Cancelled = true;
+                    return new CanvasModeRestoration.BackAt("Research");
+                });
+
+        /// <summary>
         /// A spec whose commit REFUSES and speaks its own reason — the
         /// shape PR F's real modes take when the funnel's admission says
         /// no (a canvas that went degraded or lost its handle mid-mode).
@@ -432,6 +509,7 @@ public sealed class CanvasModeControllerTests
             () => test.Spec(mode),
             () => test.RefusingSpec(mode, announcer.Announce),
             applies => test.DepartingSpec(mode, applies, controller, announcer.Announce),
+            () => test.ThrowingDepartingSpec(mode, controller),
             () => _announced.Select(line => line.Text).ToArray(),
             _announced.Clear);
     }
@@ -477,6 +555,12 @@ public sealed class CanvasModeControllerTests
     [MemberData(nameof(EveryMode))]
     public void M2_ARefusedCommitKeepsTheModeAlive(CanvasMode mode) =>
         CanvasModeConformance.ARefusedCommitKeepsTheModeAlive(NewProbe(mode));
+
+    [Theory]
+    [MemberData(nameof(EveryMode))]
+    public void M2_ADepartureHeldAcrossAThrowingCommitStillCancels(CanvasMode mode) =>
+        CanvasModeConformance.ADepartureHeldAcrossAThrowingCommitStillCancels(
+            NewProbe(mode));
 
     [Theory]
     [MemberData(nameof(EveryMode))]

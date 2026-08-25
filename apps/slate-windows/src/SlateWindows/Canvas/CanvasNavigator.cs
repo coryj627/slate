@@ -427,7 +427,12 @@ internal sealed class CanvasNavigator
                 CanvasFailedAction.WhereAmI, detail));
             return;
         }
+        // ONE view, and BOTH numbers off it: a numerator from the
+        // published unit over a denominator read live could describe two
+        // different canvases mid-reload (contract C10).
         CanvasFilterView view = _document.Filter;
+        uint shown = (uint)view.Rows.Count;
+        uint total = (uint)view.Total;
         var readback = new CanvasA11yEvent.CanvasWhereAmI(
             KindLabel: context.Kind,
             Title: context.Title,
@@ -446,8 +451,7 @@ internal sealed class CanvasNavigator
             // one thing C10's invariant forbids. Recorded as a
             // micro-divergence in C11.
             Filter: view.Narrowed
-                ? new CanvasFilterState.Active(
-                    (uint)view.Rows.Count, (uint)_document.Outline.Count)
+                ? new CanvasFilterState.Active(shown, total)
                 : new CanvasFilterState.Inactive());
         // The panel shows the SAME string the announcement speaks — one
         // render, no second composition (t0 §1.4/§3).
@@ -478,7 +482,9 @@ internal sealed class CanvasNavigator
     public void ClearFilter()
     {
         _document.FilterText = string.Empty;
-        Announce(new CanvasA11yEvent.CanvasFilterCleared((uint)_document.Outline.Count));
+        // The count comes from the view the clearing PUBLISHED — the
+        // widening is synchronous, so this is the canvas now on screen.
+        Announce(new CanvasA11yEvent.CanvasFilterCleared((uint)_document.Filter.Total));
     }
 
     /// <summary>
@@ -554,10 +560,13 @@ internal sealed class CanvasNavigator
         {
             return null;
         }
+        // ONE view for both numbers, here as everywhere: "n of m" built
+        // from a published numerator and a live denominator is a sentence
+        // about no canvas that ever existed (contract C10).
         CanvasFilterView view = _document.Filter;
         if (view.Current)
         {
-            return CanvasPhrase.FilterSummary(view.Rows.Count, _document.Outline.Count);
+            return CanvasPhrase.FilterSummary(view.Rows.Count, view.Total);
         }
         if (_document.ReadRefusal is { } note)
         {
@@ -569,7 +578,7 @@ internal sealed class CanvasNavigator
                 new CanvasStatusNote.Reopening()));
         }
         return view.Narrowed
-            ? CanvasPhrase.FilterSummary(view.Rows.Count, _document.Outline.Count)
+            ? CanvasPhrase.FilterSummary(view.Rows.Count, view.Total)
             : null;
     }
 
@@ -736,7 +745,7 @@ internal sealed class CanvasNavigator
             return false;
         }
         _document.FilterText = string.Empty;
-        Announce(new CanvasA11yEvent.CanvasFilterCleared((uint)_document.Outline.Count));
+        Announce(new CanvasA11yEvent.CanvasFilterCleared((uint)_document.Filter.Total));
         _presenter?.FocusProjection();
         return true;
     }

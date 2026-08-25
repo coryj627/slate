@@ -292,13 +292,23 @@ internal sealed class CanvasModeController : BindableBase
             // restoration to show for it.
             result = spec.OnCommit();
         }
-        finally
+        catch
         {
-            // Reopened even if the effect THREW: a controller stuck in
-            // the transition would refuse every later commit and cancel,
-            // which is a worse failure than the one being guarded.
+            // An effect that THREW applied nothing, which is the refused
+            // case by another name — so the mode is retained by rule, and
+            // the departure it provoked before failing is honoured here,
+            // BEFORE the exception propagates. Draining in a `finally`
+            // after the throw is not equivalent: the caller may be gone
+            // by then, and a departure left in the slot would cancel a
+            // LATER commit's mode instead of this one's.
             _committing = false;
+            DrainDeferredDeparture();
+            throw;
         }
+        // Reopened before the outcome is applied: a controller stuck in
+        // the transition would refuse every later commit and cancel,
+        // which is a worse failure than the one being guarded.
+        _committing = false;
         if (result.Applied)
         {
             // Cleared BEFORE the confirmation is announced: a sentence
@@ -319,12 +329,51 @@ internal sealed class CanvasModeController : BindableBase
         // keeps one — and a mode may not survive a focus departure, so it
         // cancels, with its restoration, after the single commit outcome
         // has been spoken.
-        if (_deferredDeparture is { } departure)
-        {
-            _deferredDeparture = null;
-            _ = HandleFocusDeparture(departure);
-        }
+        DrainDeferredDeparture();
         return result.Applied;
+    }
+
+    /// <summary>
+    /// Apply a departure held across a commit, if there is one. Drained
+    /// on EVERY exit from the transition — applied, refused, thrown, and
+    /// teardown — because a slot that survives its commit cancels the
+    /// NEXT one's mode instead.
+    /// </summary>
+    private void DrainDeferredDeparture()
+    {
+        if (_deferredDeparture is not { } departure)
+        {
+            return;
+        }
+        _deferredDeparture = null;
+        _ = HandleFocusDeparture(departure);
+    }
+
+    /// <summary>
+    /// Teardown (contract C7): the document is being retired.
+    /// </summary>
+    /// <remarks>
+    /// Ordered so the announcements still reach the user: the deferred
+    /// slot drains FIRST — a departure held across a failed commit owes a
+    /// restoration sentence, and the caller silences the funnel straight
+    /// after this returns — then the tab's own departure ends whatever
+    /// mode is left (M4's last case), and the slot is cleared so nothing
+    /// stale can outlive the object holding it.
+    ///
+    /// The transition is FORCED closed first. Teardown can reach here
+    /// from inside a commit effect — the shell retires the tab while the
+    /// effect is running — and a drain that still deferred would put the
+    /// departure straight back in the slot, then clear it: the mode would
+    /// outlive the document with its restoration never spoken. Nothing
+    /// will return to <see cref="Commit"/> to close the transition, so
+    /// closing it here is the truth rather than a workaround.
+    /// </remarks>
+    internal void Shutdown()
+    {
+        _committing = false;
+        DrainDeferredDeparture();
+        _ = HandleFocusDeparture(CanvasFocusDeparture.TabSwitch);
+        _deferredDeparture = null;
     }
 
     /// <summary>M2 cancel — Escape's first rung, the header's Cancel

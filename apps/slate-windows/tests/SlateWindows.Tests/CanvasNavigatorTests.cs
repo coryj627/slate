@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.ComponentModel;
 using System.Text;
 using System.Windows;
 using System.Windows.Automation;
@@ -733,6 +734,217 @@ public sealed class CanvasNavigatorTests : IDisposable
         // The pair that landed is the NEW outline's own answer.
         Assert.True(document.Filter.Current);
         Assert.DoesNotContain(document.FilteredOutline, row => row.NodeId == "loose");
+    }
+
+    /// <summary>
+    /// Codex round 2, B1-continued: a render woken by the STATE flip —
+    /// not by the publish — still sees ONE canvas.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The previous fact samples <c>OutlinePublished</c>, which is the
+    /// event the document controls. A WPF binding does not wait for it:
+    /// <c>PropertyChanged</c> on <c>State</c> re-runs the state template,
+    /// and a pane created during a reload binds to whatever the
+    /// properties say at that instant. So this samples EVERY property
+    /// notification as well, and reads exactly what such a pane would.
+    /// </para>
+    /// <para>
+    /// The invariants are stated per sample, because "the final answer is
+    /// right" was true of the defect too:
+    /// </para>
+    /// <list type="number">
+    /// <item><description>the two projections are the same canvas —
+    /// outline ids and table ids agree, before AND after narrowing;
+    /// </description></item>
+    /// <item><description>the summary's numerator counts the rows in that
+    /// sample and its denominator counts that sample's canvas, so "n of
+    /// m" is never a number from one load over a total from the next;
+    /// </description></item>
+    /// <item><description>and the canvas in any sample is one of the two
+    /// that exist — never a set mixing a deleted card with the rows that
+    /// replaced it.</description></item>
+    /// </list>
+    /// <para>
+    /// Then the two halves of the ruling: a sample taken mid-deferral
+    /// gets the PRIOR unit entire (rows, matches and total together), and
+    /// any sample already reading Ready is the NEW canvas — which is the
+    /// state flip and the unit publish being one step from here.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void AStateDrivenRenderDuringAReloadNeverSeesTwoCanvasesAtOnce()
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        document.FilterText = "zeta";
+        Assert.True(document.Filter.Current);
+        Assert.Contains(document.FilteredOutline, row => row.NodeId == "loose");
+        var before = document.Outline
+            .Select(row => row.NodeId).ToHashSet(StringComparer.Ordinal);
+        Assert.Contains("loose", before);
+
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "board.canvas"),
+            """
+            {
+              "nodes": [
+                {"id":"grp","type":"group","x":-40,"y":-40,"width":560,"height":400,"label":"Research"},
+                {"id":"question","type":"text","text":"Core question","x":0,"y":0,"width":240,"height":140,"color":"1"},
+                {"id":"evidence","type":"text","text":"Evidence zeta","x":260,"y":0,"width":220,"height":140},
+                {"id":"note","type":"file","file":"note0.md","x":0,"y":180,"width":240,"height":140}
+              ],
+              "edges": [
+                {"id":"e1","fromNode":"question","toNode":"evidence","label":"supports"}
+              ]
+            }
+            """);
+
+        var samples = new List<(CanvasLoadState State, string[] Outline, string[] Table,
+            string[] FilteredOutline, string[] FilteredTable, string? Summary)>();
+        void Sample() => samples.Add((
+            document.State,
+            document.Outline.Select(row => row.NodeId).ToArray(),
+            document.TableRows.Select(row => row.NodeId).ToArray(),
+            document.FilteredOutline.Select(row => row.NodeId).ToArray(),
+            document.FilteredTableRows.Select(row => row.NodeId).ToArray(),
+            document.Navigator.FilterSummaryText()));
+        void OnProperty(object? sender, PropertyChangedEventArgs e) => Sample();
+        void OnPublished(object? sender, EventArgs e) => Sample();
+        document.PropertyChanged += OnProperty;
+        document.OutlinePublished += OnPublished;
+        try
+        {
+            document.Load();
+        }
+        finally
+        {
+            document.PropertyChanged -= OnProperty;
+            document.OutlinePublished -= OnPublished;
+        }
+
+        var after = document.Outline
+            .Select(row => row.NodeId).ToHashSet(StringComparer.Ordinal);
+        Assert.DoesNotContain("loose", after);
+        Assert.NotEmpty(samples);
+        foreach ((CanvasLoadState state, string[] outline, string[] table,
+            string[] filteredOutline, string[] filteredTable, string? summary) in samples)
+        {
+            string where = $"state {state}, outline [{string.Join(',', outline)}], "
+                + $"table [{string.Join(',', table)}], summary '{summary}'";
+            var outlineIds = outline.ToHashSet(StringComparer.Ordinal);
+            var tableIds = table.ToHashSet(StringComparer.Ordinal);
+            Assert.True(outlineIds.SetEquals(tableIds), $"the projections disagree: {where}");
+            Assert.True(
+                filteredOutline.ToHashSet(StringComparer.Ordinal)
+                    .SetEquals(filteredTable.ToHashSet(StringComparer.Ordinal)),
+                $"the narrowed projections disagree: {where}");
+            Assert.All(filteredOutline, id => Assert.Contains(id, outlineIds));
+            Assert.All(filteredTable, id => Assert.Contains(id, tableIds));
+            if (summary is { } line)
+            {
+                Assert.Equal(
+                    CanvasPhrase.FilterSummary(filteredOutline.Length, outline.Length), line);
+            }
+            Assert.True(
+                outlineIds.SetEquals(before) || outlineIds.SetEquals(after),
+                $"a render saw a canvas that never existed: {where}");
+        }
+
+        // The deferral really happened, and what a pane binding inside it
+        // gets is the PRIOR unit whole — the old rows with the OLD
+        // answer's count over the OLD total, not a widened canvas and not
+        // a mixture.
+        var deferred = samples
+            .Where(sample =>
+                sample.Outline.ToHashSet(StringComparer.Ordinal).SetEquals(before))
+            .ToArray();
+        Assert.NotEmpty(deferred);
+        Assert.All(deferred, sample =>
+        {
+            Assert.Contains("loose", sample.FilteredOutline);
+            Assert.Contains("loose", sample.FilteredTable);
+            Assert.Equal(
+                CanvasPhrase.FilterSummary(sample.FilteredOutline.Length, before.Count),
+                sample.Summary);
+        });
+
+        // …and nothing reads Ready until the new canvas is what it is
+        // ready WITH. This is the pairing codex's blocker broke: the flip
+        // ran a scheduler hop ahead of the rows it announced.
+        Assert.All(
+            samples.Where(sample => sample.State == CanvasLoadState.Ready),
+            sample => Assert.True(
+                sample.Outline.ToHashSet(StringComparer.Ordinal).SetEquals(after),
+                "Ready was published with the previous canvas: "
+                + $"[{string.Join(',', sample.Outline)}]"));
+        Assert.Contains(samples, sample => sample.State == CanvasLoadState.Ready);
+    }
+
+    /// <summary>
+    /// Codex round 2, B2-continued: the tab is retired while a commit
+    /// effect is still running, with a focus departure already held.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Teardown is the one exit from the transition that never returns to
+    /// <c>Commit</c>, so the held departure has to drain HERE — and
+    /// before the funnel is silenced, because a departure owes a
+    /// restoration and a sentence saying what came back. The order is the
+    /// whole fact: drain, then silence.
+    /// </para>
+    /// <para>
+    /// And then the 0a-2 lesson's own shape, one document over: nothing
+    /// speaks after retirement. The commit's confirmation is composed
+    /// after the funnel closed and is DROPPED rather than queued, so the
+    /// user hears the restoration and nothing else — not a confirmation
+    /// for a canvas that no longer exists.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void AShutdownDuringACommitDrainsTheHeldDepartureThenSilences()
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        var spec = new CanvasModeSpec(
+            CanvasMode.Move,
+            new CanvasModeObject.Card("Research"),
+            () =>
+            {
+                // Focus leaves the canvas while the stack is still up…
+                _ = document.Modes.HandleFocusDeparture(CanvasFocusDeparture.PaneFocus);
+                // …and the shell retires the tab before the effect resolves.
+                document.Shutdown();
+                return CanvasModeCommitResult.Committed(
+                    new CanvasA11yEvent.CanvasModeCommitted(
+                        CanvasTransientVerb.Move,
+                        new CanvasModeObject.Card("Research")));
+            },
+            () => new CanvasModeRestoration.BackAt("Research"));
+        Assert.True(document.Modes.Enter(spec));
+        Drain(document);
+
+        _ = document.Modes.Commit();
+
+        // The held departure was honoured on the way out: the mode is
+        // gone, restored, and the restoration was SPOKEN.
+        Assert.False(document.Modes.IsActive);
+        Assert.Null(document.Modes.ContainerValue);
+        string line = OneLine(document);
+        Assert.Contains("cancelled", line, StringComparison.Ordinal);
+
+        // …and nothing the retired document composes afterwards reaches
+        // anybody — including the commit confirmation that resolved after
+        // the funnel closed.
+        Assert.DoesNotContain(
+            Lines(document),
+            spoken => spoken.Contains("Moved", StringComparison.Ordinal));
+        document.Announcer.Announce(
+            new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoMarks()));
+        Assert.Equal(line, OneLine(document));
+
+        // The slot is CLEARED at teardown: nothing stale is left to act
+        // on a document that is gone.
+        Assert.False(document.Modes.HandleFocusDeparture(CanvasFocusDeparture.PaneFocus));
+        Assert.Equal(line, OneLine(document));
     }
 
     /// <summary>

@@ -2420,9 +2420,19 @@ A focus departure raised inside that window is DEFERRED — one slot,
 latest-wins, because an effect that provokes two departures has still
 only left the canvas once — and a direct `Cancel` is REFUSED, because
 that is a caller error rather than a race and the commit already owns
-this press's outcome. The window is reopened in a `finally`, so an
-effect that throws cannot strand the controller in a state that refuses
+this press's outcome. The window is reopened before the outcome is
+applied, so nothing can strand the controller in a state that refuses
 every later transition.
+
+**A direct `Cancel` inside a commit effect is SILENT, and that is
+correct.** It returns false and says nothing: `CanvasModeCancelled` is
+the sentence for a mode that ENDED with its state restored, and neither
+happened — the mode is still up and the commit still owns the press. An
+announcement here would be an inaccurate one, which is worse than the
+silence, and the caller that made the call is host code rather than the
+user. Adjudicated in codex round 2 and recorded rather than left to be
+re-derived, because "a verb that answers nothing" normally reads as the
+never-silent defect and this one is not.
 
 **The deferred departure then applies to the RESULT**, which is the
 M4-correct order: a commit that APPLIED leaves no mode to cancel and the
@@ -2430,6 +2440,27 @@ departure is moot; a REFUSED one keeps the mode, and no mode may survive
 a focus departure, so it cancels — after the single commit outcome has
 been spoken. `ADepartureDuringTheCommitEffectYieldsOneOutcome` pins both
 variants, and PR F inherits it.
+
+**The slot drains on EVERY exit from the transition, and the exits are
+enumerated.** Applied, refused, THREW and TEARDOWN. An effect that threw
+applied nothing, which is the refused case by another name, so the mode
+is retained by rule and the departure it provoked is honoured in the
+`catch` BEFORE the exception propagates — draining in a `finally` after
+the throw is not equivalent, because a departure left in the slot would
+cancel a LATER commit's mode instead of this one's, which is the same
+lifecycle corruption one press later and much harder to attribute.
+Teardown is the exit that never returns to `Commit` at all: the shell
+can retire the tab from inside an effect, so `Shutdown` forces the
+transition closed, drains the held departure (its restoration owes a
+sentence), ends whatever mode is left with the tab's own departure, and
+CLEARS the slot so nothing stale outlives the object holding it. The
+document's `Shutdown` runs all of that BEFORE `Announcer.Shutdown`, or
+the restoration would be composed into a funnel that had already closed.
+`ADepartureHeldAcrossAThrowingCommitStillCancels` (in the conformance
+body PR F reuses) and
+`AShutdownDuringACommitDrainsTheHeldDepartureThenSilences` pin the two,
+the second in the 0a-2 shape: the retirement's own sentence speaks, and
+nothing composed after it reaches anybody.
 
 **A commit can be REFUSED, and a refused commit KEEPS the mode.** M2 was
 modelled as infallible and it is not: the canvas goes degraded or loses
@@ -2563,7 +2594,8 @@ selection, and with no viewport that is a sentence about nothing.
 
 **C10 — The filter is ONE view, and every consumer reads it.**
 `CanvasFilterView` carries the rows, whether they are narrowed, whether
-they answer the needle NOW, and the matched ids — and the outline rows,
+they answer the needle NOW, the matched ids and the TOTAL those rows
+came out of — and the outline rows,
 the table rows, the header's result summary, the announced count and
 Where-am-I's filter clause all read that one value. The invariant is
 *displayed rows == announced count*, by construction rather than by
@@ -2572,9 +2604,10 @@ agreement.
 The MATCH is core's `canvas_filter` (0b-13/0b-14): title, the kind type
 word, any one element of the group path, and the activation target. The
 needle goes over UNTRIMMED — core trims it, and an empty needle matches
-everything. The answer is memoized per needle and invalidated by every
-publish, because the ids can move under an unchanged needle; a read
-cache never outlives the rows it describes.
+everything. The answer is memoized per needle and cannot outlive the
+rows it describes, because it is a FIELD of the unit those rows are in:
+publishing new rows retires the ids that named the old ones in the same
+step.
 
 **A stale answer stays on screen rather than widening.** When the needle
 changed and nothing could answer it, the previous rows remain and
@@ -2622,30 +2655,56 @@ on screen under a populated filter field. A flash on a fast disk, a
 lasting lie on a slow one, and the same class the FilterView discipline
 was built for, one level up.
 
-Three things make the pair atomic. The memo carries the OUTLINE it
-intersected, so a view is always ids-over-their-own-rows and never ids
-matched against one set of rows intersected with another. `PublishReady`
-DEFERS its publish when a needle is active and a prior coherent answer
-exists — the surfaces keep showing that pair, rows and count together,
-which `Current: false` already models as "the previous answer is still
-on screen" — and the re-ask's landing publishes the new pair. And the
-answer's Post carries the outline snapshot as a THIRD guard beside the
-two generations: an answer computed against a different outline than the
-one now published never publishes at all, because the handle can be
-swapped by a load between a query taking the lock and its rows being
-published, which is a question the generations cannot answer on their
-own.
+**The published unit is EVERYTHING a projection reads, and it is one
+immutable value.** `CanvasProjectionUnit` carries the outline, the table
+rows, the id index, the needle its matches answer, the matched ids and
+both filtered halves — built by one factory so the filtered halves are
+always derived from the rows the unit itself carries. `_view` is swapped
+whole and never edited in place, so a mixture is UNREPRESENTABLE rather
+than merely avoided: a projection reads a value, and a value cannot be
+half-updated. `Total` comes off the unit for the same reason — a
+numerator from a published answer over a denominator read live is a
+sentence about no canvas that ever existed, and mid-reload it was
+exactly that.
 
-The one case that widens is an answer that FAILED after a reload: the
-retained memo describes rows that are gone, so it is dropped rather than
-pinning a dead outline forever — and the summary says the filter could
-not be applied, so the widening is STATED, which is the distinction this
-contract draws between an honest fallback and a silent one.
+Three things make the publish atomic. The unit pairs every half by
+construction, so `FilteredTableRows` is a field of the answer rather
+than a live re-intersection, and Where-am-I's clause, the header summary
+and the announced count all take BOTH their numbers off one view.
+`PublishReady` computes nothing visible: it HOLDS the load in
+`_pendingLoad` and re-asks, and `PublishLoadedUnit` then writes the
+rows, the warnings, the state and the selection re-seat — through the
+backing fields, silently — and raises the whole notification burst once.
+That is what makes the STATE FLIP and the unit publish one step from the
+consumers' view: a render woken by `State` can only see the unit that
+flip belongs to, and a pane that binds mid-deferral gets the PRIOR unit
+entire, rows and matches and total together, which `Current: false`
+already models as "the previous answer is still on screen". And the
+answer's Post carries the rows it intersected as a THIRD guard beside
+the two generations: an answer computed against a different outline than
+the one about to be published never publishes at all, because the handle
+can be swapped by a load between a query taking the lock and its rows
+being published, which is a question the generations cannot answer on
+their own.
 
+The one case that widens is an answer that FAILED: the load waiting on
+it must still land — holding it back leaves a dead outline on screen
+forever — so it lands as an UNNARROWED unit over the same new rows, with
+the summary saying the filter could not be applied. The widening is
+STATED, which is the distinction this contract draws between an honest
+fallback and a silent one.
+
+Two facts, because the two sampling points are different questions.
 `AReloadUnderANeedleNeverPublishesTheUnfilteredCanvas` asserts it over
-the PUBLISH STREAM rather than by chasing the window: every frame the
-document raises must be internally coherent, which fails whether or not
-the race is observable in a given scheduling mode.
+the PUBLISH STREAM — every frame the document raises must be internally
+coherent, which fails whether or not the race is observable in a given
+scheduling mode. `AStateDrivenRenderDuringAReloadNeverSeesTwoCanvasesAtOnce`
+asserts it over the PROPERTY notifications, because a WPF binding does
+not wait for the document's own event: it reads what a pane created
+mid-reload would read, and requires per sample that the two projections
+are the same canvas, that the summary's numerator and denominator come
+from that sample, that the canvas is one of the two that exist, and that
+anything already reading `Ready` is the NEW one.
 
 **The MATCH runs off the dispatcher, and the `Filter` view is pure.**
 It used to run inside the getter, on the UI thread, taking the `_ffiLock`
