@@ -128,13 +128,22 @@ internal sealed class AccessibleDataGrid : UserControl
         _grid.LoadingRow += OnLoadingRow;
         _grid.ItemContainerGenerator.StatusChanged += (_, _) =>
         {
-            if (_grid.ItemContainerGenerator.Status
-                == System.Windows.Controls.Primitives.GeneratorStatus.ContainersGenerated)
+            // The subscriber check comes BEFORE the post, not inside the
+            // posted callback. Every grid in the shell runs this handler,
+            // and most have no subscriber (Bases, the reading table) —
+            // checking inside meant each of them enqueued a
+            // Background-priority no-op per completed generation cycle,
+            // on the dispatcher every surface shares. The `?.` inside
+            // stays for the unsubscribe-after-post window.
+            if (ContainersRealized is null
+                || _grid.ItemContainerGenerator.Status
+                    != System.Windows.Controls.Primitives.GeneratorStatus.ContainersGenerated)
             {
-                _ = Dispatcher.BeginInvoke(
-                    System.Windows.Threading.DispatcherPriority.Background,
-                    () => ContainersRealized?.Invoke());
+                return;
             }
+            _ = Dispatcher.BeginInvoke(
+                System.Windows.Threading.DispatcherPriority.Background,
+                () => ContainersRealized?.Invoke());
         };
         // The menu EXISTS from construction (see OnContextMenuOpening:
         // first-request opening requires it); its items are rebuilt
