@@ -32,10 +32,17 @@ namespace SlateWindows.Tests;
 /// — PR C's test mode fakes the refusal, PR F supplies a real one (a
 /// canvas that went degraded or lost its handle mid-mode).
 /// </param>
+/// <param name="NewDepartingSpec">
+/// A fresh spec whose commit effect provokes a synchronous FOCUS
+/// DEPARTURE — the shape any real effect can take, since it opens
+/// sheets, moves focus and lets the shell switch tabs. The bool is
+/// whether that effect then APPLIES.
+/// </param>
 internal sealed record CanvasModeProbe(
     CanvasModeController Controller,
     Func<CanvasModeSpec> NewSpec,
     Func<CanvasModeSpec> NewRefusingSpec,
+    Func<bool, CanvasModeSpec> NewDepartingSpec,
     Func<IReadOnlyList<string>> Announced,
     Action Clear);
 
@@ -127,6 +134,59 @@ internal static class CanvasModeConformance
         probe.Clear();
         Assert.True(probe.Controller.Cancel());
         Assert.False(probe.Controller.IsActive);
+    }
+
+    /// <summary>
+    /// M2's one outcome, under RE-ENTRY: a commit effect that provokes a
+    /// focus departure produces exactly ONE commit outcome, and the
+    /// departure is honoured against the RESULT.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The effect is arbitrary host code and it runs while the stack is
+    /// still up: it opens a sheet, it moves focus, the shell switches
+    /// tabs — and M4 turns any of that into a cancel that re-entered the
+    /// controller mid-commit. The stack was cleared, a cancellation was
+    /// announced, and then the commit carried on and announced its
+    /// confirmation too: two outcomes for one press and a final state
+    /// that was neither.
+    /// </para>
+    /// <para>
+    /// Both variants matter and they end differently, which is the
+    /// point. A commit that APPLIED leaves no mode for the departure to
+    /// cancel, so it is moot. A REFUSED one keeps the mode — and no mode
+    /// may survive a focus departure, so the deferred departure then
+    /// cancels it, after the refusal has been spoken. That ordering is
+    /// what keeps M2's one outcome and M4's "no mode without focus" both
+    /// true at once.
+    /// </para>
+    /// </remarks>
+    public static void ADepartureDuringTheCommitEffectYieldsOneOutcome(
+        CanvasModeProbe probe)
+    {
+        // --- The effect APPLIED: the departure is moot.
+        Assert.True(probe.Controller.Enter(probe.NewDepartingSpec(true)));
+        probe.Clear();
+
+        Assert.True(probe.Controller.Commit());
+        Assert.False(probe.Controller.IsActive);
+        string committed = Assert.Single(probe.Announced());
+        Assert.DoesNotContain("cancelled", committed, StringComparison.Ordinal);
+
+        // --- The effect REFUSED: the mode is kept, then the deferred
+        // departure cancels it — in that order, and once each.
+        Assert.True(probe.Controller.Enter(probe.NewDepartingSpec(false)));
+        probe.Clear();
+
+        Assert.False(probe.Controller.Commit());
+        Assert.False(
+            probe.Controller.IsActive,
+            "a refused commit keeps the mode, and the departure the effect "
+            + "provoked then cancels it — no mode survives a focus departure.");
+        IReadOnlyList<string> refused = probe.Announced();
+        Assert.Equal(2, refused.Count);
+        Assert.DoesNotContain("cancelled", refused[0], StringComparison.Ordinal);
+        Assert.Contains("cancelled", refused[1], StringComparison.Ordinal);
     }
 
     /// <summary>M3: the mode is INSPECTABLE, not merely announced.</summary>
@@ -283,6 +343,44 @@ public sealed class CanvasModeControllerTests
                 });
 
         /// <summary>
+        /// A spec whose commit effect provokes a synchronous FOCUS
+        /// DEPARTURE before resolving — the re-entrancy any real effect
+        /// can cause by opening a sheet or letting the shell move focus.
+        /// </summary>
+        public CanvasModeSpec DepartingSpec(
+            CanvasMode mode,
+            bool applies,
+            CanvasModeController controller,
+            Action<CanvasA11yEvent> announce) =>
+            new(
+                mode,
+                new CanvasModeObject.Card("Research"),
+                () =>
+                {
+                    // The effect's side trip: focus leaves the canvas
+                    // while the stack is still up.
+                    _ = controller.HandleFocusDeparture(
+                        CanvasFocusDeparture.PaneFocus);
+                    if (!applies)
+                    {
+                        Refused = true;
+                        announce(new CanvasA11yEvent.CanvasMutationRefused(
+                            CanvasMutationRefusal.ReadOnly));
+                        return CanvasModeCommitResult.Refused();
+                    }
+                    Committed = true;
+                    return CanvasModeCommitResult.Committed(
+                        new CanvasA11yEvent.CanvasModeCommitted(
+                            CanvasTransientVerb.Move,
+                            new CanvasModeObject.Card("Research")));
+                },
+                () =>
+                {
+                    Cancelled = true;
+                    return new CanvasModeRestoration.BackAt("Research");
+                });
+
+        /// <summary>
         /// A spec whose commit REFUSES and speaks its own reason — the
         /// shape PR F's real modes take when the funnel's admission says
         /// no (a canvas that went degraded or lost its handle mid-mode).
@@ -333,6 +431,7 @@ public sealed class CanvasModeControllerTests
             controller,
             () => test.Spec(mode),
             () => test.RefusingSpec(mode, announcer.Announce),
+            applies => test.DepartingSpec(mode, applies, controller, announcer.Announce),
             () => _announced.Select(line => line.Text).ToArray(),
             _announced.Clear);
     }
@@ -378,6 +477,12 @@ public sealed class CanvasModeControllerTests
     [MemberData(nameof(EveryMode))]
     public void M2_ARefusedCommitKeepsTheModeAlive(CanvasMode mode) =>
         CanvasModeConformance.ARefusedCommitKeepsTheModeAlive(NewProbe(mode));
+
+    [Theory]
+    [MemberData(nameof(EveryMode))]
+    public void M2_ADepartureDuringTheCommitEffectYieldsOneOutcome(CanvasMode mode) =>
+        CanvasModeConformance.ADepartureDuringTheCommitEffectYieldsOneOutcome(
+            NewProbe(mode));
 
     [Theory]
     [MemberData(nameof(EveryMode))]

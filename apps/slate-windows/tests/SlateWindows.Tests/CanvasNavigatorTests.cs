@@ -638,6 +638,104 @@ public sealed class CanvasNavigatorTests : IDisposable
     }
 
     /// <summary>
+    /// A reload under an active needle never shows the unfiltered canvas,
+    /// and every frame's spoken count equals the rows it displays
+    /// (contract C10).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The document's rows and the filter's match set are CORRELATED, and
+    /// they had two independent producers: the load published rows, then
+    /// a scheduler hop later the re-ask published matches. Between them
+    /// sat a frame with every card on screen under a populated filter
+    /// field — a flash on a fast disk, a lasting lie on a slow one.
+    /// </para>
+    /// <para>
+    /// Asserted over the PUBLISH STREAM rather than by trying to catch
+    /// the window: in synchronous scheduling mode the hop is inline, so a
+    /// timing probe would prove nothing. Every publish is captured and
+    /// every captured frame must be internally coherent — which is the
+    /// stronger claim anyway, since it fails whether or not the race is
+    /// observable.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void AReloadUnderANeedleNeverPublishesTheUnfilteredCanvas()
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        document.FilterText = "zeta";
+        // The premise: the needle really narrows, it really answered, and
+        // the card the reload is about to delete is one of its matches.
+        Assert.True(document.Filter.Current);
+        Assert.InRange(document.FilteredOutline.Count, 2, document.Outline.Count - 1);
+        Assert.Contains(document.FilteredOutline, row => row.NodeId == "loose");
+
+        // The reload lands DIFFERENT rows — same file, one matching card
+        // gone. Reloading identical content would make a stale frame
+        // indistinguishable from a fresh one, which is how the first
+        // version of this fact passed against the defect.
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "board.canvas"),
+            """
+            {
+              "nodes": [
+                {"id":"grp","type":"group","x":-40,"y":-40,"width":560,"height":400,"label":"Research"},
+                {"id":"question","type":"text","text":"Core question","x":0,"y":0,"width":240,"height":140,"color":"1"},
+                {"id":"evidence","type":"text","text":"Evidence zeta","x":260,"y":0,"width":220,"height":140},
+                {"id":"note","type":"file","file":"note0.md","x":0,"y":180,"width":240,"height":140}
+              ],
+              "edges": [
+                {"id":"e1","fromNode":"question","toNode":"evidence","label":"supports"}
+              ]
+            }
+            """);
+
+        var frames = new List<(string[] Outline, string[] Table, string? Summary)>();
+        void Capture(object? sender, EventArgs e) => frames.Add((
+            document.FilteredOutline.Select(row => row.NodeId).ToArray(),
+            document.FilteredTableRows.Select(row => row.NodeId).ToArray(),
+            document.Navigator.FilterSummaryText()));
+        document.OutlinePublished += Capture;
+        try
+        {
+            document.Load();
+        }
+        finally
+        {
+            document.OutlinePublished -= Capture;
+        }
+
+        Assert.NotEmpty(frames);
+        var live = document.Outline.Select(row => row.NodeId).ToHashSet(StringComparer.Ordinal);
+        Assert.DoesNotContain("loose", live);
+        foreach ((string[] outline, string[] table, string? summary) in frames)
+        {
+            // No frame shows a row the document no longer has — which is
+            // what an eagerly published reload raised, with the rows from
+            // the discarded outline still on screen.
+            Assert.All(outline, id => Assert.Contains(id, live));
+            // …nor the whole canvas under a populated filter field.
+            Assert.True(
+                outline.Length < live.Count,
+                $"a published frame showed all {outline.Length} cards with "
+                + $"'{document.FilterText}' in the filter field.");
+            // The two projections narrow by ONE answer (contract C10).
+            Assert.Equal(
+                outline.ToHashSet(StringComparer.Ordinal),
+                table.ToHashSet(StringComparer.Ordinal));
+            // …and the number spoken is the number shown.
+            Assert.StartsWith(
+                $"{outline.Length} of ",
+                Assert.IsType<string>(summary),
+                StringComparison.Ordinal);
+        }
+
+        // The pair that landed is the NEW outline's own answer.
+        Assert.True(document.Filter.Current);
+        Assert.DoesNotContain(document.FilteredOutline, row => row.NodeId == "loose");
+    }
+
+    /// <summary>
     /// Whitespace is not a filter — mac's rule, including the one place
     /// .NET would have disagreed (a bare newline reads as ACTIVE there,
     /// and core trims it, so it matches everything).

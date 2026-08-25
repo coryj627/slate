@@ -2407,6 +2407,30 @@ comment about editor Escape says "commits" and never cites M2.**
 `CanvasModeCommitResult` and a cancel effect returning the
 `CanvasModeRestoration`.
 
+**The transition is CLOSED while a commit effect runs.** The effect is
+arbitrary host code — it opens a sheet, it moves focus, it lets the
+shell switch tabs — and any of that reaches this controller
+synchronously, where M4 turns it into a cancel. Re-entering mid-commit
+cleared the stack, announced a cancellation, and let the commit carry on
+and announce its confirmation too: two outcomes for one press and a
+final state that was neither.
+
+`Commit` therefore enters a committing state before invoking the effect.
+A focus departure raised inside that window is DEFERRED — one slot,
+latest-wins, because an effect that provokes two departures has still
+only left the canvas once — and a direct `Cancel` is REFUSED, because
+that is a caller error rather than a race and the commit already owns
+this press's outcome. The window is reopened in a `finally`, so an
+effect that throws cannot strand the controller in a state that refuses
+every later transition.
+
+**The deferred departure then applies to the RESULT**, which is the
+M4-correct order: a commit that APPLIED leaves no mode to cancel and the
+departure is moot; a REFUSED one keeps the mode, and no mode may survive
+a focus departure, so it cancels — after the single commit outcome has
+been spoken. `ADepartureDuringTheCommitEffectYieldsOneOutcome` pins both
+variants, and PR F inherits it.
+
 **A commit can be REFUSED, and a refused commit KEEPS the mode.** M2 was
 modelled as infallible and it is not: the canvas goes degraded or loses
 its handle mid-mode and the funnel's admission says no. Mac keeps the
@@ -2589,6 +2613,39 @@ which said so.
 
 **Filtered-out cards are a VIEW.** Selection is untouched by filtering
 and by clearing, and no `canvas_apply` is anywhere near it.
+
+**The document's rows and the filter's matches publish as ONE coherent
+pair.** They are correlated state and they had two independent
+producers: a reload published rows, then a scheduler hop later the
+re-ask published matches — and between them sat a frame with every card
+on screen under a populated filter field. A flash on a fast disk, a
+lasting lie on a slow one, and the same class the FilterView discipline
+was built for, one level up.
+
+Three things make the pair atomic. The memo carries the OUTLINE it
+intersected, so a view is always ids-over-their-own-rows and never ids
+matched against one set of rows intersected with another. `PublishReady`
+DEFERS its publish when a needle is active and a prior coherent answer
+exists — the surfaces keep showing that pair, rows and count together,
+which `Current: false` already models as "the previous answer is still
+on screen" — and the re-ask's landing publishes the new pair. And the
+answer's Post carries the outline snapshot as a THIRD guard beside the
+two generations: an answer computed against a different outline than the
+one now published never publishes at all, because the handle can be
+swapped by a load between a query taking the lock and its rows being
+published, which is a question the generations cannot answer on their
+own.
+
+The one case that widens is an answer that FAILED after a reload: the
+retained memo describes rows that are gone, so it is dropped rather than
+pinning a dead outline forever — and the summary says the filter could
+not be applied, so the widening is STATED, which is the distinction this
+contract draws between an honest fallback and a silent one.
+
+`AReloadUnderANeedleNeverPublishesTheUnfilteredCanvas` asserts it over
+the PUBLISH STREAM rather than by chasing the window: every frame the
+document raises must be internally coherent, which fails whether or not
+the race is observable in a given scheduling mode.
 
 **The MATCH runs off the dispatcher, and the `Filter` view is pure.**
 It used to run inside the getter, on the UI thread, taking the `_ffiLock`
@@ -2882,6 +2939,11 @@ convention.
    call — it needs F's transient holder to answer.
 4. Menu and context-menu opens KEEP the mode alive (C8/CD-41); the
    context-menu classification arm is untested until F ships one (m11).
+5. A commit effect may not assume the stack is transitionable while it
+   runs: `Cancel` refuses and a focus departure DEFERS until the outcome
+   is known. An effect that wants to abandon the mode returns
+   `Refused()` and lets the deferred departure (or the user) end it —
+   calling `Cancel` from inside its own commit gets nothing.
 
 ### Tests that pin PR C
 

@@ -172,6 +172,24 @@ internal sealed class CanvasModeController : BindableBase
     private readonly List<(CanvasEscapeRung Rung, Func<bool> Consume)> _rungs = [];
     private CanvasModeSpec? _active;
 
+    /// <summary>True while a commit effect is running — the window in
+    /// which the stack must not be transitioned by anybody else (M2's
+    /// one outcome).</summary>
+    private bool _committing;
+
+    /// <summary>
+    /// A focus departure raised from inside a commit effect, held until
+    /// the commit's outcome is known.
+    /// </summary>
+    /// <remarks>
+    /// ONE slot, latest-wins: an effect that provokes two departures has
+    /// still only left the canvas once as far as M4 is concerned, and
+    /// queueing them would cancel a mode that a later arm already
+    /// resolved. The same shape the announcer's coalescer takes, for the
+    /// same reason.
+    /// </remarks>
+    private CanvasFocusDeparture? _deferredDeparture;
+
     public CanvasModeController(Action<CanvasA11yEvent> announce)
     {
         ArgumentNullException.ThrowIfNull(announce);
@@ -250,33 +268,63 @@ internal sealed class CanvasModeController : BindableBase
     /// </returns>
     public bool Commit()
     {
-        if (_active is not { } spec)
+        if (_active is not { } spec || _committing)
         {
             return false;
         }
-        // The effect runs FIRST and the stack is cleared only if it
-        // APPLIED (t0 §2 M2): a refused commit keeps the mode and its
-        // transient state, so the user can fix what refused it or cancel
-        // out with the restoration intact. Clearing first would drop a
-        // move that was never made, with neither a commit nor a
-        // restoration to show for it.
-        CanvasModeCommitResult result = spec.OnCommit();
-        if (!result.Applied)
+        // THE TRANSITION IS CLOSED while the effect runs (t0 §2 M2's one
+        // outcome). The effect is arbitrary host code — it opens a sheet,
+        // it moves focus, it lets the shell switch tabs — and any of that
+        // reaches this controller SYNCHRONOUSLY. Without the guard a
+        // departure raised from inside the effect re-entered `Cancel`,
+        // cleared the stack, announced a cancellation, and then this
+        // method carried on and announced the confirmation too: two
+        // outcomes for one press, and a final state that is neither.
+        _committing = true;
+        CanvasModeCommitResult result;
+        try
         {
-            // Silent HERE, not silent to the user: the refusal is the
-            // effect's own sentence, because which refusal it is is the
-            // effect's knowledge.
-            return false;
+            // The effect runs FIRST and the stack is cleared only if it
+            // APPLIED: a refused commit keeps the mode and its transient
+            // state, so the user can fix what refused it or cancel out
+            // with the restoration intact. Clearing first would drop a
+            // move that was never made, with neither a commit nor a
+            // restoration to show for it.
+            result = spec.OnCommit();
         }
-        // Cleared BEFORE the confirmation is announced: a sentence that
-        // asks whether a mode is active (Where-am-I does) must see the
-        // stack as it will be, not as it was.
-        Active = null;
-        if (result.Confirmation is { } confirmation)
+        finally
         {
-            _announce(confirmation);
+            // Reopened even if the effect THREW: a controller stuck in
+            // the transition would refuse every later commit and cancel,
+            // which is a worse failure than the one being guarded.
+            _committing = false;
         }
-        return true;
+        if (result.Applied)
+        {
+            // Cleared BEFORE the confirmation is announced: a sentence
+            // that asks whether a mode is active (Where-am-I does) must
+            // see the stack as it will be, not as it was.
+            Active = null;
+            if (result.Confirmation is { } confirmation)
+            {
+                _announce(confirmation);
+            }
+        }
+        // A refusal is silent HERE, not silent to the user: which refusal
+        // it is is the effect's knowledge, so the effect said it.
+        //
+        // Now the departure the effect provoked applies to the RESULT,
+        // which is the M4-correct order: a commit that APPLIED leaves no
+        // mode for it to cancel and it is moot, while a REFUSED commit
+        // keeps one — and a mode may not survive a focus departure, so it
+        // cancels, with its restoration, after the single commit outcome
+        // has been spoken.
+        if (_deferredDeparture is { } departure)
+        {
+            _deferredDeparture = null;
+            _ = HandleFocusDeparture(departure);
+        }
+        return result.Applied;
     }
 
     /// <summary>M2 cancel — Escape's first rung, the header's Cancel
@@ -285,8 +333,13 @@ internal sealed class CanvasModeController : BindableBase
     /// rung.</summary>
     public bool Cancel()
     {
-        if (_active is not { } spec)
+        if (_active is not { } spec || _committing)
         {
+            // Refused rather than deferred while a commit is in flight:
+            // a direct cancel from inside a commit effect is a caller
+            // error, not a race, and the commit already owns this press's
+            // outcome. The DEPARTURE path defers instead, because M4 must
+            // still be honoured once the outcome is known.
             return false;
         }
         Active = null;
@@ -320,6 +373,21 @@ internal sealed class CanvasModeController : BindableBase
     /// </remarks>
     public bool HandleFocusDeparture(CanvasFocusDeparture departure)
     {
+        if (_committing && CancelsFor(departure))
+        {
+            // DEFERRED, not applied: a commit effect is mid-flight and it
+            // owns this press's outcome (M2). The departure is honoured
+            // the moment that outcome is known — see `Commit`.
+            _deferredDeparture = departure;
+            return false;
+        }
+        return CancelsFor(departure) && Cancel();
+    }
+
+    /// <summary>The M4 table itself, split out so the deferral above and
+    /// the application below cannot drift apart.</summary>
+    private static bool CancelsFor(CanvasFocusDeparture departure)
+    {
         bool cancels = departure switch
         {
             CanvasFocusDeparture.TabSwitch => true,
@@ -332,7 +400,7 @@ internal sealed class CanvasModeController : BindableBase
                 + "stack's focus-departure rule is a closed table (contract C7); "
                 + "a new departure is a decision, not a default."),
         };
-        return cancels && Cancel();
+        return cancels;
     }
 
     /// <summary>

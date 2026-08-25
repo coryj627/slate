@@ -144,7 +144,8 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     private int _filterFocusToken;
     private int _filterGeneration;
     private bool _filterAnswerFailed;
-    private (string Needle, IReadOnlySet<string> Ids)? _filterMatchCache;
+    private (string Needle, IReadOnlySet<string> Ids,
+        IReadOnlyList<CanvasOutlineRow> Outline)? _filterMatchCache;
 
     /// <summary>Row lookup by node id — the outline is walked by id from
     /// selection, activation and the tree's own callbacks.</summary>
@@ -816,17 +817,23 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             return;
         }
         if (_filterMatchCache is { } cached
-            && string.Equals(cached.Needle, _filterText, StringComparison.Ordinal))
+            && string.Equals(cached.Needle, _filterText, StringComparison.Ordinal)
+            && ReferenceEquals(cached.Outline, _outline))
         {
             OutlinePublished?.Invoke(this, EventArgs.Empty);
             return;
         }
         string needle = _filterText;
         int documentGeneration = Volatile.Read(ref _generation);
-        StartWork(() => FilterBody(needle, generation, documentGeneration));
+        IReadOnlyList<CanvasOutlineRow> outline = _outline;
+        StartWork(() => FilterBody(needle, generation, documentGeneration, outline));
     }
 
-    private void FilterBody(string needle, int generation, int documentGeneration)
+    private void FilterBody(
+        string needle,
+        int generation,
+        int documentGeneration,
+        IReadOnlyList<CanvasOutlineRow> outline)
     {
         bool answered;
         IReadOnlyList<string> matched;
@@ -856,15 +863,36 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         IReadOnlySet<string> ids = matched.ToHashSet(StringComparer.Ordinal);
         Post(() =>
         {
+            // THREE guards, and the third is the one reasoning cannot
+            // replace. A stale NEEDLE's answer must not overwrite a newer
+            // one; a stale DOCUMENT's must not land at all; and an answer
+            // computed against a DIFFERENT OUTLINE than the one now
+            // published must never publish, because its ids describe rows
+            // that are not the rows on screen. The handle can be swapped
+            // by a load between this query taking the lock and its rows
+            // being published, so "which outline did I intersect" is a
+            // question the generations cannot answer on their own.
             if (Volatile.Read(ref _filterGeneration) != generation
-                || Volatile.Read(ref _generation) != documentGeneration)
+                || Volatile.Read(ref _generation) != documentGeneration
+                || !ReferenceEquals(_outline, outline))
             {
                 return;
             }
             _filterAnswerFailed = !answered;
             if (answered)
             {
-                _filterMatchCache = (needle, ids);
+                _filterMatchCache = (needle, ids, outline);
+            }
+            else if (_filterMatchCache is { } stale
+                && !ReferenceEquals(stale.Outline, _outline))
+            {
+                // The retained answer describes rows that are GONE. Held
+                // on to, it would keep a dead outline on screen forever;
+                // dropped, the surfaces widen to the new rows — and the
+                // summary says the filter could not be applied, so the
+                // widening is stated rather than silent, which is the
+                // distinction C10 draws.
+                _filterMatchCache = null;
             }
             OutlinePublished?.Invoke(this, EventArgs.Empty);
             // The count is announced HERE — when an answer exists —
@@ -928,20 +956,26 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 return new CanvasFilterView(_outline, Narrowed: false, Current: true, null);
             }
             if (_filterMatchCache is { } cached
-                && string.Equals(cached.Needle, _filterText, StringComparison.Ordinal))
+                && string.Equals(cached.Needle, _filterText, StringComparison.Ordinal)
+                && ReferenceEquals(cached.Outline, _outline))
             {
                 return new CanvasFilterView(
-                    RowsMatching(cached.Ids), Narrowed: true, Current: true, cached.Ids);
+                    RowsMatching(cached), Narrowed: true, Current: true, cached.Ids);
             }
             if (_filterMatchCache is { } stale)
             {
-                // The needle moved on and this answer is the previous
-                // one. The PREVIOUS rows stay on screen and `Current` is
-                // false: widening silently back to the full outline would
-                // show every card while the field still claims to be
-                // filtering, and then speak that number as a match count.
+                // The needle moved on, or the OUTLINE did, and this answer
+                // is the previous coherent pair. Its own rows stay on
+                // screen and `Current` is false — and they come from the
+                // outline this answer was computed against, never from a
+                // newer one, because ids matched against one set of rows
+                // intersected with another set is a third thing that was
+                // never true of either. Widening silently back to the
+                // full outline would show every card while the field
+                // still claims to be filtering, and then speak that
+                // number as a match count.
                 return new CanvasFilterView(
-                    RowsMatching(stale.Ids), Narrowed: true, Current: false, stale.Ids);
+                    RowsMatching(stale), Narrowed: true, Current: false, stale.Ids);
             }
             // Nothing was ever applied, so the unfiltered outline IS the
             // prior view. `Narrowed: false` keeps the summary from
@@ -973,8 +1007,12 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             ? _tableRows.Where(row => ids.Contains(row.NodeId)).ToArray()
             : _tableRows;
 
-    private IReadOnlyList<CanvasOutlineRow> RowsMatching(IReadOnlySet<string> ids) =>
-        _outline.Where(row => ids.Contains(row.NodeId)).ToArray();
+    /// <summary>The answer's OWN rows — its ids over the outline it
+    /// intersected, so a view is always a coherent pair.</summary>
+    private static IReadOnlyList<CanvasOutlineRow> RowsMatching(
+        (string Needle, IReadOnlySet<string> Ids,
+            IReadOnlyList<CanvasOutlineRow> Outline) answer) =>
+        answer.Outline.Where(row => answer.Ids.Contains(row.NodeId)).ToArray();
 
     /// <summary>
     /// A request to put keyboard focus in the filter field (Ctrl+F). A
@@ -1138,7 +1176,14 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         _targets.Clear();
         _subpaths.Clear();
         _neighbors.Clear();
-        _filterMatchCache = null;
+        // The match memo is deliberately NOT cleared here. It is pinned
+        // to the outline it intersected, so it cannot be mistaken for an
+        // answer about the new rows — `Filter` compares the outline
+        // identity and reports `Current: false` — and keeping it is what
+        // lets the surfaces hold the prior COHERENT pair, rows and count
+        // together, until the re-ask lands (contract C10). It is dropped
+        // if that re-ask cannot answer, which is the one case where
+        // holding it would pin a dead outline forever.
         WhereAmIText = null;
         foreach (CanvasOutlineRow row in outline)
         {
@@ -1171,16 +1216,32 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             // keystroke of the surface's life.
             Selection.Selected = outline.Count > 0 ? outline[0].NodeId : null;
         }
-        OutlinePublished?.Invoke(this, EventArgs.Empty);
+        // THE PUBLISH IS DEFERRED when a needle is active and there is a
+        // prior coherent answer to keep showing (contract C10).
+        //
+        // Publishing here would raise a frame in which the rows are the
+        // NEW outline and no match set describes it — every card on
+        // screen with a populated filter field, then a second frame a
+        // scheduler hop later where they narrow again. The document's
+        // state and its filter view are correlated, and they had two
+        // independent producers; the new outline and its matches now
+        // publish as ONE pair.
+        //
+        // What the surfaces keep meanwhile is the PRIOR pair, rows and
+        // count together, which the `FilterView.Current` discipline
+        // already models as "the previous answer is still on screen".
+        bool deferToTheMatch = FilterActive && _filterMatchCache is not null;
+        if (!deferToTheMatch)
+        {
+            OutlinePublished?.Invoke(this, EventArgs.Empty);
+        }
         AnnounceDegradedLoadIfNeeded();
         if (FilterActive)
         {
-            // The publish above emptied the match cache, because a reload
-            // republishes rows the old ids no longer describe. Without
-            // re-asking, an active needle would leave every card on
-            // screen while the field still claimed to be filtering —
-            // exactly the silent widening the FilterView discipline
-            // exists to prevent (contract C10).
+            // The re-ask runs against the NEW outline. Without it an
+            // active needle would leave every card on screen while the
+            // field still claimed to be filtering — the silent widening
+            // the FilterView discipline exists to prevent.
             RefreshFilter();
         }
     }
