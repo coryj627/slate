@@ -512,16 +512,25 @@ public sealed class CanvasTableTests : IDisposable
     /// document's funnel.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The census only requires that at least one assignment names the
-    /// relay, so deleting the mute failed nothing (red team m-3). The
-    /// detach half is the one with teeth: the announcer is retired with
-    /// its document, and posting to a retired one is a `Debug.Fail` by
-    /// contract A5 — so a grid still holding a dead document's relay is
-    /// a real defect, not defence in depth. The unattached half is
-    /// asserted structurally, because "posted nothing through the
-    /// canonical dispatcher" has no in-process observer: the seam's
-    /// TARGET is the discriminator, since the substrate's default closes
-    /// over the grid itself.
+    /// relay, so deleting either mute failed nothing (red team m-3).
+    /// The DETACH half is the one with teeth: the announcer is retired
+    /// with its document, and posting to a retired one is a
+    /// <c>Debug.Fail</c> by contract A5 — so a grid still holding a dead
+    /// document's relay is a real defect, not defence in depth.
+    /// </para>
+    /// <para>
+    /// Both halves discriminate BY DELEGATE IDENTITY (target + method),
+    /// which is what the first version of this fact lacked and what the
+    /// re-review caught: a stale relay is not the grid's own closure
+    /// either, so asserting "the seam is not the substrate's default"
+    /// passed against exactly the defect it was written to catch, and
+    /// the sort it drove after detach was a no-op anyway (the zero-row
+    /// rebind leaves no current column to sort). The seam is also
+    /// INVOKED directly here — the same call the substrate makes on
+    /// every announcement — so the silence is observed, not inferred.
+    /// </para>
     /// </remarks>
     [Fact]
     public void AGridWithoutADocumentNeverPostsThroughTheSubstratesDefaultSeam() =>
@@ -535,22 +544,24 @@ public sealed class CanvasTableTests : IDisposable
             var substrateDefault = new AccessibleDataGrid();
             Assert.Same(substrateDefault, substrateDefault.Announce.Target);
 
-            // Attached: the seam is the document's relay.
+            // Attached: the seam IS this document's relay, by identity.
             (CanvasDocumentViewModel document, CanvasSurfaceView surface,
                 AccessibleDataGrid grid) = Table();
+            Assert.Equal<Action<A11yEvent>>(document.Announcer.Relay, grid.Announce);
             MoveReaderTo(grid, "beta");
             _announced.Clear();
             AccessibleDataGrid.ToggleSortCommand.Execute(null, grid);
             Assert.NotEmpty(_announced);
 
-            // Detached: nothing more reaches that document's funnel —
-            // which is what keeps a retired announcer from being posted
-            // to (contract A5's Debug.Fail).
+            // Detached: the seam is NO LONGER that document's relay…
             surface.Model = null;
+            Assert.NotEqual<Action<A11yEvent>>(document.Announcer.Relay, grid.Announce);
+            // …and it is really inert. Invoking the seam is what the
+            // substrate does on every sort, row move and cell move; a
+            // grid still wired to the retired document would post here.
             _announced.Clear();
-            AccessibleDataGrid.ToggleSortCommand.Execute(null, grid);
+            grid.Announce(new A11yEvent.GridSorted("Type", true));
             Assert.Empty(_announced);
-            Assert.NotSame(grid, grid.Announce.Target);
             document.Shutdown();
         });
 

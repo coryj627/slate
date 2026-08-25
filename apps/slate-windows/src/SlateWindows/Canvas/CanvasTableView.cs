@@ -393,15 +393,23 @@ internal sealed class CanvasTableView : UserControl
     /// Mac's <c>&lt;</c>, transliterated — and the transliteration is
     /// NOT exact. Swift's <c>String</c> ordering is defined over Unicode
     /// canonical equivalence: the standard library normalizes before
-    /// comparing (<i>The Swift Programming Language</i>, "Comparing
-    /// Strings"). <c>CompareOrdinal</c> normalizes nothing and compares
-    /// UTF-16 code units. So the two disagree on `target`s that differ
-    /// in normalization form — an NFD "Café.md" sorts before "Caff.md"
-    /// here and after it on mac — and on supplementary-plane pairs,
-    /// where code-unit order and scalar order differ. The first class is
-    /// ordinary, not exotic: macOS hands back decomposed filenames, so a
-    /// Mac-authored canvas carries NFD targets. Kind and colour name are
-    /// closed ASCII sets core owns and reach neither class.
+    /// comparing (the ordering implementation is the stdlib's
+    /// <c>StringComparison.swift</c>; <i>The Swift Programming
+    /// Language</i> documents the equality half). <c>CompareOrdinal</c>
+    /// normalizes nothing and compares UTF-16 code units. So the two
+    /// disagree on targets that differ in normalization form — an NFD
+    /// "Café.md" sorts before "Caff.md" here and after it on mac — and
+    /// on supplementary-plane pairs, where code-unit order and scalar
+    /// order differ. The first class is ordinary, not exotic: macOS
+    /// hands back decomposed filenames, so a Mac-authored canvas carries
+    /// NFD targets. Kind and colour name are closed ASCII sets core owns
+    /// and reach neither class.
+    ///
+    /// This repo already depends on the difference: the Swift parity
+    /// harness sorts with an explicit
+    /// <c>Array($0.utf16).lexicographicallyPrecedes(…)</c> rather than
+    /// <c>&lt;</c>, because native Swift ordering would not match the C#
+    /// twin's <c>StringComparer.Ordinal</c>.
     ///
     /// Ordinal stays anyway, and CD-39 records why: it is deterministic
     /// and locale-independent, normalizing host-side would be the host

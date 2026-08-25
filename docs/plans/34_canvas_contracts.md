@@ -1694,19 +1694,38 @@ semantics, third attempt.** Swift's `String` ordering is **not** a walk
 over code points. `String: Comparable` is defined over Unicode
 **canonical equivalence**: the standard library normalizes before
 comparing, so canonically equivalent strings compare EQUAL and ordering
-is computed on the normalized form (*The Swift Programming Language*,
-"Strings and Characters → Comparing Strings": string and character
-comparison is by canonical equivalence, "even if composed from different
-Unicode scalars behind the scenes"; the stdlib's
-`StringComparison.swift` implements it — the fast path is a byte
-compare, the general path normalizes segment by segment).
-`string.CompareOrdinal` normalizes nothing and compares raw UTF-16 code
-units. There are therefore **two** divergence classes, not one:
+is computed on the normalized form. `string.CompareOrdinal` normalizes
+nothing and compares raw UTF-16 code units.
+
+**The strongest evidence for that is IN THIS REPO, and it predates this
+PR.** Where the two parity harnesses must agree byte-for-byte, the Swift
+twin does not use `<`: `ParityHarnessTests.swift` sorts with
+`Array($0.utf16).lexicographicallyPrecedes(Array($1.utf16))` — an
+explicit UTF-16 lexicographic order, spelled out at every sort site
+(golden names, the fixture enumeration, the search rows at `:702`) —
+against the C# twin's `StringComparer.Ordinal` in
+`SurfaceSerializer.cs:951–952`. That explicit spelling is only necessary
+because Swift's native `String <` does NOT order by UTF-16 code units;
+the harness had to opt out of it to stay in parity, which is the same
+fact this row is about, already load-bearing in the §W-A gate. External
+corroboration: the stdlib's `StringComparison.swift` carries the
+ORDERING implementation (a byte fast path, a normalizing general path),
+and *The Swift Programming Language* ("Strings and Characters →
+Comparing Strings") documents the EQUALITY half — values are equal when
+their extended grapheme clusters are canonically equivalent, "even if
+they're composed from different Unicode scalars behind the scenes".
+(The attribution matters: TSPL states equality; the ordering claim comes
+from the stdlib source and from the harness pair above.)
+
+There are therefore **two** divergence classes, not one:
 
 1. **Canonical equivalence / normalization form.** Any two `target`s
    that differ in normalization sort differently — and a pair that is
-   canonically equivalent is EQUAL on mac (so mac keeps document order
-   for the tie) and strictly ordered on Windows. The worked case: an
+   canonically equivalent COMPARES EQUAL on mac while Windows orders it
+   strictly. What mac then renders for that tie is unspecified rather
+   than document order: `sorted(by:)` is documented as not guaranteed
+   stable (.NET's `OrderBy` is documented stable, which is why the
+   Windows side is at least deterministic). The worked case: an
    NFD `Café.md` beside `Caff.md`. Swift compares the NFC form, so `é`
    (U+00E9) beats `f` and `Café.md` sorts AFTER; ordinal compares the
    stored `e` + U+0301, so `e` (U+0065) loses to `f` and `Café.md`
@@ -1732,12 +1751,18 @@ locale-independent: the same canvas sorts identically on every Windows
 machine, which a culture-sensitive compare would not guarantee.
 (b) Normalizing host-side to chase Swift would be the host deriving an
 ordering core does not define — the R-D violation B4 refuses one column
-over — and it still would not reproduce Swift exactly. (c) **Sort order
-is not a §W-A surface**: `CanvasReadArtifact` (A20) serializes core's
-rows in CORE's order, and no parity artifact serializes a host's sorted
-order, so no golden and no cross-host gate compares these. What is left
-is a user-visible ordering difference on mixed-normalization vaults, and
-it is registered as **CD-39** rather than left implied.
+over — and it still would not reproduce Swift exactly. (c) **This
+column's order never reaches a §W-A artifact.** Stated precisely,
+because the harness does sort: it applies host sorts to FILE
+ENUMERATION and to the search rows, and those are kept in cross-twin
+parity by the explicit UTF-16 rule cited above — which is exactly how
+this divergence would bite if a canvas sort ever were serialized. The
+canvas ROW artifacts do not go through a host sort at all:
+`CanvasReadArtifact` (A20) passes core's rows through in CORE's order,
+so no golden and no cross-host gate compares the two hosts' sorted
+tables. What is left is a user-visible ordering difference on
+mixed-normalization vaults, and it is registered as **CD-39** rather
+than left implied.
 
 **This paragraph's own history is the reason it is this long.** It
 first claimed "the same ASCII values" (false of `target`), then "both
@@ -3307,14 +3332,22 @@ order differ. The first class is reachable with ordinary data: macOS
 hands back decomposed filenames, so a Mac-authored canvas carries NFD
 `file` targets and a synced vault brings them across byte-exact.
 
+**The divergence is real, and in-repo evidence already depends on it:**
+the Swift parity harness sorts with an explicit
+`Array($0.utf16).lexicographicallyPrecedes(…)` at every site rather than
+with `<`, precisely because Swift's native ordering would not match the
+C# twin's `StringComparer.Ordinal`. That opt-out is this row's claim,
+shipped and gating since W3.
+
 **Recorded, not fixed, on three grounds.** Ordinal is deterministic and
 locale-independent, which is what a Windows user gets to rely on;
 normalizing host-side would be the host deriving an ordering core does
 not define (the R-D line B4 holds for the `Target` column's VALUE, held
-here for its ORDER); and sort order is not serialized by any §W-A
-artifact — `CanvasReadArtifact` carries core's rows in core's order — so
-no parity gate compares the two hosts' sorted output and no golden
-moves. The user-visible residue is the ordering of a Target/Color column
+here for its ORDER); and this column's order never reaches a §W-A
+artifact — the harness sorts FILE ENUMERATION and search rows (kept in
+parity by that explicit UTF-16 rule), while `CanvasReadArtifact` passes
+core's rows through in core's order — so no parity gate compares the two
+hosts' sorted tables and no golden moves. The user-visible residue is the ordering of a Target/Color column
 on a vault that mixes normalization forms. If an owner ever wants
 byte-parity here, the honest shape is a CORE-supplied sort key rather
 than a second host normalizer, and it belongs with the §W-G audit.

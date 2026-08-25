@@ -6499,8 +6499,9 @@ public sealed class ShellAccessibilityTests
             // and the one a screen-reader user gets. The menu is a
             // separate popup HWND, so it is looked up from the desktop
             // rather than under the window.
+            ReassertForegroundForAChord(window);
             PressKey(VirtualKeyShort.APPS);
-            AutomationElement[] rowActions = WaitForRowActionItems(automation);
+            AutomationElement[] rowActions = WaitForRowActionItems(automation, process.Id);
             Assert.Equal(
                 new[] { "Open", "Toggle Mark", "Delete" },
                 rowActions.Select(item => item.Properties.Name.Value).ToArray());
@@ -6523,7 +6524,7 @@ public sealed class ShellAccessibilityTests
             PressKey(VirtualKeyShort.ESCAPE);
             Assert.True(
                 SpinWait.SpinUntil(
-                    () => FindRowActionItems(automation).Length == 0,
+                    () => FindRowActionItems(automation, process.Id).Length == 0,
                     TimeSpan.FromSeconds(10)),
                 "the row-actions menu never closed on Escape");
 
@@ -6573,15 +6574,20 @@ public sealed class ShellAccessibilityTests
     /// <summary>
     /// The canvas table's row-action items, from the popup the Menu key
     /// opened. A WPF <c>ContextMenu</c> is its own HWND, so the search
-    /// starts at the DESKTOP; the substrate's menu is identified by its
-    /// first item rather than by an automation id, because the id would
-    /// be a hook this journey invented for itself.
+    /// starts at the DESKTOP — and is filtered to THIS process, because
+    /// a desktop-wide menu search on a shared runner can otherwise pick
+    /// up another application's popup (the suite's recorded popup
+    /// discipline). The substrate's menu is identified by its first item
+    /// rather than by an automation id, because the id would be a hook
+    /// this journey invented for itself.
     /// </summary>
-    private static AutomationElement[] FindRowActionItems(UIA3Automation automation)
+    private static AutomationElement[] FindRowActionItems(
+        UIA3Automation automation, int processId)
     {
         foreach (AutomationElement menu in automation.GetDesktop()
             .FindAllDescendants(
-                automation.ConditionFactory.ByControlType(ControlType.Menu)))
+                automation.ConditionFactory.ByControlType(ControlType.Menu)
+                    .And(automation.ConditionFactory.ByProcessId(processId))))
         {
             AutomationElement[] items = menu.FindAllDescendants(
                 automation.ConditionFactory.ByControlType(ControlType.MenuItem));
@@ -6595,14 +6601,15 @@ public sealed class ShellAccessibilityTests
         return [];
     }
 
-    private static AutomationElement[] WaitForRowActionItems(UIA3Automation automation)
+    private static AutomationElement[] WaitForRowActionItems(
+        UIA3Automation automation, int processId)
     {
         AutomationElement[] items = [];
         Assert.True(
             SpinWait.SpinUntil(
                 () =>
                 {
-                    items = FindRowActionItems(automation);
+                    items = FindRowActionItems(automation, processId);
                     return items.Length >= 3;
                 },
                 TimeSpan.FromSeconds(15)),
