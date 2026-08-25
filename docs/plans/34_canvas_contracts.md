@@ -2127,8 +2127,24 @@ two shapes and they are the same code: the palette row
 (`CanvasNextCardCommand` and its twelve siblings, resolved in
 `SlateCommandRegistrar`) and the `ChordScope.Canvas` chord
 (`CanvasNavigator.HandleKey`). Rule R1 is why both exist — a chord is a
-convenience, never the only path — and rule R2 is why the chord half is
-gated on a projection owning the keys.
+convenience, never the only path.
+
+**Rule R2 gates the chord half, and which arms it gates is not
+uniform**, so this row names them rather than gesturing at "the chords":
+
+| Arm | Gate |
+|---|---|
+| Down / Up | a projection owns the keys, then defer-or-answer (C3) |
+| Right / Left | a projection owns the keys AND it is the OUTLINE (the table's arrows are the grid's cell navigation) |
+| Enter | a projection owns the keys — so a focused button, field or any other control keeps its own Enter |
+| Escape | UNGATED within the surface: the ladder answers from anywhere, and an open Where-am-I panel pre-empts it (CD-47) |
+| Ctrl+F | the OUTLINE is showing; on the table the substrate's own gesture delivers it (C10) |
+| Ctrl+Alt+Shift+I | ungated within the surface — a pull surface must answer wherever the reader is |
+
+The two ungated rows are the deliberate ones. Escape is M4-adjacent (no
+mode survives without focus, so cancelling from anywhere is the point),
+and Where-am-I is t0 §1.4's pull, which is worth nothing if it depends
+on standing in the right place.
 
 **Movement rows stay ENABLED on a canvas in any load state.** The
 navigator's whole job when the document cannot answer is to say so
@@ -2199,20 +2215,30 @@ The TABLE keeps Left/Right for the grid's cell navigation, which the UIA
 Table pattern depends on; follow is the palette row there and answers
 identically.
 
-**Enter is gated on the focused control, and Escape deliberately is
-not.** A tunnelling handler runs BEFORE the element the reader is
-standing on, so the mode's Enter would otherwise out-rank every button
-and text box on the surface — pressing Enter on the visible CANCEL MODE
-button would COMMIT the mode, inverting the user's intent on the exact
-control M6 exists for, and Enter in the filter field would commit it
-too. Mac has no such hazard because its container's Return handler
-BUBBLES, so a focused button or field consumes it first; the gate
-restores that order at the one site where the difference bites. Escape
-stays ungated because the ladder is the canvas's answer for it
-everywhere in the surface, and the panel case is settled by locus
-(CD-47) rather than by control type. Pinned by
-`EnterOnAFocusedModeButtonActivatesTheButtonNotTheChord`, which also
-covers the filter field.
+**Enter asks R2's own question, and Escape deliberately does not.** A
+tunnelling handler runs BEFORE the element the reader is standing on, so
+the mode's Enter would otherwise out-rank every control on the surface —
+pressing Enter on the visible CANCEL MODE button would COMMIT the mode,
+inverting the user's intent on the exact control M6 exists for, and
+Enter in the filter field would commit it too. Mac has no such hazard
+because its container's Return handler BUBBLES, so a focused button or
+field consumes it first.
+
+The gate is **"does a PROJECTION own the keys"** — the same question
+every other bare-key arm asks — and NOT a list of control types that own
+Enter. The list was tried and rejected in review: `ComboBox`,
+`Hyperlink`, a templated item part and every control PR E and PR F add
+would each have had to be remembered, and the one that was not would
+re-open this silently. The question is closed by construction; a list is
+open by construction, and this contract has spent two rounds on
+curated-list defects already.
+
+Escape stays broad because cancelling from anywhere in the surface is
+M4-adjacent — no mode may survive without focus — and the ladder is the
+canvas's answer for it everywhere; the panel case is settled by the
+region being open (CD-47), not by what has focus. Pinned by
+`EnterOnAFocusedModeButtonActivatesTheButtonNotTheChord`, which asserts
+the R2 premise and covers the filter field too.
 
 Latent in PR C — nothing enters a mode outside tests — and fixed here
 anyway, because the M-conformance machine is this PR's deliverable for
@@ -2313,22 +2339,21 @@ is a table test rather than a claim:
 | 3 `Surface` | a transient region is open or holds focus | close the Where-am-I panel, or the interim card detail, or leave the filter field — focus back to the projection |
 | 4 `WorkspaceTab` | nothing above consumed it | NOT consumed; the press bubbles |
 
-**The ladder runs when focus is in the PROJECTIONS. A reader standing
-INSIDE the Where-am-I panel gets the panel's own Escape instead**
-(CD-47): it closes the panel and returns focus to the element they came
-from, leaving an active filter and even an active mode untouched. That
-is mac's order — the panel's Close button carries
-`.keyboardShortcut(.cancelAction)`, which resolves before the container's
-ladder — and it is what the spec's own build text asks for. Ordered by
-FOCUS LOCUS rather than added as a rung, because it is not a rung: it is
-the transient region's own dismissal, the same shape the mode-scoped
-keys have. Without it, an Escape meant to close the panel destroyed a
-typed filter needle, which is a first-class t0 §1.4 scenario (the
-readback carries the filter clause, so asking Where-am-I while filtering
-is the designed use). Pinned by
-`EscapeInsideThePanelWhileFilteringActsOnThePanel`, which presses a real
-Escape twice — once in the panel, once in the projection — and asserts
-both answers.
+**An OPEN Where-am-I panel takes the press ahead of every rung**
+(CD-47): Escape dismisses it, leaving an active filter and even an
+active mode untouched, and returns focus to the element the reader came
+from IF they were inside it. That is mac's order — the panel's Close
+button carries `.keyboardShortcut(.cancelAction)`, which is
+window-scoped and resolves before the container's ladder — and it is
+what the spec's own build text asks for. Not a rung: it is the transient
+region's own dismissal, keyed on the region being OPEN so no focus
+arrangement can route around it. Without it, an Escape meant to close
+the panel destroyed a typed filter needle, which is a first-class t0
+§1.4 scenario (the readback carries the filter clause, so asking
+Where-am-I while filtering is the designed use). Pinned by
+`EscapeInsideThePanelWhileFilteringActsOnThePanel` and
+`EscapeDismissesAnOpenPanelEvenWhenTheReaderIsElsewhere` — the second is
+the arrangement a focus-keyed version got wrong.
 
 **Rung 3's card-detail arm is the READ-ONLY interim, and the editor is
 NOT on this ladder.** See the M8 paragraph below; the same locus rule
@@ -2389,9 +2414,19 @@ mode up in that case and consumes the key with the refusal, so the user
 can fix the problem or cancel out with the restoration still available;
 clearing the stack first loses the move with neither a commit nor a
 restoration to show for it. `Commit()` therefore runs the effect FIRST
-and clears `Active` only when it APPLIED — and the confirmation is
-announced after the clear, so a sentence that asks whether a mode is
-running (Where-am-I does) still sees the stack as it will be.
+and clears `Active` only when it APPLIED — and the CONTROLLER's
+confirmation is announced after the clear, so a sentence that asks
+whether a mode is running still sees the stack as it will be.
+
+**That guarantee is bounded, and the bound is worth stating.** An effect
+that announces for ITSELF (the `Committed(null)` shape) speaks while the
+stack is still up, because the effect runs before the clear. Today the
+only reader of "is a mode running" is Where-am-I, which is a pull the
+USER invokes — nothing calls it from inside a commit — so the two
+orderings are indistinguishable in practice. If PR F gives an effect a
+self-announcement that reports mode state, it wants
+`Committed(confirmation)` instead, so the controller speaks it after the
+clear.
 
 Modelled as an OUTCOME rather than as mac's call-site pre-gate on
 purpose: a pre-gate has to be re-implemented at every entry point — the
@@ -2647,11 +2682,11 @@ The panel is a **transient focusable region, not a `ModalSurface`**
 behind it stays live, and registering it would put it through the #1118
 chord admission it has no business being in. `LiveSetting = Off` — pull,
 not push: the announcement is what speaks, and a live region would say
-the same sentence twice. Escape closes it and returns focus to the
-element the reader came from, with the projection as the fallback when
-that element is gone — from INSIDE the panel that is the panel's own
-key, ordered ahead of the ladder by focus locus (CD-47), and from the
-projections it is ladder rung 3.
+the same sentence twice. Escape dismisses it ahead of every ladder rung
+while it is OPEN (CD-47), and returns focus to the element the reader
+came from when they were inside it — with the projection as the fallback
+when that element is gone, and no focus move at all when they were never
+in it.
 
 Nothing selected falls back to the first row in reading order, and an
 empty canvas answers `Canvas is empty.` — the pull surface always
@@ -2833,9 +2868,14 @@ convention.
    factory AND a real REFUSING spec factory, and every M1–M7 arm plus
    `ARefusedCommitKeepsTheModeAlive` runs against the real modes.
 2. A commit effect that cannot apply must return
-   `CanvasModeCommitResult.Refused()` and announce its own reason —
-   returning `Committed` on a refused funnel apply drops the mode and the
-   user's transient state with it.
+   `CanvasModeCommitResult.Refused()`, announce its own reason, **and
+   have applied NOTHING** — a refusal is atomic by contract, because the
+   mode stays up and the user may commit again, so a half-applied
+   refusal would apply that half twice. `Refused()` is the answer for
+   "admission said no", not for "it partly worked": a partial apply is a
+   failure the funnel must undo before it refuses. Returning `Committed`
+   on a refused funnel apply drops the mode and the user's transient
+   state with it.
 3. A mode survives a document RELOAD (m12): the transient geometry F
    holds was computed against rows that may have moved. The funnel's CAS
    is the backstop, and whether a reload should cancel the mode is F's
@@ -4323,11 +4363,22 @@ closes first and the filter (and even an active mode) is untouched. The
 spec §PR C Builds line says the same thing in its own words — "Esc
 returns focus to the prior element".
 
-**So the panel's Escape is ordered before the ladder by FOCUS LOCUS**,
-the same shape the mode-scoped keys already have: it is the region's own
-dismissal, not a rung. The ladder is unchanged and still owns Escape
-whenever focus is in the projections, where rung 3 closes the panel as
-before.
+**So an OPEN panel takes the press ahead of the ladder** — the key is
+the panel being open, not where focus is. Mac's `.cancelAction` is
+WINDOW-scoped, so it resolves whatever the focus arrangement, and
+keying on focus instead left the same defect standing one arrangement
+over: an open-but-unfocused panel plus an Escape from the projection
+destroyed the needle AND left the panel sitting there. With the
+panel-open key there is no divergence from mac left to record — the
+behaviours match, which is the outcome an adjudication should reach when
+the reference is right.
+
+Focus RESTORE is the part that stays locus-dependent, and
+`CloseWhereAmI` owns it: the reader is put back only if they were INSIDE
+the panel. Dismissing a panel someone was not in must not relocate them,
+which is the mirror of the defect the restore exists to prevent. The
+ladder is otherwise unchanged and still owns Escape from the
+projections, where rung 3 closes the panel exactly as before.
 
 **Why it went silent, and the class it belongs to.** This is CD-41's
 shape a second time: a t0 clause that does not mention the case, so both

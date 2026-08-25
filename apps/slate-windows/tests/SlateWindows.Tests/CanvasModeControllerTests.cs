@@ -320,6 +320,14 @@ public sealed class CanvasModeControllerTests
     {
         var test = new TestMode();
         CanvasModeController controller = NewController();
+        // A SECOND announcer, onto the same recorder: the refusing
+        // effect stands in for production code that owns its own funnel,
+        // and giving it the controller's would model a coupling the real
+        // thing does not have. Two announcers mean two independent
+        // coalescers, which is inert here because every mode-lifecycle
+        // event and every refusal posts UNCOALESCED (0a-8's list is
+        // movement and filter only) — worth stating, because a future
+        // arm that used a coalesced event would need one clock.
         var announcer = new CanvasAnnouncer(_announced.Add, TimeSpan.FromMinutes(1));
         return new CanvasModeProbe(
             controller,

@@ -502,11 +502,7 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         }
         // Alt-modified keys arrive as Key.System carrying the real key.
         Key key = e.Key == Key.System ? e.SystemKey : e.Key;
-        if (FocusOwnsTheKeyItself(key))
-        {
-            return;
-        }
-        if (EscapeBelongsToTheFocusedPanel(key))
+        if (EscapeBelongsToTheOpenPanel(key))
         {
             CloseWhereAmI();
             e.Handled = true;
@@ -519,51 +515,32 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
     }
 
     /// <summary>
-    /// Escape pressed with the reader INSIDE the Where-am-I panel belongs
-    /// to the panel, not to the ladder (contract C6, CD-47).
+    /// Escape dismisses an OPEN Where-am-I panel, ahead of the ladder
+    /// (contract C6, CD-47).
     /// </summary>
     /// <remarks>
-    /// Ordered before the ladder by FOCUS LOCUS, the same shape the
-    /// mode-scoped keys have: the panel is a transient region the reader
-    /// is standing in, and its dismissal is its own. That is mac's
-    /// behaviour too — the panel's Close button carries
-    /// <c>.keyboardShortcut(.cancelAction)</c>, which resolves at the
-    /// key-equivalent phase BEFORE the container's ladder — and without
-    /// it an Escape meant to close the panel destroys a typed filter
-    /// needle instead. The ladder still owns Escape when focus is in the
-    /// projections, where rung 3 closes the panel as before.
+    /// <para>
+    /// The key is the panel being OPEN, not the reader standing in it —
+    /// mac's <c>.keyboardShortcut(.cancelAction)</c> on the panel's Close
+    /// button is WINDOW-scoped, so it resolves at the key-equivalent
+    /// phase before the container's ladder however focus is arranged.
+    /// Keying on focus instead left a real hole: an open-but-unfocused
+    /// panel plus an Escape from the projection destroyed a typed filter
+    /// needle AND left the panel sitting there, which is the same defect
+    /// this pre-emption exists to close, one focus arrangement over.
+    /// </para>
+    /// <para>
+    /// Focus RESTORE is the part that is locus-dependent, and
+    /// <see cref="CloseWhereAmI"/> owns that: the reader is put back only
+    /// if they were inside the panel, because moving focus for someone
+    /// who was already in the projection would be a jump they did not
+    /// ask for.
+    /// </para>
     /// </remarks>
-    private bool EscapeBelongsToTheFocusedPanel(Key key) =>
+    private bool EscapeBelongsToTheOpenPanel(Key key) =>
         key == Key.Escape
         && Keyboard.Modifiers == ModifierKeys.None
-        && _whereAmIPanel.Visibility == Visibility.Visible
-        && _whereAmIPanel.IsKeyboardFocusWithin;
-
-    /// <summary>
-    /// Whether the focused element owns this key itself, so the canvas
-    /// chord must stand aside (contract C1/C6, M2's ruling).
-    /// </summary>
-    /// <remarks>
-    /// A tunnelling handler runs BEFORE the focused control, so without
-    /// this the mode's Enter reached the stack ahead of every button and
-    /// text box on the surface — pressing Enter on the visible CANCEL
-    /// MODE button would have COMMITTED the mode, inverting the user's
-    /// intent on the exact control M6 exists for, and Enter in the filter
-    /// field would have committed it too. Mac has no such hazard because
-    /// its container's Return handler BUBBLES, so a focused button or
-    /// field consumes it first; this restores that order at the one site
-    /// where the difference bites.
-    ///
-    /// Escape is deliberately NOT in here: the ladder is the canvas's
-    /// answer for it everywhere in the surface, and the panel case above
-    /// is handled by locus rather than by control type.
-    /// </remarks>
-    private static bool FocusOwnsTheKeyItself(Key key) =>
-        key == Key.Enter
-        && Keyboard.FocusedElement
-            is System.Windows.Controls.Primitives.ButtonBase
-            or System.Windows.Controls.Primitives.TextBoxBase
-            or MenuItem;
+        && _whereAmIPanel.Visibility == Visibility.Visible;
 
     // --- Lifecycle -------------------------------------------------------
 
@@ -917,20 +894,31 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
 
     private void CloseWhereAmI()
     {
+        // Asked BEFORE the panel goes away, because closing it is what
+        // takes the focus off it.
+        bool readerWasInside = _whereAmIPanel.IsKeyboardFocusWithin;
         if (Model is { } model)
         {
             model.WhereAmIText = null;
         }
+        IInputElement? restore = _whereAmIReturnFocus;
+        _whereAmIReturnFocus = null;
+        if (!readerWasInside)
+        {
+            // The panel was open but the reader was elsewhere — dismissing
+            // it must not MOVE them. Restoring here would be a jump they
+            // did not ask for, which is the mirror of the defect the
+            // restore exists to prevent (CD-47).
+            return;
+        }
         // Escape returns focus to the element the reader came from (spec
         // §PR C Builds). A stale or unfocusable token falls back to the
         // projection rather than leaving focus nowhere.
-        if (_whereAmIReturnFocus is UIElement { IsVisible: true, IsEnabled: true } element
+        if (restore is UIElement { IsVisible: true, IsEnabled: true } element
             && element.Focus())
         {
-            _whereAmIReturnFocus = null;
             return;
         }
-        _whereAmIReturnFocus = null;
         FocusProjection();
     }
 

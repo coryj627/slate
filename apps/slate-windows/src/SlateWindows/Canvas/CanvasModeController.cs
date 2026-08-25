@@ -236,9 +236,18 @@ internal sealed class CanvasModeController : BindableBase
         return true;
     }
 
-    /// <summary>M2 commit — Enter, the header's Commit button, or
-    /// <c>slate.canvas.commitMode</c>. False when no mode was
-    /// active.</summary>
+    /// <summary>
+    /// M2 commit — Enter, the header's Commit button, or
+    /// <c>slate.canvas.commitMode</c>.
+    /// </summary>
+    /// <returns>
+    /// Whether the mode ENDED. False means one of two things and the
+    /// caller usually wants neither distinguished: no mode was active, or
+    /// the effect REFUSED and the mode is still up with its transient
+    /// state intact. The one caller that must tell them apart is the
+    /// Enter chord, which asks <see cref="IsActive"/> first so it can
+    /// consume the key either way.
+    /// </returns>
     public bool Commit()
     {
         if (_active is not { } spec)

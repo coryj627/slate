@@ -863,14 +863,68 @@ public sealed class CanvasNavigatorTests : IDisposable
         // …and the reader is put back where they came from.
         Assert.Same(cameFrom, Keyboard.FocusedElement);
 
-        // Now the ladder owns it again: focus is in the projection, so
-        // the next press takes rung 2.
+        // Now the ladder owns it again: the panel is gone, so the next
+        // press takes rung 2.
         Assert.True(PressKey(surface, Key.Escape, ModifierKeys.None));
         Assert.Equal(string.Empty, document.FilterText);
         Assert.Equal(
             CanvasAnnouncer.RenderLabel(new CanvasA11yEvent.CanvasFilterCleared(
                 (uint)document.Outline.Count)),
             OneLine(document));
+    });
+
+    /// <summary>
+    /// The same rule with the panel OPEN but the reader elsewhere: the
+    /// key is the panel being open, not focus being in it (CD-47).
+    /// </summary>
+    /// <remarks>
+    /// mac's <c>.cancelAction</c> is WINDOW-scoped, so it resolves
+    /// whatever the focus arrangement. Keying on focus instead left this
+    /// exact hole — an open panel plus an Escape from the projection
+    /// destroyed the needle AND left the panel sitting there. Focus
+    /// RESTORE is the part that stays locus-dependent: a reader who was
+    /// never in the panel must not be moved by dismissing it.
+    /// </remarks>
+    [Fact]
+    public void EscapeDismissesAnOpenPanelEvenWhenTheReaderIsElsewhere() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        var surface = new CanvasSurfaceView { Model = document };
+        using var host = Host(surface);
+
+        document.FilterText = "zeta";
+        host.UpdateLayout();
+        document.Navigator.WhereAmI();
+        host.UpdateLayout();
+        Assert.NotNull(document.WhereAmIText);
+
+        // Put the reader back in the projection with the panel still up.
+        string surviving = document.FilteredOutline[0].NodeId;
+        Assert.NotNull(surface.OutlineForTests.DeliverFocus(surviving));
+        host.UpdateLayout();
+        IInputElement? stayPut = Keyboard.FocusedElement;
+        Assert.False(
+            surface.WhereAmIPanelForTests.IsKeyboardFocusWithin,
+            "the premise is an OPEN panel the reader is NOT in.");
+        Assert.Equal(Visibility.Visible, surface.WhereAmIPanelForTests.Visibility);
+        Drain(document);
+
+        Assert.True(
+            PressKey(surface, Key.Escape, ModifierKeys.None),
+            "an open panel takes the press ahead of the ladder however focus "
+            + "is arranged.");
+        host.UpdateLayout();
+
+        Assert.Null(document.WhereAmIText);
+        Assert.Equal("zeta", document.FilterText);
+        Assert.Empty(Lines(document));
+        // The reader was not moved: dismissing a panel they were not in
+        // must not relocate them.
+        Assert.Same(stayPut, Keyboard.FocusedElement);
+
+        // And the ladder resumes.
+        Assert.True(PressKey(surface, Key.Escape, ModifierKeys.None));
+        Assert.Equal(string.Empty, document.FilterText);
     });
 
     /// <summary>
@@ -908,6 +962,16 @@ public sealed class CanvasNavigatorTests : IDisposable
         // leaf answers there through the verb instead.
         document.Selection.ActiveSurface = CanvasSurfaceKind.Table;
         host.UpdateLayout();
+        // Re-establish the premise AFTER the switch: the projection
+        // changed under the reader, and without putting the keys back on
+        // the new one this half would pass because R2's gate refused —
+        // not because the table declines the chord.
+        Assert.True(surface.TableForTests.DeliverFocus(leaf.NodeId));
+        host.UpdateLayout();
+        Assert.True(
+            surface.ProjectionHasFocus,
+            "the table never took the keys, so the next assertion would hold for "
+            + "the wrong reason.");
         Drain(document);
         Assert.False(
             PressKey(surface, Key.Right, ModifierKeys.None),
@@ -1008,6 +1072,12 @@ public sealed class CanvasNavigatorTests : IDisposable
         host.UpdateLayout();
         Drain(document);
 
+        // The gate is R2's question — "does a PROJECTION have the keys" —
+        // so the button wins by the natural route rather than by being
+        // named in a list of control types.
+        Assert.False(
+            surface.ProjectionHasFocus,
+            "the premise: the button has the keys, not the projection.");
         Assert.False(
             PressKey(surface, Key.Enter, ModifierKeys.None),
             "the canvas must stand aside so the focused button gets its own key "

@@ -163,8 +163,9 @@ internal sealed class CanvasNavigator
     /// Deliver one key press from the canvas surface's tunnelling
     /// handler. Returns whether the press was consumed; an unconsumed
     /// press keeps its ordinary meaning for whatever has focus, which is
-    /// what lets the tree keep Right/Left expand-collapse and the grid
-    /// keep cell navigation.
+    /// what lets the grid keep its cell navigation, a focused button keep
+    /// its Enter, and the tree keep the numpad <c>+</c>/<c>-</c> the
+    /// arrows no longer stand in for (CD-48).
     /// </summary>
     internal bool HandleKey(Key key, ModifierKeys modifiers, ICanvasSurfacePresenter presenter)
     {
@@ -654,15 +655,44 @@ internal sealed class CanvasNavigator
     }
 
     /// <summary>
-    /// Enter commits an active mode — and CONSUMES the key whether or not
-    /// the commit applied, because a mode was running and Enter belonged
-    /// to it (mac consumes Return with the refusal for the same reason).
-    /// Letting a refused commit fall through would hand the key to
-    /// whatever is underneath while the mode is still up.
+    /// Enter commits an active mode, and only while a PROJECTION owns the
+    /// keys — rule R2's own question, asked here instead of a list of
+    /// control types (contract C1/C3).
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A tunnelling handler runs before the element the reader is
+    /// standing on, so an ungated Enter out-ranked every control on the
+    /// surface: it would have COMMITTED the mode from the visible CANCEL
+    /// MODE button — the user's intent inverted on the exact control M6
+    /// exists for — and from the filter field, where Return is the
+    /// field's own key on both platforms.
+    /// </para>
+    /// <para>
+    /// Gated by asking where focus IS rather than by naming what owns
+    /// Enter, because the list was the brittle half: <c>ComboBox</c>,
+    /// <c>Hyperlink</c>, a templated item part and every control PR E and
+    /// PR F add would each have had to be remembered, and the one that
+    /// was not would re-open this silently. "A projection has the keys"
+    /// is the same question every other bare-key arm already asks, and it
+    /// is closed by construction.
+    /// </para>
+    /// <para>
+    /// Escape stays broad on purpose: cancelling from anywhere in the
+    /// surface is M4-adjacent — no mode may survive without focus — and
+    /// the ladder is the canvas's answer for it everywhere.
+    /// </para>
+    /// <para>
+    /// The key is CONSUMED whether or not the commit applied, because a
+    /// mode was running and Enter belonged to it (mac consumes Return
+    /// with the refusal for the same reason). Letting a refused commit
+    /// fall through would hand the key to whatever is underneath while
+    /// the mode is still up.
+    /// </para>
+    /// </remarks>
     private bool CommitModeFromKey()
     {
-        if (!_document.Modes.IsActive)
+        if (_presenter is not { ProjectionHasFocus: true } || !_document.Modes.IsActive)
         {
             return false;
         }
