@@ -177,6 +177,11 @@ internal sealed class CanvasModeController : BindableBase
     /// one outcome).</summary>
     private bool _committing;
 
+    /// <summary>Set by <see cref="Shutdown"/>. The stack is TERMINAL from
+    /// then on: no mode may be entered, committed or cancelled, and
+    /// nothing is announced about it.</summary>
+    private bool _retired;
+
     /// <summary>
     /// A focus departure raised from inside a commit effect, held until
     /// the commit's outcome is known.
@@ -244,6 +249,18 @@ internal sealed class CanvasModeController : BindableBase
     public bool Enter(CanvasModeSpec spec)
     {
         ArgumentNullException.ThrowIfNull(spec);
+        if (_retired)
+        {
+            // TERMINAL, and SILENT — which is not the never-silent table
+            // being broken, it is that table's precondition being absent.
+            // C4 answers a verb the user invoked on a canvas they are
+            // reading; this document has no surface, its announcer is
+            // already shut (so a sentence composed here is the A5
+            // `Debug.Fail`), and its property channel is detached, so
+            // there is nobody to tell and nothing true to say. The
+            // refusal is the return value, for the caller that asked.
+            return false;
+        }
         if (_active is { } current)
         {
             _announce(new CanvasA11yEvent.CanvasModeRejected(current.Mode));
@@ -268,7 +285,7 @@ internal sealed class CanvasModeController : BindableBase
     /// </returns>
     public bool Commit()
     {
-        if (_active is not { } spec || _committing)
+        if (_retired || _active is not { } spec || _committing)
         {
             return false;
         }
@@ -405,8 +422,24 @@ internal sealed class CanvasModeController : BindableBase
             // document being retired must not leave a departure behind
             // for a later object to act on.
             _deferredDeparture = null;
+            // TERMINAL from here, and the two halves are the document's:
+            // every verb refuses, and the property channel is detached so
+            // a retained controller cannot reach a surface either. A
+            // controller that merely had no mode would have accepted the
+            // next `Enter` — from a menu item on a closed tab, from a
+            // palette row the shell still had registered — and run its
+            // effect against a document whose handle is gone.
+            _retired = true;
+            _active = null;
         }
     }
+
+    /// <summary>Retirement's other half, called by the document once its
+    /// last sentence has been spoken (contract C7).</summary>
+    internal void RetireObservers() => DetachPropertyObservers();
+
+    /// <summary>The observable for the detachment above.</summary>
+    internal bool HoldsObserversForTests => HasPropertyObservers;
 
     /// <summary>M2 cancel — Escape's first rung, the header's Cancel
     /// button, or <c>slate.canvas.cancelMode</c>. False when no mode was
@@ -414,7 +447,7 @@ internal sealed class CanvasModeController : BindableBase
     /// rung.</summary>
     public bool Cancel()
     {
-        if (_active is not { } spec || _committing)
+        if (_retired || _active is not { } spec || _committing)
         {
             // Refused rather than deferred while a commit is in flight:
             // a direct cancel from inside a commit effect is a caller
@@ -454,6 +487,10 @@ internal sealed class CanvasModeController : BindableBase
     /// </remarks>
     public bool HandleFocusDeparture(CanvasFocusDeparture departure)
     {
+        if (_retired)
+        {
+            return false;
+        }
         if (_committing && CancelsFor(departure))
         {
             // DEFERRED, not applied: a commit effect is mid-flight and it

@@ -73,6 +73,13 @@ internal sealed class CanvasSelection : BindableBase
     /// publication when it commits.</summary>
     internal void RaiseStaged(string name) => OnPropertyChanged(name);
 
+    /// <summary>Retirement (contract C7): the document that owns this
+    /// selection is gone, so nothing may still be listening to it.</summary>
+    internal void RetireObservers() => DetachPropertyObservers();
+
+    /// <summary>The observable for the line above.</summary>
+    internal bool HoldsObserversForTests => HasPropertyObservers;
+
     /// <summary>Mark-then-act's set (t4 #524), read-only until PR G
     /// ships the verbs. Ordinal — node ids are byte-exact everywhere.</summary>
     public IReadOnlyCollection<string> Marked => _marked;

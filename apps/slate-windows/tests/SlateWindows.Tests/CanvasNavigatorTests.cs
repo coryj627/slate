@@ -101,6 +101,23 @@ public sealed class CanvasNavigatorTests : IDisposable
               ]
             }
             """);
+        // Two cards, an edge between them, and a file target — the
+        // fixture the side-state fact reloads into a different shape.
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "connected.canvas"),
+            """
+            {
+              "nodes": [
+                {"id":"hub","type":"file","file":"note0.md","x":0,"y":0,"width":200,"height":100},
+                {"id":"spoke","type":"text","text":"one","x":300,"y":0,"width":200,"height":100},
+                {"id":"other","type":"text","text":"two","x":600,"y":0,"width":200,"height":100}
+              ],
+              "edges": [
+                {"id":"h1","fromNode":"hub","toNode":"spoke"},
+                {"id":"h2","fromNode":"other","toNode":"hub"}
+              ]
+            }
+            """);
         File.WriteAllText(Path.Combine(_fixture.Root, "empty.canvas"), "{}");
         File.WriteAllText(
             Path.Combine(_fixture.Root, "broken.canvas"), "{ this is not json");
@@ -1221,6 +1238,159 @@ public sealed class CanvasNavigatorTests : IDisposable
             + string.Join(", ", woken));
         // …and it is still SILENT as well as still, which is the other
         // half of retirement (contract A5).
+        Assert.Empty(Lines(document));
+    }
+
+    /// <summary>
+    /// Codex round 6, blocker 1: what an observer READS mid-publication
+    /// is part of the same settled world as what it was woken by.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The transaction ordered everything that RAISES. It said nothing
+    /// about the side maps a woken observer then reads — the activation
+    /// targets, the subpath anchors, the adjacency memo — and a reload
+    /// installed those before publishing its rows. So a Where-am-I
+    /// composed from a wake mid-publication described the new canvas's
+    /// connections against the old canvas's outline: every clause true of
+    /// a canvas that was never on screen.
+    /// </para>
+    /// <para>
+    /// They are fields of the unit now, so the question cannot be asked
+    /// separately from the rows. This drives it from a real observer —
+    /// the notification handler runs Where-am-I, which is exactly what a
+    /// pane refreshing its readback would do — and requires every
+    /// sample's answer to belong to the canvas that sample can see.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void AWhereAmIComposedMidPublicationDescribesOneCanvas()
+    {
+        CanvasDocumentViewModel document = Open("connected.canvas");
+        document.SelectNode("hub");
+        Drain(document);
+        // The premise: `hub` has connections and a file target on this
+        // canvas, and the reload replaces both.
+        Assert.NotEmpty(document.NeighborsOf("hub"));
+        Assert.Equal("note0.md", document.TargetOf("hub"));
+
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "connected.canvas"),
+            """
+            {
+              "nodes": [
+                {"id":"hub","type":"file","file":"note1.md","x":0,"y":0,"width":200,"height":100},
+                {"id":"lonely","type":"text","text":"nothing points here","x":400,"y":0,"width":200,"height":100}
+              ],
+              "edges": []
+            }
+            """);
+
+        var samples = new List<(int Rows, int Connections, string Target)>();
+        void Sample()
+        {
+            // Only ask when there is something to ask about: the reader's
+            // own row has to exist on the canvas being sampled.
+            if (document.RowFor("hub") is null)
+            {
+                return;
+            }
+            samples.Add((
+                document.Outline.Count,
+                document.NeighborsOf("hub").Count,
+                document.TargetOf("hub")));
+        }
+        void OnProperty(object? sender, PropertyChangedEventArgs e) => Sample();
+        void OnPublished(object? sender, EventArgs e) => Sample();
+        document.PropertyChanged += OnProperty;
+        document.OutlinePublished += OnPublished;
+        try
+        {
+            document.Load();
+        }
+        finally
+        {
+            document.PropertyChanged -= OnProperty;
+            document.OutlinePublished -= OnPublished;
+        }
+
+        Assert.NotEmpty(samples);
+        Assert.Equal(2, document.Outline.Count);
+        foreach ((int rows, int connections, string target) in samples)
+        {
+            // The two canvases, and the answers that belong to each: the
+            // old one has `hub` connected and pointing at note0, the new
+            // one has it isolated and pointing at note1. A sample that
+            // mixes them is describing neither.
+            (int Connections, string Target) expected =
+                rows == 2 ? (0, "note1.md") : (2, "note0.md");
+            Assert.Equal(
+                expected,
+                (connections, target));
+        }
+    }
+
+    /// <summary>
+    /// Codex round 6, blockers 3 and 4: retirement is terminal on EVERY
+    /// channel, and the observable says so about all of them.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Round 5 claimed retirement covered every channel and asserted it
+    /// with an observable that inspected two of five — so a retained
+    /// document's property channel, its selection's and its mode stack's
+    /// stayed attached while a passing test said otherwise. That is worse
+    /// than the gap: it is a green light over it.
+    /// </para>
+    /// <para>
+    /// And the mode stack needed more than detaching. A controller with
+    /// no active mode ACCEPTS an entry, so a menu item on a closed tab or
+    /// a palette row the shell still had registered would have started a
+    /// mode on a document whose handle is gone. It is TERMINAL now:
+    /// every verb refuses. Silently — which is not the never-silent table
+    /// broken but its precondition absent, since the announcer is already
+    /// shut and there is no surface to hear it.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void RetirementIsTerminalOnEveryChannel()
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        var woken = new List<string>();
+        document.PropertyChanged += (_, e) => woken.Add($"document.{e.PropertyName}");
+        document.OutlinePublished += (_, _) => woken.Add("document.OutlinePublished");
+        document.SurfaceChanged += (_, _) => woken.Add("document.SurfaceChanged");
+        document.Selection.PropertyChanged +=
+            (_, e) => woken.Add($"selection.{e.PropertyName}");
+        document.Modes.PropertyChanged += (_, e) => woken.Add($"modes.{e.PropertyName}");
+        Assert.True(document.HoldsObserverHandlersForTests, "the premise.");
+
+        document.Shutdown();
+        Drain(document);
+        woken.Clear();
+
+        // FIVE channels, and the observable is over all of them — the
+        // round-5 version inspected two and passed while three were still
+        // attached.
+        Assert.False(document.HoldsObserverHandlersForTests);
+
+        // The mode stack is terminal, not merely idle: an entry that
+        // arrives from a surface the shell has not finished tearing down
+        // is REFUSED, so no effect ever runs against a closed handle.
+        Assert.False(document.Modes.Enter(new CanvasModeSpec(
+            CanvasMode.Move,
+            new CanvasModeObject.Card("Research"),
+            () => throw new InvalidOperationException(
+                "a retired controller must never run an effect."),
+            () => throw new InvalidOperationException(
+                "a retired controller must never run a restoration."))));
+        Assert.False(document.Modes.IsActive);
+        Assert.False(document.Modes.Commit());
+        Assert.False(document.Modes.Cancel());
+        Assert.False(
+            document.Modes.HandleFocusDeparture(CanvasFocusDeparture.PaneFocus));
+
+        Assert.True(woken.Count == 0, string.Join(", ", woken));
         Assert.Empty(Lines(document));
     }
 

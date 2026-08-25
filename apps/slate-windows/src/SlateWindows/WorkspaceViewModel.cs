@@ -55,6 +55,25 @@ internal abstract class BindableBase : INotifyPropertyChanged
 
     protected void OnPropertyChanged([CallerMemberName] string? name = null) =>
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+
+    /// <summary>
+    /// Drop every subscriber to this object's property channel.
+    /// </summary>
+    /// <remarks>
+    /// PROTECTED, not internal: detaching another object's observers is
+    /// not a power any caller should have, so each type that can be
+    /// retired exposes its own verb and decides what retirement means for
+    /// it. The canvas document is the first (contract C7): a retired
+    /// document must not keep a dead surface's handler reachable, and
+    /// "muted" and "detached" are different jobs — the mute makes the
+    /// silence structural, this makes the reference go away.
+    /// </remarks>
+    protected void DetachPropertyObservers() => PropertyChanged = null;
+
+    /// <summary>Whether anything is still listening — the only honest
+    /// observable for <see cref="DetachPropertyObservers"/>, since its
+    /// effect is otherwise a garbage-collection property.</summary>
+    protected bool HasPropertyObservers => PropertyChanged is not null;
 }
 
 /// <summary>What the tab did with a toggle request (adversarial

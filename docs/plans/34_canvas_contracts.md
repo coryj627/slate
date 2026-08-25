@@ -2496,12 +2496,32 @@ callbacks found so far.
    what makes "teardown must not run a callback" a property of the code
    rather than a rule to remember, and it holds for a RETAINED document
    driven long after the tab closed, which is what a persisted workspace
-   can do. It also DETACHES the two events, which is about lifetime
-   rather than silence — a retired document holding a view's handler
-   keeps a dead surface reachable — and `HoldsObserverHandlersForTests`
-   is how that half is asserted, because its only honest observable is
-   the handler list. Clearing first and silencing after is the shape that
-   kept producing this class.
+   can do. It also DETACHES, which is about lifetime rather
+   than silence — a retired document holding a view's handler keeps a
+   dead surface reachable — and it detaches ALL FIVE channels:
+   `OutlinePublished`, `SurfaceChanged`, the document's property channel,
+   the selection's and the mode stack's. `BindableBase` exposes a
+   PROTECTED `DetachPropertyObservers` for it, because detaching another
+   object's observers is not a power any caller should have, so each
+   retirable type has its own verb. `HoldsObserverHandlersForTests`
+   asserts that half over all five — the round-5 version inspected two
+   and passed while three were attached, which is a green light over a
+   gap rather than the gap. Clearing first and silencing after is the
+   shape that kept producing this class.
+
+   **The mode stack becomes TERMINAL, not merely idle.** A controller
+   with no active mode ACCEPTS an entry, so an `Enter` arriving from a
+   surface the shell has not finished tearing down — a menu item on a
+   closed tab, a palette row still registered — would have run an effect
+   against a document whose handle is gone. After `Shutdown` every verb
+   refuses: `Enter`, `Commit`, `Cancel`, `HandleFocusDeparture`.
+   SILENTLY, and that is the never-silent table's precondition being
+   absent rather than the table being broken: a retired document has no
+   surface, its announcer is already shut (so a sentence composed there
+   is A5's `Debug.Fail`) and its property channel is detached, so there
+   is nobody to tell and nothing true to say. The refusal is the return
+   value, for the caller that asked.
+   `RetirementIsTerminalOnEveryChannel` pins both halves.
 3. **RELEASE**, from a `finally`, reached however phase 2 went: the
    announcer is silenced (contract A5 — a coalesced line queued on a
    dying document would otherwise speak ~200 ms later about a surface
@@ -2792,11 +2812,30 @@ methods may call which, and that kind of rule fails silently.
 
 Every notifying member is read-only outside it: `State`, `StateMessage`,
 `Warnings`, `FocusRequest`, `WhereAmIText`, `DetailText`, `DetailTitle`,
-`FilterFocusToken`, the unit behind `Outline`/`TableRows`/the filtered
-halves — and `CanvasSelection.Selected` and `ActiveSurface`, which the
-workspace used to write directly and now restores through
-`RestoreSurface`. The transaction keeps `SetField`'s discipline: a write
-that changes nothing queues nothing.
+`FilterFocusToken`, `LastActivatedNode`, the unit behind
+`Outline`/`TableRows`/the filtered halves — and `CanvasSelection.Selected`,
+`ActiveSurface` and `Marked`, which the workspace and the registry used
+to write directly and now reach through `RestoreSurface`,
+`SeedSelectionFrom`, `ClearMarks` and `ToggleMark`. The transaction keeps
+`SetField`'s discipline: a write that changes nothing queues nothing.
+
+**And what an observer READS during a wake settles with the rest, not
+just what raises.** The activation targets, the subpath anchors and the
+adjacency memo are read by observer paths — activation, `AnchorFor`,
+Where-am-I's connection counts — and they were document fields a reload
+installed BEFORE publishing its rows, so a readback composed from a
+mid-publication wake described the new canvas's connections against the
+old canvas's outline. They are fields of `CanvasProjectionUnit` now,
+built into the held load and landing with the rows they describe; the
+memo is per-unit, so it cannot outlive them, and an answer that arrives
+after a load lands is dropped rather than written into a unit it was not
+asked for. A filter answer NARROWS through `WithMatches` — the same
+canvas under a different question keeps its side maps and its memo, and
+an unchanged answer returns the same unit, which is a projection rebuild
+saved. `AWhereAmIComposedMidPublicationDescribesOneCanvas` pins it from a
+real observer; the sweep that found them also brought
+`LastActivatedNode` in, which was the last mutable field a
+publication-time reader could reach.
 
 **`TheCanvasModelNotifiesOnlyFromInsideAPublication` is what ends it,
 and it DERIVES its population.** The first version listed fields, in one
@@ -5684,6 +5723,47 @@ rather than rediscovering it.
   every notifying type as model, view or recorded exclusion, and fails on
   anything unclassified — so the next notifying member joins a side by
   decision instead of by being absent from a list nobody updated.
+- **Round 6 ESCALATED to the user, as pre-declared, and the USER RULED:
+  one boundary-complete wave, then codex round 7 as final arbiter — and
+  if round 7 fails, PR C pauses for an architecture review.** The
+  escalation was the promise round 5 made being kept: a breach of the
+  design itself, not another application gap, so the decision left the
+  loop. Codex's four blockers were taken as the finite spec for the wave,
+  which is what "boundary-complete" means here — the boundary is what an
+  observer can reach, and the wave extends the primitive to all of it
+  rather than to the next reported instance.
+
+  What the wave found, stated as the boundary rather than as four items.
+  The transaction ordered everything that RAISES and said nothing about
+  what a woken observer then READS: the activation targets, the subpath
+  anchors and the adjacency memo were document fields installed by a
+  reload before its rows were published, so a Where-am-I composed from a
+  mid-publication wake described the new canvas's connections against the
+  old canvas's outline. Those are fields of the unit now, and the sweep
+  that found them also brought in `LastActivatedNode`, the last mutable
+  field a publication-time reader could reach.
+
+  Retirement had the same boundary problem twice over. It retired two
+  channels of five, and asserted it with an observable that inspected the
+  same two — a green light over the gap, which is worse than the gap. And
+  the mode stack was left IDLE rather than terminal, so an `Enter` from a
+  surface the shell had not finished tearing down would have started a
+  mode on a document whose handle was gone. Both are closed: five
+  channels retired, the observable over all five, and every mode verb
+  refusing after `Shutdown` — silently, which is the never-silent table's
+  precondition being absent rather than the table being broken, since a
+  retired document has no surface and its announcer is already shut.
+
+  And the census that closed the population was itself failing OPEN. It
+  matched bases by direct name (a type one derivation down read as not
+  notifying), knew only field-like events, saw one partial per type, and
+  named two generic types for the collection scan and eleven fields for
+  the assignment scan. All four are derived now — transitive and
+  simple-name base resolution, both event forms, all partials merged, and
+  the state scan resolved from the members that HAND IT OUT — and the
+  discovery assertions count what the scan FOUND rather than what the
+  method listed, so a scan that silently matched nothing fails instead of
+  passing everything above it.
 - **The spec's PR A evidence line for the "Accessible canvas (T parity)"
   surface row is still unexecuted.** It says the row moves to "in
   progress — PR A"; the generated matrix still reads `pending`. Left

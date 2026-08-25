@@ -90,12 +90,19 @@ internal sealed record CanvasProjectionUnit(
     IReadOnlyList<CanvasOutlineRow> Outline,
     IReadOnlyList<CanvasTableRow> TableRows,
     IReadOnlyDictionary<string, CanvasOutlineRow> Rows,
+    IReadOnlyDictionary<string, string> Targets,
+    IReadOnlyDictionary<string, string> Subpaths,
+    Dictionary<string, IReadOnlyList<CanvasNeighbor>> Neighbors,
     string? AnswerNeedle,
     IReadOnlySet<string>? MatchedIds,
     IReadOnlyList<CanvasOutlineRow> FilteredOutline,
     IReadOnlyList<CanvasTableRow> FilteredTableRows)
 {
-    internal static readonly CanvasProjectionUnit Empty = Build([], [], null, null);
+    internal static readonly CanvasProjectionUnit Empty =
+        Build([], [], EmptyMap, EmptyMap, null, null);
+
+    private static IReadOnlyDictionary<string, string> EmptyMap =>
+        new Dictionary<string, string>(StringComparer.Ordinal);
 
     /// <summary>True when a match set narrowed this unit at all.</summary>
     internal bool Narrowed => MatchedIds is not null;
@@ -109,6 +116,8 @@ internal sealed record CanvasProjectionUnit(
     internal static CanvasProjectionUnit Build(
         IReadOnlyList<CanvasOutlineRow> outline,
         IReadOnlyList<CanvasTableRow> tableRows,
+        IReadOnlyDictionary<string, string> targets,
+        IReadOnlyDictionary<string, string> subpaths,
         string? answerNeedle,
         IReadOnlySet<string>? matched)
     {
@@ -117,17 +126,57 @@ internal sealed record CanvasProjectionUnit(
         {
             rows[row.NodeId] = row;
         }
-        return matched is null
-            ? new CanvasProjectionUnit(
-                outline, tableRows, rows, null, null, outline, tableRows)
-            : new CanvasProjectionUnit(
-                outline,
-                tableRows,
-                rows,
-                answerNeedle,
-                matched,
-                outline.Where(row => matched.Contains(row.NodeId)).ToArray(),
-                tableRows.Where(row => matched.Contains(row.NodeId)).ToArray());
+        return new CanvasProjectionUnit(
+            outline,
+            tableRows,
+            rows,
+            targets,
+            subpaths,
+            new Dictionary<string, IReadOnlyList<CanvasNeighbor>>(StringComparer.Ordinal),
+            matched is null ? null : answerNeedle,
+            matched,
+            matched is null
+                ? outline
+                : outline.Where(row => matched.Contains(row.NodeId)).ToArray(),
+            matched is null
+                ? tableRows
+                : tableRows.Where(row => matched.Contains(row.NodeId)).ToArray());
+    }
+
+    /// <summary>
+    /// The SAME canvas under a different answer — the filter's own
+    /// publication, which changes what is shown and nothing about what
+    /// exists.
+    /// </summary>
+    /// <remarks>
+    /// The adjacency memo and the side maps ride across, because they
+    /// describe the rows and the rows did not move. Narrowing used to
+    /// rebuild the unit from scratch, which would have thrown away a
+    /// cache the filter has no business invalidating.
+    /// </remarks>
+    internal CanvasProjectionUnit WithMatches(
+        string? answerNeedle, IReadOnlySet<string>? matched)
+    {
+        if (ReferenceEquals(MatchedIds, matched)
+            && string.Equals(AnswerNeedle, answerNeedle, StringComparison.Ordinal))
+        {
+            // Nothing moved, so nothing rebuilds: the projections compare
+            // the unit they last materialized, and handing them a new
+            // value for an identical answer would cost a 2,000-row pass
+            // to arrive back where they are.
+            return this;
+        }
+        return this with
+        {
+            AnswerNeedle = matched is null ? null : answerNeedle,
+            MatchedIds = matched,
+            FilteredOutline = matched is null
+                ? Outline
+                : Outline.Where(row => matched.Contains(row.NodeId)).ToArray(),
+            FilteredTableRows = matched is null
+                ? TableRows
+                : TableRows.Where(row => matched.Contains(row.NodeId)).ToArray(),
+        };
     }
 }
 
@@ -210,7 +259,9 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// because a coherent prior unit is on screen and its replacement is
     /// waiting on the re-ask's matches.</summary>
     private (CanvasOpenInfo Info, IReadOnlyList<CanvasOutlineRow> Outline,
-        IReadOnlyList<CanvasTableRow> TableRows)? _pendingLoad;
+        IReadOnlyList<CanvasTableRow> TableRows,
+        IReadOnlyDictionary<string, string> Targets,
+        IReadOnlyDictionary<string, string> Subpaths)? _pendingLoad;
     private IReadOnlyList<CanvasLoadWarning> _warnings = [];
 
     /// <summary>The transaction currently open, or null. An inner
@@ -220,6 +271,14 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// <summary>Set by the FIRST act of the terminal phase: from here a
     /// publication stages and raises nothing (contract C7).</summary>
     private bool _observersRetired;
+
+    /// <summary>The row whose activation the reader is returning from.
+    /// Staged like the rest: it is READ on the focus-delivery path, and
+    /// the round-6 sweep's rule is that everything an observer reads
+    /// during a wake settles with the rest (contract C10). It is checked
+    /// against the published rows before use, so a stale one was never
+    /// dangerous — it was just the last field outside the primitive.</summary>
+    private string? _lastActivatedNode;
     private string? _detailText;
     private string? _detailTitle;
     private bool _announcedDegradedLoad;
@@ -230,18 +289,6 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     private int _filterGeneration;
     private bool _filterAnswerFailed;
 
-    /// <summary>Per-node activation targets (file path / URL) and
-    /// subpaths, derived once at load from core's table rows and scene
-    /// — activation never re-queries (the mac <c>targets</c> shape).</summary>
-    private readonly Dictionary<string, string> _targets = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, string> _subpaths = new(StringComparer.Ordinal);
-
-    /// <summary>Per-node adjacency, fetched lazily on first selection
-    /// and cached; dropped on every load (the mac
-    /// <c>neighborsCache</c>). A refusal caches nothing, so the skew of
-    /// contract A16 heals on the next ask.</summary>
-    private readonly Dictionary<string, IReadOnlyList<CanvasNeighbor>> _neighbors =
-        new(StringComparer.Ordinal);
 
     public CanvasDocumentViewModel(
         VaultSession session,
@@ -413,7 +460,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// <summary>The row whose activation opened a card — the focus
     /// restoration target when the user comes back (WCAG 2.4.3,
     /// contract A14).</summary>
-    public string? LastActivatedNode { get; set; }
+    public string? LastActivatedNode => _lastActivatedNode;
 
     /// <summary>Rows republished — the surface rebuilds the tree on
     /// this, never on property-change granularity.</summary>
@@ -592,7 +639,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// <summary>Core's target for a card — the file path, the URL, or
     /// empty for text cards and groups (0b-13's one definition).</summary>
     public string TargetOf(string nodeId) =>
-        _targets.TryGetValue(nodeId, out string? target) ? target : string.Empty;
+        _view.Targets.TryGetValue(nodeId, out string? target) ? target : string.Empty;
 
     // --- The never-silent read gate (contract C4) -----------------------
 
@@ -780,7 +827,11 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// </remarks>
     public IReadOnlyList<CanvasNeighbor>? NeighborsIfKnown(string nodeId)
     {
-        if (_neighbors.TryGetValue(nodeId, out IReadOnlyList<CanvasNeighbor>? cached))
+        // The memo belongs to the UNIT, so it cannot outlive the rows it
+        // describes and cannot be read against a different canvas: the
+        // publication that replaces the rows replaces this with them.
+        CanvasProjectionUnit unit = _view;
+        if (unit.Neighbors.TryGetValue(nodeId, out IReadOnlyList<CanvasNeighbor>? cached))
         {
             return cached;
         }
@@ -793,7 +844,13 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             // on the next ask.
             return null;
         }
-        _neighbors[nodeId] = neighbors;
+        // Against the unit this answer was ASKED for, not whatever is
+        // published now — a load can land while an FFI read is in flight,
+        // and a memo written into the new unit would describe the old.
+        if (ReferenceEquals(unit, _view))
+        {
+            unit.Neighbors[nodeId] = neighbors;
+        }
         return neighbors;
     }
 
@@ -1027,11 +1084,20 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         string? answerNeedle,
         IReadOnlySet<string>? matched)
     {
-        IReadOnlyList<CanvasTableRow> tableRows = _pendingLoad is { } pending
-            ? pending.TableRows
-            : _view.TableRows;
-        CanvasProjectionUnit unit = CanvasProjectionUnit.Build(
-            outline, tableRows, answerNeedle, matched);
+        // A LANDING builds a whole new unit — rows, table rows, targets,
+        // subpaths, a fresh adjacency memo — because every one of them is
+        // this canvas's. An answer over the rows already published only
+        // NARROWS: the same canvas under a different question, so the
+        // side maps and the memo ride across untouched.
+        CanvasProjectionUnit unit = _pendingLoad is { } pending
+            ? CanvasProjectionUnit.Build(
+                outline,
+                pending.TableRows,
+                pending.Targets,
+                pending.Subpaths,
+                answerNeedle,
+                matched)
+            : _view.WithMatches(answerNeedle, matched);
         if (_pendingLoad is { } landing)
         {
             _pendingLoad = null;
@@ -1238,6 +1304,20 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 }
                 document._focusRequest = value;
                 Queue(nameof(CanvasDocumentViewModel.FocusRequest));
+            }
+        }
+
+        internal string? LastActivatedNode
+        {
+            set
+            {
+                if (string.Equals(
+                    document._lastActivatedNode, value, StringComparison.Ordinal))
+                {
+                    return;
+                }
+                document._lastActivatedNode = value;
+                Queue(nameof(CanvasDocumentViewModel.LastActivatedNode));
             }
         }
 
@@ -1663,9 +1743,6 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         string? stateMessage,
         CanvasLoadState state)
     {
-        _targets.Clear();
-        _subpaths.Clear();
-        _neighbors.Clear();
         // A held load never outlives the failure that replaced it: rows
         // computed for a canvas that would not open must not land later
         // as an answer to a needle.
@@ -1691,19 +1768,25 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         IReadOnlyList<CanvasTableRow> tableRows,
         CanvasScene scene)
     {
-        _targets.Clear();
-        _subpaths.Clear();
-        _neighbors.Clear();
         Publish(publication => publication.WhereAmIText = null);
+        // Built into the HELD load, never into the document: the targets,
+        // the subpaths and the adjacency memo are all read by observer
+        // paths (activation, `AnchorFor`, Where-am-I's connection
+        // counts), so a reload that installed them before publishing its
+        // rows gave a mid-publication reader the new canvas's answers
+        // about the old canvas's outline. They land WITH the rows they
+        // describe or not at all (contract C10).
+        var targets = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (CanvasTableRow row in tableRows)
         {
-            _targets[row.NodeId] = row.Target;
+            targets[row.NodeId] = row.Target;
         }
+        var subpaths = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (CanvasSceneNode node in scene.Nodes)
         {
             if (node.Subpath is { Length: > 0 } subpath)
             {
-                _subpaths[node.NodeId] = subpath;
+                subpaths[node.NodeId] = subpath;
             }
         }
         // The load is HELD, not published, and the whole of it — rows,
@@ -1721,7 +1804,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         //
         // With no needle there is nothing to wait for and the unit is
         // built and published immediately; the branch is the same code.
-        _pendingLoad = (info, outline, tableRows);
+        _pendingLoad = (info, outline, tableRows, targets, subpaths);
         RefreshFilter();
     }
 
@@ -1915,9 +1998,9 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         {
             return CanvasActivation.Refused;
         }
-        LastActivatedNode = row.NodeId;
         Publish(publication =>
         {
+            publication.LastActivatedNode = row.NodeId;
             publication.DetailTitle = row.Title;
             publication.DetailText = text;
         });
@@ -1940,7 +2023,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         }
         if (OpenExternalLinkFromSurface?.Invoke(url) == true)
         {
-            LastActivatedNode = row.NodeId;
+            Publish(publication => publication.LastActivatedNode = row.NodeId);
             Announcer.Announce(new CanvasA11yEvent.CanvasOpened(
                 row.Title, CanvasOpenTarget.Browser));
             return CanvasActivation.Opened;
@@ -1996,7 +2079,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             }
             if (OpenMediaCardFromSurface?.Invoke(target) == true)
             {
-                LastActivatedNode = row.NodeId;
+                Publish(publication => publication.LastActivatedNode = row.NodeId);
                 Announcer.Announce(new CanvasA11yEvent.CanvasOpened(
                     row.Title, CanvasOpenTarget.DefaultApp));
                 return CanvasActivation.Opened;
@@ -2022,7 +2105,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 CanvasFailedAction.CanvasAction, target));
             return CanvasActivation.Refused;
         }
-        LastActivatedNode = row.NodeId;
+        Publish(publication => publication.LastActivatedNode = row.NodeId);
         return OpenFileCardFromSurface?.Invoke(target, AnchorFor(row.NodeId)) == true
             ? CanvasActivation.Navigated
             : CanvasActivation.Refused;
@@ -2065,7 +2148,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// <c>#…</c> a heading (contract A13).</summary>
     internal LinkAnchor? AnchorFor(string nodeId)
     {
-        if (!_subpaths.TryGetValue(nodeId, out string? subpath)
+        if (!_view.Subpaths.TryGetValue(nodeId, out string? subpath)
             || !subpath.StartsWith('#'))
         {
             return null;
@@ -2172,6 +2255,15 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         _observersRetired = true;
         OutlinePublished = null;
         SurfaceChanged = null;
+        DetachPropertyObservers();
+        Selection.RetireObservers();
+        // The mode stack's channel is the document's too, from an
+        // observer's side: a surface subscribes to it in the same breath
+        // as the other four, and the round-5 claim that retirement covers
+        // every channel was false for exactly the ones nobody had
+        // enumerated. `Modes.Shutdown` has already spoken by now, so
+        // detaching here takes nothing away from the SPEAK phase.
+        Modes.RetireObservers();
     }
 
     /// <summary>
@@ -2190,7 +2282,11 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// reasons on a bad day.
     /// </remarks>
     internal bool HoldsObserverHandlersForTests =>
-        OutlinePublished is not null || SurfaceChanged is not null;
+        OutlinePublished is not null
+        || SurfaceChanged is not null
+        || HasPropertyObservers
+        || Selection.HoldsObserversForTests
+        || Modes.HoldsObserversForTests;
 
     private void CloseHandleGuarded()
     {

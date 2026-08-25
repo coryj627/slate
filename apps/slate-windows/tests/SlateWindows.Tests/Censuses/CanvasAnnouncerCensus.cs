@@ -439,7 +439,9 @@ public sealed class CanvasAnnouncerCensus
             ["CanvasModeController"] =
                 "the mode stack is not correlated with the rows: no projection "
                 + "rebuilds on it and its own lifecycle is contract C7's. It "
-                + "notifies on its own channel by decision.",
+                + "notifies on its own channel by decision — and is RETIRED "
+                + "with the document, which `HoldsObserverHandlersForTests` "
+                + "covers.",
             ["CanvasOutlineRowViewModel"] =
                 "a materialized ROW, not the document: its notifications are "
                 + "the tree's own two-way binding state (expansion, selection "
@@ -451,41 +453,99 @@ public sealed class CanvasAnnouncerCensus
                 + "a delegate rather than document state.",
         };
         // VIEWS materialize what a publication publishes; their own
-        // notifications are downstream of it by construction.
-        string[] viewBases = ["UserControl", "Control", "TreeView", "DataGrid"];
+        // notifications are downstream of it by construction. Matched
+        // TRANSITIVELY, like the notifying test — a control two
+        // derivations down is still a control.
+        string[] viewRoots = ["UserControl", "Control", "FrameworkElement"];
+        // The root that makes a type notify. Also transitive, and also
+        // matched on the SIMPLE name, so a qualified base (or a rename to
+        // a namespace-qualified spelling) does not read as "not a model".
+        const string notifyingRoot = "BindableBase";
 
-        var unclassified = new List<string>();
-        var offenders = new List<string>();
-        foreach (string file in Directory.EnumerateFiles(
-            CSharpSource.CanvasDirectory, "*.cs", SearchOption.AllDirectories))
+        // ONE pass to build the type graph, because a type's bases and
+        // its members can be split across partials and across files.
+        Dictionary<string, List<string>> bases = new(StringComparer.Ordinal);
+        Dictionary<string, List<TypeDeclarationSyntax>> parts =
+            new(StringComparer.Ordinal);
+        Dictionary<string, string> declaredIn = new(StringComparer.Ordinal);
+        foreach (string file in Directory
+            .EnumerateFiles(CSharpSource.CanvasDirectory, "*.cs", SearchOption.AllDirectories)
+            .Order(StringComparer.Ordinal))
         {
             CSharpSource source = CSharpSource.LoadPath(file);
             foreach (TypeDeclarationSyntax type in source.Root.DescendantNodes()
                 .OfType<TypeDeclarationSyntax>())
             {
-                string[] bases = type.BaseList?.Types
-                    .Select(entry => CSharpSource.Normalize(entry.Type))
-                    .ToArray() ?? [];
-                EventFieldDeclarationSyntax[] events = type.Members
-                    .OfType<EventFieldDeclarationSyntax>()
-                    .ToArray();
-                bool notifies = bases.Contains("BindableBase") || events.Length > 0;
-                if (!notifies)
-                {
-                    continue;
-                }
                 string name = type.Identifier.ValueText;
-                if (viewBases.Any(bases.Contains) || excluded.ContainsKey(name))
+                if (!parts.TryGetValue(name, out List<TypeDeclarationSyntax>? group))
                 {
-                    continue;
+                    parts[name] = group = [];
+                    bases[name] = [];
+                    declaredIn[name] = Path.GetFileName(file);
                 }
-                if (!model.Contains(name))
-                {
-                    unclassified.Add($"{name} ({Path.GetFileName(file)})");
-                    continue;
-                }
-                offenders.AddRange(RaisesOutsideThePublication(type, events));
+                group.Add(type);
+                bases[name].AddRange(type.BaseList?.Types
+                    .Select(entry => SimpleName(CSharpSource.Normalize(entry.Type)))
+                    ?? []);
             }
+        }
+
+        bool DerivesFrom(string name, string root)
+        {
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var queue = new Queue<string>([name]);
+            while (queue.Count > 0)
+            {
+                string current = queue.Dequeue();
+                if (!seen.Add(current))
+                {
+                    continue;
+                }
+                if (string.Equals(current, root, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+                foreach (string next in bases.TryGetValue(current, out List<string>? list)
+                    ? list
+                    : [])
+                {
+                    queue.Enqueue(next);
+                }
+            }
+            return false;
+        }
+
+        var candidates = new List<string>();
+        var unclassified = new List<string>();
+        var offenders = new List<string>();
+        var scanned = new List<string>();
+        foreach ((string name, List<TypeDeclarationSyntax> group) in parts)
+        {
+            MemberDeclarationSyntax[] members =
+                [.. group.SelectMany(part => part.Members)];
+            // Events BOTH ways: a field-like event and one with custom
+            // accessors are the same channel, and a scan that only knew
+            // the first would have missed a `add`/`remove` pair added
+            // tomorrow.
+            string[] events = [.. EventNames(members)];
+            bool notifies = DerivesFrom(name, notifyingRoot) || events.Length > 0;
+            if (!notifies)
+            {
+                continue;
+            }
+            candidates.Add(name);
+            if (viewRoots.Any(root => DerivesFrom(name, root))
+                || excluded.ContainsKey(name))
+            {
+                continue;
+            }
+            if (!model.Contains(name))
+            {
+                unclassified.Add($"{name} ({declaredIn[name]})");
+                continue;
+            }
+            scanned.Add(name);
+            offenders.AddRange(RaisesOutsideThePublication(name, group, members, events));
         }
 
         Assert.True(
@@ -500,9 +560,58 @@ public sealed class CanvasAnnouncerCensus
             + "publication that will announce it in order — these do not: "
             + string.Join("; ", offenders));
 
-        // The census can only be trusted if it FOUND the model, so the
-        // premise is asserted rather than assumed.
-        Assert.Equal(2, model.Length);
+        // DISCOVERY, asserted over what the scan FOUND rather than what
+        // this method listed. A census whose scan silently matched
+        // nothing passes every check above it, which is the shape that
+        // makes a green suite mean less than it looks like.
+        Assert.Equal(model.OrderBy(name => name, StringComparer.Ordinal), scanned.Order(StringComparer.Ordinal));
+        string[] missingExclusions = [.. excluded.Keys.Where(name => !candidates.Contains(name))];
+        Assert.True(
+            missingExclusions.Length == 0,
+            "an exclusion names a type this scan never saw, so it is either "
+            + "stale or the scan is broken — either way the census is asserting "
+            + $"about nothing: {string.Join(", ", missingExclusions)}");
+        Assert.True(
+            candidates.Count >= model.Length + excluded.Count,
+            $"the scan found {candidates.Count} notifying canvas types, fewer "
+            + "than the model and the exclusions it is supposed to have "
+            + "classified — the scan is not reaching the source.");
+    }
+
+    /// <summary>The last segment of a possibly-qualified type name, so a
+    /// base written <c>SlateWindows.BindableBase</c> resolves the same as
+    /// a bare one.</summary>
+    private static string SimpleName(string type)
+    {
+        int generic = type.IndexOf('<', StringComparison.Ordinal);
+        string bare = generic < 0 ? type : type[..generic];
+        int dot = bare.LastIndexOf('.');
+        return dot < 0 ? bare : bare[(dot + 1)..];
+    }
+
+    /// <summary>Every event a type declares, field-like or with custom
+    /// accessors.</summary>
+    private static IEnumerable<string> EventNames(
+        IReadOnlyList<MemberDeclarationSyntax> members)
+    {
+        foreach (MemberDeclarationSyntax member in members)
+        {
+            switch (member)
+            {
+                case EventFieldDeclarationSyntax field:
+                    foreach (VariableDeclaratorSyntax variable
+                        in field.Declaration.Variables)
+                    {
+                        yield return variable.Identifier.ValueText;
+                    }
+                    break;
+                case EventDeclarationSyntax declared:
+                    yield return declared.Identifier.ValueText;
+                    break;
+                default:
+                    break;
+            }
+        }
     }
 
     /// <summary>
@@ -510,59 +619,72 @@ public sealed class CanvasAnnouncerCensus
     /// primitive — derived from the type, not from a list.
     /// </summary>
     private static IEnumerable<string> RaisesOutsideThePublication(
-        TypeDeclarationSyntax type,
-        IReadOnlyList<EventFieldDeclarationSyntax> events)
+        string name,
+        IReadOnlyList<TypeDeclarationSyntax> parts,
+        IReadOnlyList<MemberDeclarationSyntax> members,
+        IReadOnlyList<string> events)
     {
         // The primitive, and the ONE commit site it drives on the
-        // selection. Everything else in these two types is a caller.
-        ClassDeclarationSyntax? publication = type.DescendantNodes()
-            .OfType<ClassDeclarationSyntax>()
-            .FirstOrDefault(nested => nested.Identifier.ValueText == "Publication");
-        MethodDeclarationSyntax? commit = type.Members
+        // selection. Everything else in these types is a caller.
+        ClassDeclarationSyntax[] publications = [.. parts
+            .SelectMany(part => part.DescendantNodes().OfType<ClassDeclarationSyntax>())
+            .Where(nested => nested.Identifier.ValueText == "Publication")];
+        MethodDeclarationSyntax[] commits = [.. members
             .OfType<MethodDeclarationSyntax>()
-            .FirstOrDefault(method => method.Identifier.ValueText == "RaiseStaged");
+            .Where(method => method.Identifier.ValueText == "RaiseStaged")];
 
         bool Allowed(SyntaxNode node) =>
             node.Ancestors().Any(ancestor =>
-                ancestor == publication || ancestor == commit);
+                publications.Contains(ancestor) || commits.Contains(ancestor));
 
-        string[] eventNames = events
-            .SelectMany(declaration => declaration.Declaration.Variables)
-            .Select(variable => variable.Identifier.ValueText)
-            .ToArray();
-        string[] raisers = ["OnPropertyChanged", "SetField", .. eventNames];
+        string[] raisers = ["OnPropertyChanged", "SetField", .. events];
 
-        foreach (InvocationExpressionSyntax invocation in type.DescendantNodes()
-            .OfType<InvocationExpressionSyntax>())
+        // What an observer can READ, derived from the members that hand
+        // it out: the backing fields of every public/internal property,
+        // and separately the ones that are collections (which change by
+        // mutation rather than assignment).
+        string[] readable = [.. ObserverVisibleFields(members, collectionsOnly: false)];
+        string[] collections = [.. ObserverVisibleFields(members, collectionsOnly: true)];
+        string[] mutators = ["Add", "Remove", "Clear", "Insert", "RemoveAt", "UnionWith"];
+
+        // ASSIGNMENTS first: a field an observer reads, written outside
+        // the transaction, is a value that moved under a reader with
+        // nothing announced — the same defect arriving by the back door.
+        foreach (SyntaxNode node in parts.SelectMany(part => part.DescendantNodes()))
         {
+            if (node is not AssignmentExpressionSyntax assignment
+                || assignment.Left is not IdentifierNameSyntax field
+                || !readable.Contains(field.Identifier.ValueText)
+                || Allowed(assignment))
+            {
+                continue;
+            }
+            MethodDeclarationSyntax? staging = assignment.Ancestors()
+                .OfType<MethodDeclarationSyntax>()
+                .FirstOrDefault();
+            if (staging?.Identifier.ValueText.StartsWith(
+                    "Stage", StringComparison.Ordinal) == true)
+            {
+                continue;
+            }
+            yield return $"{name}: {CSharpSource.Normalize(assignment)}";
+        }
+
+        foreach (SyntaxNode node in parts.SelectMany(part => part.DescendantNodes()))
+        {
+            if (node is not InvocationExpressionSyntax invocation)
+            {
+                continue;
+            }
             string call = CSharpSource.Normalize(invocation);
             if (raisers.Any(raiser =>
                     call.StartsWith(raiser + "(", StringComparison.Ordinal)
                     || call.StartsWith(raiser + "?.Invoke", StringComparison.Ordinal))
                 && !Allowed(invocation))
             {
-                yield return $"{type.Identifier.ValueText}: {call}";
+                yield return $"{name}: {call}";
+                continue;
             }
-        }
-
-        // The collections behind observer-visible members: a mutation is
-        // a change a reader can see, whether or not anything announced it.
-        string[] collections = type.Members
-            .OfType<FieldDeclarationSyntax>()
-            .Where(field =>
-            {
-                string declared = CSharpSource.Normalize(field.Declaration.Type);
-                return declared.StartsWith("HashSet<", StringComparison.Ordinal)
-                    || declared.StartsWith(
-                        "ObservableCollection<", StringComparison.Ordinal);
-            })
-            .SelectMany(field => field.Declaration.Variables)
-            .Select(variable => variable.Identifier.ValueText)
-            .ToArray();
-        string[] mutators = ["Add", "Remove", "Clear", "Insert", "RemoveAt"];
-        foreach (InvocationExpressionSyntax invocation in type.DescendantNodes()
-            .OfType<InvocationExpressionSyntax>())
-        {
             if (invocation.Expression is not MemberAccessExpressionSyntax
                 {
                     Expression: IdentifierNameSyntax target,
@@ -584,10 +706,92 @@ public sealed class CanvasAnnouncerCensus
             {
                 continue;
             }
-            yield return
-                $"{type.Identifier.ValueText}: {CSharpSource.Normalize(invocation)}";
+            yield return $"{name}: {call}";
         }
     }
+
+    /// <summary>
+    /// The fields behind observer-visible members — derived by resolving
+    /// each public/internal property to the field it reads.
+    /// </summary>
+    /// <remarks>
+    /// Two lists, one derivation. The first version of the collection
+    /// half named two generic types, and the first version of the
+    /// assignment half named eleven fields; both are the same failure as
+    /// naming pairs, one level down — the twelfth field and the third
+    /// collection type are invisible to a list nobody updated. What makes
+    /// state observer-visible is that a MEMBER hands it out, so that is
+    /// what is scanned.
+    /// </remarks>
+    private static IEnumerable<string> ObserverVisibleFields(
+        IReadOnlyList<MemberDeclarationSyntax> members,
+        bool collectionsOnly)
+    {
+        foreach (PropertyDeclarationSyntax property in members
+            .OfType<PropertyDeclarationSyntax>())
+        {
+            bool exposed = property.Modifiers.Any(modifier =>
+                modifier.ValueText is "public" or "internal");
+            string declared = CSharpSource.Normalize(property.Type);
+            bool collection = declared.Contains('<', StringComparison.Ordinal)
+                && (declared.Contains("Collection", StringComparison.Ordinal)
+                    || declared.Contains("List", StringComparison.Ordinal)
+                    || declared.Contains("Dictionary", StringComparison.Ordinal)
+                    || declared.Contains("Set", StringComparison.Ordinal));
+            if (!exposed || (collectionsOnly && !collection))
+            {
+                continue;
+            }
+            // What the member HANDS OUT, not everything its body touches:
+            // a property that merely consults a field (a handle guard, a
+            // delegate call) is not exposing that field's identity, and
+            // treating it as such would put the FFI handle in a set about
+            // observer-visible state.
+            foreach (ExpressionSyntax expression in Returned(property))
+            {
+                if (Root(expression) is { } field
+                    && field.StartsWith("_", StringComparison.Ordinal))
+                {
+                    yield return field;
+                }
+            }
+        }
+    }
+
+    /// <summary>The expressions a property hands back — its expression
+    /// body, or its getter's.</summary>
+    private static IEnumerable<ExpressionSyntax> Returned(
+        PropertyDeclarationSyntax property)
+    {
+        if (property.ExpressionBody?.Expression is { } inline)
+        {
+            yield return inline;
+        }
+        AccessorDeclarationSyntax? getter = property.AccessorList?.Accessors
+            .FirstOrDefault(accessor => accessor.Keyword.ValueText == "get");
+        if (getter?.ExpressionBody?.Expression is { } arrow)
+        {
+            yield return arrow;
+        }
+        foreach (ReturnStatementSyntax statement in getter?.Body?.DescendantNodes()
+            .OfType<ReturnStatementSyntax>() ?? [])
+        {
+            if (statement.Expression is { } returned)
+            {
+                yield return returned;
+            }
+        }
+    }
+
+    /// <summary>The identifier an expression is rooted at, when it is a
+    /// bare field or a walk from one (<c>_view.Outline</c>); null for
+    /// anything else, including calls and patterns.</summary>
+    private static string? Root(ExpressionSyntax expression) => expression switch
+    {
+        IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
+        MemberAccessExpressionSyntax access => Root(access.Expression),
+        _ => null,
+    };
 
     /// <summary>
     /// Contract C7: teardown SPEAKS, then SILENCES, then RELEASES — and
