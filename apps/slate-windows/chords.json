@@ -848,6 +848,163 @@
       "registered": true
     },
     {
+      "id": "slate.canvas.whereAmI",
+      "label": "Canvas: Where Am I?",
+      "section": "Canvas",
+      "hint": "Read the selected card's full context: position, group, connections, color, and marks. Also rendered in a panel you can read at leisure.",
+      "macChord": "⌃⌘I",
+      "mac": "Control Command I",
+      "windows": "Ctrl+Alt+Shift+I",
+      "windowsSpoken": "Control Alt Shift I",
+      "scope": "Canvas",
+      "registered": true,
+      "divergence": "D-2: the rule predicts Ctrl+Alt+I, which slate.view.toggleRightPane holds at Global scope — live at the same moment as a focused canvas, so this is a collision and not a disjoint pair. Disambiguated with Shift per the G18 precedent."
+    },
+    {
+      "id": "slate.canvas.nextCard",
+      "label": "Canvas: Next Card",
+      "section": "Canvas",
+      "hint": "Select the next card in reading order.",
+      "macChord": "↓",
+      "mac": "Down Arrow",
+      "windows": "Down",
+      "windowsSpoken": "Down Arrow",
+      "scope": "Canvas",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.previousCard",
+      "label": "Canvas: Previous Card",
+      "section": "Canvas",
+      "hint": "Select the previous card in reading order.",
+      "macChord": "↑",
+      "mac": "Up Arrow",
+      "windows": "Up",
+      "windowsSpoken": "Up Arrow",
+      "scope": "Canvas",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.enterGroup",
+      "label": "Canvas: Enter Group",
+      "section": "Canvas",
+      "hint": "Move into the selected group's first card.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.exitGroup",
+      "label": "Canvas: Exit Group",
+      "section": "Canvas",
+      "hint": "Move out to the containing group.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.followConnectionForward",
+      "label": "Canvas: Follow Connection Forward",
+      "section": "Canvas",
+      "hint": "Jump along the selected card's first outgoing connection.",
+      "macChord": "→",
+      "mac": "Right Arrow",
+      "windows": "Right",
+      "windowsSpoken": "Right Arrow",
+      "scope": "Canvas",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.followConnectionBack",
+      "label": "Canvas: Follow Connection Back",
+      "section": "Canvas",
+      "hint": "Jump along the selected card's first incoming connection.",
+      "macChord": "←",
+      "mac": "Left Arrow",
+      "windows": "Left",
+      "windowsSpoken": "Left Arrow",
+      "scope": "Canvas",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.tracePath",
+      "label": "Canvas: Trace Path from Selected Card",
+      "section": "Canvas",
+      "hint": "Walk the outgoing chain, announcing each hop and the visited count.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.filterCards",
+      "label": "Canvas: Filter Cards…",
+      "section": "Canvas",
+      "hint": "Focus the filter field (Ctrl+F on a canvas): narrows by title, type, group, or target.",
+      "macChord": "⌘F",
+      "mac": "Command F",
+      "windows": "Ctrl+F",
+      "windowsSpoken": "Control F",
+      "scope": "Canvas",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.clearFilter",
+      "label": "Canvas: Clear Filter",
+      "section": "Canvas",
+      "hint": "Show every card again (also the Escape rung while filtering).",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.commitMode",
+      "label": "Canvas: Commit Mode",
+      "section": "Canvas",
+      "hint": "Apply the active move or resize (same as Enter).",
+      "macChord": null,
+      "mac": null,
+      "windows": "Enter",
+      "windowsSpoken": "Enter",
+      "scope": "Canvas",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.cancelMode",
+      "label": "Canvas: Cancel Mode",
+      "section": "Canvas",
+      "hint": "Cancel the active move or resize and restore the prior position (same as Escape).",
+      "macChord": null,
+      "mac": null,
+      "windows": "Escape",
+      "windowsSpoken": "Escape",
+      "scope": "Canvas",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.toggleFollowSelection",
+      "label": "Canvas: Toggle Viewport Follows Selection",
+      "section": "Canvas",
+      "hint": "When on (the default), the visual view pans to keep the selection visible.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
       "id": "slate.sidebar.open",
       "label": "Open",
       "section": "Sidebar",
@@ -1708,6 +1865,24 @@
           "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#CanvasSurfaces_OutlineTreeSelectionAndActivation_AreClean",
           "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#CanvasSurfaces_TableGridSortSelectionAndActivation_AreClean"
         ]
+      },
+      "canvasNavigator": {
+        "implementation": [
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasNavigator.cs#CanvasNavigator",
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasModeController.cs#CanvasModeController",
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasSurfaceView.cs#OnPreviewKeyDown",
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasDocumentViewModel.cs#ReadRefusalFor",
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasPreferencesViewModel.cs#CanvasPreferencesViewModel",
+          "apps/slate-windows/src/SlateWindows/Canvas/WorkspaceViewModel.Canvas.cs#CanvasWhereAmICommand",
+          "apps/slate-windows/src/SlateWindows/Commands/ChordTable.cs#CanvasRows"
+        ],
+        "tests": [
+          "apps/slate-windows/tests/SlateWindows.Tests/CanvasNavigatorTests.cs#EveryReadVerbAnswersInEveryLoadState",
+          "apps/slate-windows/tests/SlateWindows.Tests/CanvasNavigatorTests.cs#MovementWalksTheFilteredSetAndTheProjectionsNarrowWithIt",
+          "apps/slate-windows/tests/SlateWindows.Tests/CanvasNavigatorTests.cs#WhereAmIRendersTheSameStringItSpeaks",
+          "apps/slate-windows/tests/SlateWindows.Tests/CanvasModeControllerTests.cs#TheEscapeLadderConsumesExactlyOneRungPerPress",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#CanvasSurfaces_NavigatorFilterAndWhereAmI_AreClean"
+        ]
       }
     },
     "commands": {
@@ -1820,7 +1995,19 @@
       "slate.view.toggleSearch": "searchOverlay",
       "slate.file.newFromTemplate": "templates",
       "slate.canvas.showOutline": "canvasSurfaces",
-      "slate.canvas.showTable": "canvasSurfaces"
+      "slate.canvas.showTable": "canvasSurfaces",
+      "slate.canvas.whereAmI": "canvasNavigator",
+      "slate.canvas.nextCard": "canvasNavigator",
+      "slate.canvas.previousCard": "canvasNavigator",
+      "slate.canvas.enterGroup": "canvasNavigator",
+      "slate.canvas.exitGroup": "canvasNavigator",
+      "slate.canvas.followConnectionForward": "canvasNavigator",
+      "slate.canvas.followConnectionBack": "canvasNavigator",
+      "slate.canvas.tracePath": "canvasNavigator",
+      "slate.canvas.filterCards": "canvasNavigator",
+      "slate.canvas.clearFilter": "canvasNavigator",
+      "slate.canvas.commitMode": "canvasNavigator",
+      "slate.canvas.cancelMode": "canvasNavigator"
     },
     "issues": {
       "#720": "vault",
@@ -2051,6 +2238,45 @@
       "scope": "None",
       "registered": false,
       "reason": "PR-4: the four static RoutedCommands (export CSV, export Markdown, toggle sort, filter) are the grid substrate's, scoped to a focused grid. The app-level capabilities are the registered slate.bases.* ids."
+    },
+    {
+      "id": "windows.canvas.setVerbosityTerse",
+      "label": "Canvas Verbosity: Terse",
+      "section": "Canvas",
+      "hint": null,
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": false,
+      "reason": "PR-4, the math-verbosity precedent: the three canvas verbosity levels are selected by one parameterized setter the Canvas menu binds with the level as its CommandParameter. Each level is a row so the catalog records the closed set, and none is registered because a palette row cannot supply the parameter. mac declares no SlateCommandID for these either."
+    },
+    {
+      "id": "windows.canvas.setVerbosityStandard",
+      "label": "Canvas Verbosity: Standard",
+      "section": "Canvas",
+      "hint": null,
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": false,
+      "reason": "PR-4, the math-verbosity precedent: the three canvas verbosity levels are selected by one parameterized setter the Canvas menu binds with the level as its CommandParameter. Each level is a row so the catalog records the closed set, and none is registered because a palette row cannot supply the parameter. mac declares no SlateCommandID for these either."
+    },
+    {
+      "id": "windows.canvas.setVerbosityVerbose",
+      "label": "Canvas Verbosity: Verbose",
+      "section": "Canvas",
+      "hint": null,
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": false,
+      "reason": "PR-4, the math-verbosity precedent: the three canvas verbosity levels are selected by one parameterized setter the Canvas menu binds with the level as its CommandParameter. Each level is a row so the catalog records the closed set, and none is registered because a palette row cannot supply the parameter. mac declares no SlateCommandID for these either."
     },
     {
       "id": "windows.reading.nextH",

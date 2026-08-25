@@ -792,6 +792,33 @@ internal sealed class AccessibleDataGrid : UserControl
     /// commands target it); null when currency leaves the bound set.</summary>
     internal event Action<object?>? CurrentRowChanged;
 
+    /// <summary>
+    /// Whether the grid can move currency one ROW in this direction
+    /// itself (W6-1 PR C, contract C3).
+    /// </summary>
+    /// <remarks>
+    /// The canvas navigator asks before it claims Down/Up: the grid's own
+    /// arrow already moves the reader AND raises
+    /// <see cref="CurrentRowChanged"/>, so a second movement would double
+    /// it. What the grid cannot do is say "End of canvas." when it has
+    /// nowhere to go, and a keypress that does nothing must say so (t0
+    /// never-silent). With no currency at all the answer is yes: an arrow
+    /// from nowhere lands on the first row.
+    /// </remarks>
+    internal bool CanMoveRow(bool forward)
+    {
+        if (_items.Count == 0)
+        {
+            return false;
+        }
+        int index = _grid.CurrentCell.Item is { } current ? _items.IndexOf(current) : -1;
+        if (index < 0)
+        {
+            return true;
+        }
+        return forward ? index < _items.Count - 1 : index > 0;
+    }
+
     private void OnCurrentCellChanged(object? sender, EventArgs e)
     {
         CurrentRowChanged?.Invoke(

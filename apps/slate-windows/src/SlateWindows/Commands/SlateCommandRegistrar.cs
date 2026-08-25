@@ -471,6 +471,34 @@ internal static class SlateCommandRegistrar
                 host => host.Workspace?.CanvasShowTableCommand,
             [ChordTable.Ids.CanvasShowVisual] =
                 host => host.Workspace?.CanvasShowVisualCommand,
+
+            // Canvas navigator, filter, Where-am-I and modes (W6-1 PR C,
+            // contract C1). Every movement row stays enabled on a canvas
+            // in ANY load state: the navigator's state mapping is what
+            // answers, and a disabled row cannot say why (contract C4).
+            [ChordTable.Ids.CanvasWhereAmI] = host => host.Workspace?.CanvasWhereAmICommand,
+            [ChordTable.Ids.CanvasNextCard] = host => host.Workspace?.CanvasNextCardCommand,
+            [ChordTable.Ids.CanvasPreviousCard] =
+                host => host.Workspace?.CanvasPreviousCardCommand,
+            [ChordTable.Ids.CanvasEnterGroup] =
+                host => host.Workspace?.CanvasEnterGroupCommand,
+            [ChordTable.Ids.CanvasExitGroup] = host => host.Workspace?.CanvasExitGroupCommand,
+            [ChordTable.Ids.CanvasFollowConnectionForward] =
+                host => host.Workspace?.CanvasFollowConnectionForwardCommand,
+            [ChordTable.Ids.CanvasFollowConnectionBack] =
+                host => host.Workspace?.CanvasFollowConnectionBackCommand,
+            [ChordTable.Ids.CanvasTracePath] = host => host.Workspace?.CanvasTracePathCommand,
+            [ChordTable.Ids.CanvasFilterCards] =
+                host => host.Workspace?.CanvasFilterCardsCommand,
+            [ChordTable.Ids.CanvasClearFilter] =
+                host => host.Workspace?.CanvasClearFilterCommand,
+            [ChordTable.Ids.CanvasCommitMode] =
+                host => host.Workspace?.CanvasCommitModeCommand,
+            [ChordTable.Ids.CanvasCancelMode] =
+                host => host.Workspace?.CanvasCancelModeCommand,
+            // Disabled until PR D ships the viewport (contract C9).
+            [ChordTable.Ids.CanvasToggleFollowSelection] =
+                host => host.Workspace?.CanvasToggleFollowSelectionCommand,
             [ChordTable.Ids.BasesNewQuery] = host => host.Workspace?.BasesNewQueryCommand,
             [ChordTable.Ids.BasesEditViewFilters] =
                 host => host.Workspace?.BasesEditViewFiltersCommand,

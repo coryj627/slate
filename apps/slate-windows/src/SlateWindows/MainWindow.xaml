@@ -414,6 +414,92 @@
                           AutomationProperties.AutomationId="EditorActualSizeMenuItem"
                           Command="{Binding Workspace.EditorPreferences.ActualSizeCommand}" />
             </MenuItem>
+            <!-- W6-1 PR C (#745): every slate.canvas.* command PR C ships,
+                 reachable and AT-discoverable without a chord — the Base
+                 menu's precedent. Mac ships these palette-only; a menu is
+                 the Windows-native chordless surface. Items disable
+                 through ActiveCanvasDocument (the mode rows additionally
+                 through the mode stack, contract C9). -->
+            <MenuItem Header="Ca_nvas"
+                      AutomationProperties.AutomationId="CanvasMenu">
+                <MenuItem Header="_Where Am I?"
+                          AutomationProperties.AutomationId="CanvasWhereAmIMenuItem"
+                          InputGestureText="{cmd:ChordText slate.canvas.whereAmI}"
+                          Command="{Binding Workspace.CanvasWhereAmICommand}" />
+                <Separator />
+                <MenuItem Header="_Next Card"
+                          AutomationProperties.AutomationId="CanvasNextCardMenuItem"
+                          InputGestureText="{cmd:ChordText slate.canvas.nextCard}"
+                          Command="{Binding Workspace.CanvasNextCardCommand}" />
+                <MenuItem Header="_Previous Card"
+                          AutomationProperties.AutomationId="CanvasPreviousCardMenuItem"
+                          InputGestureText="{cmd:ChordText slate.canvas.previousCard}"
+                          Command="{Binding Workspace.CanvasPreviousCardCommand}" />
+                <MenuItem Header="_Enter Group"
+                          AutomationProperties.AutomationId="CanvasEnterGroupMenuItem"
+                          Command="{Binding Workspace.CanvasEnterGroupCommand}" />
+                <MenuItem Header="E_xit Group"
+                          AutomationProperties.AutomationId="CanvasExitGroupMenuItem"
+                          Command="{Binding Workspace.CanvasExitGroupCommand}" />
+                <MenuItem Header="_Follow Connection Forward"
+                          AutomationProperties.AutomationId="CanvasFollowForwardMenuItem"
+                          InputGestureText="{cmd:ChordText slate.canvas.followConnectionForward}"
+                          Command="{Binding Workspace.CanvasFollowConnectionForwardCommand}" />
+                <MenuItem Header="Follow Connection _Back"
+                          AutomationProperties.AutomationId="CanvasFollowBackMenuItem"
+                          InputGestureText="{cmd:ChordText slate.canvas.followConnectionBack}"
+                          Command="{Binding Workspace.CanvasFollowConnectionBackCommand}" />
+                <MenuItem Header="_Trace Path from Selected Card"
+                          AutomationProperties.AutomationId="CanvasTracePathMenuItem"
+                          Command="{Binding Workspace.CanvasTracePathCommand}" />
+                <Separator />
+                <MenuItem Header="F_ilter Cards…"
+                          AutomationProperties.AutomationId="CanvasFilterCardsMenuItem"
+                          InputGestureText="{cmd:ChordText slate.canvas.filterCards}"
+                          Command="{Binding Workspace.CanvasFilterCardsCommand}" />
+                <MenuItem Header="_Clear Filter"
+                          AutomationProperties.AutomationId="CanvasClearFilterMenuItem"
+                          Command="{Binding Workspace.CanvasClearFilterCommand}" />
+                <Separator />
+                <MenuItem Header="Co_mmit Mode"
+                          AutomationProperties.AutomationId="CanvasCommitModeMenuItem"
+                          InputGestureText="{cmd:ChordText slate.canvas.commitMode}"
+                          Command="{Binding Workspace.CanvasCommitModeCommand}" />
+                <MenuItem Header="Cance_l Mode"
+                          AutomationProperties.AutomationId="CanvasCancelModeMenuItem"
+                          InputGestureText="{cmd:ChordText slate.canvas.cancelMode}"
+                          Command="{Binding Workspace.CanvasCancelModeCommand}" />
+                <Separator />
+                <MenuItem Header="Toggle Viewport Follows _Selection"
+                          AutomationProperties.AutomationId="CanvasToggleFollowSelectionMenuItem"
+                          Command="{Binding Workspace.CanvasToggleFollowSelectionCommand}" />
+                <Separator />
+                <!-- t0 §1.2, contract C13. Checkable radio items: the
+                     screen reader speaks the selected level from the
+                     element itself, which is why the setting needs no
+                     announcement of its own. -->
+                <MenuItem Header="_Verbosity"
+                          AutomationProperties.AutomationId="CanvasVerbosityMenu">
+                    <MenuItem Header="_Terse"
+                              AutomationProperties.AutomationId="CanvasVerbosityTerseMenuItem"
+                              IsCheckable="True"
+                              IsChecked="{Binding Workspace.CanvasPreferences.IsVerbosityTerse, Mode=OneWay}"
+                              Command="{Binding Workspace.CanvasPreferences.SetVerbosityCommand}"
+                              CommandParameter="terse" />
+                    <MenuItem Header="_Standard"
+                              AutomationProperties.AutomationId="CanvasVerbosityStandardMenuItem"
+                              IsCheckable="True"
+                              IsChecked="{Binding Workspace.CanvasPreferences.IsVerbosityStandard, Mode=OneWay}"
+                              Command="{Binding Workspace.CanvasPreferences.SetVerbosityCommand}"
+                              CommandParameter="standard" />
+                    <MenuItem Header="_Verbose"
+                              AutomationProperties.AutomationId="CanvasVerbosityVerboseMenuItem"
+                              IsCheckable="True"
+                              IsChecked="{Binding Workspace.CanvasPreferences.IsVerbosityVerbose, Mode=OneWay}"
+                              Command="{Binding Workspace.CanvasPreferences.SetVerbosityCommand}"
+                              CommandParameter="verbose" />
+                </MenuItem>
+            </MenuItem>
             <MenuItem Header="_Files">
                 <MenuItem Header="_Open" Command="{Binding FileSidebar.OpenCurrentCommand}" />
                 <MenuItem Header="Open in New _Tab" Command="{Binding FileSidebar.OpenNewTabCommand}" />
