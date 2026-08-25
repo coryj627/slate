@@ -1740,6 +1740,96 @@ public sealed class CanvasDocumentTests : IDisposable
     }
 
     /// <summary>
+    /// A media file that EXISTS but cannot be opened announces a
+    /// REFUSAL, never "missing from the vault" (Codoki round 2).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Every failure of the media open below the existence check is a
+    /// refusal of a present file: the containment gate rejecting a
+    /// junction that escapes the vault, the TOCTOU revalidation catching
+    /// a swap, ShellExecute finding no association, or — the arm driven
+    /// here — the identity query failing on a volume whose filesystem
+    /// does not answer <c>FileIdInfo</c>, which is CD-38's recorded
+    /// NTFS/ReFS limitation and therefore a SHIPPING configuration, not a
+    /// hypothetical.
+    /// </para>
+    /// <para>
+    /// Announcing <c>CanvasFileNotFound</c> for these rendered "…is
+    /// missing from the vault. Use Locate File to repoint this card." —
+    /// a false statement AND a recovery that would repoint a card whose
+    /// target is fine. On a FAT32/exFAT vault it fired for every media
+    /// file in the canvas. Mutation-verified: swapping the arm back to
+    /// <c>CanvasFileNotFound</c> fails this fact.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void AMediaFileThatExistsButCannotBeOpenedRefusesRatherThanClaimingItIsMissing()
+    {
+        File.WriteAllBytes(
+            Path.Combine(_fixture.Root, "present.png"),
+            [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "unopenable.canvas"),
+            """
+            {"nodes":[
+              {"id":"pic","type":"file","file":"present.png","x":0,"y":0,"width":10,"height":10}
+            ],"edges":[]}
+            """);
+
+        var launched = new List<string>();
+        using var workspace = new WorkspaceViewModel(
+            _session,
+            _fixture.Root,
+            () => [],
+            _ => { },
+            startInteractionBackgroundWork: false,
+            announceRendered: _announced.Add,
+            externalOpener: target =>
+            {
+                launched.Add(target);
+                return true;
+            });
+        workspace.OpenPath("unopenable.canvas");
+        CanvasDocumentViewModel document = Assert.IsType<CanvasDocumentViewModel>(
+            workspace.ActiveGroup.ActiveTab!.Canvas);
+
+        // The premise: the file is genuinely THERE, so a "missing" claim
+        // could only ever be false.
+        Assert.True(File.Exists(Path.Combine(_fixture.Root, "present.png")));
+
+        _announced.Clear();
+        try
+        {
+            // The volume refuses to answer the identity query — the whole
+            // production gate runs, and fails closed.
+            CanvasMediaPolicy.FailIdentityQueryForTests = true;
+            Assert.Equal(
+                CanvasActivation.Refused, document.Activate(Row(document, "pic")));
+        }
+        finally
+        {
+            CanvasMediaPolicy.FailIdentityQueryForTests = false;
+        }
+
+        Assert.Empty(launched);
+        document.Announcer.FlushForTests();
+        RenderedAnnouncement refusal = Assert.Single(_announced);
+        Assert.Equal(A11yPriority.High, refusal.Priority);
+        Assert.Equal(
+            SlateUniffiMethods.A11yRender(new A11yEvent.Canvas(
+                new CanvasA11yEvent.CanvasActionFailed(
+                    CanvasFailedAction.CanvasAction, "present.png"))).Text,
+            refusal.Text);
+        // And explicitly NOT the absence sentence, which is the wrong
+        // answer this fact exists to keep out.
+        Assert.NotEqual(
+            SlateUniffiMethods.A11yRender(new A11yEvent.Canvas(
+                new CanvasA11yEvent.CanvasFileNotFound("present.png"))).Text,
+            refusal.Text);
+    }
+
+    /// <summary>
     /// The gate's set is core's `media_class`, transliterated because it
     /// is not exported — including both of core's edge rules: the
     /// BASENAME's real extension, and a dotfile like `.mov` being a

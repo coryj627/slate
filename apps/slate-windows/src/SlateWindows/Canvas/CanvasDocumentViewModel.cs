@@ -865,7 +865,25 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                     row.Title, CanvasOpenTarget.DefaultApp));
                 return CanvasActivation.Opened;
             }
-            Announcer.Announce(new CanvasA11yEvent.CanvasFileNotFound(target));
+            // NOT file-not-found. Control only reaches here with a target
+            // that EXISTS (checked above) and IS media (checked above), so
+            // every way the open can fail is a refusal, not an absence:
+            // the containment gate refusing a junction that escapes the
+            // vault, the identity query failing on a volume whose
+            // filesystem does not answer FileIdInfo (CD-38's recorded
+            // NTFS/ReFS limitation), the TOCTOU revalidation catching a
+            // swap, ShellExecute finding no association, or the closure
+            // being absent entirely. Announcing CanvasFileNotFound told
+            // the user the file "is missing from the vault" and sent them
+            // to Locate File to repoint a card whose target is perfectly
+            // fine — a wrong answer, which this vocabulary never gives.
+            // It rides the same generic failed-action arm as the
+            // non-media refusal above, for the same reason and with the
+            // same recorded STOP: a typed "could not be opened" reason
+            // for FILES is a core change this task may not make
+            // (CanvasBlockedReason::LinkOpenFailed is for URLs).
+            Announcer.Announce(new CanvasA11yEvent.CanvasActionFailed(
+                CanvasFailedAction.CanvasAction, target));
             return CanvasActivation.Refused;
         }
         LastActivatedNode = row.NodeId;
