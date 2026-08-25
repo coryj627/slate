@@ -1462,8 +1462,9 @@ and visual are `CanExecute == false` until their projections ship, so
 sentence, because a registered row may not carry a `Reason` (that field
 belongs to `Unreg`) and "ships in PR B" is not copy any user should
 hear. The reason those two are disabled is recorded HERE and pinned by
-`ShowTableAndShowVisualRegisterAndStayDisabledUntilTheirProjectionsShip`;
-`showTable` enables in PR B and `showVisual` in PR D. None of the three
+`ShowVisualRegistersAndStaysDisabledUntilItsProjectionShips` (renamed in
+PR B, which enabled `showTable` — see B10);
+`showTable` enabled in PR B and `showVisual` enables in PR D. None of the three
 carries a chord, so `Scope` resolves to `None` through `Reg`'s own rule
 and `ChordScope.Canvas` has no delivery site until PR C — which is why
 the scope's doc comment names PR C as the first surface that uses it.
@@ -1541,7 +1542,8 @@ real peers and asserts the four patterns, the control types and the
 three label properties (mutation-verified — dropping the
 `GetPattern` override makes Invoke null, which is why the custom peer
 exists at all), and
-`ShowTableAndShowVisualRegisterAndStayDisabledUntilTheirProjectionsShip`
+`ShowVisualRegistersAndStaysDisabledUntilItsProjectionShips` (PR B's
+name for it, once `showTable` shipped)
 drives the registrar over a live workspace rather than a null-workspace
 stub.
 `apps/slate-windows/tests/SlateWindows.Tests/CanvasAnnouncerTests.cs`:
@@ -1584,6 +1586,291 @@ arbitrates; it is never run locally beside the unit suite.
 
 ---
 
+## PR B — the canvas table projection
+
+**Goal (spec §PR B).** The table view over `canvas_table_rows` on the
+W4-1 `AccessibleDataGrid`, *exactly as Bases consumed it*: a
+configuration of a battle-tested substrate, not new machinery. The
+smallest slice of the series — the mac analogue is 125 lines of view on
+the same substrate.
+
+### Contracts
+
+**B1 — The projection IS the substrate; nothing here re-implements it.**
+`Canvas/CanvasTableView.cs` builds one `AccessibleDataGrid`, calls
+`Bind` per publish, and configures columns, comparators, row actions,
+activation and the announce seam. Sorting, the reader-position restore,
+the "Header: value" cell labels, native row headers, type-ahead, the
+row-actions menu, the activation plumbing and the AT-safe virtualization
+are the substrate's — the W4-5 D-12 rule ("a second implementation of
+cell focus is what the grid-conformance contract forbids"), which is why
+the §8.7 matrix in `GridConformanceTests` applies to this projection by
+construction and is **cited, not re-run** (re-running its 10,000-row
+probe here would prove the substrate again and this projection not at
+all). Pinned by
+`TheProjectionIsTheSubstrateSoTheConformanceMatrixApplies`.
+
+**The substrate gained exactly one method, and it is the model→view
+direction it did not have.** `AccessibleDataGrid.SelectRow(predicate,
+moveFocus)` seats currency on a row WITHOUT announcing, and without
+taking keyboard focus unless asked. Every earlier consumer owns its
+selection inside the grid (Bases reads `CurrentRowChanged`; W4-5's
+Ctrl+J jump is a move the user asked for, which `FocusRow` makes and
+announces). The canvas is the first surface whose selection lives
+OUTSIDE the grid and is shared across panes, so a move made elsewhere
+has to re-seat this grid — and re-seating it must not speak a move the
+reader did not make, nor pull focus off whatever they were using. The
+mac substrate draws the same line: its own key handling announces and
+its `syncSelectionFromBinding` is silent. The new method reuses the
+substrate's existing `WithoutAnnouncing` and `FocusCellElement` rather
+than copying either.
+
+**B2 — Columns are the mac inventory, in mac's order, over core's
+fields.** **Type · Title · Group · Target · Connections · Color**, with
+`IsRowHeader` on Title. `Type` is core's `kind` word with its leading
+character capitalised (mac's `.capitalized`, and this host's existing
+`CanvasPhrase` capitaliser, which is core's `capitalize_first`
+transliterated); `Group` is core's `group_path`, last element, or empty;
+`Target` is core's `target` verbatim; `Connections` is core's
+`connection_count`; `Color` is core's `color_name` or empty. Header
+labels and the grid's accessible name ("Canvas table") are the mac label
+inventory verbatim, in `CanvasPhrase` with the rest of the §W-C label
+class (A9's designation). §W-G row J is the owner: the table's
+projection config is host-by-designation, and this row is what "host
+projection config, mac label inventory verbatim" means concretely.
+
+**`Target` is a file path or a whole URL — the HOST appears in the
+title, not here.** The spec's PR B line says "`Target` per kind = file
+path / URL host / empty (core-supplied)". Core's `node_target`
+(`model.rs`) returns the `file` for a file card and the **whole `url`**
+for a link card; the URL *host* is what core's `link_title` puts in the
+TITLE. The binding rule the sentence exists to protect — core-supplied,
+never host-derived — is met exactly: this projection passes `target`
+through untouched. Recorded rather than "fixed", because deriving a host
+here would be the R-D violation the same sentence forbids.
+
+**B3 — The comparators are mac's, and the spec's description of the
+Color one is corrected here.** Type, Target and Color take mac's plain
+`<` over the same values, transliterated as `CompareOrdinal` (identifier
+text, deterministic across cultures — the `ReadingTableGrid`
+precedent); Title and Group take mac's `localizedCaseInsensitiveCompare`,
+transliterated as .NET's current-culture, case-insensitive compare,
+because those are user-authored prose; Connections compares the COUNT, not the rendered
+digits, or 10 would sort before 2.
+
+**The Color column does not sort "by preset index, hex after presets".**
+The spec's parenthetical describes a comparator neither host has, over
+data core does not produce. Core's `color_name` (`canvas/mod.rs`) never
+yields a hex: a preset renders as its word and a hex renders as
+"⟨nearest preset⟩ (custom)", with "custom color" for an unparseable
+one. Mac's comparator is `$0.color < $1.color` over that NAME. The
+property the spec's phrase is reaching for is core's own, stated in
+`color_name`'s doc comment — *"the table's Color column sorts customs
+beside their family"* — and it is a consequence of sorting the names:
+`red` is immediately followed by `red (custom)`. **This is a
+ruling-vs-source conflict resolved in favour of the source** (the mac
+comparator, which both the spec sentence and the controller ruling name
+as the thing to match); the wording is what is wrong, and it is recorded
+here rather than implemented. Pinned by
+`TheColorColumnSortsCustomsBesideTheirFamily` and
+`TheConnectionsColumnSortsNumericallyNotAsText`; the whole six-column
+matrix by `EveryColumnSortsTheWayMacSortsIt`, whose expectations are
+CELL VALUES so a tie is spelled identically and the assertion pins the
+rendered column rather than an order that depends on how ties fell.
+
+**B4 — Rows are core's, published by the same load the outline is.**
+`CanvasDocumentViewModel.TableRows` is `canvas_table_rows` untransformed
+and in core's order (R-D), published by the publish that already fetched
+it for the activation targets — two reads of one open, never a second
+FFI round trip. The projection selects nothing and drops nothing —
+asserted as sequence equality of node ids against `TableRows`, which is
+the shape a filter or a paging bug breaks. The Title column reads core's
+`speakable_name`, the same
+field the outline row's name reads (CD-30's Windows reading), so one
+card answers to one name on both projections **and** the row-header
+identity the substrate restores the reader by is unique by construction
+— a bare title is not (the substrate's own comment: "two notes can both
+be Untitled"). Mac's table spells `title` there; the divergence is
+CD-30's, extended to this surface, and it is visible only on a canvas
+with repeated titles.
+
+**Skew-graceful for free (contract 0b-6).** Table rows are SQLite-served
+with `speakable_for`'s title fallback, so a handle whose open-time model
+no longer knows a row's id yields a row with a non-unique name rather
+than a refusal. That is 0b-6's own contract and 0b-6's own tests; this
+projection adds no per-row model query, so there is nothing new to make
+fallible (A16's list is unchanged by this PR).
+
+**B5 — Selection is `CanvasSelection`, both ways, with no echo.**
+View→model: the substrate's `CurrentRowChanged` calls the document's
+`SelectNode` — the SAME narrating mutation the outline calls, which is
+why both projections speak one grammar and why `CanvasMovedTo` and its
+group-boundary event are composed in exactly one place. Model→view:
+`SelectRow` re-seats currency silently, keeping the reader's COLUMN. The
+echo is broken by a re-entrancy flag on the view, not by comparing
+values — the A12 rule, one surface over, and it is needed here because
+the substrate raises `CurrentRowChanged` for a programmatic seat exactly
+as it does for an arrow key. A `null` from that event is currency
+LEAVING the bound set during a rebind, not the user deselecting, so the
+table never clears the shared selection (the W4-6 round-2 lesson).
+Pinned by `SelectionFlowsBothWaysWithoutAnEcho` (which asserts the
+model→view direction posts EXACTLY the canvas line, so a spurious grid
+announcement fails it) and
+`AReSeatKeepsTheReaderInTheColumnTheyWereReading`.
+
+**B6 — Activation and row actions run the document's one seam.** Enter,
+double-click, the substrate's `Invoke` path and the "Open" row action
+all reach `CanvasDocumentViewModel.Activate`, looked up from the table
+row's node id — which is exactly how mac's table does it (its `onActivate`
+resolves the outline row and calls the container's shared `activate`).
+So the media gate, the link allowlist, the subpath anchor and every
+announcement are PR A's, unchanged and unduplicated. A group row has
+nothing to expand on a flat projection and falls through silently, as
+mac's does (its `activate` has no group arm at all). Row actions are
+mac's three, in mac's order: **Open**, **Toggle Mark** (disabled until
+PR G) and **Delete** (disabled until PR E), each disabled one carrying
+its reason, which the substrate exposes as HelpText and a tooltip — the
+mac RowAction contract ("context menus retain a temporarily unavailable
+relevant action WITH its reason"), and the reason a screen-reader user
+can tell "not yet" from "not here". The reasons are label-class copy in
+`CanvasPhrase`; they are not the registrar's `UnavailableReason`,
+because that sentence belongs to command rows and a row action is not
+one. Pinned by
+`ActivationRunsTheSameSeamTheOutlineDoesIncludingTheMediaGate` and
+`TheUnshippedRowActionsAreListedDisabledWithTheirReason`.
+
+**B7 — The announce seam is swapped onto the canvas relay (DoD §H).**
+The substrate raises CANONICAL grid events — `GridSorted` on a sort,
+`GridRowMoved` on a vertical row move, `GridCellMoved` otherwise — and
+under this projection they are posted through
+`CanvasAnnouncer.Relay`, which carries core's rendered text AND core's
+priority through unwrapped rather than re-classifying them as canvas
+status (A5's `Relay` exists for exactly this consumer). The grid is
+constructed MUTED and takes the relay when its document arrives, so a
+table with no document cannot post through the canonical dispatcher.
+
+**Two lines on a row move, deliberately, because mac has two.** A
+vertical move posts the substrate's `GridRowMoved` immediately —
+rendered as the focused cell alone, since a canvas row carries no
+engine-authored audio description and mac passes none either — and the
+document's `CanvasMovedTo` on the navigation class's 200 ms window. They
+say different things (the cell under the reader; the card's position in
+the canvas), and this is the mac shape rather than a Windows choice.
+
+**The guard is structural AND behavioural, because neither alone can
+see this.** `CanvasAnnouncerCensus.NoCanvasSourceAnnouncesOutsideTheRelay`
+cannot: the substrate's default seam posts through
+`AccessibilityNotificationDispatcher` from `Grids/AccessibleDataGrid.cs`,
+which is not a canvas source — so a surface that simply forgot to swap
+would bypass the funnel with no canvas file naming the dispatcher at
+all. `EveryGridUnderCanvasRidesTheRelay` reads the syntax (every canvas
+file that builds an `AccessibleDataGrid` assigns its seam to the relay,
+with a floor so it cannot pass over nothing), and
+`TheGridsOwnAnnouncementsComeOutOfTheCanvasFunnel` drives a real
+Ctrl+Alt+S sort through the production surface and reads the funnel's
+post seam. A guard may not exercise the mechanism it is guarding — the
+class recorded five times in §A's round record — so neither of the two
+supplies the other's.
+
+**B8 — No export producer, and Ctrl+F keeps routing.** No core canvas
+export exists, and a host-composed one is what the residue census
+forbids — the `ReadingTableGrid` precedent, whose own comment records
+the same decision. `exportProducer` is therefore null and the
+substrate's export commands answer `CanExecute` false. **Owner may
+designate a canvas export later**; when core grows one, this row is
+where the producer arrives. The substrate's `FilterCommand` is likewise
+left unsubscribed, so Ctrl+F CONTINUES ROUTING to the app-level find
+(the substrate's own rule: "with no subscriber the gesture continues
+routing, so the app-level find is never shadowed by a grid that cannot
+filter"). PR C subscribes it to the canvas filter. Pinned by
+`NoExportProducerAndTheFilterChordStillRoutes`.
+
+**B9 — The summary is mac's sentence, and it is a LABEL.**
+`Canvas table: ⟨n⟩ card⟨s⟩, ⟨m⟩ group⟨s⟩.` — mac's string verbatim,
+including its pluralisation, over counts taken from `canvas_table_rows`
+(a card is any row whose kind is not `group`). It is a static label, not
+an announcement: the 0a decision (0a-13, §W-G row J) was that a
+"CanvasTableSummary" event would exist only if the sentence were ever
+ANNOUNCED, and mac never announces it — so the vocabulary has no such
+event and inventing one would put a string in the canonical corpus that
+no host speaks. The substrate makes it a separately-focusable named
+region, which is how a screen-reader user reads it on demand. Pinned by
+`TheSummaryIsMacsSentenceInTheFocusableRegion`, which includes the
+pluralisation boundary on both sides of one.
+
+**B10 — `slate.canvas.showTable` is enabled, and there is still one
+surface switch.** The command's resolver drives
+`CanvasDocumentViewModel.ShowSurface`, the same one the header radio
+drives (A15/A18), so the shared state, the persisted `"table"` token and
+the spoken `CanvasSurfaceShown` cannot disagree. `showVisual` stays
+disabled with the registrar's canonical sentence until PR D; §A's fact
+was renamed accordingly (`ShowVisualRegistersAndStaysDisabledUntilItsProjectionShips`)
+and `ShowTableIsEnabledAndDrivesTheOneSurfaceSwitch` owns the other
+half. No chord: the row stays `ChordScope.None` for A18's reason.
+
+**B11 — Exactly one projection is in the UIA tree.** The surface body
+holds both arms in one slot and COLLAPSES the one that is not showing —
+collapsed, not hidden, so it leaves the tree a client walks rather than
+sitting in it marked off-screen. Neither arm shows outside `Ready`, so a
+parse-error pane stays a message rather than becoming an empty grid.
+
+**Where each half of that is proved, stated exactly.** The visibility
+gate and the POSITIVE half of the topology (the showing projection
+really resolves as a peer under the id AT looks it up by) are
+`ExactlyOneProjectionIsEverInTheTree`. The ABSENCE of the other arm is
+the journey's, because WPF's in-process peer walk keeps an already-built
+peer for a collapsed element — observed while writing that fact — so an
+in-process "absent" assertion would be testing the walker rather than
+the tree a client reads. The journey asserts the outline's element is
+gone from the LIVE tree after the switch, through the real UIA bridge,
+and that is the level at which the claim is true. `Visual` is not a
+projection until PR D, and PR A already round-trips a persisted
+`"visual"` token, so that token falls back to the OUTLINE rather than to
+an empty pane — recorded here because it is a real state a restored
+workspace can be in today. Focus delivery routes to whichever arm is
+showing (A14's table arm), and the table reports a delivery only when
+keyboard focus is actually inside the grid: the substrate's own bool
+answers "was the row in the bound set", which is a different question by
+design, and A14's rule is that a surface may not report a landing it did
+not make. Pinned by `ExactlyOneProjectionIsEverInTheTree` and
+`AFocusRequestLandsOnATableRowAndAnUnknownRowDoesNot`.
+
+### Tests that pin PR B
+
+`apps/slate-windows/tests/SlateWindows.Tests/CanvasTableTests.cs`: the
+whole of B1–B11 against a REAL `VaultSession` and real `.canvas` bytes,
+every fact driving the production composition (`CanvasSurfaceView` →
+`CanvasTableView` → the substrate) and reading what the consumer reads —
+the rendered row order, the cell labels a screen reader speaks (read off
+the generated cell element, not off the column configuration that fed
+it), the summary region's name, the row-action menu, and the
+announcements that come out of the canvas funnel's post seam. Its
+fixture is built for the comparators: titles that only sort correctly
+under a case-insensitive compare, connection counts of 2 and 10, and a
+hex colour whose nearest preset is one of the two presets present.
+`TheLargeCanvasBindsEveryRowCoreServed` pins the thing a projection can
+get wrong on its own at 2,000 rows — truncating, paging, or dropping
+rows core served — while the responsiveness itself stays
+`GridConformanceTests`' claim, cited.
+`apps/slate-windows/tests/SlateWindows.Tests/Censuses/CanvasAnnouncerCensus.cs`:
+`EveryGridUnderCanvasRidesTheRelay`, B7's structural half.
+`apps/slate-windows/tests/SlateWindows.Tests/Censuses/ContractsCitationCensus.cs`:
+extended from §A alone to every listed PR section — §B is inside its
+jurisdiction, and inserting §B between §A and its old terminator would
+otherwise have folded the new section into the old one's extent.
+`apps/slate-windows/tests/SlateWindows.Tests/CanvasDocumentTests.cs`:
+`ShowVisualRegistersAndStaysDisabledUntilItsProjectionShips` and
+`TheSurfaceSwitcherIsNamedAndTheUnshippedArmIsDisabled` carry §A's rows
+forward with one arm shipped.
+`apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs`:
+`CanvasSurfaces_TableGridSortSelectionAndActivation_AreClean` — the
+spec's "Canvas_TableJourney" under this project's journey naming
+convention: Table/Grid patterns present, the six header names, Ctrl+Alt+S
+sorting through the real chord, row activation, the summary region, the
+disabled row actions, axe 0 failures. CI arbitrates.
+
+---
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same
@@ -1603,7 +1890,7 @@ table.
 | G | Undo/redo stacks, depth/session policy, menu-title composition (`AppState.swift:3987`) | `apply()` returns inverse + names | 3 | host stack; **menu title** = `CanvasUndoMenuTitle{verb,name}` | **menu title landed (0a)** |
 | H | Placement math leaks; `MIN_CARD_SIZE` only in Swift | constants in `placement.rs` | 2 | `canvas_constants()`, `canvas_group_rect_around`, `canvas_place_inside_group`, `canvas_bounds` (0b) | **closed** — 0b-4, 0b-11, 0b-12; mirrored constants, the fit re-union, the bbox fold and the move-into-group math deleted (0b-2), CD-21/CD-24. `MIN_CARD_SIZE`'s reject-not-clamp ENFORCEMENT stays host-side |
 | I | Viewport math — clamp 0.1–4.0, step 1.25, fit padding 40/120 | none | 3 | host rendering; constants pinned here; zoom % announced via `CanvasZoom` | **event landed (0a)** |
-| J | Table column order/sort comparators/summary sentence; outline interleave | rows from core | 3 | host projection config; summary sentence stays a **static label** (never announced on mac) | resolved as label class (0a-13) |
+| J | Table column order/sort comparators/summary sentence; outline interleave | rows from core | 3 | host projection config; summary sentence stays a **static label** (never announced on mac) | resolved as label class (0a-13); **the Windows half landed in PR B** — B2 (columns), B3 (comparators, incl. the correction to the spec's Color description) and B9 (the summary label) are the projection config this row designates |
 | K | Filter predicate — title/kind/groupPath/target, case-insensitive contains | none | 2 | `canvas_filter` (0b) | **closed** — 0b-13, 0b-14; `matchesFilter` deleted (0b-2), CD-22. `filterActive` stays host UI state |
 | L | Speakable-name dedup vs core's untitled-only allocation — two uniqueness algorithms | partial, conflicting | 2 | one algorithm in core: `CardSummary.speakable_name` (0b, D-3) | **closed** — 0b-5, 0b-6, CD-20, CD-23; the renderer's used-set walk and its per-view sticky map deleted (0b-2). **PR A note:** CD-23's "which surface reads which field" answer now differs by platform — the Windows OUTLINE reads `speakable_name` where mac's reads `title` (CD-30), so row P's two copies are not byte-identical on a canvas with repeated titles |
 | M | Node/edge id minting | none | 2 | `canvas_new_id()` (0b) | **closed** — 0b-4; `newCanvasEntityID` deleted, nine call sites (0b-2) |
