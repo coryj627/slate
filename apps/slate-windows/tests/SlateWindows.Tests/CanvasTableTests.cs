@@ -711,6 +711,93 @@ public sealed class CanvasTableTests : IDisposable
         broken.Shutdown();
     });
 
+    /// <summary>
+    /// Contract A18, the property PR B made true: the surface switcher
+    /// is ONE Tab stop, and arrows move between its three choices.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Said exactly, per the B7 pattern: this fact does not press keys.
+    /// It issues WPF <c>TraversalRequest</c>s — Next for Tab, Right/Left
+    /// for the arrows — which is the SAME focus engine a real keystroke
+    /// reaches, one layer below the key handler. That is what makes the
+    /// claim behavioural rather than a read-back of the property this
+    /// PR set; the property is asserted too, because a client that
+    /// inspects keyboard-navigation semantics reads it directly.
+    /// </para>
+    /// <para>
+    /// The third leg is the one the setting could have broken: with a
+    /// persisted "visual" token the CHECKED choice is disabled until PR
+    /// D, and `Once` must land on a reachable choice rather than
+    /// stranding focus on an unfocusable one.
+    /// </para>
+    /// <para>
+    /// Mutation-verified: removing the <c>TabNavigation=Once</c> line
+    /// fails the Tab leg (focus lands on the next radio instead of
+    /// leaving the group), and removing the directional line fails the
+    /// arrow leg.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void TheSurfaceSwitcherIsOneTabStopAndArrowsMoveWithinIt() => RunSta(() =>
+    {
+        (CanvasDocumentViewModel document, CanvasSurfaceView surface, _) = Table();
+        using var host = Host(surface);
+
+        Assert.Equal(
+            KeyboardNavigationMode.Once,
+            KeyboardNavigation.GetTabNavigation(surface.SwitcherForTests));
+        Assert.Equal(
+            KeyboardNavigationMode.Cycle,
+            KeyboardNavigation.GetDirectionalNavigation(surface.SwitcherForTests));
+
+        // ONE stop: Tab from the first choice leaves the group entirely
+        // rather than visiting the other two.
+        Assert.True(surface.OutlineChoiceForTests.Focus());
+        Assert.True(
+            surface.OutlineChoiceForTests.MoveFocus(
+                new TraversalRequest(FocusNavigationDirection.Next)));
+        Assert.DoesNotContain(
+            host.FocusedElement(),
+            new IInputElement[]
+            {
+                surface.OutlineChoiceForTests,
+                surface.TableChoiceForTests,
+                surface.VisualChoiceForTests,
+            });
+
+        // …and the arrows are how a keyboard user picks a surface.
+        Assert.True(surface.OutlineChoiceForTests.Focus());
+        Assert.True(
+            surface.OutlineChoiceForTests.MoveFocus(
+                new TraversalRequest(FocusNavigationDirection.Right)));
+        Assert.Same(surface.TableChoiceForTests, host.FocusedElement());
+        Assert.True(
+            surface.TableChoiceForTests.MoveFocus(
+                new TraversalRequest(FocusNavigationDirection.Left)));
+        Assert.Same(surface.OutlineChoiceForTests, host.FocusedElement());
+
+        // The unshipped arm is DISABLED and can be the persisted one
+        // (PR A round-trips a "visual" token). Tabbing into the group
+        // must still land on a choice the user can reach.
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        Assert.True(surface.VisualChoiceForTests.IsChecked);
+        Assert.False(surface.VisualChoiceForTests.IsEnabled);
+        Assert.True(
+            surface.SwitcherForTests.MoveFocus(
+                new TraversalRequest(FocusNavigationDirection.First)));
+        IInputElement? landed = host.FocusedElement();
+        Assert.NotSame(surface.VisualChoiceForTests, landed);
+        Assert.Contains(
+            landed,
+            new IInputElement[]
+            {
+                surface.OutlineChoiceForTests, surface.TableChoiceForTests,
+            });
+        document.Shutdown();
+    });
+
     /// <summary>Whether a UIA client walking this surface's peers would
     /// reach an element with that automation id — the production
     /// topology, not the visual tree.</summary>

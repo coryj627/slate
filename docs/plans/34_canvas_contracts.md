@@ -1469,6 +1469,25 @@ carries a chord, so `Scope` resolves to `None` through `Reg`'s own rule
 and `ChordScope.Canvas` has no delivery site until PR C — which is why
 the scope's doc comment names PR C as the first surface that uses it.
 
+**The switcher is ONE Tab stop, and arrows move within it (added in PR
+B).** Recorded as an ADDITION, not as a description of what PR A
+shipped: A18 said nothing about the keyboard shape, and the §W-C row PR
+B backfilled for the outline claimed "the switcher is one focus stop" —
+which the code did not do. `KeyboardNavigation.TabNavigation=Once` on
+the group makes it true and `DirectionalNavigation=Cycle` makes the
+other half true (with the default, an arrow walked straight out of the
+switcher into the projection). This is the WPF radio-group convention,
+and it is what gives PR D's planned "the renderer is one focus stop
+AFTER the surface switcher" a premise: without it the switcher was
+three stops. `Once` also degrades correctly when the CHECKED choice is
+disabled — a persisted `"visual"` token before PR D ships the renderer —
+landing on the first FOCUSABLE choice rather than stranding focus on an
+unreachable one. Pinned by
+`TheSurfaceSwitcherIsOneTabStopAndArrowsMoveWithinIt`, which issues WPF
+`TraversalRequest`s (the same focus engine a keystroke reaches, one
+layer below the key handler) rather than reading back the properties it
+also asserts; mutation-verified against removing either setting.
+
 **The switcher is ONE named group in the UIA tree, and that required a
 peer (round 8).** The three choices sit in a container carrying
 AutomationId "CanvasSurfaceSwitcher" and the name "Canvas view". That
@@ -1563,6 +1582,18 @@ same reason:
 facts in which A17's generation guards are live code.
 `apps/slate-windows/tests/SlateWindows.Tests/Censuses/CanvasAnnouncerCensus.cs`:
 A6's funnel guard, plus A2's attach-funnel doc-comment twin.
+`apps/slate-windows/tests/SlateWindows.Tests/Censuses/CanvasAutomationPropertyCensus.cs`:
+round 8's structural end to the inert-a11y-property class — no
+`AutomationProperties.Set*` under `Canvas/` targets a type WPF gives no
+peer, fail-closed on an unresolvable target, with a floor on the sites
+scanned. (Listed here from PR B: it was written in §A's round 8 and
+described in A18, but the pin list this section keeps was never
+extended to name it.)
+`apps/slate-windows/tests/SlateWindows.Tests/Censuses/CanvasMediaGateCensus.cs`:
+CD-38's structural half — the gate has exactly one identity method and
+reads identity only off held handles, never a re-open by path. (Same
+omission, same fix: cited throughout §A's round record, absent from the
+list.)
 `apps/slate-windows/tests/SlateWindows.Tests/Censuses/AnnouncementSeamCensus.cs`:
 the production wiring as a CHAIN — the three shipping call expressions
 from `MainWindow` to the announcer, and a canvas load driven through a
@@ -1887,9 +1918,15 @@ the pattern set now is the one PRs C–G repeat:
   (the W5-x shape) and a `canvasSurfaces` group in `chords.json`'s
   `deliveryEvidence`, whose implementation and test references the
   generator checks marker-by-marker. `deliveryEvidence` is the one
-  object the chord-table projection leaves untouched, so hand-editing it
-  is the supported path and the projection test still passes
-  byte-for-byte. **The rule this sets for the rest of the series:** a
+  object the chord-table PROJECTION leaves untouched — but it is still
+  INSIDE the byte-for-byte comparison `ChordTableTests` makes against
+  the re-serialized file, so a hand edit is safe only when it matches
+  the writer's formatting exactly. This one did, and the round-trip
+  test is what proved it. **The durable rule: edit `chords.json`
+  through its writer (`SLATE_CHORDS_UPDATE=1`) or match the writer's
+  formatting exactly, and let the round-trip test arbitrate — never
+  assume a "preserved" object is outside the comparison.**
+  **The rule this sets for the rest of the series:** a
   surface command joins the delivered set in the PR that makes it
   EXECUTABLE, not the PR that registers it — so `showVisual` stays out
   until PR D, and each PR flips its own row rather than leaving a

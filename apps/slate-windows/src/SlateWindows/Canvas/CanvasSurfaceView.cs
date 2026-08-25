@@ -32,6 +32,7 @@ internal sealed class CanvasSurfaceView : UserControl
             new PropertyMetadata(null, OnModelChanged));
 
     private readonly TextBlock _title;
+    private readonly AutomationNamedGroupPanel _switcher;
     private readonly RadioButton _outlineChoice;
     private readonly RadioButton _tableChoice;
     private readonly RadioButton _visualChoice;
@@ -72,17 +73,34 @@ internal sealed class CanvasSurfaceView : UserControl
         // below reached no client at all and the three choices appeared
         // flattened under the surface — inert a11y properties, which is
         // the class this and the Invoke defect share.
-        var switcher = new AutomationNamedGroupPanel
+        _switcher = new AutomationNamedGroupPanel
         {
             Orientation = Orientation.Horizontal,
             Margin = new Thickness(12, 0, 0, 0),
             VerticalAlignment = VerticalAlignment.Center,
         };
-        switcher.Children.Add(_outlineChoice);
-        switcher.Children.Add(_tableChoice);
-        switcher.Children.Add(_visualChoice);
-        AutomationProperties.SetAutomationId(switcher, "CanvasSurfaceSwitcher");
-        AutomationProperties.SetName(switcher, CanvasPhrase.SurfaceSwitcherName);
+        _switcher.Children.Add(_outlineChoice);
+        _switcher.Children.Add(_tableChoice);
+        _switcher.Children.Add(_visualChoice);
+        AutomationProperties.SetAutomationId(_switcher, "CanvasSurfaceSwitcher");
+        AutomationProperties.SetName(_switcher, CanvasPhrase.SurfaceSwitcherName);
+        // ONE Tab stop for the whole group, arrows within it — the WPF
+        // radio-group convention (W6-1 PR B, contract A18). Without it
+        // Tab visited all three choices and the surface's own
+        // documentation — and PR D's "one focus stop after the surface
+        // switcher" — described a keyboard route the code did not have.
+        // `Once` also degrades correctly when the CHECKED choice is
+        // disabled (a persisted "visual" token before PR D ships the
+        // renderer): WPF lands on the first FOCUSABLE child rather than
+        // stranding focus on an unreachable one.
+        KeyboardNavigation.SetTabNavigation(_switcher, KeyboardNavigationMode.Once);
+        // Arrows stay INSIDE the group and wrap, which is the other half
+        // of the convention: with the default (Continue) an arrow press
+        // walks straight out of the switcher into the projection, and
+        // "arrows move within the group" would be the same kind of
+        // untrue sentence the Tab claim was.
+        KeyboardNavigation.SetDirectionalNavigation(
+            _switcher, KeyboardNavigationMode.Cycle);
 
         var header = new StackPanel
         {
@@ -90,7 +108,7 @@ internal sealed class CanvasSurfaceView : UserControl
             Margin = new Thickness(12, 8, 12, 4),
         };
         header.Children.Add(_title);
-        header.Children.Add(switcher);
+        header.Children.Add(_switcher);
 
         _stateBanner = BannerText("CanvasStateBanner");
         _degradedBanner = BannerText("CanvasDegradedBanner");
@@ -198,9 +216,13 @@ internal sealed class CanvasSurfaceView : UserControl
 
     internal TextBlock StateBannerForTests => _stateBanner;
 
+    internal RadioButton OutlineChoiceForTests => _outlineChoice;
+
     internal RadioButton TableChoiceForTests => _tableChoice;
 
     internal RadioButton VisualChoiceForTests => _visualChoice;
+
+    internal FrameworkElement SwitcherForTests => _switcher;
 
     private static RadioButton SurfaceChoice(
         string automationId, string label, string? disabledHint)

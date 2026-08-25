@@ -225,6 +225,7 @@ public sealed class ContractsCitationCensus
             "TreeViewItemAutomationPeer", "VirtualizingStackPanel",
             "IInvokeProvider", "AutomationProperties", "RaiseNotificationEvent",
             "SelectedItemChanged", "VirtualizationMode", "DispatcherTimer",
+            "TraversalRequest",
             // Python: scripts/generate-parity-matrix.py (§B's B12 — the
             // delivered-command set whose per-PR growth is the rule that
             // row sets).
