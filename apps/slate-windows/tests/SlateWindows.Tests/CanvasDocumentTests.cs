@@ -2120,7 +2120,7 @@ public sealed class CanvasDocumentTests : IDisposable
         internal RowPublishCounter(CanvasDocumentViewModel document)
         {
             _document = document;
-            _last = document.Publication;
+            _last = document.PublicationToken;
             document.OutlinePublished += OnPublished;
         }
 
@@ -2128,11 +2128,11 @@ public sealed class CanvasDocumentTests : IDisposable
 
         private void OnPublished(object? sender, EventArgs e)
         {
-            if (ReferenceEquals(_last, _document.Publication))
+            if (ReferenceEquals(_last, _document.PublicationToken))
             {
                 return;
             }
-            _last = _document.Publication;
+            _last = _document.PublicationToken;
             Count++;
         }
     }

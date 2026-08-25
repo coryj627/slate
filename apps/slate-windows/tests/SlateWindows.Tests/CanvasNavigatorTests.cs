@@ -998,6 +998,163 @@ public sealed class CanvasNavigatorTests : IDisposable
         Assert.Contains(samples, sample => sample.State == CanvasLoadState.Ready);
     });
 
+    /// <summary>
+    /// Codex round 4, B1 — the RULE-4 design's own fact: a selection
+    /// observer is woken against rows the selection exists in.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The selection re-seat was the fourth instance of one class: a
+    /// correlated, observer-visible write outside the publication. Rounds
+    /// 1–3 ordered the rows, then the state, then the controls; the
+    /// re-seat still notified on its own, so a view woken by it read a
+    /// selection that named a row it could not find — with the previous
+    /// canvas still under it.
+    /// </para>
+    /// <para>
+    /// The fixture makes that unmistakable rather than merely unlikely:
+    /// the reload's first row is an id the previous canvas never had, so
+    /// a selection notification raised before the rows names something
+    /// nothing on screen contains. Both the MODEL and the materialized
+    /// controls are asked, because either one lagging is the same defect.
+    /// </para>
+    /// <para>
+    /// This is a fact about the design, not about a pair. The census
+    /// <c>TheDocumentNotifiesOnlyFromInsideAPublication</c> is what makes
+    /// it general.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void ASelectionObserverIsWokenAgainstRowsTheSelectionExistsIn() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        var surface = new CanvasSurfaceView { Model = document };
+        using var host = Host(surface);
+        // The selected card is one the reload DELETES, so the re-seat has
+        // to move — and the row it moves to is one this canvas has never
+        // heard of.
+        document.SelectNode("loose");
+        host.UpdateLayout();
+        Assert.Equal("loose", document.Selection.Selected);
+        Drain(document);
+
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "board.canvas"),
+            """
+            {
+              "nodes": [
+                {"id":"fresh","type":"text","text":"Brand new","x":0,"y":-400,"width":200,"height":100},
+                {"id":"question","type":"text","text":"Core question","x":0,"y":0,"width":240,"height":140,"color":"1"},
+                {"id":"evidence","type":"text","text":"Evidence zeta","x":260,"y":0,"width":220,"height":140}
+              ],
+              "edges": []
+            }
+            """);
+
+        var samples = new List<(string? Selected, bool InModel, string[] Control)>();
+        void OnSelection(object? sender, PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName != nameof(CanvasSelection.Selected))
+            {
+                return;
+            }
+            string? selected = document.Selection.Selected;
+            samples.Add((
+                selected,
+                selected is null || document.RowFor(selected) is not null,
+                OutlineControlRows(surface)));
+        }
+        document.Selection.PropertyChanged += OnSelection;
+        try
+        {
+            document.Load();
+        }
+        finally
+        {
+            document.Selection.PropertyChanged -= OnSelection;
+        }
+        host.UpdateLayout();
+
+        Assert.Equal("fresh", document.Selection.Selected);
+        Assert.NotEmpty(samples);
+        foreach ((string? selected, bool inModel, string[] control) in samples)
+        {
+            Assert.True(
+                inModel,
+                $"a selection observer woke on '{selected}', which the document's "
+                + "own rows do not contain — the re-seat was announced before the "
+                + "rows it belongs to.");
+            Assert.True(
+                selected is null || control.Contains(selected),
+                $"a selection observer woke on '{selected}' with "
+                + $"[{string.Join(',', control)}] on screen.");
+        }
+    });
+
+    /// <summary>
+    /// Codex round 4, B2 — the RULE-4 design's teardown fact: closing a
+    /// canvas mid-everything runs NO observer callback, still speaks the
+    /// sentence it owes, and still releases.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Each round found the next fallible callback reachable while a
+    /// retiring document mutated: the mode restoration, then the
+    /// announcer, then the handle. The population is "everything teardown
+    /// clears", so the phases are structural instead — SPEAK, then
+    /// SILENCE as the first act of everything after, then RELEASE from a
+    /// `finally`.
+    /// </para>
+    /// <para>
+    /// The construction is codex's: a canvas with the Where-am-I panel
+    /// OPEN and a filter applied, closed with a mode running. Every clear
+    /// teardown performs is one an observer used to be able to see.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void AClosedCanvasRunsNoObserverCallbackAndStillSpeaksItsLastSentence()
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        document.FilterText = "zeta";
+        document.Navigator.WhereAmI();
+        Assert.NotNull(document.WhereAmIText);
+        Assert.True(document.FilterActive);
+        // A mode is running, so retirement owes a restoration.
+        Assert.True(document.Modes.Enter(new CanvasModeSpec(
+            CanvasMode.Move,
+            new CanvasModeObject.Card("Research"),
+            CanvasModeCommitResult.Refused,
+            () => new CanvasModeRestoration.BackAt("Research"))));
+        Drain(document);
+
+        var woken = new List<string>();
+        document.PropertyChanged += (_, e) => woken.Add($"document.{e.PropertyName}");
+        document.OutlinePublished += (_, _) => woken.Add("document.OutlinePublished");
+        document.Selection.PropertyChanged += (_, e) => woken.Add($"selection.{e.PropertyName}");
+
+        document.Shutdown();
+
+        // SPEAK: the restoration the retirement owed, and only it.
+        string line = OneLine(document);
+        Assert.Contains("cancelled", line, StringComparison.Ordinal);
+        // SILENCE: nothing observing this document ran at all — and the
+        // clears really happened, so this is silence rather than a
+        // teardown that skipped its work.
+        Assert.True(
+            woken.Count == 0,
+            $"teardown woke {woken.Count} observer(s): {string.Join(", ", woken)}");
+        Assert.Null(document.WhereAmIText);
+        Assert.Null(document.FocusRequest);
+        Assert.Null(document.DetailText);
+        // RELEASE: the funnel refuses everything later, and the handle is
+        // closed — a read that needs one now answers with the mapping's
+        // refusal instead of a value.
+        document.Announcer.Announce(
+            new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoMarks()));
+        Assert.Equal(line, OneLine(document));
+        Assert.Empty(document.NeighborsOf("question"));
+    }
+
     /// <summary>The outline projection's MATERIALIZED node rows, in
     /// order — what a reader can reach, not what the model holds.</summary>
     private static string[] OutlineControlRows(CanvasSurfaceView surface)
@@ -1454,7 +1611,7 @@ public sealed class CanvasNavigatorTests : IDisposable
 
         // The TABLE's Left/Right stay the grid's cell navigation, and the
         // leaf answers there through the verb instead.
-        document.Selection.ActiveSurface = CanvasSurfaceKind.Table;
+        document.RestoreSurface(CanvasSurfaceKind.Table);
         host.UpdateLayout();
         // Re-establish the premise AFTER the switch: the projection
         // changed under the reader, and without putting the keys back on
@@ -1858,7 +2015,7 @@ public sealed class CanvasNavigatorTests : IDisposable
 
         // On the table — a flat projection with no connection rows — the
         // last row really is the end.
-        document.Selection.ActiveSurface = CanvasSurfaceKind.Table;
+        document.RestoreSurface(CanvasSurfaceKind.Table);
         host.UpdateLayout();
         Assert.True(surface.TableForTests.DeliverFocus(lastCard));
         host.UpdateLayout();
@@ -1881,7 +2038,7 @@ public sealed class CanvasNavigatorTests : IDisposable
             new[] { CanvasSurfaceKind.Outline, CanvasSurfaceKind.Table })
         {
             CanvasDocumentViewModel document = Open("board.canvas");
-            document.Selection.ActiveSurface = projection;
+            document.RestoreSurface(projection);
             var surface = new CanvasSurfaceView { Model = document };
             using var host = Host(surface);
 

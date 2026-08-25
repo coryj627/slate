@@ -2473,13 +2473,40 @@ can retire the tab from inside an effect, so `Shutdown` forces the
 transition closed, drains the held departure (its restoration owes a
 sentence), ends whatever mode is left with the tab's own departure, and
 CLEARS the slot in a `finally` so nothing stale outlives the object
-holding it. The document's `Shutdown` runs all of that BEFORE
-`Announcer.Shutdown` — and does not DEPEND on it: a restoration effect
-is host code and can fault, so it is logged
-(`CanvasModeTeardownFailed`) and retirement continues. Without that, the
-announcer was never silenced and a coalesced line spoke about a document
-that no longer existed ~200 ms later — the A5 defect, reached from the
-mode side — and the handle was never closed either.
+holding it.
+
+**The document's teardown is three phases, and the ORDER is the
+contract.** Four rounds found the same class here too — each one a
+different fallible callback reachable while a document mutated on its
+way out — so the phases are structural rather than a list of the
+callbacks found so far.
+
+1. **SPEAK.** `Modes.Shutdown` runs while the funnel is still open: a
+   departure held across a failed commit owes its restoration, and
+   closing the tab a mode is running in is exactly the departure M4
+   names. This is the only phase that may announce. It is fallible — a
+   restoration effect is host code — so it is logged
+   (`CanvasModeTeardownFailed`) and the teardown carries on rather than
+   depending on it.
+2. **SILENCE**, and it is the FIRST act of everything that follows.
+   `RetireObservers` detaches the rows event and mutes the property and
+   selection channels through the publication, which is the only thing
+   that raises them. Every clear below is then a transaction that stages
+   and commits nothing — "teardown must not run a callback" becomes a
+   property of the code rather than a rule to remember. Clearing first
+   and silencing after is the shape that kept producing this class.
+3. **RELEASE**, from a `finally`, reached however phase 2 went: the
+   announcer is silenced (contract A5 — a coalesced line queued on a
+   dying document would otherwise speak ~200 ms later about a surface
+   that is gone) and the handle is closed, because a handle nobody
+   closes is a leak no test would ever see.
+
+`TeardownSpeaksThenSilencesThenReleases` reads that order out of the
+source, and `AClosedCanvasRunsNoObserverCallbackAndStillSpeaksItsLastSentence`
+drives codex's construction — a canvas with the Where-am-I panel open, a
+filter applied and a mode running, closed: the restoration speaks, no
+observer runs, the clears happen anyway, the funnel refuses everything
+after, and the handle is closed.
 
 Pinned by `ADepartureHeldAcrossAThrowingCommitStillCancels` (in the
 conformance body PR F reuses),
@@ -2721,29 +2748,45 @@ the summary saying the filter could not be applied. The widening is
 STATED, which is the distinction this contract draws between an honest
 fallback and a silent one.
 
-**And the state travels WITH the unit, on ONE channel, in a fixed
-order.** An atomic model is only half the system: the projections keep
-their own materialized rows — a tree of row objects, a bound grid — and
-those rebuilt on `OutlinePublished` while the state moved on
-`PropertyChanged`. Two channels for one fact, so a binding woken by the
-first read "Ready", with the new canvas's summary, over the PREVIOUS
-canvas's controls; focus delivery ran in that gap too, seating the
-reader on rows about to be replaced.
+**EVERY observer-visible write is a PUBLICATION TRANSACTION, and that
+is the primitive four rounds of review converged on.** Rounds 1–4 each
+found one instance of one class: the rows, then the rows with the state,
+then the state with the CONTROLS, then the selection re-seat. Each fix
+ordered one more pair and left the next unordered write reachable — and
+the population is "everything this object exposes", so no list of pairs
+can close it. Rule 4 was invoked and the enumeration was replaced.
 
-Three things close it, and none of them is a check.
+`Publication` stages and queues. Writes go into the document's fields,
+where no observer can see them because nothing has been raised;
+notifications are queued. When the outermost scope closes they are
+raised in ONE defined order:
 
-`State` and `StateMessage` are READ-ONLY. There is no way to move the
-state except `PublishState` or `PublishLoadedUnit`, both of which write
-the fields and hand off to the ONE publisher — so a state change is a
-publication by construction, and a reload's "Opening canvas…" is
-published over the unit still on screen, which is what it is true of.
+1. the ROWS publication (`OutlinePublished`) — the projections rebuild
+   and the surface renders on it, in that order;
+2. the SELECTION, which is meaningful only against rows that exist;
+3. the document's property notifications, which is where a binding
+   wakes.
 
-`PublishUnit` raises `OutlinePublished` FIRST and the property
-notifications LAST. The projections rebuild and the surface renders
-inside that event, in that order, so when it returns the controls ARE
-this publication; a binding woken by `State` is the final step, and
-everything it can read — model and materialized controls — describes one
-canvas. The order is the contract, not an implementation detail.
+So every observer runs against the settled world. A mid-transaction wake
+is unrepresentable rather than avoided, and "which pairs are ordered" is
+no longer a question anyone has to keep answering. Scopes NEST by
+joining — an inner `Publish` writes into the outer transaction and the
+outermost commits — because the alternative is a rule about which
+methods may call which, and that kind of rule fails silently.
+
+Every notifying member is read-only outside it: `State`, `StateMessage`,
+`Warnings`, `FocusRequest`, `WhereAmIText`, `DetailText`, `DetailTitle`,
+`FilterFocusToken`, the unit behind `Outline`/`TableRows`/the filtered
+halves — and `CanvasSelection.Selected` and `ActiveSurface`, which the
+workspace used to write directly and now restores through
+`RestoreSurface`. The transaction keeps `SetField`'s discipline: a write
+that changes nothing queues nothing.
+
+**`TheDocumentNotifiesOnlyFromInsideAPublication` is what ends it** —
+a source census over the three channels (the property channel, the rows
+event, and the staged fields behind them), failing with the name of any
+write that is outside. The selection's two members need no rule there:
+they are read-only with staging methods, so the compiler carries them.
 
 The SURFACE has one publication handler, and the projections are made
 current in it before anything renders over them. They subscribe first
@@ -2776,7 +2819,11 @@ exist, and anything reading `Ready` is the NEW one.
 `AStateObserverNeverSeesReadyOverThePreviousCanvasControls` asserts the
 same thing about the CONTROLS — the outline's row objects, the grid's
 bound items, the summary's text — because a model that is atomic while
-the screen is not is a model nobody reads.
+the screen is not is a model nobody reads. And
+`ASelectionObserverIsWokenAgainstRowsTheSelectionExistsIn` asserts it
+for the SELECTION channel, on a reload whose first row is an id the
+previous canvas never had, so a notification raised ahead of the rows
+names something nothing on screen contains.
 
 **The MATCH runs off the dispatcher, and the `Filter` view is pure.**
 It used to run inside the getter, on the UI thread, taking the `_ffiLock`
@@ -5546,19 +5593,38 @@ rather than rediscovering it.
   and `ShellAccessibilityTests.cs` at lines this task did not edit — the
   recorded mixed-EOL trap, and the reason the DoD scopes the format gate
   to the changed files, which pass clean.
-- **Two subsystems have taken three rounds each, and the next
-  continuation in either is RULE 4.** The publish path (0a-2's class,
-  one surface over) went unit-atomicity → state/unit atomicity →
-  one-channel-with-the-controls; the mode transition went
-  guard → drain-on-the-exits-we-named → one guarded region with the
-  drain in its `finally`. Each round's finding was a genuine
-  continuation of the previous fix rather than a repeat, and each fix
-  was more structural than the last — which is the shape of converging,
-  not of patching. But the protocol's stopping rule does not count
-  intent: if codex round 4 finds another continuation in EITHER, the
-  patching stops and the invariant gets implemented as one, with this
-  paragraph as the record that it was pre-declared rather than
-  rationalized afterwards.
+- **RULE 4 TRIPPED, as pre-declared, and this is the series' THIRD
+  design pass** (after focus delivery and identity containment, both in
+  PR A). Round 3 recorded the tripwire in advance: two subsystems at
+  three rounds each, and another continuation in either stops the
+  patching. Round 4 found one in each — the selection re-seat outside
+  the publication, and teardown mutating while observers could still run
+  — so the patching stopped and both were replaced by a primitive.
+
+  The class, stated once: **any correlated observer-visible mutation
+  outside the publication transaction is a second channel.** The
+  enumeration (rows → state → controls → selection → next) can never end
+  by enumeration, because its population is everything the document
+  exposes. So `Publication` stages the writes and queues the
+  notifications, and the outermost scope raises them in one defined
+  order; every notifying member is read-only outside it; and
+  `TheDocumentNotifiesOnlyFromInsideAPublication` is the census that
+  keeps the population closed instead of a reviewer doing it one pair at
+  a time.
+
+  Teardown got the same treatment, because it had the same shape: each
+  round found the NEXT fallible callback reachable while the document
+  mutated on its way out. **Silence-first total finalization** — SPEAK
+  (the sentences a retirement owes, while the funnel is open), then
+  SILENCE as the first act of everything after, then RELEASE from a
+  `finally`. The clears cannot run a callback because there is nothing
+  left that can raise one, and `TeardownSpeaksThenSilencesThenReleases`
+  reads that order out of the source.
+
+  What made this a design pass rather than a fifth patch is the test
+  shape: the two censuses assert over the POPULATION (every notifying
+  write, the whole teardown order), and the behavioural facts drive the
+  primitive rather than the pair that happened to be reported.
 - **The spec's PR A evidence line for the "Accessible canvas (T parity)"
   surface row is still unexecuted.** It says the row moves to "in
   progress — PR A"; the generated matrix still reads `pending`. Left

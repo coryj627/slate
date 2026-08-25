@@ -455,7 +455,7 @@ internal sealed class CanvasNavigator
                 : new CanvasFilterState.Inactive());
         // The panel shows the SAME string the announcement speaks — one
         // render, no second composition (t0 §1.4/§3).
-        _document.WhereAmIText = CanvasAnnouncer.RenderLabel(readback);
+        _document.ShowWhereAmI(CanvasAnnouncer.RenderLabel(readback));
         Announce(readback);
     }
 

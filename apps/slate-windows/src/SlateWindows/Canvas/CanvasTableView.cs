@@ -213,7 +213,7 @@ internal sealed class CanvasTableView : UserControl
     /// </summary>
     internal void EnsureCurrent()
     {
-        if (ReferenceEquals(_built, Model?.Publication))
+        if (ReferenceEquals(_built, Model?.PublicationToken))
         {
             return;
         }
@@ -313,7 +313,7 @@ internal sealed class CanvasTableView : UserControl
         ApplySelection();
         // Recorded LAST: only a rebuild that finished describes the
         // publication it was asked for.
-        _built = Model?.Publication;
+        _built = Model?.PublicationToken;
     }
 
     /// <summary>

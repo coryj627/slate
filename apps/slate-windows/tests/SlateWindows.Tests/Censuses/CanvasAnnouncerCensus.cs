@@ -391,6 +391,171 @@ public sealed class CanvasAnnouncerCensus
     }
 
     /// <summary>
+    /// Contract C10: NOTHING observer-visible on the document changes
+    /// outside a publication transaction.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the census that ends an enumeration. Four review rounds
+    /// found the same class four times — the rows, then the rows with the
+    /// state, then the state with the controls, then the selection
+    /// re-seat — and every fix ordered one more pair while leaving the
+    /// next unordered write reachable. The population is "everything this
+    /// object exposes", so no list of pairs can close it; what closes it
+    /// is that a notifying write is only expressible inside
+    /// <c>Publication</c>, and that is a fact about the SOURCE, which is
+    /// what this reads.
+    /// </para>
+    /// <para>
+    /// Three rules, one per channel: the property channel
+    /// (<c>OnPropertyChanged</c>), the rows channel
+    /// (<c>OutlinePublished</c>) and the staged fields those two describe.
+    /// The selection's two members need no rule here — they are
+    /// read-only with staging methods, so the compiler carries them.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void TheDocumentNotifiesOnlyFromInsideAPublication()
+    {
+        CSharpSource document = CSharpSource.Load("Canvas", "CanvasDocumentViewModel.cs");
+        ClassDeclarationSyntax publication = document.Root.DescendantNodes()
+            .OfType<ClassDeclarationSyntax>()
+            .Single(type => type.Identifier.ValueText == "Publication");
+
+        bool Inside(SyntaxNode node) =>
+            node.Ancestors().Any(ancestor => ancestor == publication);
+
+        string[] raisedOutside = document.Root.DescendantNodes()
+            .OfType<InvocationExpressionSyntax>()
+            .Where(invocation =>
+                invocation.Expression is IdentifierNameSyntax
+                {
+                    Identifier.ValueText: "OnPropertyChanged",
+                })
+            .Where(invocation => !Inside(invocation))
+            .Select(CSharpSource.Normalize)
+            .ToArray();
+        Assert.True(
+            raisedOutside.Length == 0,
+            "the document's property channel is raised only by a publication's "
+            + "commit — every other site is a second channel, which is the class "
+            + "four review rounds kept finding one instance of at a time. "
+            + $"Outside: {string.Join("; ", raisedOutside)}");
+
+        string[] publishedOutside = document.Root.DescendantNodes()
+            .OfType<InvocationExpressionSyntax>()
+            .Where(invocation => CSharpSource.Normalize(invocation)
+                .StartsWith("OutlinePublished", StringComparison.Ordinal))
+            .Where(invocation => !Inside(invocation))
+            .Select(CSharpSource.Normalize)
+            .ToArray();
+        Assert.True(
+            publishedOutside.Length == 0,
+            "the rows event is raised only by a publication's commit. "
+            + $"Outside: {string.Join("; ", publishedOutside)}");
+
+        // The staged state: the fields behind every notifying member. An
+        // assignment outside the transaction is a value an observer can
+        // read before anything told it to look — which is the same defect
+        // arriving through the back door.
+        string[] staged =
+        [
+            "_view",
+            "_state",
+            "_stateMessage",
+            "_warnings",
+            "_focusRequest",
+            "_whereAmIText",
+            "_detailText",
+            "_detailTitle",
+            "_filterText",
+            "_filterFocusToken",
+            "_filterAnswerFailed",
+        ];
+        string[] writtenOutside = document.Root.DescendantNodes()
+            .OfType<AssignmentExpressionSyntax>()
+            .Where(assignment =>
+                assignment.Left is IdentifierNameSyntax name
+                && staged.Contains(name.Identifier.ValueText))
+            .Where(assignment => !Inside(assignment))
+            .Select(CSharpSource.Normalize)
+            .ToArray();
+        Assert.True(
+            writtenOutside.Length == 0,
+            "every staged field is written by the publication that will "
+            + "announce it, or an observer can be woken by one change and read "
+            + $"another. Outside: {string.Join("; ", writtenOutside)}");
+    }
+
+    /// <summary>
+    /// Contract C7: teardown SPEAKS, then SILENCES, then RELEASES — and
+    /// the order is the contract.
+    /// </summary>
+    /// <remarks>
+    /// The same shape as the census above, for the same reason: four
+    /// rounds each found the next fallible callback reachable while a
+    /// document was mutating on its way out. Silencing FIRST — before any
+    /// state is cleared — makes "teardown runs no callback" structural,
+    /// and this reads the order out of the source so a later edit cannot
+    /// quietly put a clear back in front of it.
+    /// </remarks>
+    [Fact]
+    public void TeardownSpeaksThenSilencesThenReleases()
+    {
+        MethodDeclarationSyntax shutdown =
+            CSharpSource.Load("Canvas", "CanvasDocumentViewModel.cs").Method("Shutdown");
+        SyntaxList<StatementSyntax> statements = shutdown.Body!.Statements;
+
+        int Position(Func<StatementSyntax, bool> predicate, string what)
+        {
+            int index = statements.IndexOf(statement => predicate(statement));
+            Assert.True(index >= 0, $"`Shutdown` must {what}.");
+            return index;
+        }
+
+        int speaks = Position(
+            statement => CSharpSource.Invokes(statement, "Modes.Shutdown"),
+            "drain the mode stack, whose restoration is the last thing owed");
+        int silences = Position(
+            statement => CSharpSource.Invokes(statement, "RetireObservers"),
+            "retire its observers");
+        Assert.True(
+            speaks < silences,
+            "the drained departure's restoration is announced BEFORE the "
+            + "silencing step, or the last sentence a retirement owes is the "
+            + "one nobody hears (contract C7).");
+
+        // The clears live inside the silencing statement's own block, and
+        // AFTER the retirement call — that is what makes them unable to
+        // reach anybody.
+        StatementSyntax terminal = statements[silences];
+        int retire = terminal.DescendantNodes().ToList().FindIndex(
+            node => node is InvocationExpressionSyntax invocation
+                && CSharpSource.Normalize(invocation).StartsWith(
+                    "RetireObservers", StringComparison.Ordinal));
+        int clears = terminal.DescendantNodes().ToList().FindIndex(
+            node => node is InvocationExpressionSyntax invocation
+                && CSharpSource.Normalize(invocation).StartsWith(
+                    "Publish(", StringComparison.Ordinal));
+        Assert.True(
+            retire >= 0 && clears > retire,
+            "the state clears must run AFTER the observers are retired, in the "
+            + "same statement, or a clear is a callback on a dying document.");
+
+        // …and the release is unconditional.
+        FinallyClauseSyntax release = Assert.IsType<FinallyClauseSyntax>(
+            terminal.DescendantNodes().OfType<FinallyClauseSyntax>().LastOrDefault());
+        Assert.True(
+            CSharpSource.Invokes(release, "Announcer.Shutdown"),
+            "the announcer is silenced from a `finally`, so no failure above it "
+            + "leaves a coalesced line to speak about a retired document (A5).");
+        Assert.True(
+            CSharpSource.Invokes(release, "CloseHandleGuarded"),
+            "the handle closes from the same `finally`: a handle nobody closes "
+            + "is a leak no test would ever see.");
+    }
+
+    /// <summary>
     /// Contract C10/A17: the filter's whole-model query runs OFF the
     /// dispatcher.
     /// </summary>

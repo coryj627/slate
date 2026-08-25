@@ -302,9 +302,12 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         {
             // The restored token seats the shared selection's surface
             // so a reopened tab lands where it left (contract A15).
-            document.Selection.ActiveSurface = ActiveCanvasSurface == "table"
+            // Through the DOCUMENT, because the surface is correlated
+            // with what both projections render: the selection is
+            // written inside a publication or not at all (contract C10).
+            document.RestoreSurface(ActiveCanvasSurface == "table"
                 ? uniffi.slate_uniffi.CanvasSurfaceKind.Table
-                : uniffi.slate_uniffi.CanvasSurfaceKind.Visual;
+                : uniffi.slate_uniffi.CanvasSurfaceKind.Visual);
         }
         OnPropertyChanged(nameof(Canvas));
     }

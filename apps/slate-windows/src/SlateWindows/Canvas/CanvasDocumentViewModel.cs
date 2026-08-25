@@ -212,6 +212,14 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     private (CanvasOpenInfo Info, IReadOnlyList<CanvasOutlineRow> Outline,
         IReadOnlyList<CanvasTableRow> TableRows)? _pendingLoad;
     private IReadOnlyList<CanvasLoadWarning> _warnings = [];
+
+    /// <summary>The transaction currently open, or null. An inner
+    /// <c>Publish</c> joins it rather than starting a second one.</summary>
+    private Publication? _openPublication;
+
+    /// <summary>Set by the FIRST act of the terminal phase: from here a
+    /// publication stages and raises nothing (contract C7).</summary>
+    private bool _observersRetired;
     private string? _detailText;
     private string? _detailTitle;
     private bool _announcedDegradedLoad;
@@ -327,7 +335,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// carries the SAME value, which is what lets the projections skip a
     /// rebuild they do not need.
     /// </remarks>
-    internal object Publication => _view;
+    internal object PublicationToken => _view;
 
     /// <summary>Core's rows, untransformed and in core's reading order
     /// (R-D).</summary>
@@ -340,17 +348,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     public IReadOnlyList<CanvasTableRow> TableRows => _view.TableRows;
 
     /// <summary>Entry-level load warnings — the t0 §5 detail rows.</summary>
-    public IReadOnlyList<CanvasLoadWarning> Warnings
-    {
-        get => _warnings;
-        private set
-        {
-            if (SetField(ref _warnings, value))
-            {
-                NotifyStateChanged();
-            }
-        }
-    }
+    public IReadOnlyList<CanvasLoadWarning> Warnings => _warnings;
 
     /// <summary>Skipped-but-preserved entries (t0 §5). The mac
     /// <c>preservedItemCount</c>: the SkippedEntry warnings, NOT
@@ -402,23 +400,15 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
 
     /// <summary>The interim read-only card text (t2 #362), published by
     /// activating a text card; PR E swaps in the editor sheet.</summary>
-    public string? DetailText
-    {
-        get => _detailText;
-        private set => SetField(ref _detailText, value);
-    }
+    public string? DetailText => _detailText;
 
-    public string? DetailTitle
-    {
-        get => _detailTitle;
-        private set => SetField(ref _detailTitle, value);
-    }
+    public string? DetailTitle => _detailTitle;
 
-    public void CloseDetail()
+    public void CloseDetail() => Publish(publication =>
     {
-        DetailText = null;
-        DetailTitle = null;
-    }
+        publication.DetailText = null;
+        publication.DetailTitle = null;
+    });
 
     /// <summary>The row whose activation opened a card — the focus
     /// restoration target when the user comes back (WCAG 2.4.3,
@@ -473,11 +463,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// newer request supersedes an older one by generation.
     /// </para>
     /// </remarks>
-    public CanvasFocusRequest? FocusRequest
-    {
-        get => _focusRequest;
-        private set => SetField(ref _focusRequest, value);
-    }
+    public CanvasFocusRequest? FocusRequest => _focusRequest;
 
     /// <param name="owner">
     /// The view this request is FOR — the tab a surface carries as its
@@ -492,8 +478,8 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     internal void RequestFocusLanding(object owner, string? nodeId = null)
     {
         ArgumentNullException.ThrowIfNull(owner);
-        FocusRequest = new CanvasFocusRequest(
-            owner, nodeId, Interlocked.Increment(ref _focusRequestGeneration));
+        Publish(publication => publication.FocusRequest = new CanvasFocusRequest(
+            owner, nodeId, Interlocked.Increment(ref _focusRequestGeneration)));
     }
 
     /// <summary>
@@ -507,7 +493,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         ArgumentNullException.ThrowIfNull(delivered);
         if (_focusRequest is { } pending && pending.Generation == delivered.Generation)
         {
-            FocusRequest = null;
+            Publish(publication => publication.FocusRequest = null);
         }
     }
 
@@ -538,10 +524,24 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         {
             return;
         }
-        Selection.ActiveSurface = surface;
+        Publish(publication => publication.ActiveSurface = surface);
         Announcer.Announce(new CanvasA11yEvent.CanvasSurfaceShown(surface));
         SurfaceChanged?.Invoke(this, surface);
     }
+
+    /// <summary>
+    /// Seat the persisted surface on restore (contract A15) — SILENT,
+    /// because nothing happened that the user did.
+    /// </summary>
+    /// <remarks>
+    /// The workspace used to write `Selection.ActiveSurface` itself. It
+    /// is correlated state — both projections render off it — so it goes
+    /// through the document's transaction like every other
+    /// observer-visible write (contract C10), and the shell no longer
+    /// has a second way in.
+    /// </remarks>
+    internal void RestoreSurface(CanvasSurfaceKind surface) =>
+        Publish(publication => publication.ActiveSurface = surface);
 
     /// <summary>The file-card route, installed by the workspace registry
     /// (the Bases <c>OpenRowFromSurface</c> precedent): the document
@@ -559,14 +559,6 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// only the workspace knows the vault root, and only it should be
     /// composing an absolute one.</summary>
     internal Func<string, bool>? OpenMediaCardFromSurface { get; set; }
-
-    private void NotifyStateChanged()
-    {
-        OnPropertyChanged(nameof(IsReadOnly));
-        OnPropertyChanged(nameof(PreservedItemCount));
-        OnPropertyChanged(nameof(DegradedBannerText));
-        OnPropertyChanged(nameof(EmptyOnboardingText));
-    }
 
     public CanvasOutlineRow? RowFor(string? nodeId) =>
         nodeId is not null && _view.Rows.TryGetValue(nodeId, out CanvasOutlineRow? row)
@@ -849,10 +841,15 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             {
                 return;
             }
-            _filterText = next;
-            OnPropertyChanged(nameof(FilterText));
-            OnPropertyChanged(nameof(FilterActive));
-            RefreshFilter();
+            // ONE transaction for the needle AND whatever answering it
+            // publishes on this frame — an inactive needle and a memoized
+            // one both widen synchronously, and the field's chrome must
+            // not reach a render ahead of the rows it is describing.
+            Publish(publication =>
+            {
+                publication.FilterText = next;
+                RefreshFilter();
+            });
         }
     }
 
@@ -889,8 +886,9 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     {
         int generation = Interlocked.Increment(ref _filterGeneration);
         // A new ask is pending, so whatever the LAST one did is no longer
-        // this needle's story.
-        _filterAnswerFailed = false;
+        // this needle's story. Staged with whatever this refresh
+        // publishes, so no render reads the reset against the old rows.
+        Publish(publication => publication.FilterAnswerFailed = false);
         // The rows the answer will be about: a load waiting on this
         // re-ask has its rows in hand but unpublished, so the query is
         // ASKED for those and the unit is built from them.
@@ -966,14 +964,18 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             {
                 return;
             }
-            _filterAnswerFailed = !answered;
             // Answered or not, the LOAD that was waiting on this must
             // land: holding it back would leave a dead outline on screen
             // forever. An answer builds a narrowed unit; a failure builds
             // an unnarrowed one over the SAME new rows — every card
             // shown, and the summary saying the filter could not be
             // applied, so the widening is stated rather than silent.
-            PublishLoadedUnit(outline, answered ? needle : null, answered ? ids : null);
+            Publish(publication =>
+            {
+                publication.FilterAnswerFailed = !answered;
+                PublishLoadedUnit(
+                    outline, answered ? needle : null, answered ? ids : null);
+            });
             // The count is announced HERE — when an answer exists —
             // rather than on the keystroke, so it can never describe rows
             // that are not on screen yet. The announcer's filter class
@@ -1009,26 +1011,320 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         if (_pendingLoad is { } landing)
         {
             _pendingLoad = null;
-            _view = unit;
-            _warnings = landing.Info.Warnings;
-            _stateMessage = null;
-            _state = CanvasLoadState.Ready;
-            // A reload keeps the selection when the node survived; a
-            // selection pointing at a node that is gone would leave every
-            // selection-scoped verb acting on nothing (contract A12).
-            if (Selection.Selected is not { } selected || !unit.Rows.ContainsKey(selected))
+            Publish(publication =>
             {
-                // Silent seat (contract A12): the focus lands on the row
-                // and the screen reader reads it; a CanvasMovedTo on top
-                // of that is the t0 §1.5 doubling rule broken at the
-                // first keystroke of the surface's life.
-                Selection.Selected = unit.Outline.Count > 0 ? unit.Outline[0].NodeId : null;
-            }
-            PublishUnit(unit);
+                publication.Unit = unit;
+                publication.Warnings = landing.Info.Warnings;
+                publication.StateMessage = null;
+                publication.State = CanvasLoadState.Ready;
+                // A reload keeps the selection when the node survived; a
+                // selection pointing at a node that is gone would leave
+                // every selection-scoped verb acting on nothing
+                // (contract A12).
+                if (Selection.Selected is not { } selected
+                    || !unit.Rows.ContainsKey(selected))
+                {
+                    // Silent seat (contract A12): the focus lands on the
+                    // row and the screen reader reads it; a CanvasMovedTo
+                    // on top of that is the t0 §1.5 doubling rule broken
+                    // at the first keystroke of the surface's life. It is
+                    // part of THIS transaction, so no observer sees the
+                    // new rows with the old selection or the reverse.
+                    publication.Selected =
+                        unit.Outline.Count > 0 ? unit.Outline[0].NodeId : null;
+                }
+            });
             AnnounceDegradedLoadIfNeeded();
             return;
         }
         PublishUnit(unit);
+    }
+
+    /// <summary>
+    /// The publication transaction (contract C10): the ONE way anything
+    /// observer-visible on this document changes.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Four review rounds found the same class four times — the rows,
+    /// then the rows with the state, then the state with the CONTROLS,
+    /// then the selection re-seat — and each fix ordered one more pair.
+    /// The enumeration cannot end by enumeration: any correlated
+    /// observer-visible write left outside the transaction is the next
+    /// instance, and the list of them is the list of everything this
+    /// object exposes. So the transaction is the primitive and the
+    /// enumeration is over.
+    /// </para>
+    /// <para>
+    /// Writes are STAGED into the document's fields, where no observer
+    /// can see them because nothing has been raised. Notifications are
+    /// QUEUED. When the outermost scope closes they are raised in one
+    /// defined order — the ROWS publication first, because the
+    /// projections rebuild and the surface renders on it; then the
+    /// SELECTION, which is meaningful only against rows that exist; then
+    /// the document's own property notifications, which is where a
+    /// binding wakes. Every observer therefore runs against the settled
+    /// world: a mid-transaction wake is unrepresentable rather than
+    /// avoided.
+    /// </para>
+    /// <para>
+    /// Scopes NEST by joining: an inner <c>Publish</c> writes into the
+    /// outer transaction and the outermost one commits, so a helper that
+    /// publishes is safe to call from a publisher — the alternative is a
+    /// rule about which methods may call which, which is the kind of
+    /// rule that fails silently.
+    /// </para>
+    /// <para>
+    /// After retirement a publication stages and raises NOTHING
+    /// (contract C7): teardown still has state to clear, and clearing it
+    /// must not run a callback on a document that is going away.
+    /// </para>
+    /// <para>
+    /// <c>TheDocumentNotifiesOnlyFromInsideAPublication</c> is the census
+    /// that keeps this true — every notifying write in this file is
+    /// inside this type, or it fails naming the one that is not.
+    /// </para>
+    /// </remarks>
+    private sealed class Publication(CanvasDocumentViewModel document)
+    {
+        private readonly List<string> _properties = [];
+        private bool _rows;
+        private bool _selection;
+        private bool _surface;
+
+        /// <summary>
+        /// Publish rows. Assigning this ALWAYS republishes to the
+        /// projections and the surface, because a state moving over
+        /// unchanged rows is still something they render — but the
+        /// bindings only hear about members that actually changed, which
+        /// is `SetField`'s discipline kept rather than dropped.
+        /// </summary>
+        internal CanvasProjectionUnit Unit
+        {
+            set
+            {
+                _rows = true;
+                if (ReferenceEquals(document._view, value))
+                {
+                    return;
+                }
+                document._view = value;
+                Queue(nameof(CanvasDocumentViewModel.Outline));
+                Queue(nameof(CanvasDocumentViewModel.TableRows));
+                Queue(nameof(CanvasDocumentViewModel.FilteredOutline));
+                Queue(nameof(CanvasDocumentViewModel.FilteredTableRows));
+                QueueStateDerived();
+            }
+        }
+
+        internal CanvasLoadState State
+        {
+            set
+            {
+                if (document._state == value)
+                {
+                    return;
+                }
+                document._state = value;
+                Queue(nameof(CanvasDocumentViewModel.State));
+                QueueStateDerived();
+            }
+        }
+
+        internal string? StateMessage
+        {
+            set
+            {
+                if (string.Equals(document._stateMessage, value, StringComparison.Ordinal))
+                {
+                    return;
+                }
+                document._stateMessage = value;
+                Queue(nameof(CanvasDocumentViewModel.StateMessage));
+            }
+        }
+
+        internal IReadOnlyList<CanvasLoadWarning> Warnings
+        {
+            set
+            {
+                if (ReferenceEquals(document._warnings, value))
+                {
+                    return;
+                }
+                document._warnings = value;
+                Queue(nameof(CanvasDocumentViewModel.Warnings));
+                QueueStateDerived();
+            }
+        }
+
+        internal string? Selected
+        {
+            set => _selection |= document.Selection.StageSelected(value);
+        }
+
+        internal CanvasSurfaceKind ActiveSurface
+        {
+            set => _surface |= document.Selection.StageActiveSurface(value);
+        }
+
+        internal CanvasFocusRequest? FocusRequest
+        {
+            set
+            {
+                if (ReferenceEquals(document._focusRequest, value))
+                {
+                    return;
+                }
+                document._focusRequest = value;
+                Queue(nameof(CanvasDocumentViewModel.FocusRequest));
+            }
+        }
+
+        internal string? WhereAmIText
+        {
+            set
+            {
+                if (string.Equals(document._whereAmIText, value, StringComparison.Ordinal))
+                {
+                    return;
+                }
+                document._whereAmIText = value;
+                Queue(nameof(CanvasDocumentViewModel.WhereAmIText));
+            }
+        }
+
+        internal string? DetailText
+        {
+            set
+            {
+                if (string.Equals(document._detailText, value, StringComparison.Ordinal))
+                {
+                    return;
+                }
+                document._detailText = value;
+                Queue(nameof(CanvasDocumentViewModel.DetailText));
+            }
+        }
+
+        internal string? DetailTitle
+        {
+            set
+            {
+                if (string.Equals(document._detailTitle, value, StringComparison.Ordinal))
+                {
+                    return;
+                }
+                document._detailTitle = value;
+                Queue(nameof(CanvasDocumentViewModel.DetailTitle));
+            }
+        }
+
+        internal string FilterText
+        {
+            set
+            {
+                if (string.Equals(document._filterText, value, StringComparison.Ordinal))
+                {
+                    return;
+                }
+                document._filterText = value;
+                Queue(nameof(CanvasDocumentViewModel.FilterText));
+                Queue(nameof(CanvasDocumentViewModel.FilterActive));
+            }
+        }
+
+        /// <summary>Not a bound member, but read by every render of the
+        /// summary — so it is staged with the rows it describes rather
+        /// than moving under them.</summary>
+        internal bool FilterAnswerFailed
+        {
+            set => document._filterAnswerFailed = value;
+        }
+
+        internal void RequestFilterFocus()
+        {
+            document._filterFocusToken++;
+            Queue(nameof(CanvasDocumentViewModel.FilterFocusToken));
+        }
+
+        /// <summary>
+        /// Raise everything this transaction owes, in the ONE order
+        /// (contract C10).
+        /// </summary>
+        internal void Commit()
+        {
+            if (document._observersRetired)
+            {
+                // The terminal phase: state still has to be cleared, and
+                // clearing it must reach nobody (contract C7).
+                return;
+            }
+            if (_rows)
+            {
+                document.OutlinePublished?.Invoke(document, EventArgs.Empty);
+            }
+            if (_selection)
+            {
+                document.Selection.RaiseStaged(nameof(CanvasSelection.Selected));
+            }
+            if (_surface)
+            {
+                document.Selection.RaiseStaged(nameof(CanvasSelection.ActiveSurface));
+            }
+            foreach (string property in _properties)
+            {
+                document.OnPropertyChanged(property);
+            }
+        }
+
+        /// <summary>The read-only members every state or row change
+        /// re-derives — queued once, however many writes touched them.</summary>
+        private void QueueStateDerived()
+        {
+            Queue(nameof(CanvasDocumentViewModel.IsReadOnly));
+            Queue(nameof(CanvasDocumentViewModel.PreservedItemCount));
+            Queue(nameof(CanvasDocumentViewModel.DegradedBannerText));
+            Queue(nameof(CanvasDocumentViewModel.EmptyOnboardingText));
+        }
+
+        private void Queue(string property)
+        {
+            if (!_properties.Contains(property))
+            {
+                _properties.Add(property);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Open a publication transaction, or join the one already open.
+    /// </summary>
+    /// <remarks>
+    /// The commit runs in a `finally`, so a body that faults still
+    /// publishes what it managed to stage: the fields have already moved,
+    /// and leaving the observers describing the world before them is a
+    /// worse failure than the one being handled.
+    /// </remarks>
+    private void Publish(Action<Publication> write)
+    {
+        ArgumentNullException.ThrowIfNull(write);
+        if (_openPublication is { } joined)
+        {
+            write(joined);
+            return;
+        }
+        var publication = new Publication(this);
+        _openPublication = publication;
+        try
+        {
+            write(publication);
+        }
+        finally
+        {
+            _openPublication = null;
+            publication.Commit();
+        }
     }
 
     /// <summary>
@@ -1039,57 +1335,27 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// The point is that there is no OTHER way to move the state. A
     /// settable `State` let a render wake on `PropertyChanged` while the
     /// projections were still holding rows from an earlier publication —
-    /// two channels for one fact. Here the state and the unit arrive
-    /// together, and the consumers see the pair they always see.
+    /// two channels for one fact. Here the state rides the transaction
+    /// like everything else, and the consumers see the pair they always
+    /// see.
     /// </remarks>
-    private void PublishState(CanvasLoadState state, string? message)
-    {
-        _state = state;
-        _stateMessage = message;
-        PublishUnit(_view);
-    }
+    private void PublishState(CanvasLoadState state, string? message) =>
+        Publish(publication =>
+        {
+            publication.State = state;
+            publication.StateMessage = message;
+            // The rows do not change, but they are REPUBLISHED with the
+            // state: "Opening canvas…" over the canvas being read is one
+            // fact, and the projections skip the rebuild themselves
+            // because the unit is the same value.
+            publication.Unit = _view;
+        });
 
     /// <summary>
-    /// Swap the published unit and tell everyone — the ONE publication,
-    /// and the ONE place a projection's rows or the load state change
-    /// (contract C10).
+    /// Publish a unit — the rows half of a transaction (contract C10).
     /// </summary>
-    /// <remarks>
-    /// The swap precedes every notification, and every notification the
-    /// swap owes follows it, so there is no observable instant in which
-    /// half a unit is readable.
-    /// <para>
-    /// The ORDER of what follows is the contract, not an implementation
-    /// detail. <see cref="OutlinePublished"/> goes FIRST: it is the event
-    /// the projections rebuild on and the surface renders on, in that
-    /// order, so when it returns the controls on screen ARE this
-    /// publication. The property notifications go LAST, and that is the
-    /// whole of what "one channel" buys — a binding woken by
-    /// <see cref="State"/> is the final step of the publication, so
-    /// everything it can read, model AND materialized controls, already
-    /// describes the same canvas.
-    /// </para>
-    /// <para>
-    /// The other order was the defect. Notifying first woke a state
-    /// render while the projections still held the PREVIOUS
-    /// publication's rows: "Ready", with the new canvas's summary, over
-    /// the old canvas's controls — and focus delivery ran in that gap
-    /// too, seating the reader on rows about to be replaced.
-    /// </para>
-    /// </remarks>
-    private void PublishUnit(CanvasProjectionUnit unit)
-    {
-        _view = unit;
-        OutlinePublished?.Invoke(this, EventArgs.Empty);
-        OnPropertyChanged(nameof(State));
-        OnPropertyChanged(nameof(StateMessage));
-        OnPropertyChanged(nameof(Warnings));
-        OnPropertyChanged(nameof(Outline));
-        OnPropertyChanged(nameof(TableRows));
-        OnPropertyChanged(nameof(FilteredOutline));
-        OnPropertyChanged(nameof(FilteredTableRows));
-        NotifyStateChanged();
-    }
+    private void PublishUnit(CanvasProjectionUnit unit) =>
+        Publish(publication => publication.Unit = unit);
 
     /// <summary>
     /// True when a non-blank needle narrows the surfaces. UI state —
@@ -1194,13 +1460,10 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// itself when it observes the change (the mac
     /// <c>canvasFilterFocusToken</c> shape, Codoki #626).
     /// </summary>
-    public int FilterFocusToken
-    {
-        get => _filterFocusToken;
-        private set => SetField(ref _filterFocusToken, value);
-    }
+    public int FilterFocusToken => _filterFocusToken;
 
-    internal void RequestFilterFocus() => FilterFocusToken++;
+    internal void RequestFilterFocus() =>
+        Publish(publication => publication.RequestFilterFocus());
 
     // --- Where am I (contract C11) ---------------------------------------
 
@@ -1209,11 +1472,11 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// closed. The SAME string the announcement speaks — one render, no
     /// second composition (t0 §1.4/§3).
     /// </summary>
-    public string? WhereAmIText
-    {
-        get => _whereAmIText;
-        internal set => SetField(ref _whereAmIText, value);
-    }
+    public string? WhereAmIText => _whereAmIText;
+
+    /// <summary>Open or close the Where-am-I panel (contract C11).</summary>
+    internal void ShowWhereAmI(string? readback) =>
+        Publish(publication => publication.WhereAmIText = readback);
 
     // --- Load -----------------------------------------------------------
 
@@ -1335,7 +1598,6 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         _targets.Clear();
         _subpaths.Clear();
         _neighbors.Clear();
-        WhereAmIText = null;
         // A held load never outlives the failure that replaced it: rows
         // computed for a canvas that would not open must not land later
         // as an answer to a needle.
@@ -1343,17 +1605,16 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         // A read cache never outlives the rows it describes (contract
         // C10) — and it cannot, now that the matches are FIELDS of the
         // unit: publishing the empty unit retires the ids with the rows
-        // they named in one step. Written through the backing fields for
-        // `PublishLoadedUnit`'s reason: the state and the unit reach the
-        // consumers in one notification burst, never one before the
-        // other.
-        CanvasProjectionUnit unit = CanvasProjectionUnit.Empty;
-        _view = unit;
-        _warnings = warnings;
-        _stateMessage = stateMessage;
-        _state = state;
-        Selection.Selected = null;
-        PublishUnit(unit);
+        // they named in one step.
+        Publish(publication =>
+        {
+            publication.WhereAmIText = null;
+            publication.Unit = CanvasProjectionUnit.Empty;
+            publication.Warnings = warnings;
+            publication.StateMessage = stateMessage;
+            publication.State = state;
+            publication.Selected = null;
+        });
     }
 
     private void PublishReady(
@@ -1365,7 +1626,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         _targets.Clear();
         _subpaths.Clear();
         _neighbors.Clear();
-        WhereAmIText = null;
+        Publish(publication => publication.WhereAmIText = null);
         foreach (CanvasTableRow row in tableRows)
         {
             _targets[row.NodeId] = row.Target;
@@ -1474,7 +1735,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             return;
         }
         CanvasOutlineRow? previous = RowFor(Selection.Selected);
-        Selection.Selected = nodeId;
+        Publish(publication => publication.Selected = nodeId);
         if (!announce || RowFor(nodeId) is not { } row)
         {
             return;
@@ -1512,7 +1773,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// make.
     /// </remarks>
     internal void SeatSelectionSilently(string? nodeId) =>
-        Selection.Selected = nodeId;
+        Publish(publication => publication.Selected = nodeId);
 
     /// <summary>
     /// The group-boundary event a move crosses into, or null when the
@@ -1587,8 +1848,11 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             return CanvasActivation.Refused;
         }
         LastActivatedNode = row.NodeId;
-        DetailTitle = row.Title;
-        DetailText = text;
+        Publish(publication =>
+        {
+            publication.DetailTitle = row.Title;
+            publication.DetailText = text;
+        });
         return CanvasActivation.DetailShown;
     }
 
@@ -1758,20 +2022,19 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     {
         base.Shutdown();
         _ = Interlocked.Increment(ref _generation);
-        // M4's last case, and the deferred-departure drain with it. Both
-        // have to happen BEFORE the announcer is silenced or their
-        // restorations would never be spoken — closing the tab a mode is
-        // running in is exactly the departure M4 names, and a departure
-        // still held from a failed commit owes a sentence too.
+        // TEARDOWN IS THREE PHASES, IN THIS ORDER, AND THE ORDER IS THE
+        // CONTRACT (contract C7). Four rounds found the same class here
+        // too — each one a different fallible callback reached while the
+        // document was mutating on its way out — so the phases are
+        // structural rather than a list of the callbacks found so far.
         //
-        // And they are FALLIBLE: a restoration effect is host code and
-        // can fault. Retirement is not allowed to depend on it. Without
-        // this the announcer below was never reached, so a coalesced line
-        // stayed queued on a document that no longer exists and spoke
-        // ~200 ms later — the A5 defect, arrived at from the mode side —
-        // and the handle below was never closed either. Logged and
-        // continued: the failure is reported, and the teardown still
-        // happens.
+        // PHASE 1, SPEAK. The sentences a retirement still owes: a
+        // departure held across a failed commit owes its restoration, and
+        // closing the tab a mode is running in is exactly the departure
+        // M4 names. This is the only phase that may announce, and it runs
+        // while the funnel is still open. It is FALLIBLE — a restoration
+        // effect is host code — so it is logged and the teardown carries
+        // on rather than depending on it.
         try
         {
             Modes.Shutdown();
@@ -1783,20 +2046,63 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         {
             HostLog.Write(HostDiagnosticEvent.CanvasModeTeardownFailed, exception);
         }
-        WhereAmIText = null;
-        // Every retirement route reaches here — the release sweep, the
-        // retarget, the vault-close drain — so this is the one place the
-        // announcer has to be silenced (contract A5): a coalesced line
-        // queued on a dying document would otherwise fire ~200 ms later
-        // and speak about a surface that no longer exists.
-        Announcer.Shutdown();
-        FocusRequest = null;
-        if (IsSynchronousForTests)
+        try
         {
-            CloseHandleGuarded();
-            return;
+            // PHASE 2, SILENCE, and it is the FIRST act of everything
+            // that follows. Retiring the observers before any state is
+            // cleared is what makes "teardown must not run a callback"
+            // structural: the clears below are publications that stage
+            // and raise nothing, so there is no callback to get wrong.
+            // Clearing first and silencing after is the shape that kept
+            // producing this class.
+            RetireObservers();
+            Publish(publication =>
+            {
+                publication.WhereAmIText = null;
+                publication.FocusRequest = null;
+                publication.DetailText = null;
+                publication.DetailTitle = null;
+            });
         }
-        _asyncClose = Task.Run(CloseHandleGuarded);
+        finally
+        {
+            // PHASE 3, RELEASE, reached however phase 2 went. Every
+            // retirement route arrives here — the release sweep, the
+            // retarget, the vault-close drain — so this is the one place
+            // the announcer is silenced (contract A5): a coalesced line
+            // queued on a dying document would otherwise fire ~200 ms
+            // later and speak about a surface that no longer exists. The
+            // handle follows it, because a handle nobody closes is a
+            // leak no test would ever see.
+            Announcer.Shutdown();
+            if (IsSynchronousForTests)
+            {
+                CloseHandleGuarded();
+            }
+            else
+            {
+                _asyncClose = Task.Run(CloseHandleGuarded);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Detach and mute every observer channel this document owns
+    /// (contract C7).
+    /// </summary>
+    /// <remarks>
+    /// Both halves, because they are different channels. The rows event
+    /// is DETACHED — a retired document holding a view's handler is a
+    /// path back into a surface whose model is gone. The property and
+    /// selection channels are MUTED through the publication, which is
+    /// the only thing that raises them: after this every transaction
+    /// stages and commits nothing. Not "we remembered not to notify" —
+    /// there is nothing left that can.
+    /// </remarks>
+    private void RetireObservers()
+    {
+        _observersRetired = true;
+        OutlinePublished = null;
     }
 
     private void CloseHandleGuarded()

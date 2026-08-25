@@ -928,10 +928,7 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         // Asked BEFORE the panel goes away, because closing it is what
         // takes the focus off it.
         bool readerWasInside = _whereAmIPanel.IsKeyboardFocusWithin;
-        if (Model is { } model)
-        {
-            model.WhereAmIText = null;
-        }
+        Model?.ShowWhereAmI(null);
         IInputElement? restore = _whereAmIReturnFocus;
         _whereAmIReturnFocus = null;
         if (!readerWasInside)
