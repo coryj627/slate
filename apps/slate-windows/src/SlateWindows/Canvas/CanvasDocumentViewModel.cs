@@ -136,6 +136,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     private string _filterText = string.Empty;
     private string? _whereAmIText;
     private int _filterFocusToken;
+    private int _filterGeneration;
     private (string Needle, IReadOnlySet<string> Ids)? _filterMatchCache;
 
     /// <summary>Row lookup by node id — the outline is walked by id from
@@ -740,8 +741,84 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             _filterText = next;
             OnPropertyChanged(nameof(FilterText));
             OnPropertyChanged(nameof(FilterActive));
-            OutlinePublished?.Invoke(this, EventArgs.Empty);
+            RefreshFilter();
         }
+    }
+
+    /// <summary>
+    /// Ask core for the current needle's match set — OFF the dispatcher
+    /// (contract C10/A17).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The match used to run inside the <c>Filter</c> getter, on the UI
+    /// thread, taking <c>_ffiLock</c> — the lock a LOAD body holds across
+    /// <c>open_canvas</c> plus three whole-model projections. A keystroke
+    /// arriving during a load therefore blocked the dispatcher until the
+    /// load finished, which on a large canvas over a slow filesystem is a
+    /// stall the user types into. Every other whole-model read in this
+    /// class is scheduled; this one now is too, which is A17's recorded
+    /// convention rather than a new one.
+    /// </para>
+    /// <para>
+    /// Two paths short-circuit and publish on THIS frame, because they
+    /// need no query: an inactive needle IS the full outline, and an
+    /// unchanged needle already has its answer memoized. So clearing the
+    /// filter — the Escape rung, the Clear button — widens the rows
+    /// immediately rather than after a scheduler hop.
+    /// </para>
+    /// <para>
+    /// The generation guard is doubled on purpose: a stale NEEDLE's answer
+    /// must not overwrite a newer one, and a stale DOCUMENT's answer must
+    /// not land at all (a reload republishes rows the ids no longer
+    /// describe).
+    /// </para>
+    /// </remarks>
+    private void RefreshFilter()
+    {
+        int generation = Interlocked.Increment(ref _filterGeneration);
+        if (!FilterActive)
+        {
+            _filterMatchCache = null;
+            OutlinePublished?.Invoke(this, EventArgs.Empty);
+            return;
+        }
+        if (_filterMatchCache is { } cached
+            && string.Equals(cached.Needle, _filterText, StringComparison.Ordinal))
+        {
+            OutlinePublished?.Invoke(this, EventArgs.Empty);
+            return;
+        }
+        string needle = _filterText;
+        int documentGeneration = Volatile.Read(ref _generation);
+        StartWork(() => FilterBody(needle, generation, documentGeneration));
+    }
+
+    private void FilterBody(string needle, int generation, int documentGeneration)
+    {
+        bool answered = TryQuery<IReadOnlyList<string>>(
+            handle => _session.CanvasFilter(handle, needle),
+            [],
+            out IReadOnlyList<string> matched);
+        IReadOnlySet<string> ids = matched.ToHashSet(StringComparer.Ordinal);
+        Post(() =>
+        {
+            if (Volatile.Read(ref _filterGeneration) != generation
+                || Volatile.Read(ref _generation) != documentGeneration)
+            {
+                return;
+            }
+            if (answered)
+            {
+                _filterMatchCache = (needle, ids);
+            }
+            OutlinePublished?.Invoke(this, EventArgs.Empty);
+            // The count is announced HERE — when an answer exists —
+            // rather than on the keystroke, so it can never describe rows
+            // that are not on screen yet. The announcer's filter class
+            // still coalesces a burst into one line (t0 §1.5).
+            Navigator.AnnounceFilterCount();
+        });
     }
 
     /// <summary>
@@ -776,6 +853,14 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// full outline exactly as <see cref="FilterActive"/> says it should.
     /// The answer is memoized per needle and invalidated by every publish,
     /// because the ids can move under an unchanged needle.
+    ///
+    /// PURE since the query moved off the dispatcher (contract C10): this
+    /// reads published state and never calls core, so every surface may
+    /// ask it as often as a layout pass wants to. <c>Current</c> now
+    /// covers two causes — "no handle could answer" and "the answer has
+    /// not landed yet" — and the callers that speak distinguish them by
+    /// asking <see cref="ReadRefusal"/>, because only the first is a
+    /// state the user needs told about.
     /// </remarks>
     internal CanvasFilterView Filter
     {
@@ -791,22 +876,12 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 return new CanvasFilterView(
                     RowsMatching(cached.Ids), Narrowed: true, Current: true, cached.Ids);
             }
-            if (TryQuery<IReadOnlyList<string>>(
-                handle => _session.CanvasFilter(handle, _filterText),
-                [],
-                out IReadOnlyList<string> matched))
-            {
-                var ids = matched.ToHashSet(StringComparer.Ordinal);
-                _filterMatchCache = (_filterText, ids);
-                return new CanvasFilterView(
-                    RowsMatching(ids), Narrowed: true, Current: true, ids);
-            }
             if (_filterMatchCache is { } stale)
             {
-                // The needle changed and nothing could answer it. The
-                // PREVIOUS rows stay on screen and `Current` is false:
-                // widening silently back to the full outline would show
-                // every card while the field still claims to be
+                // The needle moved on and this answer is the previous
+                // one. The PREVIOUS rows stay on screen and `Current` is
+                // false: widening silently back to the full outline would
+                // show every card while the field still claims to be
                 // filtering, and then speak that number as a match count.
                 return new CanvasFilterView(
                     RowsMatching(stale.Ids), Narrowed: true, Current: false, stale.Ids);
@@ -1028,6 +1103,16 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         }
         OutlinePublished?.Invoke(this, EventArgs.Empty);
         AnnounceDegradedLoadIfNeeded();
+        if (FilterActive)
+        {
+            // The publish above emptied the match cache, because a reload
+            // republishes rows the old ids no longer describe. Without
+            // re-asking, an active needle would leave every card on
+            // screen while the field still claimed to be filtering —
+            // exactly the silent widening the FilterView discipline
+            // exists to prevent (contract C10).
+            RefreshFilter();
+        }
     }
 
     /// <summary>Contract A4: the polite "loaded with skipped items"

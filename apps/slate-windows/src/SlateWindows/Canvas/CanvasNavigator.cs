@@ -500,18 +500,43 @@ internal sealed class CanvasNavigator
     }
 
     /// <summary>
-    /// The filter field's result-summary text: the same sentence, from
-    /// the same view and the same state mapping the announcement uses —
-    /// one composition, no second opinion about which sentence the state
-    /// owes.
+    /// The filter field's result-summary text, or NULL when there is
+    /// nothing to summarise yet.
     /// </summary>
-    public string FilterSummaryText()
+    /// <remarks>
+    /// <para>
+    /// The same view and the same state mapping the announcement uses —
+    /// one composition, no second opinion about which sentence the state
+    /// owes. The number always counts the rows the surfaces are
+    /// DISPLAYING, which is what keeps <i>displayed rows == the number on
+    /// screen</i> true at every instant, including the frames between a
+    /// keystroke and its answer.
+    /// </para>
+    /// <para>
+    /// The two causes of a non-current view get different answers, and
+    /// that is the whole of why this is not one line. A document that
+    /// CANNOT answer says so — the state's own sentence, mac's behaviour.
+    /// A query merely IN FLIGHT says nothing new: the previous answer is
+    /// still on screen and its count still describes it, so the label
+    /// simply lags by a frame the way every async surface does. Before
+    /// the first answer there is no summary at all rather than a
+    /// "9 of 9 cards match" that would claim a match nobody made.
+    /// </para>
+    /// </remarks>
+    public string? FilterSummaryText()
     {
+        if (!_document.FilterActive)
+        {
+            return null;
+        }
         CanvasFilterView view = _document.Filter;
-        return view.Current
-            ? CanvasPhrase.FilterSummary(view.Rows.Count, _document.Outline.Count)
-            : CanvasAnnouncer.RenderLabel(new CanvasA11yEvent.CanvasStatus(
-                _document.ReadRefusal ?? new CanvasStatusNote.Reopening()));
+        if (view.Current || view.Narrowed)
+        {
+            return CanvasPhrase.FilterSummary(view.Rows.Count, _document.Outline.Count);
+        }
+        return _document.ReadRefusal is { } note
+            ? CanvasAnnouncer.RenderLabel(new CanvasA11yEvent.CanvasStatus(note))
+            : null;
     }
 
     // --- Modes (t0 §2) ---------------------------------------------------

@@ -100,11 +100,29 @@ internal static class CanvasModeConformance
         Assert.Null(probe.Controller.ContainerValue);
     }
 
-    /// <summary>M4: a focus departure cancels with restoration and an
-    /// announcement — every arm but the one the shell layers OVER the
-    /// tab.</summary>
+    /// <summary>
+    /// M4: a focus departure cancels with restoration and an announcement
+    /// — every arm but the two the shell layers OVER the tab (contract
+    /// C8, CD-41).
+    /// </summary>
+    /// <remarks>
+    /// The keep-alive set is named here and the enum is ENUMERATED, so a
+    /// new departure joins one side or the other by decision rather than
+    /// by falling into whichever branch it happens to hit. Both members
+    /// exist for one reason: the mode-lifecycle verbs live on surfaces
+    /// that take keyboard focus without the reader leaving the canvas —
+    /// the palette, and the menus (this shell's Canvas menu carries
+    /// Commit Mode and Cancel Mode; PR E/F's context menus carry every
+    /// mode verb).
+    /// </remarks>
     public static void EveryFocusDepartureHasARecordedAnswer(CanvasModeProbe probe)
     {
+        CanvasFocusDeparture[] keepAlive =
+        [
+            CanvasFocusDeparture.ModalOverlay,
+            CanvasFocusDeparture.MenuOpen,
+        ];
+
         foreach (CanvasFocusDeparture departure
             in Enum.GetValues<CanvasFocusDeparture>())
         {
@@ -112,13 +130,14 @@ internal static class CanvasModeConformance
             probe.Clear();
 
             bool cancelled = probe.Controller.HandleFocusDeparture(departure);
-            if (departure == CanvasFocusDeparture.ModalOverlay)
+            if (keepAlive.Contains(departure))
             {
                 Assert.True(
                     probe.Controller.IsActive,
-                    "an overlay layered over the canvas tab must keep the mode "
-                    + "alive — Commit Mode and Cancel Mode are palette commands "
-                    + "(contract C8).");
+                    $"{departure} is layered OVER the canvas tab and must keep the "
+                    + "mode alive — the mode-lifecycle verbs live there, so "
+                    + "cancelling on it kills the controls that would have ended "
+                    + "the mode (contract C8).");
                 Assert.False(cancelled);
                 Assert.Empty(probe.Announced());
                 _ = probe.Controller.Cancel();
@@ -168,6 +187,19 @@ public sealed class CanvasModeControllerTests
 
         public bool Cancelled { get; private set; }
 
+        /// <summary>
+        /// A fresh spec for <paramref name="mode"/> — and its commit and
+        /// cancel HONOUR that mode rather than always speaking Move's.
+        /// </summary>
+        /// <remarks>
+        /// PR F reuses this file, so a spec that ignored its parameter
+        /// would have every mode's conformance run against Move's
+        /// confirmation and Move's restoration, and the first real
+        /// difference would surface as an F defect rather than here.
+        /// Connect has no `CanvasTransientVerb` because it commits no
+        /// geometry — its confirmation is the connection it made, which
+        /// is also why its restoration is `Unstated`.
+        /// </remarks>
         public CanvasModeSpec Spec(CanvasMode mode = CanvasMode.Move) =>
             new(
                 mode,
@@ -175,13 +207,27 @@ public sealed class CanvasModeControllerTests
                 () =>
                 {
                     Committed = true;
-                    return new CanvasA11yEvent.CanvasModeCommitted(
-                        CanvasTransientVerb.Move, new CanvasModeObject.Card("Research"));
+                    return mode switch
+                    {
+                        CanvasMode.Move => new CanvasA11yEvent.CanvasModeCommitted(
+                            CanvasTransientVerb.Move,
+                            new CanvasModeObject.Card("Research")),
+                        CanvasMode.Resize => new CanvasA11yEvent.CanvasModeCommitted(
+                            CanvasTransientVerb.Resize,
+                            new CanvasModeObject.Card("Research")),
+                        _ => new CanvasA11yEvent.CanvasConnected(
+                            "Research", "Evidence", null),
+                    };
                 },
                 () =>
                 {
                     Cancelled = true;
-                    return new CanvasModeRestoration.BackAt("Research");
+                    return mode switch
+                    {
+                        CanvasMode.Move => new CanvasModeRestoration.BackAt("Research"),
+                        CanvasMode.Resize => new CanvasModeRestoration.SizeRestored(),
+                        _ => new CanvasModeRestoration.Unstated(),
+                    };
                 });
     }
 

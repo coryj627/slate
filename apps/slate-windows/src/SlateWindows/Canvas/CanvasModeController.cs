@@ -18,7 +18,7 @@ internal enum CanvasFocusDeparture
     TabSwitch,
 
     /// <summary>Keyboard focus left the canvas surface for another part
-    /// of the shell — another pane, the sidebar, the menu bar.</summary>
+    /// of the shell — another pane, the sidebar, the files tree.</summary>
     PaneFocus,
 
     /// <summary>The window itself lost activation.</summary>
@@ -28,6 +28,23 @@ internal enum CanvasFocusDeparture
     /// this tab — the command palette, Quick Open, the search overlay, a
     /// sheet. The canvas is still the tab underneath.</summary>
     ModalOverlay,
+
+    /// <summary>
+    /// Focus moved into an open MENU — the menu bar, a submenu, or a
+    /// row's context menu.
+    /// </summary>
+    /// <remarks>
+    /// The same fact as <see cref="ModalOverlay"/> one surface over, and
+    /// it earns its own name because the failure it prevents is
+    /// self-inflicted: the shell's own Canvas menu carries Commit Mode
+    /// and Cancel Mode, so a menu that cancelled the mode on OPENING
+    /// would kill its own two items before the pointer reached them.
+    /// PR E's and PR F's per-row context menus are the M6 visible
+    /// controls for every mode verb and inherit the identical
+    /// requirement — which is why this is an arm of the table rather
+    /// than a condition at one site (CD-41).
+    /// </remarks>
+    MenuOpen,
 }
 
 /// <summary>
@@ -221,16 +238,17 @@ internal sealed class CanvasModeController : BindableBase
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <see cref="CanvasFocusDeparture.ModalOverlay"/> is the ONE arm
-    /// that keeps the mode alive, and it is a recorded divergence from
-    /// t0 §2 M4's literal list (contract C8, CD-41). t0 names the palette
-    /// among the departures; the mac controller excludes it deliberately
-    /// after red-team #521, because Commit Mode, Cancel Mode and the
-    /// resize presets ARE palette commands — cancelling on palette open
-    /// makes three registered verbs unreachable and contradicts M6's own
-    /// "never depend on the keyboard-only path". The exclusion is one
-    /// named arm of one total switch so the decision can be reversed in
-    /// one place.
+    /// Two arms KEEP the mode alive, and both are the same recorded
+    /// divergence from t0 §2 M4's literal list (contract C8, CD-41).
+    /// t0 names the palette among the departures; the mac controller
+    /// excludes it deliberately after red-team #521, because Commit Mode,
+    /// Cancel Mode and the resize presets ARE palette commands —
+    /// cancelling on palette open makes three registered verbs
+    /// unreachable and contradicts M6's own "never depend on the
+    /// keyboard-only path". <see cref="CanvasFocusDeparture.MenuOpen"/>
+    /// is the same argument for the surface a MENU is: this shell's own
+    /// Canvas menu carries those two verbs, and PR E/F's context menus
+    /// carry every mode verb.
     /// </para>
     /// <para>
     /// Every other arm cancels. The switch is total over the enum, and
@@ -246,6 +264,7 @@ internal sealed class CanvasModeController : BindableBase
             CanvasFocusDeparture.PaneFocus => true,
             CanvasFocusDeparture.WindowDeactivated => true,
             CanvasFocusDeparture.ModalOverlay => false,
+            CanvasFocusDeparture.MenuOpen => false,
             _ => throw new UnreachableException(
                 $"CanvasFocusDeparture.{departure} has no M4 answer. The mode "
                 + "stack's focus-departure rule is a closed table (contract C7); "

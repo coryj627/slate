@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Automation.Peers;
 using System.Windows.Automation.Provider;
+using System.Windows.Controls;
 using System.Windows.Input;
 using SlateWindows.Canvas;
 using uniffi.slate_uniffi;
@@ -530,9 +531,17 @@ public sealed class CanvasNavigatorTests : IDisposable
     public void TheAnnouncedCountIsTheRowsTheSurfacesShow()
     {
         CanvasDocumentViewModel document = Open("board.canvas");
-        document.FilterText = "zeta";
-        Drain(document);
 
+        // The needle alone announces: the count rides the ANSWER landing,
+        // not the keystroke, so it can never describe rows that are not
+        // on screen yet (contract C10).
+        document.FilterText = "zeta";
+        Assert.Equal(
+            CanvasAnnouncer.RenderLabel(new CanvasA11yEvent.CanvasFilterCount(
+                (uint)document.FilteredOutline.Count)),
+            OneLine(document));
+
+        Drain(document);
         document.Navigator.AnnounceFilterCount();
         Assert.Equal(
             CanvasAnnouncer.RenderLabel(new CanvasA11yEvent.CanvasFilterCount(
@@ -542,7 +551,7 @@ public sealed class CanvasNavigatorTests : IDisposable
         // and the number spoken cannot come from two answers.
         Assert.StartsWith(
             $"{document.FilteredOutline.Count} of ",
-            document.Navigator.FilterSummaryText(),
+            Assert.IsType<string>(document.Navigator.FilterSummaryText()),
             StringComparison.Ordinal);
     }
 
@@ -685,10 +694,19 @@ public sealed class CanvasNavigatorTests : IDisposable
     // --- C2/C6: the surface, its keys and its regions ---------------------
 
     /// <summary>
-    /// The Escape ladder end to end through the REAL surface: a real key
-    /// press, the real rungs, and the shell's press left unconsumed at
-    /// the bottom.
+    /// The Escape ladder end to end through a REAL key press on the REAL
+    /// surface: the rungs' EFFECTS in order, and the press left
+    /// unconsumed at the bottom so the shell's own Escape still works
+    /// with a canvas open (contract C6).
     /// </summary>
+    /// <remarks>
+    /// What this drives is the whole chain a user's Escape takes —
+    /// `OnPreviewKeyDown` → `HandleKey` → the controller's ladder → the
+    /// surface's presenter — and what it reads is each rung's effect on
+    /// the surface, plus `e.Handled`. The rung NAMES are the mode
+    /// controller's table test; the key reaching the surface from a real
+    /// input stack is the journey's.
+    /// </remarks>
     [Fact]
     public void TheSurfaceLadderClearsTheFilterThenTheRegionThenBubbles() => RunSta(() =>
     {
@@ -698,21 +716,33 @@ public sealed class CanvasNavigatorTests : IDisposable
         surface.OutlineForTests.FocusTree();
         host.UpdateLayout();
 
+        // Rung 2 — the filter.
         document.FilterText = "zeta";
         host.UpdateLayout();
-        Assert.Equal(CanvasEscapeRung.Filter, document.Modes.HandleEscape());
+        Assert.True(document.FilterActive);
+        Assert.True(
+            PressKey(surface, Key.Escape, ModifierKeys.None),
+            "the ladder must CONSUME the press that clears the filter.");
         Assert.Equal(string.Empty, document.FilterText);
+        host.UpdateLayout();
 
+        // Rung 3 — the transient region. One press per rung: the filter
+        // is already gone, so this press reaches the panel.
         document.Navigator.WhereAmI();
         host.UpdateLayout();
         Assert.NotNull(document.WhereAmIText);
-        Assert.Equal(CanvasEscapeRung.Surface, document.Modes.HandleEscape());
+        Assert.True(
+            PressKey(surface, Key.Escape, ModifierKeys.None),
+            "the ladder must CONSUME the press that dismisses the panel.");
         Assert.Null(document.WhereAmIText);
+        host.UpdateLayout();
 
-        // Nothing left in the canvas to consume it: the press belongs to
-        // the workspace, which is what keeps the shell's own Escape
-        // working with a canvas open.
-        Assert.Equal(CanvasEscapeRung.WorkspaceTab, document.Modes.HandleEscape());
+        // Rung 4 — nothing left in the canvas to consume it, so the press
+        // is NOT handled and belongs to the workspace. This is the half
+        // that keeps the shell's Escape working with a canvas open.
+        Assert.False(
+            PressKey(surface, Key.Escape, ModifierKeys.None),
+            "an Escape the canvas has no rung for must bubble.");
     });
 
     /// <summary>
@@ -727,7 +757,15 @@ public sealed class CanvasNavigatorTests : IDisposable
         var surface = new CanvasSurfaceView { Model = document };
         using var host = Host(surface);
 
-        Assert.Equal(string.Empty, AutomationProperties.GetItemStatus(surface));
+        // Read off the PEER, never off the attached property: the
+        // attached property is the setter side, and PR A's round 8
+        // recorded what happens when only that side is checked — a value
+        // set on an element WPF never peers reaches no client and nothing
+        // fails. The surface is a peered `UserControl`, so the two agree
+        // here; asserting the peer is what makes that a finding rather
+        // than an assumption.
+        AutomationPeer peer = UIElementAutomationPeer.CreatePeerForElement(surface);
+        Assert.Equal(string.Empty, peer.GetItemStatus());
         Assert.Equal(Visibility.Collapsed, surface.CommitModeForTests.Visibility);
 
         Assert.True(document.Modes.Enter(new CanvasModeSpec(
@@ -737,7 +775,6 @@ public sealed class CanvasNavigatorTests : IDisposable
             () => new CanvasModeRestoration.BackAt("Core question"))));
         host.UpdateLayout();
 
-        AutomationPeer peer = UIElementAutomationPeer.CreatePeerForElement(surface);
         Assert.Equal("Move mode: \"Core question\"", peer.GetItemStatus());
         Assert.Equal(Visibility.Visible, surface.CommitModeForTests.Visibility);
         Assert.Equal(Visibility.Visible, surface.CancelModeForTests.Visibility);
@@ -774,9 +811,17 @@ public sealed class CanvasNavigatorTests : IDisposable
             field.GetPattern(PatternInterface.Value);
         Assert.Equal("zeta", value.Value);
         Assert.Equal(Visibility.Visible, surface.FilterSummaryForTests.Visibility);
+        // The summary's NAME is read off its own peer, for the reason
+        // PR A's round 8 recorded: the attached property is the setter
+        // side, and a value on an element WPF never peers reaches no
+        // client while every property-level assertion stays green. A
+        // `TextBlock` peers, so the two agree — which is the fact, not
+        // the assumption.
+        AutomationPeer summary =
+            UIElementAutomationPeer.CreatePeerForElement(surface.FilterSummaryForTests);
         Assert.Equal(
             $"Filter results: {document.Navigator.FilterSummaryText()}",
-            AutomationProperties.GetName(surface.FilterSummaryForTests));
+            summary.GetName());
         Assert.Equal(Visibility.Visible, surface.ClearFilterForTests.Visibility);
     });
 
@@ -855,6 +900,79 @@ public sealed class CanvasNavigatorTests : IDisposable
             PressKey(surface, Key.Down, ModifierKeys.None),
             "at the boundary the navigator must consume the key and answer.");
         Assert.Equal(Rendered(new CanvasStatusNote.EndOfCanvas()), OneLine(document));
+    });
+
+    /// <summary>
+    /// M4's menu arm, end to end (contract C8, CD-41): opening a menu
+    /// moves keyboard focus onto its <c>MenuItem</c>, and the mode must
+    /// SURVIVE that — the shell's own Canvas menu carries Commit Mode and
+    /// Cancel Mode, so a cancel-on-open would kill the two items the user
+    /// opened the menu to reach.
+    /// </summary>
+    /// <remarks>
+    /// The contrast leg is the point: the SAME focus loss to an ordinary
+    /// element outside the canvas cancels. Without it this fact would
+    /// pass on a surface that had simply stopped classifying departures
+    /// at all.
+    /// </remarks>
+    [Fact]
+    public void OpeningAMenuKeepsTheModeAliveAndLeavingTheCanvasCancelsIt() => RunSta(() =>
+    {
+        foreach (bool intoMenu in new[] { true, false })
+        {
+            CanvasDocumentViewModel document = Open("board.canvas");
+            var surface = new CanvasSurfaceView { Model = document };
+            var menu = new Menu();
+            var canvasMenu = new MenuItem { Header = "Canvas" };
+            menu.Items.Add(canvasMenu);
+            var elsewhere = new TextBox { Width = 40 };
+            var root = new DockPanel();
+            DockPanel.SetDock(menu, Dock.Top);
+            DockPanel.SetDock(elsewhere, Dock.Bottom);
+            root.Children.Add(menu);
+            root.Children.Add(elsewhere);
+            root.Children.Add(surface);
+            using var host = Host(root);
+
+            Assert.NotNull(
+                surface.OutlineForTests.DeliverFocus(document.Outline[0].NodeId));
+            host.UpdateLayout();
+            // The premise: the surface really has the keys, so the loss
+            // below is a real departure rather than a no-op.
+            Assert.True(surface.IsKeyboardFocusWithin);
+            Assert.True(document.Modes.Enter(new CanvasModeSpec(
+                CanvasMode.Move,
+                new CanvasModeObject.Card("Core question"),
+                () => null,
+                () => new CanvasModeRestoration.BackAt("Core question"))));
+            Drain(document);
+
+            Assert.True(intoMenu ? canvasMenu.Focus() : elsewhere.Focus());
+            host.UpdateLayout();
+            Assert.False(
+                surface.IsKeyboardFocusWithin,
+                "focus never left the canvas surface, so no departure was classified.");
+
+            if (intoMenu)
+            {
+                Assert.True(
+                    document.Modes.IsActive,
+                    "opening a menu cancelled the mode — the Canvas menu's own "
+                    + "Commit Mode and Cancel Mode items are dead the moment it "
+                    + "opens (contract C8, CD-41).");
+                Assert.True(document.Modes.CanCommitOrCancel);
+                Assert.Empty(Lines(document));
+                _ = document.Modes.Cancel();
+            }
+            else
+            {
+                Assert.False(
+                    document.Modes.IsActive,
+                    "leaving the canvas for another part of the shell must cancel "
+                    + "the mode (t0 §2 M4).");
+                Assert.NotEmpty(Lines(document));
+            }
+        }
     });
 
     /// <summary>

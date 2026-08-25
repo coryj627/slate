@@ -385,6 +385,68 @@ public sealed class CanvasAnnouncerCensus
     }
 
     /// <summary>
+    /// Contract C10/A17: the filter's whole-model query runs OFF the
+    /// dispatcher.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// It used to run inside the <c>Filter</c> getter, on the UI thread,
+    /// taking the lock a LOAD body holds across <c>open_canvas</c> plus
+    /// three whole-model projections — so a keystroke during a load
+    /// stalled the dispatcher for the length of the load. The fix is the
+    /// scheduler A17 already mandates for every other whole-model read
+    /// in that class.
+    /// </para>
+    /// <para>
+    /// Guarded in the SOURCE because the alternative cannot see it: a
+    /// behavioural fact runs in synchronous test mode, where a scheduled
+    /// body and an inline one are indistinguishable by construction — so
+    /// the thing that regressed would be invisible to exactly the tests
+    /// that would be written for it. The claim is structural, so the
+    /// guard is too.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void TheFilterQueryIsScheduledOffTheDispatcher()
+    {
+        CSharpSource source = CSharpSource.Load("Canvas", "CanvasDocumentViewModel.cs");
+
+        MethodDeclarationSyntax[] callers = source.Root
+            .DescendantNodes()
+            .OfType<MethodDeclarationSyntax>()
+            .Where(method => method.DescendantNodes()
+                .OfType<MemberAccessExpressionSyntax>()
+                .Any(access => access.Name.Identifier.ValueText == "CanvasFilter"))
+            .ToArray();
+
+        MethodDeclarationSyntax caller = Assert.Single(callers);
+        Assert.True(
+            caller.Identifier.ValueText == "FilterBody",
+            $"`canvas_filter` is called from `{caller.Identifier.ValueText}`. The "
+            + "match is a whole-model read and belongs in a scheduler body "
+            + "(contract C10/A17), not wherever a property getter happens to run.");
+
+        // …and that body is reached only through the scheduler. A method
+        // named FilterBody that somebody also calls directly would put
+        // the query straight back on the dispatcher.
+        InvocationExpressionSyntax[] invocations = source.Root
+            .DescendantNodes()
+            .OfType<InvocationExpressionSyntax>()
+            .Where(invocation => invocation.Expression is IdentifierNameSyntax
+            {
+                Identifier.ValueText: "FilterBody",
+            })
+            .ToArray();
+
+        InvocationExpressionSyntax scheduled = Assert.Single(invocations);
+        Assert.True(
+            scheduled.Ancestors().OfType<InvocationExpressionSyntax>().Any(outer =>
+                outer.Expression is IdentifierNameSyntax { Identifier.ValueText: "StartWork" }),
+            "FilterBody is invoked outside a StartWork(...) argument, so the filter "
+            + "query is back on the dispatcher holding the FFI lock.");
+    }
+
+    /// <summary>
     /// Contract C8: M4's one keep-alive arm depends on the shell
     /// answering "is an overlay open", and the answer is a static seam
     /// with a safe default. A default left installed would silently turn

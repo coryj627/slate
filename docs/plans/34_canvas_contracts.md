@@ -2303,6 +2303,25 @@ Escape and the ladder never sees it (C16 records the pair).
 records: the projections' own controls (a `TreeView`, a `DataGrid`, a
 `TextBox`) consume arrows and Escape on the way up.
 
+**Rung 3's card-detail arm is the READ-ONLY interim, and the editor is
+NOT on this ladder.** The region rung 3 dismisses is PR A's t2 #362
+detail pane — a `TextBox IsReadOnly` seeded from `canvas_node_text`,
+where Escape closes a view and returns focus to the row it opened from
+(WCAG 2.1.2), because there is nothing to keep. PR E replaces that
+region with the real card editor, and t0 §2 **M8 carves the editor out
+of the mode stack entirely**: the inline text editor is not a spatial
+mode, **Escape COMMITS** the text and returns focus to the card, and
+discarding is the editor's own undo before Escape. So when E lands, the
+editor sheet does not join this ladder as a rung and rung 3 stops having
+a card-detail arm at all — the sheet handles its own Escape, with
+committing semantics.
+
+Written here because the inheritance is the hazard: "Escape dismisses
+the detail region" is true of the interim and false of what replaces it,
+and a reader porting rung 3 forward would ship an editor that throws
+away a user's typing. **M8 is PR E's to satisfy; every string and every
+comment about editor Escape says "commits" and never cites M2.**
+
 **C7 — The mode machine is the stack and nothing else.**
 `CanvasModeController` owns M1–M7; a `CanvasModeSpec` carries the typed
 `CanvasMode`, the `CanvasModeObject`, a commit effect returning the
@@ -2326,11 +2345,30 @@ the noun is taken off `count_noun`'s answer and the number formatted
 host-side. That is core's own documented split, reached through the one
 export that exists.
 
-**C8 — M4 is a closed table, and the palette is its recorded
-exception.** `HandleFocusDeparture(CanvasFocusDeparture)` is total over
-four departures: `TabSwitch`, `PaneFocus` and `WindowDeactivated` cancel
-with restoration and an announcement; `ModalOverlay` keeps the mode
-alive. `EveryFocusDepartureHasARecordedAnswer` enumerates the enum.
+**C8 — M4 is a closed table, and the two surfaces layered OVER the tab
+are its recorded exceptions.** `HandleFocusDeparture(CanvasFocusDeparture)`
+is total over five departures: `TabSwitch`, `PaneFocus` and
+`WindowDeactivated` cancel with restoration and an announcement;
+`ModalOverlay` and `MenuOpen` keep the mode alive.
+`EveryFocusDepartureHasARecordedAnswer` enumerates the enum and names
+the keep-alive set, so a sixth departure joins one side or the other by
+decision.
+
+**`MenuOpen` is CD-41's failure one surface over, and it was
+self-inflicted.** Opening a top-level menu moves keyboard focus onto its
+`MenuItem`, which drops `IsKeyboardFocusWithin` on the surface — so with
+only the overlay arm, the shell's own Canvas menu cancelled the mode the
+instant it opened and its Commit Mode and Cancel Mode items were dead
+before the pointer reached them. PR E's and PR F's per-row context menus
+are the M6 visible controls for every mode verb and would have inherited
+it exactly. Classified by walking the focused element's ancestors for a
+`MenuBase` — logical parents first, visual parents when the chain runs
+out, because a `ContextMenu` lives in its own popup — which covers the
+menu bar, submenus and context menus with one question.
+`OpeningAMenuKeepsTheModeAliveAndLeavingTheCanvasCancelsIt` drives a
+real menu and a real non-menu focus loss in one fact, so it cannot pass
+on a surface that stopped classifying departures at all;
+mutation-verified by collapsing the arm back into `PaneFocus`.
 
 The `ModalOverlay` arm is a **divergence from t0 §2 M4's literal list**
 and is recorded as CD-41 rather than implemented silently. Reasoning, in
@@ -2418,16 +2456,54 @@ which said so.
 **Filtered-out cards are a VIEW.** Selection is untouched by filtering
 and by clearing, and no `canvas_apply` is anywhere near it.
 
-**The cost of typing, stated rather than assumed.** Each keystroke is
-one memoized `canvas_filter` call plus ONE projection rebuild — the
-needle setter raises the republish and the surface deliberately does not
-also render on the property change, or every keystroke would rebuild
-twice. A rebuild at 2,000 rows is the same work PR A already budgets and
-measures on the open path (`A17`'s §K fact, in both scheduling modes),
-so the per-keystroke cost is bounded by a number that is already
-asserted rather than by a hope. mac has the same shape (its list
-re-renders from `filteredOutline`); what neither host does is re-run the
-match, which is what the memo is for.
+**The MATCH runs off the dispatcher, and the `Filter` view is pure.**
+It used to run inside the getter, on the UI thread, taking the `_ffiLock`
+a LOAD body holds across `open_canvas` plus three whole-model
+projections — so a keystroke arriving during a load blocked the
+dispatcher for the length of that load, which on a large canvas over a
+slow filesystem is a stall the user types into. It is a
+`PanelWorkScheduler` body now, which is the convention A17 already set
+for every other whole-model read in that class, and the getter reads
+published state only.
+
+Two paths still answer on the calling frame because they need no query:
+an inactive needle IS the full outline, and an unchanged needle already
+has its answer memoized — so CLEARING the filter (the Escape rung, the
+Clear button, the palette verb) widens the rows immediately rather than
+after a scheduler hop. Two generation guards, not one: a stale NEEDLE's
+answer must not overwrite a newer one, and a stale DOCUMENT's must not
+land at all, because a reload republishes rows the ids no longer
+describe. A reload with an active needle re-asks, or the surface would
+show every card while the field still claimed to be filtering.
+
+**`Current` now has two causes and they get different answers.** "No
+handle could answer" is a state the user needs told about — the mapping's
+sentence, mac's behaviour. "The answer has not landed yet" is not: the
+previous rows are still on screen and their count still describes them,
+so the label lags by a frame the way every async surface does. Before
+the FIRST answer there is no summary at all rather than a "9 of 9 cards
+match" that would claim a match nobody made — which is why
+`FilterSummaryText` returns null and the region hides. The COUNT is
+announced from the publish rather than the keystroke, so it can never
+describe rows that are not on screen; the announcer's filter class still
+collapses a burst into one line.
+
+**The cost of typing, stated rather than assumed.** One memoized
+`canvas_filter` call off the dispatcher, plus ONE projection rebuild when
+its answer lands. A rebuild at 2,000 rows is the same work PR A already
+budgets and measures on the open path (A17's §K fact, in both scheduling
+modes), so the per-keystroke cost is bounded by a number that is already
+asserted rather than by a hope. The needle's own property change renders
+the field's chrome only — Clear has to appear on the frame the reader
+typed, not when the query returns.
+
+**Guarded in the SOURCE** (`TheFilterQueryIsScheduledOffTheDispatcher`),
+because a behavioural fact cannot see it: unit facts run in synchronous
+scheduling mode, where a scheduled body and an inline one are
+indistinguishable by construction, so the thing that regressed would be
+invisible to exactly the tests written for it. The guard asserts
+`canvas_filter` has ONE caller, that it is the scheduler body, and that
+the body is invoked only inside a `StartWork(...)` argument.
 
 **C11 — Where-am-I is one render, spoken and shown.** The navigator
 builds one `CanvasWhereAmI` event from core's `canvas_where_am_i` plus
@@ -2475,11 +2551,19 @@ open canvas with nothing to push.
 `VerbosityIsReadLiveAtEveryAnnouncement` moves the same way at all three
 levels and gets three different lines.
 
-The preference persists as `canvasVerbosity` in `AppPreferencesState`,
-spelled with mac's own `CanvasVerbosity` case names so the two
-preference files read identically and a future shared schema needs no
-migration. Default `standard`; an unknown or version-skewed key degrades
-to the default like every other field.
+The preference persists as `canvasVerbosity` in `AppPreferencesState`.
+**What is shared is the VALUE spelling, not the store, and the row says
+which**: `terse` / `standard` / `verbose` are mac's own
+`CanvasVerbosity` case names, so a future shared schema (W8-1 owns the
+settings surface) needs no value migration. The STORES are peers rather
+than one file — mac keeps `CanvasPrefs` under the `slate.prefs.canvas`
+UserDefaults key, which is device-local, and Windows keeps this field in
+its device-local preferences JSON; the container formats differ and
+neither is the vault's `.slate/prefs.json`. The task brief's "a synced
+vault reads identically" is therefore not what shipped and is not
+reachable from `AppPreferencesStore` at all; recorded rather than
+implied away. Default `standard`; an unknown or version-skewed key
+degrades to the default like every other field.
 
 **The setting announces nothing of its own**, and that is a decision.
 The three menu items are checkable radio items, so a screen reader
@@ -2600,9 +2684,10 @@ M1–M7 over every `CanvasMode` the vocabulary knows (enumerated, so a new
 one joins without anyone remembering), the M5 ladder table, and
 `CanvasModeConformance` — the body PR F re-runs against the real modes.
 `apps/slate-windows/tests/SlateWindows.Tests/Censuses/CanvasAnnouncerCensus.cs`:
-`TheSnapshotVisibilityPredicateMatchesTheSurfaceRender` and
-`TheShellInstallsTheModalOverlayAnswerForModeCancellation`, the two
-source guards for properties no in-process fact can reach.
+`TheSnapshotVisibilityPredicateMatchesTheSurfaceRender`,
+`TheShellInstallsTheModalOverlayAnswerForModeCancellation` and
+`TheFilterQueryIsScheduledOffTheDispatcher` — the three source guards
+for properties no in-process fact can reach.
 `apps/slate-windows/tests/SlateWindows.Tests/ChordTableTests.cs`: the
 canvas scrape, `SharedCommandChords` (C16) and the D-2 divergence row.
 `apps/slate-windows/tests/SlateWindows.Tests/CanvasTableTests.cs`:
@@ -4027,6 +4112,17 @@ details recorded while reading" as an upstream note rather than fixed
 here — it is the same never-silent gap VA-1/VA-2 closed for the other
 verbs, and mac's own membership guard does not see these two because
 they reach `canvas_filter` only through `filteredOutline`.
+
+**And the same two are silent on an EMPTY canvas, which is a second
+divergence in the same verb.** Mac's `canvasSelectAdjacent` guards
+`!rows.isEmpty` and announces `NoCardsMatchFilter` only when a filter is
+active — so an arrow on a canvas with no cards at all says nothing at
+all, in the `.ready` state, with no state sentence to fall back on.
+Windows answers `Canvas is empty.` there
+(`AnEmptyCanvasAnswersRatherThanMovingNowhere`), which is the arm the
+onboarding region already renders, so again no vocabulary work. Both
+halves go upstream together: the state gap and the empty-canvas gap are
+the same never-silent hole seen from two sides.
 
 ---
 

@@ -446,6 +446,12 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
             CloseWhereAmI();
             return true;
         }
+        // The READ-ONLY interim detail (PR A / t2 #362), where Escape
+        // closes a view and there is nothing to keep. PR E replaces this
+        // region with the real card editor, which t0 §2 M8 carves OUT of
+        // the mode stack: Escape COMMITS there and the sheet owns its own
+        // key, so it must not become a rung of this ladder. Porting this
+        // arm forward would throw away a user's typing (contract C6).
         if (Model is { DetailText: not null } model)
         {
             model.CloseDetail();
@@ -552,14 +558,62 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
             Model?.Navigator.AttachPresenter(this);
             return;
         }
-        // M4's pane arm. A shell overlay layered OVER this tab is the one
-        // departure that keeps the mode alive (contract C8): Commit Mode,
-        // Cancel Mode and the resize presets are palette commands, so
-        // cancelling here would make three registered verbs unreachable.
-        Depart(
-            ShellOverlayIsOpen()
-                ? CanvasFocusDeparture.ModalOverlay
-                : CanvasFocusDeparture.PaneFocus);
+        Depart(ClassifyFocusLoss());
+    }
+
+    /// <summary>
+    /// Which M4 departure a focus loss IS (contract C8).
+    /// </summary>
+    /// <remarks>
+    /// Two of the three answers keep the mode alive, and both are things
+    /// layered OVER the canvas tab rather than places the reader went:
+    /// a shell overlay, and an open menu. The menu arm is not a nicety —
+    /// opening a top-level menu moves keyboard focus onto its
+    /// <c>MenuItem</c>, so without it this shell's own Canvas menu would
+    /// cancel the mode the instant it opened and its Commit Mode and
+    /// Cancel Mode items would be dead before the pointer reached them
+    /// (and PR E/F's context menus, which are the M6 visible controls for
+    /// every mode verb, would inherit that).
+    /// </remarks>
+    private static CanvasFocusDeparture ClassifyFocusLoss()
+    {
+        if (ShellOverlayIsOpen())
+        {
+            return CanvasFocusDeparture.ModalOverlay;
+        }
+        return FocusIsInAMenu()
+            ? CanvasFocusDeparture.MenuOpen
+            : CanvasFocusDeparture.PaneFocus;
+    }
+
+    /// <summary>
+    /// Whether the keyboard focus now sits inside an open menu.
+    /// </summary>
+    /// <remarks>
+    /// Walked rather than type-tested on the focused element alone: a
+    /// submenu header, a checkable item and a templated item part are all
+    /// different elements, and a <c>ContextMenu</c> lives in its own
+    /// popup so the VISUAL tree is where its chain continues once the
+    /// logical one runs out. <see cref="MenuBase"/> covers both
+    /// <c>Menu</c> and <c>ContextMenu</c>, which is exactly the pair this
+    /// arm is about.
+    /// </remarks>
+    private static bool FocusIsInAMenu()
+    {
+        for (DependencyObject? node = Keyboard.FocusedElement as DependencyObject;
+            node is not null;
+            node = LogicalTreeHelper.GetParent(node)
+                ?? (node is System.Windows.Media.Visual
+                    or System.Windows.Media.Media3D.Visual3D
+                    ? System.Windows.Media.VisualTreeHelper.GetParent(node)
+                    : null))
+        {
+            if (node is System.Windows.Controls.Primitives.MenuBase)
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void Depart(CanvasFocusDeparture departure) =>
@@ -709,10 +763,13 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         if (e.PropertyName is nameof(CanvasDocumentViewModel.State)
             or nameof(CanvasDocumentViewModel.StateMessage)
             or nameof(CanvasDocumentViewModel.Warnings)
-            // FilterText is deliberately absent: its setter already
-            // raises OutlinePublished (the displayed rows changed), and
-            // rendering on both signals would rebuild the projection
-            // twice per keystroke.
+            // FilterText renders the FIELD's chrome — the Clear button
+            // and, when there is one, the summary. It has to be here now
+            // that the match is asynchronous: the needle changes on this
+            // frame and the rows arrive later, so waiting for
+            // OutlinePublished would leave the reader unable to see (or
+            // reach) Clear for whatever the query costs.
+            or nameof(CanvasDocumentViewModel.FilterText)
             or nameof(CanvasDocumentViewModel.DetailText)
             or nameof(CanvasDocumentViewModel.WhereAmIText))
         {
@@ -769,10 +826,11 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         {
             return;
         }
+        // The needle only; the match runs off the dispatcher and the
+        // document announces the count when its answer lands (contract
+        // C10). Announcing from here would have described rows that were
+        // not on screen yet.
         model.FilterText = _filterField.Text;
-        // Debounced by the announcer's FILTER coalescing class (t0 §1.5),
-        // so a keystroke burst collapses into one count.
-        model.Navigator.AnnounceFilterCount();
     }
 
     /// <summary>
@@ -914,8 +972,11 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
                 _synchronizingFilter = false;
             }
         }
-        bool filtering = model.FilterActive;
-        string summary = filtering ? model.Navigator.FilterSummaryText() : string.Empty;
+        // Null means "nothing to summarise yet" — the frames between the
+        // first keystroke and its answer, where a count would claim a
+        // match nobody made (contract C10).
+        string summary = model.Navigator.FilterSummaryText() ?? string.Empty;
+        bool filtering = summary.Length > 0;
         _filterSummary.Text = summary;
         // The region's own name carries its value, the interim card
         // detail's idiom: a bare Name would REPLACE the text for a
@@ -926,7 +987,13 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
                 ? $"{CanvasPhrase.FilterSummaryName}: {summary}"
                 : CanvasPhrase.FilterSummaryName);
         _filterSummary.Visibility = filtering ? Visibility.Visible : Visibility.Collapsed;
-        _filterClear.Visibility = filtering ? Visibility.Visible : Visibility.Collapsed;
+        // Clear follows the NEEDLE, not the summary: the moment there is
+        // something in the field there is something to clear, and waiting
+        // for the answer would leave the reader briefly unable to undo
+        // what they just typed.
+        _filterClear.Visibility = model.FilterActive
+            ? Visibility.Visible
+            : Visibility.Collapsed;
     }
 
     private void RenderWhereAmI(CanvasDocumentViewModel model)
