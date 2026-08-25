@@ -176,6 +176,11 @@ public sealed class ChordTableTests
         Assert.Equal(
             new[]
             {
+                // W6-1 PR C (#745): mac's ⌃⌘I predicts Ctrl+Alt+I, which
+                // slate.view.toggleRightPane holds at Global scope — live
+                // while a canvas is focused, so a real collision. Owner
+                // decision D-2 disambiguates with Shift (G18 precedent).
+                "slate.canvas.whereAmI",
                 "slate.file.cancelImport",
                 "slate.file.rename",
                 "slate.sidebar.openShortcut1",
@@ -253,20 +258,89 @@ public sealed class ChordTableTests
             + "the file: the table is the single source of truth (PINV-5).");
     }
 
+    /// <summary>
+    /// Command rows that deliberately share a chord string, keyed by the
+    /// ids in ordinal order, each with the reason their delivery sites
+    /// are disjoint (W6-1 PR C, contract C16).
+    /// </summary>
+    /// <remarks>
+    /// Recorded per PAIR rather than inferred from "the scopes differ",
+    /// because differing scopes are not automatically disjoint — the
+    /// canvas TABLE is a grid, so <c>ChordScope.Grid</c> and
+    /// <c>ChordScope.Canvas</c> are live at the same instant there. The
+    /// reason has to say why that is still correct, and for Ctrl+F it is
+    /// because both rows end in the SAME action.
+    /// </remarks>
+    private static readonly Dictionary<string, string> SharedCommandChords =
+        new(System.StringComparer.Ordinal)
+        {
+            ["slate.bases.quickFilter | slate.canvas.filterCards"] =
+                "Ctrl+F. Disjoint on the outline (Grid scope needs a focused grid); "
+                + "on the canvas TABLE both are live, and they agree by "
+                + "construction — the substrate's FilterCommand is subscribed to "
+                + "the canvas filter (spec §7's \"table: grid FilterCommand\"), and "
+                + "the navigator stands aside there rather than shadowing it.",
+            ["slate.canvas.cancelMode | slate.file.cancelImport"] =
+                "Escape. The import row is Global but acts only while an import is "
+                + "running, and it is delivered from Window_PreviewKeyDown, which "
+                + "TUNNELS BEFORE the canvas surface — so an import in flight keeps "
+                + "Escape and the canvas ladder never sees it. With no import the "
+                + "global arm does nothing and the ladder consumes one rung "
+                + "(contract C6).",
+        };
+
     [Fact]
     public void CommandRows_HaveNoActiveChordCollision()
     {
-        // The W1 invariant, restated over the table rather than the file.
-        // chordSurface rows are exempt because focus scopes make sharing a
-        // chord string correct there — Ctrl+Enter in the editor and in Quick
-        // Open are never live at the same moment.
-        string[] active = ChordTable.Entries
+        // The W1 invariant, restated over the table rather than the file:
+        // no two COMMAND rows may share a chord — with the same
+        // focus-scope carve-out surface rows have always had, and each
+        // sharing recorded by id pair rather than inferred from the
+        // scopes alone (W6-1 PR C, contract C16). Ctrl+Enter in the
+        // editor and in Quick Open are never live at the same moment;
+        // W6-1's canvas rows are the first COMMAND rows that need the
+        // same reading, and D-2 anticipated it ("the same-string /
+        // different-scope precedent Ctrl+F already sets").
+        foreach (IGrouping<string, ChordTableEntry> group in ChordTable.Entries
             .Where(row => row.IsCommandId && row.WindowsChord is not null)
-            .Select(row => row.WindowsChord!)
-            .ToArray();
-        Assert.Equal(
-            active.Length,
-            active.Distinct(System.StringComparer.OrdinalIgnoreCase).Count());
+            .GroupBy(row => row.WindowsChord!, System.StringComparer.OrdinalIgnoreCase))
+        {
+            if (group.Count() == 1)
+            {
+                continue;
+            }
+
+            string[] ids = group
+                .Select(row => row.Id)
+                .OrderBy(id => id, System.StringComparer.Ordinal)
+                .ToArray();
+            string key = string.Join(" | ", ids);
+            Assert.True(
+                SharedCommandChords.TryGetValue(key, out string? reason),
+                $"command rows {key} all ship {group.Key}. Two commands on one "
+                + "chord is a collision unless their delivery scopes make them "
+                + "disjoint AND that is RECORDED — add the pair to "
+                + nameof(SharedCommandChords) + " with the reason, or rebind.");
+            Assert.False(string.IsNullOrWhiteSpace(reason));
+            Assert.Equal(
+                group.Count(),
+                group.Select(row => row.Scope).Distinct().Count());
+        }
+
+        // Staleness in the other direction: a recorded sharing whose rows
+        // no longer share is an excuse sitting where the next real
+        // collision would be.
+        foreach (string key in SharedCommandChords.Keys)
+        {
+            string[] ids = key.Split(" | ");
+            ChordTableEntry[] rows = ids.Select(RequireRow).ToArray();
+            Assert.True(
+                rows.Select(row => row.WindowsChord)
+                    .Distinct(System.StringComparer.OrdinalIgnoreCase)
+                    .Count() == 1,
+                $"{key} is recorded as sharing a chord, but the rows no longer "
+                + "share one — the entry is stale.");
+        }
 
         // Two surface rows sharing a chord must be in different scopes.
         foreach (IGrouping<string, ChordTableEntry> group in ChordTable.Entries
@@ -637,6 +711,7 @@ public sealed class ChordTableTests
             [ChordScope.QuickOpen] = QuickOpenChords(),
             [ChordScope.SearchOverlay] = SearchOverlayChords(),
             [ChordScope.Editor] = EditorChords(),
+            [ChordScope.Canvas] = CanvasChords(),
         };
 
     /// <summary>
@@ -649,15 +724,6 @@ public sealed class ChordTableTests
             [ChordScope.None] = "no chord to deliver.",
             [ChordScope.Global] = "checked in both directions below, against "
                 + "MainWindow.xaml's KeyBindings plus the imperative allow-list.",
-            // W6-1 PR A (#745, contract A18): the scope exists so the
-            // canvas rows PR C adds can declare their delivery site,
-            // but PR A's three surface commands are palette- and
-            // menu-only, so no row carries a Canvas chord yet and there
-            // is no key handler to scrape. PR C ships CanvasNavigator's
-            // handler and this entry becomes a scrape.
-            [ChordScope.Canvas] = "no row is delivered at this scope yet — PR A's "
-                + "canvas commands carry no chord; PR C's navigator adds the "
-                + "handler and the scrape with the first Canvas-scoped row.",
         };
 
     /// <summary>
@@ -847,6 +913,58 @@ public sealed class ChordTableTests
 
         return chords;
 
+    }
+
+    /// <summary>
+    /// <c>CanvasNavigator.Bind</c>, where every <c>ChordScope.Canvas</c>
+    /// chord is registered (W6-1 PR C, contract C6).
+    /// </summary>
+    /// <remarks>
+    /// The reading navigator's shape, one surface over: a flat list of
+    /// <c>AddChord(Key.X, &lt;modifiers&gt;, …)</c> calls, read literally
+    /// so a chord handled with no table row — or a row claiming this
+    /// scope that nothing delivers — fails in the direction that names
+    /// it. The modifier argument is a <c>ModifierKeys</c> expression
+    /// rather than a bool, because the canvas mixes bare surface keys
+    /// (Down, Escape) with modified ones (Ctrl+F).
+    /// </remarks>
+    private static HashSet<string> CanvasChords()
+    {
+        MethodDeclarationSyntax bind =
+            CSharpSource.Load("Canvas", "CanvasNavigator.cs").Method("Bind");
+        var chords = new HashSet<string>(System.StringComparer.Ordinal);
+        foreach (InvocationExpressionSyntax call in bind.DescendantNodes()
+            .OfType<InvocationExpressionSyntax>()
+            .Where(invocation => invocation.Expression is IdentifierNameSyntax
+            {
+                Identifier.ValueText: "AddChord",
+            })
+            .Where(invocation => invocation.ArgumentList.Arguments.Count == 3))
+        {
+            Assert.True(
+                call.ArgumentList.Arguments[0].Expression
+                    is MemberAccessExpressionSyntax key
+                && CSharpSource.Normalize(key.Expression) == "Key",
+                $"canvas chord `{call}` does not name its key as `Key.X`; the "
+                + "scrape reads that form and would silently skip this one.");
+            var keyAccess = (MemberAccessExpressionSyntax)
+                call.ArgumentList.Arguments[0].Expression;
+            string modifiers = CSharpSource
+                .Normalize(call.ArgumentList.Arguments[1].Expression)
+                .Replace("ModifierKeys.", string.Empty, System.StringComparison.Ordinal);
+            chords.Add(Canonical(
+                modifiers == "None" ? null : modifiers.Replace("|", "+"),
+                keyAccess.Name.Identifier.ValueText));
+        }
+
+        // The guard's own premise: a rename that made the scrape find
+        // nothing would otherwise leave the Canvas scope compared against
+        // an empty set in one direction and vacuous in the other.
+        Assert.True(
+            chords.Count >= 8,
+            $"only {chords.Count} canvas chords were scraped from CanvasNavigator.Bind; "
+            + "PR C ships eight, so the scrape is reading less than the truth.");
+        return chords;
     }
 
     /// <summary>

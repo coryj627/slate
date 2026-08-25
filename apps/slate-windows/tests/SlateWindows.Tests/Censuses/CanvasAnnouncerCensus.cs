@@ -331,6 +331,90 @@ public sealed class CanvasAnnouncerCensus
             + "focus attempts, or it protects nothing.");
     }
 
+    /// <summary>
+    /// Contract C4: the snapshot-visibility predicate is DERIVED from
+    /// what the surface renders, not from a state's name — so changing
+    /// which states show rows forces the predicate to follow.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The mac twin (<c>the_snapshot_visibility_predicate_matches_the_container_switch</c>)
+    /// exists because writing the condition out by hand made the gate
+    /// miss a state whose retained rows the container DOES render — the
+    /// curated-condition class. The Windows surface's answer is one
+    /// expression in <c>Render</c>, so this parses THAT and requires the
+    /// predicate to say the same thing.
+    /// </para>
+    /// <para>
+    /// The VIEW is the authority: a future state that renders a
+    /// projection has to appear on both sides or this fails naming the
+    /// disagreement.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void TheSnapshotVisibilityPredicateMatchesTheSurfaceRender()
+    {
+        MethodDeclarationSyntax render =
+            CSharpSource.Load("Canvas", "CanvasSurfaceView.cs").Method("Render");
+        string[] readyDeclarations = render.DescendantNodes()
+            .OfType<VariableDeclaratorSyntax>()
+            .Where(declarator => declarator.Identifier.ValueText == "ready")
+            .Select(declarator => CSharpSource.Normalize(declarator.Initializer!.Value))
+            .ToArray();
+        string surfaceCondition = Assert.Single(readyDeclarations);
+
+        PropertyDeclarationSyntax predicate = CSharpSource
+            .Load("Canvas", "CanvasDocumentViewModel.cs")
+            .Root.DescendantNodes()
+            .OfType<PropertyDeclarationSyntax>()
+            .Single(property =>
+                property.Identifier.ValueText == "RendersRetainedSnapshot");
+        string predicateCondition =
+            CSharpSource.Normalize(predicate.ExpressionBody!.Expression);
+
+        // The surface says `model.State == …`; the document says
+        // `State == …`. Compare the STATE TEST, which is the part that
+        // can drift.
+        Assert.Equal(
+            surfaceCondition.Replace("model.", string.Empty, StringComparison.Ordinal),
+            predicateCondition);
+        Assert.Contains(
+            "CanvasLoadState.Ready",
+            predicateCondition,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Contract C8: M4's one keep-alive arm depends on the shell
+    /// answering "is an overlay open", and the answer is a static seam
+    /// with a safe default. A default left installed would silently turn
+    /// every palette open into a mode cancellation — which is the exact
+    /// behaviour the arm exists to prevent — and nothing in-process can
+    /// see it, because <c>MainWindow</c> is not reachable from a unit
+    /// fact.
+    /// </summary>
+    [Fact]
+    public void TheShellInstallsTheModalOverlayAnswerForModeCancellation()
+    {
+        ConstructorDeclarationSyntax constructor = CSharpSource
+            .Load("MainWindow.xaml.cs")
+            .Root.DescendantNodes()
+            .OfType<ConstructorDeclarationSyntax>()
+            .Single(declaration => declaration.Identifier.ValueText == "MainWindow");
+
+        AssignmentExpressionSyntax[] installs = constructor.DescendantNodes()
+            .OfType<AssignmentExpressionSyntax>()
+            .Where(assignment => CSharpSource.Normalize(assignment.Left)
+                .EndsWith("CanvasSurfaceView.ShellOverlayIsOpen", StringComparison.Ordinal))
+            .ToArray();
+
+        AssignmentExpressionSyntax install = Assert.Single(installs);
+        Assert.Contains(
+            "OpenModalSurface",
+            CSharpSource.Normalize(install.Right),
+            StringComparison.Ordinal);
+    }
+
     private static IEnumerable<string> CanvasSources()
     {
         string root = CanvasSourceRoot();
