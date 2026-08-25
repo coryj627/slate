@@ -812,6 +812,19 @@ tripwires (0a-3): a Rust test that reads a Swift file so a forgotten
 host edit fails in the fast lane rather than after a full
 `generate-bindings` + `dotnet test` round trip.
 
+> **Completed by PR C (contract C17), and this is where the 0b m1 ledger
+> line closes.** 0b-17 shipped the MAC half here, in PR 0b — so the "m1
+> coalescing-class tripwire" the C-1 brief carried as an open item was
+> already done, and PR C VERIFIED it rather than re-implementing it.
+> What re-reading it found is that this row's own failure sentence
+> ("spoken uncoalesced on mac and coalesced on Windows") assumes the
+> Windows copy is faithful, and nothing checked that. The true gap was
+> the SYMMETRIC twin, which C17 lands
+> (`the_windows_coalescing_switch_matches_the_pinned_class_list`), with
+> the pinned-list parser factored into one function both tripwires call.
+> **0b m1 reads resolved as of PR C**: mac half 0b-17, Windows half C17,
+> and the pair is now the same shape 0a-3 set for the corpus mirrors.
+
 ### Tests that pin PR 0b (Task 0b-1)
 
 `crates/slate-core/src/canvas/queries_tests.rs`: per-query behaviour
@@ -2559,6 +2572,11 @@ depends on the FILTER class existing.
 Mutation-verified: dropping `CanvasResizeGeometry` from the C# switch
 fails it naming the variant and the class.
 
+**The ledger line, closed explicitly.** 0b m1 = mac half in 0b-17
+(PR 0b) + Windows half in C17 (PR C). 0b-17 carries the same
+cross-reference, so the trail reads the same from either end and nobody
+re-opens it looking for a missing Swift parser.
+
 ### Tests that pin PR C
 
 `apps/slate-windows/tests/SlateWindows.Tests/CanvasNavigatorTests.cs`:
@@ -3910,8 +3928,21 @@ failure than the one being fixed. And the alternative that DOES avoid
 the seat — preferring the selection over `LastActivatedNode` — breaks
 WCAG 2.4.3's return-to-where-you-were, which is what A14 exists for.
 
-The residue: a second pane's selection follows a first pane's return
-from an activated card. Silently, and by R-B's design.
+**Ratified by controller ruling, with the design argument on the
+record**: the residue is not merely unavoidable, it is CORRECT. Spec
+§PR A behavior 6 mandates the ACTIVATED row as the return-focus target
+(WCAG 2.4.3) — the row the user demonstrably left from — so a delivery
+is a statement about where the user IS, not an arbitrary jump. WPF's
+focus-selection coupling then unifies the shared selection with focus at
+exactly that point. That is CONVERGENCE on the return target, not a yank
+away from the user; the platform constraint and the contract happen to
+want the same thing. What was actually broken was the announcement, and
+`AFocusDeliveryToANodeOtherThanTheSelectionDoesNotDouble` is the
+defect's real closure.
+
+The residue, stated plainly: a second pane's selection follows a first
+pane's return from an activated card. Silently, to the row the user is
+on, and by R-B's design.
 
 **CD-41 — M4 does not cancel on a shell overlay; t0 §2 M4's palette
 clause is superseded.** t0 lists the palette among the focus departures
@@ -3925,10 +3956,21 @@ cancels makes three registered verbs permanently unreachable.
 
 Implemented as one named arm (`CanvasFocusDeparture.ModalOverlay`) of
 one total switch, so reversing the decision is a one-line change with a
-test that already enumerates it. **Reported to the controller** as the
-one adjudication this task made against a normative source; the
-alternative (implementing t0 literally) was rejected rather than
-deferred because it would have shipped three dead commands.
+test that already enumerates it. Reported to the controller as the one
+adjudication this task made against a normative source; the alternative
+(implementing t0 literally) was rejected rather than deferred because it
+would have shipped three dead commands.
+
+**Ratified by controller ruling** (the shipped mac arm stands, and the
+M4-vs-M6 contradiction is real), **with an upstream note attached**:
+t0 §2 M4's palette clause is a DOC-FIX CANDIDATE at close-out. The
+contract contradicts its own M6 for the mode-lifecycle palette verbs, so
+the fix belongs in t0 rather than in either host — and t0's own preamble
+("when a wave spec and this contract disagree, this contract wins — fix
+the spec") gives no rule for a contract that disagrees with ITSELF,
+which is why both implementations quietly diverged from the letter
+instead of one of them being wrong. It joins the upstream-file list;
+PR H's §9 reconciliation carries it.
 
 **CD-42 — The filter's visible summary is mac's sentence, not t0's
 spoken one.** Spec §PR C's Builds line writes the slot as "n of m
@@ -4152,6 +4194,18 @@ close-out**:
   rather than absorbed into W6-1:** PR 0b did not cause it, and the
   window PR 0b DID change (`beginBatchRetarget`'s) is a different state
   with its own answer (VA-1).
+- **t0 §2 M4's palette clause is a DOC-FIX candidate** (W6-1 PR C,
+  CD-41 — ratified by controller ruling). Not a mac-code note like the
+  rest of this list, and listed here anyway because this is where the
+  close-out reads the things to file: the fix belongs in
+  `09_canvas/specs/t0_interaction_contract.md`, not in either host. M4
+  names the palette among the departures that auto-cancel a mode while
+  M6 requires every mode to be committable and cancellable from visible
+  controls — and Commit Mode, Cancel Mode and the resize presets ARE
+  palette commands, so the two clauses cannot both hold. Both hosts
+  implement M6's side. t0's precedence rule covers a spec disagreeing
+  with the contract and says nothing about the contract disagreeing with
+  itself, which is why the divergence went unrecorded on mac until now.
 - **`canvasSelectAdjacent` is silent outside `.ready`** (found reading
   for W6-1 PR C). It resolves through `activeCanvasDocument`, which
   admits only `.ready`, and returns with no announcement otherwise — so
