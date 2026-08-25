@@ -637,13 +637,32 @@ W5_4_DELIVERED_COMMANDS = {
 # projection. `showVisual` stays out until PR D ships the renderer,
 # where its resolver stops answering CanExecute false.
 W6_1_STATUS = (
-    "implemented; local gates green 2026-08-24; "
+    "implemented; local gates green 2026-08-25; "
     "interactive CI + human AT pending"
 )
 
 W6_1_DELIVERED_COMMANDS = {
+    # PR A / PR B: the two projections that exist.
     "slate.canvas.showOutline",
     "slate.canvas.showTable",
+    # PR C: the navigator command layer, the filter, Where-am-I and the
+    # mode transitions. `slate.canvas.toggleFollowSelection` is
+    # deliberately absent — it registers in C and stays disabled until
+    # PR D ships the viewport, and §B12's rule is that a command joins
+    # this set in the PR that makes it EXECUTABLE, not the one that
+    # registers it.
+    "slate.canvas.whereAmI",
+    "slate.canvas.nextCard",
+    "slate.canvas.previousCard",
+    "slate.canvas.enterGroup",
+    "slate.canvas.exitGroup",
+    "slate.canvas.followConnectionForward",
+    "slate.canvas.followConnectionBack",
+    "slate.canvas.tracePath",
+    "slate.canvas.filterCards",
+    "slate.canvas.clearFilter",
+    "slate.canvas.commitMode",
+    "slate.canvas.cancelMode",
 }
 
 # W4 delivery, same per-command shape as W3.
