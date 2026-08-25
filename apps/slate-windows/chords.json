@@ -1692,6 +1692,22 @@
           "apps/slate-windows/tests/SlateWindows.Tests/Censuses/MutationHarnessCensus.cs#MutationHarnessCensus",
           "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#FileManagement_CreateRenameDuplicateMoveDelete_IsClean"
         ]
+      },
+      "canvasSurfaces": {
+        "implementation": [
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasDocumentViewModel.cs#CanvasDocumentViewModel",
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasOutlineView.cs#CanvasOutlineView",
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasTableView.cs#CanvasTableView",
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasSurfaceView.cs#CanvasSurfaceView",
+          "apps/slate-windows/src/SlateWindows/Canvas/WorkspaceViewModel.Canvas.cs#CanvasShowTableCommand",
+          "apps/slate-windows/src/SlateWindows/Commands/ChordTable.cs#CanvasRows"
+        ],
+        "tests": [
+          "apps/slate-windows/tests/SlateWindows.Tests/CanvasDocumentTests.cs#ShowVisualRegistersAndStaysDisabledUntilItsProjectionShips",
+          "apps/slate-windows/tests/SlateWindows.Tests/CanvasTableTests.cs#ShowTableIsEnabledAndDrivesTheOneSurfaceSwitch",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#CanvasSurfaces_OutlineTreeSelectionAndActivation_AreClean",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#CanvasSurfaces_TableGridSortSelectionAndActivation_AreClean"
+        ]
       }
     },
     "commands": {
@@ -1802,7 +1818,9 @@
       "slate.history.showPanel": "history",
       "slate.diagnostics.refreshSync": "syncDiagnostics",
       "slate.view.toggleSearch": "searchOverlay",
-      "slate.file.newFromTemplate": "templates"
+      "slate.file.newFromTemplate": "templates",
+      "slate.canvas.showOutline": "canvasSurfaces",
+      "slate.canvas.showTable": "canvasSurfaces"
     },
     "issues": {
       "#720": "vault",

@@ -1651,12 +1651,24 @@ here would be the R-D violation the same sentence forbids.
 
 **B3 — The comparators are mac's, and the spec's description of the
 Color one is corrected here.** Type, Target and Color take mac's plain
-`<` over the same values, transliterated as `CompareOrdinal` (identifier
-text, deterministic across cultures — the `ReadingTableGrid`
-precedent); Title and Group take mac's `localizedCaseInsensitiveCompare`,
+`<` over the same values, transliterated as `CompareOrdinal`; Title and
+Group take mac's `localizedCaseInsensitiveCompare`,
 transliterated as .NET's current-culture, case-insensitive compare,
 because those are user-authored prose; Connections compares the COUNT, not the rendered
 digits, or 10 would sort before 2.
+
+**What "transliterated as `CompareOrdinal`" claims, and what it does
+not.** Both comparators walk code points in order, so they agree on
+every string in the Basic Multilingual Plane. They can disagree ONLY
+where a supplementary-plane character meets a BMP character above
+U+DFFF, because .NET orders by UTF-16 code unit and Swift by Unicode
+scalar. `kind` and `color_name` are closed sets core owns and cannot
+reach that; a `target` — a vault path or a URL — could in principle.
+Ordinal is still the right choice for all three: they are identifiers
+rather than prose, and a culture-sensitive compare would sort the same
+canvas differently on two machines. The first wording of this row said
+"the same ASCII values", which was false of `target` and is the
+claim-exceeds-enforcement shape this document exists to stop.
 
 **The Color column does not sort "by preset index, hex after presets".**
 The spec's parenthetical describes a comparator neither host has, over
@@ -1718,6 +1730,25 @@ model→view direction posts EXACTLY the canvas line, so a spurious grid
 announcement fails it) and
 `AReSeatKeepsTheReaderInTheColumnTheyWereReading`.
 
+**The REBUILD runs under the same guard, and that is not redundant with
+the substrate's own silence.** `Bind` restores the reader's position by
+ROW-HEADER TEXT — every publish builds fresh row objects, so identity is
+gone by definition — and this projection's row header is core's
+`speakable_name`, which a republish can RENUMBER. Two cards titled
+"Shared" are `Shared` and `Shared 2`; rename the first on disk and the
+second one becomes `Shared`, so the header-text restore lands the reader
+on a DIFFERENT card that now spells what they were reading. The
+substrate suppresses its OWN announcement there (its restore runs under
+`WithoutAnnouncing`), but `CurrentRowChanged` still fires — so without
+the guard the view would call `SelectNode` and the DOCUMENT would speak
+a canvas move nobody made, off a reload the user did not ask for. With
+it, the re-seat that follows puts the reader back on the selected NODE,
+which is the authority the header text is only a proxy for.
+`ARepublishThatRenumbersASpeakableNameNeverSpeaks` drives exactly that
+rename through a real reload; mutation-verified against dropping the
+guard, which fails it on both halves (a line is spoken, and the shared
+selection moves to the namesake).
+
 **B6 — Activation and row actions run the document's one seam.** Enter,
 double-click, the substrate's `Invoke` path and the "Open" row action
 all reach `CanvasDocumentViewModel.Activate`, looked up from the table
@@ -1766,10 +1797,14 @@ would bypass the funnel with no canvas file naming the dispatcher at
 all. `EveryGridUnderCanvasRidesTheRelay` reads the syntax (every canvas
 file that builds an `AccessibleDataGrid` assigns its seam to the relay,
 with a floor so it cannot pass over nothing), and
-`TheGridsOwnAnnouncementsComeOutOfTheCanvasFunnel` drives a real
-Ctrl+Alt+S sort through the production surface and reads the funnel's
-post seam. A guard may not exercise the mechanism it is guarding — the
-class recorded five times in §A's round record — so neither of the two
+`TheGridsOwnAnnouncementsComeOutOfTheCanvasFunnel` EXECUTES
+`ToggleSortCommand` — the command the Ctrl+Alt+S gesture is bound to,
+which is the seam a real chord arrives at — on the production surface,
+and reads the funnel's post seam. Said exactly, because the difference
+is the kind this document keeps catching: that fact does not press a
+key; the JOURNEY is the half that does, cross-process, through real
+input. A guard may not exercise the mechanism it is guarding — the class
+recorded five times in §A's round record — so neither of the two
 supplies the other's.
 
 **B8 — No export producer, and Ctrl+F keeps routing.** No core canvas
@@ -1834,6 +1869,31 @@ answers "was the row in the bound set", which is a different question by
 design, and A14's rule is that a surface may not report a landing it did
 not make. Pinned by `ExactlyOneProjectionIsEverInTheTree` and
 `AFocusRequestLandsOnATableRowAndAnUnknownRowDoesNot`.
+
+**B12 — PR B carries the series' evidence debt rather than accruing it.**
+Two rows PR A owed were backfilled here on a controller ruling, because
+the pattern set now is the one PRs C–G repeat:
+
+- **`w_c_matrix.md` gained the Canvas OUTLINE row**, composed from §A's
+  own evidence list (the projection and its state regions, the
+  data-item peer topology, the A9/A10/A11 name and status sources, the
+  patterns, the A14 focus route, the announcement contract, and the
+  named facts and censuses). PR A's spec line asked for it and it was
+  not written; it is PR A's content, recorded under PR A's heading.
+- **`parity_matrix.md` flips BOTH `slate.canvas.showOutline` and
+  `slate.canvas.showTable`** out of `pending`. That file is generated,
+  so the change is to its inputs: a `W6_1_STATUS` /
+  `W6_1_DELIVERED_COMMANDS` pair in `scripts/generate-parity-matrix.py`
+  (the W5-x shape) and a `canvasSurfaces` group in `chords.json`'s
+  `deliveryEvidence`, whose implementation and test references the
+  generator checks marker-by-marker. `deliveryEvidence` is the one
+  object the chord-table projection leaves untouched, so hand-editing it
+  is the supported path and the projection test still passes
+  byte-for-byte. **The rule this sets for the rest of the series:** a
+  surface command joins the delivered set in the PR that makes it
+  EXECUTABLE, not the PR that registers it — so `showVisual` stays out
+  until PR D, and each PR flips its own row rather than leaving a
+  batch for PR H.
 
 ### Tests that pin PR B
 

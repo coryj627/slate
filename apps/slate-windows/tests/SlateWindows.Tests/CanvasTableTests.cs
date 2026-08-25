@@ -344,16 +344,97 @@ public sealed class CanvasTableTests : IDisposable
         document.Shutdown();
     });
 
+    /// <summary>
+    /// A background REPUBLISH never speaks, even when it renumbers the
+    /// row-header text the substrate restores the reader by.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The substrate restores position by ROW-HEADER TEXT — every
+    /// publish builds fresh row objects, so identity is gone by
+    /// definition — and this projection's row header is core's
+    /// <c>speakable_name</c>, which a republish can RENUMBER. Two cards
+    /// titled "Shared" are "Shared" and "Shared 2"; rename the first and
+    /// the second one becomes "Shared". The restore then lands on a
+    /// DIFFERENT card that now spells what the reader was reading.
+    /// </para>
+    /// <para>
+    /// The substrate suppresses its own announcement there, but
+    /// <c>CurrentRowChanged</c> still fires — so without the guard the
+    /// view would call <c>SelectNode</c> and the DOCUMENT would speak a
+    /// canvas move nobody made, off a reload the user did not ask for.
+    /// Mutation-verified: dropping the guard around <c>Bind</c> fails
+    /// this fact on both halves (a line is spoken, and the shared
+    /// selection moves to the namesake).
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void ARepublishThatRenumbersASpeakableNameNeverSpeaks() => RunSta(() =>
+    {
+        string path = Path.Combine(_fixture.Root, "renamed.canvas");
+        File.WriteAllText(
+            path,
+            """
+            {"nodes":[
+              {"id":"first","type":"text","text":"Shared","x":0,"y":0,"width":100,"height":50},
+              {"id":"second","type":"text","text":"Shared","x":200,"y":0,"width":100,"height":50}
+            ],"edges":[]}
+            """);
+        (CanvasDocumentViewModel document, _, AccessibleDataGrid grid) =
+            Table("renamed.canvas");
+        // Core's one uniqueness algorithm gives the second card the
+        // ordinal; the reader sits on the FIRST, whose header is the
+        // bare title.
+        Assert.Equal(
+            new[] { "Shared", "Shared 2" },
+            document.TableRows.Select(row => row.SpeakableName).ToArray());
+        MoveReaderTo(grid, "first");
+        _announced.Clear();
+
+        // The first card is renamed on disk, so "Shared" is now the
+        // SECOND card's speakable name — the header-text restore has a
+        // match, and it is the wrong card.
+        File.WriteAllText(
+            path,
+            """
+            {"nodes":[
+              {"id":"first","type":"text","text":"Zulu","x":0,"y":0,"width":100,"height":50},
+              {"id":"second","type":"text","text":"Shared","x":200,"y":0,"width":100,"height":50}
+            ],"edges":[]}
+            """);
+        document.Load();
+        Assert.Equal(
+            new[] { "Zulu", "Shared" },
+            document.TableRows.Select(row => row.SpeakableName).ToArray());
+
+        document.Announcer.FlushForTests();
+        Assert.Empty(_announced);
+        // And the reader is still on the card they were on, by NODE id:
+        // the model is the authority the re-seat comes back to, not the
+        // header text.
+        Assert.Equal("first", document.Selection.Selected);
+        Assert.Equal(
+            "first", Assert.IsType<CanvasTableRow>(grid.Grid.CurrentCell.Item).NodeId);
+        document.Shutdown();
+    });
+
     // --- B7: the announce seam --------------------------------------------
 
     /// <summary>
     /// Contract B7 (DoD §H): the substrate's own canonical events ride
-    /// the CANVAS announcer. The fact drives the production keyboard
-    /// route (Ctrl+Alt+S) on the production surface and reads the
-    /// canvas funnel's post seam — the sink the workspace wires in
-    /// production — so nothing here supplies the mechanism it is
-    /// checking.
+    /// the CANVAS announcer.
     /// </summary>
+    /// <remarks>
+    /// Stated exactly, because the difference matters: this fact
+    /// EXECUTES <c>ToggleSortCommand</c> — the command the Ctrl+Alt+S
+    /// gesture is bound to, and the seam a real chord arrives at — on
+    /// the production surface, and reads the canvas funnel's post seam,
+    /// the sink the workspace wires in production. It does not press a
+    /// key; the journey
+    /// (<c>CanvasSurfaces_TableGridSortSelectionAndActivation_AreClean</c>)
+    /// is the half that does, cross-process, through real input.
+    /// Nothing here supplies the mechanism it is checking.
+    /// </remarks>
     [Fact]
     public void TheGridsOwnAnnouncementsComeOutOfTheCanvasFunnel() => RunSta(() =>
     {
@@ -616,11 +697,14 @@ public sealed class CanvasTableTests : IDisposable
         Assert.Equal(Visibility.Collapsed, surface.TableForTests.Visibility);
         document.Shutdown();
 
-        // A parse error is a message, never an empty grid.
+        // A parse error is a message, never an empty grid. The surface
+        // is asked for the table through the ONE switch (B10), not by
+        // poking the selection's field: a state a user can actually
+        // reach is the only one worth asserting about.
         CanvasDocumentViewModel broken = NewDocument("no-such.canvas");
         broken.Load();
         surface.Model = broken;
-        broken.Selection.ActiveSurface = CanvasSurfaceKind.Table;
+        broken.ShowSurface(CanvasSurfaceKind.Table);
         host.UpdateLayout();
         Assert.Equal(Visibility.Collapsed, surface.TableForTests.Visibility);
         Assert.Equal(Visibility.Collapsed, surface.OutlineForTests.Visibility);

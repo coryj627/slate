@@ -212,19 +212,23 @@ public sealed class ContractsCitationCensus
                 }
             }
         }
-        // Names §A legitimately cites that are declared in a language
-        // or assembly this census cannot parse. Each is listed with
-        // where it really lives, so the escape hatch stays auditable
-        // rather than becoming a place to hide a typo.
+        // Names a PR section legitimately cites that are declared in a
+        // language or assembly this census cannot parse. Each is listed
+        // with where it really lives, so the escape hatch stays
+        // auditable rather than becoming a place to hide a typo.
         foreach (string external in new[]
         {
-            // The mac twins §A compares against.
+            // The mac twins these sections compare against.
             "A11yResidueCensusTests", "CanvasAnnouncerTests", "CanvasCardRef",
             "CanvasDocument", "CanvasContainerView", "CanvasOutlineView",
             // WPF / .NET.
             "TreeViewItemAutomationPeer", "VirtualizingStackPanel",
             "IInvokeProvider", "AutomationProperties", "RaiseNotificationEvent",
             "SelectedItemChanged", "VirtualizationMode", "DispatcherTimer",
+            // Python: scripts/generate-parity-matrix.py (§B's B12 — the
+            // delivered-command set whose per-PR growth is the rule that
+            // row sets).
+            "W6_1_DELIVERED_COMMANDS",
         })
         {
             _ = names.Add(external);

@@ -162,15 +162,40 @@ internal sealed class CanvasTableView : UserControl
         // B8): no core canvas export exists, and a host-composed one is
         // what the residue census forbids — the `ReadingTableGrid`
         // precedent — so the substrate's export commands stay disabled.
-        _grid.Bind(
-            Columns(),
-            rows.Cast<object>().ToArray(),
-            summary: CanvasPhrase.TableSummary(cards, rows.Count - cards),
-            accessibilityLabel: CanvasPhrase.TableName,
-            rowAudioDescription: null,
-            rowActions: RowActions(),
-            exportProducer: null,
-            rowActivated: ActivateRow);
+        // The bind runs under the sync guard for the same reason the
+        // re-seat below does, and it is NOT redundant with the
+        // substrate's own silence. `Bind` restores the reader's position
+        // by ROW-HEADER TEXT, because every publish builds fresh row
+        // objects and identity is gone by definition — and this
+        // projection's row header is core's `speakable_name`, which a
+        // republish can RENUMBER. Two cards titled "Shared" are "Shared"
+        // and "Shared 2"; rename the first and the second becomes
+        // "Shared", so the restore lands the reader on a DIFFERENT card
+        // that now spells what they were reading. The substrate suppresses
+        // its own announcement there, but `CurrentRowChanged` still
+        // fires, and without this guard it would reach `SelectNode` and
+        // speak a canvas move the reader never made — from a background
+        // republish, which is the one thing that must never talk.
+        _syncingSelection = true;
+        try
+        {
+            _grid.Bind(
+                Columns(),
+                rows.Cast<object>().ToArray(),
+                summary: CanvasPhrase.TableSummary(cards, rows.Count - cards),
+                accessibilityLabel: CanvasPhrase.TableName,
+                rowAudioDescription: null,
+                rowActions: RowActions(),
+                exportProducer: null,
+                rowActivated: ActivateRow);
+        }
+        finally
+        {
+            _syncingSelection = false;
+        }
+        // The model is the authority the reader comes back to: whatever
+        // the header-text restore landed on, the selected NODE is where
+        // the reader is seated.
         ApplySelection();
     }
 
@@ -349,10 +374,18 @@ internal sealed class CanvasTableView : UserControl
     private static bool IsNode(object row, string nodeId) =>
         string.Equals(Row(row).NodeId, nodeId, StringComparison.Ordinal);
 
-    /// <summary>Mac's <c>&lt;</c> over the same ASCII values: ordinal
-    /// keeps the order deterministic across cultures where the value is
-    /// an identifier rather than prose (the <c>ReadingTableGrid</c>
-    /// precedent).</summary>
+    /// <summary>
+    /// Mac's <c>&lt;</c>, transliterated. Both walk code points in
+    /// order, so the two agree on every string in the Basic Multilingual
+    /// Plane; they can disagree ONLY where a supplementary-plane
+    /// character meets a BMP character above U+DFFF, because .NET orders
+    /// by UTF-16 code unit and Swift by Unicode scalar. Kind and colour
+    /// name are closed sets core owns and cannot reach that; a Target
+    /// could. Ordinal is still right for all three — they are
+    /// identifiers rather than prose, and a culture-sensitive compare
+    /// would sort the same canvas differently on two machines (the
+    /// <c>ReadingTableGrid</c> precedent).
+    /// </summary>
     private static IComparer<object> Ordinal(Func<CanvasTableRow, string> value) =>
         Comparer<object>.Create(
             (x, y) => string.CompareOrdinal(value(Row(x)), value(Row(y))));
