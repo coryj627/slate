@@ -290,6 +290,10 @@ internal sealed class CanvasOutlineView : UserControl
     private readonly Dictionary<CanvasOutlineRowViewModel, CanvasOutlineRowViewModel> _parentOf =
         [];
 
+    /// <summary>The publication these materialized rows came from
+    /// (contract C10). Null until the first rebuild.</summary>
+    private object? _built;
+
     /// <summary>The row this view believes is selected — the one whose
     /// TwoWay flag must be cleared before another is set.</summary>
     private CanvasOutlineRowViewModel? _selectedRow;
@@ -569,7 +573,29 @@ internal sealed class CanvasOutlineView : UserControl
         view.Rebuild();
     }
 
-    private void OnOutlinePublished(object? sender, EventArgs e) => Rebuild();
+    private void OnOutlinePublished(object? sender, EventArgs e) => EnsureCurrent();
+
+    /// <summary>
+    /// Materialize the CURRENT publication's rows, if these are not
+    /// already them (contract C10).
+    /// </summary>
+    /// <remarks>
+    /// Two callers, one question. This view's own subscription asks it
+    /// on every publication — and a state-only publication carries the
+    /// same unit, so the rebuild is skipped rather than re-running a
+    /// 2,000-row tree pass for a banner. The SURFACE asks it before it
+    /// renders anything over these rows, which is what makes "the state
+    /// on screen and the rows under it came from one publication" a
+    /// property of the code rather than of the subscription order.
+    /// </remarks>
+    internal void EnsureCurrent()
+    {
+        if (ReferenceEquals(_built, Model?.Publication))
+        {
+            return;
+        }
+        Rebuild();
+    }
 
     private void OnSelectionChanged(
         object? sender, System.ComponentModel.PropertyChangedEventArgs e)
@@ -629,6 +655,9 @@ internal sealed class CanvasOutlineView : UserControl
             _byNode[row.NodeId] = line;
         }
         ApplySelection();
+        // Recorded LAST: only a rebuild that finished describes the
+        // publication it was asked for.
+        _built = Model?.Publication;
     }
 
     /// <summary>

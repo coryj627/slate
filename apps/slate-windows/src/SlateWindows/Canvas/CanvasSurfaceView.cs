@@ -725,8 +725,36 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         view.TryDeliverFocus();
     }
 
+    /// <summary>
+    /// The ONE publication handler (contract C10): the projections are
+    /// made current with this publication, and only then does anything
+    /// render over them.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The state and the rows are one fact and they used to arrive on
+    /// two channels. `State` moved on `PropertyChanged`, which rendered
+    /// the banner, the empty-state and the filter summary immediately;
+    /// the rows moved on this event, which the projections rebuild from.
+    /// Between the two sat a frame reading "Ready", with the new
+    /// canvas's summary, over the PREVIOUS canvas's controls — and
+    /// <see cref="TryDeliverFocus"/> ran there too, seating the reader
+    /// against rows that were about to be replaced.
+    /// </para>
+    /// <para>
+    /// So the state now moves only inside a publication, and this is the
+    /// only place that renders one. The children subscribe before this
+    /// view does and have already rebuilt by the time it runs, which
+    /// makes <c>EnsureCurrent</c> a comparison and nothing more — but it
+    /// is asked rather than assumed, because "the surface renders over
+    /// this publication's rows" should not rest on the order two
+    /// subscriptions happen to have been added in.
+    /// </para>
+    /// </remarks>
     private void OnOutlinePublished(object? sender, EventArgs e)
     {
+        _outline.EnsureCurrent();
+        _table.EnsureCurrent();
         Render();
         TryDeliverFocus();
     }
@@ -793,16 +821,19 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
     private void OnModelPropertyChanged(
         object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is nameof(CanvasDocumentViewModel.State)
-            or nameof(CanvasDocumentViewModel.StateMessage)
-            or nameof(CanvasDocumentViewModel.Warnings)
-            // FilterText renders the FIELD's chrome — the Clear button
-            // and, when there is one, the summary. It has to be here now
-            // that the match is asynchronous: the needle changes on this
-            // frame and the rows arrive later, so waiting for
-            // OutlinePublished would leave the reader unable to see (or
-            // reach) Clear for whatever the query costs.
-            or nameof(CanvasDocumentViewModel.FilterText)
+        // `State`, `StateMessage` and `Warnings` are deliberately NOT in
+        // this list. They are part of a PUBLICATION and they render with
+        // the rows they describe, in `OnOutlinePublished`; rendering
+        // them here is the two-channel defect (contract C10). What is
+        // left is the chrome that belongs to no publication.
+        //
+        // FilterText renders the FIELD's chrome — the Clear button and,
+        // when there is one, the summary. It has to be here now that the
+        // match is asynchronous: the needle changes on this frame and the
+        // rows arrive later, so waiting for the publication would leave
+        // the reader unable to see (or reach) Clear for whatever the
+        // query costs.
+        if (e.PropertyName is nameof(CanvasDocumentViewModel.FilterText)
             or nameof(CanvasDocumentViewModel.DetailText)
             or nameof(CanvasDocumentViewModel.WhereAmIText))
         {
@@ -996,10 +1027,21 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         // hidden while the document has no rows to show, so a
         // parse-error pane is a message, never an empty tree or an empty
         // grid.
-        bool ready = model.State == CanvasLoadState.Ready;
+        //
+        // A RELOAD keeps its rows on screen, which is the one case this
+        // gained. The publication that turns the state to Loading carries
+        // the unit already published (contract C10) — "Opening canvas…"
+        // over the canvas you were reading — so collapsing here would
+        // tear that canvas out from under the reader for the length of
+        // the load AND drop their keyboard focus with it, which is the
+        // A14 failure arrived at from the state side. A FIRST load has no
+        // rows and the banner stands alone, exactly as before.
+        bool showsRows = model.State == CanvasLoadState.Ready
+            || (model.State == CanvasLoadState.Loading && model.Outline.Count > 0);
         bool table = TableIsTheProjection(model);
-        _outline.Visibility = ready && !table ? Visibility.Visible : Visibility.Collapsed;
-        _table.Visibility = ready && table ? Visibility.Visible : Visibility.Collapsed;
+        _outline.Visibility =
+            showsRows && !table ? Visibility.Visible : Visibility.Collapsed;
+        _table.Visibility = showsRows && table ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void RenderFilter(CanvasDocumentViewModel model)

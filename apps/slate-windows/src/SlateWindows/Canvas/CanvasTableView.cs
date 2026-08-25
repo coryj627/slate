@@ -37,6 +37,10 @@ internal sealed class CanvasTableView : UserControl
 
     private readonly AccessibleDataGrid _grid;
 
+    /// <summary>The publication these materialized rows came from
+    /// (contract C10). Null until the first rebuild.</summary>
+    private object? _built;
+
     /// <summary>The model→view direction, so the substrate's currency
     /// change cannot read back as a user selection (contract B5, the
     /// A12 idiom).</summary>
@@ -200,7 +204,21 @@ internal sealed class CanvasTableView : UserControl
         view.Rebuild();
     }
 
-    private void OnRowsPublished(object? sender, EventArgs e) => Rebuild();
+    private void OnRowsPublished(object? sender, EventArgs e) => EnsureCurrent();
+
+    /// <summary>
+    /// Materialize the CURRENT publication's rows, if these are not
+    /// already them — the outline's twin, for the same reason
+    /// (contract C10).
+    /// </summary>
+    internal void EnsureCurrent()
+    {
+        if (ReferenceEquals(_built, Model?.Publication))
+        {
+            return;
+        }
+        Rebuild();
+    }
 
     private void OnSelectionChanged(
         object? sender, System.ComponentModel.PropertyChangedEventArgs e)
@@ -293,6 +311,9 @@ internal sealed class CanvasTableView : UserControl
         // defect, reintroduced. `ARepublishNeverYanksTheReaderOffTheSummaryRegion`
         // now guards that, and fails if this ever grows a focus re-seat.
         ApplySelection();
+        // Recorded LAST: only a rebuild that finished describes the
+        // publication it was asked for.
+        _built = Model?.Publication;
     }
 
     /// <summary>

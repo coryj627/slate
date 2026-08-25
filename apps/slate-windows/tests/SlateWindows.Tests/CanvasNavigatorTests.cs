@@ -670,6 +670,8 @@ public sealed class CanvasNavigatorTests : IDisposable
         Assert.True(document.Filter.Current);
         Assert.InRange(document.FilteredOutline.Count, 2, document.Outline.Count - 1);
         Assert.Contains(document.FilteredOutline, row => row.NodeId == "loose");
+        var before = document.Outline
+            .Select(row => row.NodeId).ToHashSet(StringComparer.Ordinal);
 
         // The reload lands DIFFERENT rows — same file, one matching card
         // gone. Reloading identical content would make a stale frame
@@ -711,13 +713,21 @@ public sealed class CanvasNavigatorTests : IDisposable
         Assert.DoesNotContain("loose", live);
         foreach ((string[] outline, string[] table, string? summary) in frames)
         {
-            // No frame shows a row the document no longer has — which is
-            // what an eagerly published reload raised, with the rows from
-            // the discarded outline still on screen.
-            Assert.All(outline, id => Assert.Contains(id, live));
+            // Every frame is ONE canvas's narrowed rows: the prior one
+            // while the reload is in flight (the publication that turns
+            // the state to Loading carries the unit still on screen), or
+            // the new one afterwards. What the eager publish raised, and
+            // what this forbids, is a frame belonging to NEITHER — the
+            // discarded outline's rows against the new canvas.
+            bool priorCanvas = outline.Contains("loose");
+            Assert.All(
+                outline,
+                id => Assert.True(
+                    priorCanvas ? before.Contains(id) : live.Contains(id),
+                    $"a published frame mixed canvases: [{string.Join(',', outline)}]"));
             // …nor the whole canvas under a populated filter field.
             Assert.True(
-                outline.Length < live.Count,
+                outline.Length < (priorCanvas ? before.Count : live.Count),
                 $"a published frame showed all {outline.Length} cards with "
                 + $"'{document.FilterText}' in the filter field.");
             // The two projections narrow by ONE answer (contract C10).
@@ -881,6 +891,141 @@ public sealed class CanvasNavigatorTests : IDisposable
     }
 
     /// <summary>
+    /// Codex round 3, B1: an observer woken by the state sees the state
+    /// over the CONTROLS that state describes — never over the previous
+    /// canvas's.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The round-2 fix made the model atomic and the round-2 facts read
+    /// the model. That was half the system. The projections keep their
+    /// own materialized rows — a tree of row objects, a bound grid — and
+    /// they rebuilt on <c>OutlinePublished</c> while the state moved on
+    /// <c>PropertyChanged</c>: two channels for one fact. A binding woken
+    /// by the first read "Ready", with the new canvas's summary, over the
+    /// old canvas's controls.
+    /// </para>
+    /// <para>
+    /// So this reads the CONTROLS — the outline's row objects, the grid's
+    /// bound items, the summary's text — from a <c>PropertyChanged</c>
+    /// observer, which is exactly what a pane binding mid-reload is. The
+    /// invariants are per sample: the two projections show one canvas,
+    /// the summary counts the rows actually on screen, and a sample that
+    /// reads Ready shows the NEW canvas. The last one is the blocker; the
+    /// first two are the class it belongs to.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void AStateObserverNeverSeesReadyOverThePreviousCanvasControls() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        var surface = new CanvasSurfaceView { Model = document };
+        using var host = Host(surface);
+        document.FilterText = "zeta";
+        host.UpdateLayout();
+
+        // The premise, read off the CONTROLS: the needle narrows both
+        // projections and the card the reload deletes is materialized in
+        // each of them.
+        Assert.Contains("loose", OutlineControlRows(surface));
+        Assert.Contains("loose", TableControlRows(surface));
+        // The denominator the summary is over: the whole canvas, before
+        // and after. Read from the model because it is the EXPECTATION —
+        // what is under test is the control that has to agree with it.
+        int beforeTotal = document.Outline.Count;
+
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "board.canvas"),
+            """
+            {
+              "nodes": [
+                {"id":"grp","type":"group","x":-40,"y":-40,"width":560,"height":400,"label":"Research"},
+                {"id":"question","type":"text","text":"Core question","x":0,"y":0,"width":240,"height":140,"color":"1"},
+                {"id":"evidence","type":"text","text":"Evidence zeta","x":260,"y":0,"width":220,"height":140},
+                {"id":"note","type":"file","file":"note0.md","x":0,"y":180,"width":240,"height":140}
+              ],
+              "edges": [
+                {"id":"e1","fromNode":"question","toNode":"evidence","label":"supports"}
+              ]
+            }
+            """);
+
+        var samples = new List<(CanvasLoadState State, string[] Outline,
+            string[] Table, string Summary)>();
+        void OnProperty(object? sender, PropertyChangedEventArgs e) => samples.Add((
+            document.State,
+            OutlineControlRows(surface),
+            TableControlRows(surface),
+            surface.FilterSummaryForTests.Text));
+        document.PropertyChanged += OnProperty;
+        try
+        {
+            document.Load();
+        }
+        finally
+        {
+            document.PropertyChanged -= OnProperty;
+        }
+        host.UpdateLayout();
+
+        int afterTotal = document.Outline.Count;
+        Assert.NotEqual(beforeTotal, afterTotal);
+        Assert.DoesNotContain("loose", OutlineControlRows(surface));
+        Assert.NotEmpty(samples);
+        foreach ((CanvasLoadState state, string[] outline, string[] table, string summary)
+            in samples)
+        {
+            string where = $"state {state}, outline [{string.Join(',', outline)}], "
+                + $"table [{string.Join(',', table)}], summary '{summary}'";
+            // The two projections are ONE canvas's answer, materialized.
+            Assert.True(
+                outline.ToHashSet(StringComparer.Ordinal)
+                    .SetEquals(table.ToHashSet(StringComparer.Ordinal)),
+                $"the controls disagree: {where}");
+            // The summary describes the rows a reader can actually reach.
+            Assert.Equal(
+                CanvasPhrase.FilterSummary(
+                    outline.Length,
+                    state == CanvasLoadState.Ready ? afterTotal : beforeTotal),
+                summary);
+            // …and the state is never ahead of the controls.
+            if (state == CanvasLoadState.Ready)
+            {
+                Assert.DoesNotContain("loose", outline);
+                Assert.DoesNotContain("loose", table);
+            }
+        }
+        Assert.Contains(samples, sample => sample.State == CanvasLoadState.Ready);
+    });
+
+    /// <summary>The outline projection's MATERIALIZED node rows, in
+    /// order — what a reader can reach, not what the model holds.</summary>
+    private static string[] OutlineControlRows(CanvasSurfaceView surface)
+    {
+        var ids = new List<string>();
+        void Walk(IEnumerable<CanvasOutlineRowViewModel> rows)
+        {
+            foreach (CanvasOutlineRowViewModel row in rows)
+            {
+                if (!row.IsConnection)
+                {
+                    ids.Add(row.Id);
+                }
+                Walk(row.Children);
+            }
+        }
+        Walk(surface.OutlineForTests.RootsForTests);
+        return [.. ids];
+    }
+
+    /// <summary>The table projection's MATERIALIZED rows — the grid's
+    /// own bound items.</summary>
+    private static string[] TableControlRows(CanvasSurfaceView surface) =>
+        [.. surface.TableForTests.GridForTests.Grid.Items
+            .OfType<CanvasTableRow>()
+            .Select(row => row.NodeId)];
+
+    /// <summary>
     /// Codex round 2, B2-continued: the tab is retired while a commit
     /// effect is still running, with a focus departure already held.
     /// </summary>
@@ -945,6 +1090,45 @@ public sealed class CanvasNavigatorTests : IDisposable
         // on a document that is gone.
         Assert.False(document.Modes.HandleFocusDeparture(CanvasFocusDeparture.PaneFocus));
         Assert.Equal(line, OneLine(document));
+    }
+
+    /// <summary>
+    /// Codex round 3, B2: retirement does not depend on a restoration
+    /// effect succeeding.
+    /// </summary>
+    /// <remarks>
+    /// Closing a tab with a mode running ends that mode, and ending it
+    /// runs host code — a restoration that can fault. When it did, the
+    /// announcer below it was never silenced, so a coalesced line stayed
+    /// queued on a document that no longer exists and spoke about it
+    /// ~200 ms later: the A5 defect, reached from the mode side. The
+    /// handle was never closed either. Logged and continued, so the
+    /// failure is reported and the teardown still happens.
+    /// </remarks>
+    [Fact]
+    public void ATeardownWhoseRestorationFaultsStillSilencesTheAnnouncer()
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        var spec = new CanvasModeSpec(
+            CanvasMode.Move,
+            new CanvasModeObject.Card("Research"),
+            () => CanvasModeCommitResult.Refused(),
+            () => throw new NotSupportedException("the restoration faulted."));
+        Assert.True(document.Modes.Enter(spec));
+        // A coalesced line is queued on the way out — the 0a-2 premise.
+        document.SelectNode("evidence");
+        _announced.Clear();
+
+        // Retirement completes. It does not propagate the restoration's
+        // failure to the registry sweeping every open document.
+        document.Shutdown();
+
+        Assert.False(document.Modes.IsActive);
+        // The queued line was DROPPED and the funnel refuses anything
+        // later, which is only true if `Announcer.Shutdown` was reached.
+        document.Announcer.Announce(
+            new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoMarks()));
+        Assert.Empty(Lines(document));
     }
 
     /// <summary>

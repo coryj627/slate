@@ -2420,9 +2420,11 @@ A focus departure raised inside that window is DEFERRED — one slot,
 latest-wins, because an effect that provokes two departures has still
 only left the canvas once — and a direct `Cancel` is REFUSED, because
 that is a caller error rather than a race and the commit already owns
-this press's outcome. The window is reopened before the outcome is
-applied, so nothing can strand the controller in a state that refuses
-every later transition.
+this press's outcome. The window CLOSES on the way out — in the
+`finally` below, so no failure can strand the controller in a state that
+refuses every later transition — and it stays closed across the outcome
+and its announcements, which is why a departure raised by the
+CONFIRMATION is deferred and applied to the result like any other.
 
 **A direct `Cancel` inside a commit effect is SILENT, and that is
 correct.** It returns false and says nothing: `CanvasModeCancelled` is
@@ -2441,26 +2443,51 @@ a focus departure, so it cancels — after the single commit outcome has
 been spoken. `ADepartureDuringTheCommitEffectYieldsOneOutcome` pins both
 variants, and PR F inherits it.
 
-**The slot drains on EVERY exit from the transition, and the exits are
-enumerated.** Applied, refused, THREW and TEARDOWN. An effect that threw
-applied nothing, which is the refused case by another name, so the mode
-is retained by rule and the departure it provoked is honoured in the
-`catch` BEFORE the exception propagates — draining in a `finally` after
-the throw is not equivalent, because a departure left in the slot would
-cancel a LATER commit's mode instead of this one's, which is the same
-lifecycle corruption one press later and much harder to attribute.
+**The slot drains on every exit, and "every exit" is a `finally` rather
+than a list.** The effect, the outcome application and the
+ANNOUNCEMENTS are one guarded region; the drain is its `finally`. That
+is what makes applied, refused and thrown the same code path instead of
+three arms someone has to keep complete — and the confirmation announce
+is INSIDE it, because it renders through core and can fault. It sat
+outside for one round, between the outcome and the drain, and a fault
+there skipped the drain and left the slot loaded for the next commit.
+
+`finally` is right here for the reason it was wrong before: it runs
+BEFORE the exception propagates, so the departure still applies to THIS
+commit. What the previous round rejected was a `finally` that only
+REOPENED the transition and left the drain on the success path, so a
+throw skipped it — the objection was to the missing drain, never to
+`finally` itself.
+
+The drain is TOTAL, and that follows from where it is called. An
+exception raised inside a `finally` REPLACES the one already unwinding,
+so a restoration or an announcement that faults in the drain would erase
+the failure worth reporting and blame a restoration effect for it. The
+departure's own outcome is not worth that: it is logged
+(`CanvasModeDepartureFailed`) and the unwind continues. The slot is
+emptied BEFORE the departure runs, so a fault cannot leave it loaded
+either.
+
 Teardown is the exit that never returns to `Commit` at all: the shell
 can retire the tab from inside an effect, so `Shutdown` forces the
 transition closed, drains the held departure (its restoration owes a
 sentence), ends whatever mode is left with the tab's own departure, and
-CLEARS the slot so nothing stale outlives the object holding it. The
-document's `Shutdown` runs all of that BEFORE `Announcer.Shutdown`, or
-the restoration would be composed into a funnel that had already closed.
-`ADepartureHeldAcrossAThrowingCommitStillCancels` (in the conformance
-body PR F reuses) and
-`AShutdownDuringACommitDrainsTheHeldDepartureThenSilences` pin the two,
-the second in the 0a-2 shape: the retirement's own sentence speaks, and
-nothing composed after it reaches anybody.
+CLEARS the slot in a `finally` so nothing stale outlives the object
+holding it. The document's `Shutdown` runs all of that BEFORE
+`Announcer.Shutdown` — and does not DEPEND on it: a restoration effect
+is host code and can fault, so it is logged
+(`CanvasModeTeardownFailed`) and retirement continues. Without that, the
+announcer was never silenced and a coalesced line spoke about a document
+that no longer existed ~200 ms later — the A5 defect, reached from the
+mode side — and the handle was never closed either.
+
+Pinned by `ADepartureHeldAcrossAThrowingCommitStillCancels` (in the
+conformance body PR F reuses),
+`AShutdownDuringACommitDrainsTheHeldDepartureThenSilences` (the 0a-2
+shape: the retirement's own sentence speaks, and nothing composed after
+it reaches anybody), `AnAnnouncementThatFaultsAfterTheOutcomeStillDrainsTheSlot`,
+`AFaultingDrainNeverMasksTheFailureThatCausedIt` and
+`ATeardownWhoseRestorationFaultsStillSilencesTheAnnouncer`.
 
 **A commit can be REFUSED, and a refused commit KEEPS the mode.** M2 was
 modelled as infallible and it is not: the canvas goes degraded or loses
@@ -2694,17 +2721,62 @@ the summary saying the filter could not be applied. The widening is
 STATED, which is the distinction this contract draws between an honest
 fallback and a silent one.
 
-Two facts, because the two sampling points are different questions.
+**And the state travels WITH the unit, on ONE channel, in a fixed
+order.** An atomic model is only half the system: the projections keep
+their own materialized rows — a tree of row objects, a bound grid — and
+those rebuilt on `OutlinePublished` while the state moved on
+`PropertyChanged`. Two channels for one fact, so a binding woken by the
+first read "Ready", with the new canvas's summary, over the PREVIOUS
+canvas's controls; focus delivery ran in that gap too, seating the
+reader on rows about to be replaced.
+
+Three things close it, and none of them is a check.
+
+`State` and `StateMessage` are READ-ONLY. There is no way to move the
+state except `PublishState` or `PublishLoadedUnit`, both of which write
+the fields and hand off to the ONE publisher — so a state change is a
+publication by construction, and a reload's "Opening canvas…" is
+published over the unit still on screen, which is what it is true of.
+
+`PublishUnit` raises `OutlinePublished` FIRST and the property
+notifications LAST. The projections rebuild and the surface renders
+inside that event, in that order, so when it returns the controls ARE
+this publication; a binding woken by `State` is the final step, and
+everything it can read — model and materialized controls — describes one
+canvas. The order is the contract, not an implementation detail.
+
+The SURFACE has one publication handler, and the projections are made
+current in it before anything renders over them. They subscribe first
+and have already rebuilt, so `EnsureCurrent` is a comparison against the
+publication each of them last built from — but it is asked rather than
+assumed, because this must not rest on the order two subscriptions
+happen to have been added in. That comparison also makes a state-only
+publication free: same unit, no rebuild.
+
+One consequence is a behaviour change worth naming: a RELOAD keeps its
+rows on screen. Collapsing the projections under `Loading` used to tear
+the canvas out from under the reader for the length of the load and drop
+their keyboard focus with it — visible as a table reader losing their
+row across a background republish. `Render` now shows a projection when
+the publication HAS rows, which is what "hidden while the document has
+no rows to show" always meant; a first load still has none and the
+banner stands alone, and a parse error is still a message rather than an
+empty tree. `RendersRetainedSnapshot` follows it, and the census that
+parses `Render` is what forced it to.
+
+Three facts, because the three sampling points are different questions.
 `AReloadUnderANeedleNeverPublishesTheUnfilteredCanvas` asserts it over
-the PUBLISH STREAM — every frame the document raises must be internally
-coherent, which fails whether or not the race is observable in a given
-scheduling mode. `AStateDrivenRenderDuringAReloadNeverSeesTwoCanvasesAtOnce`
-asserts it over the PROPERTY notifications, because a WPF binding does
-not wait for the document's own event: it reads what a pane created
-mid-reload would read, and requires per sample that the two projections
-are the same canvas, that the summary's numerator and denominator come
-from that sample, that the canvas is one of the two that exist, and that
-anything already reading `Ready` is the NEW one.
+the PUBLISH STREAM — every frame the document raises is one canvas's
+narrowed rows, which fails whether or not the race is observable in a
+given scheduling mode. `AStateDrivenRenderDuringAReloadNeverSeesTwoCanvasesAtOnce`
+asserts it over the PROPERTY notifications on the MODEL: per sample, the
+two projections are the same canvas, the summary's numerator and
+denominator come from that sample, the canvas is one of the two that
+exist, and anything reading `Ready` is the NEW one.
+`AStateObserverNeverSeesReadyOverThePreviousCanvasControls` asserts the
+same thing about the CONTROLS — the outline's row objects, the grid's
+bound items, the summary's text — because a model that is atomic while
+the screen is not is a model nobody reads.
 
 **The MATCH runs off the dispatcher, and the `Filter` view is pure.**
 It used to run inside the getter, on the UI thread, taking the `_ffiLock`
@@ -5474,6 +5546,19 @@ rather than rediscovering it.
   and `ShellAccessibilityTests.cs` at lines this task did not edit — the
   recorded mixed-EOL trap, and the reason the DoD scopes the format gate
   to the changed files, which pass clean.
+- **Two subsystems have taken three rounds each, and the next
+  continuation in either is RULE 4.** The publish path (0a-2's class,
+  one surface over) went unit-atomicity → state/unit atomicity →
+  one-channel-with-the-controls; the mode transition went
+  guard → drain-on-the-exits-we-named → one guarded region with the
+  drain in its `finally`. Each round's finding was a genuine
+  continuation of the previous fix rather than a repeat, and each fix
+  was more structural than the last — which is the shape of converging,
+  not of patching. But the protocol's stopping rule does not count
+  intent: if codex round 4 finds another continuation in EITHER, the
+  patching stops and the invariant gets implemented as one, with this
+  paragraph as the record that it was pre-declared rather than
+  rationalized afterwards.
 - **The spec's PR A evidence line for the "Accessible canvas (T parity)"
   surface row is still unexecuted.** It says the row moves to "in
   progress — PR A"; the generated matrix still reads `pending`. Left

@@ -293,26 +293,41 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// fourth view: every projection hosts it.</summary>
     public CanvasNavigator Navigator { get; }
 
-    public CanvasLoadState State
-    {
-        get => _state;
-        private set
-        {
-            if (SetField(ref _state, value))
-            {
-                NotifyStateChanged();
-            }
-        }
-    }
+    /// <summary>
+    /// The load state — READ ONLY, because it may only change as part of
+    /// a publication (contract C10).
+    /// </summary>
+    /// <remarks>
+    /// A settable state was a SECOND notification channel: `State` moved
+    /// on `PropertyChanged` while the projections' rows moved on
+    /// `OutlinePublished`, so a render woken by the first ran over
+    /// controls still holding the previous canvas's rows. Every
+    /// transition now goes through <see cref="PublishState"/> or
+    /// <see cref="PublishLoadedUnit"/>, which write the field and let
+    /// <see cref="PublishUnit"/> raise ONE ordered publication.
+    /// </remarks>
+    public CanvasLoadState State => _state;
 
     /// <summary>The failure/absent message. Null in Loading and Ready —
     /// a ready canvas with skipped entries speaks through
-    /// <see cref="DegradedBannerText"/>, not through this.</summary>
-    public string? StateMessage
-    {
-        get => _stateMessage;
-        private set => SetField(ref _stateMessage, value);
-    }
+    /// <see cref="DegradedBannerText"/>, not through this. Read only,
+    /// for <see cref="State"/>'s reason: it is part of a state, and a
+    /// state changes only in a publication.</summary>
+    public string? StateMessage => _stateMessage;
+
+    /// <summary>
+    /// The identity of the CURRENT publication — the value a projection
+    /// records so it can tell whether its materialized rows came from
+    /// the publication a render is about to describe (contract C10).
+    /// </summary>
+    /// <remarks>
+    /// Opaque on purpose: the only question anyone asks it is "is this
+    /// the same one", and reference equality answers that without giving
+    /// a view a second way to read the rows. A state-only publication
+    /// carries the SAME value, which is what lets the projections skip a
+    /// rebuild they do not need.
+    /// </remarks>
+    internal object Publication => _view;
 
     /// <summary>Core's rows, untransformed and in core's reading order
     /// (R-D).</summary>
@@ -637,12 +652,16 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// renders, not from the state's name — and
     /// <c>TheSnapshotVisibilityPredicateMatchesTheSurfaceRender</c>
     /// parses that method and fails when the two disagree, so changing
-    /// what a state shows forces this to follow. Windows shows a
-    /// projection only under <c>Ready</c>; mac additionally renders a
-    /// read-only snapshot for its <c>retargetFailed</c>, which Windows
-    /// has no equivalent of (CD-32).
+    /// what a state shows forces this to follow. That is exactly what
+    /// happened when a RELOAD stopped collapsing its rows: Windows now
+    /// shows a projection under <c>Ready</c> and under a <c>Loading</c>
+    /// that still has rows on screen — which is a retained snapshot in
+    /// the most literal sense, and is closer to mac, whose
+    /// <c>retargetFailed</c> renders one too (CD-32).
     /// </remarks>
-    internal bool RendersRetainedSnapshot => State == CanvasLoadState.Ready;
+    internal bool RendersRetainedSnapshot =>
+        State == CanvasLoadState.Ready
+        || (State == CanvasLoadState.Loading && Outline.Count > 0);
 
     /// <summary>
     /// The recorded precedence, in one place beside the mapping that owns
@@ -1013,19 +1032,55 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     }
 
     /// <summary>
-    /// Swap the published unit and tell everyone — the ONE place any
-    /// projection's rows change (contract C10).
+    /// A state transition with no new rows: the state moves, and the
+    /// unit already on screen is republished with it (contract C10).
+    /// </summary>
+    /// <remarks>
+    /// The point is that there is no OTHER way to move the state. A
+    /// settable `State` let a render wake on `PropertyChanged` while the
+    /// projections were still holding rows from an earlier publication —
+    /// two channels for one fact. Here the state and the unit arrive
+    /// together, and the consumers see the pair they always see.
+    /// </remarks>
+    private void PublishState(CanvasLoadState state, string? message)
+    {
+        _state = state;
+        _stateMessage = message;
+        PublishUnit(_view);
+    }
+
+    /// <summary>
+    /// Swap the published unit and tell everyone — the ONE publication,
+    /// and the ONE place a projection's rows or the load state change
+    /// (contract C10).
     /// </summary>
     /// <remarks>
     /// The swap precedes every notification, and every notification the
     /// swap owes follows it, so there is no observable instant in which
-    /// half a unit is readable. The state properties are notified here
-    /// too because <see cref="PublishLoadedUnit"/> writes them silently
-    /// for exactly that reason.
+    /// half a unit is readable.
+    /// <para>
+    /// The ORDER of what follows is the contract, not an implementation
+    /// detail. <see cref="OutlinePublished"/> goes FIRST: it is the event
+    /// the projections rebuild on and the surface renders on, in that
+    /// order, so when it returns the controls on screen ARE this
+    /// publication. The property notifications go LAST, and that is the
+    /// whole of what "one channel" buys — a binding woken by
+    /// <see cref="State"/> is the final step of the publication, so
+    /// everything it can read, model AND materialized controls, already
+    /// describes the same canvas.
+    /// </para>
+    /// <para>
+    /// The other order was the defect. Notifying first woke a state
+    /// render while the projections still held the PREVIOUS
+    /// publication's rows: "Ready", with the new canvas's summary, over
+    /// the old canvas's controls — and focus delivery ran in that gap
+    /// too, seating the reader on rows about to be replaced.
+    /// </para>
     /// </remarks>
     private void PublishUnit(CanvasProjectionUnit unit)
     {
         _view = unit;
+        OutlinePublished?.Invoke(this, EventArgs.Empty);
         OnPropertyChanged(nameof(State));
         OnPropertyChanged(nameof(StateMessage));
         OnPropertyChanged(nameof(Warnings));
@@ -1034,7 +1089,6 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         OnPropertyChanged(nameof(FilteredOutline));
         OnPropertyChanged(nameof(FilteredTableRows));
         NotifyStateChanged();
-        OutlinePublished?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>
@@ -1179,10 +1233,13 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             return;
         }
         int generation = Interlocked.Increment(ref _generation);
-        State = CanvasLoadState.Loading;
-        StateMessage = null;
         _announcedDegradedLoad = false;
         CloseDetail();
+        // The state moves as a PUBLICATION carrying the unit still on
+        // screen — which is the truth of a reload: "Loading, over the
+        // canvas you were reading". A bare property change here was the
+        // second channel (contract C10).
+        PublishState(CanvasLoadState.Loading, null);
         StartWork(() => LoadBody(generation));
     }
 
@@ -1706,7 +1763,26 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         // restorations would never be spoken — closing the tab a mode is
         // running in is exactly the departure M4 names, and a departure
         // still held from a failed commit owes a sentence too.
-        Modes.Shutdown();
+        //
+        // And they are FALLIBLE: a restoration effect is host code and
+        // can fault. Retirement is not allowed to depend on it. Without
+        // this the announcer below was never reached, so a coalesced line
+        // stayed queued on a document that no longer exists and spoke
+        // ~200 ms later — the A5 defect, arrived at from the mode side —
+        // and the handle below was never closed either. Logged and
+        // continued: the failure is reported, and the teardown still
+        // happens.
+        try
+        {
+            Modes.Shutdown();
+        }
+        catch (Exception exception) when (
+            exception is not OutOfMemoryException
+                and not StackOverflowException
+                and not AccessViolationException)
+        {
+            HostLog.Write(HostDiagnosticEvent.CanvasModeTeardownFailed, exception);
+        }
         WhereAmIText = null;
         // Every retirement route reaches here — the release sweep, the
         // retarget, the vault-close drain — so this is the one place the

@@ -2102,6 +2102,42 @@ public sealed class CanvasDocumentTests : IDisposable
     // --- M3: the production scheduling mode's own interleavings -------------
 
     /// <summary>
+    /// Publications that carry NEW ROWS, which is what "the surface was
+    /// published" has always meant here.
+    /// </summary>
+    /// <remarks>
+    /// The state and the rows travel as ONE publication (contract C10),
+    /// so a state transition republishes the unit already on screen —
+    /// a reload raises "Opening canvas…" over the canvas being read. The
+    /// question these facts ask is whether the ROWS changed, and the
+    /// unit's identity answers it exactly: same unit, same rows.
+    /// </remarks>
+    private sealed class RowPublishCounter
+    {
+        private readonly CanvasDocumentViewModel _document;
+        private object _last;
+
+        internal RowPublishCounter(CanvasDocumentViewModel document)
+        {
+            _document = document;
+            _last = document.Publication;
+            document.OutlinePublished += OnPublished;
+        }
+
+        internal int Count { get; private set; }
+
+        private void OnPublished(object? sender, EventArgs e)
+        {
+            if (ReferenceEquals(_last, _document.Publication))
+            {
+                return;
+            }
+            _last = _document.Publication;
+            Count++;
+        }
+    }
+
+    /// <summary>
     /// The W4-5 lesson, applied to teardown: a shutdown landing while a
     /// load body is in flight must publish nothing and still close the
     /// handle exactly once. Synchronous mode orders the body before the
@@ -2112,8 +2148,7 @@ public sealed class CanvasDocumentTests : IDisposable
     public async Task AShutdownDuringAnInFlightLoadNeverPublishesAndClosesTheHandle()
     {
         CanvasDocumentViewModel document = NewAsyncDocument("board.canvas");
-        int published = 0;
-        document.OutlinePublished += (_, _) => published++;
+        var published = new RowPublishCounter(document);
 
         document.Load();
         document.Shutdown();
@@ -2123,7 +2158,7 @@ public sealed class CanvasDocumentTests : IDisposable
         // Either the body bailed at its generation check or its publish
         // did; what must never happen is a Ready surface after teardown.
         Assert.NotEqual(CanvasLoadState.Ready, document.State);
-        Assert.Equal(0, published);
+        Assert.Equal(0, published.Count);
         Assert.Empty(document.Outline);
         // Refused afterwards, forever.
         document.Load();
@@ -2141,15 +2176,14 @@ public sealed class CanvasDocumentTests : IDisposable
     public async Task ASecondLoadSupersedesTheFirstPublish()
     {
         CanvasDocumentViewModel document = NewAsyncDocument("board.canvas");
-        int published = 0;
-        document.OutlinePublished += (_, _) => published++;
+        var published = new RowPublishCounter(document);
 
         document.Load();
         document.Load();
         await QuiesceAsync(document);
 
         Assert.Equal(CanvasLoadState.Ready, document.State);
-        Assert.Equal(1, published);
+        Assert.Equal(1, published.Count);
         Assert.NotEmpty(document.Outline);
         document.Shutdown();
         await document.WhenHandleClosed();
@@ -2164,23 +2198,21 @@ public sealed class CanvasDocumentTests : IDisposable
     public async Task ARetargetDuringAnInFlightLoadPublishesOnlyTheNewDocument()
     {
         CanvasDocumentViewModel stale = NewAsyncDocument("board.canvas");
-        int stalePublished = 0;
-        stale.OutlinePublished += (_, _) => stalePublished++;
+        var stalePublished = new RowPublishCounter(stale);
         stale.Load();
         stale.Shutdown();
 
         CanvasDocumentViewModel fresh = NewAsyncDocument("skipped.canvas");
-        int freshPublished = 0;
-        fresh.OutlinePublished += (_, _) => freshPublished++;
+        var freshPublished = new RowPublishCounter(fresh);
         fresh.Load();
 
         await QuiesceAsync(stale);
         await QuiesceAsync(fresh);
         await stale.WhenHandleClosed();
 
-        Assert.Equal(0, stalePublished);
+        Assert.Equal(0, stalePublished.Count);
         Assert.NotEqual(CanvasLoadState.Ready, stale.State);
-        Assert.Equal(1, freshPublished);
+        Assert.Equal(1, freshPublished.Count);
         Assert.Equal(CanvasLoadState.Ready, fresh.State);
         fresh.Shutdown();
         await fresh.WhenHandleClosed();

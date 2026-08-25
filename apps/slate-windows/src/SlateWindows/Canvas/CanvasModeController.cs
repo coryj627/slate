@@ -281,7 +281,6 @@ internal sealed class CanvasModeController : BindableBase
         // method carried on and announced the confirmation too: two
         // outcomes for one press, and a final state that is neither.
         _committing = true;
-        CanvasModeCommitResult result;
         try
         {
             // The effect runs FIRST and the stack is cleared only if it
@@ -290,47 +289,50 @@ internal sealed class CanvasModeController : BindableBase
             // with the restoration intact. Clearing first would drop a
             // move that was never made, with neither a commit nor a
             // restoration to show for it.
-            result = spec.OnCommit();
+            CanvasModeCommitResult result = spec.OnCommit();
+            if (result.Applied)
+            {
+                // Cleared BEFORE the confirmation is announced: a
+                // sentence that asks whether a mode is active
+                // (Where-am-I does) must see the stack as it will be,
+                // not as it was.
+                Active = null;
+                if (result.Confirmation is { } confirmation)
+                {
+                    // FALLIBLE, like everything else in here: the render
+                    // goes through core. It sits INSIDE the try for that
+                    // reason — an announcement that faulted after the
+                    // outcome applied used to skip the drain entirely and
+                    // leave the slot loaded for the next commit.
+                    _announce(confirmation);
+                }
+            }
+            // A refusal is silent HERE, not silent to the user: which
+            // refusal it is is the effect's knowledge, so the effect said
+            // it.
+            return result.Applied;
         }
-        catch
+        finally
         {
-            // An effect that THREW applied nothing, which is the refused
-            // case by another name — so the mode is retained by rule, and
-            // the departure it provoked before failing is honoured here,
-            // BEFORE the exception propagates. Draining in a `finally`
-            // after the throw is not equivalent: the caller may be gone
-            // by then, and a departure left in the slot would cancel a
-            // LATER commit's mode instead of this one's.
+            // ONE exit, and every exit passes through it: applied,
+            // refused, and thrown. The transition reopens — a controller
+            // stuck in it would refuse every later commit and cancel,
+            // which is worse than what the guard prevents — and the
+            // departure the effect provoked is then applied to the
+            // RESULT, which is the M4-correct order: a commit that
+            // APPLIED leaves no mode for it to cancel and it is moot,
+            // while a REFUSED one (a throw included) keeps a mode, and a
+            // mode may not survive a focus departure.
+            //
+            // This runs BEFORE an exception propagates, which is what
+            // makes `finally` right here. Round 2 rejected a finally that
+            // only REOPENED the transition and left the drain on the
+            // success path, so a throw skipped it and the slot cancelled
+            // a later commit's mode. The objection was to the missing
+            // drain, never to `finally`.
             _committing = false;
             DrainDeferredDeparture();
-            throw;
         }
-        // Reopened before the outcome is applied: a controller stuck in
-        // the transition would refuse every later commit and cancel,
-        // which is a worse failure than the one being guarded.
-        _committing = false;
-        if (result.Applied)
-        {
-            // Cleared BEFORE the confirmation is announced: a sentence
-            // that asks whether a mode is active (Where-am-I does) must
-            // see the stack as it will be, not as it was.
-            Active = null;
-            if (result.Confirmation is { } confirmation)
-            {
-                _announce(confirmation);
-            }
-        }
-        // A refusal is silent HERE, not silent to the user: which refusal
-        // it is is the effect's knowledge, so the effect said it.
-        //
-        // Now the departure the effect provoked applies to the RESULT,
-        // which is the M4-correct order: a commit that APPLIED leaves no
-        // mode for it to cancel and it is moot, while a REFUSED commit
-        // keeps one — and a mode may not survive a focus departure, so it
-        // cancels, with its restoration, after the single commit outcome
-        // has been spoken.
-        DrainDeferredDeparture();
-        return result.Applied;
     }
 
     /// <summary>
@@ -339,6 +341,16 @@ internal sealed class CanvasModeController : BindableBase
     /// teardown — because a slot that survives its commit cancels the
     /// NEXT one's mode instead.
     /// </summary>
+    /// <remarks>
+    /// TOTAL by construction, because it is called from a `finally`: a
+    /// restoration or an announcement that faults in here would REPLACE
+    /// the exception the caller was already propagating, and the original
+    /// failure — the one worth reporting — would vanish. The departure's
+    /// own outcome is not worth that, so it is logged and the unwind
+    /// continues (the shell's log-and-continue pattern). The slot is
+    /// emptied BEFORE the departure runs, so a fault cannot leave it
+    /// loaded either.
+    /// </remarks>
     private void DrainDeferredDeparture()
     {
         if (_deferredDeparture is not { } departure)
@@ -346,7 +358,17 @@ internal sealed class CanvasModeController : BindableBase
             return;
         }
         _deferredDeparture = null;
-        _ = HandleFocusDeparture(departure);
+        try
+        {
+            _ = HandleFocusDeparture(departure);
+        }
+        catch (Exception exception) when (
+            exception is not OutOfMemoryException
+                and not StackOverflowException
+                and not AccessViolationException)
+        {
+            HostLog.Write(HostDiagnosticEvent.CanvasModeDepartureFailed, exception);
+        }
     }
 
     /// <summary>
@@ -371,9 +393,19 @@ internal sealed class CanvasModeController : BindableBase
     internal void Shutdown()
     {
         _committing = false;
-        DrainDeferredDeparture();
-        _ = HandleFocusDeparture(CanvasFocusDeparture.TabSwitch);
-        _deferredDeparture = null;
+        try
+        {
+            DrainDeferredDeparture();
+            _ = HandleFocusDeparture(CanvasFocusDeparture.TabSwitch);
+        }
+        finally
+        {
+            // The slot is empty when this returns, whatever happened —
+            // including a restoration that faulted on the way out. A
+            // document being retired must not leave a departure behind
+            // for a later object to act on.
+            _deferredDeparture = null;
+        }
     }
 
     /// <summary>M2 cancel — Escape's first rung, the header's Cancel

@@ -356,12 +356,18 @@ public sealed class CanvasAnnouncerCensus
     {
         MethodDeclarationSyntax render =
             CSharpSource.Load("Canvas", "CanvasSurfaceView.cs").Method("Render");
-        string[] readyDeclarations = render.DescendantNodes()
+        string[] showsRowsDeclarations = render.DescendantNodes()
             .OfType<VariableDeclaratorSyntax>()
-            .Where(declarator => declarator.Identifier.ValueText == "ready")
+            .Where(declarator => declarator.Identifier.ValueText == "showsRows")
             .Select(declarator => CSharpSource.Normalize(declarator.Initializer!.Value))
             .ToArray();
-        string surfaceCondition = Assert.Single(readyDeclarations);
+        Assert.True(
+            showsRowsDeclarations.Length == 1,
+            "`Render` must decide projection visibility with exactly one "
+            + "`showsRows` expression, which is the thing this census compares "
+            + "against `RendersRetainedSnapshot`; found "
+            + $"{showsRowsDeclarations.Length}.");
+        string surfaceCondition = showsRowsDeclarations[0];
 
         PropertyDeclarationSyntax predicate = CSharpSource
             .Load("Canvas", "CanvasDocumentViewModel.cs")
@@ -372,9 +378,9 @@ public sealed class CanvasAnnouncerCensus
         string predicateCondition =
             CSharpSource.Normalize(predicate.ExpressionBody!.Expression);
 
-        // The surface says `model.State == …`; the document says
-        // `State == …`. Compare the STATE TEST, which is the part that
-        // can drift.
+        // The surface says `model.State == …` and `model.Outline`; the
+        // document says `State == …` and `Outline`. Compare the
+        // CONDITION, which is the part that can drift.
         Assert.Equal(
             surfaceCondition.Replace("model.", string.Empty, StringComparison.Ordinal),
             predicateCondition);

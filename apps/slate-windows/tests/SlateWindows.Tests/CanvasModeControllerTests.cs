@@ -562,6 +562,126 @@ public sealed class CanvasModeControllerTests
         CanvasModeConformance.ADepartureHeldAcrossAThrowingCommitStillCancels(
             NewProbe(mode));
 
+    // --- C7: the transition's exits are structural, not enumerated ---------
+
+    /// <summary>
+    /// Codex round 3, B2: the ANNOUNCEMENT is fallible too, and a
+    /// commit that faults there still drains its deferred departure.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Round 2 guarded the exits it could name — applied, refused, the
+    /// effect throwing — and left the confirmation announce sitting
+    /// between the outcome and the drain, unguarded. It renders through
+    /// core, so it can fault; and when it did, the drain below it never
+    /// ran and the slot stayed loaded. The next commit's mode was then
+    /// cancelled by a departure that belonged to the previous press.
+    /// </para>
+    /// <para>
+    /// The fix is not another catch. The effect, the outcome and the
+    /// announcements are ONE guarded region and the drain is its
+    /// `finally`, so "every exit drains" stops being a list to keep
+    /// complete.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void AnAnnouncementThatFaultsAfterTheOutcomeStillDrainsTheSlot()
+    {
+        var announcer = new CanvasAnnouncer(_announced.Add, TimeSpan.FromMinutes(1));
+        var controller = new CanvasModeController(@event =>
+        {
+            // The one announcement this commit owes, and it faults.
+            if (@event is CanvasA11yEvent.CanvasModeCommitted)
+            {
+                throw new InvalidOperationException("the confirmation render faulted.");
+            }
+            announcer.Announce(@event);
+        });
+        var departing = new CanvasModeSpec(
+            CanvasMode.Move,
+            new CanvasModeObject.Card("Research"),
+            () =>
+            {
+                _ = controller.HandleFocusDeparture(CanvasFocusDeparture.PaneFocus);
+                return CanvasModeCommitResult.Committed(
+                    new CanvasA11yEvent.CanvasModeCommitted(
+                        CanvasTransientVerb.Move,
+                        new CanvasModeObject.Card("Research")));
+            },
+            () => new CanvasModeRestoration.BackAt("Research"));
+        Assert.True(controller.Enter(departing));
+
+        _ = Assert.Throws<InvalidOperationException>(() => controller.Commit());
+        Assert.False(controller.IsActive);
+
+        // The slot is EMPTY, and the only way to see that is the next
+        // mode: a departure left behind cancels a mode it never belonged
+        // to, and a REFUSED commit is the case that still has one to
+        // cancel.
+        _announced.Clear();
+        var refusing = new CanvasModeSpec(
+            CanvasMode.Resize,
+            new CanvasModeObject.Card("Evidence"),
+            CanvasModeCommitResult.Refused,
+            () => new CanvasModeRestoration.SizeRestored());
+        Assert.True(controller.Enter(refusing));
+        Assert.False(controller.Commit());
+        Assert.True(
+            controller.IsActive,
+            "a refused commit keeps its mode — unless a departure from the "
+            + "PREVIOUS commit was still in the slot to cancel it.");
+        Assert.DoesNotContain(
+            _announced.Select(line => line.Text),
+            line => line.Contains("cancelled", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Codex round 3, B2: a drain that faults must not become the
+    /// failure the caller sees.
+    /// </summary>
+    /// <remarks>
+    /// The drain runs from a `finally`, so an exception raised inside it
+    /// REPLACES the one already unwinding — the mutation that actually
+    /// failed would vanish from the report and a restoration effect would
+    /// be blamed for it. The departure's own outcome is not worth that,
+    /// so it is logged and the unwind continues. The slot is still
+    /// emptied, because it is emptied before the departure runs.
+    /// </remarks>
+    [Fact]
+    public void AFaultingDrainNeverMasksTheFailureThatCausedIt()
+    {
+        var announcer = new CanvasAnnouncer(_announced.Add, TimeSpan.FromMinutes(1));
+        CanvasModeController controller = new(announcer.Announce);
+        var spec = new CanvasModeSpec(
+            CanvasMode.Move,
+            new CanvasModeObject.Card("Research"),
+            () =>
+            {
+                _ = controller.HandleFocusDeparture(CanvasFocusDeparture.PaneFocus);
+                throw new InvalidOperationException("the mutation faulted.");
+            },
+            () => throw new NotSupportedException("the restoration faulted."));
+        Assert.True(controller.Enter(spec));
+
+        // The EFFECT's failure is the one that propagates — not the
+        // restoration's, which happened later and only because of it.
+        var failure = Assert.Throws<InvalidOperationException>(() => controller.Commit());
+        Assert.Equal("the mutation faulted.", failure.Message);
+        // The mode still ended: `Cancel` clears the stack before it asks
+        // the restoration for its sentence.
+        Assert.False(controller.IsActive);
+
+        // …and the slot is empty, so the next mode is unaffected.
+        var refusing = new CanvasModeSpec(
+            CanvasMode.Resize,
+            new CanvasModeObject.Card("Evidence"),
+            CanvasModeCommitResult.Refused,
+            () => new CanvasModeRestoration.SizeRestored());
+        Assert.True(controller.Enter(refusing));
+        Assert.False(controller.Commit());
+        Assert.True(controller.IsActive);
+    }
+
     [Theory]
     [MemberData(nameof(EveryMode))]
     public void M2_ADepartureDuringTheCommitEffectYieldsOneOutcome(CanvasMode mode) =>

@@ -17,6 +17,8 @@ namespace SlateWindows;
 internal enum HostDiagnosticEvent
 {
     ActivationDeliveryFailed,
+    CanvasModeDepartureFailed,
+    CanvasModeTeardownFailed,
     ClipboardCopyFailed,
     DpiAwarenessFailed,
     DpiCensusFailed,
