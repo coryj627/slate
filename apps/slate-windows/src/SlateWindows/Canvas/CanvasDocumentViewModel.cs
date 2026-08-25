@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Diagnostics;
 using SlateWindows.Panels;
 using uniffi.slate_uniffi;
 
@@ -66,6 +67,34 @@ internal enum CanvasActivation
 internal sealed record CanvasFocusRequest(object Owner, string? NodeId, int Generation);
 
 /// <summary>
+/// What the surfaces are showing for the filter, and whether that answers
+/// the needle now in the field — the mac <c>CanvasDocument.FilterView</c>
+/// twin (contract C10).
+/// </summary>
+/// <remarks>
+/// Every consumer reads this ONE value, so the rows on screen, the
+/// summary's number and the announced count cannot come from three
+/// different answers. The invariant is <i>displayed rows == announced
+/// count</i>, always.
+/// </remarks>
+/// <param name="Rows">Exactly what the surfaces display.</param>
+/// <param name="Narrowed">True when a filter narrowed
+/// <paramref name="Rows"/> at all.</param>
+/// <param name="Current">True when <paramref name="Rows"/> answer the
+/// needle in the field. False means no handle could answer it and the
+/// PREVIOUS answer is still on screen — the caller must say so rather
+/// than count these rows as if they matched what the user just
+/// typed.</param>
+/// <param name="MatchedIds">The matched node ids when narrowed, so the
+/// table projection filters core's table rows by the SAME answer the
+/// outline shows; null when nothing is narrowed.</param>
+internal sealed record CanvasFilterView(
+    IReadOnlyList<CanvasOutlineRow> Rows,
+    bool Narrowed,
+    bool Current,
+    IReadOnlySet<string>? MatchedIds);
+
+/// <summary>
 /// W6-1 PR A (#745): the per-path canvas document — the mac
 /// <c>CanvasDocument</c> twin, built on the W4-6 <c>BaseDocument</c>
 /// pattern. Owns the native handle, the load state, the published
@@ -104,6 +133,10 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     private string? _detailTitle;
     private bool _announcedDegradedLoad;
     private Task? _asyncClose;
+    private string _filterText = string.Empty;
+    private string? _whereAmIText;
+    private int _filterFocusToken;
+    private (string Needle, IReadOnlySet<string> Ids)? _filterMatchCache;
 
     /// <summary>Row lookup by node id — the outline is walked by id from
     /// selection, activation and the tree's own callbacks.</summary>
@@ -128,13 +161,17 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         string path,
         CanvasAnnouncer announcer,
         bool synchronousForTests = false,
-        string? retargetedFrom = null)
+        string? retargetedFrom = null,
+        Func<CanvasVerbosity>? verbosity = null)
         : base(synchronousForTests)
     {
         _session = session;
         Path = path;
         Announcer = announcer;
         _retargetedFrom = retargetedFrom;
+        _verbosity = verbosity ?? (static () => CanvasVerbosity.Standard);
+        Modes = new CanvasModeController(Announcer.Announce);
+        Navigator = new CanvasNavigator(this);
     }
 
     /// <summary>Vault-relative path — the registry's identity, compared
@@ -152,10 +189,30 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// canvas (contract A1/R-B).</summary>
     public CanvasSelection Selection { get; } = new();
 
-    /// <summary>Contract A7: a parameter at every announce site,
-    /// defaulted until PR C ships the persisted, live-switchable
-    /// preference. PR C replaces the field and changes no call site.</summary>
-    public CanvasVerbosity Verbosity { get; set; } = CanvasVerbosity.Standard;
+    private readonly Func<CanvasVerbosity> _verbosity;
+
+    /// <summary>
+    /// Contract A7/C13: a parameter at every announce site, READ LIVE.
+    /// </summary>
+    /// <remarks>
+    /// A delegate rather than a value, because the preference is
+    /// app-level and live-switchable (t0 §1.2) while this object is
+    /// per-document: reading it at every announce is what makes a
+    /// verbosity change take effect on the very next movement without
+    /// anything pushing the new value into every open canvas. PR A's
+    /// settable field is gone; no announce site changed, which is what
+    /// A7 said would happen.
+    /// </remarks>
+    public CanvasVerbosity Verbosity => _verbosity();
+
+    /// <summary>The per-document mode stack (t0 §2). One per document, so
+    /// two panes on one canvas share the mode exactly as they share the
+    /// selection (R-B).</summary>
+    public CanvasModeController Modes { get; }
+
+    /// <summary>The per-document command layer (contract C1) — not a
+    /// fourth view: every projection hosts it.</summary>
+    public CanvasNavigator Navigator { get; }
 
     public CanvasLoadState State
     {
@@ -435,6 +492,373 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     public string TargetOf(string nodeId) =>
         _targets.TryGetValue(nodeId, out string? target) ? target : string.Empty;
 
+    // --- The never-silent read gate (contract C4) -----------------------
+
+    /// <summary>
+    /// <b>The one state → response mapping for canvas READ verbs</b> —
+    /// the mac <c>canvasReadRefusal(for:)</c> twin (VA-1/VA-2).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Null means the document can answer a core query. Anything else is
+    /// the sentence its state owes the user. Static and total over
+    /// (<see cref="CanvasLoadState"/> × handle), because the mac
+    /// equivalent's history is three consecutive review rounds finding a
+    /// state missing from a hand-written list:
+    /// <c>TheReadMappingAnswersEveryLoadState</c> enumerates the enum
+    /// rather than restating it, so a sixth state fails the test by name.
+    /// </para>
+    /// <para>
+    /// The <c>Ready</c>-with-no-handle arm is VA-1's reopening window.
+    /// Windows cannot reach it the way mac does — a rename RE-KEYS the
+    /// registry and builds a fresh document rather than detaching a
+    /// handle (CD-32) — so today it is reachable only on a RETIRED
+    /// document, whose announcer is already silenced (contract A5). The
+    /// arm exists because the mapping is a table over the state space,
+    /// not over the states somebody remembered were reachable, and PR E's
+    /// funnel and file watcher are the first things that could make it
+    /// live.
+    /// </para>
+    /// </remarks>
+    internal static CanvasStatusNote? ReadRefusalFor(CanvasLoadState state, bool handleLive) =>
+        state switch
+        {
+            CanvasLoadState.Ready =>
+                handleLive ? null : new CanvasStatusNote.Reopening(),
+            CanvasLoadState.Loading => new CanvasStatusNote.Loading(),
+            CanvasLoadState.ParseError => new CanvasStatusNote.NotReadable(),
+            CanvasLoadState.Failed => new CanvasStatusNote.NotReadable(),
+            CanvasLoadState.RetargetAbsent => new CanvasStatusNote.NotReadable(),
+            _ => throw new UnreachableException(
+                $"CanvasLoadState.{state} has no read-refusal answer. The read "
+                + "mapping is a total table (contract C4); a new state is a "
+                + "decision, not a silent arm."),
+        };
+
+    /// <summary>This document's refusal, or null when it can answer.</summary>
+    internal CanvasStatusNote? ReadRefusal =>
+        ReadRefusalFor(State, _handle is not null);
+
+    /// <summary>
+    /// Admission for a read verb: true when the document can answer,
+    /// false HAVING ANNOUNCED what the state owes. The announcement
+    /// happens here so no verb decides which sentence its state deserves.
+    /// </summary>
+    internal bool AdmitStructuralRead()
+    {
+        if (ReadRefusal is not { } note)
+        {
+            return true;
+        }
+        Announcer.Announce(new CanvasA11yEvent.CanvasStatus(note));
+        return false;
+    }
+
+    /// <summary>
+    /// Whether the surface is putting this document's retained rows on
+    /// screen — the question the recorded precedence asks before the
+    /// state's (contract C4, the mac <c>rendersRetainedSnapshot</c>
+    /// twin): a selection question is meaningful exactly where the user
+    /// can see rows to have a caret in.
+    /// </summary>
+    /// <remarks>
+    /// DERIVED from what <see cref="CanvasSurfaceView"/> actually
+    /// renders, not from the state's name — and
+    /// <c>TheSnapshotVisibilityPredicateMatchesTheSurfaceRender</c>
+    /// parses that method and fails when the two disagree, so changing
+    /// what a state shows forces this to follow. Windows shows a
+    /// projection only under <c>Ready</c>; mac additionally renders a
+    /// read-only snapshot for its <c>retargetFailed</c>, which Windows
+    /// has no equivalent of (CD-32).
+    /// </remarks>
+    internal bool RendersRetainedSnapshot => State == CanvasLoadState.Ready;
+
+    /// <summary>
+    /// The recorded precedence, in one place beside the mapping that owns
+    /// the state story: a verb answers its OWN selection question before
+    /// the state's — but only on a canvas whose rows the user can see.
+    /// Returns true HAVING ANNOUNCED, so the caller returns.
+    /// </summary>
+    internal bool AnsweredMissingSelection()
+    {
+        if (!RendersRetainedSnapshot || Selection.Selected is not null)
+        {
+            return false;
+        }
+        AnnounceSelectionUnresolvable();
+        return true;
+    }
+
+    /// <summary>
+    /// The other never-silent arm: a structural query THREW while the
+    /// handle was live, so the selection no longer names a card this
+    /// canvas can answer for (contract 0b-6's row/model skew).
+    /// </summary>
+    /// <remarks>
+    /// <c>Nothing selected.</c> is the accurate existing phrase for that:
+    /// nothing RESOLVABLE is selected. Deliberately not the verb-specific
+    /// phrase, because none of those was learned — the group might have
+    /// children, the card might have a parent, the row might not be at
+    /// canvas level. Announcing one of those asserts an answer no query
+    /// gave.
+    /// </remarks>
+    internal void AnnounceSelectionUnresolvable() =>
+        Announcer.Announce(new CanvasA11yEvent.CanvasStatus(
+            new CanvasStatusNote.NothingSelected()));
+
+    // --- Structural queries (contract C5) --------------------------------
+
+    /// <summary>
+    /// Core's children of a group, in reading order (0b-8). False means
+    /// the query could not answer — never "the group is empty", which is
+    /// the distinction the VA-1 throw-arm table exists to keep.
+    /// </summary>
+    internal bool TryChildrenOf(string groupId, out IReadOnlyList<string> children) =>
+        TryQuery<IReadOnlyList<string>>(
+            handle => _session.CanvasChildrenOf(handle, groupId), [], out children);
+
+    /// <summary>Core's containing group (0b-8). The out value is null for
+    /// "at canvas level", which is why the ANSWER and the FAILURE are
+    /// different returns — an <c>Option</c> collapsed into a nullable
+    /// would erase exactly the distinction the two arms make.</summary>
+    internal bool TryParentOf(string nodeId, out string? parent) =>
+        TryQuery<string?>(handle => _session.CanvasParentOf(handle, nodeId), null, out parent);
+
+    /// <summary>Core's cycle-safe greedy walk (0b-9), hops EXCLUDING the
+    /// start card.</summary>
+    internal bool TryTracePath(string nodeId, out IReadOnlyList<CanvasTraceHop> hops) =>
+        TryQuery<IReadOnlyList<CanvasTraceHop>>(
+            handle => _session.CanvasTracePath(handle, nodeId), [], out hops);
+
+    /// <summary>
+    /// Core's full readback for one card (t0 §1.4). The failure DETAIL
+    /// comes out too: Where-am-I is the one read verb whose vocabulary
+    /// carries a dynamic reason (<c>CanvasActionFailed{WhereAmI}</c>),
+    /// and swallowing the message would make that parameter a
+    /// constant.
+    /// </summary>
+    internal bool TryWhereAmI(string nodeId, out CanvasWhereAmI? context, out string detail)
+    {
+        detail = string.Empty;
+        try
+        {
+            lock (_ffiLock)
+            {
+                if (_handle is not { } handle)
+                {
+                    context = null;
+                    return false;
+                }
+                context = _session.CanvasWhereAmI(handle, nodeId);
+                return true;
+            }
+        }
+        catch (VaultException exception)
+        {
+            context = null;
+            detail = exception.Message;
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// The selected card's connections, or NULL when nothing could
+    /// answer.
+    /// </summary>
+    /// <remarks>
+    /// The primitive <see cref="NeighborsOf"/> is built on: A11's outline
+    /// rows want "no rows" for an unanswerable lookup, while
+    /// follow-connection must not say <c>No outgoing connection.</c> —
+    /// a claim about an adjacency list — when there is no list. One
+    /// query, two honest answers.
+    /// </remarks>
+    public IReadOnlyList<CanvasNeighbor>? NeighborsIfKnown(string nodeId)
+    {
+        if (_neighbors.TryGetValue(nodeId, out IReadOnlyList<CanvasNeighbor>? cached))
+        {
+            return cached;
+        }
+        if (!TryQuery<IReadOnlyList<CanvasNeighbor>>(
+            handle => _session.CanvasNeighbors(handle, nodeId),
+            [],
+            out IReadOnlyList<CanvasNeighbor> neighbors))
+        {
+            // A refusal caches nothing, so the skew of contract A16 heals
+            // on the next ask.
+            return null;
+        }
+        _neighbors[nodeId] = neighbors;
+        return neighbors;
+    }
+
+    /// <summary>
+    /// One handle-guarded FFI read. False means "no answer" — either no
+    /// handle at all, or the model refused the id (<c>bad_node</c>) —
+    /// and the caller decides which sentence that owes.
+    /// </summary>
+    private bool TryQuery<T>(Func<ulong, T> read, T fallback, out T value)
+    {
+        try
+        {
+            lock (_ffiLock)
+            {
+                if (_handle is not { } handle)
+                {
+                    value = fallback;
+                    return false;
+                }
+                value = read(handle);
+                return true;
+            }
+        }
+        catch (VaultException)
+        {
+            // bad_node / bad_handle — one refusal, never discriminated by
+            // message (0b-12's API note).
+            value = fallback;
+            return false;
+        }
+    }
+
+    // --- Filter (contract C10) -------------------------------------------
+
+    /// <summary>
+    /// The in-canvas filter's needle (#373). A VIEW over the outline and
+    /// table — never a mutation; filtered-out cards stay in the file, and
+    /// Escape's second rung restores the full canvas.
+    /// </summary>
+    public string FilterText
+    {
+        get => _filterText;
+        set
+        {
+            string next = value ?? string.Empty;
+            if (string.Equals(_filterText, next, StringComparison.Ordinal))
+            {
+                return;
+            }
+            _filterText = next;
+            OnPropertyChanged(nameof(FilterText));
+            OnPropertyChanged(nameof(FilterActive));
+            OutlinePublished?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    /// <summary>
+    /// True when a non-blank needle narrows the surfaces. UI state —
+    /// whether to show the Clear button, the result summary and the Esc
+    /// rung — not the match rule, which is core's.
+    /// </summary>
+    /// <remarks>
+    /// Mac keeps Foundation's <c>.whitespaces</c>, which does NOT include
+    /// newlines, so a needle of nothing but a newline reads as active and
+    /// (core trimming it) matches everything. .NET's
+    /// <c>IsNullOrWhiteSpace</c> trims newlines too, which would make the
+    /// same needle inactive — so the predicate is spelled out to mac's
+    /// rule rather than borrowed. CD-22 records the trimming differences
+    /// this belongs to.
+    /// </remarks>
+    public bool FilterActive => IsFilterActive(_filterText);
+
+    internal static bool IsFilterActive(string needle) =>
+        needle.Any(character => !char.IsWhiteSpace(character) || character is '\n' or '\r');
+
+    /// <summary>
+    /// What the surfaces show for the current needle, in reading order —
+    /// ONE value, so the rows on screen, the summary's number and the
+    /// announced count cannot disagree.
+    /// </summary>
+    /// <remarks>
+    /// The MATCH is core's <c>canvas_filter</c> (0b-13/0b-14): title, the
+    /// kind type word, any one element of the group path, and the
+    /// activation target. The needle goes over UNTRIMMED — core trims it,
+    /// and an empty needle matches everything, so whitespace answers the
+    /// full outline exactly as <see cref="FilterActive"/> says it should.
+    /// The answer is memoized per needle and invalidated by every publish,
+    /// because the ids can move under an unchanged needle.
+    /// </remarks>
+    internal CanvasFilterView Filter
+    {
+        get
+        {
+            if (!FilterActive)
+            {
+                return new CanvasFilterView(_outline, Narrowed: false, Current: true, null);
+            }
+            if (_filterMatchCache is { } cached
+                && string.Equals(cached.Needle, _filterText, StringComparison.Ordinal))
+            {
+                return new CanvasFilterView(
+                    RowsMatching(cached.Ids), Narrowed: true, Current: true, cached.Ids);
+            }
+            if (TryQuery<IReadOnlyList<string>>(
+                handle => _session.CanvasFilter(handle, _filterText),
+                [],
+                out IReadOnlyList<string> matched))
+            {
+                var ids = matched.ToHashSet(StringComparer.Ordinal);
+                _filterMatchCache = (_filterText, ids);
+                return new CanvasFilterView(
+                    RowsMatching(ids), Narrowed: true, Current: true, ids);
+            }
+            if (_filterMatchCache is { } stale)
+            {
+                // The needle changed and nothing could answer it. The
+                // PREVIOUS rows stay on screen and `Current` is false:
+                // widening silently back to the full outline would show
+                // every card while the field still claims to be
+                // filtering, and then speak that number as a match count.
+                return new CanvasFilterView(
+                    RowsMatching(stale.Ids), Narrowed: true, Current: false, stale.Ids);
+            }
+            // Nothing was ever applied, so the unfiltered outline IS the
+            // prior view. `Narrowed: false` keeps the summary from
+            // claiming these rows matched anything.
+            return new CanvasFilterView(_outline, Narrowed: false, Current: false, null);
+        }
+    }
+
+    /// <summary>The outline rows the surfaces display.</summary>
+    public IReadOnlyList<CanvasOutlineRow> FilteredOutline => Filter.Rows;
+
+    /// <summary>The table rows the grid displays — core's rows, narrowed
+    /// by the SAME answer the outline shows (contract C10).</summary>
+    public IReadOnlyList<CanvasTableRow> FilteredTableRows =>
+        Filter.MatchedIds is { } ids
+            ? _tableRows.Where(row => ids.Contains(row.NodeId)).ToArray()
+            : _tableRows;
+
+    private IReadOnlyList<CanvasOutlineRow> RowsMatching(IReadOnlySet<string> ids) =>
+        _outline.Where(row => ids.Contains(row.NodeId)).ToArray();
+
+    /// <summary>
+    /// A request to put keyboard focus in the filter field (Ctrl+F). A
+    /// TOKEN rather than an event: only the surface the user is looking
+    /// at should take focus, and a token lets each surface decide for
+    /// itself when it observes the change (the mac
+    /// <c>canvasFilterFocusToken</c> shape, Codoki #626).
+    /// </summary>
+    public int FilterFocusToken
+    {
+        get => _filterFocusToken;
+        private set => SetField(ref _filterFocusToken, value);
+    }
+
+    internal void RequestFilterFocus() => FilterFocusToken++;
+
+    // --- Where am I (contract C11) ---------------------------------------
+
+    /// <summary>
+    /// The rendered Where-am-I readback, or null when the panel is
+    /// closed. The SAME string the announcement speaks — one render, no
+    /// second composition (t0 §1.4/§3).
+    /// </summary>
+    public string? WhereAmIText
+    {
+        get => _whereAmIText;
+        internal set => SetField(ref _whereAmIText, value);
+    }
+
     // --- Load -----------------------------------------------------------
 
     /// <summary>Open (or reopen) the canvas and publish its
@@ -548,6 +972,12 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         _targets.Clear();
         _subpaths.Clear();
         _neighbors.Clear();
+        // A read cache never outlives the rows it describes (contract
+        // C10): the memoized match set names ids that are about to stop
+        // existing, and a stale answer that still LOOKS like an answer is
+        // the filter's own second failure mode.
+        _filterMatchCache = null;
+        WhereAmIText = null;
         Outline = [];
         TableRows = [];
         Selection.Selected = null;
@@ -563,6 +993,8 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         _targets.Clear();
         _subpaths.Clear();
         _neighbors.Clear();
+        _filterMatchCache = null;
+        WhereAmIText = null;
         foreach (CanvasOutlineRow row in outline)
         {
             _rows[row.NodeId] = row;
@@ -627,34 +1059,8 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// model refuses. A refusal answers EMPTY and caches nothing, so the
     /// row stays selectable and the next ask heals.
     /// </summary>
-    public IReadOnlyList<CanvasNeighbor> NeighborsOf(string nodeId)
-    {
-        if (_neighbors.TryGetValue(nodeId, out IReadOnlyList<CanvasNeighbor>? cached))
-        {
-            return cached;
-        }
-        CanvasNeighbor[] neighbors;
-        try
-        {
-            lock (_ffiLock)
-            {
-                if (_handle is not { } handle)
-                {
-                    return [];
-                }
-                neighbors = _session.CanvasNeighbors(handle, nodeId);
-            }
-        }
-        catch (VaultException)
-        {
-            // bad_node / bad_handle — one refusal, never discriminated
-            // by message (0b-12's API note). Uncached: the handle may
-            // be reopened on the next change event.
-            return [];
-        }
-        _neighbors[nodeId] = neighbors;
-        return neighbors;
-    }
+    public IReadOnlyList<CanvasNeighbor> NeighborsOf(string nodeId) =>
+        NeighborsIfKnown(nodeId) ?? [];
 
     /// <summary>The interim card text (t2 #362). Null and an announced
     /// refusal for a non-text card or an id the model does not know —
@@ -722,6 +1128,25 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             ColorName: row.ColorName,
             Marked: Selection.IsMarked(row.NodeId)));
     }
+
+    /// <summary>
+    /// Seat the shared selection with NO announcement — the A12 silent
+    /// seat, extended to focus delivery (contract C12, CD-40).
+    /// </summary>
+    /// <remarks>
+    /// A14 lands focus on the row the user is returning FROM, which can
+    /// differ from the selection when another pane moved it. Both
+    /// projections seat selection as an inseparable part of taking
+    /// focus — WPF's <c>TreeViewItem</c> selects itself on
+    /// <c>GotFocus</c>, and a <c>DataGrid</c>'s currency IS its focused
+    /// row — so the reachable choice is not "seat or don't", it is
+    /// "audibly or silently". Silently: the screen reader reads the row
+    /// it just landed on, and a <c>CanvasMovedTo</c> on top of that is
+    /// the t0 §1.5 doubling rule broken on a landing the user did not
+    /// make.
+    /// </remarks>
+    internal void SeatSelectionSilently(string? nodeId) =>
+        Selection.Selected = nodeId;
 
     /// <summary>
     /// The group-boundary event a move crosses into, or null when the
@@ -967,6 +1392,12 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     {
         base.Shutdown();
         _ = Interlocked.Increment(ref _generation);
+        // M4's last case: a document being retired takes its mode with
+        // it, and the cancel has to happen BEFORE the announcer is
+        // silenced or the restoration would never be spoken. Closing the
+        // tab a mode is running in is exactly the departure M4 names.
+        _ = Modes.HandleFocusDeparture(CanvasFocusDeparture.TabSwitch);
+        WhereAmIText = null;
         // Every retirement route reaches here — the release sweep, the
         // retarget, the vault-close drain — so this is the one place the
         // announcer has to be silenced (contract A5): a coalesced line
@@ -1037,6 +1468,69 @@ internal static class CanvasPhrase
     public const string WarningsRegionName = "Canvas load warnings";
 
     public const string DetailRegionName = "Card text";
+
+    // --- W6-1 PR C: the filter field, its summary, and the Where-am-I
+    // panel. The mac label inventory verbatim where mac has the string
+    // (§W-C label class, contract C14).
+
+    /// <summary>Mac's <c>accessibilityLabel</c> for the filter field,
+    /// verbatim.</summary>
+    public const string FilterFieldName = "Filter cards";
+
+    /// <summary>Mac's <c>accessibilityHint</c> for it, with mac's Escape
+    /// sentence kept: the Escape rung behaves identically here (t0
+    /// M5).</summary>
+    public const string FilterFieldHint =
+        "Narrows the outline and table by title, type, group, or target. Escape clears.";
+
+    /// <summary>Mac's <c>Button("Clear")</c> and its accessibility label,
+    /// verbatim.</summary>
+    public const string ClearFilterLabel = "Clear";
+
+    public const string ClearFilterName = "Clear filter";
+
+    /// <summary>The result-summary region's own name. Windows-authored:
+    /// mac's summary is an unlabelled caption beside the field, and an
+    /// unlabelled region is not readable on demand, which is the whole
+    /// point of t0 §3's "result summary element".</summary>
+    public const string FilterSummaryName = "Filter results";
+
+    /// <summary>Mac's Where-am-I panel heading, verbatim.</summary>
+    public const string WhereAmIHeading = "Where am I?";
+
+    /// <summary>Mac's Close button on that panel, verbatim.</summary>
+    public const string WhereAmICloseLabel = "Close";
+
+    /// <summary>
+    /// The M6 visible controls. The VISIBLE text is short because the
+    /// buttons sit in a header beside the mode's own value; the
+    /// ACCESSIBLE name is the mac catalog's verb, so a Voice Control user
+    /// says the same words the palette row is called.
+    /// </summary>
+    public const string ModeCommitLabel = "Commit";
+
+    public const string ModeCancelLabel = "Cancel";
+
+    public const string ModeCommitName = "Commit Mode";
+
+    public const string ModeCancelName = "Cancel Mode";
+
+    /// <summary>
+    /// The filter's result summary — mac's sentence, verbatim, including
+    /// its verb agreement ("1 of 40 cards matches", "3 of 40 cards
+    /// match").
+    /// </summary>
+    /// <remarks>
+    /// The spec's §PR C Builds line writes this slot as "n of m shown",
+    /// which is t0's spelling for the SPOKEN Where-am-I filter clause —
+    /// core renders that one, and CD-5 already settled that there is
+    /// exactly one of it. This is the visible LABEL, and §1 R-C says a
+    /// static label is the mac inventory verbatim. CD-42 records the
+    /// choice so the two spellings are not read as drift.
+    /// </remarks>
+    public static string FilterSummary(int matched, int total) =>
+        $"{matched} of {SlateUniffiMethods.CountNoun((ulong)total, "card", "cards")} "
+        + (matched == 1 ? "matches" : "match");
 
     /// <summary>The switcher's per-surface labels; the SPOKEN surface
     /// change is <c>CanvasSurfaceShown</c>, which core renders.</summary>
@@ -1153,7 +1647,12 @@ internal static class CanvasPhrase
     /// announcement-only. The mac <c>nodeValue</c> twin minus the
     /// <c>, filtered</c> clause PR C introduces.</summary>
     public static string RowStatus(
-        uint ordinalN, uint totalM, string? container, string? colorName, bool marked)
+        uint ordinalN,
+        uint totalM,
+        string? container,
+        string? colorName,
+        bool marked,
+        bool filtered = false)
     {
         string status = $"{ordinalN} of {totalM} in {container ?? "canvas"}";
         if (colorName is { Length: > 0 } color)
@@ -1163,6 +1662,14 @@ internal static class CanvasPhrase
         if (marked)
         {
             status += ", marked";
+        }
+        if (filtered)
+        {
+            // t0 §3 / spec §PR C behavior 4: a row a reader reaches while
+            // a filter is on carries the CONTEXT that it is one of a
+            // narrowed set — mac's `CanvasOutlineView` appends the same
+            // clause to the same value.
+            status += ", filtered";
         }
         return status;
     }

@@ -11,18 +11,29 @@ namespace SlateWindows.Canvas;
 
 /// <summary>
 /// W6-1 PR A (#745): the `.canvas` tab body — the mac
-/// <c>CanvasContainerView</c> twin. Header (title, the surface
-/// switcher), the t0 §5 state regions (loading / empty onboarding /
-/// degraded banner with its focusable warning rows / parse error /
-/// retarget-absent), and the outline projection. The table (PR B) and
-/// visual (PR D) arms land in the same body slot, visibility-gated so
-/// exactly one projection is ever in the UIA tree.
+/// <c>CanvasContainerView</c> twin. Header (title, the surface switcher,
+/// the PR C filter field and mode controls), the t0 §5 state regions
+/// (loading / empty onboarding / degraded banner with its focusable
+/// warning rows / parse error / retarget-absent), the outline and table
+/// projections, and PR C's Where-am-I panel. The visual projection (PR D)
+/// lands in the same body slot, visibility-gated so exactly one
+/// projection is ever in the UIA tree.
 ///
 /// A code-built control, not a XAML pair (CD-31): every sibling surface
 /// view in this shell — Bases, dashboard, history, sync diagnostics,
 /// reading — is built the same way.
+///
+/// W6-1 PR C: this is also the canvas's KEY SURFACE. Every
+/// <c>ChordScope.Canvas</c> row is delivered from
+/// <see cref="OnPreviewKeyDown"/> into <see cref="CanvasNavigator"/>, and
+/// the Esc ladder (t0 §2 M5) is implemented HERE rather than in
+/// <c>Window_PreviewKeyDown</c> — so the shell's own Escape keeps working
+/// exactly as it does with no canvas open whenever the ladder does not
+/// consume (contract C6). The surface implements
+/// <see cref="ICanvasSurfacePresenter"/>, which is the whole of what the
+/// navigator knows about views.
 /// </summary>
-internal sealed class CanvasSurfaceView : UserControl
+internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
 {
     public static readonly DependencyProperty ModelProperty =
         DependencyProperty.Register(
@@ -31,11 +42,31 @@ internal sealed class CanvasSurfaceView : UserControl
             typeof(CanvasSurfaceView),
             new PropertyMetadata(null, OnModelChanged));
 
+    /// <summary>
+    /// The shell's "is a modal overlay open" question — M4's one
+    /// keep-alive arm (contract C8).
+    /// </summary>
+    /// <remarks>
+    /// A static seam because this control is built by a XAML template
+    /// with no injection point, and defaulted to "no overlay" so a bare
+    /// test host behaves like the shell with nothing open.
+    /// <c>MainWindow</c> installs the real answer;
+    /// <c>TheShellInstallsTheModalOverlayAnswerForModeCancellation</c>
+    /// pins that it does, because a default left in place would silently
+    /// turn every palette open into a mode cancellation.
+    /// </remarks>
+    internal static Func<bool> ShellOverlayIsOpen { get; set; } = static () => false;
+
     private readonly TextBlock _title;
     private readonly AutomationNamedGroupPanel _switcher;
     private readonly RadioButton _outlineChoice;
     private readonly RadioButton _tableChoice;
     private readonly RadioButton _visualChoice;
+    private readonly TextBox _filterField;
+    private readonly TextBlock _filterSummary;
+    private readonly Button _filterClear;
+    private readonly Button _modeCommit;
+    private readonly Button _modeCancel;
     private readonly TextBlock _stateBanner;
     private readonly TextBlock _degradedBanner;
     private readonly ListBox _warningRows;
@@ -45,7 +76,13 @@ internal sealed class CanvasSurfaceView : UserControl
     private readonly Grid _detailRegion;
     private readonly TextBlock _detailHeading;
     private readonly TextBox _detailText;
+    private readonly AutomationNamedGroupPanel _whereAmIPanel;
+    private readonly TextBox _whereAmIReadback;
     private bool _synchronizingSwitcher;
+    private bool _synchronizingFilter;
+    private int _filterFocusToken;
+    private IInputElement? _whereAmIReturnFocus;
+    private Window? _hostWindow;
 
     public CanvasSurfaceView()
     {
@@ -102,6 +139,54 @@ internal sealed class CanvasSurfaceView : UserControl
         KeyboardNavigation.SetDirectionalNavigation(
             _switcher, KeyboardNavigationMode.Cycle);
 
+        // The filter field (t0 §3: the filter's state is READABLE — the
+        // field's value plus a result summary element — never
+        // announcement-only). An Edit peer with mac's label and hint.
+        _filterField = new TextBox
+        {
+            Width = 220,
+            Margin = new Thickness(12, 0, 6, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        AutomationProperties.SetAutomationId(_filterField, "CanvasFilterField");
+        AutomationProperties.SetName(_filterField, CanvasPhrase.FilterFieldName);
+        AutomationProperties.SetHelpText(_filterField, CanvasPhrase.FilterFieldHint);
+        _filterField.TextChanged += OnFilterTextChanged;
+
+        _filterSummary = new TextBlock
+        {
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 6, 0),
+            Visibility = Visibility.Collapsed,
+            // t0 §3 wants this READ ON DEMAND, so it is its own focus
+            // stop rather than a decoration beside the field.
+            Focusable = true,
+        };
+        KeyboardNavigation.SetIsTabStop(_filterSummary, true);
+        _filterSummary.SetResourceReference(
+            TextBlock.ForegroundProperty, "Slate.SecondaryTextBrush");
+        AutomationProperties.SetAutomationId(_filterSummary, "CanvasFilterSummary");
+
+        _filterClear = new Button
+        {
+            Content = CanvasPhrase.ClearFilterLabel,
+            Margin = new Thickness(0, 0, 12, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            Visibility = Visibility.Collapsed,
+        };
+        AutomationProperties.SetAutomationId(_filterClear, "CanvasClearFilter");
+        AutomationProperties.SetName(_filterClear, CanvasPhrase.ClearFilterName);
+        _filterClear.Click += (_, _) => Model?.Navigator.ClearFilter();
+
+        // M6: every mode transition has a VISIBLE control, so Switch
+        // Control and Voice Control never depend on the keyboard path.
+        _modeCommit = ModeButton(
+            "CanvasCommitMode", CanvasPhrase.ModeCommitLabel, CanvasPhrase.ModeCommitName);
+        _modeCancel = ModeButton(
+            "CanvasCancelMode", CanvasPhrase.ModeCancelLabel, CanvasPhrase.ModeCancelName);
+        _modeCommit.Click += (_, _) => Model?.Navigator.CommitMode();
+        _modeCancel.Click += (_, _) => Model?.Navigator.CancelMode();
+
         var header = new StackPanel
         {
             Orientation = Orientation.Horizontal,
@@ -109,6 +194,11 @@ internal sealed class CanvasSurfaceView : UserControl
         };
         header.Children.Add(_title);
         header.Children.Add(_switcher);
+        header.Children.Add(_filterField);
+        header.Children.Add(_filterSummary);
+        header.Children.Add(_filterClear);
+        header.Children.Add(_modeCommit);
+        header.Children.Add(_modeCancel);
 
         _stateBanner = BannerText("CanvasStateBanner");
         _degradedBanner = BannerText("CanvasDegradedBanner");
@@ -161,7 +251,6 @@ internal sealed class CanvasSurfaceView : UserControl
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
         };
         AutomationProperties.SetAutomationId(_detailText, "CanvasCardDetail");
-        _detailText.PreviewKeyDown += OnDetailKeyDown;
         var detailStack = new StackPanel();
         detailStack.Children.Add(_detailHeading);
         detailStack.Children.Add(_detailText);
@@ -172,9 +261,56 @@ internal sealed class CanvasSurfaceView : UserControl
         };
         _detailRegion.Children.Add(detailStack);
 
+        // t0 §1.4: the transient, focusable Where-am-I panel — the
+        // PULL-based counterpart to the announcement, so a braille user
+        // reads the same string at leisure. NOT a `ModalSurface`
+        // (contract C11): it takes no keys away from anything, the canvas
+        // behind it stays live, and registering it as one would put it
+        // through the #1118 chord admission it has no business being in.
+        _whereAmIReadback = new TextBox
+        {
+            IsReadOnly = true,
+            AcceptsReturn = true,
+            TextWrapping = TextWrapping.Wrap,
+            MaxHeight = 120,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+        };
+        AutomationProperties.SetAutomationId(_whereAmIReadback, "CanvasWhereAmIReadback");
+        AutomationProperties.SetName(_whereAmIReadback, CanvasPhrase.WhereAmIHeading);
+        // PULL, not push (spec §PR C Builds): the panel appears because
+        // the user asked, and the ANNOUNCEMENT is what speaks. A live
+        // region here would say the same sentence twice.
+        AutomationProperties.SetLiveSetting(
+            _whereAmIReadback, AutomationLiveSetting.Off);
+        var whereAmIHeading = new TextBlock
+        {
+            Text = CanvasPhrase.WhereAmIHeading,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 0, 0, 4),
+        };
+        var whereAmIClose = new Button
+        {
+            Content = CanvasPhrase.WhereAmICloseLabel,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Margin = new Thickness(0, 4, 0, 0),
+        };
+        AutomationProperties.SetAutomationId(whereAmIClose, "CanvasWhereAmIClose");
+        whereAmIClose.Click += (_, _) => CloseWhereAmI();
+        _whereAmIPanel = new AutomationNamedGroupPanel
+        {
+            Margin = new Thickness(12, 4, 12, 8),
+            Visibility = Visibility.Collapsed,
+        };
+        _whereAmIPanel.Children.Add(whereAmIHeading);
+        _whereAmIPanel.Children.Add(_whereAmIReadback);
+        _whereAmIPanel.Children.Add(whereAmIClose);
+        AutomationProperties.SetAutomationId(_whereAmIPanel, "CanvasWhereAmIPanel");
+        AutomationProperties.SetName(_whereAmIPanel, CanvasPhrase.WhereAmIHeading);
+
         // Every condition that can turn a pending request deliverable.
-        Loaded += (_, _) => TryDeliverFocus();
-        IsVisibleChanged += (_, _) => TryDeliverFocus();
+        Loaded += OnLoaded;
+        Unloaded += OnUnloaded;
+        IsVisibleChanged += OnIsVisibleChanged;
         // The presenter rebinding this surface from tab A to tab B while
         // the Model stays identical (both panes share one document) is
         // NOT caught by OnModelChanged — the model did not change — so a
@@ -182,15 +318,20 @@ internal sealed class CanvasSurfaceView : UserControl
         // key, so a change to it is exactly the moment to re-ask (B2).
         DataContextChanged += (_, _) => TryDeliverFocus();
         _outline.ContainersRealized += TryDeliverFocus;
+        // M4's pane arm, and the navigator's "which surface are the keys
+        // coming from" answer, in one subscription.
+        IsKeyboardFocusWithinChanged += OnKeyboardFocusWithinChanged;
 
         var layout = new DockPanel();
         DockPanel.SetDock(header, Dock.Top);
         DockPanel.SetDock(banners, Dock.Top);
         DockPanel.SetDock(_warningRows, Dock.Bottom);
+        DockPanel.SetDock(_whereAmIPanel, Dock.Bottom);
         DockPanel.SetDock(_detailRegion, Dock.Bottom);
         layout.Children.Add(header);
         layout.Children.Add(banners);
         layout.Children.Add(_warningRows);
+        layout.Children.Add(_whereAmIPanel);
         layout.Children.Add(_detailRegion);
         // Both projections share the fill slot; Render() gates them.
         var projections = new Grid();
@@ -227,6 +368,216 @@ internal sealed class CanvasSurfaceView : UserControl
     internal RadioButton VisualChoiceForTests => _visualChoice;
 
     internal FrameworkElement SwitcherForTests => _switcher;
+
+    internal TextBox FilterFieldForTests => _filterField;
+
+    internal TextBlock FilterSummaryForTests => _filterSummary;
+
+    internal Button ClearFilterForTests => _filterClear;
+
+    internal Button CommitModeForTests => _modeCommit;
+
+    internal Button CancelModeForTests => _modeCancel;
+
+    internal FrameworkElement WhereAmIPanelForTests => _whereAmIPanel;
+
+    internal TextBox WhereAmIReadbackForTests => _whereAmIReadback;
+
+    // --- ICanvasSurfacePresenter (contract C2) ---------------------------
+
+    public CanvasSurfaceKind Projection =>
+        Model is { } model && TableIsTheProjection(model)
+            ? CanvasSurfaceKind.Table
+            : CanvasSurfaceKind.Outline;
+
+    public bool ProjectionHasFocus =>
+        Projection == CanvasSurfaceKind.Table
+            ? _table.HasKeyboardFocus
+            : _outline.HasKeyboardFocus;
+
+    public bool CanMoveWithinProjection(bool forward) =>
+        Projection == CanvasSurfaceKind.Table
+            ? _table.CanMoveRow(forward)
+            : _outline.CanMoveFocus(forward);
+
+    public void FocusRow(string nodeId)
+    {
+        if (Projection == CanvasSurfaceKind.Table)
+        {
+            _ = _table.DeliverFocus(nodeId);
+        }
+        else
+        {
+            _ = _outline.DeliverFocus(nodeId);
+        }
+    }
+
+    public void FocusProjection()
+    {
+        if (Projection == CanvasSurfaceKind.Table)
+        {
+            _table.FocusGrid();
+        }
+        else
+        {
+            _outline.FocusTree();
+        }
+    }
+
+    /// <summary>Not a presenter member (see
+    /// <see cref="ICanvasSurfacePresenter"/>): Ctrl+F raises the
+    /// document's focus token and each surface decides for itself
+    /// whether the reader is in IT.</summary>
+    private void FocusFilterField()
+    {
+        _ = _filterField.Focus();
+        _filterField.SelectAll();
+    }
+
+    /// <summary>
+    /// Escape's third rung (contract C6): the canvas's own transient
+    /// regions, innermost first, each handing focus back to somewhere the
+    /// reader can navigate from.
+    /// </summary>
+    public bool DismissTransientRegion()
+    {
+        if (_whereAmIPanel.Visibility == Visibility.Visible)
+        {
+            CloseWhereAmI();
+            return true;
+        }
+        if (Model is { DetailText: not null } model)
+        {
+            model.CloseDetail();
+            // Back to the row that opened it (WCAG 2.1.2/2.4.3) — on the
+            // projection that opened it, which is the one still showing.
+            if (model.LastActivatedNode is { } row)
+            {
+                FocusRow(row);
+            }
+            else
+            {
+                FocusProjection();
+            }
+            return true;
+        }
+        if (_filterField.IsKeyboardFocusWithin || _filterSummary.IsKeyboardFocusWithin)
+        {
+            FocusProjection();
+            return true;
+        }
+        return false;
+    }
+
+    // --- Key delivery (contract C6) --------------------------------------
+
+    /// <summary>
+    /// Every <c>ChordScope.Canvas</c> row, delivered in the TUNNELLING
+    /// phase from the surface — never from
+    /// <c>MainWindow.Window_PreviewKeyDown</c>.
+    /// </summary>
+    /// <remarks>
+    /// Two things follow from the site. A canvas chord is live exactly
+    /// while the canvas surface has focus, which is what rule R2 asks
+    /// for; and an Escape the ladder does NOT consume keeps its ordinary
+    /// meaning for the shell, so cancel-import and every overlay dismissal
+    /// behave with a canvas open exactly as they do without one.
+    /// Tunnelling rather than bubbling because the projections' own
+    /// controls (a <c>TreeView</c>, a <c>DataGrid</c>, a <c>TextBox</c>)
+    /// consume arrows and Escape on the way up — the reading navigator's
+    /// recorded lesson, one surface over.
+    /// </remarks>
+    protected override void OnPreviewKeyDown(KeyEventArgs e)
+    {
+        ArgumentNullException.ThrowIfNull(e);
+        base.OnPreviewKeyDown(e);
+        if (e.Handled || Model is not { } model)
+        {
+            return;
+        }
+        // Alt-modified keys arrive as Key.System carrying the real key.
+        Key key = e.Key == Key.System ? e.SystemKey : e.Key;
+        if (model.Navigator.HandleKey(key, Keyboard.Modifiers, this))
+        {
+            e.Handled = true;
+        }
+    }
+
+    // --- Lifecycle -------------------------------------------------------
+
+    private void OnLoaded(object sender, RoutedEventArgs e)
+    {
+        if (_hostWindow is null && Window.GetWindow(this) is { } window)
+        {
+            _hostWindow = window;
+            _hostWindow.Deactivated += OnWindowDeactivated;
+        }
+        TryDeliverFocus();
+    }
+
+    private void OnUnloaded(object sender, RoutedEventArgs e)
+    {
+        if (_hostWindow is { } window)
+        {
+            window.Deactivated -= OnWindowDeactivated;
+            _hostWindow = null;
+        }
+        Model?.Navigator.DetachPresenter(this);
+    }
+
+    private void OnWindowDeactivated(object? sender, EventArgs e) =>
+        Depart(CanvasFocusDeparture.WindowDeactivated);
+
+    private void OnIsVisibleChanged(
+        object sender, DependencyPropertyChangedEventArgs e)
+    {
+        if (e.NewValue is false)
+        {
+            // The tab body stopped being shown — the workspace moved to
+            // another tab, or this one closed. M4's clearest case.
+            Depart(CanvasFocusDeparture.TabSwitch);
+            return;
+        }
+        TryDeliverFocus();
+    }
+
+    private void OnKeyboardFocusWithinChanged(
+        object sender, DependencyPropertyChangedEventArgs e)
+    {
+        if (e.NewValue is true)
+        {
+            // The navigator's palette-invoked verbs move focus on the
+            // pane the reader is actually in, so the surface says which
+            // one that is as soon as it has the keys.
+            Model?.Navigator.AttachPresenter(this);
+            return;
+        }
+        // M4's pane arm. A shell overlay layered OVER this tab is the one
+        // departure that keeps the mode alive (contract C8): Commit Mode,
+        // Cancel Mode and the resize presets are palette commands, so
+        // cancelling here would make three registered verbs unreachable.
+        Depart(
+            ShellOverlayIsOpen()
+                ? CanvasFocusDeparture.ModalOverlay
+                : CanvasFocusDeparture.PaneFocus);
+    }
+
+    private void Depart(CanvasFocusDeparture departure) =>
+        _ = Model?.Modes.HandleFocusDeparture(departure);
+
+    private static Button ModeButton(string automationId, string content, string name)
+    {
+        var button = new Button
+        {
+            Content = content,
+            Margin = new Thickness(0, 0, 6, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            Visibility = Visibility.Collapsed,
+        };
+        AutomationProperties.SetAutomationId(button, automationId);
+        AutomationProperties.SetName(button, name);
+        return button;
+    }
 
     private static RadioButton SurfaceChoice(
         string automationId, string label, string? disabledHint)
@@ -270,6 +621,8 @@ internal sealed class CanvasSurfaceView : UserControl
             oldModel.PropertyChanged -= view.OnModelPropertyChanged;
             oldModel.OutlinePublished -= view.OnOutlinePublished;
             oldModel.Selection.PropertyChanged -= view.OnSelectionPropertyChanged;
+            oldModel.Modes.PropertyChanged -= view.OnModePropertyChanged;
+            oldModel.Navigator.DetachPresenter(view);
         }
         view._outline.Model = e.NewValue as CanvasDocumentViewModel;
         view._table.Model = e.NewValue as CanvasDocumentViewModel;
@@ -278,6 +631,8 @@ internal sealed class CanvasSurfaceView : UserControl
             model.PropertyChanged += view.OnModelPropertyChanged;
             model.OutlinePublished += view.OnOutlinePublished;
             model.Selection.PropertyChanged += view.OnSelectionPropertyChanged;
+            model.Modes.PropertyChanged += view.OnModePropertyChanged;
+            view._filterFocusToken = model.FilterFocusToken;
         }
         view.Render();
         view.TryDeliverFocus();
@@ -324,8 +679,10 @@ internal sealed class CanvasSurfaceView : UserControl
             case CanvasLoadState.Loading:
                 // Nothing to land on yet; the publish will call back.
                 return;
-            case CanvasLoadState.Ready when model.Outline.Count == 0:
-                delivered = _onboarding.Focus();
+            case CanvasLoadState.Ready when model.FilteredOutline.Count == 0:
+                delivered = _onboarding.IsVisible
+                    ? _onboarding.Focus()
+                    : _filterField.Focus();
                 break;
             case CanvasLoadState.Ready:
                 // Whichever projection is SHOWING is the one that can
@@ -352,7 +709,12 @@ internal sealed class CanvasSurfaceView : UserControl
         if (e.PropertyName is nameof(CanvasDocumentViewModel.State)
             or nameof(CanvasDocumentViewModel.StateMessage)
             or nameof(CanvasDocumentViewModel.Warnings)
-            or nameof(CanvasDocumentViewModel.DetailText))
+            // FilterText is deliberately absent: its setter already
+            // raises OutlinePublished (the displayed rows changed), and
+            // rendering on both signals would rebuild the projection
+            // twice per keystroke.
+            or nameof(CanvasDocumentViewModel.DetailText)
+            or nameof(CanvasDocumentViewModel.WhereAmIText))
         {
             Render();
             TryDeliverFocus();
@@ -360,6 +722,21 @@ internal sealed class CanvasSurfaceView : UserControl
         else if (e.PropertyName == nameof(CanvasDocumentViewModel.FocusRequest))
         {
             TryDeliverFocus();
+        }
+        else if (e.PropertyName == nameof(CanvasDocumentViewModel.FilterFocusToken))
+        {
+            OnFilterFocusRequested();
+        }
+    }
+
+    private void OnModePropertyChanged(
+        object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(CanvasModeController.Active)
+            or nameof(CanvasModeController.IsActive)
+            or nameof(CanvasModeController.ContainerValue))
+        {
+            RenderMode();
         }
     }
 
@@ -384,9 +761,69 @@ internal sealed class CanvasSurfaceView : UserControl
         }
     }
 
+    // --- Filter ----------------------------------------------------------
+
+    private void OnFilterTextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_synchronizingFilter || Model is not { } model)
+        {
+            return;
+        }
+        model.FilterText = _filterField.Text;
+        // Debounced by the announcer's FILTER coalescing class (t0 §1.5),
+        // so a keystroke burst collapses into one count.
+        model.Navigator.AnnounceFilterCount();
+    }
+
+    /// <summary>
+    /// Ctrl+F reached the document. Only the surface the reader is
+    /// looking at takes focus: the token is per DOCUMENT, and two panes
+    /// on one canvas would otherwise both grab it (the mac Codoki #626
+    /// rule, restated for panes).
+    /// </summary>
+    private void OnFilterFocusRequested()
+    {
+        if (Model is not { } model || model.FilterFocusToken == _filterFocusToken)
+        {
+            return;
+        }
+        _filterFocusToken = model.FilterFocusToken;
+        if (IsVisible && (IsKeyboardFocusWithin || !AnyOtherPaneHasFocus()))
+        {
+            FocusFilterField();
+        }
+    }
+
+    /// <summary>Whether some OTHER element in this window holds the keys,
+    /// so a surface that is merely visible does not steal them.</summary>
+    private bool AnyOtherPaneHasFocus() =>
+        _hostWindow is { IsActive: true } window
+        && window.IsKeyboardFocusWithin
+        && !IsKeyboardFocusWithin;
+
+    private void CloseWhereAmI()
+    {
+        if (Model is { } model)
+        {
+            model.WhereAmIText = null;
+        }
+        // Escape returns focus to the element the reader came from (spec
+        // §PR C Builds). A stale or unfocusable token falls back to the
+        // projection rather than leaving focus nowhere.
+        if (_whereAmIReturnFocus is UIElement { IsVisible: true, IsEnabled: true } element
+            && element.Focus())
+        {
+            _whereAmIReturnFocus = null;
+            return;
+        }
+        _whereAmIReturnFocus = null;
+        FocusProjection();
+    }
+
     private void Render()
     {
         RenderSwitcher();
+        RenderMode();
         if (Model is not { } model)
         {
             return;
@@ -417,6 +854,9 @@ internal sealed class CanvasSurfaceView : UserControl
             errorState ? AutomationLiveSetting.Assertive : AutomationLiveSetting.Off);
         SetBanner(_degradedBanner, model.DegradedBannerText ?? string.Empty);
         SetBanner(_onboarding, model.EmptyOnboardingText ?? string.Empty);
+
+        RenderFilter(model);
+        RenderWhereAmI(model);
 
         // EVERY warning, not just the skipped entries (spec §PR A
         // behavior 2: "a focusable detail row in the outline footer
@@ -460,6 +900,70 @@ internal sealed class CanvasSurfaceView : UserControl
         _table.Visibility = ready && table ? Visibility.Visible : Visibility.Collapsed;
     }
 
+    private void RenderFilter(CanvasDocumentViewModel model)
+    {
+        if (!string.Equals(_filterField.Text, model.FilterText, StringComparison.Ordinal))
+        {
+            _synchronizingFilter = true;
+            try
+            {
+                _filterField.Text = model.FilterText;
+            }
+            finally
+            {
+                _synchronizingFilter = false;
+            }
+        }
+        bool filtering = model.FilterActive;
+        string summary = filtering ? model.Navigator.FilterSummaryText() : string.Empty;
+        _filterSummary.Text = summary;
+        // The region's own name carries its value, the interim card
+        // detail's idiom: a bare Name would REPLACE the text for a
+        // screen reader, and the text is the whole point.
+        AutomationProperties.SetName(
+            _filterSummary,
+            summary.Length > 0
+                ? $"{CanvasPhrase.FilterSummaryName}: {summary}"
+                : CanvasPhrase.FilterSummaryName);
+        _filterSummary.Visibility = filtering ? Visibility.Visible : Visibility.Collapsed;
+        _filterClear.Visibility = filtering ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void RenderWhereAmI(CanvasDocumentViewModel model)
+    {
+        if (model.WhereAmIText is not { Length: > 0 } text)
+        {
+            _whereAmIPanel.Visibility = Visibility.Collapsed;
+            _whereAmIReadback.Text = string.Empty;
+            return;
+        }
+        bool opening = _whereAmIPanel.Visibility != Visibility.Visible;
+        _whereAmIReadback.Text = text;
+        _whereAmIPanel.Visibility = Visibility.Visible;
+        if (!opening || !IsKeyboardFocusWithin)
+        {
+            return;
+        }
+        // Only the pane the reader is in takes focus into the panel, and
+        // it remembers where they came from so Escape can put them back.
+        _whereAmIReturnFocus = Keyboard.FocusedElement;
+        UpdateLayout();
+        _ = _whereAmIReadback.Focus();
+    }
+
+    private void RenderMode()
+    {
+        string? value = Model?.Modes.ContainerValue;
+        // M3: the active mode is INSPECTABLE from the container's own
+        // state, never announcement-only (t0 §3, the braille rule). The
+        // surface is a UserControl and therefore peered, so this reaches
+        // a client — the inert-property census's jurisdiction.
+        AutomationProperties.SetItemStatus(this, value ?? string.Empty);
+        Visibility visible = value is null ? Visibility.Collapsed : Visibility.Visible;
+        _modeCommit.Visibility = visible;
+        _modeCancel.Visibility = visible;
+    }
+
     /// <summary>
     /// Which projection the body shows. Only the table asks for itself:
     /// <c>Visual</c> is not a projection until PR D, and a persisted
@@ -495,31 +999,4 @@ internal sealed class CanvasSurfaceView : UserControl
     }
 
     private void FocusDetail() => _ = _detailText.Focus();
-
-    /// <summary>Escape closes the interim detail and returns focus to
-    /// the row that opened it (WCAG 2.1.2 — a read-only region with no
-    /// keyboard way out is a trap). PR C's Esc ladder subsumes this
-    /// rung.</summary>
-    private void OnDetailKeyDown(object sender, KeyEventArgs e)
-    {
-        if (e.Key != Key.Escape || Model is not { } model)
-        {
-            return;
-        }
-        e.Handled = true;
-        model.CloseDetail();
-        // Back to the row that opened it (WCAG 2.1.2/2.4.3) — on the
-        // projection that opened it, which is the one still showing.
-        if (model.LastActivatedNode is { } row)
-        {
-            if (TableIsTheProjection(model))
-            {
-                _ = _table.DeliverFocus(row);
-            }
-            else
-            {
-                _ = _outline.DeliverFocus(row);
-            }
-        }
-    }
 }

@@ -38,7 +38,7 @@ internal sealed class CanvasOutlineRowViewModel : BindableBase
 
     /// <summary>A node row.</summary>
     internal static CanvasOutlineRowViewModel ForNode(
-        CanvasOutlineRow row, bool marked) =>
+        CanvasOutlineRow row, bool marked, bool filtered) =>
         new(
             row.NodeId,
             CanvasPhrase.CardReference(row.Kind, row.SpeakableName),
@@ -47,7 +47,8 @@ internal sealed class CanvasOutlineRowViewModel : BindableBase
                 row.TotalM,
                 row.GroupPath.Length > 0 ? row.GroupPath[^1] : null,
                 row.ColorName,
-                marked),
+                marked,
+                filtered),
             CanvasPhrase.ActivationHint(row.Kind),
             string.Equals(row.Kind, "group", StringComparison.Ordinal))
         {
@@ -380,17 +381,97 @@ internal sealed class CanvasOutlineView : UserControl
     /// </remarks>
     internal CanvasOutlineRowViewModel? DeliverFocus(string nodeId)
     {
-        if (!_byNode.TryGetValue(nodeId, out CanvasOutlineRowViewModel? target))
+        if (Model is not { } model
+            || !_byNode.TryGetValue(nodeId, out CanvasOutlineRowViewModel? target))
         {
             return null;
         }
-        // Selection first: it is what the row's container binds, and a
-        // realized container must come up already selected.
-        SetSelectedRow(target);
-        return RealizeContainer(target) is { } container && container.Focus()
-            ? target
-            : null;
+        // Contract C12 / CD-40: a delivery is a LANDING, not a move the
+        // user made, so it is silent. The whole body runs inside the sync
+        // guard — WPF's TreeViewItem selects itself on GotFocus, so the
+        // container's own echo would otherwise reach `SelectNode` and
+        // narrate a `CanvasMovedTo` on top of the row the screen reader
+        // is already reading (t0 §1.5 doubling). The shared selection
+        // still follows the reader, because R-B says there is exactly one
+        // of it — it just follows silently.
+        _syncingSelection = true;
+        try
+        {
+            SetSelectedRow(target);
+            model.SeatSelectionSilently(nodeId);
+            return RealizeContainer(target) is { } container && container.Focus()
+                ? target
+                : null;
+        }
+        finally
+        {
+            _syncingSelection = false;
+        }
     }
+
+    /// <summary>
+    /// Whether the tree can move the reader one row in this direction
+    /// itself — the navigator's boundary question (contract C3).
+    /// </summary>
+    /// <remarks>
+    /// The tree's own rows, not core's reading order: a connection row
+    /// under the selected card is a reading stop the tree visits
+    /// (contract A11), and asking core's order instead would report
+    /// "End of canvas." while a connection row was still below the
+    /// cursor.
+    /// </remarks>
+    internal bool CanMoveFocus(bool forward)
+    {
+        List<CanvasOutlineRowViewModel> visible = VisibleRows();
+        if (visible.Count == 0)
+        {
+            return false;
+        }
+        CanvasOutlineRowViewModel? current = FocusedRow() ?? _selectedRow;
+        if (current is null)
+        {
+            return true;
+        }
+        int index = visible.IndexOf(current);
+        if (index < 0)
+        {
+            return true;
+        }
+        return forward ? index < visible.Count - 1 : index > 0;
+    }
+
+    /// <summary>The rows a reader can arrow through right now: the tree
+    /// in order, descending only into expanded rows.</summary>
+    private List<CanvasOutlineRowViewModel> VisibleRows()
+    {
+        var visible = new List<CanvasOutlineRowViewModel>();
+        void Walk(IEnumerable<CanvasOutlineRowViewModel> rows)
+        {
+            foreach (CanvasOutlineRowViewModel row in rows)
+            {
+                visible.Add(row);
+                if (row.IsExpanded)
+                {
+                    Walk(row.Children);
+                }
+            }
+        }
+        Walk(_roots);
+        return visible;
+    }
+
+    /// <summary>
+    /// The row that owns keyboard focus. WPF focuses the CONTAINER for a
+    /// tree row, so the focused element is the item itself.
+    /// </summary>
+    private static CanvasOutlineRowViewModel? FocusedRow() =>
+        Keyboard.FocusedElement is CanvasOutlineItem item
+            ? item.DataContext as CanvasOutlineRowViewModel
+            : null;
+
+    internal bool HasKeyboardFocus => _tree.IsKeyboardFocusWithin;
+
+    internal void FocusTree() => _ = _tree.Focus();
 
     /// <summary>The container for a row at any depth, realized if it
     /// can be. Null when the panel would not make it.</summary>
@@ -515,10 +596,18 @@ internal sealed class CanvasOutlineView : UserControl
             return;
         }
         var stack = new Stack<(uint Depth, CanvasOutlineRowViewModel Row)>();
-        foreach (CanvasOutlineRow row in model.Outline)
+        // The FILTERED rows (contract C10): the filter is a view over
+        // core's reading order, so the tree is simply built from fewer
+        // rows. A surviving child whose containing group did not match is
+        // promoted to a root by the same depth-stack pass that nests
+        // everything else — indenting it under a parent that is not on
+        // screen would be the alternative, and it is worse (CD-45; mac's
+        // flat outline has no such case, CD-33).
+        bool filtered = model.FilterActive;
+        foreach (CanvasOutlineRow row in model.FilteredOutline)
         {
             var line = CanvasOutlineRowViewModel.ForNode(
-                row, model.Selection.IsMarked(row.NodeId));
+                row, model.Selection.IsMarked(row.NodeId), filtered);
             line.Activate = ActivateRow;
             while (stack.Count > 0 && stack.Peek().Depth >= row.Depth)
             {
@@ -564,6 +653,13 @@ internal sealed class CanvasOutlineView : UserControl
         // came back through OnTreeSelectionChanged as a fresh user
         // selection and dragged the model back to the card the user had
         // just left. Found by `ArrowingOntoAConnectionRowLeavesItReadable`.
+        // SAVED and restored, not forced false: `DeliverFocus` seats the
+        // shared selection inside its OWN guard, which re-enters here
+        // through the selection's property change — and a bare
+        // `finally { false }` would drop the outer guard while the
+        // delivery still had a container focus to take, letting WPF's
+        // own selection echo reach `SelectNode` (contract C12).
+        bool outer = _syncingSelection;
         _syncingSelection = true;
         try
         {
@@ -571,7 +667,7 @@ internal sealed class CanvasOutlineView : UserControl
         }
         finally
         {
-            _syncingSelection = false;
+            _syncingSelection = outer;
         }
     }
 

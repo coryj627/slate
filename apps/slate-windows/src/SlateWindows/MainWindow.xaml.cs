@@ -57,6 +57,14 @@ public partial class MainWindow : Window
         _viewModel.WorkspaceFocusBoundaryRequested += ViewModel_WorkspaceFocusBoundaryRequested;
         _viewModel.PropertyChanged += ViewModel_PropertyChanged;
         DataContext = _viewModel;
+        // W6-1 PR C (contract C8): the canvas mode stack's M4 rule needs
+        // to tell "focus moved to another pane" (cancel) from "focus
+        // moved into an overlay layered over this tab" (keep the mode
+        // alive — Commit Mode, Cancel Mode and the resize presets are
+        // palette commands). Only the shell knows which; the surface is
+        // built by a XAML template with no injection point, so the answer
+        // is installed here and CanvasAnnouncerCensus pins that it is.
+        Canvas.CanvasSurfaceView.ShellOverlayIsOpen = () => OpenModalSurface is not null;
         ObservePalette();
         ObserveSearch();
         RecentVaultJumpList.Apply(_viewModel.RecentVaults);
