@@ -6601,6 +6601,189 @@ public sealed class ShellAccessibilityTests
         return [];
     }
 
+    /// <summary>
+    /// W6-1 PR C (#745): the canvas NAVIGATOR journey (the spec's
+    /// "Canvas_NavigatorJourney"). Ctrl+F reaches the one filter field
+    /// and its Value carries the needle; the result summary becomes a
+    /// readable element and the projection narrows with it; Escape walks
+    /// the t0 §2 M5 ladder one rung per press — the filter first, then
+    /// the transient region; and Ctrl+Alt+Shift+I opens the Where-am-I
+    /// panel with keyboard focus inside it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The ANNOUNCEMENTS are deliberately not asserted here, and that is
+    /// the honest split rather than an omission (the B7 precedent). The
+    /// shell posts them as UIA notification events, which this suite has
+    /// no capture for; every one of them is pinned instead in
+    /// `CanvasNavigatorTests` at the production funnel's own post seam,
+    /// as the RENDERED text. What only a live UIA tree can prove — that
+    /// the field is an Edit whose Value a client can read, that the
+    /// summary is its own element, and that a chord really lands
+    /// keyboard focus in the panel — is what this journey asserts.
+    /// </para>
+    /// <para>
+    /// Honors the recorded journey traps: peered elements only, a
+    /// foreground re-assert at every keyboard boundary, and an async
+    /// settle after each chord.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    [Trait("gate", "W-C")]
+    public void CanvasSurfaces_NavigatorFilterAndWhereAmI_AreClean()
+    {
+        string testRoot = Path.Combine(
+            Path.GetTempPath(), $"slate-canvas-navigator-{Guid.NewGuid():N}");
+        string vaultRoot = Path.Combine(testRoot, "Canvas Vault");
+        string logDirectory = Path.Combine(testRoot, "logs");
+        Directory.CreateDirectory(vaultRoot);
+        File.Copy(
+            Path.Combine(DemoVaultCanvasDirectory(), "sample.canvas"),
+            Path.Combine(vaultRoot, "sample.canvas"));
+
+        Process? process = null;
+        try
+        {
+            var startInfo = new ProcessStartInfo(SlateWindowsExe())
+            {
+                UseShellExecute = false,
+            };
+            startInfo.ArgumentList.Add(vaultRoot);
+            startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
+                $"slate-canvas-navigator-{Guid.NewGuid():N}";
+            startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            process = Process.Start(startInfo)
+                ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+
+            if (!HasInteractiveDesktop(process, "Canvas navigator"))
+            {
+                return;
+            }
+
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(
+                process,
+                automation,
+                Path.Combine(logDirectory, "slate-windows.log"),
+                TimeSpan.FromSeconds(30));
+            window.SetForeground();
+            window.Focus();
+
+            OpenCanvasFromTree(window, automation, "sample");
+            AutomationElement tree = WaitForElement(
+                window, "CanvasOutlineTree", TimeSpan.FromSeconds(20));
+            int unfiltered = WaitForTreeItems(automation, tree, 5).Length;
+
+            // Ctrl+F reaches the ONE canvas filter field (contract C10).
+            ReassertForegroundForAChord(window);
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_F);
+            AutomationElement filter = WaitForElement(
+                window, "CanvasFilterField", TimeSpan.FromSeconds(10));
+            Assert.Equal(ControlType.Edit, filter.Properties.ControlType.Value);
+            Assert.Equal("Filter cards", filter.Properties.Name.Value);
+            AssertEventuallyFocused(
+                filter, "Ctrl+F never landed focus in the canvas filter field");
+
+            // The needle goes in through the Value pattern — the same
+            // surface a client reads it back from.
+            filter.Patterns.Value.Pattern.SetValue("Research");
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(500));
+            Assert.Equal("Research", filter.Patterns.Value.Pattern.Value.Value);
+
+            // t0 §3: the result summary is its own readable element, and
+            // the projection narrowed with it.
+            AutomationElement summary = WaitForElement(
+                window, "CanvasFilterSummary", TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => summary.Properties.Name.Value.StartsWith(
+                        "Filter results:", StringComparison.Ordinal),
+                    TimeSpan.FromSeconds(10)),
+                $"the filter summary never became readable; it reads "
+                + $"'{summary.Properties.Name.ValueOrDefault}'");
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => tree.FindAllDescendants(
+                        automation.ConditionFactory.ByControlType(ControlType.TreeItem))
+                        .Length < unfiltered,
+                    TimeSpan.FromSeconds(10)),
+                "the outline never narrowed to the filtered set");
+
+            // M5 rung 2: one Escape clears the filter and no more.
+            ReassertForegroundForAChord(window);
+            PressKey(VirtualKeyShort.ESCAPE);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => filter.Patterns.Value.Pattern.Value.Value.Length == 0,
+                    TimeSpan.FromSeconds(10)),
+                "Escape did not consume the filter rung of the ladder");
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => tree.FindAllDescendants(
+                        automation.ConditionFactory.ByControlType(ControlType.TreeItem))
+                        .Length == unfiltered,
+                    TimeSpan.FromSeconds(10)),
+                "clearing the filter did not restore every card");
+
+            // Where-am-I: the chord opens the panel and puts the reader
+            // in it (t0 §1.4, contract C11).
+            ReassertForegroundForAChord(window);
+            PressChord(
+                VirtualKeyShort.CONTROL,
+                VirtualKeyShort.ALT,
+                VirtualKeyShort.SHIFT,
+                VirtualKeyShort.KEY_I);
+            AutomationElement readback = WaitForElement(
+                window, "CanvasWhereAmIReadback", TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => readback.Patterns.Value.IsSupported
+                        && !string.IsNullOrEmpty(
+                            readback.Patterns.Value.Pattern.Value.Value),
+                    TimeSpan.FromSeconds(10)),
+                "the Where-am-I panel never carried the readback text");
+            AssertEventuallyFocused(
+                readback, "Ctrl+Alt+Shift+I never landed focus in the Where-am-I panel");
+            AutomationElement panel = WaitForElement(
+                window, "CanvasWhereAmIPanel", TimeSpan.FromSeconds(10));
+            Assert.Equal("Where am I?", panel.Properties.Name.Value);
+
+            AssertAxeClean(process, "canvas-navigator");
+
+            // M5 rung 3: the next Escape dismisses the panel.
+            ReassertForegroundForAChord(window);
+            PressKey(VirtualKeyShort.ESCAPE);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => window.FindFirstDescendant(
+                        automation.ConditionFactory.ByAutomationId(
+                            "CanvasWhereAmIPanel")) is null,
+                    TimeSpan.FromSeconds(10)),
+                "Escape did not consume the surface rung and close the panel");
+        }
+        finally
+        {
+            if (process is not null && !process.HasExited)
+            {
+                process.CloseMainWindow();
+                if (!process.WaitForExit(5_000))
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            try
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
     private static AutomationElement[] WaitForRowActionItems(
         UIA3Automation automation, int processId)
     {
@@ -7000,6 +7183,22 @@ public sealed class ShellAccessibilityTests
         VirtualKeyShort key)
     {
         using (Keyboard.Pressing(firstModifier, secondModifier))
+        {
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+            PressKey(key);
+        }
+        Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+    }
+
+    /// <summary>Three-modifier form, for the G18-disambiguated chords —
+    /// W6-1's Ctrl+Alt+Shift+I is the first (owner decision D-2).</summary>
+    private static void PressChord(
+        VirtualKeyShort firstModifier,
+        VirtualKeyShort secondModifier,
+        VirtualKeyShort thirdModifier,
+        VirtualKeyShort key)
+    {
+        using (Keyboard.Pressing(firstModifier, secondModifier, thirdModifier))
         {
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
             PressKey(key);

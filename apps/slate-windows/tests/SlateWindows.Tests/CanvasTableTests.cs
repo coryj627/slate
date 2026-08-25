@@ -716,17 +716,34 @@ public sealed class CanvasTableTests : IDisposable
     /// Contract B8: no export producer, because no core canvas export
     /// exists — the `ReadingTableGrid` precedent, and the reason the
     /// substrate's export commands answer CanExecute false rather than
-    /// composing text host-side. Ctrl+F likewise keeps ROUTING until PR
-    /// C subscribes the canvas filter, so the app-level find is never
-    /// shadowed by a grid that cannot filter.
+    /// composing text host-side.
     /// </summary>
+    /// <remarks>
+    /// Ctrl+F's half of B8 has been SUPERSEDED by W6-1 PR C (contract
+    /// C10) and the sentence is corrected rather than deleted: B8 said
+    /// the grid's filter chord keeps ROUTING "until PR C subscribes the
+    /// canvas filter", and PR C does. The substrate's own gesture is now
+    /// the TABLE's delivery site for <c>slate.canvas.filterCards</c>
+    /// (spec §7's "table: grid FilterCommand"), which is why the two
+    /// command rows may share Ctrl+F — they end in the same action.
+    /// </remarks>
     [Fact]
-    public void NoExportProducerAndTheFilterChordStillRoutes() => RunSta(() =>
+    public void NoExportProducerAndTheFilterChordFocusesTheCanvasFilter() => RunSta(() =>
     {
         (CanvasDocumentViewModel document, _, AccessibleDataGrid grid) = Table();
         Assert.False(AccessibleDataGrid.ExportCsvCommand.CanExecute(null, grid));
         Assert.False(AccessibleDataGrid.ExportMarkdownCommand.CanExecute(null, grid));
-        Assert.False(AccessibleDataGrid.FilterCommand.CanExecute(null, grid));
+
+        Assert.True(
+            AccessibleDataGrid.FilterCommand.CanExecute(null, grid),
+            "the canvas subscribes the substrate's filter hook (contract C10), so "
+            + "the grid's Ctrl+F must stop continuing-routing past a grid that CAN "
+            + "filter.");
+        int before = document.FilterFocusToken;
+        AccessibleDataGrid.FilterCommand.Execute(null, grid);
+        Assert.True(
+            document.FilterFocusToken > before,
+            "the grid's filter chord must reach the ONE canvas filter field.");
         document.Shutdown();
     });
 

@@ -50,9 +50,19 @@ public sealed class ContractsCitationCensus
             (
                 "B",
                 "## PR B — the canvas table projection",
-                "## §W-G canonical-consumption audit",
+                // Terminated by §C rather than by §W-G since W6-1 PR C:
+                // leaving the old terminator would have folded the whole
+                // of §C into §B's extent, which is the shape-change the
+                // class comment above warns about.
+                "## PR C — the navigator, the mode stack",
                 2_000,
                 10),
+            (
+                "C",
+                "## PR C — the navigator, the mode stack",
+                "## §W-G canonical-consumption audit",
+                8_000,
+                30),
         ];
 
     public static TheoryData<string, string, string> SectionRanges
@@ -225,7 +235,10 @@ public sealed class ContractsCitationCensus
             "TreeViewItemAutomationPeer", "VirtualizingStackPanel",
             "IInvokeProvider", "AutomationProperties", "RaiseNotificationEvent",
             "SelectedItemChanged", "VirtualizationMode", "DispatcherTimer",
-            "TraversalRequest", "IsKeyboardFocusWithin",
+            "TraversalRequest", "IsKeyboardFocusWithin", "UnreachableException",
+            "IsNullOrWhiteSpace",
+            // XAML attributes, which live in markup rather than in C#.
+            "CommandParameter",
             // Python: scripts/generate-parity-matrix.py (§B's B12 — the
             // delivered-command set whose per-PR growth is the rule that
             // row sets).
