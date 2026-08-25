@@ -11130,30 +11130,29 @@ mod tests {
     /// SCOPE: membership per class, both directions. The 200 ms window,
     /// the latest-wins rule and the High-flushes-and-drops rule stay
     /// the hosts' own tests (`CanvasAnnouncerTests`).
-    #[test]
-    fn the_mac_coalescing_switch_matches_the_pinned_class_list() {
+    /// uniffi lower-camelises Swift case names; every name in this
+    /// vocabulary is CamelCase, so lowering the first character is the
+    /// same transform. C# keeps the Rust spelling, so the C# side
+    /// lower-cases too and the two tripwires compare in one alphabet.
+    fn lower_first(name: &str) -> String {
+        let mut chars = name.chars();
+        match chars.next() {
+            Some(first) => first.to_ascii_lowercase().to_string() + chars.as_str(),
+            None => String::new(),
+        }
+    }
+
+    /// The ONE pinned coalescing-class list, read out of core's own doc
+    /// comment (0a-8) and checked against the enum it names.
+    ///
+    /// Shared by BOTH host tripwires, deliberately: two copies of this
+    /// parser would be the same curated-list defect one level up, which
+    /// is the class this programme keeps closing rather than patching.
+    fn pinned_coalescing_classes(
+        core_source: &str,
+    ) -> std::collections::BTreeMap<String, std::collections::BTreeSet<String>> {
         use std::collections::{BTreeMap, BTreeSet};
 
-        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let core_source = std::fs::read_to_string(manifest.join("../slate-core/src/a11y.rs"))
-            .expect("core a11y source");
-        let swift = std::fs::read_to_string(
-            manifest.join("../../apps/slate-mac/Sources/SlateMac/Canvas/CanvasAnnouncer.swift"),
-        )
-        .expect("mac announcer source");
-
-        /// uniffi lower-camelises Swift case names; every name in this
-        /// vocabulary is CamelCase, so lowering the first character is
-        /// the same transform.
-        fn lower_first(name: &str) -> String {
-            let mut chars = name.chars();
-            match chars.next() {
-                Some(first) => first.to_ascii_lowercase().to_string() + chars.as_str(),
-                None => String::new(),
-            }
-        }
-
-        // --- The pinned list: core's own doc comment -----------------
         // Bounded to the class-key section so a variant named anywhere
         // else in the module doc cannot be counted.
         let pinned_section = core_source
@@ -11166,12 +11165,12 @@ mod tests {
             .0;
 
         let mut pinned: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-        let mut current: Option<String> = None;
+        let mut found_a_class = false;
         for chunk in pinned_section.split("// - **`") {
             let Some((class, rest)) = chunk.split_once("`**") else {
                 continue;
             };
-            current = Some(class.to_string());
+            found_a_class = true;
             let entry = pinned.entry(class.to_string()).or_default();
             for (at, marker) in rest.match_indices("[`CanvasA11yEvent::") {
                 let name: String = rest[at + marker.len()..]
@@ -11182,12 +11181,12 @@ mod tests {
             }
         }
         assert!(
-            current.is_some() && pinned.values().all(|names| !names.is_empty()),
+            found_a_class && pinned.values().all(|names| !names.is_empty()),
             "the class-key doc comment parsed to nothing; its shape changed"
         );
 
-        // Every name the doc comment comes from must still BE a variant
-        // — a rename that misses the comment is the other way this rots.
+        // Every name the doc comment carries must still BE a variant —
+        // a rename that misses the comment is the other way this rots.
         let variants: BTreeSet<String> = {
             let decl = core_source
                 .find("pub enum CanvasA11yEvent {")
@@ -11215,6 +11214,22 @@ mod tests {
                 );
             }
         }
+        pinned
+    }
+
+    #[test]
+    fn the_mac_coalescing_switch_matches_the_pinned_class_list() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let core_source = std::fs::read_to_string(manifest.join("../slate-core/src/a11y.rs"))
+            .expect("core a11y source");
+        let swift = std::fs::read_to_string(
+            manifest.join("../../apps/slate-mac/Sources/SlateMac/Canvas/CanvasAnnouncer.swift"),
+        )
+        .expect("mac announcer source");
+
+        let pinned = pinned_coalescing_classes(&core_source);
 
         // --- The copy: mac's switch ----------------------------------
         let switch = swift
@@ -11254,6 +11269,84 @@ mod tests {
              Left is CanvasAnnouncer.swift, right is the a11y.rs doc comment; a core \
              event in either class that the switch does not route is spoken \
              uncoalesced on mac and coalesced on Windows, which is a §W-D difference \
+             no corpus entry can show."
+        );
+    }
+
+    /// The Windows twin of the tripwire above (W6-1 PR C, #745).
+    ///
+    /// 0b-17 pinned the MAC copy of the one class list and its own
+    /// failure message assumed the Windows copy was faithful — which
+    /// nothing checked. That is the asymmetry 0a-3 already closed for
+    /// the corpus mirrors ("two tripwires, symmetric"), reappearing one
+    /// subsystem over: forgetting the C# switch is exactly as easy as
+    /// forgetting the Swift one, and until now it cost a full
+    /// `generate-bindings` + `dotnet test` round trip to find, or
+    /// nothing at all — the C# side has no behavioural test that can see
+    /// a MISSING class, only that the classes it has behave.
+    ///
+    /// SCOPE: membership per class, both directions, exactly as the mac
+    /// half. The 200 ms window, latest-wins and the High-flushes rule
+    /// stay `CanvasAnnouncerTests`'.
+    #[test]
+    fn the_windows_coalescing_switch_matches_the_pinned_class_list() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let core_source = std::fs::read_to_string(manifest.join("../slate-core/src/a11y.rs"))
+            .expect("core a11y source");
+        let csharp = std::fs::read_to_string(
+            manifest.join("../../apps/slate-windows/src/SlateWindows/Canvas/CanvasAnnouncer.cs"),
+        )
+        .expect("windows announcer source");
+
+        let pinned = pinned_coalescing_classes(&core_source);
+
+        // --- The copy: the C# switch expression ----------------------
+        // Bounded to the switch body, and terminated at the discard arm
+        // for the same reason mac's is bounded at `default:` — an arm
+        // past it routes nothing.
+        let switch = csharp
+            .split_once("CoalescingClassOf(CanvasA11yEvent @event) => @event switch")
+            .expect("windows coalescing switch")
+            .1;
+        let switch = switch
+            .split_once("_ => null,")
+            .expect("the switch's discard arm")
+            .0;
+
+        // Each arm is `⟨patterns⟩ => EventClass.⟨Class⟩,`; the patterns
+        // are `CanvasA11yEvent.X` joined by `or`, wrapped freely by
+        // `dotnet format`, so the arm is split on its RESULT rather
+        // than on lines (the recorded reason the Windows corpus mirror's
+        // parser is slice-oriented too).
+        let mut windows: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut cursor = 0usize;
+        for (at, marker) in switch.match_indices("=> EventClass.") {
+            let class: String = switch[at + marker.len()..]
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric())
+                .collect();
+            let entry = windows.entry(lower_first(&class)).or_default();
+            let patterns = &switch[cursor..at];
+            for (name_at, name_marker) in patterns.match_indices("CanvasA11yEvent.") {
+                let name: String = patterns[name_at + name_marker.len()..]
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric())
+                    .collect();
+                if !name.is_empty() {
+                    entry.insert(lower_first(&name));
+                }
+            }
+            cursor = at + marker.len();
+        }
+
+        assert_eq!(
+            windows, pinned,
+            "the Windows coalescing switch and the class list core pins (0a-8) \
+             disagree. Left is CanvasAnnouncer.cs, right is the a11y.rs doc comment; \
+             a core event in either class that the switch does not route is spoken \
+             coalesced on mac and uncoalesced on Windows, which is a §W-D difference \
              no corpus entry can show."
         );
     }
