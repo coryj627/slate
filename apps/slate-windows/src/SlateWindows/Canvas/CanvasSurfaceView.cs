@@ -32,6 +32,7 @@ internal sealed class CanvasSurfaceView : UserControl
             new PropertyMetadata(null, OnModelChanged));
 
     private readonly TextBlock _title;
+    private readonly AutomationNamedGroupPanel _switcher;
     private readonly RadioButton _outlineChoice;
     private readonly RadioButton _tableChoice;
     private readonly RadioButton _visualChoice;
@@ -40,6 +41,7 @@ internal sealed class CanvasSurfaceView : UserControl
     private readonly ListBox _warningRows;
     private readonly TextBlock _onboarding;
     private readonly CanvasOutlineView _outline;
+    private readonly CanvasTableView _table;
     private readonly Grid _detailRegion;
     private readonly TextBlock _detailHeading;
     private readonly TextBox _detailText;
@@ -60,27 +62,45 @@ internal sealed class CanvasSurfaceView : UserControl
         _outlineChoice = SurfaceChoice(
             "CanvasShowOutline", CanvasPhrase.OutlineSurfaceLabel, null);
         _tableChoice = SurfaceChoice(
-            "CanvasShowTable", CanvasPhrase.TableSurfaceLabel, CanvasPhrase.TableShipsLater);
+            "CanvasShowTable", CanvasPhrase.TableSurfaceLabel, null);
         _visualChoice = SurfaceChoice(
             "CanvasShowVisual", CanvasPhrase.VisualSurfaceLabel, CanvasPhrase.VisualShipsLater);
         _outlineChoice.Checked += (_, _) => RequestSurface(CanvasSurfaceKind.Outline);
+        _tableChoice.Checked += (_, _) => RequestSurface(CanvasSurfaceKind.Table);
 
         // A named GROUP, not a bare StackPanel (A18, round 8). A plain
         // panel gets no automation peer, so the AutomationId and Name set
         // below reached no client at all and the three choices appeared
         // flattened under the surface — inert a11y properties, which is
         // the class this and the Invoke defect share.
-        var switcher = new AutomationNamedGroupPanel
+        _switcher = new AutomationNamedGroupPanel
         {
             Orientation = Orientation.Horizontal,
             Margin = new Thickness(12, 0, 0, 0),
             VerticalAlignment = VerticalAlignment.Center,
         };
-        switcher.Children.Add(_outlineChoice);
-        switcher.Children.Add(_tableChoice);
-        switcher.Children.Add(_visualChoice);
-        AutomationProperties.SetAutomationId(switcher, "CanvasSurfaceSwitcher");
-        AutomationProperties.SetName(switcher, CanvasPhrase.SurfaceSwitcherName);
+        _switcher.Children.Add(_outlineChoice);
+        _switcher.Children.Add(_tableChoice);
+        _switcher.Children.Add(_visualChoice);
+        AutomationProperties.SetAutomationId(_switcher, "CanvasSurfaceSwitcher");
+        AutomationProperties.SetName(_switcher, CanvasPhrase.SurfaceSwitcherName);
+        // ONE Tab stop for the whole group, arrows within it — the WPF
+        // radio-group convention (W6-1 PR B, contract A18). Without it
+        // Tab visited all three choices and the surface's own
+        // documentation — and PR D's "one focus stop after the surface
+        // switcher" — described a keyboard route the code did not have.
+        // `Once` also degrades correctly when the CHECKED choice is
+        // disabled (a persisted "visual" token before PR D ships the
+        // renderer): WPF lands on the first FOCUSABLE child rather than
+        // stranding focus on an unreachable one.
+        KeyboardNavigation.SetTabNavigation(_switcher, KeyboardNavigationMode.Once);
+        // Arrows stay INSIDE the group and wrap, which is the other half
+        // of the convention: with the default (Continue) an arrow press
+        // walks straight out of the switcher into the projection, and
+        // "arrows move within the group" would be the same kind of
+        // untrue sentence the Tab claim was.
+        KeyboardNavigation.SetDirectionalNavigation(
+            _switcher, KeyboardNavigationMode.Cycle);
 
         var header = new StackPanel
         {
@@ -88,7 +108,7 @@ internal sealed class CanvasSurfaceView : UserControl
             Margin = new Thickness(12, 8, 12, 4),
         };
         header.Children.Add(_title);
-        header.Children.Add(switcher);
+        header.Children.Add(_switcher);
 
         _stateBanner = BannerText("CanvasStateBanner");
         _degradedBanner = BannerText("CanvasDegradedBanner");
@@ -117,6 +137,15 @@ internal sealed class CanvasSurfaceView : UserControl
 
         _outline = new CanvasOutlineView();
         _outline.DetailRequested += FocusDetail;
+        // PR B's projection, in the SAME body slot: exactly one of them
+        // is ever visible, so exactly one is ever in the UIA tree
+        // (spec §1).
+        _table = new CanvasTableView { Visibility = Visibility.Collapsed };
+        _table.DetailRequested += FocusDetail;
+        // Same reason as the outline's: a request for a row the panel
+        // had virtualized away is deliverable once containers exist
+        // (A14.3).
+        _table.ContainersRealized += TryDeliverFocus;
 
         _detailHeading = new TextBlock
         {
@@ -163,7 +192,11 @@ internal sealed class CanvasSurfaceView : UserControl
         layout.Children.Add(banners);
         layout.Children.Add(_warningRows);
         layout.Children.Add(_detailRegion);
-        layout.Children.Add(_outline);
+        // Both projections share the fill slot; Render() gates them.
+        var projections = new Grid();
+        projections.Children.Add(_outline);
+        projections.Children.Add(_table);
+        layout.Children.Add(projections);
         Content = layout;
     }
 
@@ -175,6 +208,8 @@ internal sealed class CanvasSurfaceView : UserControl
 
     internal CanvasOutlineView OutlineForTests => _outline;
 
+    internal CanvasTableView TableForTests => _table;
+
     internal TextBox DetailForTests => _detailText;
 
     internal ListBox WarningRowsForTests => _warningRows;
@@ -185,7 +220,13 @@ internal sealed class CanvasSurfaceView : UserControl
 
     internal TextBlock StateBannerForTests => _stateBanner;
 
+    internal RadioButton OutlineChoiceForTests => _outlineChoice;
+
     internal RadioButton TableChoiceForTests => _tableChoice;
+
+    internal RadioButton VisualChoiceForTests => _visualChoice;
+
+    internal FrameworkElement SwitcherForTests => _switcher;
 
     private static RadioButton SurfaceChoice(
         string automationId, string label, string? disabledHint)
@@ -231,6 +272,7 @@ internal sealed class CanvasSurfaceView : UserControl
             oldModel.Selection.PropertyChanged -= view.OnSelectionPropertyChanged;
         }
         view._outline.Model = e.NewValue as CanvasDocumentViewModel;
+        view._table.Model = e.NewValue as CanvasDocumentViewModel;
         if (e.NewValue is CanvasDocumentViewModel model)
         {
             model.PropertyChanged += view.OnModelPropertyChanged;
@@ -286,8 +328,13 @@ internal sealed class CanvasSurfaceView : UserControl
                 delivered = _onboarding.Focus();
                 break;
             case CanvasLoadState.Ready:
+                // Whichever projection is SHOWING is the one that can
+                // deliver: a row in a collapsed view has no container to
+                // realize and no focus to take (A14, PR B's arm).
                 delivered = model.FocusLandingNodeFor(request) is { } nodeId
-                    && _outline.DeliverFocus(nodeId) is not null;
+                    && (TableIsTheProjection(model)
+                        ? _table.DeliverFocus(nodeId)
+                        : _outline.DeliverFocus(nodeId) is not null);
                 break;
             default:
                 delivered = _stateBanner.Focus();
@@ -321,7 +368,11 @@ internal sealed class CanvasSurfaceView : UserControl
     {
         if (e.PropertyName == nameof(CanvasSelection.ActiveSurface))
         {
-            RenderSwitcher();
+            // The switcher AND the projections: a surface change that
+            // moved only the radio button would leave the reader on the
+            // old projection while the control claimed the new one.
+            Render();
+            TryDeliverFocus();
         }
     }
 
@@ -397,13 +448,27 @@ internal sealed class CanvasSurfaceView : UserControl
             ? Visibility.Collapsed
             : Visibility.Visible;
 
-        // Exactly one projection in the UIA tree (spec §1): the outline
-        // is hidden while the document has no rows to show, so a
-        // parse-error pane is a message, never an empty tree.
-        _outline.Visibility = model.State == CanvasLoadState.Ready
-            ? Visibility.Visible
-            : Visibility.Collapsed;
+        // Exactly one projection in the UIA tree (spec §1): the arm that
+        // is not showing is COLLAPSED, which is what keeps it out of the
+        // tree entirely rather than merely off screen — and both are
+        // hidden while the document has no rows to show, so a
+        // parse-error pane is a message, never an empty tree or an empty
+        // grid.
+        bool ready = model.State == CanvasLoadState.Ready;
+        bool table = TableIsTheProjection(model);
+        _outline.Visibility = ready && !table ? Visibility.Visible : Visibility.Collapsed;
+        _table.Visibility = ready && table ? Visibility.Visible : Visibility.Collapsed;
     }
+
+    /// <summary>
+    /// Which projection the body shows. Only the table asks for itself:
+    /// <c>Visual</c> is not a projection until PR D, and a persisted
+    /// <c>"visual"</c> token — which PR A already round-trips — must land
+    /// on a real surface rather than an empty pane, so it falls back to
+    /// the outline exactly as the absent token does.
+    /// </summary>
+    private static bool TableIsTheProjection(CanvasDocumentViewModel model) =>
+        model.Selection.ActiveSurface == CanvasSurfaceKind.Table;
 
     private void RenderSwitcher()
     {
@@ -443,10 +508,18 @@ internal sealed class CanvasSurfaceView : UserControl
         }
         e.Handled = true;
         model.CloseDetail();
-        // Back to the row that opened it (WCAG 2.1.2/2.4.3).
+        // Back to the row that opened it (WCAG 2.1.2/2.4.3) — on the
+        // projection that opened it, which is the one still showing.
         if (model.LastActivatedNode is { } row)
         {
-            _ = _outline.DeliverFocus(row);
+            if (TableIsTheProjection(model))
+            {
+                _ = _table.DeliverFocus(row);
+            }
+            else
+            {
+                _ = _outline.DeliverFocus(row);
+            }
         }
     }
 }

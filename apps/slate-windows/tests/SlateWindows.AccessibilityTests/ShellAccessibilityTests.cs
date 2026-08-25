@@ -6297,14 +6297,16 @@ public sealed class ShellAccessibilityTests
             PressKey(VirtualKeyShort.RETURN);
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(500));
 
-            // The surface switcher is one named group, and the two
-            // unshipped arms are disabled rather than absent (A18).
+            // The surface switcher is one named group, and an unshipped
+            // arm is disabled rather than absent (A18). The table arm
+            // shipped in PR B and has its own journey; the visual arm is
+            // PR D's and is the disabled one now.
             AutomationElement switcher = WaitForElement(
                 window, "CanvasSurfaceSwitcher", TimeSpan.FromSeconds(10));
             Assert.Equal("Canvas view", switcher.Properties.Name.Value);
-            AutomationElement tableChoice = WaitForElement(
-                window, "CanvasShowTable", TimeSpan.FromSeconds(10));
-            Assert.False(tableChoice.Properties.IsEnabled.Value);
+            AutomationElement visualChoice = WaitForElement(
+                window, "CanvasShowVisual", TimeSpan.FromSeconds(10));
+            Assert.False(visualChoice.Properties.IsEnabled.Value);
 
             // The t0 §5 banner and its focusable detail rows, on a
             // fixture whose entries core preserved but cannot show.
@@ -6347,6 +6349,338 @@ public sealed class ShellAccessibilityTests
             {
             }
         }
+    }
+
+    /// <summary>
+    /// W6-1 PR B (#745): the canvas TABLE journey (the spec's
+    /// "Canvas_TableJourney"). Switching the surface switcher to Table
+    /// swaps the projection in the live UIA tree — the outline LEAVES it
+    /// entirely — and what arrives is the W4-1 grid: Table and Grid
+    /// patterns, the six mac column headers, the separately-focusable
+    /// summary region, keyboard sort on Ctrl+Alt+S, and Enter activation
+    /// that opens a card.
+    /// </summary>
+    /// <remarks>
+    /// Honors the recorded journey traps: peered elements only, a
+    /// foreground re-assert before every keyboard boundary (a plain
+    /// SetForegroundWindow is DENIED to a background process; the
+    /// synthetic Alt tap is what satisfies the foreground lock), and
+    /// assertions that tolerate row virtualization — only realized rows
+    /// are in the tree, so the sort is checked as "the realized column is
+    /// non-decreasing and starts where ascending order starts", never as
+    /// a fixed row count.
+    /// </remarks>
+    [Fact]
+    [Trait("gate", "W-C")]
+    public void CanvasSurfaces_TableGridSortSelectionAndActivation_AreClean()
+    {
+        string testRoot = Path.Combine(
+            Path.GetTempPath(), $"slate-canvas-table-{Guid.NewGuid():N}");
+        string vaultRoot = Path.Combine(testRoot, "Canvas Vault");
+        string logDirectory = Path.Combine(testRoot, "logs");
+        Directory.CreateDirectory(vaultRoot);
+        File.Copy(
+            Path.Combine(DemoVaultCanvasDirectory(), "sample.canvas"),
+            Path.Combine(vaultRoot, "sample.canvas"));
+
+        Process? process = null;
+        try
+        {
+            var startInfo = new ProcessStartInfo(SlateWindowsExe())
+            {
+                UseShellExecute = false,
+            };
+            startInfo.ArgumentList.Add(vaultRoot);
+            startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
+                $"slate-canvas-table-{Guid.NewGuid():N}";
+            startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            process = Process.Start(startInfo)
+                ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+
+            if (!HasInteractiveDesktop(process, "Canvas table"))
+            {
+                return;
+            }
+
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(
+                process,
+                automation,
+                Path.Combine(logDirectory, "slate-windows.log"),
+                TimeSpan.FromSeconds(30));
+            window.SetForeground();
+            window.Focus();
+
+            OpenCanvasFromTree(window, automation, "sample");
+            _ = WaitForElement(window, "CanvasOutlineTree", TimeSpan.FromSeconds(20));
+
+            // The switcher's table arm is LIVE from this slice (contract
+            // B10) — it was disabled in PR A.
+            AutomationElement tableChoice = WaitForElement(
+                window, "CanvasShowTable", TimeSpan.FromSeconds(10));
+            Assert.True(
+                tableChoice.Properties.IsEnabled.Value,
+                "the Table arm of the surface switcher must be enabled once its "
+                + "projection ships");
+            tableChoice.Patterns.SelectionItem.Pattern.Select();
+
+            AutomationElement grid = WaitForElement(
+                window, "CanvasTableGrid", TimeSpan.FromSeconds(20));
+            // Contract B11: exactly one projection is in the tree. The
+            // outline is COLLAPSED, which takes it out of the tree
+            // entirely rather than leaving it off screen.
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => window.FindFirstDescendant(
+                        automation.ConditionFactory.ByAutomationId("CanvasOutlineTree"))
+                        is null,
+                    TimeSpan.FromSeconds(10)),
+                "the outline projection is still in the UIA tree while the table "
+                + "is showing");
+
+            // The substrate's patterns, on the element a client reads.
+            Assert.True(grid.Patterns.Grid.IsSupported, "the table must expose Grid");
+            Assert.True(grid.Patterns.Table.IsSupported, "the table must expose Table");
+            Assert.Equal("Canvas table", grid.Properties.Name.Value);
+
+            // Contract B2: the mac column inventory, in mac's order.
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => grid.FindAllDescendants(
+                        automation.ConditionFactory.ByControlType(ControlType.HeaderItem))
+                        .Length >= 6,
+                    TimeSpan.FromSeconds(10)),
+                "the canvas table never materialized its six column headers");
+            Assert.Equal(
+                new[] { "Type", "Title", "Group", "Target", "Connections", "Color" },
+                grid.FindAllDescendants(
+                    automation.ConditionFactory.ByControlType(ControlType.HeaderItem))
+                    .Select(header => header.Properties.Name.Value)
+                    .Take(6)
+                    .ToArray());
+
+            // Contract B9: mac's summary sentence, in the substrate's
+            // separately-focusable region. `sample.canvas` is seven cards
+            // and two groups.
+            AutomationElement summary = WaitForElement(
+                window, "CanvasTableGridSummary", TimeSpan.FromSeconds(10));
+            Assert.Equal(
+                "Summary: Canvas table: 7 cards, 2 groups.",
+                summary.Properties.Name.Value);
+
+            // Keyboard sort: Ctrl+Alt+S on the focused column (§8.7
+            // forbids header-click-only sorting), which for the entry
+            // cell is Type. Ascending kind order starts at `file`.
+            AutomationElement firstTypeCell = WaitForCellStartingWith(grid, "Type: ");
+            ReassertForegroundForAChord(window);
+            firstTypeCell.Focus();
+            AssertEventuallyFocused(
+                firstTypeCell, "the canvas table's first cell never took focus");
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.KEY_S);
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(500));
+
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => TypeColumn(grid) is ["Type: File", ..],
+                    TimeSpan.FromSeconds(10)),
+                "Ctrl+Alt+S did not sort the Type column ascending; the column "
+                + $"reads [{string.Join(", ", TypeColumn(grid))}]");
+            string[] sortedTypes = TypeColumn(grid);
+            Assert.Equal(
+                sortedTypes.OrderBy(value => value, StringComparer.Ordinal).ToArray(),
+                sortedTypes);
+
+            AssertAxeClean(process, "canvas-table");
+
+            // Contract B6: the row-actions menu on the KEYBOARD route
+            // (the Menu key; Shift+F10 is its twin), with the two
+            // unshipped verbs listed DISABLED and their reasons readable
+            // as HelpText — the channel the mac RowAction contract names
+            // and the one a screen-reader user gets. The menu is a
+            // separate popup HWND, so it is looked up from the desktop
+            // rather than under the window.
+            ReassertForegroundForAChord(window);
+            PressKey(VirtualKeyShort.APPS);
+            AutomationElement[] rowActions = WaitForRowActionItems(automation, process.Id);
+            Assert.Equal(
+                new[] { "Open", "Toggle Mark", "Delete" },
+                rowActions.Select(item => item.Properties.Name.Value).ToArray());
+            Assert.True(
+                rowActions[0].Properties.IsEnabled.Value,
+                "Open must be live — it is the shipped verb");
+            foreach (AutomationElement unshipped in rowActions.Skip(1))
+            {
+                Assert.False(
+                    unshipped.Properties.IsEnabled.Value,
+                    $"{unshipped.Properties.Name.Value} ships in a later slice and "
+                    + "must be listed disabled, not enabled");
+                Assert.Contains(
+                    "arrives in a later slice",
+                    unshipped.Properties.HelpText.Value,
+                    StringComparison.Ordinal);
+            }
+            // Close it before the activation leg: a live popup owns the
+            // keyboard, and Enter would pick a menu item instead.
+            PressKey(VirtualKeyShort.ESCAPE);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => FindRowActionItems(automation, process.Id).Length == 0,
+                    TimeSpan.FromSeconds(10)),
+                "the row-actions menu never closed on Escape");
+
+            // Contract B6: Enter opens the card, through the same
+            // activation seam the outline uses — a text card publishes
+            // the interim read-only detail.
+            AutomationElement textCell = WaitForCellStartingWith(grid, "Type: Text");
+            ReassertForegroundForAChord(window);
+            textCell.Focus();
+            AssertEventuallyFocused(
+                textCell, "the canvas table's text-card row never took focus");
+            PressKey(VirtualKeyShort.RETURN);
+
+            AutomationElement detail = WaitForElement(
+                window, "CanvasCardDetail", TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => detail.Patterns.Value.IsSupported
+                        && !string.IsNullOrEmpty(
+                            detail.Patterns.Value.Pattern.Value.Value),
+                    TimeSpan.FromSeconds(10)),
+                "activating a table row never opened the card's text");
+        }
+        finally
+        {
+            if (process is not null && !process.HasExited)
+            {
+                process.CloseMainWindow();
+                if (!process.WaitForExit(5_000))
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            try
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    /// <summary>
+    /// The canvas table's row-action items, from the popup the Menu key
+    /// opened. A WPF <c>ContextMenu</c> is its own HWND, so the search
+    /// starts at the DESKTOP — and is filtered to THIS process, because
+    /// a desktop-wide menu search on a shared runner can otherwise pick
+    /// up another application's popup (the suite's recorded popup
+    /// discipline). The substrate's menu is identified by its first item
+    /// rather than by an automation id, because the id would be a hook
+    /// this journey invented for itself.
+    /// </summary>
+    private static AutomationElement[] FindRowActionItems(
+        UIA3Automation automation, int processId)
+    {
+        foreach (AutomationElement menu in automation.GetDesktop()
+            .FindAllDescendants(
+                automation.ConditionFactory.ByControlType(ControlType.Menu)
+                    .And(automation.ConditionFactory.ByProcessId(processId))))
+        {
+            AutomationElement[] items = menu.FindAllDescendants(
+                automation.ConditionFactory.ByControlType(ControlType.MenuItem));
+            if (items.Any(item =>
+                string.Equals(
+                    item.Properties.Name.ValueOrDefault, "Open", StringComparison.Ordinal)))
+            {
+                return items;
+            }
+        }
+        return [];
+    }
+
+    private static AutomationElement[] WaitForRowActionItems(
+        UIA3Automation automation, int processId)
+    {
+        AutomationElement[] items = [];
+        Assert.True(
+            SpinWait.SpinUntil(
+                () =>
+                {
+                    items = FindRowActionItems(automation, processId);
+                    return items.Length >= 3;
+                },
+                TimeSpan.FromSeconds(15)),
+            "the canvas table's row-actions menu never opened on the Menu key "
+            + $"(saw {items.Length} items)");
+        return items;
+    }
+
+    /// <summary>
+    /// The Type column, top to bottom, through the UIA Grid pattern —
+    /// which resolves a cell by (row, column) whether or not its
+    /// container is realized, so row virtualization (the substrate's
+    /// AT-safe setting) cannot turn this into an assertion about the
+    /// window size. The same route `GridConformanceTests` reads cells
+    /// by.
+    /// </summary>
+    private static string[] TypeColumn(AutomationElement grid)
+    {
+        FlaUI.Core.Patterns.IGridPattern pattern = grid.Patterns.Grid.Pattern;
+        int rows = pattern.RowCount.Value;
+        var names = new string[rows];
+        for (int row = 0; row < rows; row++)
+        {
+            names[row] = pattern.GetItem(row, 0).Name;
+        }
+        return names;
+    }
+
+    private static AutomationElement WaitForCellStartingWith(
+        AutomationElement grid, string prefix)
+    {
+        AutomationElement? cell = null;
+        Assert.True(
+            SpinWait.SpinUntil(
+                () =>
+                {
+                    FlaUI.Core.Patterns.IGridPattern pattern = grid.Patterns.Grid.Pattern;
+                    for (int row = 0; row < pattern.RowCount.Value; row++)
+                    {
+                        AutomationElement candidate = pattern.GetItem(row, 0);
+                        if ((candidate.Name ?? string.Empty)
+                            .StartsWith(prefix, StringComparison.Ordinal))
+                        {
+                            cell = candidate;
+                            return true;
+                        }
+                    }
+                    return false;
+                },
+                TimeSpan.FromSeconds(20)),
+            $"no canvas-table cell named '{prefix}…' materialized");
+        return cell!;
+    }
+
+    /// <summary>
+    /// Put the window in the foreground for a CHORD. Synthesized input
+    /// goes to the foreground queue, and Windows denies
+    /// SetForegroundWindow to a background process unless it owns recent
+    /// input — a synthesized key grants exactly that credential. The tap
+    /// is CONTROL rather than Alt on purpose: a bare Alt tap drops the
+    /// target window into system-menu mode and the next key is eaten by
+    /// menu navigation (the recorded `GridConformanceTests` lesson,
+    /// which matters here because the next key is Ctrl+Alt+S).
+    /// </summary>
+    private static void ReassertForegroundForAChord(Window window)
+    {
+        Keyboard.Press(VirtualKeyShort.CONTROL);
+        Keyboard.Release(VirtualKeyShort.CONTROL);
+        window.SetForeground();
+        window.Focus();
+        Wait.UntilInputIsProcessed();
     }
 
     /// <summary>Open a canvas by selecting its row in the files tree —

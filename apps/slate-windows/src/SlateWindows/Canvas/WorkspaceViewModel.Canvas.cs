@@ -247,13 +247,14 @@ internal sealed partial class WorkspaceViewModel
             _ => ActiveCanvasDocument?.ShowSurface(CanvasSurfaceKind.Outline),
             _ => ActiveCanvasDocument is not null);
 
-    /// <summary>Registered now, disabled until PR B ships the
-    /// projection (contract A18): the palette lists it and answers with
-    /// the registrar's canonical unavailable sentence, because a
-    /// registered row carries no reason of its own and "ships in PR B"
-    /// is not copy a user should hear.</summary>
+    /// <summary>Enabled in W6-1 PR B, now that the projection exists
+    /// (contract B10): the same one surface switch the header's radio
+    /// drives, so the state, the persisted token and the spoken sentence
+    /// cannot disagree.</summary>
     public System.Windows.Input.ICommand CanvasShowTableCommand =>
-        _canvasShowTableCommand ??= new RelayCommand(_ => { }, _ => false);
+        _canvasShowTableCommand ??= new RelayCommand(
+            _ => ActiveCanvasDocument?.ShowSurface(CanvasSurfaceKind.Table),
+            _ => ActiveCanvasDocument is not null);
 
     /// <summary>Registered now, disabled until PR D ships the
     /// projection (contract A18).</summary>

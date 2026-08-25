@@ -1462,11 +1462,31 @@ and visual are `CanExecute == false` until their projections ship, so
 sentence, because a registered row may not carry a `Reason` (that field
 belongs to `Unreg`) and "ships in PR B" is not copy any user should
 hear. The reason those two are disabled is recorded HERE and pinned by
-`ShowTableAndShowVisualRegisterAndStayDisabledUntilTheirProjectionsShip`;
-`showTable` enables in PR B and `showVisual` in PR D. None of the three
+`ShowVisualRegistersAndStaysDisabledUntilItsProjectionShips` (renamed in
+PR B, which enabled `showTable` — see B10);
+`showTable` enabled in PR B and `showVisual` enables in PR D. None of the three
 carries a chord, so `Scope` resolves to `None` through `Reg`'s own rule
 and `ChordScope.Canvas` has no delivery site until PR C — which is why
 the scope's doc comment names PR C as the first surface that uses it.
+
+**The switcher is ONE Tab stop, and arrows move within it (added in PR
+B).** Recorded as an ADDITION, not as a description of what PR A
+shipped: A18 said nothing about the keyboard shape, and the §W-C row PR
+B backfilled for the outline claimed "the switcher is one focus stop" —
+which the code did not do. `KeyboardNavigation.TabNavigation=Once` on
+the group makes it true and `DirectionalNavigation=Cycle` makes the
+other half true (with the default, an arrow walked straight out of the
+switcher into the projection). This is the WPF radio-group convention,
+and it is what gives PR D's planned "the renderer is one focus stop
+AFTER the surface switcher" a premise: without it the switcher was
+three stops. `Once` also degrades correctly when the CHECKED choice is
+disabled — a persisted `"visual"` token before PR D ships the renderer —
+landing on the first FOCUSABLE choice rather than stranding focus on an
+unreachable one. Pinned by
+`TheSurfaceSwitcherIsOneTabStopAndArrowsMoveWithinIt`, which issues WPF
+`TraversalRequest`s (the same focus engine a keystroke reaches, one
+layer below the key handler) rather than reading back the properties it
+also asserts; mutation-verified against removing either setting.
 
 **The switcher is ONE named group in the UIA tree, and that required a
 peer (round 8).** The three choices sit in a container carrying
@@ -1541,7 +1561,8 @@ real peers and asserts the four patterns, the control types and the
 three label properties (mutation-verified — dropping the
 `GetPattern` override makes Invoke null, which is why the custom peer
 exists at all), and
-`ShowTableAndShowVisualRegisterAndStayDisabledUntilTheirProjectionsShip`
+`ShowVisualRegistersAndStaysDisabledUntilItsProjectionShips` (PR B's
+name for it, once `showTable` shipped)
 drives the registrar over a live workspace rather than a null-workspace
 stub.
 `apps/slate-windows/tests/SlateWindows.Tests/CanvasAnnouncerTests.cs`:
@@ -1561,6 +1582,18 @@ same reason:
 facts in which A17's generation guards are live code.
 `apps/slate-windows/tests/SlateWindows.Tests/Censuses/CanvasAnnouncerCensus.cs`:
 A6's funnel guard, plus A2's attach-funnel doc-comment twin.
+`apps/slate-windows/tests/SlateWindows.Tests/Censuses/CanvasAutomationPropertyCensus.cs`:
+round 8's structural end to the inert-a11y-property class — no
+`AutomationProperties.Set*` under `Canvas/` targets a type WPF gives no
+peer, fail-closed on an unresolvable target, with a floor on the sites
+scanned. (Listed here from PR B: it was written in §A's round 8 and
+described in A18, but the pin list this section keeps was never
+extended to name it.)
+`apps/slate-windows/tests/SlateWindows.Tests/Censuses/CanvasMediaGateCensus.cs`:
+CD-38's structural half — the gate has exactly one identity method and
+reads identity only off held handles, never a re-open by path. (Same
+omission, same fix: cited throughout §A's round record, absent from the
+list.)
 `apps/slate-windows/tests/SlateWindows.Tests/Censuses/AnnouncementSeamCensus.cs`:
 the production wiring as a CHAIN — the three shipping call expressions
 from `MainWindow` to the announcer, and a canvas load driven through a
@@ -1584,6 +1617,476 @@ arbitrates; it is never run locally beside the unit suite.
 
 ---
 
+## PR B — the canvas table projection
+
+**Goal (spec §PR B).** The table view over `canvas_table_rows` on the
+W4-1 `AccessibleDataGrid`, *exactly as Bases consumed it*: a
+configuration of a battle-tested substrate, not new machinery. The
+smallest slice of the series — the mac analogue is 125 lines of view on
+the same substrate.
+
+### Contracts
+
+**B1 — The projection IS the substrate; nothing here re-implements it.**
+`Canvas/CanvasTableView.cs` builds one `AccessibleDataGrid`, calls
+`Bind` per publish, and configures columns, comparators, row actions,
+activation and the announce seam. Sorting, the reader-position restore,
+the "Header: value" cell labels, native row headers, type-ahead, the
+row-actions menu, the activation plumbing and the AT-safe virtualization
+are the substrate's — the W4-5 D-12 rule ("a second implementation of
+cell focus is what the grid-conformance contract forbids"), which is why
+the §8.7 matrix in `GridConformanceTests` applies to this projection by
+construction and is **cited, not re-run** (re-running its 10,000-row
+probe here would prove the substrate again and this projection not at
+all). Pinned by
+`TheProjectionIsTheSubstrateSoTheConformanceMatrixApplies`.
+
+**The substrate gained exactly one method, and it is the model→view
+direction it did not have.** `AccessibleDataGrid.SelectRow(predicate,
+moveFocus)` seats currency on a row WITHOUT announcing, and without
+taking keyboard focus unless asked. Every earlier consumer owns its
+selection inside the grid (Bases reads `CurrentRowChanged`; W4-5's
+Ctrl+J jump is a move the user asked for, which `FocusRow` makes and
+announces). The canvas is the first surface whose selection lives
+OUTSIDE the grid and is shared across panes, so a move made elsewhere
+has to re-seat this grid — and re-seating it must not speak a move the
+reader did not make, nor pull focus off whatever they were using. The
+mac substrate draws the same line: its own key handling announces and
+its `syncSelectionFromBinding` is silent. The new method reuses the
+substrate's existing `WithoutAnnouncing` and `FocusCellElement` rather
+than copying either.
+
+**B2 — Columns are the mac inventory, in mac's order, over core's
+fields.** **Type · Title · Group · Target · Connections · Color**, with
+`IsRowHeader` on Title. `Type` is core's `kind` word with its leading
+character capitalised (mac's `.capitalized`, and this host's existing
+`CanvasPhrase` capitaliser, which is core's `capitalize_first`
+transliterated); `Group` is core's `group_path`, last element, or empty;
+`Target` is core's `target` verbatim; `Connections` is core's
+`connection_count`; `Color` is core's `color_name` or empty. Header
+labels and the grid's accessible name ("Canvas table") are the mac label
+inventory verbatim, in `CanvasPhrase` with the rest of the §W-C label
+class (A9's designation). §W-G row J is the owner: the table's
+projection config is host-by-designation, and this row is what "host
+projection config, mac label inventory verbatim" means concretely.
+
+**`Target` is a file path or a whole URL — the HOST appears in the
+title, not here.** The spec's PR B line says "`Target` per kind = file
+path / URL host / empty (core-supplied)". Core's `node_target`
+(`model.rs`) returns the `file` for a file card and the **whole `url`**
+for a link card; the URL *host* is what core's `link_title` puts in the
+TITLE. The binding rule the sentence exists to protect — core-supplied,
+never host-derived — is met exactly: this projection passes `target`
+through untouched. Recorded rather than "fixed", because deriving a host
+here would be the R-D violation the same sentence forbids.
+
+**B3 — The comparators are mac's, and the spec's description of the
+Color one is corrected here.** Type, Target and Color take mac's plain
+`<` over the same values, transliterated as `CompareOrdinal`; Title and
+Group take mac's `localizedCaseInsensitiveCompare`,
+transliterated as .NET's current-culture, case-insensitive compare,
+because those are user-authored prose; Connections compares the COUNT, not the rendered
+digits, or 10 would sort before 2.
+
+**What "transliterated as `CompareOrdinal`" claims, and what it does
+not — written from the reference implementation's actual comparison
+semantics, third attempt.** Swift's `String` ordering is **not** a walk
+over code points. `String: Comparable` is defined over Unicode
+**canonical equivalence**: the standard library normalizes before
+comparing, so canonically equivalent strings compare EQUAL and ordering
+is computed on the normalized form. `string.CompareOrdinal` normalizes
+nothing and compares raw UTF-16 code units.
+
+**The strongest evidence for that is IN THIS REPO, and it predates this
+PR.** Where the two parity harnesses must agree byte-for-byte, the Swift
+twin does not use `<`: `ParityHarnessTests.swift` sorts with
+`Array($0.utf16).lexicographicallyPrecedes(Array($1.utf16))` — an
+explicit UTF-16 lexicographic order, spelled out at every sort site
+(golden names, the fixture enumeration, the search rows at `:702`) —
+against the C# twin's `StringComparer.Ordinal` in
+`SurfaceSerializer.cs:951–952`. That explicit spelling is only necessary
+because Swift's native `String <` does NOT order by UTF-16 code units;
+the harness had to opt out of it to stay in parity, which is the same
+fact this row is about, already load-bearing in the §W-A gate. External
+corroboration: the stdlib's `StringComparison.swift` carries the
+ORDERING implementation (a byte fast path, a normalizing general path),
+and *The Swift Programming Language* ("Strings and Characters →
+Comparing Strings") documents the EQUALITY half — values are equal when
+their extended grapheme clusters are canonically equivalent, "even if
+they're composed from different Unicode scalars behind the scenes".
+(The attribution matters: TSPL states equality; the ordering claim comes
+from the stdlib source and from the harness pair above.)
+
+There are therefore **two** divergence classes, not one:
+
+1. **Canonical equivalence / normalization form.** Any two `target`s
+   that differ in normalization sort differently — and a pair that is
+   canonically equivalent COMPARES EQUAL on mac while Windows orders it
+   strictly. What mac then renders for that tie is unspecified rather
+   than document order: `sorted(by:)` is documented as not guaranteed
+   stable (.NET's `OrderBy` is documented stable, which is why the
+   Windows side is at least deterministic). The worked case: an
+   NFD `Café.md` beside `Caff.md`. Swift compares the NFC form, so `é`
+   (U+00E9) beats `f` and `Café.md` sorts AFTER; ordinal compares the
+   stored `e` + U+0301, so `e` (U+0065) loses to `f` and `Café.md`
+   sorts BEFORE. Opposite order, every character inside the BMP.
+2. **Code unit vs scalar for the supplementary planes.** A
+   supplementary-plane character compared against a BMP character above
+   U+DFFF sorts oppositely, because UTF-16 puts the surrogate lead unit
+   (U+D800–U+DBFF) below U+E000 while the scalar is above every BMP
+   value.
+
+**Class 1 is ORDINARY, not exotic**, and this row does not get to call
+it a corner: macOS's filesystem hands back decomposed filenames, so a
+`.canvas` authored on a Mac routinely carries NFD `file` targets, and a
+synced vault brings them to Windows verbatim (core stores `target`
+byte-exact — 0b's "bytes are bytes" rule and this repo's own
+`.gitattributes` doctrine). Any vault with an accented filename can show
+it. `kind` and `color_name` remain out of the class for the reason the
+earlier draft gave: closed ASCII sets core owns.
+
+**The ordinal choice STANDS, and here is why the divergence is
+acceptable rather than a defect to fix.** (a) It is deterministic and
+locale-independent: the same canvas sorts identically on every Windows
+machine, which a culture-sensitive compare would not guarantee.
+(b) Normalizing host-side to chase Swift would be the host deriving an
+ordering core does not define — the R-D violation B4 refuses one column
+over — and it still would not reproduce Swift exactly. (c) **This
+column's order never reaches a §W-A artifact.** Stated precisely,
+because the harness does sort: it applies host sorts to FILE
+ENUMERATION and to the search rows, and those are kept in cross-twin
+parity by the explicit UTF-16 rule cited above — which is exactly how
+this divergence would bite if a canvas sort ever were serialized. The
+canvas ROW artifacts do not go through a host sort at all:
+`CanvasReadArtifact` (A20) passes core's rows through in CORE's order,
+so no golden and no cross-host gate compares the two hosts' sorted
+tables. What is left is a user-visible ordering difference on
+mixed-normalization vaults, and it is registered as **CD-39** rather
+than left implied.
+
+**This paragraph's own history is the reason it is this long.** It
+first claimed "the same ASCII values" (false of `target`), then "both
+walk code points in order … they can disagree ONLY [in the
+supplementary planes]" (false of Swift, and it named the wrong single
+class). Two corrections to one bound is the shape rule 4 exists for, so
+this version is written from the reference implementation's documented
+semantics with the source cited in line, and the residual divergence is
+registered instead of being bounded away.
+
+**The Color column does not sort "by preset index, hex after presets".**
+The spec's parenthetical describes a comparator neither host has, over
+data core does not produce. Core's `color_name` (`canvas/mod.rs`) never
+yields a hex: a preset renders as its word and a hex renders as
+"⟨nearest preset⟩ (custom)", with "custom color" for an unparseable
+one. Mac's comparator is `$0.color < $1.color` over that NAME. The
+property the spec's phrase is reaching for is core's own, stated in
+`color_name`'s doc comment — *"the table's Color column sorts customs
+beside their family"* — and it is a consequence of sorting the names:
+`red` is immediately followed by `red (custom)`. **This is a
+ruling-vs-source conflict resolved in favour of the source** (the mac
+comparator, which both the spec sentence and the controller ruling name
+as the thing to match); the wording is what is wrong, and it is recorded
+here rather than implemented. Pinned by
+`TheColorColumnSortsCustomsBesideTheirFamily` and
+`TheConnectionsColumnSortsNumericallyNotAsText`; the whole six-column
+matrix by `EveryColumnSortsTheWayMacSortsIt`, whose expectations are
+CELL VALUES so a tie is spelled identically and the assertion pins the
+rendered column rather than an order that depends on how ties fell.
+
+**B4 — Rows are core's, published by the same load the outline is.**
+`CanvasDocumentViewModel.TableRows` is `canvas_table_rows` untransformed
+and in core's order (R-D), published by the publish that already fetched
+it for the activation targets — two reads of one open, never a second
+FFI round trip. The projection selects nothing and drops nothing —
+asserted as sequence equality of node ids against `TableRows`, which is
+the shape a filter or a paging bug breaks. The Title column reads core's
+`speakable_name`, the same
+field the outline row's name reads (CD-30's Windows reading), so one
+card answers to one name on both projections **and** the row-header
+identity the substrate restores the reader by is unique by construction
+— a bare title is not (the substrate's own comment: "two notes can both
+be Untitled"). Mac's table spells `title` there; the divergence is
+CD-30's, extended to this surface, and it is visible only on a canvas
+with repeated titles.
+
+**Skew-graceful for free (contract 0b-6).** Table rows are SQLite-served
+with `speakable_for`'s title fallback, so a handle whose open-time model
+no longer knows a row's id yields a row with a non-unique name rather
+than a refusal. That is 0b-6's own contract and 0b-6's own tests; this
+projection adds no per-row model query, so there is nothing new to make
+fallible (A16's list is unchanged by this PR).
+
+**B5 — Selection is `CanvasSelection`, both ways, with no echo.**
+View→model: the substrate's `CurrentRowChanged` calls the document's
+`SelectNode` — the SAME narrating mutation the outline calls, which is
+why both projections speak one grammar and why `CanvasMovedTo` and its
+group-boundary event are composed in exactly one place. Model→view:
+`SelectRow` re-seats currency silently, keeping the reader's COLUMN. The
+echo is broken by a re-entrancy flag on the view, not by comparing
+values — the A12 rule, one surface over, and it is needed here because
+the substrate raises `CurrentRowChanged` for a programmatic seat exactly
+as it does for an arrow key. A `null` from that event is currency
+LEAVING the bound set during a rebind, not the user deselecting, so the
+table never clears the shared selection (the W4-6 round-2 lesson).
+Pinned by `SelectionFlowsBothWaysWithoutAnEcho` (which asserts the
+model→view direction posts EXACTLY the canvas line, so a spurious grid
+announcement fails it) and
+`AReSeatKeepsTheReaderInTheColumnTheyWereReading`.
+
+**The REBUILD runs under the same guard, and that is not redundant with
+the substrate's own silence.** `Bind` restores the reader's position by
+ROW-HEADER TEXT — every publish builds fresh row objects, so identity is
+gone by definition — and this projection's row header is core's
+`speakable_name`, which a republish can RENUMBER. Two cards titled
+"Shared" are `Shared` and `Shared 2`; rename the first on disk and the
+second one becomes `Shared`, so the header-text restore lands the reader
+on a DIFFERENT card that now spells what they were reading. The
+substrate suppresses its OWN announcement there (its restore runs under
+`WithoutAnnouncing`), but `CurrentRowChanged` still fires — so without
+the guard the view would call `SelectNode` and the DOCUMENT would speak
+a canvas move nobody made, off a reload the user did not ask for. With
+it, the re-seat that follows puts the reader back on the selected NODE,
+which is the authority the header text is only a proxy for.
+`ARepublishThatRenumbersASpeakableNameNeverSpeaks` drives exactly that
+rename through a real reload; mutation-verified against dropping the
+guard, which fails it on both halves (a line is spoken, and the shared
+selection moves to the namesake).
+
+**The repair moves CURRENCY, not focus, and that is a measured decision
+rather than an omission** (codex B round 1, B2). The finding was that
+the repair leaves the reader on the namesake row while the selection
+moves elsewhere — a split in which Enter would open a card the reader is
+not on. It does not reproduce: while the DataGrid holds focus, WPF moves
+focus WITH currency, so after the full sorted-rename-republish path the
+reader, currency and `CanvasSelection` are all on the same row. That was
+measured with the proposed fix's own precondition (the reader was in the
+grid) holding, so the fix would have fired and changed nothing.
+
+Adding it would have COST something, which is why it is recorded here
+rather than taken for safety: `IsKeyboardFocusWithin` on this control
+includes the separately-focusable SUMMARY region (§8.7's own contract),
+so re-seating the row with focus on every rebind yanks a reader who is
+sitting on the summary onto a row they never asked for — the W4-6
+background-publish focus-steal defect, reintroduced. Measured too: with
+the re-seat applied, focus went from the summary `TextBlock` to a
+`DataGridCell`. Both halves are now pinned —
+`AfterANamesakeRepublishTheReaderCurrencyAndSelectionAllAgree` as an
+end-state characterization (labelled as one: it passes with or without a
+re-seat, and says so), and
+`ARepublishNeverYanksTheReaderOffTheSummaryRegion` as the guard, which
+is mutation-verified in the OTHER direction — adding the re-seat fails
+it.
+
+**B6 — Activation and row actions run the document's one seam.** Enter,
+double-click, the substrate's `Invoke` path and the "Open" row action
+all reach `CanvasDocumentViewModel.Activate`, looked up from the table
+row's node id — which is exactly how mac's table does it (its `onActivate`
+resolves the outline row and calls the container's shared `activate`).
+So the media gate, the link allowlist, the subpath anchor and every
+announcement are PR A's, unchanged and unduplicated. A group row has
+nothing to expand on a flat projection and falls through silently, as
+mac's does (its `activate` has no group arm at all). Row actions are
+mac's three, in mac's order: **Open**, **Toggle Mark** (disabled until
+PR G) and **Delete** (disabled until PR E), each disabled one carrying
+its reason, which the substrate exposes as HelpText and a tooltip — the
+mac RowAction contract ("context menus retain a temporarily unavailable
+relevant action WITH its reason"), and the reason a screen-reader user
+can tell "not yet" from "not here". The reasons are label-class copy in
+`CanvasPhrase`; they are not the registrar's `UnavailableReason`,
+because that sentence belongs to command rows and a row action is not
+one. Pinned by
+`ActivationRunsTheSameSeamTheOutlineDoesIncludingTheMediaGate` and
+`TheUnshippedRowActionsAreListedDisabledWithTheirReason`.
+
+**B7 — The announce seam is swapped onto the canvas relay (DoD §H).**
+The substrate raises CANONICAL grid events — `GridSorted` on a sort,
+`GridRowMoved` on a vertical row move, `GridCellMoved` otherwise — and
+under this projection they are posted through
+`CanvasAnnouncer.Relay`, which carries core's rendered text AND core's
+priority through unwrapped rather than re-classifying them as canvas
+status (A5's `Relay` exists for exactly this consumer). The grid is
+constructed MUTED and takes the relay when its document arrives, so a
+table with no document cannot post through the canonical dispatcher.
+
+**Two lines on a row move, deliberately, because mac has two.** A
+vertical move posts the substrate's `GridRowMoved` immediately —
+rendered as the focused cell alone, since a canvas row carries no
+engine-authored audio description and mac passes none either — and the
+document's `CanvasMovedTo` on the navigation class's 200 ms window. They
+say different things (the cell under the reader; the card's position in
+the canvas), and this is the mac shape rather than a Windows choice.
+
+**The guard is structural AND behavioural, because neither alone can
+see this.** `CanvasAnnouncerCensus.NoCanvasSourceAnnouncesOutsideTheRelay`
+cannot: the substrate's default seam posts through
+`AccessibilityNotificationDispatcher` from `Grids/AccessibleDataGrid.cs`,
+which is not a canvas source — so a surface that simply forgot to swap
+would bypass the funnel with no canvas file naming the dispatcher at
+all. `EveryGridUnderCanvasRidesTheRelay` reads the syntax (every canvas
+file that builds an `AccessibleDataGrid` assigns its seam to the relay,
+with a floor so it cannot pass over nothing), and
+`TheGridsOwnAnnouncementsComeOutOfTheCanvasFunnel` EXECUTES
+`ToggleSortCommand` — the command the Ctrl+Alt+S gesture is bound to,
+which is the seam a real chord arrives at — on the production surface,
+and reads the funnel's post seam. Said exactly, because the difference
+is the kind this document keeps catching: that fact does not press a
+key; the JOURNEY is the half that does, cross-process, through real
+input. A guard may not exercise the mechanism it is guarding — the class
+recorded five times in §A's round record — so neither of the two
+supplies the other's.
+
+**B8 — No export producer, and Ctrl+F keeps routing.** No core canvas
+export exists, and a host-composed one is what the residue census
+forbids — the `ReadingTableGrid` precedent, whose own comment records
+the same decision. `exportProducer` is therefore null and the
+substrate's export commands answer `CanExecute` false. **Owner may
+designate a canvas export later**; when core grows one, this row is
+where the producer arrives. The substrate's `FilterCommand` is likewise
+left unsubscribed, so Ctrl+F CONTINUES ROUTING to the app-level find
+(the substrate's own rule: "with no subscriber the gesture continues
+routing, so the app-level find is never shadowed by a grid that cannot
+filter"). PR C subscribes it to the canvas filter. Pinned by
+`NoExportProducerAndTheFilterChordStillRoutes`.
+
+**B9 — The summary is mac's sentence, and it is a LABEL.**
+`Canvas table: ⟨n⟩ card⟨s⟩, ⟨m⟩ group⟨s⟩.` — mac's string verbatim,
+including its pluralisation, over counts taken from `canvas_table_rows`
+(a card is any row whose kind is not `group`). It is a static label, not
+an announcement: the 0a decision (0a-13, §W-G row J) was that a
+"CanvasTableSummary" event would exist only if the sentence were ever
+ANNOUNCED, and mac never announces it — so the vocabulary has no such
+event and inventing one would put a string in the canonical corpus that
+no host speaks. The substrate makes it a separately-focusable named
+region, which is how a screen-reader user reads it on demand. Pinned by
+`TheSummaryIsMacsSentenceInTheFocusableRegion`, which includes the
+pluralisation boundary on both sides of one.
+
+**B10 — `slate.canvas.showTable` is enabled, and there is still one
+surface switch.** The command's resolver drives
+`CanvasDocumentViewModel.ShowSurface`, the same one the header radio
+drives (A15/A18), so the shared state, the persisted `"table"` token and
+the spoken `CanvasSurfaceShown` cannot disagree. `showVisual` stays
+disabled with the registrar's canonical sentence until PR D; §A's fact
+was renamed accordingly (`ShowVisualRegistersAndStaysDisabledUntilItsProjectionShips`)
+and `ShowTableIsEnabledAndDrivesTheOneSurfaceSwitch` owns the other
+half. No chord: the row stays `ChordScope.None` for A18's reason.
+
+**B11 — Exactly one projection is in the UIA tree.** The surface body
+holds both arms in one slot and COLLAPSES the one that is not showing —
+collapsed, not hidden, so it leaves the tree a client walks rather than
+sitting in it marked off-screen. Neither arm shows outside `Ready`, so a
+parse-error pane stays a message rather than becoming an empty grid.
+
+**Where each half of that is proved, stated exactly.** The visibility
+gate and the POSITIVE half of the topology (the showing projection
+really resolves as a peer under the id AT looks it up by) are
+`ExactlyOneProjectionIsEverInTheTree`. The ABSENCE of the other arm is
+the journey's, because WPF's in-process peer walk keeps an already-built
+peer for a collapsed element — observed while writing that fact — so an
+in-process "absent" assertion would be testing the walker rather than
+the tree a client reads. The journey asserts the outline's element is
+gone from the LIVE tree after the switch, through the real UIA bridge,
+and that is the level at which the claim is true. `Visual` is not a
+projection until PR D, and PR A already round-trips a persisted
+`"visual"` token, so that token falls back to the OUTLINE rather than to
+an empty pane — recorded here because it is a real state a restored
+workspace can be in today. Focus delivery routes to whichever arm is
+showing (A14's table arm), and the table reports a delivery only when
+keyboard focus is actually inside the grid: the substrate's own bool
+answers "was the row in the bound set", which is a different question by
+design, and A14's rule is that a surface may not report a landing it did
+not make. Pinned by `ExactlyOneProjectionIsEverInTheTree` and
+`AFocusRequestLandsOnATableRowAndAnUnknownRowDoesNot`.
+
+**B12 — PR B carries the series' evidence debt rather than accruing it.**
+Two rows PR A owed were backfilled here on a controller ruling, because
+the pattern set now is the one PRs C–G repeat:
+
+- **`w_c_matrix.md` gained the Canvas OUTLINE row**, composed from §A's
+  own evidence list (the projection and its state regions, the
+  data-item peer topology, the A9/A10/A11 name and status sources, the
+  patterns, the A14 focus route, the announcement contract, and the
+  named facts and censuses). PR A's spec line asked for it and it was
+  not written; it is PR A's content, recorded under PR A's heading.
+- **`parity_matrix.md` flips BOTH `slate.canvas.showOutline` and
+  `slate.canvas.showTable`** out of `pending`. That file is generated,
+  so the change is to its inputs: a `W6_1_STATUS` /
+  `W6_1_DELIVERED_COMMANDS` pair in `scripts/generate-parity-matrix.py`
+  (the W5-x shape) and a `canvasSurfaces` group in `chords.json`'s
+  `deliveryEvidence`, whose implementation and test references the
+  generator checks marker-by-marker. `deliveryEvidence` is the one
+  object the chord-table PROJECTION leaves untouched — but it is still
+  INSIDE the byte-for-byte comparison `ChordTableTests` makes against
+  the re-serialized file, so a hand edit is safe only when it matches
+  the writer's formatting exactly. This one did, and the round-trip
+  test is what proved it. **The durable rule: edit `chords.json`
+  through its writer (`SLATE_CHORDS_UPDATE=1`) or match the writer's
+  formatting exactly, and let the round-trip test arbitrate — never
+  assume a "preserved" object is outside the comparison.**
+  **The rule this sets for the rest of the series:** a
+  surface command joins the delivered set in the PR that makes it
+  EXECUTABLE, not the PR that registers it — so `showVisual` stays out
+  until PR D, and each PR flips its own row rather than leaving a
+  batch for PR H.
+
+### Tests that pin PR B
+
+`apps/slate-windows/tests/SlateWindows.Tests/CanvasTableTests.cs`: the
+whole of B1–B11 against a REAL `VaultSession` and real `.canvas` bytes,
+every fact driving the production composition (`CanvasSurfaceView` →
+`CanvasTableView` → the substrate) and reading what the consumer reads —
+the rendered row order, the cell labels a screen reader speaks (read off
+the generated cell element, not off the column configuration that fed
+it), the summary region's name, the row-action menu, and the
+announcements that come out of the canvas funnel's post seam. Its
+fixture is built for the comparators: titles that only sort correctly
+under a case-insensitive compare, connection counts of 2 and 10, and a
+hex colour whose nearest preset is one of the two presets present.
+`TheLargeCanvasBindsEveryRowCoreServed` pins the thing a projection can
+get wrong on its own at 2,000 rows — truncating, paging, or dropping
+rows core served — while the responsiveness itself stays
+`GridConformanceTests`' claim, cited.
+`apps/slate-windows/tests/SlateWindows.Tests/Censuses/CanvasAnnouncerCensus.cs`:
+`EveryGridUnderCanvasRidesTheRelay`, B7's structural half.
+`apps/slate-windows/tests/SlateWindows.Tests/Censuses/ContractsCitationCensus.cs`:
+extended from §A alone to every listed PR section — §B is inside its
+jurisdiction, and inserting §B between §A and its old terminator would
+otherwise have folded the new section into the old one's extent.
+`apps/slate-windows/tests/SlateWindows.Tests/CanvasDocumentTests.cs`:
+`ShowVisualRegistersAndStaysDisabledUntilItsProjectionShips` and
+`TheSurfaceSwitcherIsNamedAndTheUnshippedArmIsDisabled` carry §A's rows
+forward with one arm shipped.
+`apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs`:
+`CanvasSurfaces_TableGridSortSelectionAndActivation_AreClean` — the
+spec's "Canvas_TableJourney" under this project's journey naming
+convention. Enumerated against the shipped assertions, not the plan: the
+switcher's table arm is enabled and selecting it swaps the projection
+(the outline's element LEAVES the live tree); Grid and Table patterns
+and the grid's name; the six column headers; the summary region's
+rendered sentence; Ctrl+Alt+S through a real chord, asserted as the
+whole Type column ordered ascending; the row-actions menu opened with
+the MENU KEY, its three items named, the two unshipped ones disabled
+with their reasons readable as HelpText; Enter activation opening the
+card detail; axe 0 over the table. CI arbitrates.
+
+**The row-actions leg was ADDED rather than the claim narrowed** (red
+team B-2). This sentence previously named "the disabled row actions"
+while the journey never opened the menu — an evidence claim written from
+the plan instead of the code, which is the shape PR H's reconciliation
+exists to catch, and which the `w_c_matrix` row (written in the same PR)
+got right. `GridConformanceTests` had recorded that popup menu items are
+"not reliably enumerable through desktop UIA on a starved session", so
+the leg was attempted rather than assumed: the menu is found from the
+DESKTOP (a WPF `ContextMenu` is its own HWND) and identified by its first
+item rather than by an id invented for the test. Four consecutive
+published-dll foreign-CWD runs came up green, so the honest fix was the
+leg, not the sentence. `ToolTipService.ShowOnDisabled` went into the
+substrate in the same pass (red team m-6): the reasons reached AT
+through HelpText, but WPF suppresses tooltips on disabled elements, so a
+sighted mouse user got nothing on exactly the items that carry one.
+
+---
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same
@@ -1603,7 +2106,7 @@ table.
 | G | Undo/redo stacks, depth/session policy, menu-title composition (`AppState.swift:3987`) | `apply()` returns inverse + names | 3 | host stack; **menu title** = `CanvasUndoMenuTitle{verb,name}` | **menu title landed (0a)** |
 | H | Placement math leaks; `MIN_CARD_SIZE` only in Swift | constants in `placement.rs` | 2 | `canvas_constants()`, `canvas_group_rect_around`, `canvas_place_inside_group`, `canvas_bounds` (0b) | **closed** — 0b-4, 0b-11, 0b-12; mirrored constants, the fit re-union, the bbox fold and the move-into-group math deleted (0b-2), CD-21/CD-24. `MIN_CARD_SIZE`'s reject-not-clamp ENFORCEMENT stays host-side |
 | I | Viewport math — clamp 0.1–4.0, step 1.25, fit padding 40/120 | none | 3 | host rendering; constants pinned here; zoom % announced via `CanvasZoom` | **event landed (0a)** |
-| J | Table column order/sort comparators/summary sentence; outline interleave | rows from core | 3 | host projection config; summary sentence stays a **static label** (never announced on mac) | resolved as label class (0a-13) |
+| J | Table column order/sort comparators/summary sentence; outline interleave | rows from core | 3 | host projection config; summary sentence stays a **static label** (never announced on mac) | resolved as label class (0a-13); **the Windows half landed in PR B** — B2 (columns), B3 (comparators, incl. the correction to the spec's Color description) and B9 (the summary label) are the projection config this row designates |
 | K | Filter predicate — title/kind/groupPath/target, case-insensitive contains | none | 2 | `canvas_filter` (0b) | **closed** — 0b-13, 0b-14; `matchesFilter` deleted (0b-2), CD-22. `filterActive` stays host UI state |
 | L | Speakable-name dedup vs core's untitled-only allocation — two uniqueness algorithms | partial, conflicting | 2 | one algorithm in core: `CardSummary.speakable_name` (0b, D-3) | **closed** — 0b-5, 0b-6, CD-20, CD-23; the renderer's used-set walk and its per-view sticky map deleted (0b-2). **PR A note:** CD-23's "which surface reads which field" answer now differs by platform — the Windows OUTLINE reads `speakable_name` where mac's reads `title` (CD-30), so row P's two copies are not byte-identical on a canvas with repeated titles |
 | M | Node/edge id minting | none | 2 | `canvas_new_id()` (0b) | **closed** — 0b-4; `newCanvasEntityID` deleted, nine call sites (0b-2) |
@@ -2840,6 +3343,39 @@ task may not make (the brief's hard rule), so it is flagged rather than
 smuggled: **the vocabulary needs a `CanvasBlockedReason` arm for a
 refused file-type open, and PR E or a 0a follow-up should add it.** The
 SAFETY behaviour does not wait on that; only the sentence does.
+
+**CD-39 — The canvas table's ordinal columns sort differently from
+mac's on a mixed-normalization vault** (W6-1 PR B, red-team round 1
+B-1). Mac's Type/Target/Color comparator is Swift's `<`, which orders by
+Unicode **canonical equivalence** (the stdlib normalizes before
+comparing); Windows transliterates it as `string.CompareOrdinal`, which
+compares raw UTF-16 code units and normalizes nothing. The two therefore
+disagree on any pair of `target`s differing in normalization form — an
+NFD `Café.md` sorts BEFORE `Caff.md` on Windows and AFTER it on mac —
+and on the supplementary-plane pairs where code-unit order and scalar
+order differ. The first class is reachable with ordinary data: macOS
+hands back decomposed filenames, so a Mac-authored canvas carries NFD
+`file` targets and a synced vault brings them across byte-exact.
+
+**The divergence is real, and in-repo evidence already depends on it:**
+the Swift parity harness sorts with an explicit
+`Array($0.utf16).lexicographicallyPrecedes(…)` at every site rather than
+with `<`, precisely because Swift's native ordering would not match the
+C# twin's `StringComparer.Ordinal`. That opt-out is this row's claim,
+shipped and gating since W3.
+
+**Recorded, not fixed, on three grounds.** Ordinal is deterministic and
+locale-independent, which is what a Windows user gets to rely on;
+normalizing host-side would be the host deriving an ordering core does
+not define (the R-D line B4 holds for the `Target` column's VALUE, held
+here for its ORDER); and this column's order never reaches a §W-A
+artifact — the harness sorts FILE ENUMERATION and search rows (kept in
+parity by that explicit UTF-16 rule), while `CanvasReadArtifact` passes
+core's rows through in core's order — so no parity gate compares the two
+hosts' sorted tables and no golden moves. The user-visible residue is the ordering of a Target/Color column
+on a vault that mixes normalization forms. If an owner ever wants
+byte-parity here, the honest shape is a CORE-supplied sort key rather
+than a second host normalizer, and it belongs with the §W-G audit.
 
 ---
 
@@ -4152,3 +4688,106 @@ properties that reach no client at all. Instances 4 and 5 share a root
 that the earlier three did not: **the assertion targeted a real object,
 but not the object the consumer reads.** That is what the two new censuses
 guard, and it is the form to watch for in PRs B–E.
+
+### PR B — red team round 1 — NOT SAFE, 2 blockers + 1 major + 6 minors
+
+Both blockers were **record-accuracy** defects with no behavioral change
+forced; the implementation came through all nine attack surfaces clean.
+That is the shape this document was built to catch, and it caught it.
+
+- **B-1 — the comparator bound was wrong for the SECOND time.** B3's
+  replacement claim ("both walk code points in order… they can disagree
+  ONLY in the supplementary planes") was false of the reference
+  implementation: Swift's `String` ordering is defined over Unicode
+  canonical equivalence and normalizes before comparing, so the two
+  comparators diverge on any `target` differing in NORMALIZATION FORM —
+  an NFD `Café.md` sorts opposite to `Caff.md` across the hosts, every
+  character inside the BMP. Reachable with ordinary data (macOS hands
+  back decomposed filenames). Two corrections to one paragraph is the
+  rule-4 shape, so the third version is written from the reference
+  implementation's documented semantics **with the source cited in
+  line**, states BOTH divergence classes, and registers the residue as
+  **CD-39** instead of bounding it away. The ratified ordinal choice
+  stands; only the recording was wrong.
+- **B-2 — §B claimed a journey leg that did not exist** ("the disabled
+  row actions"). Fixed by adding the leg, not by narrowing the sentence
+  — see the tests paragraph above for why that was the honest direction
+  and what it cost.
+- **M-1 — `DeliverFocus`'s "the seat is SILENT" comment was false for a
+  reachable arm.** Seating currency raises `CurrentRowChanged` outside
+  the sync guard, so a request landing on a node other than the current
+  selection reaches `SelectNode` and the document narrates. Corrected in
+  the comment. **The BEHAVIOR is not PR B's to change**: it is A14's,
+  the outline drives the identical path through its own selection
+  binding, and a table-only fix would make the two projections behave
+  differently on the same request. **Filed for PR C**, which adds the
+  first production caller that passes a `NodeId` and therefore widens
+  the reachable surface: decide whether a delivery to a node other than
+  the selection should narrate (t0 §1.5 doubling against A14's landing
+  rules), then pin it in BOTH projections — the reviewer's named missing
+  fact is `AFocusDeliveryToANodeOtherThanTheSelectionDoesNotDouble`, or
+  a recorded decision that it SHOULD narrate.
+- **Minors folded:** m-1 (the hand-counted "18 facts" in the §W-C row —
+  deleted, per 0a's rule-4 lesson that counts live in tests, not prose);
+  m-2 (the collation-dependent sort expectations now pin the culture the
+  production comparator reads, so an exotic host cannot report a defect
+  that is not one); m-3 (the muted-until-attach seam had no witness —
+  `AGridWithoutADocumentNeverPostsThroughTheSubstratesDefaultSeam` now
+  covers both the unattached and the DETACHED arm, the second being the
+  one with teeth: a grid still holding a retired document's relay would
+  post to a shut-down announcer, which A5 makes a `Debug.Fail`);
+  m-6 (`ToolTipService.ShowOnDisabled`, one substrate line).
+- **Minors recorded, not fixed:** m-4 — the generator's evidence
+  validation allows a command to reference ANY existing group and checks
+  markers by substring; pre-existing (W5-x), `canvasSurfaces` added under
+  the same strength, closed by PR H's matrix pass or the next PR that
+  edits that file for its own reasons. m-5 — while the table shows, the
+  COLLAPSED outline still runs its `ApplySelection` on every row move,
+  so switching back can show group expansions the user never made there;
+  it belongs to the ledgered expansion-state-preservation decision PR E
+  owns, and is recorded here so it lands in that decision rather than
+  being rediscovered.
+
+### PR B — codex adversarial round 1 — NOT SAFE, 2 blockers
+
+Both were A14 properties the outline had and the table did not. One was
+real and is fixed; the other did not reproduce and its proposed fix
+would have introduced a defect, so it is recorded with the measurements
+instead.
+
+- **B1 — the focus request was consumed by a grid-level fallback.**
+  Real, and the same class A14.3 was rewritten over on the outline:
+  `SelectRow` reported bound-set membership, `FocusCellElement` fell back
+  to focusing the GRID, and `DeliverFocus` asked only
+  `IsKeyboardFocusWithin` — true for that fallback, and true again
+  whenever the reader was anywhere in the grid already. So a request for
+  a row that could not be realized was marked delivered while the reader
+  never reached it, and nothing retried. **Fixed at the seam**, where the
+  outline's equivalent already is: `FocusCellElement` returns whether the
+  REALIZED CELL took focus (the grid fallback returns false, and the
+  callers that only want the reader's position still ignore it);
+  `SelectRow(moveFocus: true)` returns that instead of set membership,
+  with the split documented on the method; `DeliverFocus` is exactly that
+  bool. Realization joins delivery: the substrate raises
+  `ContainersRealized` off its generator (posted at Background priority —
+  the outline's recorded re-entrancy trap), the table re-raises it and
+  the surface retries, so a request for a virtualized-away row survives
+  until the panel makes the container.
+  `SeatingTheReaderOnAnUnrealizedRowReportsFailureNotSuccess` pins the
+  seam and `AnUnrealizedRowLeavesTheRequestPendingUntilItCanBeDelivered`
+  the end to end, on the last row of the 2,000-node fixture.
+  Mutation-verified: restoring the fallback-accepting form fails both.
+- **B2 — the currency/focus split did not reproduce, and the fix was
+  harmful.** See B5's own paragraph for the measurements. Summary: WPF
+  moves focus with currency while the DataGrid holds focus, so the
+  reader, currency and the shared selection end the namesake path on the
+  same row — measured with the proposed fix's precondition holding, so
+  it would have fired and changed nothing. Meanwhile
+  `IsKeyboardFocusWithin` on this control includes the
+  separately-focusable summary region, so the proposed re-seat pulls a
+  reader off the summary onto a row (measured). The finding is now
+  guarded from the other side:
+  `ARepublishNeverYanksTheReaderOffTheSummaryRegion` fails if the
+  re-seat is ever added. **Recorded as a stop point rather than
+  implemented**, per the standing rule that a fix must not be
+  manufactured to satisfy a mutation that does not fail.

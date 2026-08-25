@@ -628,6 +628,24 @@ W5_4_DELIVERED_COMMANDS = {
     "slate.file.revealInFinder",
 }
 
+# W6-1 (#745): the canvas, as a STACKED SERIES — so this set grows one
+# PR at a time rather than once at the issue's close. The rule the
+# series adopted with PR B: a surface command joins the set in the PR
+# that makes it executable, not in the PR that registers it. PR A
+# registered all three `show*` rows and enabled `showOutline` when the
+# outline projection shipped; PR B enabled `showTable` with the table
+# projection. `showVisual` stays out until PR D ships the renderer,
+# where its resolver stops answering CanExecute false.
+W6_1_STATUS = (
+    "implemented; local gates green 2026-08-24; "
+    "interactive CI + human AT pending"
+)
+
+W6_1_DELIVERED_COMMANDS = {
+    "slate.canvas.showOutline",
+    "slate.canvas.showTable",
+}
+
 # W4 delivery, same per-command shape as W3.
 # slate.editor.togglePropertiesSource stays PENDING: YAML source mode
 # was scoped out of W4-4 (no set_frontmatter_source call site) — the
@@ -705,7 +723,7 @@ def load_delivery_evidence(
         cid for cid, _, _, _, issue in cmd_rows
         if issue.startswith(("#720", "#721", "#722", "#723", "#724", "#725"))
     } | W3_DELIVERED_COMMANDS | W4_DELIVERED_COMMANDS | W5_2_DELIVERED_COMMANDS \
-        | W5_3_DELIVERED_COMMANDS | W5_4_DELIVERED_COMMANDS
+        | W5_3_DELIVERED_COMMANDS | W5_4_DELIVERED_COMMANDS | W6_1_DELIVERED_COMMANDS
     mapped_commands = set(command_map)
     if mapped_commands != delivered_commands:
         missing = sorted(delivered_commands - mapped_commands)
@@ -751,6 +769,8 @@ def command_delivery_status(
         return W5_3_STATUS
     if command_id in W5_4_DELIVERED_COMMANDS:
         return W5_4_STATUS
+    if command_id in W6_1_DELIVERED_COMMANDS:
+        return W6_1_STATUS
     return (
         W2_IMPLEMENTED_STATUS
         if issue.startswith(("#381", "#724", "#725"))
