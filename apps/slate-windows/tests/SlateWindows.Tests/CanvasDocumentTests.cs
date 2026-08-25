@@ -1216,17 +1216,20 @@ public sealed class CanvasDocumentTests : IDisposable
         });
 
     [Fact]
-    public void TheSurfaceSwitcherIsNamedAndTheUnshippedArmsAreDisabled() => RunSta(() =>
+    public void TheSurfaceSwitcherIsNamedAndTheUnshippedArmIsDisabled() => RunSta(() =>
     {
         CanvasDocumentViewModel document = NewDocument("board.canvas");
         document.Load();
         var surface = new CanvasSurfaceView { Model = document };
 
-        Assert.False(surface.TableChoiceForTests.IsEnabled);
+        // W6-1 PR B shipped the table, so its arm is live now; the
+        // visual arm is PR D's and stays disabled with its reason.
+        Assert.True(surface.TableChoiceForTests.IsEnabled);
+        Assert.False(surface.VisualChoiceForTests.IsEnabled);
         Assert.Equal(
-            CanvasPhrase.TableShipsLater,
+            CanvasPhrase.VisualShipsLater,
             System.Windows.Automation.AutomationProperties.GetHelpText(
-                surface.TableChoiceForTests));
+                surface.VisualChoiceForTests));
         document.Shutdown();
     });
 
@@ -1351,13 +1354,20 @@ public sealed class CanvasDocumentTests : IDisposable
 
     /// <summary>
     /// All three register so the palette lists the whole switcher from
-    /// this slice; the two whose projections have not shipped resolve
-    /// to a command whose CanExecute is false, so the registrar answers
-    /// its canonical unavailable sentence rather than a per-PR string
+    /// this slice; the one whose projection has not shipped resolves to
+    /// a command whose CanExecute is false, so the registrar answers its
+    /// canonical unavailable sentence rather than a per-PR string
     /// (contract A18).
     /// </summary>
+    /// <remarks>
+    /// Renamed in W6-1 PR B: `showTable` shipped its projection there
+    /// and is enabled from that slice on (contract B10), so the shape
+    /// this fact pins is now one unshipped arm, not two.
+    /// `ShowTableIsEnabledAndDrivesTheOneSurfaceSwitch` in
+    /// <c>CanvasTableTests</c> owns the other half.
+    /// </remarks>
     [Fact]
-    public void ShowTableAndShowVisualRegisterAndStayDisabledUntilTheirProjectionsShip()
+    public void ShowVisualRegistersAndStaysDisabledUntilItsProjectionShips()
     {
         using WorkspaceViewModel workspace = NewWorkspace();
         workspace.OpenPath("board.canvas");
@@ -1384,16 +1394,10 @@ public sealed class CanvasDocumentTests : IDisposable
 
         Assert.Null(Commands.SlateCommandRegistrar.DisabledReason(
             host, Commands.ChordTable.Ids.CanvasShowOutline));
-        foreach (string unshipped in new[]
-        {
-            Commands.ChordTable.Ids.CanvasShowTable,
-            Commands.ChordTable.Ids.CanvasShowVisual,
-        })
-        {
-            Assert.Equal(
-                Commands.SlateCommandRegistrar.UnavailableReason,
-                Commands.SlateCommandRegistrar.DisabledReason(host, unshipped));
-        }
+        Assert.Equal(
+            Commands.SlateCommandRegistrar.UnavailableReason,
+            Commands.SlateCommandRegistrar.DisabledReason(
+                host, Commands.ChordTable.Ids.CanvasShowVisual));
 
         // The one that IS shipped switches the shared surface and
         // speaks core's sentence.
@@ -1467,7 +1471,7 @@ public sealed class CanvasDocumentTests : IDisposable
     /// <summary>The command bridge's host over a live workspace — the
     /// registrar resolves through <c>Workspace</c>, so a null-workspace
     /// stub could not see these rows at all.</summary>
-    private sealed class CanvasCommandHost(WorkspaceViewModel workspace)
+    internal sealed class CanvasCommandHost(WorkspaceViewModel workspace)
         : Commands.ISlateCommandHost
     {
         public WorkspaceViewModel? Workspace => workspace;

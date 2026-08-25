@@ -85,6 +85,85 @@ public sealed class CanvasAnnouncerCensus
             + "contract A5/A6), never directly:\n" + string.Join("\n", offenders));
     }
 
+    /// <summary>
+    /// Contract B7 (DoD §H): a shared grid under <c>Canvas/</c> has its
+    /// <c>Announce</c> seam SWAPPED onto the canvas relay.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The guard above cannot see this one. The substrate's default seam
+    /// posts straight through <c>AccessibilityNotificationDispatcher</c>
+    /// — but it does so inside <c>Grids/AccessibleDataGrid.cs</c>, which
+    /// is not a canvas source, so a canvas surface that simply FORGOT to
+    /// swap the seam would announce outside the canvas funnel with no
+    /// canvas file naming the dispatcher at all. That is the whole
+    /// bypass this PR's §W-D claim rests on not existing.
+    /// </para>
+    /// <para>
+    /// Structural, and paired with a behavioural fact
+    /// (<c>TheGridsOwnAnnouncementsComeOutOfTheCanvasFunnel</c>) that
+    /// drives a real sort through the production surface and reads the
+    /// funnel's post seam: a guard may not exercise the mechanism it is
+    /// guarding, so neither of the two supplies the other's.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void EveryGridUnderCanvasRidesTheRelay()
+    {
+        var offenders = new List<string>();
+        var grids = 0;
+        foreach (string file in CanvasSources())
+        {
+            string label = Path.GetRelativePath(CanvasSourceRoot(), file);
+            CSharpSource source = CSharpSource.Load("Canvas", label);
+            bool buildsAGrid = source.Root.DescendantNodes()
+                .OfType<ObjectCreationExpressionSyntax>()
+                .Any(creation => creation.Type.ToString() == "AccessibleDataGrid");
+            if (!buildsAGrid)
+            {
+                continue;
+            }
+            grids++;
+
+            // Every assignment to the seam in this file, and what it
+            // assigns — the object-initializer form included, since that
+            // is an assignment node too. A grid may legitimately be
+            // muted before its document arrives (`_ => { }`); what it
+            // may never be is left on the substrate's dispatcher-backed
+            // default, so at least one assignment has to be the relay.
+            string[] seatings = source.Root.DescendantNodes()
+                .OfType<AssignmentExpressionSyntax>()
+                .Where(assignment => assignment.Left.ToString()
+                    .EndsWith("Announce", StringComparison.Ordinal))
+                .Select(assignment => assignment.Right.ToString())
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+
+            if (!seatings.Any(right =>
+                right.Contains("Announcer.Relay", StringComparison.Ordinal)))
+            {
+                offenders.Add(
+                    $"{label}: builds an AccessibleDataGrid but never assigns its "
+                    + "Announce seam to the canvas announcer's Relay "
+                    + $"(assignments seen: {(seatings.Length == 0 ? "none" : string.Join(" | ", seatings))})");
+            }
+        }
+
+        // The guard's own premise: PR B ships exactly one such grid, and
+        // a scan that found none would pass over nothing.
+        Assert.True(
+            grids >= 1,
+            "no canvas source builds an AccessibleDataGrid; the seam-swap guard "
+            + "would be scanning nothing.");
+        Assert.True(
+            offenders.Count == 0,
+            "a shared grid under Canvas/ must announce through CanvasAnnouncer.Relay "
+            + "(contract B7/DoD §H) — the substrate's default seam posts through the "
+            + "canonical dispatcher from a file this census does not scan, so a "
+            + "forgotten swap is a silent bypass of the canvas funnel:\n"
+            + string.Join("\n", offenders));
+    }
+
     /// <summary>The relay is the only file that needs the exemption, so
     /// the exemption must actually be load-bearing: if
     /// <c>CanvasAnnouncer.cs</c> ever stopped rendering, this guard

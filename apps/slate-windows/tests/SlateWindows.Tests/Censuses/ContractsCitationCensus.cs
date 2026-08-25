@@ -1,8 +1,11 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// W6-1 PR A (#745): the contracts document's §A cites no identifier
-// that does not exist.
+// W6-1 PR A (#745): a contracts-document PR section cites no identifier
+// that does not exist. (PR B extended it from §A alone to every listed
+// PR section — inserting §B between §A and its old terminator would
+// otherwise have folded the new section into the old one's extent, and
+// a guard whose subject silently changed shape is not a guard.)
 //
 // The contracts doc is the evidence ledger PR H reconciles every row
 // against, so a citation naming a test that was renamed — or never
@@ -26,8 +29,58 @@ namespace SlateWindows.Tests.Censuses;
 public sealed class ContractsCitationCensus
 {
     private const string ContractsDoc = "34_canvas_contracts.md";
-    private const string SectionStart = "## PR A — the canvas document, the tab, and the outline";
-    private const string SectionEnd = "## §W-G canonical-consumption audit";
+
+    /// <summary>
+    /// The PR sections this census reads, each with the floors that keep
+    /// it from passing over nothing. A section is added here as its PR
+    /// lands: an unlisted section is invisible to the guard, and a
+    /// section whose heading moved fails on its own marker rather than
+    /// silently swallowing the next one — which is what would have
+    /// happened when §B was inserted between §A and its old terminator.
+    /// </summary>
+    private static readonly (string Pr, string Start, string End, int Length, int Citations)[]
+        PrSections =
+        [
+            (
+                "A",
+                "## PR A — the canvas document, the tab, and the outline",
+                "## PR B — the canvas table projection",
+                5_000,
+                30),
+            (
+                "B",
+                "## PR B — the canvas table projection",
+                "## §W-G canonical-consumption audit",
+                2_000,
+                10),
+        ];
+
+    public static TheoryData<string, string, string> SectionRanges
+    {
+        get
+        {
+            var data = new TheoryData<string, string, string>();
+            foreach ((string pr, string start, string end, _, _) in PrSections)
+            {
+                data.Add(pr, start, end);
+            }
+            return data;
+        }
+    }
+
+    public static TheoryData<string, string, string, int, int> Sections
+    {
+        get
+        {
+            var data = new TheoryData<string, string, string, int, int>();
+            foreach ((string pr, string start, string end, int length, int citations)
+                in PrSections)
+            {
+                data.Add(pr, start, end, length, citations);
+            }
+            return data;
+        }
+    }
 
     /// <summary>
     /// Long PascalCase names are the ones that read as code. Short ones
@@ -38,10 +91,11 @@ public sealed class ContractsCitationCensus
     /// </summary>
     private const int IdentifierFloor = 15;
 
-    [Fact]
-    public void EveryIdentifierCitedInSectionAExists()
+    [Theory]
+    [MemberData(nameof(SectionRanges))]
+    public void EveryIdentifierCitedInAPrSectionExists(string pr, string start, string end)
     {
-        string section = SectionA();
+        string section = Section(start, end, pr);
         HashSet<string> declared = DeclaredNames();
 
         var missing = new SortedSet<string>(StringComparer.Ordinal);
@@ -58,38 +112,42 @@ public sealed class ContractsCitationCensus
 
         Assert.True(
             missing.Count == 0,
-            "§A of the contracts document cites identifiers that do not exist "
+            $"§{pr} of the contracts document cites identifiers that do not exist "
             + "anywhere in the Windows shell or its tests. A contract row citing "
             + "a test that was renamed reads as evidenced and is not — which is "
             + "the failure class PR H's reconciliation depends on catching:\n  "
             + string.Join("\n  ", missing));
     }
 
-    /// <summary>The census's own premise: a §A that stopped citing
-    /// anything, or a section marker that moved, would make the check
-    /// above pass over nothing.</summary>
-    [Fact]
-    public void TheSectionIsFoundAndCitesIdentifiers()
+    /// <summary>The census's own premise: a section that stopped citing
+    /// anything, or a marker that moved, would make the check above pass
+    /// over nothing.</summary>
+    [Theory]
+    [MemberData(nameof(Sections))]
+    public void EverySectionIsFoundAndCitesIdentifiers(
+        string pr, string start, string end, int minimumLength, int minimumCitations)
     {
-        string section = SectionA();
-        Assert.True(section.Length > 5_000, "§A is implausibly short — did the marker move?");
+        string section = Section(start, end, pr);
+        Assert.True(
+            section.Length > minimumLength,
+            $"§{pr} is implausibly short — did the marker move?");
         int citations = Regex.Matches(section, @"`([A-Z][A-Za-z0-9_]{14,})`").Count;
         Assert.True(
-            citations >= 30,
-            $"§A cites only {citations} identifiers; the guard would be scanning "
+            citations >= minimumCitations,
+            $"§{pr} cites only {citations} identifiers; the guard would be scanning "
             + "almost nothing.");
     }
 
-    private static string SectionA()
+    private static string Section(string sectionStart, string sectionEnd, string pr)
     {
         string path = Path.Combine(
             SourceText.RepoRoot(), "docs", "plans", ContractsDoc);
         Assert.True(File.Exists(path), $"the contracts document is missing at {path}");
         string text = File.ReadAllText(path);
-        int start = text.IndexOf(SectionStart, StringComparison.Ordinal);
-        int end = text.IndexOf(SectionEnd, StringComparison.Ordinal);
-        Assert.True(start >= 0, $"§A's heading is missing: {SectionStart}");
-        Assert.True(end > start, $"§A's terminator is missing: {SectionEnd}");
+        int start = text.IndexOf(sectionStart, StringComparison.Ordinal);
+        int end = text.IndexOf(sectionEnd, StringComparison.Ordinal);
+        Assert.True(start >= 0, $"§{pr}'s heading is missing: {sectionStart}");
+        Assert.True(end > start, $"§{pr}'s terminator is missing: {sectionEnd}");
         return text[start..end];
     }
 
