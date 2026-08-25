@@ -474,9 +474,10 @@
                           AutomationProperties.AutomationId="CanvasToggleFollowSelectionMenuItem"
                           Command="{Binding Workspace.CanvasToggleFollowSelectionCommand}" />
                 <Separator />
-                <!-- t0 §1.2, contract C13. Checkable radio items: the
-                     screen reader speaks the selected level from the
-                     element itself, which is why the setting needs no
+                <!-- t0 §1.2, contract C13. CHECK items bound OneWay to
+                     the level (WPF has no radio menu item): the screen
+                     reader speaks the selected level from the element
+                     itself, which is why the setting needs no
                      announcement of its own. -->
                 <MenuItem Header="_Verbosity"
                           AutomationProperties.AutomationId="CanvasVerbosityMenu">

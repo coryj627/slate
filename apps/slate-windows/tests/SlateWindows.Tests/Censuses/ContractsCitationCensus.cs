@@ -236,9 +236,12 @@ public sealed class ContractsCitationCensus
             "IInvokeProvider", "AutomationProperties", "RaiseNotificationEvent",
             "SelectedItemChanged", "VirtualizationMode", "DispatcherTimer",
             "TraversalRequest", "IsKeyboardFocusWithin", "UnreachableException",
-            "IsNullOrWhiteSpace",
+            "IsNullOrWhiteSpace", "OutOfMemoryException", "StackOverflowException",
+            "AccessViolationException",
             // XAML attributes, which live in markup rather than in C#.
             "CommandParameter",
+            // Roslyn, which the censuses consume but do not declare.
+            "MethodDeclarationSyntax", "MemberDeclarationSyntax",
             // Python: scripts/generate-parity-matrix.py (§B's B12 — the
             // delivered-command set whose per-PR growth is the rule that
             // row sets).

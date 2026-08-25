@@ -28,11 +28,16 @@ internal sealed record AppPreferencesState(
     bool HistoryShowChangesSinceOpen = false,
     /// <summary>
     /// W6-1 PR C (#745): the canvas announcement verbosity (t0 §1.2).
-    /// The KEY is mac's — <c>slate.prefs.canvas</c>'s <c>verbosity</c>
-    /// member, spelled with mac's own <c>CanvasVerbosity</c> case names —
-    /// so a user reading the two files side by side sees the same word,
-    /// and a future shared prefs schema needs no migration.
     /// </summary>
+    /// <remarks>
+    /// The VALUES are mac's — <c>terse</c> / <c>standard</c> /
+    /// <c>verbose</c>, its own <c>CanvasVerbosity</c> case names — so a
+    /// future shared prefs schema needs no value migration. The STORE is
+    /// not shared and contract C13 says so: mac keeps its
+    /// <c>CanvasPrefs</c> under the <c>slate.prefs.canvas</c> UserDefaults
+    /// key, this file is the device-local Windows peer, and neither is
+    /// the vault's <c>.slate/prefs.json</c>.
+    /// </remarks>
     [property: JsonPropertyName("canvasVerbosity")]
     string CanvasVerbosity = "standard");
 

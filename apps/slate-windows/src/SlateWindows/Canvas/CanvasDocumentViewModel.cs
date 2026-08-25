@@ -1392,11 +1392,30 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     {
         base.Shutdown();
         _ = Interlocked.Increment(ref _generation);
-        // M4's last case: a document being retired takes its mode with
-        // it, and the cancel has to happen BEFORE the announcer is
-        // silenced or the restoration would never be spoken. Closing the
-        // tab a mode is running in is exactly the departure M4 names.
-        _ = Modes.HandleFocusDeparture(CanvasFocusDeparture.TabSwitch);
+        // M4's last case, the deferred-departure drain with it, and the
+        // stack's own retirement. All of it BEFORE the announcer is
+        // silenced or the restorations would never be spoken — closing
+        // the tab a mode is running in is exactly the departure M4 names,
+        // and a departure still held from a failed commit owes a sentence
+        // too (contract C7).
+        //
+        // FALLIBLE, and retirement is not allowed to depend on it: a
+        // restoration effect is host code and can fault. Without this
+        // guard the announcer below was never silenced, so a coalesced
+        // line stayed queued on a document that no longer exists and
+        // spoke ~200 ms later — the A5 defect reached from the mode side
+        // — and the handle below was never closed either.
+        try
+        {
+            Modes.Shutdown();
+        }
+        catch (Exception exception) when (
+            exception is not OutOfMemoryException
+                and not StackOverflowException
+                and not AccessViolationException)
+        {
+            HostLog.Write(HostDiagnosticEvent.CanvasModeTeardownFailed, exception);
+        }
         WhereAmIText = null;
         // Every retirement route reaches here — the release sweep, the
         // retarget, the vault-close drain — so this is the one place the

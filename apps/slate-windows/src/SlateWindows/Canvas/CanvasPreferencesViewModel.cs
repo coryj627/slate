@@ -33,8 +33,12 @@ namespace SlateWindows.Canvas;
 /// </remarks>
 internal sealed class CanvasPreferencesViewModel : BindableBase
 {
-    /// <summary>The storage keys, spelled as mac's <c>CanvasVerbosity</c>
-    /// cases so the two preference files read identically.</summary>
+    /// <summary>
+    /// The storage keys, spelled as mac's <c>CanvasVerbosity</c> cases so
+    /// a future shared schema needs no VALUE migration (contract C13).
+    /// The stores themselves are peers, not one file — mac's is a
+    /// UserDefaults key, this one is the device-local preferences JSON.
+    /// </summary>
     internal static readonly IReadOnlyDictionary<string, CanvasVerbosity> VerbosityKeys =
         new Dictionary<string, CanvasVerbosity>(StringComparer.Ordinal)
         {

@@ -2127,8 +2127,24 @@ two shapes and they are the same code: the palette row
 (`CanvasNextCardCommand` and its twelve siblings, resolved in
 `SlateCommandRegistrar`) and the `ChordScope.Canvas` chord
 (`CanvasNavigator.HandleKey`). Rule R1 is why both exist — a chord is a
-convenience, never the only path — and rule R2 is why the chord half is
-gated on a projection owning the keys.
+convenience, never the only path.
+
+**Rule R2 gates the chord half, and which arms it gates is not
+uniform**, so this row names them rather than gesturing at "the chords":
+
+| Arm | Gate |
+|---|---|
+| Down / Up | a projection owns the keys, then defer-or-answer (C3) |
+| Right / Left | a projection owns the keys AND it is the OUTLINE (the table's arrows are the grid's cell navigation) |
+| Enter | a projection owns the keys — so a focused button, field or any other control keeps its own Enter |
+| Escape | UNGATED within the surface: the ladder answers from anywhere, and an open Where-am-I panel pre-empts it (CD-47) |
+| Ctrl+F | the OUTLINE is showing; on the table the substrate's own gesture delivers it (C10) |
+| Ctrl+Alt+Shift+I | ungated within the surface — a pull surface must answer wherever the reader is |
+
+The two ungated rows are the deliberate ones. Escape is M4-adjacent (no
+mode survives without focus, so cancelling from anywhere is the point),
+and Where-am-I is t0 §1.4's pull, which is worth nothing if it depends
+on standing in the right place.
 
 **Movement rows stay ENABLED on a canvas in any load state.** The
 navigator's whole job when the document cannot answer is to say so
@@ -2185,6 +2201,48 @@ reader's SORT may have changed, and which is the honest answer there.
 the filtered set. The two are not in tension: one is the reader's arrow
 through the rows on screen, the other is the verb named "Next Card".
 CD-44 records the pair.
+
+**Right/Left FOLLOW unconditionally on the outline, and always answer**
+(CD-48). The spec asked for "connection-follow when the card has
+connections, else tree semantics, as mac does"; mac does not do that —
+it follows unconditionally, so a connectionless card hears
+`No outgoing connection.` there. The blend left one keypress on a leaf
+silent, which is the never-silent rule broken by a precedence nobody
+had. Expand/collapse keeps Enter-on-group, WPF's own numpad `+`/`-`, and
+the `ExpandCollapse` pattern a screen reader drives — all three verified
+by `ExpandCollapseSurvivesTheArrowsBeingClaimed` rather than asserted.
+The TABLE keeps Left/Right for the grid's cell navigation, which the UIA
+Table pattern depends on; follow is the palette row there and answers
+identically.
+
+**Enter asks R2's own question, and Escape deliberately does not.** A
+tunnelling handler runs BEFORE the element the reader is standing on, so
+the mode's Enter would otherwise out-rank every control on the surface —
+pressing Enter on the visible CANCEL MODE button would COMMIT the mode,
+inverting the user's intent on the exact control M6 exists for, and
+Enter in the filter field would commit it too. Mac has no such hazard
+because its container's Return handler BUBBLES, so a focused button or
+field consumes it first.
+
+The gate is **"does a PROJECTION own the keys"** — the same question
+every other bare-key arm asks — and NOT a list of control types that own
+Enter. The list was tried and rejected in review: `ComboBox`,
+`Hyperlink`, a templated item part and every control PR E and PR F add
+would each have had to be remembered, and the one that was not would
+re-open this silently. The question is closed by construction; a list is
+open by construction, and this contract has spent two rounds on
+curated-list defects already.
+
+Escape stays broad because cancelling from anywhere in the surface is
+M4-adjacent — no mode may survive without focus — and the ladder is the
+canvas's answer for it everywhere; the panel case is settled by the
+region being open (CD-47), not by what has focus. Pinned by
+`EnterOnAFocusedModeButtonActivatesTheButtonNotTheChord`, which asserts
+the R2 premise and covers the filter field too.
+
+Latent in PR C — nothing enters a mode outside tests — and fixed here
+anyway, because the M-conformance machine is this PR's deliverable for
+PR F and F arms it on its first day.
 
 **C4 — The never-silent read gate: one mapping, membership by
 construction.** `ReadRefusalFor(state, handleLive)` is the single
@@ -2281,6 +2339,27 @@ is a table test rather than a claim:
 | 3 `Surface` | a transient region is open or holds focus | close the Where-am-I panel, or the interim card detail, or leave the filter field — focus back to the projection |
 | 4 `WorkspaceTab` | nothing above consumed it | NOT consumed; the press bubbles |
 
+**An OPEN Where-am-I panel takes the press ahead of every rung**
+(CD-47): Escape dismisses it, leaving an active filter and even an
+active mode untouched, and returns focus to the element the reader came
+from IF they were inside it. That is mac's order — the panel's Close
+button carries `.keyboardShortcut(.cancelAction)`, which is
+window-scoped and resolves before the container's ladder — and it is
+what the spec's own build text asks for. Not a rung: it is the transient
+region's own dismissal, keyed on the region being OPEN so no focus
+arrangement can route around it. Without it, an Escape meant to close
+the panel destroyed a typed filter needle, which is a first-class t0
+§1.4 scenario (the readback carries the filter clause, so asking
+Where-am-I while filtering is the designed use). Pinned by
+`EscapeInsideThePanelWhileFilteringActsOnThePanel` and
+`EscapeDismissesAnOpenPanelEvenWhenTheReaderIsElsewhere` — the second is
+the arrangement a focus-keyed version got wrong.
+
+**Rung 3's card-detail arm is the READ-ONLY interim, and the editor is
+NOT on this ladder.** See the M8 paragraph below; the same locus rule
+is why the editor sheet will own its own Escape rather than becoming a
+rung.
+
 Rung 3's effect is a focus move and is deliberately unannounced: the
 screen reader reads what focus lands on, and a line on top of that is
 the t0 §1.5 doubling rule broken on a dismissal (the same reasoning as
@@ -2303,11 +2382,166 @@ Escape and the ladder never sees it (C16 records the pair).
 records: the projections' own controls (a `TreeView`, a `DataGrid`, a
 `TextBox`) consume arrows and Escape on the way up.
 
+**Rung 3's card-detail arm is the READ-ONLY interim, and the editor is
+NOT on this ladder.** The region rung 3 dismisses is PR A's t2 #362
+detail pane — a `TextBox IsReadOnly` seeded from `canvas_node_text`,
+where Escape closes a view and returns focus to the row it opened from
+(WCAG 2.1.2), because there is nothing to keep. PR E replaces that
+region with the real card editor, and t0 §2 **M8 carves the editor out
+of the mode stack entirely**: the inline text editor is not a spatial
+mode, **Escape COMMITS** the text and returns focus to the card, and
+discarding is the editor's own undo before Escape. So when E lands, the
+editor sheet does not join this ladder as a rung and rung 3 stops having
+a card-detail arm at all — the sheet handles its own Escape, with
+committing semantics.
+
+Written here because the inheritance is the hazard: "Escape dismisses
+the detail region" is true of the interim and false of what replaces it,
+and a reader porting rung 3 forward would ship an editor that throws
+away a user's typing. **M8 is PR E's to satisfy; every string and every
+comment about editor Escape says "commits" and never cites M2.**
+
 **C7 — The mode machine is the stack and nothing else.**
 `CanvasModeController` owns M1–M7; a `CanvasModeSpec` carries the typed
-`CanvasMode`, the `CanvasModeObject`, a commit effect returning the
-confirmation EVENT and a cancel effect returning the
-`CanvasModeRestoration`. Every sentence is core's (PR 0a). Nothing here
+`CanvasMode`, the `CanvasModeObject`, a commit effect returning a
+`CanvasModeCommitResult` and a cancel effect returning the
+`CanvasModeRestoration`.
+
+**The transition is CLOSED while a commit effect runs.** The effect is
+arbitrary host code — it opens a sheet, it moves focus, it lets the
+shell switch tabs — and any of that reaches this controller
+synchronously, where M4 turns it into a cancel. Re-entering mid-commit
+cleared the stack, announced a cancellation, and let the commit carry on
+and announce its confirmation too: two outcomes for one press and a
+final state that was neither.
+
+`Commit` therefore enters a committing state before invoking the effect.
+A focus departure raised inside that window is DEFERRED — one slot,
+latest-wins, because an effect that provokes two departures has still
+only left the canvas once — and a direct `Cancel` is REFUSED, because
+that is a caller error rather than a race and the commit already owns
+this press's outcome. The window CLOSES on the way out — in the
+`finally` below, so no failure can strand the controller in a state that
+refuses every later transition — and it stays closed across the outcome
+and its announcements, which is why a departure raised by the
+CONFIRMATION is deferred and applied to the result like any other.
+
+**A direct `Cancel` inside a commit effect is SILENT, and that is
+correct.** It returns false and says nothing: `CanvasModeCancelled` is
+the sentence for a mode that ENDED with its state restored, and neither
+happened — the mode is still up and the commit still owns the press. An
+announcement here would be an inaccurate one, which is worse than the
+silence, and the caller that made the call is host code rather than the
+user. Adjudicated in codex round 2 and recorded rather than left to be
+re-derived, because "a verb that answers nothing" normally reads as the
+never-silent defect and this one is not.
+
+**The deferred departure then applies to the RESULT**, which is the
+M4-correct order: a commit that APPLIED leaves no mode to cancel and the
+departure is moot; a REFUSED one keeps the mode, and no mode may survive
+a focus departure, so it cancels — after the single commit outcome has
+been spoken. `ADepartureDuringTheCommitEffectYieldsOneOutcome` pins both
+variants, and PR F inherits it.
+
+**The slot drains on every exit, and "every exit" is a `finally` rather
+than a list.** The effect, the outcome application and the
+ANNOUNCEMENTS are one guarded region; the drain is its `finally`. That
+is what makes applied, refused and thrown the same code path instead of
+three arms someone has to keep complete — and the confirmation announce
+is INSIDE it, because it renders through core and can fault. It sat
+outside for one round, between the outcome and the drain, and a fault
+there skipped the drain and left the slot loaded for the next commit.
+
+`finally` is right here for the reason it was wrong before: it runs
+BEFORE the exception propagates, so the departure still applies to THIS
+commit. What the previous round rejected was a `finally` that only
+REOPENED the transition and left the drain on the success path, so a
+throw skipped it — the objection was to the missing drain, never to
+`finally` itself.
+
+The drain is TOTAL, and that follows from where it is called. An
+exception raised inside a `finally` REPLACES the one already unwinding,
+so a restoration or an announcement that faults in the drain would erase
+the failure worth reporting and blame a restoration effect for it. The
+departure's own outcome is not worth that: it is logged
+(`CanvasModeDepartureFailed`) and the unwind continues. The slot is
+emptied BEFORE the departure runs, so a fault cannot leave it loaded
+either.
+
+Teardown is the exit that never returns to `Commit` at all: the shell
+can retire the tab from inside an effect, so `Shutdown` forces the
+transition closed, drains the held departure (its restoration owes a
+sentence), ends whatever mode is left with the tab's own departure, and
+CLEARS the slot in a `finally` so nothing stale outlives the object
+holding it.
+
+**Teardown SPEAKS, then RELEASES, and the mode stack ends TERMINAL.**
+
+1. **SPEAK.** `Modes.Shutdown` runs while the funnel is still open: a
+   departure held across a failed commit owes its restoration, and
+   closing the tab a mode is running in is exactly the departure M4
+   names. This is the only phase that may announce. It is fallible — a
+   restoration effect is host code — so it is logged
+   (`CanvasModeTeardownFailed`) and the teardown carries on rather than
+   depending on it. Without that guard the announcer was never silenced
+   and a coalesced line spoke about a document that no longer existed
+   ~200 ms later — the A5 defect reached from the mode side — and the
+   handle was never closed either.
+2. **RELEASE.** The announcer is silenced (contract A5) and the handle
+   closed, after the sentences above have been spoken.
+
+**The stack ends TERMINAL, not merely idle.** A controller with no
+active mode ACCEPTS an entry, so an `Enter` arriving from a surface the
+shell has not finished tearing down — a menu item on a closed tab, a
+palette row still registered — would have run an effect against a
+document whose handle is gone. After `Shutdown` every verb refuses:
+`Enter`, `Commit`, `Cancel`, `HandleFocusDeparture`. The Escape LADDER
+is terminal by construction rather than by a fourth gate: `Shutdown`
+empties it and `RegisterRung` refuses afterwards, so there is nothing
+left to run, and rung 1 refuses because `Cancel` does. A check inside
+`HandleEscape` would answer the same `WorkspaceTab` the empty ladder
+already answers, and a guard with no power is a claim this task has
+learned the cost of.
+
+The refusal is SILENT, and that is the never-silent table's
+PRECONDITION being absent rather than the table being broken (C4): a
+retired document has no surface the user is reading and its announcer is
+already shut, so a sentence composed there is A5's `Debug.Fail` rather
+than something anybody hears. The return value is the answer, for the
+caller that asked. `ARetiredStackRefusesEveryVerbAndHoldsNoRung` drives
+every entry point rather than a sample of them, because "which ones did
+we remember to gate" is exactly the question a list gets wrong — this
+PR's own review history is four rounds of that shape.
+
+**A commit can be REFUSED, and a refused commit KEEPS the mode.** M2 was
+modelled as infallible and it is not: the canvas goes degraded or loses
+its handle mid-mode and the funnel's admission says no. Mac keeps the
+mode up in that case and consumes the key with the refusal, so the user
+can fix the problem or cancel out with the restoration still available;
+clearing the stack first loses the move with neither a commit nor a
+restoration to show for it. `Commit()` therefore runs the effect FIRST
+and clears `Active` only when it APPLIED — and the CONTROLLER's
+confirmation is announced after the clear, so a sentence that asks
+whether a mode is running still sees the stack as it will be.
+
+**That guarantee is bounded, and the bound is worth stating.** An effect
+that announces for ITSELF (the `Committed(null)` shape) speaks while the
+stack is still up, because the effect runs before the clear. Today the
+only reader of "is a mode running" is Where-am-I, which is a pull the
+USER invokes — nothing calls it from inside a commit — so the two
+orderings are indistinguishable in practice. If PR F gives an effect a
+self-announcement that reports mode state, it wants
+`Committed(confirmation)` instead, so the controller speaks it after the
+clear.
+
+Modelled as an OUTCOME rather than as mac's call-site pre-gate on
+purpose: a pre-gate has to be re-implemented at every entry point — the
+key, the header button, the palette row, the menu item — and the one
+that forgets loses the user's work silently. The refusal's SENTENCE is
+the effect's, because which refusal it is is the effect's knowledge; the
+controller has none and inventing one would be host prose.
+`ARefusedCommitKeepsTheModeAlive` is a conformance arm, so PR F inherits
+the check rather than discovering the gap. Every sentence is core's (PR 0a). Nothing here
 knows what a mode DOES, which is what lets PR F re-run the same suite
 against the real move and resize modes: `CanvasModeConformance` is the
 conformance body and `CanvasModeProbe` is its seam, and PR C supplies a
@@ -2326,11 +2560,48 @@ the noun is taken off `count_noun`'s answer and the number formatted
 host-side. That is core's own documented split, reached through the one
 export that exists.
 
-**C8 — M4 is a closed table, and the palette is its recorded
-exception.** `HandleFocusDeparture(CanvasFocusDeparture)` is total over
-four departures: `TabSwitch`, `PaneFocus` and `WindowDeactivated` cancel
-with restoration and an announcement; `ModalOverlay` keeps the mode
-alive. `EveryFocusDepartureHasARecordedAnswer` enumerates the enum.
+**C8 — M4 is a closed table, and the two surfaces layered OVER the tab
+are its recorded exceptions.** `HandleFocusDeparture(CanvasFocusDeparture)`
+is total over five departures: `TabSwitch`, `PaneFocus` and
+`WindowDeactivated` cancel with restoration and an announcement;
+`ModalOverlay` and `MenuOpen` keep the mode alive.
+`EveryFocusDepartureHasARecordedAnswer` enumerates the enum and names
+the keep-alive set, so a sixth departure joins one side or the other by
+decision.
+
+**`MenuOpen` is CD-41's failure one surface over, and it was
+self-inflicted.** Opening a top-level menu moves keyboard focus onto its
+`MenuItem`, which drops `IsKeyboardFocusWithin` on the surface — so with
+only the overlay arm, the shell's own Canvas menu cancelled the mode the
+instant it opened and its Commit Mode and Cancel Mode items were dead
+before the pointer reached them. PR E's and PR F's per-row context menus
+are the M6 visible controls for every mode verb and would have inherited
+it exactly. Classified by walking the focused element's ancestors for a
+`MenuBase` — logical parents first, visual parents when the chain runs
+out, because a `ContextMenu` lives in its own popup. One question covers
+the menu bar, submenus and context menus; what is TESTED is the menu-bar
+chain, because no canvas surface has a context menu until PR E/F ship
+the row menus, and the popup arm is named as the untested half so the PR
+that ships the first one owns the fact (m11).
+`OpeningAMenuKeepsTheModeAliveAndLeavingTheCanvasCancelsIt` drives a
+real menu and a real non-menu focus loss in one fact, so it cannot pass
+on a surface that stopped classifying departures at all;
+mutation-verified by collapsing the arm back into `PaneFocus`.
+
+**Menu-then-elsewhere is not re-classified, and that is the pre-existing
+shape this widens rather than a hole it opens.** `IsKeyboardFocusWithin`
+is already false once focus is in the menu, so a subsequent move from
+the menu to some other part of the shell raises nothing and the mode
+survives a departure that would otherwise have cancelled it. Exactly the
+same has been true of `ModalOverlay` since this arm existed — dismissing
+the palette onto another pane never re-fires either — so `MenuOpen`
+inherits the property rather than introducing it. It is bounded, not
+unbounded: the tab going invisible (`TabSwitch`) and the window losing
+activation (`WindowDeactivated`) are separate triggers that still fire,
+and document retirement cancels outright, so no mode outlives the thing
+it belongs to. Recorded here so a future reviewer reads it as known;
+closing it properly wants a focus-restored trigger, which belongs with
+PR F's real modes rather than a test one.
 
 The `ModalOverlay` arm is a **divergence from t0 §2 M4's literal list**
 and is recorded as CD-41 rather than implemented silently. Reasoning, in
@@ -2372,7 +2643,9 @@ PR D ships the viewport. "State only until D" was the alternative and it
 is worse: the toggle's announcement says the viewport follows the
 selection, and with no viewport that is a sentence about nothing.
 
-**C10 — The filter is ONE view, and every consumer reads it.**
+**C10 — The filter is ONE view, and every consumer reads it. THE
+IMPLEMENTATION IS THE SYNCHRONOUS INTERIM.**
+
 `CanvasFilterView` carries the rows, whether they are narrowed, whether
 they answer the needle NOW, and the matched ids — and the outline rows,
 the table rows, the header's result summary, the announced count and
@@ -2396,12 +2669,57 @@ speak that number as a match count. Both the announcement
 the state mapping for the sentence in that case, so neither has a second
 opinion about which sentence the state owes.
 
-**`FilterActive` is mac's predicate, spelled out.** Foundation's
-`.whitespaces` does not include newlines, so a needle of nothing but a
-newline reads as ACTIVE on mac and (core trimming it) matches
-everything. .NET's `IsNullOrWhiteSpace` would call the same needle
-inactive, so `IsFilterActive` is written to mac's rule rather than
-borrowed. It belongs to the trimming differences CD-22 already records.
+**THE INTERIM, and its cost, stated rather than discovered.** The match
+runs SYNCHRONOUSLY, inside the `Filter` getter, on the dispatcher,
+taking `_ffiLock` — PR A's recorded precedent for a whole-model read,
+and the shape this PR ships. The cost is real and bounded: a LOAD body
+holds that lock across `open_canvas` plus three whole-model projections,
+so a keystroke arriving during a load waits for the load to finish. On
+the fixtures and the §K 2,000-node budget that is milliseconds; on a
+slow filesystem it is the length of the open, and the user types into
+it.
+
+That is the whole reason the redesign PR exists. Moving the query off
+the dispatcher makes the rows and the answer arrive on different frames,
+and correlating them is what four review rounds and two design passes
+were spent on — the publication transaction, the projection unit, the
+one-channel ordering and their censuses. None of that ships here,
+because none of it is needed by a match that returns before the getter
+does: the rows, the count and the outline they are over are one
+dispatcher turn's worth of state and cannot describe two canvases.
+
+**WHAT TRAVELS TO THE REDESIGN PR**, so nobody re-derives it. The names
+below are in PLAIN TEXT rather than backticks, deliberately: a backtick
+in §C is a citation, the citation census checks that every one of them
+names something this branch actually has, and none of these do. The
+census made that rule visible while this table was being written, which
+is the census working.
+
+| Travelling | What it was |
+|---|---|
+| The off-dispatcher match | the filter body on PanelWorkScheduler, the doubled generation guard, the outline-identity third guard, the panic-class catch and its injected-fault fact |
+| The failed-answer bit and the four-branch summary | "ran and failed" vs "has not run yet" vs "no handle" — distinctions only an async match creates |
+| The projection unit | rows, table rows, id index, targets, subpaths, the adjacency memo, the answered needle, the matched ids and both filtered halves as ONE immutable value |
+| The publication transaction | staged writes, queued notifications, the rows→selection→properties order, nesting by joining, and the retirement mute |
+| Silence-first teardown | the speak/silence/release phases, the five-channel detachment and its handler-list observable |
+| Their censuses | the derived notification census and the teardown-order census |
+| Their facts | the reload / state-render / state-observer / selection-observer / mid-publication Where-am-I family, and the retired-document family |
+
+The full review history for all of it is in this document's round record,
+which stays: the redesign PR inherits seven rounds of findings, two
+design passes and a rule-4 trip, and starting from that is the point of
+splitting rather than reverting.
+
+**`FilterActive` carves out what .NET would have got wrong, and the
+claim is bounded to that.** Foundation's `.whitespaces` does not include
+newlines, so a needle of nothing but a newline reads as ACTIVE on mac
+and (core trimming it) matches everything, while .NET's
+`IsNullOrWhiteSpace` would call it inactive — `IsFilterActive` carves
+out them so that needle behaves as mac's does. It is NOT a full
+transcription of `.whitespaces`, which is Zs plus tab: U+000B, U+000C,
+U+0085, U+2028 and U+2029 read active on mac and inactive here.
+Recorded rather than chased — they are unreachable from a keyboard and
+belong to the trimming differences CD-22 already covers.
 
 **The table's OTHER summary is outside this invariant, and that is
 recorded rather than assumed.** `Canvas table: N cards, M groups.`
@@ -2418,16 +2736,15 @@ which said so.
 **Filtered-out cards are a VIEW.** Selection is untouched by filtering
 and by clearing, and no `canvas_apply` is anywhere near it.
 
-**The cost of typing, stated rather than assumed.** Each keystroke is
-one memoized `canvas_filter` call plus ONE projection rebuild — the
-needle setter raises the republish and the surface deliberately does not
-also render on the property change, or every keystroke would rebuild
-twice. A rebuild at 2,000 rows is the same work PR A already budgets and
-measures on the open path (`A17`'s §K fact, in both scheduling modes),
-so the per-keystroke cost is bounded by a number that is already
-asserted rather than by a hope. mac has the same shape (its list
-re-renders from `filteredOutline`); what neither host does is re-run the
-match, which is what the memo is for.
+**A reload with an active needle re-asks**, or the surface would show
+every card while the field still claimed to be filtering. It announces
+its new count deliberately: the rows changed under the user while they
+were filtering, and the accurate number is information they need — the
+alternative is a surface quietly holding a different set than the one
+last spoken. It is safe to say because it rides the FILTER coalescing
+class, which is separate from the `navigation` class the degraded-load
+line and every movement use (0a-8), so a reload's count cannot collapse
+the load's own sentence or be collapsed by it.
 
 **C11 — Where-am-I is one render, spoken and shown.** The navigator
 builds one `CanvasWhereAmI` event from core's `canvas_where_am_i` plus
@@ -2441,13 +2758,23 @@ The panel is a **transient focusable region, not a `ModalSurface`**
 behind it stays live, and registering it would put it through the #1118
 chord admission it has no business being in. `LiveSetting = Off` — pull,
 not push: the announcement is what speaks, and a live region would say
-the same sentence twice. Escape (ladder rung 3) closes it and returns
-focus to the element the reader came from, with the projection as the
-fallback when that element is gone.
+the same sentence twice. Escape dismisses it ahead of every ladder rung
+while it is OPEN (CD-47), and returns focus to the element the reader
+came from when they were inside it — with the projection as the fallback
+when that element is gone, and no focus move at all when they were never
+in it.
 
 Nothing selected falls back to the first row in reading order, and an
 empty canvas answers `Canvas is empty.` — the pull surface always
 answers, which is the failure t0 §1.4 exists to prevent.
+
+**The filter clause keys on NARROWED, where mac keys on the needle**
+(m3). During an in-flight first answer, or after a query that ran and
+failed, Windows omits the clause while a needle sits in the field.
+Deliberate: keying on the needle would make the clause read
+"9 of 9 shown" for rows that nothing narrowed, and C10's whole invariant
+is that the count describes the rows on screen. A micro-divergence
+recorded rather than matched.
 
 **C12 — Focus delivery lands the reader and says NOTHING (the carried
 A14 defect).** §B filed it: a delivery to `LastActivatedNode` when the
@@ -2475,17 +2802,26 @@ open canvas with nothing to push.
 `VerbosityIsReadLiveAtEveryAnnouncement` moves the same way at all three
 levels and gets three different lines.
 
-The preference persists as `canvasVerbosity` in `AppPreferencesState`,
-spelled with mac's own `CanvasVerbosity` case names so the two
-preference files read identically and a future shared schema needs no
-migration. Default `standard`; an unknown or version-skewed key degrades
-to the default like every other field.
+The preference persists as `canvasVerbosity` in `AppPreferencesState`.
+**What is shared is the VALUE spelling, not the store, and the row says
+which**: `terse` / `standard` / `verbose` are mac's own
+`CanvasVerbosity` case names, so a future shared schema (W8-1 owns the
+settings surface) needs no value migration. The STORES are peers rather
+than one file — mac keeps `CanvasPrefs` under the `slate.prefs.canvas`
+UserDefaults key, which is device-local, and Windows keeps this field in
+its device-local preferences JSON; the container formats differ and
+neither is the vault's `.slate/prefs.json`. The task brief's "a synced
+vault reads identically" is therefore not what shipped and is not
+reachable from `AppPreferencesStore` at all; recorded rather than
+implied away. Default `standard`; an unknown or version-skewed key
+degrades to the default like every other field.
 
 **The setting announces nothing of its own**, and that is a decision.
-The three menu items are checkable radio items, so a screen reader
-speaks the selected level from the element itself (t0 §3's
-inspectability, and the shape mac's Settings toggle has), and the honest
-confirmation of "you are now at Verbose" is the next card you move to.
+The three menu items are CHECK items bound OneWay to the level (WPF has
+no radio menu item), so a screen reader speaks the selected level from
+the element itself (t0 §3's inspectability, and the shape mac's Settings
+toggle has), and the honest confirmation of "you are now at Verbose" is
+the next card you move to.
 Inventing a canvas event would put a string in the corpus that mac never
 speaks; composing one host-side is what R-C forbids.
 
@@ -2577,6 +2913,57 @@ fails it naming the variant and the class.
 cross-reference, so the trail reads the same from either end and nobody
 re-opens it looking for a missing Swift parser.
 
+
+### Red-team round 1 minors — dispositions
+
+Every minor from `redteam-c-round1.md`, with what happened to it. The
+ones marked DEFERRED name an owner rather than a date, per the ledger
+convention.
+
+| # | Disposition |
+|---|---|
+| m1 | **DEFERRED — close-out, and it is a CLASS not a canvas row.** Re-clicking a checked verbosity item unchecks it visually because `IsCheckable` toggles `IsChecked` while the OneWay binding only re-pushes on `PropertyChanged` and the setter early-returns on the same value. Shipped by the math-verbosity precedent this row copied, and live on all five groups (math verbosity, speech style, braille, code preamble, canvas). One fix — re-raise the three `PropertyChanged` unconditionally, or handle `Click` — covers every group, and doing it here would fix a canvas symptom of a shell defect. Recorded as the inspectability class's 6th appearance. |
+| m2 | **TAKEN (record).** C10 said "mac's predicate, spelled out"; it is not exactly — Foundation's `.whitespaces` is Zs plus tab, so U+000B, U+000C, U+0085, U+2028 and U+2029 read ACTIVE on mac and inactive here. The claim is narrowed to what the code does and the five code points are named. |
+| m3 | **TAKEN (record).** Where-am-I's filter clause keys on `Narrowed` where mac keys on `filterActive`, so during an in-flight first answer — or after a ran-and-failed query — Windows omits the clause while a needle sits in the field. Kept on `Narrowed` deliberately: keying on the needle would make the clause say "9 of 9 shown" for rows nothing narrowed, which is a false number, and C10's whole invariant is that the count describes the rows on screen. Recorded as a micro-divergence rather than matched. |
+| m4 | **TAKEN (upstream note).** Where-am-I's no-selection fallback is the first UNFILTERED row on BOTH hosts, so with a filter active it can describe a card that is not on screen. Shared-reference quirk; filed in the mac-details register rather than fixed one-sided. |
+| m5 | **TAKEN (upstream note).** Enter-group, follow-connection and trace-path can seat a filtered-out node, and enter-group narrates it. Verified mac-parity (`canvasSelect` has no filtered-set check either), so not a Windows defect — but it grinds against CD-40's ratified "the reader and the selection agreeing IS the contract", so the verb family is recorded together. |
+| m6 | **TAKEN (fixed + fact).** `DismissTransientRegion`'s detail arm ignored `FocusRow`'s answer, so a row that vanished under an external edit left focus on the window root. `FocusRow` now RETURNS whether the row took focus — which is a seam improvement in its own right — and the arm falls back to the projection exactly as `CloseWhereAmI` does. |
+| m7 | **DEFERRED — PR E, with the expansion-state decision.** A durable focus request naming a filtered-out node stays pending and delivers a surprise jump when the filter later clears. `FocusLandingNodeFor` reads the unfiltered map by design (A14's landing rules predate the filter). Superseding the request when the filter excludes its target is a change to A14's own state machine; it belongs with the request-lifecycle work PR E already owns, not bolted on here. |
+| m8 | **TAKEN (fixed).** The scheduler guard scanned one file, so a `canvas_filter` call added anywhere else under `Canvas/` would have evaded the one-caller claim. It scans the whole directory now and names any offender. |
+| m9 | **DEFERRED — PR D, with the surface's focus map.** Ctrl+F reaches nobody when the table shows and focus is in the HEADER: the navigator stands aside for the grid's own gesture, and the grid's binding needs the grid focused. Routing the stand-aside on "the GRID owns focus" rather than "the table is showing" is the fix; it wants the header/projection focus map PR D is already building for the renderer's tab order, and the palette row covers the gap meanwhile. |
+| m10 | **RECORDED (no action).** The `Key.System`/`SystemKey` translation and the `Keyboard.Modifiers` read have no unit exercise — `PressKey` documents that it bypasses the routed event for modified chords, and the CI journey's real Ctrl+Alt+Shift+I is the executable coverage. Named so nobody reads the unit fact as covering it. The AltGr note (Ctrl+Alt chords are typeable glyphs on some layouts) is recorded with it; no current canvas chord collides with a common AltGr glyph. |
+| m11 | **DEFERRED — PR E/F, with the first context menu.** The `MenuOpen` classification's visual-parent fallback (the `ContextMenu` popup chain) is exercised nowhere, because no canvas surface has a context menu until E/F ship the row menus. C8's "one question covers the menu bar, submenus and context menus" is narrowed to what is tested, and the popup arm is named as the untested half so the PR that ships the first context menu owns the fact. |
+| m12 | **DEFERRED — PR F hand-off (recorded below).** A mode survives a document RELOAD: the publish republishes rows under an active mode and no M4 departure fires. Inert for C's test mode; F's transient geometry commits against moved rows, where the funnel's CAS is the backstop. |
+| n1 | **TAKEN.** `ArrowFollow`'s comment repeated the spec's false "the precedence mac pins"; rewritten with the mac file it actually comes from (CD-48). |
+| n2 | **TAKEN.** C13's "checkable radio items" is wrong — WPF has no radio menu item; they are check items with a OneWay `IsChecked`. Reworded. |
+| n3–n5 | No action needed (checked, recorded, or H's). |
+
+### Hand-off to PR F (the mode stack's consumer)
+
+1. `CanvasModeConformance` is the suite: supply a probe with a real spec
+   factory AND a real REFUSING spec factory, and every M1–M7 arm plus
+   `ARefusedCommitKeepsTheModeAlive` runs against the real modes.
+2. A commit effect that cannot apply must return
+   `CanvasModeCommitResult.Refused()`, announce its own reason, **and
+   have applied NOTHING** — a refusal is atomic by contract, because the
+   mode stays up and the user may commit again, so a half-applied
+   refusal would apply that half twice. `Refused()` is the answer for
+   "admission said no", not for "it partly worked": a partial apply is a
+   failure the funnel must undo before it refuses. Returning `Committed`
+   on a refused funnel apply drops the mode and the user's transient
+   state with it.
+3. A mode survives a document RELOAD (m12): the transient geometry F
+   holds was computed against rows that may have moved. The funnel's CAS
+   is the backstop, and whether a reload should cancel the mode is F's
+   call — it needs F's transient holder to answer.
+4. Menu and context-menu opens KEEP the mode alive (C8/CD-41); the
+   context-menu classification arm is untested until F ships one (m11).
+5. A commit effect may not assume the stack is transitionable while it
+   runs: `Cancel` refuses and a focus departure DEFERS until the outcome
+   is known. An effect that wants to abandon the mode returns
+   `Refused()` and lets the deferred departure (or the user) end it —
+   calling `Cancel` from inside its own commit gets nothing.
+
 ### Tests that pin PR C
 
 `apps/slate-windows/tests/SlateWindows.Tests/CanvasNavigatorTests.cs`:
@@ -2601,8 +2988,10 @@ one joins without anyone remembering), the M5 ladder table, and
 `CanvasModeConformance` — the body PR F re-runs against the real modes.
 `apps/slate-windows/tests/SlateWindows.Tests/Censuses/CanvasAnnouncerCensus.cs`:
 `TheSnapshotVisibilityPredicateMatchesTheSurfaceRender` and
-`TheShellInstallsTheModalOverlayAnswerForModeCancellation`, the two
-source guards for properties no in-process fact can reach.
+`TheShellInstallsTheModalOverlayAnswerForModeCancellation` — the two
+source guards for properties no in-process fact can reach. The third,
+the off-dispatcher scheduling guard, travels with the redesign PR: it
+guards a scheduled body this branch does not have.
 `apps/slate-windows/tests/SlateWindows.Tests/ChordTableTests.cs`: the
 canvas scrape, `SharedCommandChords` (C16) and the D-2 divergence row.
 `apps/slate-windows/tests/SlateWindows.Tests/CanvasTableTests.cs`:
@@ -4028,6 +4417,101 @@ here — it is the same never-silent gap VA-1/VA-2 closed for the other
 verbs, and mac's own membership guard does not see these two because
 they reach `canvas_filter` only through `filteredOutline`.
 
+**And the same two are silent on an EMPTY canvas, which is a second
+divergence in the same verb.** Mac's `canvasSelectAdjacent` guards
+`!rows.isEmpty` and announces `NoCardsMatchFilter` only when a filter is
+active — so an arrow on a canvas with no cards at all says nothing at
+all, in the `.ready` state, with no state sentence to fall back on.
+Windows answers `Canvas is empty.` there
+(`AnEmptyCanvasAnswersRatherThanMovingNowhere`), which is the arm the
+onboarding region already renders, so again no vocabulary work. Both
+halves go upstream together: the state gap and the empty-canvas gap are
+the same never-silent hole seen from two sides.
+
+**CD-47 — Escape inside the Where-am-I panel is the PANEL's, not the
+ladder's; t0 §2 M5 has no clause for a focused transient region.**
+Ruled panel-first, on mac parity and on the spec's own build text.
+
+t0's M5 ladder is `mode → filter → surface → workspace`, and it says
+nothing about where FOCUS is when the press arrives — it was written for
+a reader standing in the canvas, and the transient regions §1.4 and §3
+add came later in the same document without M5 being revisited. Read
+literally, a reader standing IN the Where-am-I panel who presses Escape
+to close it gets their typed filter needle destroyed instead, and the
+panel stays open. Mac never had that behaviour: the panel's Close button
+carries `.keyboardShortcut(.cancelAction)`, which resolves at the
+key-equivalent phase BEFORE the container's ladder, so on mac the panel
+closes first and the filter (and even an active mode) is untouched. The
+spec §PR C Builds line says the same thing in its own words — "Esc
+returns focus to the prior element".
+
+**So an OPEN panel takes the press ahead of the ladder** — the key is
+the panel being open, not where focus is. Mac's `.cancelAction` is
+WINDOW-scoped, so it resolves whatever the focus arrangement, and
+keying on focus instead left the same defect standing one arrangement
+over: an open-but-unfocused panel plus an Escape from the projection
+destroyed the needle AND left the panel sitting there. With the
+panel-open key there is no divergence from mac left to record — the
+behaviours match, which is the outcome an adjudication should reach when
+the reference is right.
+
+Focus RESTORE is the part that stays locus-dependent, and
+`CloseWhereAmI` owns it: the reader is put back only if they were INSIDE
+the panel. Dismissing a panel someone was not in must not relocate them,
+which is the mirror of the defect the restore exists to prevent. The
+ladder is otherwise unchanged and still owns Escape from the
+projections, where rung 3 closes the panel exactly as before.
+
+**Why it went silent, and the class it belongs to.** This is CD-41's
+shape a second time: a t0 clause that does not mention the case, so both
+hosts diverge from the letter without either being wrong, and nothing
+records it because there is no contradiction to trip over — only an
+absence. CD-41's sweep stopped at M4 and never re-read mac's M5
+consumers. **The rule this sets: a t0-vs-reference adjudication is swept
+per CONTRACT, not per site** — when one clause of M1–M8 is found to
+disagree with the reference, every clause with the same consumers gets
+re-read in the same pass.
+
+The M5 blind spot joins the upstream-file list beside CD-41's M4-vs-M6
+one: t0 §2 M5 should name the transient regions §1.4 and §3 introduce
+and say where they sit relative to the rungs.
+
+**CD-48 — Right/Left FOLLOW unconditionally; the spec's "as mac does"
+premise was false.** Spec §PR C Builds asked for "connection-follow when
+the selected card has connections, else tree semantics — pin the
+precedence as mac does; record". Mac pins no such precedence:
+`CanvasOutlineView.swift` delivers `canvasFollowConnection`
+unconditionally and returns handled, so a connectionless card ANSWERS
+there ("No outgoing connection."). Mac's list has no expand/collapse for
+an arrow to defer to, so the blend the spec describes was never shipped
+anywhere.
+
+Implementing the spec's sentence left one keypress on a leaf doing
+nothing and saying nothing — the never-silent rule broken by a
+precedence nobody had. Mac is the authority: the arrows follow always,
+and the leaf gets the `NoConnection` sentence the vocabulary already
+carries.
+
+**Expand/collapse keeps three keyboard routes, VERIFIED rather than
+assumed** (`ExpandCollapseSurvivesTheArrowsBeingClaimed`): Enter on a
+group toggles it through the one activation seam; WPF's own
+`TreeViewItem` numpad `+`/`-` still arrive, because the canvas claims
+neither; and the `ExpandCollapse` pattern — the route a screen reader
+actually drives, and the one that matters most here — is untouched. The
+numpad pair is recorded as a route rather than THE route: a keyboard
+without a numpad has the other two.
+
+**The TABLE keeps Left/Right** for the grid's cell navigation, which the
+UIA Table pattern depends on and the W4-1 conformance matrix asserts;
+follow there is the palette row, and it answers identically. Recorded so
+the asymmetry is a decision.
+
+**Root class, and what it costs.** The spec sentence was written from
+memory of mac rather than from the source, and then transcribed into a
+code comment that repeated the attribution — the same false-attribution
+shape B3/CD-39 closed by binding claims to primary sources in line. Both
+the contract and the comment now name the file the behaviour comes from.
+
 ---
 
 ## Accepted risks (owner-recorded; off-limits for re-litigation)
@@ -4194,6 +4678,17 @@ close-out**:
   rather than absorbed into W6-1:** PR 0b did not cause it, and the
   window PR 0b DID change (`beginBatchRetarget`'s) is a different state
   with its own answer (VA-1).
+- **t0 §2 M5's ladder does not mention the transient regions** §1.4 and
+  §3 introduce (W6-1 PR C, CD-47 — ruled panel-first). The rungs are
+  `mode → filter → surface → workspace` with no clause for where FOCUS
+  is, so read literally a reader standing in the Where-am-I panel who
+  presses Escape loses their filter needle instead of closing the panel.
+  Both hosts do the sensible thing and neither records it, because an
+  absence trips nothing. The fix belongs in
+  `09_canvas/specs/t0_interaction_contract.md`: name the transient
+  regions and say where they sit relative to the rungs. Same blind-spot
+  class as the M4 note below, found by the sweep that note's rule
+  demanded.
 - **t0 §2 M4's palette clause is a DOC-FIX candidate** (W6-1 PR C,
   CD-41 — ratified by controller ruling). Not a mac-code note like the
   rest of this list, and listed here anyway because this is where the
@@ -4206,6 +4701,24 @@ close-out**:
   implement M6's side. t0's precedence rule covers a spec disagreeing
   with the contract and says nothing about the contract disagreeing with
   itself, which is why the divergence went unrecorded on mac until now.
+- **Where-am-I's no-selection fallback names the first UNFILTERED row**
+  on both hosts (`doc.outline.first` / `Outline[0]`), so with a filter
+  active it can describe a card that is not on screen. Shared-reference
+  quirk found reading for W6-1 PR C (m4); filed rather than fixed
+  one-sided, because a Windows-only change would make the pull surface
+  answer differently on the two platforms for the same canvas.
+- **The movement verbs can seat a filtered-out node** — enter-group,
+  follow-connection and trace-path all move to a card core named without
+  asking whether the surfaces are showing it, and enter-group narrates
+  the arrival. Verified mac-parity (`canvasSelect` has no filtered-set
+  check either, and mac's list equally cannot show the row), so not a
+  Windows defect (m5). Recorded because it grinds against CD-40's
+  ratified "the reader and the selection agreeing IS the contract": the
+  focus delivery that follows finds no container and no-ops, so the
+  reader's cursor and the selection every selection-scoped verb acts on
+  come apart. The honest fix is a shared decision about whether
+  structural movement escapes the filter, which is a t0/spec question
+  rather than a host bug.
 - **`canvasSelectAdjacent` is silent outside `.ready`** (found reading
   for W6-1 PR C). It resolves through `activeCanvasDocument`, which
   admits only `.ready`, and returns with no announcement otherwise — so
@@ -4922,6 +5435,139 @@ rather than rediscovering it.
   and `ShellAccessibilityTests.cs` at lines this task did not edit — the
   recorded mixed-EOL trap, and the reason the DoD scopes the format gate
   to the changed files, which pass clean.
+- **RULE 4 TRIPPED, as pre-declared, and this is the series' THIRD
+  design pass** (after focus delivery and identity containment, both in
+  PR A). Round 3 recorded the tripwire in advance: two subsystems at
+  three rounds each, and another continuation in either stops the
+  patching. Round 4 found one in each — the selection re-seat outside
+  the publication, and teardown mutating while observers could still run
+  — so the patching stopped and both were replaced by a primitive.
+
+  The class, stated once: **any correlated observer-visible mutation
+  outside the publication transaction is a second channel.** The
+  enumeration (rows → state → controls → selection → next) can never end
+  by enumeration, because its population is everything the document
+  exposes. So `Publication` stages the writes and queues the
+  notifications, and the outermost scope raises them in one defined
+  order; every notifying member is read-only outside it; and
+  `TheCanvasModelNotifiesOnlyFromInsideAPublication` is the census that
+  keeps the population closed instead of a reviewer doing it one pair at
+  a time.
+
+  Teardown got the same treatment, because it had the same shape: each
+  round found the NEXT fallible callback reachable while the document
+  mutated on its way out. **Silence-first total finalization** — SPEAK
+  (the sentences a retirement owes, while the funnel is open), then
+  SILENCE as the first act of everything after, then RELEASE from a
+  `finally`. The clears cannot run a callback because there is nothing
+  left that can raise one, and `TeardownSpeaksThenSilencesThenReleases`
+  reads that order out of the source.
+
+  What made this a design pass rather than a fifth patch is the test
+  shape: the two censuses assert over the POPULATION (every notifying
+  write, the whole teardown order), and the behavioural facts drive the
+  primitive rather than the pair that happened to be reported.
+- **Round 5 adjudicated as MECHANICAL COMPLETION, not a design
+  continuation — and that adjudication is on the record because it is
+  the kind that gets made too easily.** The design held: codex verified
+  the ordering and the throwing-Shutdown construction. What it found was
+  the design not fully APPLIED — the marked set and the `SurfaceChanged`
+  event still notifying outside the transaction — and a census whose
+  population was a hard-coded field list in one file, which could not
+  have seen either. Both are failures of application and of the check,
+  not of the primitive, so the controller ruled completion rather than a
+  fifth round of the class. **A round-6 breach of the DESIGN itself
+  escalates to the user without further adjudication**, which is what
+  keeps "mechanical" from being a word that can be reused.
+
+  The lesson generalizes past this task: a census that closes a class
+  must derive its own population. Ours now scans the directory, classes
+  every notifying type as model, view or recorded exclusion, and fails on
+  anything unclassified — so the next notifying member joins a side by
+  decision instead of by being absent from a list nobody updated.
+- **Round 6 ESCALATED to the user, as pre-declared, and the USER RULED:
+  one boundary-complete wave, then codex round 7 as final arbiter — and
+  if round 7 fails, PR C pauses for an architecture review.** The
+  escalation was the promise round 5 made being kept: a breach of the
+  design itself, not another application gap, so the decision left the
+  loop. Codex's four blockers were taken as the finite spec for the wave,
+  which is what "boundary-complete" means here — the boundary is what an
+  observer can reach, and the wave extends the primitive to all of it
+  rather than to the next reported instance.
+
+  What the wave found, stated as the boundary rather than as four items.
+  The transaction ordered everything that RAISES and said nothing about
+  what a woken observer then READS: the activation targets, the subpath
+  anchors and the adjacency memo were document fields installed by a
+  reload before its rows were published, so a Where-am-I composed from a
+  mid-publication wake described the new canvas's connections against the
+  old canvas's outline. Those are fields of the unit now, and the sweep
+  that found them also brought in `LastActivatedNode`, the last mutable
+  field a publication-time reader could reach.
+
+  Retirement had the same boundary problem twice over. It retired two
+  channels of five, and asserted it with an observable that inspected the
+  same two — a green light over the gap, which is worse than the gap. And
+  the mode stack was left IDLE rather than terminal, so an `Enter` from a
+  surface the shell had not finished tearing down would have started a
+  mode on a document whose handle was gone. Both are closed: five
+  channels retired, the observable over all five, and every mode verb
+  refusing after `Shutdown` — silently, which is the never-silent table's
+  precondition being absent rather than the table being broken, since a
+  retired document has no surface and its announcer is already shut.
+
+  And the census that closed the population was itself failing OPEN. It
+  matched bases by direct name (a type one derivation down read as not
+  notifying), knew only field-like events, saw one partial per type, and
+  named two generic types for the collection scan and eleven fields for
+  the assignment scan. All four are derived now — transitive and
+  simple-name base resolution, both event forms, all partials merged, and
+  the state scan resolved from the members that HAND IT OUT — and the
+  discovery assertions count what the scan FOUND rather than what the
+  method listed, so a scan that silently matched nothing fails instead of
+  passing everything above it.
+
+- **Round 7 failed, and the user ruled a SPLIT. This branch is C-lite.**
+  The second user decision, and the one that ends the loop. Round 7
+  found four blockers inside the wave — query-source identity, the Empty
+  sentinel's shared memo, `HandleEscape`/`RegisterRung` un-gated, and the
+  census blind to state handed out by METHODS rather than properties —
+  so PR C paused as pre-declared and the path was decided outside the
+  review loop rather than by another round.
+
+  **What ships here** is the layer seven rounds verified clean: the
+  navigator's verbs (the unconditional follow, the dead ends, the CD-48
+  routes), the M1–M7 machine with ALL of its hardening (the closed
+  transition, the drained departures on every exit, the M4 table with
+  MenuOpen, the terminal shutdown — including round 7's ladder holes,
+  which are cheap and in scope because the stack ships), the chord rows
+  and their resolvers, Where-am-I with its panel and the panel-open
+  Escape, the verbosity preference, the coalescing tripwire, the
+  never-silent read gates, and every fact that pins them.
+
+  **What travels** is the asynchronous filter and everything four rounds
+  and two design passes built to correlate it: the projection unit, the
+  publication transaction, silence-first teardown and their censuses.
+  C10 carries the travel list and the interim's cost. The filter here is
+  the SYNCHRONOUS pre-review form — the memoized view with its `Current`
+  flag, querying under the lock on the dispatcher, PR A's own recorded
+  precedent — and C10 states the lock-wait plainly rather than leaving it
+  to be discovered.
+
+  **The round record above STAYS, in full, and that is the point of
+  splitting rather than reverting.** The redesign PR does not start from
+  a blank page: it inherits seven rounds of findings, two design passes,
+  a rule-4 trip and the two user decisions — and it inherits the reason
+  the design was right, which is that a match returning on a later frame
+  makes rows and answers separate facts. Nothing above this line was
+  wasted; it was early.
+
+  The generalizable lesson, recorded because it is the expensive kind:
+  the async filter was one requirement inside a PR whose other twelve
+  contracts had nothing to do with it, and it took the whole PR hostage
+  for seven rounds. Sizing a PR by SUBSYSTEM rather than by requirement
+  count would have caught that at the brief.
+
 - **The spec's PR A evidence line for the "Accessible canvas (T parity)"
   surface row is still unexecuted.** It says the row moves to "in
   progress — PR A"; the generated matrix still reads `pending`. Left

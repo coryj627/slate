@@ -1,11 +1,13 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.ComponentModel;
 using System.Text;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Automation.Peers;
 using System.Windows.Automation.Provider;
+using System.Windows.Controls;
 using System.Windows.Input;
 using SlateWindows.Canvas;
 using uniffi.slate_uniffi;
@@ -96,6 +98,23 @@ public sealed class CanvasNavigatorTests : IDisposable
                 {"id":"ab","fromNode":"a","toNode":"b"},
                 {"id":"bc","fromNode":"b","toNode":"c"},
                 {"id":"ca","fromNode":"c","toNode":"a"}
+              ]
+            }
+            """);
+        // Two cards, an edge between them, and a file target — the
+        // fixture the side-state fact reloads into a different shape.
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "connected.canvas"),
+            """
+            {
+              "nodes": [
+                {"id":"hub","type":"file","file":"note0.md","x":0,"y":0,"width":200,"height":100},
+                {"id":"spoke","type":"text","text":"one","x":300,"y":0,"width":200,"height":100},
+                {"id":"other","type":"text","text":"two","x":600,"y":0,"width":200,"height":100}
+              ],
+              "edges": [
+                {"id":"h1","fromNode":"hub","toNode":"spoke"},
+                {"id":"h2","fromNode":"other","toNode":"hub"}
               ]
             }
             """);
@@ -567,6 +586,112 @@ public sealed class CanvasNavigatorTests : IDisposable
     }
 
     /// <summary>
+    /// Codex round 2, B2-continued: the tab is retired while a commit
+    /// effect is still running, with a focus departure already held.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Teardown is the one exit from the transition that never returns to
+    /// <c>Commit</c>, so the held departure has to drain HERE — and
+    /// before the funnel is silenced, because a departure owes a
+    /// restoration and a sentence saying what came back. The order is the
+    /// whole fact: drain, then silence.
+    /// </para>
+    /// <para>
+    /// And then the 0a-2 lesson's own shape, one document over: nothing
+    /// speaks after retirement. The commit's confirmation is composed
+    /// after the funnel closed and is DROPPED rather than queued, so the
+    /// user hears the restoration and nothing else — not a confirmation
+    /// for a canvas that no longer exists.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void AShutdownDuringACommitDrainsTheHeldDepartureThenSilences()
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        var spec = new CanvasModeSpec(
+            CanvasMode.Move,
+            new CanvasModeObject.Card("Research"),
+            () =>
+            {
+                // Focus leaves the canvas while the stack is still up…
+                _ = document.Modes.HandleFocusDeparture(CanvasFocusDeparture.PaneFocus);
+                // …and the shell retires the tab before the effect resolves.
+                document.Shutdown();
+                return CanvasModeCommitResult.Committed(
+                    new CanvasA11yEvent.CanvasModeCommitted(
+                        CanvasTransientVerb.Move,
+                        new CanvasModeObject.Card("Research")));
+            },
+            () => new CanvasModeRestoration.BackAt("Research"));
+        Assert.True(document.Modes.Enter(spec));
+        Drain(document);
+
+        _ = document.Modes.Commit();
+
+        // The held departure was honoured on the way out: the mode is
+        // gone, restored, and the restoration was SPOKEN.
+        Assert.False(document.Modes.IsActive);
+        Assert.Null(document.Modes.ContainerValue);
+        string line = OneLine(document);
+        Assert.Contains("cancelled", line, StringComparison.Ordinal);
+
+        // …and nothing the retired document composes afterwards reaches
+        // anybody — including the commit confirmation that resolved after
+        // the funnel closed.
+        Assert.DoesNotContain(
+            Lines(document),
+            spoken => spoken.Contains("Moved", StringComparison.Ordinal));
+        document.Announcer.Announce(
+            new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoMarks()));
+        Assert.Equal(line, OneLine(document));
+
+        // The slot is CLEARED at teardown: nothing stale is left to act
+        // on a document that is gone.
+        Assert.False(document.Modes.HandleFocusDeparture(CanvasFocusDeparture.PaneFocus));
+        Assert.Equal(line, OneLine(document));
+    }
+
+    /// <summary>
+    /// Codex round 3, B2: retirement does not depend on a restoration
+    /// effect succeeding.
+    /// </summary>
+    /// <remarks>
+    /// Closing a tab with a mode running ends that mode, and ending it
+    /// runs host code — a restoration that can fault. When it did, the
+    /// announcer below it was never silenced, so a coalesced line stayed
+    /// queued on a document that no longer exists and spoke about it
+    /// ~200 ms later: the A5 defect, reached from the mode side. The
+    /// handle was never closed either. Logged and continued, so the
+    /// failure is reported and the teardown still happens.
+    /// </remarks>
+    [Fact]
+    public void ATeardownWhoseRestorationFaultsStillSilencesTheAnnouncer()
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        var spec = new CanvasModeSpec(
+            CanvasMode.Move,
+            new CanvasModeObject.Card("Research"),
+            () => CanvasModeCommitResult.Refused(),
+            () => throw new NotSupportedException("the restoration faulted."));
+        Assert.True(document.Modes.Enter(spec));
+        // A coalesced line is queued on the way out — the 0a-2 premise.
+        document.SelectNode("evidence");
+        _announced.Clear();
+
+        // Retirement completes. It does not propagate the restoration's
+        // failure to the registry sweeping every open document.
+        document.Shutdown();
+
+        Assert.False(document.Modes.IsActive);
+        // The queued line was DROPPED and the funnel refuses anything
+        // later, which is only true if `Announcer.Shutdown` was reached.
+        document.Announcer.Announce(
+            new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoMarks()));
+        Assert.Empty(Lines(document));
+    }
+
+    /// <summary>
     /// Whitespace is not a filter — mac's rule, including the one place
     /// .NET would have disagreed (a bare newline reads as ACTIVE there,
     /// and core trims it, so it matches everything).
@@ -607,7 +732,7 @@ public sealed class CanvasNavigatorTests : IDisposable
         Assert.True(document.Modes.Enter(new CanvasModeSpec(
             CanvasMode.Move,
             new CanvasModeObject.Card("Core question"),
-            () => null,
+            () => CanvasModeCommitResult.Committed(),
             () => new CanvasModeRestoration.Unstated())));
         Drain(document);
 
@@ -685,10 +810,19 @@ public sealed class CanvasNavigatorTests : IDisposable
     // --- C2/C6: the surface, its keys and its regions ---------------------
 
     /// <summary>
-    /// The Escape ladder end to end through the REAL surface: a real key
-    /// press, the real rungs, and the shell's press left unconsumed at
-    /// the bottom.
+    /// The Escape ladder end to end through a REAL key press on the REAL
+    /// surface: the rungs' EFFECTS in order, and the press left
+    /// unconsumed at the bottom so the shell's own Escape still works
+    /// with a canvas open (contract C6).
     /// </summary>
+    /// <remarks>
+    /// What this drives is the whole chain a user's Escape takes —
+    /// `OnPreviewKeyDown` → `HandleKey` → the controller's ladder → the
+    /// surface's presenter — and what it reads is each rung's effect on
+    /// the surface, plus `e.Handled`. The rung NAMES are the mode
+    /// controller's table test; the key reaching the surface from a real
+    /// input stack is the journey's.
+    /// </remarks>
     [Fact]
     public void TheSurfaceLadderClearsTheFilterThenTheRegionThenBubbles() => RunSta(() =>
     {
@@ -698,21 +832,336 @@ public sealed class CanvasNavigatorTests : IDisposable
         surface.OutlineForTests.FocusTree();
         host.UpdateLayout();
 
+        // Rung 2 — the filter.
         document.FilterText = "zeta";
         host.UpdateLayout();
-        Assert.Equal(CanvasEscapeRung.Filter, document.Modes.HandleEscape());
+        Assert.True(document.FilterActive);
+        Assert.True(
+            PressKey(surface, Key.Escape, ModifierKeys.None),
+            "the ladder must CONSUME the press that clears the filter.");
         Assert.Equal(string.Empty, document.FilterText);
+        host.UpdateLayout();
 
+        // Rung 3 — the transient region. One press per rung: the filter
+        // is already gone, so this press reaches the panel.
         document.Navigator.WhereAmI();
         host.UpdateLayout();
         Assert.NotNull(document.WhereAmIText);
-        Assert.Equal(CanvasEscapeRung.Surface, document.Modes.HandleEscape());
+        Assert.True(
+            PressKey(surface, Key.Escape, ModifierKeys.None),
+            "the ladder must CONSUME the press that dismisses the panel.");
         Assert.Null(document.WhereAmIText);
+        host.UpdateLayout();
 
-        // Nothing left in the canvas to consume it: the press belongs to
-        // the workspace, which is what keeps the shell's own Escape
-        // working with a canvas open.
-        Assert.Equal(CanvasEscapeRung.WorkspaceTab, document.Modes.HandleEscape());
+        // Rung 4 — nothing left in the canvas to consume it, so the press
+        // is NOT handled and belongs to the workspace. This is the half
+        // that keeps the shell's Escape working with a canvas open.
+        Assert.False(
+            PressKey(surface, Key.Escape, ModifierKeys.None),
+            "an Escape the canvas has no rung for must bubble.");
+    });
+
+    /// <summary>
+    /// B1: Escape with the reader INSIDE the Where-am-I panel acts on the
+    /// PANEL — it does not clear a typed filter out from under them
+    /// (contract C6, CD-47).
+    /// </summary>
+    /// <remarks>
+    /// Asking Where-am-I while filtering is a first-class t0 §1.4
+    /// scenario — the readback carries the filter clause — so this
+    /// combination is the designed use, not a corner. The second press,
+    /// with focus back in the projection, is the ladder's: it takes rung
+    /// 2 and clears the needle.
+    /// </remarks>
+    [Fact]
+    public void EscapeInsideThePanelWhileFilteringActsOnThePanel() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        var surface = new CanvasSurfaceView { Model = document };
+        using var host = Host(surface);
+
+        document.FilterText = "zeta";
+        host.UpdateLayout();
+        Assert.True(document.FilterActive);
+        // Focus a row the filter KEPT, and capture the container after the
+        // narrowing: a row the needle removed has no container to come
+        // back to, and the restore would (correctly) fall back to the
+        // projection — which would make the "prior element" assertion
+        // below about the fallback instead of about the restore.
+        string surviving = document.FilteredOutline[0].NodeId;
+        Assert.NotNull(surface.OutlineForTests.DeliverFocus(surviving));
+        host.UpdateLayout();
+        IInputElement? cameFrom = Keyboard.FocusedElement;
+        Assert.IsType<CanvasOutlineItem>(cameFrom);
+
+        document.Navigator.WhereAmI();
+        host.UpdateLayout();
+        // The premise: the chord's contract is that focus lands IN the
+        // panel, so this is the state a reader is actually in.
+        Assert.True(
+            surface.WhereAmIPanelForTests.IsKeyboardFocusWithin,
+            "the panel never took focus, so this fact would be about the ladder "
+            + "rather than about the panel.");
+        Drain(document);
+
+        Assert.True(
+            PressKey(surface, Key.Escape, ModifierKeys.None),
+            "Escape in the panel must be consumed by the panel.");
+        host.UpdateLayout();
+
+        Assert.Null(document.WhereAmIText);
+        // The typed needle SURVIVES — destroying it was the defect.
+        Assert.Equal("zeta", document.FilterText);
+        Assert.True(document.FilterActive);
+        Assert.Empty(Lines(document));
+        // …and the reader is put back where they came from.
+        Assert.Same(cameFrom, Keyboard.FocusedElement);
+
+        // Now the ladder owns it again: the panel is gone, so the next
+        // press takes rung 2.
+        Assert.True(PressKey(surface, Key.Escape, ModifierKeys.None));
+        Assert.Equal(string.Empty, document.FilterText);
+        Assert.Equal(
+            CanvasAnnouncer.RenderLabel(new CanvasA11yEvent.CanvasFilterCleared(
+                (uint)document.Outline.Count)),
+            OneLine(document));
+    });
+
+    /// <summary>
+    /// The same rule with the panel OPEN but the reader elsewhere: the
+    /// key is the panel being open, not focus being in it (CD-47).
+    /// </summary>
+    /// <remarks>
+    /// mac's <c>.cancelAction</c> is WINDOW-scoped, so it resolves
+    /// whatever the focus arrangement. Keying on focus instead left this
+    /// exact hole — an open panel plus an Escape from the projection
+    /// destroyed the needle AND left the panel sitting there. Focus
+    /// RESTORE is the part that stays locus-dependent: a reader who was
+    /// never in the panel must not be moved by dismissing it.
+    /// </remarks>
+    [Fact]
+    public void EscapeDismissesAnOpenPanelEvenWhenTheReaderIsElsewhere() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        var surface = new CanvasSurfaceView { Model = document };
+        using var host = Host(surface);
+
+        document.FilterText = "zeta";
+        host.UpdateLayout();
+        document.Navigator.WhereAmI();
+        host.UpdateLayout();
+        Assert.NotNull(document.WhereAmIText);
+
+        // Put the reader back in the projection with the panel still up.
+        string surviving = document.FilteredOutline[0].NodeId;
+        Assert.NotNull(surface.OutlineForTests.DeliverFocus(surviving));
+        host.UpdateLayout();
+        IInputElement? stayPut = Keyboard.FocusedElement;
+        Assert.False(
+            surface.WhereAmIPanelForTests.IsKeyboardFocusWithin,
+            "the premise is an OPEN panel the reader is NOT in.");
+        Assert.Equal(Visibility.Visible, surface.WhereAmIPanelForTests.Visibility);
+        Drain(document);
+
+        Assert.True(
+            PressKey(surface, Key.Escape, ModifierKeys.None),
+            "an open panel takes the press ahead of the ladder however focus "
+            + "is arranged.");
+        host.UpdateLayout();
+
+        Assert.Null(document.WhereAmIText);
+        Assert.Equal("zeta", document.FilterText);
+        Assert.Empty(Lines(document));
+        // The reader was not moved: dismissing a panel they were not in
+        // must not relocate them.
+        Assert.Same(stayPut, Keyboard.FocusedElement);
+
+        // And the ladder resumes.
+        Assert.True(PressKey(surface, Key.Escape, ModifierKeys.None));
+        Assert.Equal(string.Empty, document.FilterText);
+    });
+
+    /// <summary>
+    /// M1: Right on a card with NO connections still answers — mac
+    /// follows unconditionally and so does this (contract C3, CD-48).
+    /// </summary>
+    [Fact]
+    public void ARightArrowOnAConnectionlessLeafStillAnswers() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("nested.canvas");
+        var surface = new CanvasSurfaceView { Model = document };
+        using var host = Host(surface);
+
+        // A card with no edges at all — the fixture has none.
+        CanvasOutlineRow leaf = document.Outline.First(row => row.NodeId == "free");
+        Assert.Empty(document.NeighborsOf(leaf.NodeId));
+        Assert.NotNull(surface.OutlineForTests.DeliverFocus(leaf.NodeId));
+        host.UpdateLayout();
+        Assert.True(surface.ProjectionHasFocus);
+        Drain(document);
+
+        Assert.True(
+            PressKey(surface, Key.Right, ModifierKeys.None),
+            "the follow chord must CONSUME the key and answer, not leave a "
+            + "connectionless leaf silent.");
+        Assert.Equal(
+            Rendered(new CanvasStatusNote.NoConnection(true, null)), OneLine(document));
+
+        Drain(document);
+        Assert.True(PressKey(surface, Key.Left, ModifierKeys.None));
+        Assert.Equal(
+            Rendered(new CanvasStatusNote.NoConnection(false, null)), OneLine(document));
+
+        // The TABLE's Left/Right stay the grid's cell navigation, and the
+        // leaf answers there through the verb instead.
+        document.Selection.ActiveSurface = CanvasSurfaceKind.Table;
+        host.UpdateLayout();
+        // Re-establish the premise AFTER the switch: the projection
+        // changed under the reader, and without putting the keys back on
+        // the new one this half would pass because R2's gate refused —
+        // not because the table declines the chord.
+        Assert.True(surface.TableForTests.DeliverFocus(leaf.NodeId));
+        host.UpdateLayout();
+        Assert.True(
+            surface.ProjectionHasFocus,
+            "the table never took the keys, so the next assertion would hold for "
+            + "the wrong reason.");
+        Drain(document);
+        Assert.False(
+            PressKey(surface, Key.Right, ModifierKeys.None),
+            "the table's Left/Right belong to the grid's cell navigation.");
+        document.Navigator.FollowConnection(forward: true);
+        Assert.Equal(
+            Rendered(new CanvasStatusNote.NoConnection(true, null)), OneLine(document));
+    });
+
+    /// <summary>
+    /// M1's other half: claiming the arrows leaves every OTHER keyboard
+    /// route to expand/collapse intact — Enter on a group, WPF's own
+    /// numpad +/-, and the `ExpandCollapse` pattern a screen reader
+    /// drives.
+    /// </summary>
+    /// <remarks>
+    /// VERIFIED rather than assumed: the ruling asked whether +/- really
+    /// works on this tree before the contract claimed it as the route.
+    /// </remarks>
+    [Fact]
+    public void ExpandCollapseSurvivesTheArrowsBeingClaimed() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("nested.canvas");
+        var surface = new CanvasSurfaceView { Model = document };
+        using var host = Host(surface);
+        CanvasOutlineRowViewModel group = Assert.Single(
+            surface.OutlineForTests.RootsForTests, row => row.Id == "outer");
+        Assert.NotNull(surface.OutlineForTests.DeliverFocus("outer"));
+        host.UpdateLayout();
+        Assert.True(group.IsExpanded);
+
+        // The focused CONTAINER is where WPF's own tree keys land, and
+        // it is what a real press bubbles up from.
+        UIElement row = Assert.IsType<CanvasOutlineItem>(Keyboard.FocusedElement);
+
+        // 1. Enter on a group toggles it, through the one activation
+        // seam. The canvas STANDS ASIDE for it — with no mode active the
+        // navigator does not consume Enter — and the tree's own bubbling
+        // handler does the work, which is the routing this fact is about.
+        Assert.False(
+            PressKey(surface, Key.Enter, ModifierKeys.None),
+            "with no mode running the canvas must leave Enter to the tree.");
+        RaiseBubblingKey(row, Key.Enter);
+        host.UpdateLayout();
+        Assert.False(group.IsExpanded);
+        RaiseBubblingKey(row, Key.Enter);
+        host.UpdateLayout();
+        Assert.True(group.IsExpanded);
+
+        // 2. WPF's own TreeViewItem keys: numpad minus collapses, plus
+        // expands. The canvas does not claim them, so they still arrive.
+        Assert.False(PressKey(surface, Key.Subtract, ModifierKeys.None));
+        RaiseBubblingKey(row, Key.Subtract);
+        host.UpdateLayout();
+        Assert.False(group.IsExpanded);
+        RaiseBubblingKey(row, Key.Add);
+        host.UpdateLayout();
+        Assert.True(group.IsExpanded);
+
+        // 3. The pattern AT actually drives.
+        AutomationPeer tree = UIElementAutomationPeer.CreatePeerForElement(
+            surface.OutlineForTests.TreeForTests);
+        AutomationPeer groupPeer = tree.GetChildren()
+            .First(child => child.GetName().StartsWith("Group \"", StringComparison.Ordinal));
+        var expand = (IExpandCollapseProvider)groupPeer.GetPattern(
+            PatternInterface.ExpandCollapse);
+        expand.Collapse();
+        host.UpdateLayout();
+        Assert.Equal(ExpandCollapseState.Collapsed, expand.ExpandCollapseState);
+        expand.Expand();
+        host.UpdateLayout();
+        Assert.Equal(ExpandCollapseState.Expanded, expand.ExpandCollapseState);
+    });
+
+    /// <summary>
+    /// M2: a tunnelling chord must not out-rank the control the reader is
+    /// standing on. With a mode active, Enter on the visible CANCEL MODE
+    /// button belongs to the BUTTON (contract C1/C6).
+    /// </summary>
+    [Fact]
+    public void EnterOnAFocusedModeButtonActivatesTheButtonNotTheChord() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        var surface = new CanvasSurfaceView { Model = document };
+        using var host = Host(surface);
+        var committed = false;
+        Assert.True(document.Modes.Enter(new CanvasModeSpec(
+            CanvasMode.Move,
+            new CanvasModeObject.Card("Core question"),
+            () =>
+            {
+                committed = true;
+                return CanvasModeCommitResult.Committed();
+            },
+            () => new CanvasModeRestoration.BackAt("Core question"))));
+        host.UpdateLayout();
+        Assert.True(surface.CancelModeForTests.Focus());
+        host.UpdateLayout();
+        Drain(document);
+
+        // The gate is R2's question — "does a PROJECTION have the keys" —
+        // so the button wins by the natural route rather than by being
+        // named in a list of control types.
+        Assert.False(
+            surface.ProjectionHasFocus,
+            "the premise: the button has the keys, not the projection.");
+        Assert.False(
+            PressKey(surface, Key.Enter, ModifierKeys.None),
+            "the canvas must stand aside so the focused button gets its own key "
+            + "— committing here inverts the user's intent on the exact control "
+            + "M6 exists for.");
+        Assert.False(committed);
+        Assert.True(document.Modes.IsActive);
+
+        // And the button, reached the way WPF reaches it, cancels.
+        RaiseBubblingKey(surface.CancelModeForTests, Key.Enter);
+        host.UpdateLayout();
+        Assert.False(document.Modes.IsActive);
+        Assert.False(committed);
+
+        // The same stand-aside protects the filter field, where Return is
+        // the field's own key on both platforms.
+        Assert.True(document.Modes.Enter(new CanvasModeSpec(
+            CanvasMode.Move,
+            new CanvasModeObject.Card("Core question"),
+            () =>
+            {
+                committed = true;
+                return CanvasModeCommitResult.Committed();
+            },
+            () => new CanvasModeRestoration.BackAt("Core question"))));
+        Assert.True(surface.FilterFieldForTests.Focus());
+        host.UpdateLayout();
+        Assert.False(PressKey(surface, Key.Enter, ModifierKeys.None));
+        Assert.False(committed);
+        Assert.True(document.Modes.IsActive);
     });
 
     /// <summary>
@@ -727,17 +1176,24 @@ public sealed class CanvasNavigatorTests : IDisposable
         var surface = new CanvasSurfaceView { Model = document };
         using var host = Host(surface);
 
-        Assert.Equal(string.Empty, AutomationProperties.GetItemStatus(surface));
+        // Read off the PEER, never off the attached property: the
+        // attached property is the setter side, and PR A's round 8
+        // recorded what happens when only that side is checked — a value
+        // set on an element WPF never peers reaches no client and nothing
+        // fails. The surface is a peered `UserControl`, so the two agree
+        // here; asserting the peer is what makes that a finding rather
+        // than an assumption.
+        AutomationPeer peer = UIElementAutomationPeer.CreatePeerForElement(surface);
+        Assert.Equal(string.Empty, peer.GetItemStatus());
         Assert.Equal(Visibility.Collapsed, surface.CommitModeForTests.Visibility);
 
         Assert.True(document.Modes.Enter(new CanvasModeSpec(
             CanvasMode.Move,
             new CanvasModeObject.Card("Core question"),
-            () => null,
+            () => CanvasModeCommitResult.Committed(),
             () => new CanvasModeRestoration.BackAt("Core question"))));
         host.UpdateLayout();
 
-        AutomationPeer peer = UIElementAutomationPeer.CreatePeerForElement(surface);
         Assert.Equal("Move mode: \"Core question\"", peer.GetItemStatus());
         Assert.Equal(Visibility.Visible, surface.CommitModeForTests.Visibility);
         Assert.Equal(Visibility.Visible, surface.CancelModeForTests.Visibility);
@@ -858,6 +1314,79 @@ public sealed class CanvasNavigatorTests : IDisposable
     });
 
     /// <summary>
+    /// M4's menu arm, end to end (contract C8, CD-41): opening a menu
+    /// moves keyboard focus onto its <c>MenuItem</c>, and the mode must
+    /// SURVIVE that — the shell's own Canvas menu carries Commit Mode and
+    /// Cancel Mode, so a cancel-on-open would kill the two items the user
+    /// opened the menu to reach.
+    /// </summary>
+    /// <remarks>
+    /// The contrast leg is the point: the SAME focus loss to an ordinary
+    /// element outside the canvas cancels. Without it this fact would
+    /// pass on a surface that had simply stopped classifying departures
+    /// at all.
+    /// </remarks>
+    [Fact]
+    public void OpeningAMenuKeepsTheModeAliveAndLeavingTheCanvasCancelsIt() => RunSta(() =>
+    {
+        foreach (bool intoMenu in new[] { true, false })
+        {
+            CanvasDocumentViewModel document = Open("board.canvas");
+            var surface = new CanvasSurfaceView { Model = document };
+            var menu = new Menu();
+            var canvasMenu = new MenuItem { Header = "Canvas" };
+            menu.Items.Add(canvasMenu);
+            var elsewhere = new TextBox { Width = 40 };
+            var root = new DockPanel();
+            DockPanel.SetDock(menu, Dock.Top);
+            DockPanel.SetDock(elsewhere, Dock.Bottom);
+            root.Children.Add(menu);
+            root.Children.Add(elsewhere);
+            root.Children.Add(surface);
+            using var host = Host(root);
+
+            Assert.NotNull(
+                surface.OutlineForTests.DeliverFocus(document.Outline[0].NodeId));
+            host.UpdateLayout();
+            // The premise: the surface really has the keys, so the loss
+            // below is a real departure rather than a no-op.
+            Assert.True(surface.IsKeyboardFocusWithin);
+            Assert.True(document.Modes.Enter(new CanvasModeSpec(
+                CanvasMode.Move,
+                new CanvasModeObject.Card("Core question"),
+                () => CanvasModeCommitResult.Committed(),
+                () => new CanvasModeRestoration.BackAt("Core question"))));
+            Drain(document);
+
+            Assert.True(intoMenu ? canvasMenu.Focus() : elsewhere.Focus());
+            host.UpdateLayout();
+            Assert.False(
+                surface.IsKeyboardFocusWithin,
+                "focus never left the canvas surface, so no departure was classified.");
+
+            if (intoMenu)
+            {
+                Assert.True(
+                    document.Modes.IsActive,
+                    "opening a menu cancelled the mode — the Canvas menu's own "
+                    + "Commit Mode and Cancel Mode items are dead the moment it "
+                    + "opens (contract C8, CD-41).");
+                Assert.True(document.Modes.CanCommitOrCancel);
+                Assert.Empty(Lines(document));
+                _ = document.Modes.Cancel();
+            }
+            else
+            {
+                Assert.False(
+                    document.Modes.IsActive,
+                    "leaving the canvas for another part of the shell must cancel "
+                    + "the mode (t0 §2 M4).");
+                Assert.NotEmpty(Lines(document));
+            }
+        }
+    });
+
+    /// <summary>
     /// The boundary question is the PROJECTION's own rows, not core's
     /// reading order: a connection row under the selected card is a
     /// reading stop the tree visits (contract A11), so the last CARD is
@@ -959,6 +1488,25 @@ public sealed class CanvasNavigatorTests : IDisposable
         };
         surface.RaiseEvent(args);
         return args.Handled;
+    }
+
+    /// <summary>
+    /// Raise a BUBBLING KeyDown on an element — the phase WPF's own
+    /// controls listen in, which is exactly what the canvas's tunnelling
+    /// handler must not out-rank.
+    /// </summary>
+    private static void RaiseBubblingKey(UIElement target, Key key)
+    {
+        var args = new KeyEventArgs(
+            Keyboard.PrimaryDevice,
+            PresentationSource.FromVisual(target)
+                ?? throw new InvalidOperationException("the element is not in a window."),
+            0,
+            key)
+        {
+            RoutedEvent = Keyboard.KeyDownEvent,
+        };
+        target.RaiseEvent(args);
     }
 
     private static HostedWindow Host(UIElement content)

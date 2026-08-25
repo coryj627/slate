@@ -18,7 +18,7 @@ internal enum CanvasFocusDeparture
     TabSwitch,
 
     /// <summary>Keyboard focus left the canvas surface for another part
-    /// of the shell — another pane, the sidebar, the menu bar.</summary>
+    /// of the shell — another pane, the sidebar, the files tree.</summary>
     PaneFocus,
 
     /// <summary>The window itself lost activation.</summary>
@@ -28,6 +28,23 @@ internal enum CanvasFocusDeparture
     /// this tab — the command palette, Quick Open, the search overlay, a
     /// sheet. The canvas is still the tab underneath.</summary>
     ModalOverlay,
+
+    /// <summary>
+    /// Focus moved into an open MENU — the menu bar, a submenu, or a
+    /// row's context menu.
+    /// </summary>
+    /// <remarks>
+    /// The same fact as <see cref="ModalOverlay"/> one surface over, and
+    /// it earns its own name because the failure it prevents is
+    /// self-inflicted: the shell's own Canvas menu carries Commit Mode
+    /// and Cancel Mode, so a menu that cancelled the mode on OPENING
+    /// would kill its own two items before the pointer reached them.
+    /// PR E's and PR F's per-row context menus are the M6 visible
+    /// controls for every mode verb and inherit the identical
+    /// requirement — which is why this is an arm of the table rather
+    /// than a condition at one site (CD-41).
+    /// </remarks>
+    MenuOpen,
 }
 
 /// <summary>
@@ -63,16 +80,55 @@ internal enum CanvasEscapeRung
 /// instructions (t0 §2 M1).</param>
 /// <param name="Object">What the mode acts on — one titled card, or a
 /// count.</param>
-/// <param name="OnCommit">The commit side effect. Returns the
-/// confirmation EVENT (t0 §1.3), or null to stay silent because the
-/// action announces for itself.</param>
+/// <param name="OnCommit">The commit side effect. Returns whether it
+/// APPLIED, and the confirmation event (t0 §1.3) when it has one of its
+/// own to speak.</param>
 /// <param name="OnCancel">The cancel side effect (restore prior state).
 /// Returns what was put back, which core phrases.</param>
 internal sealed record CanvasModeSpec(
     CanvasMode Mode,
     CanvasModeObject Object,
-    Func<CanvasA11yEvent?> OnCommit,
+    Func<CanvasModeCommitResult> OnCommit,
     Func<CanvasModeRestoration> OnCancel);
+
+/// <summary>
+/// What a mode's commit effect did (t0 §2 M2).
+/// </summary>
+/// <remarks>
+/// <para>
+/// M2 was modelled as infallible and it is not. A commit can be REFUSED
+/// — the canvas went degraded or lost its handle mid-mode, the funnel's
+/// admission says no — and mac keeps the mode alive when that happens:
+/// its container checks <c>admitCanvasMutation</c> BEFORE calling
+/// <c>commit()</c> and consumes the key with the refusal, leaving the
+/// transient state intact so the user can fix the problem or cancel.
+/// </para>
+/// <para>
+/// Modelled as an OUTCOME rather than as mac's call-site pre-gate on
+/// purpose: a pre-gate has to be re-implemented at every entry point —
+/// the key, the header button, the palette row, the menu item — and the
+/// one that forgets loses the user's work silently. Here the machine
+/// cannot clear the stack for an effect that did not apply.
+/// </para>
+/// <para>
+/// A refusal announces for ITSELF. The controller has no sentence for
+/// it: which refusal it is (degraded, detached, conflicted) is the
+/// effect's knowledge, and inventing one here would be host prose.
+/// </para>
+/// </remarks>
+internal readonly record struct CanvasModeCommitResult(
+    bool Applied, CanvasA11yEvent? Confirmation)
+{
+    /// <summary>The effect applied. <paramref name="confirmation"/> is
+    /// the t0 §1.3 sentence, or null when the action announces for
+    /// itself.</summary>
+    internal static CanvasModeCommitResult Committed(
+        CanvasA11yEvent? confirmation = null) => new(true, confirmation);
+
+    /// <summary>The effect REFUSED: the mode and its transient state
+    /// survive, and the effect has already said why.</summary>
+    internal static CanvasModeCommitResult Refused() => new(false, null);
+}
 
 /// <summary>
 /// W6-1 PR C (#745): the canvas mode stack — t0 §2 M1–M7, and the mac
@@ -115,6 +171,29 @@ internal sealed class CanvasModeController : BindableBase
     private readonly Action<CanvasA11yEvent> _announce;
     private readonly List<(CanvasEscapeRung Rung, Func<bool> Consume)> _rungs = [];
     private CanvasModeSpec? _active;
+
+    /// <summary>True while a commit effect is running — the window in
+    /// which the stack must not be transitioned by anybody else (M2's
+    /// one outcome).</summary>
+    private bool _committing;
+
+    /// <summary>Set by <see cref="Shutdown"/>. The stack is TERMINAL from
+    /// then on: no mode may be entered, committed or cancelled, and
+    /// nothing is announced about it.</summary>
+    private bool _retired;
+
+    /// <summary>
+    /// A focus departure raised from inside a commit effect, held until
+    /// the commit's outcome is known.
+    /// </summary>
+    /// <remarks>
+    /// ONE slot, latest-wins: an effect that provokes two departures has
+    /// still only left the canvas once as far as M4 is concerned, and
+    /// queueing them would cancel a mode that a later arm already
+    /// resolved. The same shape the announcer's coalescer takes, for the
+    /// same reason.
+    /// </remarks>
+    private CanvasFocusDeparture? _deferredDeparture;
 
     public CanvasModeController(Action<CanvasA11yEvent> announce)
     {
@@ -170,6 +249,18 @@ internal sealed class CanvasModeController : BindableBase
     public bool Enter(CanvasModeSpec spec)
     {
         ArgumentNullException.ThrowIfNull(spec);
+        if (_retired)
+        {
+            // TERMINAL, and SILENT — which is not the never-silent table
+            // being broken, it is that table's precondition being absent.
+            // C4 answers a verb the user invoked on a canvas they are
+            // reading; this document has no surface, its announcer is
+            // already shut (so a sentence composed here is the A5
+            // `Debug.Fail`), and its property channel is detached, so
+            // there is nobody to tell and nothing true to say. The
+            // refusal is the return value, for the caller that asked.
+            return false;
+        }
         if (_active is { } current)
         {
             _announce(new CanvasA11yEvent.CanvasModeRejected(current.Mode));
@@ -180,34 +271,185 @@ internal sealed class CanvasModeController : BindableBase
         return true;
     }
 
-    /// <summary>M2 commit — Enter, the header's Commit button, or
-    /// <c>slate.canvas.commitMode</c>. False when no mode was
-    /// active.</summary>
+    /// <summary>
+    /// M2 commit — Enter, the header's Commit button, or
+    /// <c>slate.canvas.commitMode</c>.
+    /// </summary>
+    /// <returns>
+    /// Whether the mode ENDED. False means one of two things and the
+    /// caller usually wants neither distinguished: no mode was active, or
+    /// the effect REFUSED and the mode is still up with its transient
+    /// state intact. The one caller that must tell them apart is the
+    /// Enter chord, which asks <see cref="IsActive"/> first so it can
+    /// consume the key either way.
+    /// </returns>
     public bool Commit()
     {
-        if (_active is not { } spec)
+        if (_retired || _active is not { } spec || _committing)
         {
             return false;
         }
-        // Cleared BEFORE the side effect runs: a commit that announces
-        // through a path which asks whether a mode is active (Where-am-I
-        // does) must see the stack as it will be, not as it was.
-        Active = null;
-        if (spec.OnCommit() is { } confirmation)
+        // THE TRANSITION IS CLOSED while the effect runs (t0 §2 M2's one
+        // outcome). The effect is arbitrary host code — it opens a sheet,
+        // it moves focus, it lets the shell switch tabs — and any of that
+        // reaches this controller SYNCHRONOUSLY. Without the guard a
+        // departure raised from inside the effect re-entered `Cancel`,
+        // cleared the stack, announced a cancellation, and then this
+        // method carried on and announced the confirmation too: two
+        // outcomes for one press, and a final state that is neither.
+        _committing = true;
+        try
         {
-            _announce(confirmation);
+            // The effect runs FIRST and the stack is cleared only if it
+            // APPLIED: a refused commit keeps the mode and its transient
+            // state, so the user can fix what refused it or cancel out
+            // with the restoration intact. Clearing first would drop a
+            // move that was never made, with neither a commit nor a
+            // restoration to show for it.
+            CanvasModeCommitResult result = spec.OnCommit();
+            if (result.Applied)
+            {
+                // Cleared BEFORE the confirmation is announced: a
+                // sentence that asks whether a mode is active
+                // (Where-am-I does) must see the stack as it will be,
+                // not as it was.
+                Active = null;
+                if (result.Confirmation is { } confirmation)
+                {
+                    // FALLIBLE, like everything else in here: the render
+                    // goes through core. It sits INSIDE the try for that
+                    // reason — an announcement that faulted after the
+                    // outcome applied used to skip the drain entirely and
+                    // leave the slot loaded for the next commit.
+                    _announce(confirmation);
+                }
+            }
+            // A refusal is silent HERE, not silent to the user: which
+            // refusal it is is the effect's knowledge, so the effect said
+            // it.
+            return result.Applied;
         }
-        return true;
+        finally
+        {
+            // ONE exit, and every exit passes through it: applied,
+            // refused, and thrown. The transition reopens — a controller
+            // stuck in it would refuse every later commit and cancel,
+            // which is worse than what the guard prevents — and the
+            // departure the effect provoked is then applied to the
+            // RESULT, which is the M4-correct order: a commit that
+            // APPLIED leaves no mode for it to cancel and it is moot,
+            // while a REFUSED one (a throw included) keeps a mode, and a
+            // mode may not survive a focus departure.
+            //
+            // This runs BEFORE an exception propagates, which is what
+            // makes `finally` right here. Round 2 rejected a finally that
+            // only REOPENED the transition and left the drain on the
+            // success path, so a throw skipped it and the slot cancelled
+            // a later commit's mode. The objection was to the missing
+            // drain, never to `finally`.
+            _committing = false;
+            DrainDeferredDeparture();
+        }
     }
 
+    /// <summary>
+    /// Apply a departure held across a commit, if there is one. Drained
+    /// on EVERY exit from the transition — applied, refused, thrown, and
+    /// teardown — because a slot that survives its commit cancels the
+    /// NEXT one's mode instead.
+    /// </summary>
+    /// <remarks>
+    /// TOTAL by construction, because it is called from a `finally`: a
+    /// restoration or an announcement that faults in here would REPLACE
+    /// the exception the caller was already propagating, and the original
+    /// failure — the one worth reporting — would vanish. The departure's
+    /// own outcome is not worth that, so it is logged and the unwind
+    /// continues (the shell's log-and-continue pattern). The slot is
+    /// emptied BEFORE the departure runs, so a fault cannot leave it
+    /// loaded either.
+    /// </remarks>
+    private void DrainDeferredDeparture()
+    {
+        if (_deferredDeparture is not { } departure)
+        {
+            return;
+        }
+        _deferredDeparture = null;
+        try
+        {
+            _ = HandleFocusDeparture(departure);
+        }
+        catch (Exception exception) when (
+            exception is not OutOfMemoryException
+                and not StackOverflowException
+                and not AccessViolationException)
+        {
+            HostLog.Write(HostDiagnosticEvent.CanvasModeDepartureFailed, exception);
+        }
+    }
+
+    /// <summary>
+    /// Teardown (contract C7): the document is being retired.
+    /// </summary>
+    /// <remarks>
+    /// Ordered so the announcements still reach the user: the deferred
+    /// slot drains FIRST — a departure held across a failed commit owes a
+    /// restoration sentence, and the caller silences the funnel straight
+    /// after this returns — then the tab's own departure ends whatever
+    /// mode is left (M4's last case), and the slot is cleared so nothing
+    /// stale can outlive the object holding it.
+    ///
+    /// The transition is FORCED closed first. Teardown can reach here
+    /// from inside a commit effect — the shell retires the tab while the
+    /// effect is running — and a drain that still deferred would put the
+    /// departure straight back in the slot, then clear it: the mode would
+    /// outlive the document with its restoration never spoken. Nothing
+    /// will return to <see cref="Commit"/> to close the transition, so
+    /// closing it here is the truth rather than a workaround.
+    /// </remarks>
+    internal void Shutdown()
+    {
+        _committing = false;
+        try
+        {
+            DrainDeferredDeparture();
+            _ = HandleFocusDeparture(CanvasFocusDeparture.TabSwitch);
+        }
+        finally
+        {
+            // The slot is empty when this returns, whatever happened —
+            // including a restoration that faulted on the way out. A
+            // document being retired must not leave a departure behind
+            // for a later object to act on.
+            _deferredDeparture = null;
+            // TERMINAL from here, and the two halves are the document's:
+            // every verb refuses, and the property channel is detached so
+            // a retained controller cannot reach a surface either. A
+            // controller that merely had no mode would have accepted the
+            // next `Enter` — from a menu item on a closed tab, from a
+            // palette row the shell still had registered — and run its
+            // effect against a document whose handle is gone.
+            _retired = true;
+            _active = null;
+            _rungs.Clear();
+        }
+    }
+
+    /// <summary>Retirement's other half, called by the document once its
+    /// last sentence has been spoken (contract C7).</summary>
     /// <summary>M2 cancel — Escape's first rung, the header's Cancel
     /// button, or <c>slate.canvas.cancelMode</c>. False when no mode was
     /// active, which is what lets the Esc ladder fall through to the next
     /// rung.</summary>
     public bool Cancel()
     {
-        if (_active is not { } spec)
+        if (_retired || _active is not { } spec || _committing)
         {
+            // Refused rather than deferred while a commit is in flight:
+            // a direct cancel from inside a commit effect is a caller
+            // error, not a race, and the commit already owns this press's
+            // outcome. The DEPARTURE path defers instead, because M4 must
+            // still be honoured once the outcome is known.
             return false;
         }
         Active = null;
@@ -221,16 +463,17 @@ internal sealed class CanvasModeController : BindableBase
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <see cref="CanvasFocusDeparture.ModalOverlay"/> is the ONE arm
-    /// that keeps the mode alive, and it is a recorded divergence from
-    /// t0 §2 M4's literal list (contract C8, CD-41). t0 names the palette
-    /// among the departures; the mac controller excludes it deliberately
-    /// after red-team #521, because Commit Mode, Cancel Mode and the
-    /// resize presets ARE palette commands — cancelling on palette open
-    /// makes three registered verbs unreachable and contradicts M6's own
-    /// "never depend on the keyboard-only path". The exclusion is one
-    /// named arm of one total switch so the decision can be reversed in
-    /// one place.
+    /// Two arms KEEP the mode alive, and both are the same recorded
+    /// divergence from t0 §2 M4's literal list (contract C8, CD-41).
+    /// t0 names the palette among the departures; the mac controller
+    /// excludes it deliberately after red-team #521, because Commit Mode,
+    /// Cancel Mode and the resize presets ARE palette commands —
+    /// cancelling on palette open makes three registered verbs
+    /// unreachable and contradicts M6's own "never depend on the
+    /// keyboard-only path". <see cref="CanvasFocusDeparture.MenuOpen"/>
+    /// is the same argument for the surface a MENU is: this shell's own
+    /// Canvas menu carries those two verbs, and PR E/F's context menus
+    /// carry every mode verb.
     /// </para>
     /// <para>
     /// Every other arm cancels. The switch is total over the enum, and
@@ -240,18 +483,38 @@ internal sealed class CanvasModeController : BindableBase
     /// </remarks>
     public bool HandleFocusDeparture(CanvasFocusDeparture departure)
     {
+        if (_retired)
+        {
+            return false;
+        }
+        if (_committing && CancelsFor(departure))
+        {
+            // DEFERRED, not applied: a commit effect is mid-flight and it
+            // owns this press's outcome (M2). The departure is honoured
+            // the moment that outcome is known — see `Commit`.
+            _deferredDeparture = departure;
+            return false;
+        }
+        return CancelsFor(departure) && Cancel();
+    }
+
+    /// <summary>The M4 table itself, split out so the deferral above and
+    /// the application below cannot drift apart.</summary>
+    private static bool CancelsFor(CanvasFocusDeparture departure)
+    {
         bool cancels = departure switch
         {
             CanvasFocusDeparture.TabSwitch => true,
             CanvasFocusDeparture.PaneFocus => true,
             CanvasFocusDeparture.WindowDeactivated => true,
             CanvasFocusDeparture.ModalOverlay => false,
+            CanvasFocusDeparture.MenuOpen => false,
             _ => throw new UnreachableException(
                 $"CanvasFocusDeparture.{departure} has no M4 answer. The mode "
                 + "stack's focus-departure rule is a closed table (contract C7); "
                 + "a new departure is a decision, not a default."),
         };
-        return cancels && Cancel();
+        return cancels;
     }
 
     /// <summary>
@@ -270,6 +533,14 @@ internal sealed class CanvasModeController : BindableBase
     public void RegisterRung(CanvasEscapeRung rung, Func<bool> consume)
     {
         ArgumentNullException.ThrowIfNull(consume);
+        if (_retired)
+        {
+            // A rung registered after retirement is a closure over a dead
+            // surface, kept alive by a controller nobody will ask again.
+            // Refused silently for `Enter`'s reason: there is no reader to
+            // tell and nothing true to say.
+            return;
+        }
         if (rung is CanvasEscapeRung.Mode or CanvasEscapeRung.WorkspaceTab)
         {
             throw new ArgumentOutOfRangeException(
@@ -299,6 +570,18 @@ internal sealed class CanvasModeController : BindableBase
     /// </summary>
     public CanvasEscapeRung HandleEscape()
     {
+        // TERMINAL after retirement, and by construction rather than by
+        // a gate here (contract C7). Codex round 7 found this and
+        // `RegisterRung` still open after the terminal state landed, and
+        // the hazard is running a rung whose closure holds a surface that
+        // is gone — the filter's clear, the panel's dismissal. What
+        // closes it is that `Shutdown` EMPTIES the ladder and
+        // `RegisterRung` refuses afterwards, so there is nothing left to
+        // run; `Cancel` below is gated too, so rung 1 refuses like every
+        // other verb. A third check here would answer the same
+        // `WorkspaceTab` this already answers, which is a guard with no
+        // power — and this task has spent five rounds learning what those
+        // cost.
         if (Cancel())
         {
             return CanvasEscapeRung.Mode;

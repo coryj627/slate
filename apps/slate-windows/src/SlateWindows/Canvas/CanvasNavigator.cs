@@ -42,8 +42,12 @@ internal interface ICanvasSurfacePresenter
     /// </remarks>
     bool CanMoveWithinProjection(bool forward);
 
-    /// <summary>Put keyboard focus on a row, silently (contract C12).</summary>
-    void FocusRow(string nodeId);
+    /// <summary>Put keyboard focus on a row, silently (contract C12).
+    /// False when the row could not take it — gone, filtered out, or
+    /// unrealizable — so a caller with nowhere else to put the reader
+    /// knows to fall back rather than leaving focus on the window
+    /// root.</summary>
+    bool FocusRow(string nodeId);
 
     /// <summary>Put keyboard focus back on the showing projection.</summary>
     void FocusProjection();
@@ -159,8 +163,9 @@ internal sealed class CanvasNavigator
     /// Deliver one key press from the canvas surface's tunnelling
     /// handler. Returns whether the press was consumed; an unconsumed
     /// press keeps its ordinary meaning for whatever has focus, which is
-    /// what lets the tree keep Right/Left expand-collapse and the grid
-    /// keep cell navigation.
+    /// what lets the grid keep its cell navigation, a focused button keep
+    /// its Enter, and the tree keep the numpad <c>+</c>/<c>-</c> the
+    /// arrows no longer stand in for (CD-48).
     /// </summary>
     internal bool HandleKey(Key key, ModifierKeys modifiers, ICanvasSurfacePresenter presenter)
     {
@@ -422,7 +427,13 @@ internal sealed class CanvasNavigator
                 CanvasFailedAction.WhereAmI, detail));
             return;
         }
+        // ONE view, and BOTH numbers read on this frame: the filter is
+        // SYNCHRONOUS here (contract C10 interim), so the rows, the count
+        // and the outline they are over are one dispatcher turn's worth
+        // of state and cannot describe two canvases.
         CanvasFilterView view = _document.Filter;
+        uint shown = (uint)view.Rows.Count;
+        uint total = (uint)_document.Outline.Count;
         var readback = new CanvasA11yEvent.CanvasWhereAmI(
             KindLabel: context.Kind,
             Title: context.Title,
@@ -435,9 +446,13 @@ internal sealed class CanvasNavigator
             ColorName: context.ColorName,
             Marked: _document.Selection.IsMarked(nodeId),
             Mode: _document.Modes.Active?.Mode,
+            // NARROWED, not "a needle is in the field" (mac's key): a
+            // clause built from rows nothing narrowed would read
+            // "9 of 9 shown" and claim a match nobody made, which is the
+            // one thing C10's invariant forbids. Recorded as a
+            // micro-divergence in C11.
             Filter: view.Narrowed
-                ? new CanvasFilterState.Active(
-                    (uint)view.Rows.Count, (uint)_document.Outline.Count)
+                ? new CanvasFilterState.Active(shown, total)
                 : new CanvasFilterState.Inactive());
         // The panel shows the SAME string the announcement speaks — one
         // render, no second composition (t0 §1.4/§3).
@@ -468,6 +483,8 @@ internal sealed class CanvasNavigator
     public void ClearFilter()
     {
         _document.FilterText = string.Empty;
+        // The widening is synchronous, so this is the canvas now on
+        // screen (contract C10 interim).
         Announce(new CanvasA11yEvent.CanvasFilterCleared((uint)_document.Outline.Count));
     }
 
@@ -505,6 +522,14 @@ internal sealed class CanvasNavigator
     /// one composition, no second opinion about which sentence the state
     /// owes.
     /// </summary>
+    /// <remarks>
+    /// SYNCHRONOUS (contract C10 interim), and the shape follows from
+    /// that: the match runs on this frame, so `Current` has exactly one
+    /// cause — no handle could answer — and it is the cause the state
+    /// mapping already has a sentence for. There is no in-flight frame to
+    /// describe and no failed-query state to distinguish, which is why
+    /// this is two branches rather than four.
+    /// </remarks>
     public string FilterSummaryText()
     {
         CanvasFilterView view = _document.Filter;
@@ -555,13 +580,35 @@ internal sealed class CanvasNavigator
     }
 
     /// <summary>
-    /// Right/Left, with the precedence mac pins: connection-follow when
-    /// the selected card HAS connections, else the projection's own
-    /// meaning. On the outline that is the tree's expand/collapse; on the
-    /// table it is the grid's CELL navigation, which the Table pattern
-    /// depends on — so the follow chord is outline-only there and the
-    /// palette rows are the table's path (contract C3, CD-44).
+    /// Right/Left FOLLOW, unconditionally, on the outline (contract C3,
+    /// CD-48).
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The spec asked for "connection-follow when the selected card has
+    /// connections, else tree semantics, as mac does". Mac does not do
+    /// that: <c>CanvasOutlineView.swift</c> delivers
+    /// <c>canvasFollowConnection</c> unconditionally and returns handled,
+    /// so a connectionless card ANSWERS there ("No outgoing connection.").
+    /// The blend the spec describes was never shipped, and implementing
+    /// it left one keypress on a leaf doing nothing and saying nothing —
+    /// the never-silent rule broken by a precedence nobody had.
+    /// </para>
+    /// <para>
+    /// Expand/collapse stays keyboard-reachable on the tree without
+    /// arrows: Enter on a group toggles it (the activation seam), the
+    /// numpad <c>+</c>/<c>-</c> are WPF's own <c>TreeViewItem</c> keys,
+    /// and the <c>ExpandCollapse</c> pattern is what a screen reader
+    /// drives — all three pinned by
+    /// <c>ExpandCollapseSurvivesTheArrowsBeingClaimed</c>.
+    /// </para>
+    /// <para>
+    /// The TABLE keeps Left/Right for the grid's CELL navigation, which
+    /// the UIA Table pattern depends on and the W4-1 conformance matrix
+    /// asserts; follow there is the palette row, and it answers the same
+    /// way.
+    /// </para>
+    /// </remarks>
     private bool ArrowFollow(bool forward)
     {
         if (_presenter is not
@@ -569,21 +616,55 @@ internal sealed class CanvasNavigator
         {
             return false;
         }
-        if (_document.Selection.Selected is not { } selected)
-        {
-            return false;
-        }
-        // An UNANSWERABLE lookup keeps the arrow's tree meaning rather
-        // than claiming a connection state nothing returned.
-        if (_document.NeighborsIfKnown(selected) is not { Count: > 0 })
-        {
-            return false;
-        }
         FollowConnection(forward);
         return true;
     }
 
-    private bool CommitModeFromKey() => _document.Modes.IsActive && _document.Modes.Commit();
+    /// <summary>
+    /// Enter commits an active mode, and only while a PROJECTION owns the
+    /// keys — rule R2's own question, asked here instead of a list of
+    /// control types (contract C1/C3).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A tunnelling handler runs before the element the reader is
+    /// standing on, so an ungated Enter out-ranked every control on the
+    /// surface: it would have COMMITTED the mode from the visible CANCEL
+    /// MODE button — the user's intent inverted on the exact control M6
+    /// exists for — and from the filter field, where Return is the
+    /// field's own key on both platforms.
+    /// </para>
+    /// <para>
+    /// Gated by asking where focus IS rather than by naming what owns
+    /// Enter, because the list was the brittle half: <c>ComboBox</c>,
+    /// <c>Hyperlink</c>, a templated item part and every control PR E and
+    /// PR F add would each have had to be remembered, and the one that
+    /// was not would re-open this silently. "A projection has the keys"
+    /// is the same question every other bare-key arm already asks, and it
+    /// is closed by construction.
+    /// </para>
+    /// <para>
+    /// Escape stays broad on purpose: cancelling from anywhere in the
+    /// surface is M4-adjacent — no mode may survive without focus — and
+    /// the ladder is the canvas's answer for it everywhere.
+    /// </para>
+    /// <para>
+    /// The key is CONSUMED whether or not the commit applied, because a
+    /// mode was running and Enter belonged to it (mac consumes Return
+    /// with the refusal for the same reason). Letting a refused commit
+    /// fall through would hand the key to whatever is underneath while
+    /// the mode is still up.
+    /// </para>
+    /// </remarks>
+    private bool CommitModeFromKey()
+    {
+        if (_presenter is not { ProjectionHasFocus: true } || !_document.Modes.IsActive)
+        {
+            return false;
+        }
+        _ = _document.Modes.Commit();
+        return true;
+    }
 
     private bool EscapeFromKey() =>
         _document.Modes.HandleEscape() != CanvasEscapeRung.WorkspaceTab;
