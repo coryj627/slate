@@ -2370,6 +2370,21 @@ real menu and a real non-menu focus loss in one fact, so it cannot pass
 on a surface that stopped classifying departures at all;
 mutation-verified by collapsing the arm back into `PaneFocus`.
 
+**Menu-then-elsewhere is not re-classified, and that is the pre-existing
+shape this widens rather than a hole it opens.** `IsKeyboardFocusWithin`
+is already false once focus is in the menu, so a subsequent move from
+the menu to some other part of the shell raises nothing and the mode
+survives a departure that would otherwise have cancelled it. Exactly the
+same has been true of `ModalOverlay` since this arm existed — dismissing
+the palette onto another pane never re-fires either — so `MenuOpen`
+inherits the property rather than introducing it. It is bounded, not
+unbounded: the tab going invisible (`TabSwitch`) and the window losing
+activation (`WindowDeactivated`) are separate triggers that still fire,
+and document retirement cancels outright, so no mode outlives the thing
+it belongs to. Recorded here so a future reviewer reads it as known;
+closing it properly wants a focus-restored trigger, which belongs with
+PR F's real modes rather than a test one.
+
 The `ModalOverlay` arm is a **divergence from t0 §2 M4's literal list**
 and is recorded as CD-41 rather than implemented silently. Reasoning, in
 full: t0 names the palette among the departures; the mac controller
@@ -2497,13 +2512,44 @@ asserted rather than by a hope. The needle's own property change renders
 the field's chrome only — Clear has to appear on the frame the reader
 typed, not when the query returns.
 
+**The body catches what the scheduler's contract says it must.** A
+`bad_node` refusal is an answer; a PANIC-CLASS uniffi exception is not,
+and letting one escape faults the tracked task silently — the single
+route to a permanently stranded filter, where nothing publishes, the
+rows never move, the summary never resolves and the needle sits in the
+field describing nothing. `FilterBody` takes LoadBody's own filter
+(everything but `OutOfMemoryException`, `StackOverflowException` and
+`AccessViolationException`) and
+posts the refusal path instead, so the failure is SPOKEN and the label
+says the same thing. Pinned by
+`APanicClassFilterFailureAnswersInsteadOfStrandingTheFilter`, which
+injects at the query seam (`StructuralQueryFaultForTests`, the
+`FailIdentityQueryForTests` idiom one subsystem over) because nothing a
+fixture hands the real library makes it panic — with the premise
+asserted first, and recovery asserted after: a failure caches nothing,
+so the next ask answers normally.
+
 **Guarded in the SOURCE** (`TheFilterQueryIsScheduledOffTheDispatcher`),
 because a behavioural fact cannot see it: unit facts run in synchronous
 scheduling mode, where a scheduled body and an inline one are
 indistinguishable by construction, so the thing that regressed would be
-invisible to exactly the tests written for it. The guard asserts
-`canvas_filter` has ONE caller, that it is the scheduler body, and that
-the body is invoked only inside a `StartWork(...)` argument.
+invisible to exactly the tests written for it. The guard walks UP from
+each call site to its enclosing MEMBER rather than down from the
+methods — the bug lived in a property GETTER, which a
+`MethodDeclarationSyntax` scan cannot see, so that scan would have
+reported the one scheduler body and passed while a "fast path" in the
+getter put the query back on the dispatcher. It asserts `canvas_filter`
+has exactly one caller, names every caller it found when it does not,
+and asserts the body is invoked only inside a `StartWork(...)` argument.
+
+**A reload with an active needle announces its new count, deliberately.**
+The re-ask is not silent bookkeeping: the rows changed under the user
+while they were filtering, and the accurate number is information they
+need — the alternative is a surface that quietly holds a different set
+than the one last spoken. It is safe to say because it rides the FILTER
+coalescing class, which is separate from the `navigation` class the
+degraded-load line and every movement use (0a-8), so a reload's count
+cannot collapse the load's own sentence or be collapsed by it.
 
 **C11 — Where-am-I is one render, spoken and shown.** The navigator
 builds one `CanvasWhereAmI` event from core's `canvas_where_am_i` plus

@@ -103,15 +103,21 @@ internal sealed record CanvasFilterView(
 /// on that path (contract A1); the workspace registry owns creation and
 /// shutdown.
 ///
-/// Threading (contract A17), stated as it is: the LOAD and the CLOSE run
-/// inside <see cref="PanelWorkScheduler.StartWork"/> bodies, marshal
-/// their publications through <c>Post</c> and re-check the generation;
-/// the per-node DETAIL reads (<see cref="NeighborsOf"/>,
+/// Threading (contract A17), stated as it is: the LOAD, the CLOSE and
+/// the FILTER MATCH run inside <see cref="PanelWorkScheduler.StartWork"/>
+/// bodies, marshal their publications through <c>Post</c> and re-check
+/// the generation; the per-node DETAIL reads (<see cref="NeighborsOf"/>,
 /// <see cref="NodeTextOf"/>) and the activation identity read are
-/// synchronous UI-thread calls. Every one of them — scheduled or not —
-/// holds <c>_ffiLock</c> for its FFI section, which is what makes a
-/// handle replacement unable to race a read. The handle is closed
-/// exactly once: on replacement inside the load body, or on shutdown.
+/// synchronous UI-thread calls. The line between the two lists is
+/// WHOLE-MODEL versus per-node: a whole-model read can contend with a
+/// load holding the lock across <c>open_canvas</c> plus three
+/// projections, and the filter's match is the third such read (W6-1
+/// PR C, contract C10) — it used to run in a property getter on the
+/// dispatcher, which is exactly the stall this convention exists to
+/// prevent. Every one of them — scheduled or not — holds
+/// <c>_ffiLock</c> for its FFI section, which is what makes a handle
+/// replacement unable to race a read. The handle is closed exactly once:
+/// on replacement inside the load body, or on shutdown.
 ///
 /// Canvas tabs are never dirty: mutations write through on commit
 /// (PR E), so the U1 close gate is bypassed for canvas tabs
@@ -137,6 +143,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     private string? _whereAmIText;
     private int _filterFocusToken;
     private int _filterGeneration;
+    private bool _filterAnswerFailed;
     private (string Needle, IReadOnlySet<string> Ids)? _filterMatchCache;
 
     /// <summary>Row lookup by node id — the outline is walked by id from
@@ -697,6 +704,21 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// handle at all, or the model refused the id (<c>bad_node</c>) —
     /// and the caller decides which sentence that owes.
     /// </summary>
+    /// <summary>
+    /// Failure injection for the one branch no fixture can drive: a
+    /// PANIC-CLASS exception out of a structural query.
+    /// </summary>
+    /// <remarks>
+    /// The `CanvasMediaPolicy.FailIdentityQueryForTests` idiom, one
+    /// subsystem over, and it exists for the same reason: a `bad_node`
+    /// refusal is reachable with a bad id, but nothing a test can hand
+    /// the real library makes it PANIC — and the panic path is the one
+    /// that used to fault a scheduler task silently. Null in production
+    /// and asserted so by the fact that uses it, which sets it inside a
+    /// `try`/`finally`.
+    /// </remarks>
+    internal static Func<Exception>? StructuralQueryFaultForTests { get; set; }
+
     private bool TryQuery<T>(Func<ulong, T> read, T fallback, out T value)
     {
         try
@@ -707,6 +729,13 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 {
                     value = fallback;
                     return false;
+                }
+                // Injected HERE — after the handle check, immediately
+                // before the call — so it reproduces "the query threw"
+                // rather than "there was nothing to ask".
+                if (StructuralQueryFaultForTests is { } fault)
+                {
+                    throw fault();
                 }
                 value = read(handle);
                 return true;
@@ -777,6 +806,9 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     private void RefreshFilter()
     {
         int generation = Interlocked.Increment(ref _filterGeneration);
+        // A new ask is pending, so whatever the LAST one did is no longer
+        // this needle's story.
+        _filterAnswerFailed = false;
         if (!FilterActive)
         {
             _filterMatchCache = null;
@@ -796,10 +828,31 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
 
     private void FilterBody(string needle, int generation, int documentGeneration)
     {
-        bool answered = TryQuery<IReadOnlyList<string>>(
-            handle => _session.CanvasFilter(handle, needle),
-            [],
-            out IReadOnlyList<string> matched);
+        bool answered;
+        IReadOnlyList<string> matched;
+        try
+        {
+            answered = TryQuery<IReadOnlyList<string>>(
+                handle => _session.CanvasFilter(handle, needle),
+                [],
+                out matched);
+        }
+        // LoadBody's contract, for LoadBody's reason (m6): the scheduler's
+        // rule is that bodies catch their own failures, and a panic-class
+        // uniffi exception escaping here faults the tracked task SILENTLY.
+        // That is the only route to a permanently stranded filter — no
+        // publish, so the rows never move, the summary never resolves and
+        // the needle sits in the field describing nothing, with no
+        // sentence anywhere saying why. Anything the process cannot
+        // survive still propagates.
+        catch (Exception exception) when (
+            exception is not OutOfMemoryException
+                and not StackOverflowException
+                and not AccessViolationException)
+        {
+            answered = false;
+            matched = [];
+        }
         IReadOnlySet<string> ids = matched.ToHashSet(StringComparer.Ordinal);
         Post(() =>
         {
@@ -808,6 +861,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             {
                 return;
             }
+            _filterAnswerFailed = !answered;
             if (answered)
             {
                 _filterMatchCache = (needle, ids);
@@ -892,6 +946,19 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             return new CanvasFilterView(_outline, Narrowed: false, Current: false, null);
         }
     }
+
+    /// <summary>
+    /// True when the last query for the CURRENT needle came back with
+    /// nothing — it ran and failed, as distinct from not having run yet.
+    /// </summary>
+    /// <remarks>
+    /// One bit, because the two are different facts the reader is owed
+    /// different answers about: a query still in flight is a frame of
+    /// latency and says nothing, while a query that FAILED has to say so
+    /// or the summary sits blank forever with a needle in the field
+    /// above it. Reset the moment a new ask is scheduled.
+    /// </remarks>
+    internal bool FilterAnswerFailed => _filterAnswerFailed;
 
     /// <summary>The outline rows the surfaces display.</summary>
     public IReadOnlyList<CanvasOutlineRow> FilteredOutline => Filter.Rows;

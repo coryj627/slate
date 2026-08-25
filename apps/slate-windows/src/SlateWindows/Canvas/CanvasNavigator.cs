@@ -513,15 +513,30 @@ internal sealed class CanvasNavigator
     /// keystroke and its answer.
     /// </para>
     /// <para>
-    /// The two causes of a non-current view get different answers, and
-    /// that is the whole of why this is not one line. A document that
-    /// CANNOT answer says so — the state's own sentence, mac's behaviour.
-    /// A query merely IN FLIGHT says nothing new: the previous answer is
-    /// still on screen and its count still describes it, so the label
-    /// simply lags by a frame the way every async surface does. Before
-    /// the first answer there is no summary at all rather than a
-    /// "9 of 9 cards match" that would claim a match nobody made.
+    /// The causes of a non-current view get different answers, and that
+    /// is the whole of why this is not one line, in this order:
     /// </para>
+    /// <list type="number">
+    /// <item><description>a document that CANNOT answer says so — the
+    /// state's own sentence, mac's behaviour — and it says so IN
+    /// PREFERENCE to a stale memo, because rows matched against an older
+    /// needle are not an answer to this one and C10's rule is that a
+    /// document which cannot answer says so on the LABEL too, not only in
+    /// the announcement;</description></item>
+    /// <item><description>a query that RAN AND FAILED with the document
+    /// otherwise able to answer keeps the honest "not now" — the same
+    /// sentence <see cref="AnnounceFilterCount"/> speaks, from the same
+    /// fallback mac uses when a handle goes stale inside the call. Without
+    /// this branch a failed match leaves the region blank forever with a
+    /// needle in the field above it;</description></item>
+    /// <item><description>a query merely IN FLIGHT says nothing new: the
+    /// previous answer is still on screen and its count still describes
+    /// it, so the label lags by a frame the way every async surface
+    /// does;</description></item>
+    /// <item><description>and before the FIRST answer there is no summary
+    /// at all rather than a "9 of 9 cards match" that would claim a match
+    /// nobody made.</description></item>
+    /// </list>
     /// </remarks>
     public string? FilterSummaryText()
     {
@@ -530,12 +545,21 @@ internal sealed class CanvasNavigator
             return null;
         }
         CanvasFilterView view = _document.Filter;
-        if (view.Current || view.Narrowed)
+        if (view.Current)
         {
             return CanvasPhrase.FilterSummary(view.Rows.Count, _document.Outline.Count);
         }
-        return _document.ReadRefusal is { } note
-            ? CanvasAnnouncer.RenderLabel(new CanvasA11yEvent.CanvasStatus(note))
+        if (_document.ReadRefusal is { } note)
+        {
+            return CanvasAnnouncer.RenderLabel(new CanvasA11yEvent.CanvasStatus(note));
+        }
+        if (_document.FilterAnswerFailed)
+        {
+            return CanvasAnnouncer.RenderLabel(new CanvasA11yEvent.CanvasStatus(
+                new CanvasStatusNote.Reopening()));
+        }
+        return view.Narrowed
+            ? CanvasPhrase.FilterSummary(view.Rows.Count, _document.Outline.Count)
             : null;
     }
 

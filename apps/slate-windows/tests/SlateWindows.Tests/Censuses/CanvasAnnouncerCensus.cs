@@ -411,20 +411,34 @@ public sealed class CanvasAnnouncerCensus
     {
         CSharpSource source = CSharpSource.Load("Canvas", "CanvasDocumentViewModel.cs");
 
-        MethodDeclarationSyntax[] callers = source.Root
+        // Walked UP from each call site to its enclosing MEMBER, not down
+        // from the methods: the bug this guards lived in a PROPERTY
+        // GETTER, and a scan that enumerated `MethodDeclarationSyntax`
+        // could not see one — it would have reported the single scheduler
+        // body and passed while a "fast path" in the getter put the query
+        // straight back on the dispatcher. `MemberDeclarationSyntax`
+        // covers properties, constructors and field initialisers too, so
+        // "one caller" means one caller.
+        string[] callers = source.Root
             .DescendantNodes()
-            .OfType<MethodDeclarationSyntax>()
-            .Where(method => method.DescendantNodes()
-                .OfType<MemberAccessExpressionSyntax>()
-                .Any(access => access.Name.Identifier.ValueText == "CanvasFilter"))
+            .OfType<MemberAccessExpressionSyntax>()
+            .Where(access => access.Name.Identifier.ValueText == "CanvasFilter")
+            .Select(access => access.FirstAncestorOrSelf<MemberDeclarationSyntax>())
+            .Select(NameOfMember)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(name => name, StringComparer.Ordinal)
             .ToArray();
 
-        MethodDeclarationSyntax caller = Assert.Single(callers);
+        // Compared as a SET with the members in the message: a bare
+        // `Assert.Single` reports "the collection contained 2 items" and
+        // leaves the reader to go find which member re-introduced the
+        // call, which is exactly the thing a guard is for.
         Assert.True(
-            caller.Identifier.ValueText == "FilterBody",
-            $"`canvas_filter` is called from `{caller.Identifier.ValueText}`. The "
-            + "match is a whole-model read and belongs in a scheduler body "
-            + "(contract C10/A17), not wherever a property getter happens to run.");
+            callers.Length == 1 && callers[0] == "FilterBody",
+            "`canvas_filter` must be called from exactly one member, the scheduler "
+            + "body — it is a whole-model read and belongs off the dispatcher "
+            + "(contract C10/A17), not wherever a property getter happens to run. "
+            + $"Callers found: {string.Join(", ", callers)}.");
 
         // …and that body is reached only through the scheduler. A method
         // named FilterBody that somebody also calls directly would put
@@ -445,6 +459,23 @@ public sealed class CanvasAnnouncerCensus
             "FilterBody is invoked outside a StartWork(...) argument, so the filter "
             + "query is back on the dispatcher holding the FFI lock.");
     }
+
+    /// <summary>
+    /// The enclosing member's name, whatever KIND of member it is — a
+    /// call in a property getter must report the property, or the scan
+    /// above would name nothing and read as "no caller".
+    /// </summary>
+    private static string NameOfMember(MemberDeclarationSyntax? member) => member switch
+    {
+        MethodDeclarationSyntax method => method.Identifier.ValueText,
+        PropertyDeclarationSyntax property => property.Identifier.ValueText,
+        ConstructorDeclarationSyntax constructor => constructor.Identifier.ValueText,
+        IndexerDeclarationSyntax => "this[]",
+        FieldDeclarationSyntax field =>
+            field.Declaration.Variables[0].Identifier.ValueText,
+        null => "(no enclosing member)",
+        _ => member.Kind().ToString(),
+    };
 
     /// <summary>
     /// Contract C8: M4's one keep-alive arm depends on the shell

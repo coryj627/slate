@@ -576,6 +576,68 @@ public sealed class CanvasNavigatorTests : IDisposable
     }
 
     /// <summary>
+    /// A PANIC-CLASS failure out of the match answers instead of faulting
+    /// the scheduler's task — the only route to a permanently stranded
+    /// filter (contract C10).
+    /// </summary>
+    /// <remarks>
+    /// Without the body's catch the exception escapes into the tracked
+    /// task and dies there: nothing publishes, so the rows never move,
+    /// the summary never resolves, and the needle sits in the field
+    /// describing nothing with no sentence anywhere saying why. A
+    /// `bad_node` refusal is reachable with a bad id; a PANIC is not
+    /// something a fixture can make the real library do, so it is
+    /// injected at the query seam — the `FailIdentityQueryForTests`
+    /// idiom, one subsystem over — with the premise asserted first so a
+    /// broken fixture cannot pass this.
+    /// </remarks>
+    [Fact]
+    public void APanicClassFilterFailureAnswersInsteadOfStrandingTheFilter()
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+
+        // The premise: WITHOUT injection this needle answers and narrows.
+        document.FilterText = "zeta";
+        Assert.True(document.Filter.Current);
+        Assert.True(document.Filter.Narrowed);
+        document.FilterText = string.Empty;
+        Drain(document);
+
+        try
+        {
+            CanvasDocumentViewModel.StructuralQueryFaultForTests =
+                static () => new InvalidOperationException("uniffi panic");
+            // The scheduler runs bodies inline here, so an escaping
+            // exception would come straight back out of this assignment —
+            // which is the fault this fact exists about.
+            document.FilterText = "zeta";
+        }
+        finally
+        {
+            CanvasDocumentViewModel.StructuralQueryFaultForTests = null;
+        }
+
+        // The refusal is SPOKEN — the honest "not now", the same sentence
+        // the count path falls back to when a handle goes stale inside
+        // the call.
+        Assert.Equal(Rendered(new CanvasStatusNote.Reopening()), OneLine(document));
+        // The summary is NOT stranded: it says what the state owes rather
+        // than sitting blank under a needle.
+        Assert.Equal(
+            Rendered(new CanvasStatusNote.Reopening()),
+            Assert.IsType<string>(document.Navigator.FilterSummaryText()));
+        // And the needle survives, so the reader can correct or clear it.
+        Assert.Equal("zeta", document.FilterText);
+
+        // Recovery: the next ask answers normally, because a failure
+        // caches nothing.
+        Drain(document);
+        document.FilterText = "zet";
+        Assert.True(document.Filter.Current);
+        Assert.False(document.FilterAnswerFailed);
+    }
+
+    /// <summary>
     /// Whitespace is not a filter — mac's rule, including the one place
     /// .NET would have disagreed (a bare newline reads as ACTIVE there,
     /// and core trims it, so it matches everything).
