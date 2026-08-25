@@ -255,6 +255,62 @@ internal sealed class AccessibleDataGrid : UserControl
     }
 
     /// <summary>
+    /// Seat the reader on the row matching <paramref name="predicate"/>
+    /// WITHOUT announcing a move, and — unless
+    /// <paramref name="moveFocus"/> says otherwise — without moving
+    /// keyboard focus.
+    ///
+    /// This is the model→view direction for a surface whose selection
+    /// lives OUTSIDE the grid. <see cref="FocusRow"/> is the other
+    /// shape: a jump the USER asked for, which should speak. W6-1 PR B
+    /// (#745) is the first consumer — the canvas's <c>CanvasSelection</c>
+    /// is shared by every pane on the path, so a move made in another
+    /// pane (or, from PR C, by the navigator) has to re-seat this grid,
+    /// and re-seating it must not announce a move the reader did not
+    /// make and must not take keyboard focus off whatever they were
+    /// using. The mac substrate draws the same line: its
+    /// <c>syncSelectionFromBinding</c> is silent while its own key
+    /// handling announces.
+    ///
+    /// Returns whether the row was IN THE BOUND SET — not whether the
+    /// OS granted keyboard focus, which is <see cref="FocusRow"/>'s
+    /// recorded rule and holds for the same reason.
+    /// </summary>
+    internal bool SelectRow(Func<object, bool> predicate, bool moveFocus = false)
+    {
+        ArgumentNullException.ThrowIfNull(predicate);
+        if (_grid.Columns.Count == 0)
+        {
+            return false;
+        }
+        object? match = _items.FirstOrDefault(predicate);
+        if (match is null)
+        {
+            return false;
+        }
+        // The reader's COLUMN survives: someone reading down the Color
+        // column must not be dropped back to column 0 because another
+        // pane moved the shared selection.
+        DataGridColumn column = _grid.CurrentCell.Column ?? _grid.Columns[0];
+        WithoutAnnouncing(() =>
+        {
+            // This row is where the reader now is, so a later move
+            // WITHIN it is a cell move rather than a row move (the
+            // ApplySort precedent, and the reason that field exists).
+            _lastAnnouncedRow = match;
+            if (moveFocus)
+            {
+                _ = FocusCellElement(match, column);
+                return;
+            }
+            _grid.CurrentCell = new DataGridCellInfo(match, column);
+            _grid.SelectedCells.Clear();
+            _grid.SelectedCells.Add(_grid.CurrentCell);
+        });
+        return true;
+    }
+
+    /// <summary>
     /// Put keyboard focus on the CELL ELEMENT for (item, column):
     /// scroll, realize the container synchronously (under a starved
     /// session the deferred generation leaves Focus() on the grid, and

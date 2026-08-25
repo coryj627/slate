@@ -98,6 +98,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     private CanvasLoadState _state = CanvasLoadState.Loading;
     private string? _stateMessage;
     private IReadOnlyList<CanvasOutlineRow> _outline = [];
+    private IReadOnlyList<CanvasTableRow> _tableRows = [];
     private IReadOnlyList<CanvasLoadWarning> _warnings = [];
     private string? _detailText;
     private string? _detailTitle;
@@ -183,6 +184,16 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     {
         get => _outline;
         private set => SetField(ref _outline, value);
+    }
+
+    /// <summary>Core's table rows, untransformed and in core's order
+    /// (R-D) — the PR B projection's whole content. Published from the
+    /// same load that publishes <see cref="Outline"/>, because they are
+    /// two reads of one open (contract B4).</summary>
+    public IReadOnlyList<CanvasTableRow> TableRows
+    {
+        get => _tableRows;
+        private set => SetField(ref _tableRows, value);
     }
 
     /// <summary>Entry-level load warnings — the t0 §5 detail rows.</summary>
@@ -538,6 +549,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         _subpaths.Clear();
         _neighbors.Clear();
         Outline = [];
+        TableRows = [];
         Selection.Selected = null;
     }
 
@@ -568,6 +580,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         }
         Warnings = info.Warnings;
         Outline = outline;
+        TableRows = tableRows;
         StateMessage = null;
         State = CanvasLoadState.Ready;
         // A reload keeps the selection when the node survived; a
@@ -1033,9 +1046,64 @@ internal static class CanvasPhrase
 
     public const string VisualSurfaceLabel = "Visual";
 
-    public const string TableShipsLater = "The canvas table view arrives in a later slice.";
-
     public const string VisualShipsLater = "The canvas visual view arrives in a later slice.";
+
+    /// <summary>The table projection's accessible name (mac's
+    /// <c>accessibilityLabel</c>, verbatim).</summary>
+    public const string TableName = "Canvas table";
+
+    // The mac column inventory, in mac's order (§W-G row J: the table's
+    // projection config is host-by-designation, and its labels are the
+    // mac label inventory verbatim — contract B2).
+    public const string TypeColumn = "Type";
+
+    public const string TitleColumn = "Title";
+
+    public const string GroupColumn = "Group";
+
+    public const string TargetColumn = "Target";
+
+    public const string ConnectionsColumn = "Connections";
+
+    public const string ColorColumn = "Color";
+
+    // The mac row-action names, verbatim (contract B6).
+    public const string OpenRowAction = "Open";
+
+    public const string ToggleMarkRowAction = "Toggle Mark";
+
+    public const string DeleteRowAction = "Delete";
+
+    /// <summary>The reason the Toggle Mark row action is listed but
+    /// disabled: the marking verbs are PR G's. Carried as the action's
+    /// <c>DisabledReason</c>, which the substrate exposes as HelpText —
+    /// the mac RowAction contract's "retain the relevant action with its
+    /// reason".</summary>
+    public const string MarkingArrivesLater = "Marking cards arrives in a later slice.";
+
+    /// <summary>The same, for Delete: the mutation funnel is PR E's.</summary>
+    public const string DeletingArrivesLater = "Deleting cards arrives in a later slice.";
+
+    /// <summary>
+    /// The table's summary line — mac's sentence verbatim, including its
+    /// pluralisation (contract B9).
+    /// </summary>
+    /// <remarks>
+    /// A static LABEL, not an announcement (0a-13, §W-G row J): mac
+    /// never speaks it, so the vocabulary has no <c>CanvasTableSummary</c>
+    /// event to render and inventing one would put a string in the
+    /// canonical corpus that no host announces. The substrate makes it a
+    /// separately-focusable region, which is how a screen-reader user
+    /// reads it on demand.
+    /// </remarks>
+    public static string TableSummary(int cards, int groups) =>
+        $"Canvas table: {cards} card{(cards == 1 ? "" : "s")}, "
+        + $"{groups} group{(groups == 1 ? "" : "s")}.";
+
+    /// <summary>The Type cell: core's kind word with its leading
+    /// character capitalised — mac's <c>.capitalized</c> over the same
+    /// closed set of five ASCII words.</summary>
+    public static string TypeCell(string kind) => Capitalized(kind);
 
     /// <summary>
     /// t0 §1.1's card reference, composed from core's parts — core's
