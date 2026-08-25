@@ -1689,17 +1689,64 @@ because those are user-authored prose; Connections compares the COUNT, not the r
 digits, or 10 would sort before 2.
 
 **What "transliterated as `CompareOrdinal`" claims, and what it does
-not.** Both comparators walk code points in order, so they agree on
-every string in the Basic Multilingual Plane. They can disagree ONLY
-where a supplementary-plane character meets a BMP character above
-U+DFFF, because .NET orders by UTF-16 code unit and Swift by Unicode
-scalar. `kind` and `color_name` are closed sets core owns and cannot
-reach that; a `target` — a vault path or a URL — could in principle.
-Ordinal is still the right choice for all three: they are identifiers
-rather than prose, and a culture-sensitive compare would sort the same
-canvas differently on two machines. The first wording of this row said
-"the same ASCII values", which was false of `target` and is the
-claim-exceeds-enforcement shape this document exists to stop.
+not — written from the reference implementation's actual comparison
+semantics, third attempt.** Swift's `String` ordering is **not** a walk
+over code points. `String: Comparable` is defined over Unicode
+**canonical equivalence**: the standard library normalizes before
+comparing, so canonically equivalent strings compare EQUAL and ordering
+is computed on the normalized form (*The Swift Programming Language*,
+"Strings and Characters → Comparing Strings": string and character
+comparison is by canonical equivalence, "even if composed from different
+Unicode scalars behind the scenes"; the stdlib's
+`StringComparison.swift` implements it — the fast path is a byte
+compare, the general path normalizes segment by segment).
+`string.CompareOrdinal` normalizes nothing and compares raw UTF-16 code
+units. There are therefore **two** divergence classes, not one:
+
+1. **Canonical equivalence / normalization form.** Any two `target`s
+   that differ in normalization sort differently — and a pair that is
+   canonically equivalent is EQUAL on mac (so mac keeps document order
+   for the tie) and strictly ordered on Windows. The worked case: an
+   NFD `Café.md` beside `Caff.md`. Swift compares the NFC form, so `é`
+   (U+00E9) beats `f` and `Café.md` sorts AFTER; ordinal compares the
+   stored `e` + U+0301, so `e` (U+0065) loses to `f` and `Café.md`
+   sorts BEFORE. Opposite order, every character inside the BMP.
+2. **Code unit vs scalar for the supplementary planes.** A
+   supplementary-plane character compared against a BMP character above
+   U+DFFF sorts oppositely, because UTF-16 puts the surrogate lead unit
+   (U+D800–U+DBFF) below U+E000 while the scalar is above every BMP
+   value.
+
+**Class 1 is ORDINARY, not exotic**, and this row does not get to call
+it a corner: macOS's filesystem hands back decomposed filenames, so a
+`.canvas` authored on a Mac routinely carries NFD `file` targets, and a
+synced vault brings them to Windows verbatim (core stores `target`
+byte-exact — 0b's "bytes are bytes" rule and this repo's own
+`.gitattributes` doctrine). Any vault with an accented filename can show
+it. `kind` and `color_name` remain out of the class for the reason the
+earlier draft gave: closed ASCII sets core owns.
+
+**The ordinal choice STANDS, and here is why the divergence is
+acceptable rather than a defect to fix.** (a) It is deterministic and
+locale-independent: the same canvas sorts identically on every Windows
+machine, which a culture-sensitive compare would not guarantee.
+(b) Normalizing host-side to chase Swift would be the host deriving an
+ordering core does not define — the R-D violation B4 refuses one column
+over — and it still would not reproduce Swift exactly. (c) **Sort order
+is not a §W-A surface**: `CanvasReadArtifact` (A20) serializes core's
+rows in CORE's order, and no parity artifact serializes a host's sorted
+order, so no golden and no cross-host gate compares these. What is left
+is a user-visible ordering difference on mixed-normalization vaults, and
+it is registered as **CD-39** rather than left implied.
+
+**This paragraph's own history is the reason it is this long.** It
+first claimed "the same ASCII values" (false of `target`), then "both
+walk code points in order … they can disagree ONLY [in the
+supplementary planes]" (false of Swift, and it named the wrong single
+class). Two corrections to one bound is the shape rule 4 exists for, so
+this version is written from the reference implementation's documented
+semantics with the source cited in line, and the residual divergence is
+registered instead of being bounded away.
 
 **The Color column does not sort "by preset index, hex after presets".**
 The spec's parenthetical describes a comparator neither host has, over
@@ -1962,9 +2009,31 @@ forward with one arm shipped.
 `apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs`:
 `CanvasSurfaces_TableGridSortSelectionAndActivation_AreClean` — the
 spec's "Canvas_TableJourney" under this project's journey naming
-convention: Table/Grid patterns present, the six header names, Ctrl+Alt+S
-sorting through the real chord, row activation, the summary region, the
-disabled row actions, axe 0 failures. CI arbitrates.
+convention. Enumerated against the shipped assertions, not the plan: the
+switcher's table arm is enabled and selecting it swaps the projection
+(the outline's element LEAVES the live tree); Grid and Table patterns
+and the grid's name; the six column headers; the summary region's
+rendered sentence; Ctrl+Alt+S through a real chord, asserted as the
+whole Type column ordered ascending; the row-actions menu opened with
+the MENU KEY, its three items named, the two unshipped ones disabled
+with their reasons readable as HelpText; Enter activation opening the
+card detail; axe 0 over the table. CI arbitrates.
+
+**The row-actions leg was ADDED rather than the claim narrowed** (red
+team B-2). This sentence previously named "the disabled row actions"
+while the journey never opened the menu — an evidence claim written from
+the plan instead of the code, which is the shape PR H's reconciliation
+exists to catch, and which the `w_c_matrix` row (written in the same PR)
+got right. `GridConformanceTests` had recorded that popup menu items are
+"not reliably enumerable through desktop UIA on a starved session", so
+the leg was attempted rather than assumed: the menu is found from the
+DESKTOP (a WPF `ContextMenu` is its own HWND) and identified by its first
+item rather than by an id invented for the test. Four consecutive
+published-dll foreign-CWD runs came up green, so the honest fix was the
+leg, not the sentence. `ToolTipService.ShowOnDisabled` went into the
+substrate in the same pass (red team m-6): the reasons reached AT
+through HelpText, but WPF suppresses tooltips on disabled elements, so a
+sighted mouse user got nothing on exactly the items that carry one.
 
 ---
 
@@ -3224,6 +3293,31 @@ task may not make (the brief's hard rule), so it is flagged rather than
 smuggled: **the vocabulary needs a `CanvasBlockedReason` arm for a
 refused file-type open, and PR E or a 0a follow-up should add it.** The
 SAFETY behaviour does not wait on that; only the sentence does.
+
+**CD-39 — The canvas table's ordinal columns sort differently from
+mac's on a mixed-normalization vault** (W6-1 PR B, red-team round 1
+B-1). Mac's Type/Target/Color comparator is Swift's `<`, which orders by
+Unicode **canonical equivalence** (the stdlib normalizes before
+comparing); Windows transliterates it as `string.CompareOrdinal`, which
+compares raw UTF-16 code units and normalizes nothing. The two therefore
+disagree on any pair of `target`s differing in normalization form — an
+NFD `Café.md` sorts BEFORE `Caff.md` on Windows and AFTER it on mac —
+and on the supplementary-plane pairs where code-unit order and scalar
+order differ. The first class is reachable with ordinary data: macOS
+hands back decomposed filenames, so a Mac-authored canvas carries NFD
+`file` targets and a synced vault brings them across byte-exact.
+
+**Recorded, not fixed, on three grounds.** Ordinal is deterministic and
+locale-independent, which is what a Windows user gets to rely on;
+normalizing host-side would be the host deriving an ordering core does
+not define (the R-D line B4 holds for the `Target` column's VALUE, held
+here for its ORDER); and sort order is not serialized by any §W-A
+artifact — `CanvasReadArtifact` carries core's rows in core's order — so
+no parity gate compares the two hosts' sorted output and no golden
+moves. The user-visible residue is the ordering of a Target/Color column
+on a vault that mixes normalization forms. If an owner ever wants
+byte-parity here, the honest shape is a CORE-supplied sort key rather
+than a second host normalizer, and it belongs with the §W-G audit.
 
 ---
 
@@ -4536,3 +4630,62 @@ properties that reach no client at all. Instances 4 and 5 share a root
 that the earlier three did not: **the assertion targeted a real object,
 but not the object the consumer reads.** That is what the two new censuses
 guard, and it is the form to watch for in PRs B–E.
+
+### PR B — red team round 1 — NOT SAFE, 2 blockers + 1 major + 6 minors
+
+Both blockers were **record-accuracy** defects with no behavioral change
+forced; the implementation came through all nine attack surfaces clean.
+That is the shape this document was built to catch, and it caught it.
+
+- **B-1 — the comparator bound was wrong for the SECOND time.** B3's
+  replacement claim ("both walk code points in order… they can disagree
+  ONLY in the supplementary planes") was false of the reference
+  implementation: Swift's `String` ordering is defined over Unicode
+  canonical equivalence and normalizes before comparing, so the two
+  comparators diverge on any `target` differing in NORMALIZATION FORM —
+  an NFD `Café.md` sorts opposite to `Caff.md` across the hosts, every
+  character inside the BMP. Reachable with ordinary data (macOS hands
+  back decomposed filenames). Two corrections to one paragraph is the
+  rule-4 shape, so the third version is written from the reference
+  implementation's documented semantics **with the source cited in
+  line**, states BOTH divergence classes, and registers the residue as
+  **CD-39** instead of bounding it away. The ratified ordinal choice
+  stands; only the recording was wrong.
+- **B-2 — §B claimed a journey leg that did not exist** ("the disabled
+  row actions"). Fixed by adding the leg, not by narrowing the sentence
+  — see the tests paragraph above for why that was the honest direction
+  and what it cost.
+- **M-1 — `DeliverFocus`'s "the seat is SILENT" comment was false for a
+  reachable arm.** Seating currency raises `CurrentRowChanged` outside
+  the sync guard, so a request landing on a node other than the current
+  selection reaches `SelectNode` and the document narrates. Corrected in
+  the comment. **The BEHAVIOR is not PR B's to change**: it is A14's,
+  the outline drives the identical path through its own selection
+  binding, and a table-only fix would make the two projections behave
+  differently on the same request. **Filed for PR C**, which adds the
+  first production caller that passes a `NodeId` and therefore widens
+  the reachable surface: decide whether a delivery to a node other than
+  the selection should narrate (t0 §1.5 doubling against A14's landing
+  rules), then pin it in BOTH projections — the reviewer's named missing
+  fact is `AFocusDeliveryToANodeOtherThanTheSelectionDoesNotDouble`, or
+  a recorded decision that it SHOULD narrate.
+- **Minors folded:** m-1 (the hand-counted "18 facts" in the §W-C row —
+  deleted, per 0a's rule-4 lesson that counts live in tests, not prose);
+  m-2 (the collation-dependent sort expectations now pin the culture the
+  production comparator reads, so an exotic host cannot report a defect
+  that is not one); m-3 (the muted-until-attach seam had no witness —
+  `AGridWithoutADocumentNeverPostsThroughTheSubstratesDefaultSeam` now
+  covers both the unattached and the DETACHED arm, the second being the
+  one with teeth: a grid still holding a retired document's relay would
+  post to a shut-down announcer, which A5 makes a `Debug.Fail`);
+  m-6 (`ToolTipService.ShowOnDisabled`, one substrate line).
+- **Minors recorded, not fixed:** m-4 — the generator's evidence
+  validation allows a command to reference ANY existing group and checks
+  markers by substring; pre-existing (W5-x), `canvasSurfaces` added under
+  the same strength, closed by PR H's matrix pass or the next PR that
+  edits that file for its own reasons. m-5 — while the table shows, the
+  COLLAPSED outline still runs its `ApplySelection` on every row move,
+  so switching back can show group expansions the user never made there;
+  it belongs to the ledgered expansion-state-preservation decision PR E
+  owns, and is recorded here so it lands in that decision rather than
+  being rediscovered.

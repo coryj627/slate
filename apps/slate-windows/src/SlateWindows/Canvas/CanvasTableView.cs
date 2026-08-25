@@ -80,11 +80,26 @@ internal sealed class CanvasTableView : UserControl
     /// </summary>
     /// <remarks>
     /// <para>
-    /// The seat is SILENT: a landing is not a move the user made, and
-    /// the reader is about to read the row they land on, so a grid
-    /// row-move announcement on top of it is the t0 §1.5 doubling rule
-    /// broken at the first keystroke of the surface's life (A12's
-    /// "landing selection is silent", applied to this projection).
+    /// The SEAT is silent — <see cref="AccessibleDataGrid.SelectRow"/>
+    /// suppresses the grid's own row-move line, because a landing is not
+    /// a move the user made and the reader is about to read the row they
+    /// land on anyway (A12's "landing selection is silent", applied to
+    /// this projection).
+    /// </para>
+    /// <para>
+    /// The DELIVERY as a whole is not unconditionally silent, and an
+    /// earlier version of this comment said it was. Seating currency
+    /// raises <c>CurrentRowChanged</c> outside the sync guard, so a
+    /// request that lands on a node OTHER than the current selection
+    /// reaches <c>SelectNode</c> and the document narrates the move —
+    /// reachable when `LastActivatedNode` differs from `Selected`, since
+    /// A14 prefers the activated row and never consults the selection.
+    /// That is inherited behaviour, not this projection's: the outline's
+    /// <c>DeliverFocus</c> drives the same path through its own
+    /// selection binding, and diverging here would make the two
+    /// projections behave differently on the same request. Filed for
+    /// A14's owner (PR C adds the first caller that passes a NodeId) —
+    /// see §B's round record.
     /// </para>
     /// <para>
     /// Delivery is reported only when keyboard focus is actually INSIDE
@@ -375,16 +390,24 @@ internal sealed class CanvasTableView : UserControl
         string.Equals(Row(row).NodeId, nodeId, StringComparison.Ordinal);
 
     /// <summary>
-    /// Mac's <c>&lt;</c>, transliterated. Both walk code points in
-    /// order, so the two agree on every string in the Basic Multilingual
-    /// Plane; they can disagree ONLY where a supplementary-plane
-    /// character meets a BMP character above U+DFFF, because .NET orders
-    /// by UTF-16 code unit and Swift by Unicode scalar. Kind and colour
-    /// name are closed sets core owns and cannot reach that; a Target
-    /// could. Ordinal is still right for all three — they are
-    /// identifiers rather than prose, and a culture-sensitive compare
-    /// would sort the same canvas differently on two machines (the
-    /// <c>ReadingTableGrid</c> precedent).
+    /// Mac's <c>&lt;</c>, transliterated — and the transliteration is
+    /// NOT exact. Swift's <c>String</c> ordering is defined over Unicode
+    /// canonical equivalence: the standard library normalizes before
+    /// comparing (<i>The Swift Programming Language</i>, "Comparing
+    /// Strings"). <c>CompareOrdinal</c> normalizes nothing and compares
+    /// UTF-16 code units. So the two disagree on `target`s that differ
+    /// in normalization form — an NFD "Café.md" sorts before "Caff.md"
+    /// here and after it on mac — and on supplementary-plane pairs,
+    /// where code-unit order and scalar order differ. The first class is
+    /// ordinary, not exotic: macOS hands back decomposed filenames, so a
+    /// Mac-authored canvas carries NFD targets. Kind and colour name are
+    /// closed ASCII sets core owns and reach neither class.
+    ///
+    /// Ordinal stays anyway, and CD-39 records why: it is deterministic
+    /// and locale-independent, normalizing host-side would be the host
+    /// deriving an ordering core does not define, and no §W-A artifact
+    /// serializes a host's sort order, so nothing cross-host compares
+    /// these (the <c>ReadingTableGrid</c> precedent for the choice).
     /// </summary>
     private static IComparer<object> Ordinal(Func<CanvasTableRow, string> value) =>
         Comparer<object>.Create(

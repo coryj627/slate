@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Globalization;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Automation.Peers;
@@ -205,6 +206,28 @@ public sealed class CanvasTableTests : IDisposable
     [Fact]
     public void EveryColumnSortsTheWayMacSortsIt() => RunSta(() =>
     {
+        // The Title/Group expectations are a COLLATION result, and the
+        // production comparator reads the ambient culture — so the fact
+        // pins the culture rather than inheriting the machine's. Without
+        // this it passes on en-US CI and could mis-order on a host whose
+        // collation differs (tr-TR's dotted/dotless I is the standard
+        // example), reporting a product defect that is not one. The
+        // comparator under test is unchanged; only the ambient value it
+        // reads is made deterministic (red team m-2).
+        CultureInfo previous = CultureInfo.CurrentCulture;
+        CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("en-US");
+        try
+        {
+            AssertEveryColumnSortsTheWayMacSortsIt();
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = previous;
+        }
+    });
+
+    private void AssertEveryColumnSortsTheWayMacSortsIt()
+    {
         (CanvasDocumentViewModel document, _, AccessibleDataGrid grid) = Table();
         (int Column, string[] Ascending)[] expectations =
         [
@@ -239,7 +262,7 @@ public sealed class CanvasTableTests : IDisposable
                 SortedCells(grid, column, ascending: false));
         }
         document.Shutdown();
-    });
+    }
 
     /// <summary>
     /// The Color comparator, called out because the spec's parenthetical
@@ -482,6 +505,55 @@ public sealed class CanvasTableTests : IDisposable
         document.Shutdown();
     });
 
+    /// <summary>
+    /// Contract B7's other half: a table with no document attached does
+    /// NOT fall back to the substrate's dispatcher-backed default seam,
+    /// and a table whose document was DETACHED stops posting to that
+    /// document's funnel.
+    /// </summary>
+    /// <remarks>
+    /// The census only requires that at least one assignment names the
+    /// relay, so deleting the mute failed nothing (red team m-3). The
+    /// detach half is the one with teeth: the announcer is retired with
+    /// its document, and posting to a retired one is a `Debug.Fail` by
+    /// contract A5 — so a grid still holding a dead document's relay is
+    /// a real defect, not defence in depth. The unattached half is
+    /// asserted structurally, because "posted nothing through the
+    /// canonical dispatcher" has no in-process observer: the seam's
+    /// TARGET is the discriminator, since the substrate's default closes
+    /// over the grid itself.
+    /// </remarks>
+    [Fact]
+    public void AGridWithoutADocumentNeverPostsThroughTheSubstratesDefaultSeam() =>
+        RunSta(() =>
+        {
+            var bare = new CanvasTableView();
+            Assert.NotSame(bare.GridForTests, bare.GridForTests.Announce.Target);
+            // The substrate's own default IS the shape being refused:
+            // its target is the grid, because it closes over the grid's
+            // lazily-built dispatcher.
+            var substrateDefault = new AccessibleDataGrid();
+            Assert.Same(substrateDefault, substrateDefault.Announce.Target);
+
+            // Attached: the seam is the document's relay.
+            (CanvasDocumentViewModel document, CanvasSurfaceView surface,
+                AccessibleDataGrid grid) = Table();
+            MoveReaderTo(grid, "beta");
+            _announced.Clear();
+            AccessibleDataGrid.ToggleSortCommand.Execute(null, grid);
+            Assert.NotEmpty(_announced);
+
+            // Detached: nothing more reaches that document's funnel —
+            // which is what keeps a retired announcer from being posted
+            // to (contract A5's Debug.Fail).
+            surface.Model = null;
+            _announced.Clear();
+            AccessibleDataGrid.ToggleSortCommand.Execute(null, grid);
+            Assert.Empty(_announced);
+            Assert.NotSame(grid, grid.Announce.Target);
+            document.Shutdown();
+        });
+
     // --- B6: activation and row actions ------------------------------------
 
     /// <summary>
@@ -589,6 +661,11 @@ public sealed class CanvasTableTests : IDisposable
             Assert.False(item.IsEnabled);
             Assert.Equal(reason, AutomationProperties.GetHelpText(item));
             Assert.Equal(reason, item.ToolTip);
+            // …and the tooltip actually SHOWS: WPF suppresses tooltips
+            // on disabled elements by default, so without this the
+            // reason reached AT and nobody else — on exactly the items
+            // that have one (red team m-6).
+            Assert.True(ToolTipService.GetShowOnDisabled(item));
         }
 
         // Open runs the same activation Enter runs.

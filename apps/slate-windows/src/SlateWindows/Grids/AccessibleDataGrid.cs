@@ -1256,6 +1256,13 @@ internal sealed class AccessibleDataGrid : UserControl
                 if (action.DisabledReason is { Length: > 0 } reason)
                 {
                     item.ToolTip = reason;
+                    // WPF suppresses tooltips on disabled elements by
+                    // default, so the reason reached AT (HelpText) and
+                    // nobody else — on exactly the items that HAVE a
+                    // reason. W6-1 PR B is the first consumer to ship
+                    // disabled-with-reason actions, and a sighted mouse
+                    // user is entitled to the same sentence.
+                    ToolTipService.SetShowOnDisabled(item, true);
                     AutomationProperties.SetHelpText(item, reason);
                 }
             }

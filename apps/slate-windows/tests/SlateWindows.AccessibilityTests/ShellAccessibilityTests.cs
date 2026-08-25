@@ -6492,6 +6492,41 @@ public sealed class ShellAccessibilityTests
 
             AssertAxeClean(process, "canvas-table");
 
+            // Contract B6: the row-actions menu on the KEYBOARD route
+            // (the Menu key; Shift+F10 is its twin), with the two
+            // unshipped verbs listed DISABLED and their reasons readable
+            // as HelpText — the channel the mac RowAction contract names
+            // and the one a screen-reader user gets. The menu is a
+            // separate popup HWND, so it is looked up from the desktop
+            // rather than under the window.
+            PressKey(VirtualKeyShort.APPS);
+            AutomationElement[] rowActions = WaitForRowActionItems(automation);
+            Assert.Equal(
+                new[] { "Open", "Toggle Mark", "Delete" },
+                rowActions.Select(item => item.Properties.Name.Value).ToArray());
+            Assert.True(
+                rowActions[0].Properties.IsEnabled.Value,
+                "Open must be live — it is the shipped verb");
+            foreach (AutomationElement unshipped in rowActions.Skip(1))
+            {
+                Assert.False(
+                    unshipped.Properties.IsEnabled.Value,
+                    $"{unshipped.Properties.Name.Value} ships in a later slice and "
+                    + "must be listed disabled, not enabled");
+                Assert.Contains(
+                    "arrives in a later slice",
+                    unshipped.Properties.HelpText.Value,
+                    StringComparison.Ordinal);
+            }
+            // Close it before the activation leg: a live popup owns the
+            // keyboard, and Enter would pick a menu item instead.
+            PressKey(VirtualKeyShort.ESCAPE);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => FindRowActionItems(automation).Length == 0,
+                    TimeSpan.FromSeconds(10)),
+                "the row-actions menu never closed on Escape");
+
             // Contract B6: Enter opens the card, through the same
             // activation seam the outline uses — a text card publishes
             // the interim read-only detail.
@@ -6533,6 +6568,47 @@ public sealed class ShellAccessibilityTests
             {
             }
         }
+    }
+
+    /// <summary>
+    /// The canvas table's row-action items, from the popup the Menu key
+    /// opened. A WPF <c>ContextMenu</c> is its own HWND, so the search
+    /// starts at the DESKTOP; the substrate's menu is identified by its
+    /// first item rather than by an automation id, because the id would
+    /// be a hook this journey invented for itself.
+    /// </summary>
+    private static AutomationElement[] FindRowActionItems(UIA3Automation automation)
+    {
+        foreach (AutomationElement menu in automation.GetDesktop()
+            .FindAllDescendants(
+                automation.ConditionFactory.ByControlType(ControlType.Menu)))
+        {
+            AutomationElement[] items = menu.FindAllDescendants(
+                automation.ConditionFactory.ByControlType(ControlType.MenuItem));
+            if (items.Any(item =>
+                string.Equals(
+                    item.Properties.Name.ValueOrDefault, "Open", StringComparison.Ordinal)))
+            {
+                return items;
+            }
+        }
+        return [];
+    }
+
+    private static AutomationElement[] WaitForRowActionItems(UIA3Automation automation)
+    {
+        AutomationElement[] items = [];
+        Assert.True(
+            SpinWait.SpinUntil(
+                () =>
+                {
+                    items = FindRowActionItems(automation);
+                    return items.Length >= 3;
+                },
+                TimeSpan.FromSeconds(15)),
+            "the canvas table's row-actions menu never opened on the Menu key "
+            + $"(saw {items.Length} items)");
+        return items;
     }
 
     /// <summary>
