@@ -254,11 +254,11 @@ internal sealed class CanvasModeController : BindableBase
             // TERMINAL, and SILENT — which is not the never-silent table
             // being broken, it is that table's precondition being absent.
             // C4 answers a verb the user invoked on a canvas they are
-            // reading; this document has no surface, its announcer is
-            // already shut (so a sentence composed here is the A5
-            // `Debug.Fail`), and its property channel is detached, so
-            // there is nobody to tell and nothing true to say. The
-            // refusal is the return value, for the caller that asked.
+            // READING; this document has been retired, so there is no
+            // surface showing it and its announcer is already shut — a
+            // sentence composed here would be the A5 `Debug.Fail` rather
+            // than something anybody hears. The refusal is the return
+            // value, for the caller that asked.
             return false;
         }
         if (_active is { } current)
@@ -422,21 +422,19 @@ internal sealed class CanvasModeController : BindableBase
             // document being retired must not leave a departure behind
             // for a later object to act on.
             _deferredDeparture = null;
-            // TERMINAL from here, and the two halves are the document's:
-            // every verb refuses, and the property channel is detached so
-            // a retained controller cannot reach a surface either. A
+            // TERMINAL from here, and terminal is more than idle: a
             // controller that merely had no mode would have accepted the
             // next `Enter` — from a menu item on a closed tab, from a
             // palette row the shell still had registered — and run its
-            // effect against a document whose handle is gone.
+            // effect against a document whose handle is gone. Every verb
+            // refuses, and the ladder is emptied so nothing holds a
+            // closure over a surface that is gone.
             _retired = true;
             _active = null;
             _rungs.Clear();
         }
     }
 
-    /// <summary>Retirement's other half, called by the document once its
-    /// last sentence has been spoken (contract C7).</summary>
     /// <summary>M2 cancel — Escape's first rung, the header's Cancel
     /// button, or <c>slate.canvas.cancelMode</c>. False when no mode was
     /// active, which is what lets the Esc ladder fall through to the next

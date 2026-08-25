@@ -2679,14 +2679,35 @@ the fixtures and the §K 2,000-node budget that is milliseconds; on a
 slow filesystem it is the length of the open, and the user types into
 it.
 
+**THE SECOND COST, and it is the one that is easy to miss.** Typing
+DURING a reload can speak a number that belongs to no canvas. The load
+body swaps the handle on the scheduler thread and publishes its rows
+later, through `Post`; a keystroke arriving in that window queries the
+NEW handle and intersects the answer with the OLD outline still on
+screen. The pair is internally coherent — the numerator and the
+denominator are one dispatcher turn's worth of state, which is what the
+synchronous form actually guarantees — but the canvas the pair describes
+is a mixture.
+
+It is bounded, and the bound is why it ships. It is NUMBER-ONLY: the
+rows on screen are the old outline's, and the reload is hidden behind
+`Loading` anyway. It is SELF-HEALING: the reload's own publish re-asks
+and republishes, so the next frame is right. And it needs a keystroke
+inside the window, which is the length of one `open_canvas` plus three
+projections. Recorded rather than fixed, because fixing it IS the
+redesign: a count that cannot be taken against a handle the rows do not
+come from is the coherent unit owning its queries, which is exactly what
+the architecture review named as the fixed point.
+
 That is the whole reason the redesign PR exists. Moving the query off
 the dispatcher makes the rows and the answer arrive on different frames,
 and correlating them is what four review rounds and two design passes
 were spent on — the publication transaction, the projection unit, the
 one-channel ordering and their censuses. None of that ships here,
 because none of it is needed by a match that returns before the getter
-does: the rows, the count and the outline they are over are one
-dispatcher turn's worth of state and cannot describe two canvases.
+does. What the synchronous form buys is that nothing lands BETWEEN the
+two numbers; what it does not buy is that the handle they were taken
+from is the handle the rows came from.
 
 **WHAT TRAVELS TO THE REDESIGN PR**, so nobody re-derives it. The names
 below are in PLAIN TEXT rather than backticks, deliberately: a backtick
@@ -2779,12 +2800,16 @@ empty canvas answers `Canvas is empty.` — the pull surface always
 answers, which is the failure t0 §1.4 exists to prevent.
 
 **The filter clause keys on NARROWED, where mac keys on the needle**
-(m3). During an in-flight first answer, or after a query that ran and
-failed, Windows omits the clause while a needle sits in the field.
-Deliberate: keying on the needle would make the clause read
-"9 of 9 shown" for rows that nothing narrowed, and C10's whole invariant
-is that the count describes the rows on screen. A micro-divergence
-recorded rather than matched.
+(m3). On this branch the divergence has ONE reachable cause, and it is
+worth naming precisely rather than describing states the synchronous
+form does not have: an active needle with no memo and no handle to build
+one — the document cannot answer, so nothing is narrowed, and Where-am-I
+omits the clause while the field still reads as filtering. (The async
+form adds an in-flight first answer and a ran-and-failed query; both
+travel with it.) Deliberate either way: keying on the needle would make
+the clause read "9 of 9 shown" for rows that nothing narrowed, and
+C10's whole invariant is that the count describes the rows on screen. A
+micro-divergence recorded rather than matched.
 
 **C12 — Focus delivery lands the reader and says NOTHING (the carried
 A14 defect).** §B filed it: a delivery to `LastActivatedNode` when the
@@ -4578,6 +4603,22 @@ adding a residue site of its own — the count is 29, not 30.
 
 ## Mac details recorded while reading (not this issue's to fix)
 
+- **Backspacing a needle to EMPTY exits filtering silently, on both
+  hosts.** `AppState+CanvasExtras.swift:415` guards
+  `canvasAnnounceFilterCount` on `filterActive` and returns, and mac's
+  `.onChange(of: filterText)` calls exactly that — so deleting the last
+  character widens the canvas back to every card and says nothing. The
+  explicit CLEAR verb announces `canvasFilterCleared`; the keystroke
+  that does the same thing does not. Windows matches, deliberately:
+  `AnnounceFilterCount` has the same guard, and diverging here would
+  make the two hosts disagree about a keystroke rather than fix
+  anything. **It is a real gap in both** — a screen-reader user who
+  backspaces to empty gets no confirmation the canvas widened, which is
+  the never-silent rule's own subject — so it belongs upstream as one
+  decision for both hosts: either the last backspace speaks
+  `canvasFilterCleared` like the button, or the rule records why a
+  keystroke-driven widening is exempt.
+
 - **`canvasColorMarked` is unregistered.** `AppState+CanvasActions.swift:757`
   is implemented and tested but has no command id, palette row, or menu
   item. Windows matches the registry, not the hidden verb (D-4); file
@@ -6192,3 +6233,211 @@ instead.
   re-seat is ever added. **Recorded as a stop point rather than
   implemented**, per the standing rule that a fix must not be
   manufactured to satisfy a mutation that does not fail.
+
+### PR C — task review — Approved, 3 Importants + 6 minors
+
+Written into this document because it had only ever lived in the SDD
+ledger, which is git-ignored and one `git clean -fdx` from gone. Every
+round below is reconstructed from that ledger and the task report; the
+sequence is the redesign PR's inheritance, and the reason the split was
+a split rather than a revert.
+
+- **I1 — opening a MENU cancelled the mode**, which is CD-41's failure
+  one surface over: this PR's own Canvas menu carries Commit Mode and
+  Cancel Mode, so opening it killed the two items the reader came for.
+  Fixed as a named `MenuOpen` arm of the M4 table (a `MenuBase` ancestor
+  walk), not a condition at one site — PR E's and PR F's context menus
+  inherit it.
+- **I2 — the M8 boundary was unrecorded.** Rung 3's card-detail Escape
+  is a read-only interim; PR E owns M8, where Escape COMMITS. One
+  paragraph, so the two are not read as the same rung.
+- **I3 — the filter's FFI ran under `_ffiLock` on the dispatcher.** The
+  review preferred a scheduler publish; the accepted-risk fallback was
+  evidence-backed. Taken as the scheduler publish — **and this is the
+  decision the next six rounds were about.**
+- Minors 4–8 taken; minor 9 deferred to PR H. Parity, M1–M8 letter
+  conformance, the never-silent table and the preference schema were
+  verified independently against mac.
+
+### PR C — red team round 1 — NOT SAFE, 1 blocker + 3 majors + 12 minors
+
+- **B1 — Escape with the reader INSIDE the Where-am-I panel** destroyed
+  a typed needle and left the panel open. Asking Where-am-I while
+  filtering is the designed use — the readback carries the filter
+  clause. RULED panel-first. The first fix keyed on FOCUS; the scoped
+  re-review found mac keys on the panel being OPEN, so the same defect
+  survived one arrangement over. Re-ruled to the open-panel key, which
+  turned CD-47 from a divergence into an AGREEMENT. **CD-47's own
+  lesson is the durable one: a t0-vs-reference adjudication is swept per
+  CONTRACT, not per site** — M5 lists rungs and says nothing about
+  transient regions, because §1.4 and §3 added them later without M5
+  being revisited, and an absence trips nothing.
+- **M1 — the spec's "connection-follow when the card has connections,
+  else tree semantics, as mac does" describes a blend mac never
+  shipped.** Mac follows unconditionally and always answers. The blend
+  left a keypress on a connectionless leaf silent — the never-silent
+  rule broken by a precedence nobody had. CD-48; all three expand routes
+  (Enter-on-group, numpad `+`/`-`, the `ExpandCollapse` pattern) DRIVEN
+  rather than claimed.
+- **M2 — a tunnelling Enter ran ahead of every focused control**, so
+  Enter on the visible Cancel Mode button would have committed the mode.
+  First fixed with a list of control types; re-ruled to R2's own
+  question — does a PROJECTION own the keys — because the list was the
+  brittle half and the one control nobody remembered would re-open it
+  silently.
+- **M3 — a commit that cannot apply now keeps the mode**, modelled as an
+  OUTCOME rather than mac's call-site pre-gate so no entry point can
+  forget it.
+- Verified clean under hostility: the filter guards, the panic path, the
+  CD-40/41 records, tripwire symmetry, scope.
+
+### PR C — codex adversarial round 1 — NOT SAFE, 2 blockers
+
+- **B1 — a reload published the unfiltered canvas Ready before the
+  re-ask landed**: a flash of everything under a populated filter field.
+  Correlated state without a snapshot boundary. Fixed with a coherent
+  outline+matches pair publish, prior-view retention, and a third
+  (outline-identity) guard beside the two generations — the handle can
+  be swapped between a query taking the lock and its rows publishing,
+  which is a question the generations cannot answer.
+- **B2 — `OnCommit` ran while `Active` was still cancellable**, so a
+  departure raised from inside the effect re-entered `Cancel` and
+  produced two outcomes for one press. Fixed with a committing-state
+  transition guard and a deferred latest-wins departure applied to the
+  RESULT, which keeps M2's one outcome and M4's ordering both true.
+- Self-caught during the wave: the reload fact reloaded identical
+  content, so it passed against its own mutation. Rewritten to delete a
+  matching card first.
+
+### PR C — codex adversarial round 2 — NOT SAFE, 2 blockers (continuations)
+
+- **B1-continued — the snapshot was the OUTLINE only.** The table rows,
+  the totals and the summary still read live, and `State` flipped before
+  the deferred publish. Ruled to a full-unit snapshot: everything a
+  projection reads, one immutable value, with the state flip and the
+  publish atomic from the consumers' view. `CanvasProjectionUnit`.
+- **B2-continued — the deferred slot drained only on the happy path.**
+  Teardown-aware drain: an effect that threw is the refused case by
+  another name, so the departure cancels after it; shutdown reordered to
+  drain-before-silence; the slot cleared.
+- Adjudicated by codex and recorded: a direct `Cancel` inside a commit
+  effect is SILENT and that is correct — `CanvasModeCancelled` would be
+  an inaccurate sentence, and an inaccurate one is worse than none.
+
+### PR C — codex adversarial round 3 — NOT SAFE, 2 blockers (classes named)
+
+- **B1 — TWO NOTIFICATION CHANNELS.** The model was atomic and the
+  presentation caches were not: they rebuilt on `OutlinePublished` while
+  the state moved on `PropertyChanged`, so a binding woken by the first
+  read "Ready", with the new canvas's summary, over the PREVIOUS
+  canvas's controls. Fixed to one channel in a defined order, with the
+  fact sampling the MATERIALIZED controls rather than the model.
+- **B2 — PIECEMEAL CATCH.** The confirmation announce sat between the
+  outcome and the drain, unguarded, and a teardown throw blocked
+  `Announcer.Shutdown`. Fixed structurally: one guarded region with the
+  drain in its `finally`, and the distinction from round 2's rejected
+  shape stated in the code (that one reopened WITHOUT draining).
+- **The rule-4 tripwire was set here**: a fourth continuation in either
+  subsystem would be a formal stop.
+- A behaviour improvement fell out of the fix: a reload no longer
+  collapses its rows, so the reader keeps the canvas and their keyboard
+  focus for the length of the load.
+
+### PR C — codex adversarial round 4 — RULE 4 TRIPS (2 blockers, both continuations)
+
+- **B1 — the selection re-seat was the next channel member. B2 —
+  `WhereAmIText` and `FocusRequest` were teardown callbacks.** Both
+  continuations, so the tripwire fired as pre-declared.
+- **Design pass (the series' third**, after focus delivery and identity
+  containment in PR A**).** A publication-SCOPE primitive: every
+  correlated observer-visible write staged, notifications deferred to
+  scope close, a mid-transaction wake UNREPRESENTABLE rather than
+  avoided, and a census forbidding out-of-scope writes. Plus
+  silence-first total finalization: the drain speaks, then every channel
+  mutes, then the state clears, and the announcer and handle release
+  from a `finally`.
+- The design commit found a FIFTH channel member no round had reported —
+  the workspace's direct `ActiveSurface` write.
+- **The gate mystery was solved in the same pass**: a solution-level test
+  run executes the unit and journey projects CONCURRENTLY, and the
+  journey app eats the STA facts' synthetic keystrokes. That is every
+  intermittent key failure this task saw. The serial gate is two
+  commands.
+
+### PR C — codex adversarial round 5 — NOT SAFE, 1 blocker (the design HELD)
+
+- Codex verified the ordering and the throwing-`Shutdown` construction.
+  The blocker was incomplete APPLICATION — `CanvasSelection.Marked` and
+  `SeedFrom` still raised outside the primitive — and a census that
+  scanned one file with a hard-coded field list, which could not have
+  seen either.
+- **Adjudicated as mechanical completion, not a design continuation**,
+  with a round-6 design breach pre-declared to escalate to the user
+  without further adjudication.
+- The completion made the census DERIVE its population; it caught its
+  first unclassified offender immediately, and `ContractsCitationCensus`
+  fired unprompted on a rename.
+
+### PR C — codex adversarial round 6 — ESCALATED TO THE USER (4 blockers)
+
+- Side-state outside the unit; the census not fail-closed semantically;
+  **the detachment observable FALSE — it inspected two of five channels
+  while a passing test said otherwise**; shutdown a drain rather than a
+  terminal retirement; and the crates-untouched claim inaccurate about
+  the tripwire commit.
+- **USER RULING #1: one boundary-complete wave, then codex round 7 as
+  final arbiter; a failing round 7 pauses PR C for an architecture
+  review.**
+- The wave stated the boundary once — everything REACHABLE during a wake,
+  not just what raises — and its sweep found `LastActivatedNode`, the
+  last mutable field a publication-time reader could reach.
+
+### PR C — codex adversarial round 7 — PR C PAUSED (4 blockers)
+
+- **Query-source identity outside the unit**: handle B queried against
+  view A. **The `Empty` sentinel's shared mutable memo.**
+  **`HandleEscape`/`RegisterRung` un-gated** — terminality reached by
+  enumeration rather than at the command boundary. **The census scanned
+  property roots**, so state handed out by a METHOD was invisible.
+- Paused per the mandate. The architecture review named the fixed point:
+  **the document exposes THREE populations — what RAISES, what is
+  READABLE, and what is QUERYABLE — and only two were ever in the
+  design.** The coherent shape is the unit OWNING its queries, with
+  generation-stamped handle tokens.
+- **USER RULING #2: SPLIT.** C-lite now — the verified-clean layer with
+  the filter reverted to the synchronous pre-review interim — and the
+  coherent-unit redesign as its own contracts-first PR before PR D, with
+  its design doc codex-verified BEFORE implementation.
+
+### PR C-lite — surgery review and red team — the extraction, checked
+
+- **Surgery review: one leaked async hunk severed the headline
+  feature.** `OnFilterTextChanged` kept its async-era body, so typing in
+  the filter field announced nothing — and every filter fact stayed
+  green, because the covering fact called `AnnounceFilterCount` itself
+  rather than driving the field. Restored, and the mutation re-homed to
+  the FIELD. **The lesson is in the fact's own doc comment: a fact that
+  calls the verb tests the verb, and what broke was the wire.**
+- An era-mixed render list had silently reversed a recorded
+  single-render decision, and its §C paragraph had been deleted with it.
+  Both restored — and recorded rather than pinned, because the mutation
+  PASSES: a double render is invisible to a functional fact, and
+  manufacturing one to satisfy a mutation is the unearned-mechanism
+  class this PR paid for twice.
+- **Red team: the blocker was that this record did not exist.** The §C
+  claims said the seven-round history was "in this document's round
+  record"; it was not, on either branch — it lived only in the
+  git-ignored ledger. That is W4-5's founding lesson repeated, and by
+  the controller rather than by an implementer. This section is the fix.
+- Recorded with it: the interim filter's SECOND cost (C10), and five
+  minors including extraction residue in the mode controller's comments.
+
+### PR C — the strategic lesson
+
+One asynchronous requirement, inside a PR whose other twelve contracts
+had nothing to do with it, took the whole PR hostage for seven codex
+rounds, two rule-4 trips, three design passes and two user rulings.
+Nothing above was wasted — the redesign PR starts from all of it — but
+the sizing was wrong from the brief. **Size a PR by SUBSYSTEM, not by
+requirement count**: the filter's async publish was a subsystem, and it
+was scoped as one line item among thirteen.

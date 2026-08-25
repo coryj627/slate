@@ -11148,6 +11148,54 @@ mod tests {
     /// Shared by BOTH host tripwires, deliberately: two copies of this
     /// parser would be the same curated-list defect one level up, which
     /// is the class this programme keeps closing rather than patching.
+    /// Remove C# line and block comments, so a scrape over the result
+    /// reads CODE rather than prose about code.
+    ///
+    /// Bounded to what the caller needs and honest about it: the slice
+    /// this runs over is a `switch` expression's arms, which contain no
+    /// string or character literals, so the scanner does not track them.
+    /// A literal introduced there would need that added — the assertion
+    /// below the call site would start failing rather than passing
+    /// wrongly, because a stripped literal removes routes rather than
+    /// inventing them.
+    fn strip_csharp_comments(source: &str) -> String {
+        let bytes = source.as_bytes();
+        let mut out = String::with_capacity(source.len());
+        let mut at = 0usize;
+        while at < bytes.len() {
+            if bytes[at..].starts_with(b"//") {
+                match source[at..].find('\n') {
+                    Some(end) => at += end,
+                    None => break,
+                }
+            } else if bytes[at..].starts_with(b"/*") {
+                match source[at + 2..].find("*/") {
+                    Some(end) => at += 2 + end + 2,
+                    None => break,
+                }
+            } else {
+                let ch = source[at..].chars().next().expect("a char boundary");
+                out.push(ch);
+                at += ch.len_utf8();
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn the_csharp_comment_stripper_removes_decoys_and_keeps_code() {
+        let stripped = strip_csharp_comments(
+            "CanvasA11yEvent.Real => EventClass.Navigation,\n             // CanvasA11yEvent.LineDecoy => EventClass.Navigation,\n             /* CanvasA11yEvent.BlockDecoy => EventClass.Filter, */\n             CanvasA11yEvent.AlsoReal => EventClass.Filter,\n",
+        );
+        assert!(stripped.contains("CanvasA11yEvent.Real"));
+        assert!(stripped.contains("CanvasA11yEvent.AlsoReal"));
+        assert!(
+            !stripped.contains("Decoy"),
+            "a name that appears only in a comment must not survive into \
+             the scrape: {stripped}"
+        );
+    }
+
     fn pinned_coalescing_classes(
         core_source: &str,
     ) -> std::collections::BTreeMap<String, std::collections::BTreeSet<String>> {
@@ -11314,6 +11362,15 @@ mod tests {
             .split_once("_ => null,")
             .expect("the switch's discard arm")
             .0;
+
+        // COMMENTS OUT FIRST. A scrape reads text, and text includes the
+        // text somebody wrote to explain the code — so an arm named only
+        // in a `// CanvasA11yEvent.Foo routes here` note would satisfy
+        // this tripwire while the switch routed nothing. That is the
+        // 0a round-6 decoy class exactly (an unused declaration carrying
+        // the words a scrape looks for), and it is one function to close.
+        let switch = strip_csharp_comments(switch);
+        let switch = switch.as_str();
 
         // Each arm is `⟨patterns⟩ => EventClass.⟨Class⟩,`; the patterns
         // are `CanvasA11yEvent.X` joined by `or`, wrapped freely by

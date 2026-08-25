@@ -651,6 +651,18 @@ W6_1_DELIVERED_COMMANDS = {
     # PR D ships the viewport, and §B12's rule is that a command joins
     # this set in the PR that makes it EXECUTABLE, not the one that
     # registers it.
+    #
+    # `commitMode` and `cancelMode` are PRESENT under that same rule, and
+    # the difference is worth stating because the two look alike from
+    # here. Both pairs are disabled most of the time; only one is
+    # disabled for a reason the PR cannot lift. The mode rows gate on
+    # `CanCommitOrCancel`, so they EXECUTE the moment a mode is running —
+    # and C ships the machine that runs one, drives it from the header's
+    # buttons and the menu items, and pins it with the M1–M7 conformance
+    # suite. `toggleFollowSelection` gates on a viewport that does not
+    # exist in this PR at all: there is no state of the shipped code in
+    # which it does anything. Delivered means REACHABLE, not
+    # unconditionally enabled.
     "slate.canvas.whereAmI",
     "slate.canvas.nextCard",
     "slate.canvas.previousCard",

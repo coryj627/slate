@@ -427,10 +427,14 @@ internal sealed class CanvasNavigator
                 CanvasFailedAction.WhereAmI, detail));
             return;
         }
-        // ONE view, and BOTH numbers read on this frame: the filter is
-        // SYNCHRONOUS here (contract C10 interim), so the rows, the count
-        // and the outline they are over are one dispatcher turn's worth
-        // of state and cannot describe two canvases.
+        // ONE view, and BOTH numbers read on this frame. The filter is
+        // SYNCHRONOUS here (contract C10 interim), so nothing lands
+        // BETWEEN the numerator and the denominator: they are one
+        // dispatcher turn's worth of state. That is what this guarantees
+        // and all it guarantees — during a reload the handle can already
+        // be the new canvas's while the rows on screen are still the old
+        // one's, so the PAIR is coherent and the CANVAS it describes can
+        // be a mixture. C10 records that as the interim's second cost.
         CanvasFilterView view = _document.Filter;
         uint shown = (uint)view.Rows.Count;
         uint total = (uint)_document.Outline.Count;
@@ -483,8 +487,8 @@ internal sealed class CanvasNavigator
     public void ClearFilter()
     {
         _document.FilterText = string.Empty;
-        // The widening is synchronous, so this is the canvas now on
-        // screen (contract C10 interim).
+        // The widening is synchronous, so this counts the rows this
+        // frame put on screen (contract C10 interim).
         Announce(new CanvasA11yEvent.CanvasFilterCleared((uint)_document.Outline.Count));
     }
 
@@ -528,7 +532,9 @@ internal sealed class CanvasNavigator
     /// cause — no handle could answer — and it is the cause the state
     /// mapping already has a sentence for. There is no in-flight frame to
     /// describe and no failed-query state to distinguish, which is why
-    /// this is two branches rather than four.
+    /// this is two branches rather than four. What it does NOT rule out
+    /// is a count taken against a handle a reload has already swapped;
+    /// C10 records that cost rather than this comment claiming it away.
     /// </remarks>
     public string FilterSummaryText()
     {
