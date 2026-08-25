@@ -173,7 +173,11 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     public WorkspaceItemState Item { get; private set; }
     public string? Mode { get; private set; }
     public bool? PropsCollapsed { get; }
-    public string? ActiveCanvasSurface { get; }
+    /// <summary>W6-1 PR A (contract A15): the persisted surface token,
+    /// `"table" | "visual"` with outline written as ABSENT. The surface
+    /// switcher drives it through
+    /// <see cref="SetActiveCanvasSurface"/>.</summary>
+    public string? ActiveCanvasSurface { get; private set; }
     public string Title => Item.Title;
     public TextDocument? EditorDocument => _editorSession?.Document;
     public AvalonDocumentBufferSession? EditorSession => _editorSession;
@@ -282,8 +286,42 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
 
     public bool IsBaseVisible => IsBase || IsSavedQueryTab;
 
+    public bool IsCanvas => Item.Kind == WorkspaceItemKind.Canvas;
+
+    /// <summary>W6-1 PR A (#745, contract A1): the shared per-path
+    /// canvas document — attached by the workspace registry at tab
+    /// creation through the ONE attach funnel. Null on every other tab
+    /// kind, and on canvas tabs only between construction and
+    /// attach.</summary>
+    public Canvas.CanvasDocumentViewModel? Canvas { get; private set; }
+
+    internal void AttachCanvasDocument(Canvas.CanvasDocumentViewModel document)
+    {
+        Canvas = document;
+        if (ActiveCanvasSurface is "table" or "visual")
+        {
+            // The restored token seats the shared selection's surface
+            // so a reopened tab lands where it left (contract A15).
+            document.Selection.ActiveSurface = ActiveCanvasSurface == "table"
+                ? uniffi.slate_uniffi.CanvasSurfaceKind.Table
+                : uniffi.slate_uniffi.CanvasSurfaceKind.Visual;
+        }
+        OnPropertyChanged(nameof(Canvas));
+    }
+
+    /// <summary>Contract A15: outline persists as ABSENT (null), the
+    /// mac sparse-map shape — the writer only ever emits the two
+    /// non-outline tokens.</summary>
+    internal void SetActiveCanvasSurface(string? surface)
+    {
+        ActiveCanvasSurface = surface is "table" or "visual" ? surface : null;
+        OnPropertyChanged(nameof(ActiveCanvasSurface));
+    }
+
+    public bool IsCanvasVisible => IsCanvas;
+
     public bool IsPlaceholder =>
-        !IsMarkdown && !IsBase && !IsSavedQueryTab && !IsDashboardTab;
+        !IsMarkdown && !IsBase && !IsSavedQueryTab && !IsDashboardTab && !IsCanvas;
     public string KindLabel => Item.Kind switch
     {
         WorkspaceItemKind.Canvas => "Canvas",
@@ -373,12 +411,14 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         // Navigation reuses the tab IN PLACE, so the previous item's
         // Bases/dashboard documents must not survive the replacement
         // (red team round 1: base B's title over base A's rows). The
-        // caller re-attaches through AttachBaseDocumentIfNeeded and
+        // caller re-attaches through AttachTabDocumentsIfNeeded and
         // releases the orphaned documents.
         Base = null;
         Dashboard = null;
+        Canvas = null;
         OnPropertyChanged(nameof(Base));
         OnPropertyChanged(nameof(Dashboard));
+        OnPropertyChanged(nameof(Canvas));
         // The staleness verdict belongs to the PREVIOUS note
         // (adversarial round 10): a reused current tab must not make
         // the replacement note inherit it — every identity guard
@@ -1231,8 +1271,10 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         OnPropertyChanged(nameof(IsBase));
         OnPropertyChanged(nameof(IsSavedQueryTab));
         OnPropertyChanged(nameof(IsDashboardTab));
+        OnPropertyChanged(nameof(IsCanvas));
         OnPropertyChanged(nameof(IsBaseVisible));
         OnPropertyChanged(nameof(IsDashboardVisible));
+        OnPropertyChanged(nameof(IsCanvasVisible));
     }
 }
 
@@ -1314,7 +1356,15 @@ internal sealed class WorkspacePaneNodeViewModel : BindableBase
 internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
 {
     private readonly VaultSession _session;
+    /// <summary>The vault's absolute root — the one place that composes
+    /// an absolute path from a vault-relative one (W6-1 PR A: the canvas
+    /// media hand-off to the shell).</summary>
+    private readonly string _vaultRoot;
     private readonly Action<A11yEvent> _announce;
+    /// <summary>W6-1 PR A (contract A5): the canvas coalescer's post
+    /// seam. It queues RENDERED lines — the window's winner is decided
+    /// after the render — so it cannot use the event seam above.</summary>
+    private readonly Action<RenderedAnnouncement> _announceRendered;
     private readonly Panels.TaskIndexRepairCoordinator _taskIndexRepairs;
     private readonly Func<WorkspaceTabViewModel, WorkspaceItemState, WorkspaceDirtyNavigationDecision>
         _dirtyNavigationDecision;
@@ -1406,12 +1456,15 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             dirtyCloseDecision = null,
         bool? startInteractionBackgroundWork = null,
         AppPreferencesStore? preferencesStore = null,
-        Func<string, bool>? externalOpener = null)
+        Func<string, bool>? externalOpener = null,
+        Action<RenderedAnnouncement>? announceRendered = null)
     {
         _session = session;
         _persistence = new WorkspacePersistence(vaultRoot);
+        _vaultRoot = vaultRoot;
         _expandedDirectoryPaths = expandedDirectoryPaths;
         _announce = announce;
+        _announceRendered = announceRendered ?? (_ => { });
         // Unspecified = the host decides (#1129). Background
         // interaction work needs a UI thread to come back to: every
         // panel's publish posts to the SynchronizationContext captured
@@ -1932,6 +1985,8 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         // path forever, and whose stale key the next release sweep
         // shuts down UNDER the live tab (red team round 2 blocker).
         RetargetBaseDocuments(source, destination);
+        // Same reason, same shape, for the canvas registry (CD-32).
+        RetargetCanvasDocuments(source, destination);
 
         Persist();
         // A rename that touched the ACTIVE tab changed its Path in
@@ -2119,6 +2174,9 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             basesDrains.Add(dashboard.WhenWorkDrained());
         }
         _dashboardDocuments.Clear();
+        // W6-1 PR A (contract A1/A17): canvas documents hold the shared
+        // session and a native handle on exactly the same terms.
+        ShutdownCanvasDocuments(basesDrains);
         // Retires the dock document/dashboard into the tracked set.
         ClearBasesDock();
         if (BaseQueryBuilderSheet is { } openBuilder)

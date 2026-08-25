@@ -22,7 +22,20 @@ internal sealed class AccessibilityNotificationDispatcher
     public void Post(A11yEvent @event)
     {
         ArgumentNullException.ThrowIfNull(@event);
-        RenderedAnnouncement rendered = SlateUniffiMethods.A11yRender(@event);
+        Post(SlateUniffiMethods.A11yRender(@event));
+    }
+
+    /// <summary>
+    /// The rendered-pair primitive (W6-1 PR A, contract A5). A
+    /// coalescer cannot hand back an event: the window's winner is
+    /// decided AFTER the render and the loser is dropped without ever
+    /// being spoken, so its queue holds rendered lines — the same seam
+    /// shape mac's <c>CanvasAnnouncer</c> takes. Text and priority both
+    /// stay core's either way.
+    /// </summary>
+    public void Post(RenderedAnnouncement rendered)
+    {
+        ArgumentNullException.ThrowIfNull(rendered);
         AutomationPeer peer = UIElementAutomationPeer.FromElement(_source)
             ?? UIElementAutomationPeer.CreatePeerForElement(_source)
             ?? new FrameworkElementAutomationPeer(_source);

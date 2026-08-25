@@ -41,7 +41,15 @@ public partial class MainWindow : Window
             confirmDirtyNavigation: ConfirmDirtyNavigation,
             confirmDirtyClose: ConfirmDirtyClose,
             confirmDestructive: ConfirmDestructive,
-            pickImportSources: PickImportSourcesAsync);
+            pickImportSources: PickImportSourcesAsync,
+            // W6-1 PR A (contract A5): the canvas coalescer queues
+            // RENDERED lines, so it cannot use the event seam above.
+            // BOTH seams must be threaded here or every canvas
+            // announcement falls into the lifecycle's no-op default and
+            // dies silently in production while every fact that injects
+            // its own sink stays green. AnnouncementSeamCensus reads
+            // this call and fails if either argument goes missing.
+            announceRendered: _announcer.Post);
         _viewModel.RecentVaultsChanged += ViewModel_RecentVaultsChanged;
         _viewModel.ReturnedToWelcome += ViewModel_ReturnedToWelcome;
         _viewModel.WorkspaceReady += ViewModel_WorkspaceReady;
@@ -1484,6 +1492,26 @@ public partial class MainWindow : Window
     private void FocusEditorPane(WorkspaceGroupViewModel group)
     {
         WorkspaceTabViewModel? activeTab = group.ActiveTab;
+        // W6-1 PR A (contract A14): a canvas tab's focus belongs to the
+        // canvas surface, which realizes an outline row and places focus
+        // there. The fallbacks below (the TabItem, then the TabControl)
+        // would take focus straight back off that row, and this handler
+        // is queued at Input priority — i.e. strictly AFTER the canvas
+        // delivery — so they would win deterministically.
+        //
+        // But it must not return BARE. Seven routes reach here as a
+        // last resort after a dismissal whose own comments say the
+        // fallback exists "rather than stranding focus on the window
+        // root" — the palette, search, properties and template sheets
+        // among them — and for those the canvas delivery has not been
+        // asked for at all. So the canvas arm ASKS: one authority per
+        // tab kind, and every route that wanted "put focus somewhere
+        // sensible" gets the outline row.
+        if (activeTab is { IsCanvas: true, Canvas: { } canvas })
+        {
+            canvas.RequestFocusLanding(activeTab);
+            return;
+        }
         SlateTextEditor? editor = FindVisualDescendants<SlateTextEditor>(ContentPaneBorder)
             .FirstOrDefault(candidate => ReferenceEquals(candidate.DataContext, activeTab));
         if (editor is { IsVisible: true, IsEnabled: true } && editor.FocusInputOwner())

@@ -1004,11 +1004,9 @@ internal sealed class RightPanePanelsViewModel : PanelWorkScheduler
 
     private void OpenExternal(string target)
     {
-        // The mac allowlist, verbatim: anything else — file:,
-        // javascript:, custom schemes — is refused loudly.
-        bool allowed = Uri.TryCreate(target, UriKind.Absolute, out Uri? uri)
-            && uri.Scheme is "http" or "https" or "mailto";
-        if (!allowed)
+        // The ONE allowlist (ExternalLinkPolicy): anything else —
+        // file:, javascript:, custom schemes — is refused loudly.
+        if (!ExternalLinkPolicy.IsLaunchable(target))
         {
             _announce(new A11yEvent.ExternalLinkUnsupported(target));
             return;

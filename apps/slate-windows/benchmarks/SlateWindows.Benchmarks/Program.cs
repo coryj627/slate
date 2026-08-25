@@ -7,13 +7,27 @@ using BenchmarkDotNet.Configs;
 using BenchmarkDotNet.Reports;
 using BenchmarkDotNet.Running;
 using SlateWindows;
+using uniffi.slate_uniffi;
 
 bool validateBudgets = args.Contains("--validate-budgets", StringComparer.Ordinal);
+// W6-1 PR A (§K, contract A20): the canvas open/marshalling suite is a
+// SEPARATE runner selection rather than a second class in the same run,
+// because the W2-2 budget gate below reads every report's `Bytes`
+// parameter and a canvas report has none.
+bool canvasSuite = args.Contains("--canvas", StringComparer.Ordinal);
 string[] benchmarkArgs = args
-    .Where(argument => !string.Equals(argument, "--validate-budgets", StringComparison.Ordinal))
+    .Where(argument =>
+        !string.Equals(argument, "--validate-budgets", StringComparison.Ordinal)
+        && !string.Equals(argument, "--canvas", StringComparison.Ordinal))
     .ToArray();
 ManualConfig benchmarkConfig = ManualConfig.Create(DefaultConfig.Instance)
     .WithArtifactsPath(Path.Combine(AppContext.BaseDirectory, "BenchmarkDotNet.Artifacts"));
+if (canvasSuite)
+{
+    _ = BenchmarkRunner.Run<CanvasOpenBenchmarks>(benchmarkConfig, benchmarkArgs);
+    return 0;
+}
+
 Summary summary = BenchmarkRunner.Run<EditorHighlightBenchmarks>(
     benchmarkConfig,
     benchmarkArgs);
@@ -144,5 +158,122 @@ public class EditorHighlightBenchmarks
         return afterTarget >= 0
             ? afterTarget
             : document.LastIndexOf(anchor, target, StringComparison.Ordinal);
+    }
+}
+
+/// <summary>
+/// W6-1 PR A §K (contract A20): the canvas read path through the C#
+/// binding, over the committed 2,000-node fixture. The mac core path is
+/// 5.62 ms (BENCHMARKS.md, Milestone T Wave 1) — everything measured
+/// here on top of that is marshalling, which is the whole point of the
+/// row: core's cost is already benchmarked in Rust, and this suite
+/// isolates what the Windows host adds.
+///
+///   dotnet run --project apps/slate-windows/benchmarks/SlateWindows.Benchmarks ///     --configuration Release -- --canvas
+/// </summary>
+[MemoryDiagnoser]
+[MedianColumn]
+[SimpleJob(warmupCount: 3, iterationCount: 15)]
+public class CanvasOpenBenchmarks
+{
+    private const string Fixture = "large_2000.canvas";
+    private string _root = string.Empty;
+    private VaultSession? _session;
+
+    [GlobalSetup]
+    public void GlobalSetup()
+    {
+        _root = Path.Combine(
+            Path.GetTempPath(), $"slate-canvas-bench-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(_root);
+        File.Copy(FixturePath(), Path.Combine(_root, Fixture));
+        _session = VaultSession.OpenFilesystem(_root);
+        using var cancel = new CancelToken();
+        _session.ScanInitial(cancel);
+    }
+
+    [GlobalCleanup]
+    public void GlobalCleanup()
+    {
+        _session?.Dispose();
+        _session = null;
+        try
+        {
+            Directory.Delete(_root, recursive: true);
+        }
+        catch (IOException)
+        {
+        }
+    }
+
+    /// <summary>Parse + derive + index + the handle, with nothing
+    /// marshalled back but the open info.</summary>
+    [Benchmark(Baseline = true)]
+    public uint Open()
+    {
+        VaultSession session = Session();
+        CanvasOpenInfo info = session.OpenCanvas(Fixture);
+        try
+        {
+            return info.NodeCount;
+        }
+        finally
+        {
+            session.CloseCanvas(info.Handle);
+        }
+    }
+
+    [Benchmark]
+    public int OpenAndOutline() => Marshalled(static (session, handle) =>
+        session.CanvasOutline(handle).Length);
+
+    [Benchmark]
+    public int OpenAndTable() => Marshalled(static (session, handle) =>
+        session.CanvasTableRows(handle).Length);
+
+    [Benchmark]
+    public int OpenAndScene() => Marshalled(static (session, handle) =>
+        session.CanvasScene(handle).Nodes.Length);
+
+    /// <summary>What PR A's document VM actually pays on a load: all
+    /// three projections behind one open (contract A17).</summary>
+    [Benchmark]
+    public int OpenAndEveryProjection() => Marshalled(static (session, handle) =>
+        session.CanvasOutline(handle).Length
+        + session.CanvasTableRows(handle).Length
+        + session.CanvasScene(handle).Nodes.Length);
+
+    private int Marshalled(Func<VaultSession, ulong, int> body)
+    {
+        VaultSession session = Session();
+        CanvasOpenInfo info = session.OpenCanvas(Fixture);
+        try
+        {
+            return body(session, info.Handle);
+        }
+        finally
+        {
+            session.CloseCanvas(info.Handle);
+        }
+    }
+
+    private VaultSession Session() => _session
+        ?? throw new InvalidOperationException("Benchmark session was not initialized.");
+
+    /// <summary>Walk UP to the workspace `Cargo.toml` rather than
+    /// counting directory hops — a hop count breaks on a TFM, RID or
+    /// runner change (the A11yCorpusCensus rationale).</summary>
+    private static string FixturePath()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null
+            && !File.Exists(Path.Combine(directory.FullName, "Cargo.toml")))
+        {
+            directory = directory.Parent;
+        }
+        string root = directory?.FullName
+            ?? throw new InvalidOperationException("repository root not found");
+        return Path.Combine(
+            root, "crates", "slate-core", "tests", "fixtures", "canvas", Fixture);
     }
 }

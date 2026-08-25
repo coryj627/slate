@@ -3,7 +3,8 @@
                     xmlns:local="clr-namespace:SlateWindows"
                     xmlns:panels="clr-namespace:SlateWindows.Panels"
                     xmlns:reading="clr-namespace:SlateWindows.Reading"
-                    xmlns:bases="clr-namespace:SlateWindows.Bases">
+                    xmlns:bases="clr-namespace:SlateWindows.Bases"
+                    xmlns:canvas="clr-namespace:SlateWindows.Canvas">
     <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
     <local:InverseBooleanToVisibilityConverter x:Key="InverseBooleanToVisibilityConverter" />
     <local:AxisToOrientationConverter x:Key="AxisToOrientationConverter" />
@@ -440,6 +441,12 @@
             <bases:DashboardSurfaceView Grid.Row="1"
                                         Model="{Binding Dashboard}"
                                         Visibility="{Binding IsDashboardVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
+            <!-- W6-1 PR A (#745): the .canvas tab body — same shared
+                 cell and the same visibility discipline, so UIA only
+                 ever sees the one live document surface. -->
+            <canvas:CanvasSurfaceView Grid.Row="1"
+                                      Model="{Binding Canvas}"
+                                      Visibility="{Binding IsCanvasVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
             <!-- Keep the modal interaction surface in the tab's presentation
                  source so UIA ownership is stable across providers. The
                  transparent layer intentionally makes Close/Escape the only

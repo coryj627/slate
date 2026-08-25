@@ -832,3 +832,49 @@ The optimization keeps immutable concurrent snapshots through the existing
 `Arc` ownership boundary while using `Arc::make_mut` plus in-place structure
 splices for the normal sequential edit path. The formal `--validate-budgets`
 runner exits non-zero on any point or flatness miss.
+
+## W6-1 PR A — canvas through the C# binding — 2026-08-24 (#745)
+
+The §K row the W6-1 spec asks PR A for: the canvas READ path through
+`uniffi`, over the committed 2,000-node fixture (`large_2000.canvas`).
+Runner class `CanvasOpenBenchmarks`
+(`apps/slate-windows/benchmarks/SlateWindows.Benchmarks/Program.cs`),
+BenchmarkDotNet 0.15.8, three warmups and fifteen measured iterations:
+
+```powershell
+dotnet run --project apps/slate-windows/benchmarks/SlateWindows.Benchmarks `
+  --configuration Release -- --canvas
+```
+
+Environment: **QEMU virtual CPU, 12 logical processors**, Windows 11 Pro
+x64 build 26200, .NET SDK 10.0.400 / .NET 10.0.11, `rustc 1.97.1`,
+Release `slate_uniffi.dll`. **This is a virtualized box, not the bare
+metal the W2-1/W2-2 rows above were measured on** (AMD Ryzen 7 9800X3D)
+— the two sets are not comparable to each other, and the absolute
+numbers here should be re-measured on the reference machine before any
+of them is treated as a budget.
+
+| Benchmark | Median | What it adds |
+|---|---:|---|
+| `Open` (baseline) | **36.27 ms** | `open_canvas`: parse + derive + the fenced `canvas_nodes` index write + registry insert. |
+| `OpenAndOutline` | 37.38 ms | + **~1.1 ms** marshalling 2,000 `CanvasOutlineRow`s (834 KB). |
+| `OpenAndTable` | 37.00 ms | + **~0.7 ms** marshalling 2,000 `CanvasTableRow`s (904 KB). |
+| `OpenAndScene` | 36.55 ms | + **~0.3 ms** marshalling the scene (1.43 MB). |
+| `OpenAndEveryProjection` | 40.82 ms | + **~4.6 ms** for all three behind one open (3.17 MB) — what PR A's document VM actually pays on a load. |
+
+**The mac 5.62 ms figure is not this baseline, and the spec's §K row
+reads as though it were.** `canvas_parse_derive_2000` (Milestone T Wave
+1, above) measures the pure parse + derive of the same fixture with no
+persistence; `open_canvas` additionally does an indexed SQLite write
+inside `begin_fenced` and inserts the handle into the session registry.
+So the 36 ms baseline is core's own work, not a C# tax, and the
+marshalling delta this suite exists to isolate is the **~4.6 ms** for
+all three projections. A like-for-like comparison against 5.62 ms needs
+a Rust bench of `open_canvas` itself, which does not exist; recorded
+here rather than papered over with a ratio that would mean nothing.
+
+Gate: PR A's `CanvasDocumentTests.LargeCanvasOutlineBuildsUnderBudget`
+asserts a complete document load (open + outline + table + scene +
+publish) under **500 ms** in both scheduling modes — the §K interactive
+budget the mac renderer suite also asserts. Measured headroom here is
+roughly an order of magnitude.

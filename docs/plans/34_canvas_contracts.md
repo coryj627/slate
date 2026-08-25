@@ -878,6 +878,712 @@ siblings answer it).
 
 ---
 
+## PR A — the canvas document, the tab, and the outline
+
+**Goal (spec §PR A).** Opening a `.canvas` shows a real surface: a
+per-path document view model over the FFI, the outline projection as a
+UIA tree, the load states of t0 §5, canvas-open announcements through
+the PR 0a vocabulary, and focus landing. Default landing is the outline
+(t2 #369 decision 3). The table (PR B) and visual (PR D) projections
+are commands here and projections later.
+
+### Contracts
+
+**A1 — One document per open path; the registry owns its lifetime.**
+`WorkspaceViewModel` keys canvas documents by the byte-exact
+vault-relative path (`Ordinal`, `"canvas:" + path`) exactly as it keys
+Bases documents (`WorkspaceViewModel.cs`, `_baseDocuments` /
+`BaseDocumentFor`), so every tab and every pane showing that path holds
+the SAME `CanvasDocumentViewModel` and therefore the same
+`CanvasSelection` (R-B). Release is the Bases sweep, not a hand-kept
+integer: `ReleaseUnreferencedCanvasDocuments()` runs at every tab-close
+funnel, computes the live key set from the open tabs, and shuts down
+every document no tab references — which closes `close_canvas` and
+drops the selection and the marks with the object (spec behavior 1's
+"marks cleared when the last tab closes"). `Dispose` shuts the whole
+registry down and drains its closes into the same bounded teardown
+drain the Bases documents use (INV-2's Windows twin).
+
+**A registry HIT must not serve stale content.** The registry keys by
+path and a hit returns the document as it stands, which is right for
+sharing and wrong the moment the bytes change underneath it. The
+attach funnel's fifth site — `ReloadOpenTabFromDisk`, the history
+restore's — is the reachable one today: it re-attached the same
+document and the outline went on rendering the PRE-restore rows,
+directly after this shell announced the restore. So the canvas arm of
+that site reloads explicitly (`ReloadCanvasDocumentAt`). Selection
+survives wherever the node id still exists, because `PublishReady`
+re-seats only when the selected node is gone. Pinned by
+`RestoringAVersionReloadsAnOpenCanvasTab` and
+`TheReloadKeepsTheSharedDocumentObject`, and mutation-verified: dropping
+the reload call brings the stale rows back.
+
+**A rename lands new bytes at the DESTINATION, too.** Two shapes reach
+it: the atomic save (write `x.tmp`, rename it onto the open
+`board.canvas` — the source was never open, so the registry's re-key
+loop does nothing at all), and both-open, where the re-key points the
+source's tabs at the destination's existing document without re-reading
+it. `RetargetCanvasDocuments` therefore reloads the destination after
+the re-key, so the surviving document is the one that re-reads. Pinned
+by `ARenameOntoAnOpenCanvasReloadsTheDestination` and
+`ARenameWithBothPathsOpenReloadsTheDestinationAndRetargetsTheSource`.
+
+**Scope, stated honestly.** The fact drives the reload SITE, not the
+whole History restore: W4-7's restore carries its own preconditions for
+a non-markdown tab (the CAS basis is the history head hash, not a tab
+buffer hash), and a `.canvas` tab does not satisfy them end to end in
+this harness. Whether History should restore a canvas at all is W4-7's
+question and is recorded in "verified during implementation" rather than
+answered here. The Bases and dashboard arms of the same site have the
+same registry-hit hole at BASE; that is pre-existing and not this PR's
+to fix, but PR A adopted the shape into new code at the exact site whose
+enumeration was a controller ruling, which is why the canvas arm is
+closed now.
+
+**"Refcount" is the sweep's live-key set, stated exactly.** The spec
+says refcount; this registry has no counter, because the Bases
+precedent proved a counter and a tab list can disagree and the tab list
+is the one a user can see. Everything the spec asks a refcount for is a
+property of the sweep: 0→1 is the `CanvasDocumentFor` miss that
+constructs and loads (A4 hangs the once-per-open announcement there),
+and N→0 is the sweep finding no live tab. Pinned by
+`OneDocumentIsSharedByEveryTabOnThePath`,
+`TheLastTabClosingReleasesTheDocumentAndItsMarks`.
+
+**A2 — The attach funnel has FIVE call sites, and the list is derived.**
+Controller ruling. The funnel's doc comment — it was named
+AttachBaseDocumentIfNeeded before this PR renamed it, so that spelling
+is history rather than a citation
+(`WorkspaceViewModel.Bases.cs:1042–1046`) — named four — "AddTab, restore,
+duplicate, and the in-place REPLACE arm" — and there were five: the
+active-tab replace arm in `TryOpenItem` (`Layout.cs:161`), `AddTab`
+(`Layout.cs:210`), `DuplicateActiveTab` (`Layout.cs:441`), `RestoreNode`
+(`Persistence.cs:83`) and `ReloadOpenTabFromDisk` (`History.cs:237`).
+The W4-6 round-1 lesson was that two sweeps missed sites; a comment one
+site behind is the same failure in slower motion. This PR renames the
+funnel `AttachTabDocumentsIfNeeded` (it attaches Bases, dashboards and
+now canvases), fixes the enumeration, and replaces "trust the comment"
+with a Roslyn twin: `TheAttachFunnelDocCommentNamesEveryCallSite` parses
+the three partial files, collects the enclosing method of every
+invocation, and asserts the comment's named set EQUALS the derived set
+in both directions. A sixth site that forgets the comment fails; a
+comment naming a site that no longer exists fails too.
+
+**A3 — Five load states, and `degraded` is the PARSE-ERROR one.**
+`CanvasLoadState { Loading, Ready, ParseError, Failed, RetargetAbsent }`
+is the mac `CanvasDocument.LoadState` twin
+(`apps/slate-mac/Sources/SlateMac/Canvas/CanvasDocument.swift:174–186`)
+with mac's `.degraded` renamed, because on Windows two different things
+were both called degraded and the reviewer has to be able to tell them
+apart:
+
+| Source fact | State | What the user gets |
+|---|---|---|
+| `open_canvas` threw | `Failed` | the failure message, retry-able |
+| `CanvasOpenInfo.degraded` | `ParseError` | the `ParseFailed` warning's detail; handle closed at once; read-only by construction |
+| open succeeded | `Ready` | rows; the A4 banner rides on top when any entry was skipped |
+| a retarget's reopen threw | `RetargetAbsent` | the message names both spellings |
+| before the first publish | `Loading` | the spinner label |
+
+The three FAILURE states put the banner in the tab order with
+`LiveSetting=Assertive` — t0 §3's error-region discipline is "focusable,
+never announcement-only", and a plain `TextBlock` satisfies neither
+half. `Loading` does not: it is transient, and a tab stop that vanishes
+under the cursor is its own defect. Pinned by
+`TheFailureBannerIsAFocusableRegion`.
+
+`canvas::is_load_degraded` (`crates/slate-core/src/canvas/mod.rs:356`)
+is `any(ParseFailed)`, and every `ParseFailed` arm of `canvas::parse`
+returns `Canvas::default()` — so a degraded open carries **no** skipped
+entries, and rendering `CanvasLoadedDegraded { skipped }` for it would
+speak a count of zero for a file that was not loaded at all. t0 §5
+agrees: its sentence is introduced as "Parse warnings (#359 tolerant
+contract)", i.e. the warnings, not the flag. Mac reads it the same way —
+`preservedItemCount` counts `.skippedEntry`
+(`CanvasDocument.swift:486–490`) and the banner renders only in
+`.ready` (`CanvasContainerView.swift:354`). The spec's PR A behavior
+row 2 folds the two facts into one sentence; this row unfolds them and
+takes mac's shipped shape, which is the reference implementation for
+both. (CD-28.)
+
+**A4 — `CanvasLoadedDegraded` is announced once per document OPEN.**
+Controller ruling on CD-3's Windows reading: the announcement belongs to
+the registry's 0→1 transition (A1), not to a mounted view. It is
+therefore posted by `CanvasDocumentViewModel` at the end of the publish
+that reaches `Ready`, behind a one-shot the `Load()` entry point resets
+— so a reload re-announces (a reload IS an open) and a second pane
+mounting the same document does not. Mac's one-shot is a view-level
+`@State` (`CanvasContainerView.swift:470–487`), which is per-container;
+the mac per-container behaviour stays a recorded platform note (CD-29).
+`skipped` is the SkippedEntry warning count, and the banner renders the
+SAME event through `A11yRender` rather than composing a second copy —
+the mac CD-3 precedent, so banner and speech cannot drift. Pinned by
+`TwoPanesOnOneDocumentAnnounceTheDegradedLoadOnce` and
+`TheDegradedBannerIsTheSameRenderTheAnnouncementSpeaks`.
+
+**The footer rows are wider than the banner's count, deliberately.**
+Spec behavior 2 asks for "a focusable detail row in the outline footer
+listing `warnings`" — every warning, which on `malformed.canvas` is
+eight where the banner's `skipped` is five. The footer lists all of
+them, because a dangling connection or an ignored side is a fact about
+the user's file that nothing else in this PR reports, and the banner
+keeps the vocabulary's number, because that is the parameter the event
+takes. The footer renders only under `Ready`: a parse error's state
+message IS its single `ParseFailed` detail (A3), so listing it below
+would say the same sentence twice.
+
+**A5 — `CanvasAnnouncer` is a relay and a clock, and nothing else.**
+R-C. It takes a typed `CanvasA11yEvent`, wraps it in
+`A11yEvent.Canvas`, renders it through `SlateUniffiMethods.A11yRender`,
+and posts the rendered `(text, priority)` pair. The class keys are the
+one list pinned core-side (0a-8) copied verbatim: `navigation` =
+`CanvasMovedTo`, `CanvasGroupEntered`, `CanvasGroupLeft`,
+`CanvasConnectionTraversed`, `CanvasMoveRelative`,
+`CanvasResizeGeometry`; `filter` = `CanvasFilterCount`,
+`CanvasFilterCleared`; everything else posts immediately; a `High`
+canvas event cancels and DROPS both pending classes rather than
+flushing them (navigation context is re-derivable by moving again).
+The window is 200 ms latest-wins, each class independent. `Relay` takes
+a non-canvas `A11yEvent` (the shared grid's own events, PR B) and
+carries its core priority through unwrapped — the mac
+`testRelayCarriesTheCorePriorityOfANonCanvasEvent` fact.
+
+**The timers are bound to the dispatcher captured at CONSTRUCTION, and
+an empty render is loud.** A `DispatcherTimer` binds to
+`Dispatcher.CurrentDispatcher` of whatever thread creates it, and these
+are created lazily on the first debounce of each class — so a first
+navigation announcement arriving from a scheduler body would have
+created a timer on a POOL thread whose dispatcher nothing ever pumps,
+and the queued line would simply never fire. The announcer captures the
+dispatcher in its constructor and passes it to every timer, which makes
+that unreachable, and asserts in Debug that it is being driven from that
+thread. Separately, the empty-render arm (mac's
+`guard !rendered.text.isEmpty` twin) now carries a `Debug.Fail`: no
+canvas template renders empty, and a silent drop is the worst way to
+learn that one started to, because the symptom is an announcement that
+does not happen.
+
+**The announcer is retired with its document.** `Shutdown()` cancels the
+timers, DROPS the pending lines rather than flushing them (the reason to
+say a navigation line — the user is reading that canvas — stopped being
+true), and refuses anything posted afterwards with a `Debug.Fail`,
+because a post after retirement means some path outlived the document
+that owns it. `CanvasDocumentViewModel.Shutdown` calls it, so every
+retirement route reaches it: the release sweep, the retarget, the
+vault-close drain. Without it, closing the last tab on a canvas the user
+had just moved around in left a coalesced line queued on a dead document
+that fired ~200 ms later, and the shell spoke about a surface that was
+gone. Pinned by `NothingSpeaksAfterTheLastTabClosed`, which covers both
+halves (the dropped queue and the refused late post) and is
+mutation-verified against each.
+
+**The post seam is `(text, priority)`, so the dispatcher gained an
+overload.** `AccessibilityNotificationDispatcher.Post(A11yEvent)`
+rendered internally, which a coalescer cannot use: the window's winner
+is decided AFTER the render and the loser is dropped without ever being
+spoken, so the queue holds rendered lines. `Post(RenderedAnnouncement)`
+is now the primitive and `Post(A11yEvent)` delegates to it — the same
+seam shape mac's announcer takes (`CanvasAnnouncer.swift`, the
+`(String, NSAccessibilityPriorityLevel)` closure), for the same reason.
+
+**A6 — The census is the funnel guard, and it reads syntax, not text.**
+The Windows twin of mac's `testNoDirectAnnouncementsUnderCanvas`
+(`CanvasAnnouncerTests.swift:138`) is `CanvasAnnouncerCensus`, a Roslyn
+pass over every `.cs` under `src/SlateWindows/Canvas/` **recursively**
+(the mac round-1 m-F lesson: `Canvas/CanvasPickers/` arrives in PR E)
+with `CanvasAnnouncer.cs` as the single exempt file. It fails on any
+`AccessibilityNotificationDispatcher` reference, any
+`RaiseNotificationEvent`, any `A11yRender` call, and any
+`A11yEvent.HostComposed` construction. Syntax, not `Contains`: a
+comment naming a bypass is trivia and cannot trip the guard, and a
+string literal spelling one is a literal node, not a call — the #1108
+rationale that `CSharpSource` exists for. Windows has no residue census
+of its own (`A11yResidueCensusTests` has no twin); this is the first,
+and it is scoped to `Canvas/` deliberately rather than pretending to be
+the general one.
+
+**A7 — Verbosity is a parameter at every announce site.**
+`CanvasDocumentViewModel.Verbosity` defaults to
+`CanvasVerbosity.Standard` and is passed into every event that takes it
+(today: `CanvasMovedTo`). PR C replaces the field with the persisted,
+live-switchable preference and changes no call site. The m7 lesson is
+recorded rather than papered over: **no unit guard asserts that a new
+announce site threads verbosity** — a `CanvasA11yEvent` variant that
+takes the parameter cannot be constructed without one, and which VALUE
+it gets is not a property any source scan can see. The coverage is the
+end-to-end-through-render facts (`MovingSelectionAnnouncesTheCoreRenderedMoveAtTheVerbosity`),
+exactly as mac has it.
+
+**A8 — The outline is a tree of core's rows, nested by `depth`.**
+One `TreeViewItem` per `CanvasOutlineRow` in `canvas_outline` order,
+re-parented by the `depth` column with a stack — the host computes no
+containment (R-D; 0b-8 owns the tree). `ControlType.TreeItem` under a
+`ControlType.Tree` named "Canvas outline"; `SelectionItem` and
+`ExpandCollapse` come from WPF, and `Invoke` is added by the host because
+WPF's tree peers implement ExpandCollapse/SelectionItem/ScrollItem and
+NOT `IInvokeProvider` — putting an invokable child element inside the row
+instead would violate the journeys' recorded peered-elements-only trap.
+
+**Invoke must live on the DATA-ITEM peer, not the container peer (round
+7).** WPF does not project a `TreeViewItem`'s own peer into the UIA tree;
+it projects each row through WPF's tree *data-item* peer, which
+implements SelectionItem/ExpandCollapse/ScrollItem ITSELF and does not
+forward a custom pattern to the container. So `Invoke` added only to
+`CanvasOutlineItemAutomationPeer` was real but invisible — a client saw
+`invoke=NULL` on every row. `CanvasOutlineRowDataPeer` supplies it, and
+BOTH item-peer factories are overridden
+(`CanvasOutlineTreeAutomationPeer.CreateItemAutomationPeer` for top-level
+rows and `CanvasOutlineItemAutomationPeer.CreateItemAutomationPeer` for
+nested group children and connection rows). Activation routes to
+`CanvasOutlineRowViewModel.RaiseActivate`, the same path Enter and
+double-click take, so UIA activation cannot drift from them. Evidence:
+`TheTreeItemsCarryTreeSelectionItemExpandCollapseAndInvoke`, which walks
+`treePeer.GetChildren()` — the production topology a client reads —
+asserting the row peers ARE `CanvasOutlineRowDataPeer` and carry all four
+patterns at both levels; mutation-verified against reverting either
+override. The `CanvasSurfaces_OutlineTreeSelectionAndActivation_AreClean`
+journey is the CI-arbitrated half.
+
+Virtualization is
+`VirtualizingStackPanel.IsVirtualizing=true` with
+`VirtualizationMode=Standard`, the W4-1 UIA-safe setting (the files
+tree uses `Recycling`; a recycled container re-uses one peer for
+different data, which is what the canvas outline must not do).
+
+**A9 — The row's Name is the t0 §1.1 card reference, composed from
+core's parts, and it is LABEL class.** `⟨Kind⟩ card "⟨speakable_name⟩"`,
+groups as `Group "⟨speakable_name⟩"` — `kind` is core's type word
+(`CanvasOutlineRow.kind`, the t0 §1.1 word) and `speakable_name` is
+core's one uniqueness algorithm (0b-5). The composition is
+`CanvasPhrase.CardReference`, one function, the `BasePhrase` precedent
+for the label class.
+
+**No core accessor for this exists, and 0a-10 says so.** Its scope
+table records mac's outline `accessibilityLabel` as *"survives —
+`CanvasCardRef` moved into that file; §W-C label class (0a-13), and no
+vocabulary event renders a bare card reference"*, and tells a PR-A
+implementer to *"expect a core accessor for spoken card references and
+NOT for label-class peer names"*. So this is host label composition
+**by designation** (0a-13's list: the outline node value, the renderer's
+peer names, the degraded message and the panel headings are all §W-C
+label class and deliberately outside the vocabulary), not a missed core
+query. §W-G row L is its named owner. The controller ruling's phrase
+"core-rendered composition" is satisfied in the sense the ruling's own
+parenthesis gives it — every PART is core's — and this row states the
+residue plainly rather than letting "core-rendered" imply an
+`a11y_render` call that does not exist. (CD-30 records the one place
+Windows and mac differ here: mac's outline label spells `title`, this
+one spells `speakable_name`.)
+
+**A10 — The row's ItemStatus is the t0 §3 inspectability slot.**
+`⟨n⟩ of ⟨m⟩ in ⟨container‖canvas⟩[, ⟨color⟩][, marked]` — mac's
+`nodeValue` (`CanvasOutlineView.swift:309–318`) minus the `, filtered`
+clause, which has nothing to describe until PR C ships the filter.
+`AutomationProperties.ItemStatus` is the Windows slot for mac's
+`accessibilityValue`; `TreeViewItem` supports no Value pattern, and the
+spec's "ItemStatus/Value" names the pair for exactly that reason.
+`HelpText` is the per-kind activation hint (mac `activationHint`,
+verbatim). Every ingredient is core's except the joining commas and the
+two English words `in` and `marked` — label class, A9's designation.
+
+**A11 — Connection rows are core-rendered, under the selected card
+only.** A selected row's children are its connection rows FIRST, then
+its structural children — which reproduces mac's flat reading order
+(`[row][its connection lines][its members]`) as a depth-first tree
+walk. Their Name is `A11yRender(CanvasConnectionTraversed { direction,
+kind_label, title, label })` — the same event the navigator speaks when
+it traverses that connection (CD-14, and the reason mac's second copy
+died). ItemStatus is `connection ⟨i⟩ of ⟨n⟩`.
+
+**Invoke follows; ARROWING does not.** A connection row is a reading
+position, not canvas selection state, so the tree's selection changing
+onto one leaves the model alone — `Invoke`, Enter and double-click all
+route through the one activation path, which is the same split mac
+draws with `returnOpensRow`. Following on selection made the rows
+unreadable: the arrow key that landed on a row immediately moved the
+model to the other card, which rebuilt the selected card's children out
+from under the cursor, so the direction phrase a screen reader was about
+to speak was gone before it spoke it.
+
+**And the view's re-seat must not read back as a user action.** Removing
+those rows can remove the tree's CURRENT selection, and WPF answers by
+re-selecting the parent container — which arrived at the selection
+handler as a fresh user selection and dragged the model back to the card
+the user had just left. The whole model→view apply therefore runs under
+the sync guard, not just its final assignment.
+`ArrowingOntoAConnectionRowLeavesItReadable` pins both halves: the row
+survives with its name and status intact and nothing is announced, and
+then Invoke does move.
+Neighbours are `canvas_neighbors`, fetched lazily per node and cached,
+cache dropped on every load — the mac `neighborsCache` shape.
+
+**A12 — One selection, both directions, no echo.** The tree's
+`SelectedItemChanged` writes `CanvasSelection.Selected`; the selection's
+change event re-seats the tree. The echo is broken by a
+re-entrancy flag on the view, not by comparing values, because the
+value-compare version cannot tell "the model already agrees" from "the
+model was set to the same node by another pane". A selection change
+announces `CanvasMovedTo` at A7's verbosity, preceded by
+`CanvasGroupEntered` / `CanvasGroupLeft` when the container changed —
+`CanvasGroupEntered.count` is the arrived-at row's `total_m`, which is
+the entered group's own card count (CD-4's fix, not the sibling count).
+
+**The landing selection is silent.** Opening seats selection on the
+first row so the tree has a selected item, and announces nothing: the
+focus lands there and the screen reader reads the row it lands on, so a
+`CanvasMovedTo` on top of it is the t0 §1.5 doubling rule broken at the
+first keystroke of the surface's life. Pinned by
+`ReadyPublishesCoreRowsAndSeatsTheFirstRowSilently`.
+
+**A13 — Activation is per kind, and every arm speaks canvas
+vocabulary.** Text ⇒ the interim read-only detail region seeded from
+`canvas_node_text` (`TextBox IsReadOnly`, focusable, named for the card;
+PR E swaps in the editor). File/image ⇒ routed on the TARGET, not the
+kind, exactly as mac routes it
+(`CanvasContainerView.swift:169–187`): a `.md`/`.markdown` target goes
+to the workspace's ONE navigation seam (`OpenEditorNavigation`), with
+the scene node's `subpath` mapped to a `LinkAnchor` — `#^id` ⇒
+`("block", id)`, `#…` ⇒ `("heading", …)` — so the W3-5 anchor
+resolution lands the caret at the heading rather than at the note top;
+anything else goes to the shell as `CanvasOpened { DefaultApp }` **if
+and only if it is media** (CD-38's extension gate), and a non-media
+target is refused audibly and never launched. Link ⇒
+`ExternalLinkPolicy.IsLaunchable` — the ONE scheme allowlist
+(`http`/`https`/`mailto`) — and the injected opener, announcing
+`CanvasOpened { Browser }`, `CanvasBlocked { LinkOpenFailed }` or
+`CanvasBlocked { NotAUrl }`.
+
+**Two hand-offs, two gates, and they are not the same gate.**
+`ExternalLinkPolicy` decides which URLs may be handed to a browser;
+`CanvasMediaPolicy` (CD-38) decides which vault FILES may be handed to
+the shell. A file card does not go through the scheme allowlist and a
+link card does not go through the media gate — different inputs,
+different failure modes, and folding them together would let either
+rule's reasoning excuse the other's.
+
+**Routing on the KIND was a defect, and the vocabulary said so.**
+`image` fell into the `file` arm, and `ItemForPath` calls every
+extension that is not `.canvas`/`.base` Markdown — so activating an
+image card replaced the canvas tab with an editor over the PNG's bytes,
+while the row's own HelpText said media arrives in a later slice. The
+tell was `CanvasOpenTarget.DefaultApp`: an arm of the canvas vocabulary
+that no Windows code path could reach. The media hand-off resolves the
+vault-relative target against the vault root in the WORKSPACE (the only
+holder of the root) and refuses anything that escapes the vault — a
+`.canvas` file is untrusted input and `../../` in a `file` node would
+otherwise open anything on the disk.
+
+**The predicate is shared; the announcements deliberately are not.**
+The first cut of this row said "the shared external-link policy" while
+copying the scheme literal a THIRD time (the right-pane panels and the
+citation popover held the other two), which is the claim-exceeds-
+enforcement class this document exists to stop. `ExternalLinkPolicy` is
+now the one definition and all three call sites read it, so a fourth
+scheme is a one-line change rather than a search. What stays per-surface
+is the sentence: the panels and the popover speak the `ExternalLink*`
+family, the canvas speaks its own, because a canvas surface emitting
+another family's strings would be §W-D drift.
+Group ⇒ expand. A file card whose target is gone announces
+`CanvasFileNotFound`; a text card whose `canvas_node_text` refuses
+announces `CanvasBlocked { CardTextUnreadable }` — the 0b never-silent
+table, and the reason A16 exists.
+
+**A14 — Focus delivery is durable STATE, delivered by whichever surface
+can actually deliver it** (rewritten as the design pass's contract,
+stopping rule 4).
+
+**Why a rewrite.** Four consecutive review rounds found a defect in this
+one behaviour — the connection-row follow, the retarget focus theft, two
+tests that could not fail, and then codex's three. Every one was a
+variation on the same thing: focus was delivered on an EDGE, at the
+instant something fired, to whoever happened to be subscribed and ready,
+and the tests supplied the trigger themselves. Rule 4 says stop patching
+the sites and write the design.
+
+**The design.**
+
+1. **The request is state, not an edge.** `CanvasFocusRequest
+   { Owner, NodeId, Generation }` lives on the document as
+   `FocusRequest`. `RequestActiveEditorFocus` — the one funnel every
+   user-initiated open calls and no background path does — raises it,
+   addressed to the tab that asked. It stays pending until a surface
+   delivers it and says so (`CompleteFocusLanding`), and a newer request
+   supersedes an older one by generation, so a late delivery of a
+   superseded request cannot clear a live one.
+2. **Every surface retries on every condition that can change the
+   answer**: the model changing, a publish landing, the view loading,
+   the view becoming visible, the request being raised, the tree
+   realizing containers, and — B2 — the presenter REBINDING its
+   `DataContext`. That last one is not covered by the model changing: two
+   panes on a path share one document, so a presenter swapped from tab A
+   to tab B keeps an identical `Model` reference and `OnModelChanged`
+   never fires, yet a request addressed to B must now deliver.
+   `ARequestDeliversWhenThePresenterRebindsToItsOwner` pins it. None of these is "the" moment — assuming one
+   was is what the edge design got wrong — so each simply asks again.
+   A surface whose `DataContext` is not the request's owner ignores it,
+   which is what stops one document's request landing in every pane
+   showing that path.
+3. **Realization is part of delivery.** A virtualized row has no
+   container until the panel makes one, and an ancestor group's children
+   are not items until it is expanded. `DeliverFocus` walks the ancestor
+   chain root-first, expanding and laying out, and asks the virtualizing
+   panel to bring the index into view when the generator has not made
+   the container yet. **Only a realized container counts as delivered**:
+   the previous code fell back to focusing the tree and returned success,
+   so the request was consumed, the row was never read, and nothing
+   retried. A failed delivery leaves the request pending.
+4. **One authority per tab kind.** `MainWindow.FocusEditorPane` hands a
+   canvas tab to the canvas delivery — it RAISES a focus request and
+   returns, rather than returning bare. Returning bare stranded the
+   seven dismissal routes that reach it as a last resort (the palette,
+   search, properties and template sheets among them), whose own
+   comments say the fallback exists "rather than stranding focus on the
+   window root"; for those the canvas delivery had not been asked for at
+   all. It still must not fall THROUGH: it is queued at `Input`
+   priority — strictly after the canvas delivery — and its fallbacks
+   (the `TabItem`, then the `TabControl`) would take focus straight back
+   off the row, every time. The ordering is what makes this provable
+   rather than a race: the canvas delivers synchronously on the funnel
+   call, the pane handler runs later and re-asks instead of competing.
+   Handing over is safe because the
+   canvas surface has a landing place for **every** state — a realized
+   row when Ready with rows, the onboarding region when Ready and empty,
+   the (focusable) failure banner otherwise, and nothing at all while
+   Loading, where the request simply stays pending.
+
+**What the row lands on.** The request's `NodeId` when it names a row
+this document has; else `LastActivatedNode`, which is how returning from
+an opened card lands on the row that opened it (WCAG 2.4.3); else the
+first row.
+
+**The facts drive the production trigger.** `OpeningACanvasFromTheWorkspaceLandsFocusOnARealizedRow`
+opens through `OpenPath` with MainWindow's own subscriber attached, so
+the two authorities compete as they do in the app, and asserts the
+subscriber RAN (standing aside, not never firing).
+`AFocusRequestSurvivesUntilASurfaceCanActuallyDeliverIt` mounts the
+surface after the request. `FocusRealizesADeeplyVirtualizedRowRatherThanFakingIt`
+lands on the last row of the 2,000-node fixture.
+`AnUnrealizableRowIsNotReportedAsDelivered` and
+`AFailedDeliveryLeavesTheRequestPendingForTheNextTry` pin the honest
+failure. `OpeningACanvasInOnePaneNeverLandsFocusInAnother` pins the
+addressing, `AnEmptyCanvasLandsFocusOnTheOnboardingRegion` and
+`TheFailureBannerIsAFocusableRegion` the non-Ready landings, and
+`TheEditorPaneFocusFallbackStandsAsideForACanvasTab` pins point 4 in the
+source, because no in-process fact can reach `MainWindow` — and it is
+TWO-SIDED (fix round 7, Major-2): it asserts both the early return AND
+that the canvas arm RAISES `RequestFocusLanding`, because a one-sided
+"it returns" went green while the raise was missing and the seven
+dismissal routes stranded. The delivery half a raised request relies on
+is a separate fact, `ABareFocusRequestDeliversWithoutAnyOtherTrigger`,
+so neither supplies the other's mechanism.
+**Mutation-verified**: removing the funnel's canvas request fails three
+of them; restoring the tree-focus fallback fails the realization fact;
+deleting MainWindow's early return fails the source guard.
+
+**A15 — `ActiveCanvasSurface` round-trips, and outline is ABSENT.**
+The persisted token stays `"table" | "visual"` with outline written as
+nothing at all (`WorkspacePersistence.cs:385–395, 549–551`) — the mac
+sparse-map shape. `WorkspaceTabViewModel.ActiveCanvasSurface` gains a
+setter the surface switcher drives; `Snapshot()` already carries it. The
+forward-compat drop test (an unrecognised token collapsing to `null`)
+is asserted to still pass, because the switcher now WRITES the field
+that test reads.
+
+**A16 — The document survives the 0b-6 skew.** Outline and table rows
+are SQLite-served and their `speakable_name` falls back to the row title
+when the handle's model does not know the id (0b-6); the model-backed
+surfaces refuse instead — `canvas_where_am_i` answers `bad_node` for an
+id the outline names. The document therefore treats every per-node
+detail query as fallible: `NeighborsOf` and `NodeText` catch
+`VaultException`, cache nothing on failure, and the surface renders the
+accurate absent phrase from the vocabulary. The row stays selectable
+either way. `not_a_group` and `bad_node` are ONE refusal discriminated
+by message (0b-12's API note) and are treated as one: no host string
+matching, anywhere.
+
+**A17 — The scheduler conventions are the panel conventions, and the
+threading rule is stated as the code has it.**
+`CanvasDocumentViewModel : PanelWorkScheduler`. **Every FFI section
+holds `_ffiLock`** — that is the invariant, and it is what makes a
+handle replacement unable to race a read. What is SCHEDULED is narrower
+than that, and the first wording of this row claimed otherwise ("every
+FFI touch runs inside a `StartWork` body"), which the shipped code never
+did:
+
+| Call | Thread | Lock |
+|---|---|---|
+| `Load` / `LoadBody` (open, outline, table, scene) | `StartWork` body | yes |
+| `Shutdown`'s close | `Task.Run` (inline in sync test mode) | yes |
+| `NeighborsOf`, `NodeTextOf` | UI thread, synchronous | yes |
+| `TargetExistsInVault` (`canonical_path`) | UI thread, synchronous | yes |
+
+The two per-node detail reads are synchronous on purpose: they answer a
+selection or an activation the user just made, they are single indexed
+lookups, and the mac twin caches them the same way (`neighborsCache`).
+`canonical_path` touches no handle at all and needed no lock for
+correctness — it takes one anyway, so the rule above has no exception to
+remember. The cost of the whole exception class is bounded UI-thread
+blocking behind a large load; moving these into scheduled bodies is a
+design change PR A does not need and PR C can make if the navigator's
+volume warrants it.
+
+Publishes marshal through `Post`, every publish re-reads a
+`_generation` bumped with `Interlocked.Increment` at dispatch,
+`Shutdown()` bumps the generation and closes the handle off the
+dispatcher (exposed as `WhenHandleClosed()` for the bounded teardown
+drain), and synchronous test mode runs bodies inline. The handle is
+closed exactly once — on replacement inside the load body, or on
+shutdown.
+
+**The interleaving facts assert safety, not liveness.**
+`AShutdownDuringAnInFlightLoadNeverPublishesAndClosesTheHandle` asserts
+that no publish lands and the handle closes — it does NOT assert which
+side won the race, because either order is correct and the scheduler
+may legitimately refuse the body before it starts; a fact that demanded
+the load reach the FFI first would be a timing bet, not a contract.
+
+**The 2,000-node budget fact runs BOTH modes.** The W4-5 lesson is
+"test the mode users run": the synchronous mode orders the load body
+deterministically and makes every generation guard dead code, so
+`LargeCanvasOutlineBuildsUnderBudget` is a `[Theory]` over
+`synchronousForTests: true` and `startInteractionBackgroundWork: true`,
+and the asynchronous arm drains before asserting.
+
+**A18 — `ChordScope.Canvas` and three surface commands.**
+`ChordScope.Canvas` joins the delivery enum (the file did not contain
+the string "Canvas" at BASE). `slate.canvas.showOutline`,
+`slate.canvas.showTable` and `slate.canvas.showVisual` register now in
+`CommandSection.Canvas` (which core already exports,
+`commands.rs:38`) with resolvers on the active tab's canvas document,
+so all three are palette-reachable from this PR (drift test 1). Table
+and visual are `CanExecute == false` until their projections ship, so
+`SlateCommandRegistrar.DisabledReason` answers the canonical
+`UnavailableReason` — the palette's own vocabulary, not a per-PR
+sentence, because a registered row may not carry a `Reason` (that field
+belongs to `Unreg`) and "ships in PR B" is not copy any user should
+hear. The reason those two are disabled is recorded HERE and pinned by
+`ShowTableAndShowVisualRegisterAndStayDisabledUntilTheirProjectionsShip`;
+`showTable` enables in PR B and `showVisual` in PR D. None of the three
+carries a chord, so `Scope` resolves to `None` through `Reg`'s own rule
+and `ChordScope.Canvas` has no delivery site until PR C — which is why
+the scope's doc comment names PR C as the first surface that uses it.
+
+**The switcher is ONE named group in the UIA tree, and that required a
+peer (round 8).** The three choices sit in a container carrying
+AutomationId "CanvasSurfaceSwitcher" and the name "Canvas view". That
+container was a bare `StackPanel`, which WPF gives no automation peer, so
+BOTH properties were inert: a client saw no switcher element at all and
+the three radio buttons appeared flattened directly under
+`CanvasSurface`. It is now an `AutomationNamedGroupPanel` (the shared
+peered-container idiom in `AutomationLandmark.cs`, whose own comment
+records the W4-5 lesson that produced it), exposing
+`ControlType.Group` with the name, and the three choices are its UIA
+children. Evidence: the
+`CanvasSurfaces_OutlineTreeSelectionAndActivation_AreClean` journey
+asserts the element resolves and is named "Canvas view", and
+`CanvasAutomationPropertyCensus` pins the general rule structurally —
+mutation-verified both ways (reverting the switcher to a `StackPanel`
+fails it on both property lines; adding a name to any other bare panel
+fails it naming that line).
+
+**A19 — Canvas tabs are never dirty, and the close gate is bypassed by
+construction.** `WorkspaceTabViewModel.IsDirty` is only ever set by the
+editor session, which a non-markdown tab never creates, so `CanCloseTab`
+returns true before it consults `_dirtyCloseDecision`. That is a
+property of the existing code, not new code, and it is exactly the kind
+of claim that rots silently — so it is pinned by a fact that installs a
+throwing close decision and closes a canvas tab
+(`ClosingACanvasTabNeverConsultsTheDirtyCloseGate`).
+
+**A20 — §W-A gains `canvas_read`; §K gains `CanvasOpenBenchmarks`.**
+The serializer gains `CanvasReadArtifact`: per fixture in filename
+order, the `open_canvas` info (node/edge counts, degraded, warnings),
+then outline rows, table rows, the scene, and per node in reading order
+`canvas_where_am_i` **and** `canvas_neighbors`. It shares
+`CanvasArtifactExclusions` with `canvas_queries`, so `large_2000.canvas`
+stays out of the golden for the reason 0b-15 gives. A node whose
+`canvas_where_am_i` refuses serializes as `null` rather than aborting
+the artifact — A16's skew is a shape the artifact must be able to
+express. **The Swift twin lands in this PR** (`ParityHarnessTests
+.canvasReadArtifact`), written blind against the mac binding and
+arbitrated by the committed golden.
+
+**The twin has to be same-PR, and the earlier plan to defer it was a
+misread of the precedent it cited.** 0a and 0b both say "the twin lands
+later and the mac lane arbitrates", and in both the twin landed in the
+SAME pull request, before CI ever ran the pair — 0b's own ledger says
+the mac census "was RED between Task 0b-1 and Task 0b-2", two tasks
+inside one PR. Across a PR boundary the sentence means something else
+entirely: `testHarnessArtifactsMatchCommittedGoldensByteForByte`
+asserts golden↔produced name-set equality in BOTH directions, so a
+golden with no Swift producer fails the mac lane deterministically on
+the first run, with no coincidences. The coverage test was built to
+refuse a golden nothing produces, and it would have. **Recorded as the
+rule for every remaining PR in this series: a §W-A artifact and both of
+its producers land together.** §K is `CanvasOpenBenchmarks` over `large_2000.canvas`
+— open, open+outline, open+table, open+scene — recorded in
+`BENCHMARKS.md` against the mac core-path figure of 5.62 ms, the C#
+delta being marshalling.
+
+### Tests that pin PR A
+
+`apps/slate-windows/tests/SlateWindows.Tests/CanvasDocumentTests.cs`:
+the registry facts (sharing, close-and-clear, retarget, vault-close
+teardown), the five load states through a real `VaultSession` over the
+committed fixtures, the once-per-open degraded announcement across two
+panes, selection sync both ways, activation per kind, focus land and
+restore, `ActiveCanvasSurface` round-trip and its forward-compat drop,
+the close-gate bypass, and the 2,000-node outline budget in both
+scheduling modes. Two of its facts are the ones a CI-arbitrated journey
+would otherwise be the only witness for:
+`TheTreeItemsCarryTreeSelectionItemExpandCollapseAndInvoke` builds the
+real peers and asserts the four patterns, the control types and the
+three label properties (mutation-verified — dropping the
+`GetPattern` override makes Invoke null, which is why the custom peer
+exists at all), and
+`ShowTableAndShowVisualRegisterAndStayDisabledUntilTheirProjectionsShip`
+drives the registrar over a live workspace rather than a null-workspace
+stub.
+`apps/slate-windows/tests/SlateWindows.Tests/CanvasAnnouncerTests.cs`:
+latest-wins per class, the two classes independent, the High
+flush-and-drop, the relay's priority pass-through, the label render used
+by the banner, the phrase-drift pins (rows P/Q), and — the one fact with
+no `FlushForTests` in it —
+`APendingNavigationLineFiresOnItsOwnWithoutAFlush`, which pumps a real
+dispatcher so the production `DispatcherTimer` actually ticks. Every
+other fact in that file stays green with `_timer.Start()` deleted; this
+one does not, which is the W4-5 lesson applied to the coalescer.
+`CanvasDocumentTests` carries the production-mode interleavings for the
+same reason:
+`AShutdownDuringAnInFlightLoadNeverPublishesAndClosesTheHandle`,
+`ASecondLoadSupersedesTheFirstPublish` and
+`ARetargetDuringAnInFlightLoadPublishesOnlyTheNewDocument` are the only
+facts in which A17's generation guards are live code.
+`apps/slate-windows/tests/SlateWindows.Tests/Censuses/CanvasAnnouncerCensus.cs`:
+A6's funnel guard, plus A2's attach-funnel doc-comment twin.
+`apps/slate-windows/tests/SlateWindows.Tests/Censuses/AnnouncementSeamCensus.cs`:
+the production wiring as a CHAIN — the three shipping call expressions
+from `MainWindow` to the announcer, and a canvas load driven through a
+real dispatcher. The one guard class here that no injected sink can
+replace.
+`apps/slate-windows/tests/SlateWindows.Tests/Censuses/ContractsCitationCensus.cs`:
+every long identifier §A cites resolves to a real declaration. This
+section shipped five citations of tests that did not exist; a contract
+row citing a renamed test reads as evidenced and is not, which is the
+failure class PR H's reconciliation depends on catching.
+`apps/slate-windows/tests/SlateWindows.Tests/ChordTableTests.cs` /
+`CommandDriftTests.cs`: green with the three new rows.
+`apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs`:
+`CanvasSurfaces_OutlineTreeSelectionAndActivation_AreClean` — tree and
+tree-item control types, the row
+names and ItemStatus, expand/collapse, selection, Enter activation,
+focus landing, the degraded banner reachable, axe 0 failures. CI
+arbitrates; it is never run locally beside the unit suite.
+`apps/slate-windows/tests/SlateWindows.Tests/Censuses/ParityHarnessCensus.cs`:
+`canvas_read.json` byte-for-byte against the committed golden.
+
+---
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same
@@ -899,10 +1605,12 @@ table.
 | I | Viewport math — clamp 0.1–4.0, step 1.25, fit padding 40/120 | none | 3 | host rendering; constants pinned here; zoom % announced via `CanvasZoom` | **event landed (0a)** |
 | J | Table column order/sort comparators/summary sentence; outline interleave | rows from core | 3 | host projection config; summary sentence stays a **static label** (never announced on mac) | resolved as label class (0a-13) |
 | K | Filter predicate — title/kind/groupPath/target, case-insensitive contains | none | 2 | `canvas_filter` (0b) | **closed** — 0b-13, 0b-14; `matchesFilter` deleted (0b-2), CD-22. `filterActive` stays host UI state |
-| L | Speakable-name dedup vs core's untitled-only allocation — two uniqueness algorithms | partial, conflicting | 2 | one algorithm in core: `CardSummary.speakable_name` (0b, D-3) | **closed** — 0b-5, 0b-6, CD-20, CD-23; the renderer's used-set walk and its per-view sticky map deleted (0b-2) |
+| L | Speakable-name dedup vs core's untitled-only allocation — two uniqueness algorithms | partial, conflicting | 2 | one algorithm in core: `CardSummary.speakable_name` (0b, D-3) | **closed** — 0b-5, 0b-6, CD-20, CD-23; the renderer's used-set walk and its per-view sticky map deleted (0b-2). **PR A note:** CD-23's "which surface reads which field" answer now differs by platform — the Windows OUTLINE reads `speakable_name` where mac's reads `title` (CD-30), so row P's two copies are not byte-identical on a canvas with repeated titles |
 | M | Node/edge id minting | none | 2 | `canvas_new_id()` (0b) | **closed** — 0b-4; `newCanvasEntityID` deleted, nine call sites (0b-2) |
 | N | Overlap onset/offset transition tracking | query exposed | 3 | host state machine (two-state, pinned); the CLAUSE is core's (`CanvasOverlapTransition`) | **clause landed (0a)** |
 | O | Resize → Fit to Content text-metrics approximation | none | 3 (D-5) | host, identical placeholder formula both hosts; the LABEL is core's (`CanvasResizePreset::FitToContent`) | **label landed (0a)** |
+| P | **The outline row's card reference** — `⟨Kind⟩ card "⟨name⟩"` / `Group "⟨label⟩"`, composed host-side by `CanvasPhrase.CardReference` (Windows) and `CanvasCardRef.phrase` (mac) | **`a11y.rs::card_ref` composes the identical clause**, but only INSIDE templates — no exported accessor renders a bare card reference (0a-10) | 3 by designation (§W-C label class, 0a-13) | host, on both platforms, until an owner designates a label accessor | **open by designation** — the two copies are pinned against core's own render by `TheCardReferenceMatchesCoresOwnComposition`, so a core wording change fails Windows CI rather than drifting. CD-30 records the `speakable_name` vs `title` difference; CD-34 the capitalisation residue |
+| Q | **The outline row's positional status** — `⟨n⟩ of ⟨m⟩ in ⟨container‖canvas⟩[, ⟨colour⟩][, marked]`, composed by `CanvasPhrase.RowStatus` (Windows) and `nodeValue` (mac) | **the same clause is the tail of `CanvasMovedTo`** at Standard and Verbose; again template-internal, with no accessor | 3 by designation (§W-C label class, 0a-13 names the outline node value explicitly) | host, both platforms | **open by designation** — same pin: the Standard render of `CanvasMovedTo` is asserted to equal `CardReference + ", " + RowStatus`, word for word |
 
 ---
 
@@ -1562,9 +2270,19 @@ that moves `CanvasOutlineTests.testOutlineRowsCarryDerivedLabelsAndValues`.
 Task 0b-2 therefore consumes the field at the renderer's peer names
 only — the second surviving card-reference spelling 0a-10's scope table
 left standing with §W-G row L as its owner — and leaves the other three
-surfaces reading `title`. Both hosts do the same thing, which is what
-parity requires; the field being available on all four is what stops a
-later host from re-deriving it.
+surfaces reading `title`. The field being available on all four is what
+stops a later host from re-deriving it.
+
+**Amended by PR A: the hosts no longer do the same thing here.** This
+row originally closed "both hosts do the same thing, which is what
+parity requires". CD-30 then took the Windows OUTLINE to
+`speakable_name` on a controller ruling (t0 §4's Voice Control
+uniqueness row, on Windows' only canvas surface in PR A), so the two
+outlines differ on any canvas with repeated titles — mac's renderer
+already spelled `speakable_name`, which makes mac's outline the odd one
+out rather than Windows'. The sentence is corrected rather than deleted:
+what it asserted was true when written and is the reason CD-30 had to be
+a recorded divergence instead of a quiet change.
 
 **CD-24 — `canvas_group_rect_around` returns `Option`.** Mac's bbox
 fold aborts on `guard minX.isFinite` when no member resolves — a silent
@@ -1650,6 +2368,478 @@ records the OTHER disagreement between mac's containment copies and
 core's tree (the equal-area tie-break); CD-18 is about which group
 wins a tie, CD-27 about a node whose membership two rules answer
 differently without any tie.
+
+### PR A
+
+**CD-28 — `CanvasOpenInfo.degraded` is the PARSE-ERROR state, not the
+"unsupported items" banner.** The spec's PR A behavior row 2 reads
+*"`degraded=true` ⇒ … banner 'N unsupported items are preserved in the
+file but not shown'"*, which joins two facts core keeps apart.
+`is_load_degraded` is `any(ParseFailed)` (`canvas/mod.rs:356`) and every
+`ParseFailed` arm of `parse` returns `Canvas::default()`, so a degraded
+open has zero skipped entries and zero nodes: its banner would say
+"0 unsupported items are preserved" about a file that produced no rows
+at all. t0 §5 introduces the sentence as *"Parse warnings (#359 tolerant
+contract)"* — the warnings — and mac implements exactly that
+(`preservedItemCount` counts `.skippedEntry`; the banner renders only in
+`.ready`; `info.degraded` closes the handle and enters a read-only error
+state). Windows takes mac's shape and names the two states apart:
+`ParseError` for the flag, the A4 banner for the skipped count. The
+spec sentence is the thing that is wrong here; t0 and the shipped mac
+behaviour agree with each other and with core.
+
+**CD-29 — The degraded announcement is once per DOCUMENT on Windows and
+once per CONTAINER on mac.** Controller ruling, resolving the ledgered
+m2 wording question in favour of the contract as written: CD-3 says
+"once per open", and on Windows an open is the registry's 0→1
+transition (A1), so the post lives on the document and two panes on one
+canvas hear it once. Mac's one-shot is `@State` on
+`CanvasContainerView` (`:470–487`), so a second container on the same
+document announces again. The mac per-container behaviour is recorded
+here as the platform note rather than changed: this issue does not
+re-open a mac view's state ownership, and the difference is audible only
+when a user splits a pane onto a canvas that has skipped entries.
+
+**CD-30 — The outline row's Name spells `speakable_name`; mac's spells
+`title`.** Mac's outline `accessibilityLabel` builds
+`CanvasCardRef(kind:title:)` from the raw `title`
+(`CanvasOutlineView.swift:220, 12–21`) and reserves `speakable_name` for
+the renderer's peer names (CD-23). Windows spells `speakable_name` in
+the outline too, on the controller ruling, because the outline is
+Windows' primary and (in PR A) only canvas surface, and t0 §4's Voice
+Control row asks for *"no duplicate speakable names per surface"* — two
+cards both titled `Research` are two rows a dictated "click Research"
+cannot disambiguate. 0b-5's algorithm returns `display_title` verbatim
+whenever that spelling is free, so the two hosts differ only on the
+canvases where mac's outline is ambiguous. Recorded as an upstream note
+rather than a mac change: mac's renderer already spells it this way, so
+the mac outline is the odd one out, and aligning it is a mac-side edit
+this issue's Windows lane must not make.
+
+**CD-31 — The surface view is a code-built `UserControl`, not a
+`.xaml(.cs)` pair.** Spec §1's file layout names
+`CanvasSurfaceView.xaml(.cs)`. The Windows shell has no XAML surface
+view: `BaseSurfaceView.cs`, `DashboardSurfaceView.cs`,
+`HistorySurfaceView.cs`, `SyncDiagnosticsSurfaceView.cs` and
+`ReadingSurface.cs` are all code-built controls, and the project's only
+XAML is the window, the app, the shared templates and the themes. A
+XAML pair here would be the single one of its kind, and the brief's
+"match the Workspace/Bases idioms" is the stronger instruction: the
+sibling surfaces are the idiom. Every other name in the layout is
+literal.
+
+**CD-32 — A retarget re-keys the registry; it does not mutate the
+document's path.** Mac's `CanvasDocument` retargets in place, keeps its
+last published snapshot visible while the reopen runs, and can land in
+`.retargetFailed` still showing rows. The Windows registry keys
+documents by path and a document's `Path` is immutable — the Bases
+precedent, whose round-2 blocker was exactly the alternative (a renamed
+tab keeping a document that reopens the OLD path forever). So
+`RetargetCanvasDocuments` shuts the old document down and attaches a
+fresh one at the new path, carrying the previous `CanvasSelection`
+(selected node and marks) across so a rename does not silently drop a
+user's marks. What does NOT carry is the retained snapshot: a failed
+reopen shows `RetargetAbsent` with the message, not the old rows. The
+snapshot-retention machinery is 0b-2's `beginBatchRetarget` family and
+the surfaces that consume it are PR C/E's; adopting it here would be
+inventing PR C.
+
+**CD-33 — The Windows outline NESTS; mac's is flat with indentation.**
+Mac renders a `List` of lines and indents by `depth * spacing`
+(`CanvasOutlineView.swift:207`), so a VoiceOver user hears reading order
+with no structural nesting and no collapse. The spec's PR A behavior
+row 3 asks Windows for a `TreeView` with `ExpandCollapse` on groups and
+items "nested by `depth`", which is a real capability difference, not a
+divergence in what is spoken: a depth-first walk of the Windows tree
+visits exactly mac's line order, including A11's connection-rows-first
+rule inside a selected group. Two consequences are recorded rather than
+discovered: a selected LEAF card also becomes expandable, because its
+connection rows are its children (the surface auto-expands it, so the
+rows are never hidden behind a collapse the user did not ask for), and
+a collapsed group hides its members from the tree walk, which is what a
+tree is for and what mac's flat list cannot offer.
+
+**CD-34 — `CanvasPhrase.CardReference` capitalises with .NET's SIMPLE
+mapping where core uses Rust's FULL one.** Core's `capitalize_first`
+(`a11y.rs:2841`) upper-cases the leading character through
+`char::to_uppercase`, which is the full Unicode mapping — one scalar may
+become several, so `ß` → `SS` and `ﬁ` → `FI`. .NET's
+`ToUpperInvariant` is deliberately the simple 1:1 mapping and leaves
+both alone. The two therefore disagree on any leading character whose
+full uppercase is longer than itself.
+
+**Unreachable, and checked rather than asserted.** The only argument is
+core's own `kind_label`, a closed set of five ASCII words
+(`text` · `file` · `image` · `link` · `group`,
+`model.rs::kind_label` returning `&'static str`), so no input in the
+system reaches the divergence.
+`TheCardReferenceMatchesCoresOwnComposition` renders all five through
+core and compares, which turns "unreachable" from a claim into a
+per-kind check that fails the day a sixth kind arrives with a
+non-ASCII initial.
+
+**What the host actually does, since the first wording of this row said
+otherwise.** It splits on the first UTF-16 unit, taking two when that
+unit is a high surrogate — which keeps a surrogate PAIR intact but is
+not the same thing as a text element: a base character followed by a
+combining mark is one grapheme and this splits it, and so does an
+emoji ZWJ sequence. Saying "first text element" was simply false, and
+the same false sentence was in the code remark. Both are corrected.
+Nothing depends on it — the argument is `kind_label`, five ASCII words
+— and the per-kind test is what keeps that a check. Recorded rather
+than worked around: emulating Rust's full mapping in C# means
+hand-coding the special-casing table, which is a real second copy of a
+Unicode rule for a case no caller can produce, and grapheme-correct
+splitting would be a third.
+
+**CD-35 — The canvas link card has no confirmation step, and neither
+does the policy it reuses.** Spec §PR A behavior 5 says *"link ⇒
+`Process.Start` URL with confirmation per the existing external-link
+policy"*. The existing policy has no confirmation: the right-pane
+panels and the citation popover both check the scheme allowlist and
+launch, announcing `ExternalLinkOpened` or `ExternalLinkFailed`
+afterwards — there is no prompt anywhere in it. Mac's canvas is the
+same shape (`CanvasContainerView.swift:177–178,188` announces
+`CanvasOpened` after the fact).
+
+So "with confirmation per the existing policy" reads as *the
+announcement IS the confirmation*, and that is what ships: the
+allowlist refuses `file:`/`javascript:`/custom schemes with
+`CanvasBlocked { NotAUrl }`, a successful launch says
+`CanvasOpened { Browser }`, and a failed one says
+`CanvasBlocked { LinkOpenFailed }`. Adding a modal prompt on the canvas
+path alone would make the canvas the only surface in the shell that
+asks before opening a link — a divergence from both the other Windows
+surfaces and from mac, introduced by PR A, on the strength of one
+ambiguous word. If an owner wants a confirmation, it belongs on
+`ExternalLinkPolicy` for every surface at once, which is a decision, not
+a canvas detail.
+
+**CD-36 — The media activation hint is corrected on Windows; mac's is
+stale.** The mac label inventory gives every kind an activation hint and
+A10 takes them verbatim. Mac's image hint is *"Media cards open with
+canvas actions, arriving in a later milestone slice."* — but mac's own
+`activate` opens a non-Markdown target in its default app TODAY
+(`CanvasContainerView.swift:181–187`), so the hint has been describing a
+deferral that is not there. Windows does what the mac CODE does (M1),
+and a HelpText contradicting its row's behaviour fails the one job the
+§W-C label inventory has, so Windows spells it *"Opens the media file in
+its default app."* Filed as a mac note rather than fixed there: this
+issue's Windows lane does not edit mac copy, and the hint is the
+divergence, not the behaviour.
+
+**CD-37 — The empty canvas renders `CanvasStatus{Empty}`, not
+`CanvasEmptyOnboarding`.** Spec behavior 2 asks for an onboarding region
+"whose text leads with the New Card chord … until then the copy is the
+palette sentence". The event cannot deliver that in PR A: its template
+renders *"Press ⟨chord⟩ to create your first card."* unconditionally, so
+whatever goes in that slot — the palette chord included — tells a
+screen-reader user to press a key that creates nothing, and PR A ships
+no create command. The t2 rule the spec cites in the same sentence
+("don't advertise a command that doesn't exist yet") is the tie-breaker,
+so the region renders the true sentence the vocabulary already has, and
+PR E swaps `CanvasEmptyOnboarding` in with the real New Card chord.
+No host prose either way: both are core renders.
+**Ratified by controller ruling** (fix round 3): the core-rendered empty
+copy beats the spec's interim palette sentence, and the deviation from
+spec behavior 2's literal wording stands as recorded.
+
+**CD-38 — Windows will not shell-execute a non-media file card; mac
+will** (controller security ruling, fix round 3). PR A's media arm
+(M1, CD-36) handed any non-Markdown in-vault target to
+`Process.Start(UseShellExecute: true)`. On Windows that is
+`ShellExecute`, which EXECUTES what it is given, and a canvas is
+untrusted input — it arrives over sync, from a shared vault, from
+Obsidian — so a `{"type":"file","file":"setup.exe"}` node ran on one
+Enter. The default-app open is therefore gated to MEDIA by extension;
+everything else is refused, audibly, and never launched.
+
+**The gate's set is core's, copied because core does not export it.**
+`canvas::model::media_class` (`model.rs:661`) is the same private
+function whose answer becomes the `image` kind label and the
+`Image:`/`Audio:`/`Video:` title prefixes, and it carries no
+`#[uniffi::export]`. `CanvasMediaPolicy` transliterates it in ONE place,
+including both of its edge rules (the BASENAME's real extension; a
+dotfile like `.mov` is a hidden file, not a video), and
+`TheMediaGateIsCoresClassification` pins the set and both edges.
+The lowercasing is core's `to_ascii_lowercase`, hand-written rather than
+.NET's `ToLowerInvariant`: the two differ outside ASCII (the Kelvin sign
+lowers to `k`, `İ` to `i̇`) and every difference ADMITS something core
+calls not-media, which is the wrong direction for a gate deciding what
+reaches `ShellExecute`.
+
+**Half of it is pinned against core anyway, without waiting for the
+export.** Core does not export the classification, but it exports one of
+its ANSWERS: `kind_label` returns `"image"` exactly when `media_class`
+says Image (`model.rs:646`), and that reaches the host as
+`CanvasOutlineRow.kind`. `TheImageThirdOfTheGateAgreesWithCoresOwnKindLabel`
+opens a canvas of file cards over every image extension the host set
+claims plus six non-media ones, and asserts core's own row agrees in
+both directions. The audio and video thirds have no exported answer —
+`kind_label` calls them plain `"file"` — and stay unpinned until PR E.
+
+**Drift note:** PR E is the first PR that needs the classification for
+its own reasons (the spec's Add Media row — "media kinds by extension
+set — core's `media_class` decides the label"), so PR E exports it,
+deletes this copy, and retires the pin above with it.
+
+**Containment is by OS FILE IDENTITY, not path text (codex round 3 — the
+class ended, not patched).** Three consecutive codex rounds found
+containment defects, and codex named the class: *filesystem identity
+reduced to path text*, where two normalization or case rules on the same
+string disagree. Path text is retired as the decision substrate. The gate
+resolves the target through an OPENED HANDLE and answers every
+containment and every "unchanged since check" question with OS file
+identity. Immune to case, trailing dots, per-directory case sensitivity,
+SUBST, and which spelling reached it.
+`FileIdentityIsStableAcrossSpellingsAndDistinctAcrossObjects` pins the
+primitive (same object ⇒ equal, different objects ⇒ unequal).
+
+**The identity is the 128-bit `FILE_ID_INFO`, and it is the ONLY identity
+method (round 4 #2, completed by round 5).** `nFileIndex` from
+`GetFileInformationByHandle` is documented as NOT unique on ReFS and its
+ids are reused, so a 64-bit compare can call two different files the same
+— a fail-OPEN in the very gate it anchors. The identity is
+`GetFileInformationByHandleEx(FileIdInfo)` → `FILE_ID_INFO`: a 64-bit
+`VolumeSerialNumber` plus a 128-bit `FileId`, stable and unique on NTFS
+and ReFS alike.
+
+**There is NO legacy fallback, and the round-4 record's claim that there
+was a safe one is corrected.** Round 4 shipped a 64-bit
+`BY_HANDLE_FILE_INFORMATION` arm and this document described it as a
+capability selection confined to pre-Windows-8 hosts. That description was
+WRONG, and the scoped re-review that endorsed it was wrong to: the arm was
+per-CALL, not per-host. It triggered on ANY failure of the primary query —
+a transient error, a handle race, an unusual filesystem — and silently
+downgraded that individual read to the non-unique index. On ReFS that is a
+fail-open that arrives precisely when something is already wrong, which is
+strictly worse than no fallback at all. The arm, its P/Invoke and its
+struct are DELETED (codex round 5, controller ruling: take the strongest
+form). `IdentityOfHandle` is now `FileIdInfo` or `null`, and a failed
+identity query REFUSES the media like every other failure in this gate.
+
+**The real constraint is the FILESYSTEM, not the OS version — and it has
+an availability cost, stated plainly.** An earlier draft of this row
+justified the deletion by minimum OS (Windows 10 1607 postdates
+`FileIdInfo`'s Windows 8). That argument is the wrong KIND: `FileIdInfo`
+is not a function of OS version but of what the volume's filesystem
+answers, and FAT32 and exFAT commonly fail it, as do some redirectors and
+virtual filesystems. The correct statement:
+
+- **Supported volumes for opening vault media are NTFS and ReFS.**
+- **On a vault whose volume does not answer `FileIdInfo` — a FAT32/exFAT
+  stick, some network or virtual mounts — every media open REFUSES,
+  audibly.**
+- This is a **known, recorded fail-CLOSED limitation**, and a real
+  availability regression against the round-4 code, which would have
+  opened those files through the legacy index.
+
+It is accepted deliberately. The only alternative is deciding containment
+on a weaker identity, which is precisely the fail-OPEN codex round 5
+killed: a per-call downgrade fires exactly when something is already
+wrong. Refusing to open a photo is recoverable; launching a file that
+escaped the vault is not. The fallback's existence WAS the mixed-method
+class, so the choice is refusal or a hole, and this gate refuses.
+
+`IdentityIsThe128BitFileIdInfoNotThe64BitIndex` pins that the 128-bit
+class succeeds on a live handle (mutation-verified against a wrong class
+value). `IdentityQueryFailureRefusesRatherThanDowngrading` injects a
+primary-query failure into the containment flow and pins that the identity
+primitive, `ResolveInsideVault` and `OpenMediaInVault` ALL refuse, with
+nothing handed to the shell — mutation-verified by reintroducing a
+fallback arm. `CanvasMediaGateCensus.TheGateHasExactlyOneIdentityMethod`
+pins the legacy symbols absent rather than dormant, two-sided against the
+surviving `TryGetFileIdInfo`.
+
+**Containment reaches the root by identity, with NO depth cap on the
+lexical walk (round 4, fail-closed #3).** The resolved terminal path names
+canonical ancestors; each is opened, its handle HELD (see the coherent
+snapshot below), and its identity compared to the vault root's. The walk
+is purely lexical — `ParentOf` strictly shortens and terminates at the
+volume root — so a fixed-point/shortening guard suffices and it carries no
+arbitrary iteration bound. An earlier `ResolveRounds=64` reparse-cycle
+bound had been mis-applied to this walk, refusing valid in-vault media
+more than 64 directories deep (a fail-CLOSED availability bug); it is
+removed. `MediaSeventyDirectoriesDeepStillOpens` opens a media file 70
+directories down (mutation-verified against reinstating a 64-iteration
+cap), and `TheAncestorWalkCarriesNoDepthCap` pins the `ResolveRounds`
+symbol gone from the gate. A case-sensitive-directory sibling —
+`C:\work\VAULT` vs `C:\work\vault`, which an `OrdinalIgnoreCase` text
+prefix falsely accepts when per-directory case sensitivity is on (codex
+defect 3) — is a DIFFERENT object with a different identity and does not
+match. That feature is non-default and needs admin to enable, so the
+exploit itself is recorded as a manual residual; the SAME rule is pinned
+reproducibly by
+`IdentityContainmentAcceptsAJunctionRootedVaultAtextPrefixWouldReject`,
+where a vault rooted at a junction is contained by identity and would be
+REJECTED by a text prefix — mutation-verified against a text-prefix
+containment.
+
+**The extended (`\\?\`) form is kept end to end (launch-integrity).**
+The handle-resolved path is verified and launched unchanged. The
+extended prefix is exactly what stops `ShellExecute` renormalizing
+`vault.\file` to `vault\file` — verifying one string and launching
+another was a real bug. `ATrailingDotVaultComponentLaunchesTheVerifiedIdentity`
+pins it and is mutation-verified against stripping the prefix.
+
+**One coherent snapshot: capture is fused with containment (round 4,
+fail-open #1).** The leaf is opened ONCE; its resolved terminal path AND
+its identity come from THAT handle; and every ancestor up to the vault
+root is opened and HELD simultaneously while its identity is compared —
+one coherent view, not three independent opens. Revalidation re-checks the
+identity captured from the containment handle. An earlier shape captured
+the check identity by RE-OPENING the resolved path after containment,
+which opened a second window: a swap between the containment open and that
+re-open made the captured identity the OUTSIDE object, and revalidating
+outside-against-outside passed — a fail-OPEN. Fusing capture into
+containment closes that sub-window by construction. The property is pinned
+STRUCTURALLY — `CanvasMediaGateCensus.TheSnapshotCapturesIdentityFromThe
+HeldHandleNotAReopen` proves `ResolveContained` reads identity only off
+held handles (`IdentityOfHandle`) and never re-opens by path
+(`IdentityOf`), mutation-verified against reinstating the re-open — because
+an unprivileged in-process race cannot drive a swap inside a single
+method's handle-held region; the swap-during-capture E2E is a manual
+residual.
+
+**The TOCTOU window, narrowed by IDENTITY (B1).** Immediately before
+launch the resolved path is re-opened and its identity compared to the
+snapshot's, and the launch happens only if the identity is unchanged — an
+OS "same file" guarantee, not a string compare, so it is immune to the
+case/normalization tricks a text revalidation was not. A swap in the
+window redirects the re-open to a different object whose identity differs,
+and the launch refuses. `ASwapInTheTocTouWindowIsCaughtByRevalidation`
+drives the swap through a test seam, mutation-verified. **The single
+remaining residual** is now exactly the launch-time re-resolution: the
+snapshot is coherent and the revalidation reads the containment handle's
+own identity, so the ONLY window left is that `ShellExecute` re-opens the
+verified path BY NAME and resolves it itself — a path-taking launcher
+cannot be handed the verified handle, and closing this needs a
+handle-based launcher (a verb invoked against the open handle), which
+`ShellExecute` is not. Precondition: hostile in-vault write access — the
+peer the gate defends against — against which the exploit is a
+sub-millisecond race on an already-identity-checked path.
+
+**Driveless folder-mounted volumes open their media (Major-4).**
+`GetFinalPathNameByHandle` with the default DOS-name flag returns
+`ERROR_PATH_NOT_FOUND` for a volume with no drive letter, so every target
+under such a vault resolved null. A `VOLUME_NAME_GUID` fallback resolves
+it. A driveless mount cannot be created unprivileged, so the end-to-end
+is a manual residual; the fallback PRIMITIVE is pinned by
+`TheVolumeGuidResolutionReturnsAWellFormedPath` so it is not dead code.
+
+**Junctions, pinned.** `AJunctionInsideTheVaultPointingOutsideIsRefused`
+builds the reviewer's construction (`mklink /J`, no elevation, a plain
+`.png` leaf) and `ANestedJunctionChainStillResolvesOutsideTheVault` the
+nested one; both resolve through the OS handle now.
+
+**Hardlinks are NOT covered, and the earlier claim that they were is
+withdrawn.** A hardlink is a second directory entry for the same file
+data, not a reparse point: it has no other path to resolve to — the
+in-vault name IS a real name for that file, and its identity is the
+file's own. Bounded by what a hardlink can be: same volume only, never a
+directory, and it must be created by something that already has write
+access inside the vault. It cannot reach a file the vault's filesystem
+cannot reach, and the extension gate still applies to the name opened.
+Accepted residual.
+
+**Two more residuals codex verified, recorded.** An alternate-data-stream
+syntax leaf can satisfy the extension gate, but only in a narrower shape
+than this row used to claim — and the correction matters because the old
+wording described a parser that does not exist.
+
+*What the parser actually does:* `IsOpenableMedia` takes everything after
+the LAST `.` in the basename, colon included, and compares that whole
+string to the media sets. It does not split on `:` and it does not read
+"the part before the colon". Verified against the shipped code:
+
+| leaf | gate | why |
+|---|---|---|
+| `photo.png:stream` | **refused** | extension parses as `png:stream` |
+| `photo:stream` | refused | extension parses as `stream` |
+| `photo:cover.png` | **accepted** | extension parses as `png` |
+| `photo.png:stream.png` | **accepted** | extension parses as `png` |
+
+So the example this row carried for three rounds (`photo.png:stream`) was
+REJECTED all along — the claim erred in the safe direction, but it
+described the wrong mechanism. The real shape is an ADS whose STREAM NAME
+ends in a media extension (`photo:cover.png`). Codex found no
+boundary-escape or execution path through it either way: the resolved
+terminal identity is still the in-vault base file, and containment is
+decided on that identity, not on the leaf's spelling. A policy residual,
+not a hole.
+
+UNC and the `\\?\` / `\\.\` device-namespace forms fail closed: the
+volume-GUID/UNC resolution does not reach a file whose identity chain
+lands under a local vault root. Noted so a later change does not
+regress it.
+
+**The manual/bounded residuals, gathered** (each pinned at the primitive
+or structurally, E2E deferred because the feature needs privilege or a
+race that cannot be driven unprivileged): per-directory case sensitivity
+(defect 3, `fsutil`); driveless folder-mount (Major-4, admin); the ReFS
+128-bit id (round 4 #2, needs an ReFS volume — the 128-bit primitive is
+pinned, the ReFS collision is the deferred E2E); the swap-during-capture
+race (round 4 #1, closed by construction and pinned structurally, its E2E
+undrivable unprivileged); and the sub-millisecond launch-time re-resolution
+gap (needs a handle-based launcher). None is a path-text defect; the class
+codex named is closed. Round 4 found three fail modes in the identity/
+snapshot logic (a check→capture window, a ReFS-unsafe 64-bit id, a
+mis-applied depth cap) and round 5 found that round 4's own fix for the
+second one still carried a per-call downgrade; all four are fixed.
+
+**One recorded fail-CLOSED limitation, not a residual risk.** On a vault
+volume whose filesystem does not answer `FileIdInfo` (FAT32, exFAT, some
+redirectors and virtual filesystems), media open refuses audibly rather
+than downgrading to a weaker identity — supported volumes are NTFS/ReFS.
+Listed here because it is a real availability regression introduced by
+round 5 and belongs where the other bounded statements live; it is the
+deliberate price of closing the fail-open.
+
+**The capability-fallback sweep (round 5 #4).** No primitive in this gate
+weakens itself on failure. Identity is `FileIdInfo` or refusal — no second
+method exists. The two surviving retry/alternate shapes are NOT downgrades:
+the final-path buffer growth re-invokes the SAME method with a larger
+buffer, and the `VOLUME_NAME_DOS` → `VOLUME_NAME_GUID` step is the same
+`GetFinalPathNameByHandle` asked for a different SPELLING of the same
+resolved object (identity is still read from the held handle, and
+`TheVolumeGuidResolutionReturnsAWellFormedPath` pins the two spellings name
+one identity). Everything else fails CLOSED: a mixed-class comparison would
+differ in the high half; UNC and `\\.\`/`\\?\` device forms never reach an
+identity chain under a local vault root; an unopenable ancestor refuses.
+
+**Every failure mode is a refusal** — a NUL character, a reserved device
+name, a path too long, a link cycle, a permission error — because an
+exception escaping into the activation would abort it silently rather
+than refuse it audibly; the whole closure is wrapped and any failure
+answers "no". Pinned by
+`AnInVaultSymlinkPointingOutsideTheVaultIsRefused` (which FAILS rather
+than skips when the box cannot make symlinks, so the arm is never
+silently unchecked) and `AMalformedMediaTargetIsRefusedRatherThanThrown`
+over six hostile shapes, with `AMalformedMediaTargetRefusesAudibly` for
+the never-silent half.
+
+**Deliberately stricter than mac, because the threat models differ.**
+Mac opens any non-Markdown target through `NSWorkspace`
+(`CanvasContainerView.swift:181–187`), where Gatekeeper, quarantine and
+notarization adjudicate an execution; `ShellExecute` adjudicates
+nothing. Matching mac here would import a decision that only holds under
+mac's protections. Mac's laxer arm goes on the upstream-notes list, not
+fixed here.
+
+**STOP point recorded: the vocabulary has no reason for this refusal.**
+Nothing in `CanvasBlockedReason` or `CanvasStatusNote` says "this file
+type is not openable from a canvas" — `CanvasFileNotFound` is false (the
+file is present), `LinkOpenFailed` is false (it is not a link), and a
+host-authored clause in `CanvasActionFailed`'s `detail` would be exactly
+the prose 0a deleted. So the refusal rides
+`CanvasActionFailed { CanvasAction, detail: target }` — High priority,
+never silent, dynamic data only — rendering *"Canvas action failed:
+setup.exe"*. That is accurate and uninformative, and it is the best the
+shipped vocabulary can do. Adding the typed reason is a core change this
+task may not make (the brief's hard rule), so it is flagged rather than
+smuggled: **the vocabulary needs a `CanvasBlockedReason` arm for a
+refused file-type open, and PR E or a 0a follow-up should add it.** The
+SAFETY behaviour does not wait on that; only the sentence does.
 
 ---
 
@@ -2216,6 +3406,249 @@ every deleted symbol was re-grepped to zero afterwards.
   value for value. The equality that matters is still the committed
   golden, which only the mac CI lane can decide.
 
+### Task A-1 (the Windows document, tab and outline)
+
+- **CD-28 is not a reading, it is measurable.** The committed
+  `malformed.canvas` — the fixture whose whole purpose is entries core
+  preserves but cannot show — comes back `degraded: false` with eight
+  warnings, five of them `SkippedEntry`, and two live rows. The banner
+  it drives says *five*. Meanwhile every `ParseFailed` arm of
+  `canvas::parse` returns `Canvas::default()`, so the state the flag
+  names can never carry a skipped entry at all. Both facts are visible
+  in the committed `canvas_read.json` golden, which is why that artifact
+  serializes the warnings rather than just their count.
+- **The group boundary is superseded by the move, on BOTH hosts.**
+  `CanvasGroupEntered` and `CanvasMovedTo` are both class `navigation`
+  (0a-8), and every selection change announces the boundary and then the
+  move in the same synchronous run — so inside the 200 ms window the
+  move wins and the boundary line is dropped, never spoken. Mac's
+  `announceMove` (`CanvasOutlineView.swift:404–432`) has exactly the
+  same shape, so this is inherited parity, not a Windows defect. The
+  class membership is pinned core-side and is not a host's to change.
+  Recorded rather than worked around: CD-4's count rule is pinned on the
+  PURE `GroupBoundaryEvent` (the mac `returnOpensRow` precedent) and the
+  audible outcome is pinned separately by
+  `TheMoveSupersedesTheBoundaryInsideTheCoalescingWindow`. **Worth an
+  upstream look at close-out** — t0 §1.2 specifies group entry/exit
+  narration, and neither host currently delivers it on the arrow path.
+- **The §K row's mac reference number is the wrong benchmark.** The spec
+  asks PR A to record its numbers "against the mac `5.62 ms` core path
+  (the C# delta is marshalling only)". `5.62 ms` is
+  `canvas_parse_derive_2000` — pure parse + derive, no persistence.
+  `open_canvas` additionally runs an indexed `canvas_nodes` write inside
+  `begin_fenced` and inserts into the session registry, and it measures
+  **36.27 ms** here. The C# delta this suite actually isolates is
+  **~4.6 ms** for all three projections behind one open. A like-for-like
+  ratio needs a Rust bench of `open_canvas`, which does not exist;
+  BENCHMARKS.md says so rather than printing a ratio that would mean
+  nothing. (The measuring box is also a QEMU VM, not the bare metal the
+  W2-x rows used — recorded in the same entry.)
+- **The warning footer is wider than the banner, and gated on Ready.**
+  Spec behavior 2 asks for "a focusable detail row in the outline footer
+  listing `warnings`", and the banner's count is core's `skipped`
+  parameter. Those are two different sets on the same fixture (eight
+  versus five on `malformed.canvas`), so the footer lists every warning
+  — a dangling connection is a fact about the user's file that nothing
+  else in this PR reports — while the banner keeps the vocabulary's
+  number. The footer renders only under `Ready`: a parse error's state
+  message IS its single `ParseFailed` detail, so listing it below would
+  say the same sentence twice.
+- **`TreeViewItemAutomationPeer` has no `IInvokeProvider`.** It
+  implements ExpandCollapse, SelectionItem and ScrollItem, and the
+  spec's outline needs Invoke on both the node rows and the connection
+  rows. The alternative — an invokable child element inside each row —
+  is what the journeys' peered-elements-only trap forbids, so the item
+  is a `CanvasOutlineItem` whose peer adds the pattern.
+- **A `RenderedAnnouncement` overload was unavoidable, and the seam it
+  created was not wired.** `AccessibilityNotificationDispatcher.Post`
+  rendered internally, and a coalescer cannot use that: the window's
+  winner is decided AFTER the render and the loser is dropped without
+  ever being spoken, so the queue holds rendered lines.
+  `Post(A11yEvent)` now delegates to `Post(RenderedAnnouncement)`, and
+  the new seam takes the same `?? (_ => { })` default the event seam
+  already had at each hop.
+
+  **This bullet used to claim the seam was "threaded from `MainWindow`
+  through the vault lifecycle to the workspace". It was not.** The
+  production construction passed no `announceRendered:` argument at all,
+  so the default no-op threaded the whole way and every canvas
+  announcement died silently in the shipping app — while the entire
+  suite stayed green, because every fact injects its own sink. That is
+  the exact shape a default-to-harmless seam fails in, and no
+  test-injected sink can ever catch it. Fixed, and guarded by
+  `AnnouncementSeamCensus`, which reads the three SHIPPING call
+  expressions — `MainWindow` → lifecycle → workspace → announcer — and
+  a fourth fact that drives a canvas load through a real
+  `AccessibilityNotificationDispatcher`. Mutation-verified: deleting the
+  argument again fails the first of them by name.
+- **The attach funnel's doc comment was one site behind, and now cannot
+  be.** The controller ruling said four listed versus five real; that
+  was correct (`Layout.cs:161`, the active-tab replace arm in
+  `TryOpenItem`, was missing). Both the fix and the guard landed
+  together, and the guard was mutation-verified: dropping `TryOpenItem`
+  from the comment fails
+  `TheAttachFunnelDocCommentNamesEveryCallSite` with that name in the
+  message, and adding an `AccessibilityNotificationDispatcher` field to
+  a `Canvas/` file fails `NoCanvasSourceAnnouncesOutsideTheRelay`.
+- **`ChordScope.Canvas` has no scrape yet, and `ChordTableTests` says
+  so.** `EveryScopeIsEitherScrapedFromProductionOrDispositioned` demands
+  that a new scope be either scraped from a production key handler or
+  dispositioned with a reason. PR A's three canvas commands carry no
+  chord (rule R1: the switcher is a visible control and the palette is
+  always a path), so `Reg` gives them `ChordScope.None` and the scope
+  itself is dispositioned — PR C's navigator ships the first
+  Canvas-scoped row and the scrape that checks it.
+- **`dotnet format --verify-no-changes` is clean solution-wide** at
+  every commit; no unrelated file was rewritten. The ten xUnit2031
+  analyzer warnings the first cut of `CanvasDocumentTests` produced were
+  cleared rather than left in the log.
+
+**Fix round 1 (task review).** Three of the findings changed shipped
+behaviour rather than only prose, and one of those was found by a test
+written for a different finding:
+
+- **The rendered seam was never wired** (above, in the amended overload
+  bullet). Class: a seam whose every hop defaults to harmless is
+  invisible to any suite that injects its own sink.
+- **Removing a selected connection row dragged the model backwards.**
+  Writing the arrow-onto-a-connection-row fact exposed it: WPF
+  re-selects the parent container when the selected item is removed, and
+  that arrived at the selection handler as a user action. The apply now
+  runs wholly under the sync guard (A11). The reviewer's finding was
+  that arrowing must not follow; the guard gap was underneath it and
+  would have survived the narrow fix.
+- **Three copies of the scheme allowlist** — panels, citation popover,
+  canvas — while the contracts row said "shared". Now one
+  `ExternalLinkPolicy`; the row says what is true (I4/A13).
+- **Five §A citations named tests that did not exist.** Corrected, and
+  `ContractsCitationCensus` now derives the check instead of trusting a
+  re-read. The mechanical sweep also found the inverse hazard: §A cites
+  plenty of real identifiers that live outside the C# tree (WPF, the mac
+  twins), so the census lists those explicitly rather than loosening the
+  rule until it passes.
+
+**Fix round 2 (red team round 1).** Three blockers, and two of them are
+the same class: a record that outran the code.
+
+- **The `canvas_read` golden had no Swift producer**, and mac's
+  `ParityHarnessTests` asserts golden↔produced name-set equality BOTH
+  directions — so the mac lane would have failed deterministically on
+  this PR's first CI run. A20's "the twin lands later" was copied from
+  0a/0b, where "later" meant a later TASK inside the same PR. The twin
+  is written (blind, against symbols verified one by one in the mac
+  sources), and the same-PR rule is now stated in A20 for the rest of
+  the series.
+- **A17 claimed every FFI touch was scheduled; three were not**, and one
+  of those held no lock. The lock is now universal and the contract
+  carries the actual table. This is the 0a record-drift class, caught
+  before codex rather than by it.
+- **The history reload site did not reload a canvas** — a registry hit
+  returned the document untouched, so the outline kept the pre-restore
+  rows right after the shell announced the restore.
+- **Image cards opened as Markdown.** `ItemForPath` calls every
+  non-`.canvas`/`.base` extension Markdown, so activating an image
+  replaced the canvas tab with an editor over the PNG's bytes. Mac
+  routes on the TARGET, not the kind; the unreachable
+  `CanvasOpenTarget.DefaultApp` arm was the tell that a whole branch was
+  missing. (CD-36 records the stale mac hint that hid it.)
+- **Focus was a side effect of publishing**, which stole it on retarget
+  and never landed it on a registry hit — both halves of A14 wrong at
+  once, one of them contradicting the guard comment beside the code.
+- **The real coalescer had no test.** Every announcer fact flushed
+  manually, so deleting `_timer.Start()` left the whole suite green.
+  One fact now pumps a real dispatcher; mutation-verified.
+
+**What generalises.** Four of these six are the same failure: a
+mechanism whose absence is silent (a no-op default, a registry hit, a
+manual flush, a deferred twin) tested only through a path that supplies
+the mechanism. The guards added here — the seam census, the citation
+census, the real-timer fact, the production-mode interleavings — all
+exist to make absence loud.
+
+**Also this round.** The History restore of a `.canvas` tab does not
+complete end to end in the harness: `RequestRestoreVersion` stages the
+history head hash as the CAS basis for a non-markdown tab and the
+restore does not reach disk. Unresolved here and NOT PR A's to answer —
+W4-7 owns that path, and PR A's obligation is that its own reload site
+reloads, which is where the fact is pinned. Flagged for close-out.
+
+**Fix round 3 (scoped re-review).** The round-2 fixes introduced three
+of their own, which is the stopping rule's own warning shape — a fix
+that creates the next round's finding counts double. None of these
+created a NEW blocker class, but they are recorded plainly:
+
+- **M1's media arm was a shell-execution hole.** Opening "anything
+  non-Markdown" in its default app is right on mac and wrong on Windows,
+  because `ShellExecute` executes. The gate (CD-38) is the fix; the
+  lesson is that "match the reference implementation" is not a safety
+  argument when the platforms' adjudicators differ.
+- **The gate's own tests were stubbed.** The activation facts replace
+  `OpenMediaCardFromSurface`, so they could never have seen a gate in
+  the production closure — the same silent-absence shape as round 2's
+  unwired seam, one layer down.
+  `TheProductionMediaSeamOpensMediaAndRefusesEverythingElse` drives the
+  real closure on both arms.
+- **M2's addressing was still a broadcast.** One document serves every
+  pane, so `RequestFocusLanding` reached every mounted surface and each
+  landed. The request carries the asking tab now.
+**Fix round 4 (scoped re-check).** Two test-integrity defects in round
+3's own focus facts, both the same shape: a test that could not have
+failed.
+
+- **The two-pane fact was addressed to the wrong pane.** It asked for
+  focus in B and asserted focus landed in B — but with the guard deleted
+  BOTH surfaces land and B, subscribed second, wins the last word, so
+  the fact passed either way. It addresses pane A now, the surface
+  mounted first, which is the one a broadcast loses to. Mutation-verified.
+- **`AnEmptyCanvasLandsFocusOnTheOnboardingRegion` had no
+  `DataContext`,** so it was asserting on a shape production never
+  builds; A14 cited it as a pin for behaviour it did not exercise. It
+  runs through the workspace's open funnel now. The enabler is gone
+  with it: `RequestFocusLanding`'s `owner` parameter lost its default,
+  so an unaddressed call is a compile error rather than a convention —
+  which is what turned the defect up in the first place, since removing
+  the default broke exactly that one call site.
+
+**Fix round 6 (scoped re-review).** B4 was half-fixed and the round-5
+focus fix carried a regression.
+
+- **Leaf-only resolution was bypassed empirically**: a directory
+  junction inside the vault with an ordinary `.png` leaf. Junctions need
+  no elevation, so the privilege argument never covered them. The walk
+  resolves the whole chain now, bounded to the vault subtree — and the
+  first attempt at that bound refused everything, because interrogating
+  `C:\` throws and the fail-closed handler caught it. Both the bypass
+  and the over-refusal are pinned.
+- **The hardlink claim was false** and is withdrawn with the residual
+  stated rather than implied.
+- **The canvas early return stranded focus.** Seven dismissal routes
+  reach `FocusEditorPane` as a last resort — their own comments say the
+  fallback exists "rather than stranding focus on the window root" — and
+  a bare return left them with nowhere. The canvas arm RAISES a request
+  instead, so every route lands on the outline row.
+- **The rename double-loaded**: the re-key's `CanvasDocumentFor` loads
+  on a miss and the unconditional reload after it read the file again,
+  speaking the degraded-load sentence twice. The reload is now skipped
+  when the re-key just created the document.
+
+- Two contract amendments from round 2 (A13's routing, A14's trigger)
+  were **lost when their edit script aborted on a later assertion** and
+  the file was never written — the code shipped, the record did not.
+  Caught by re-reading §A against the diff in this round and reapplied.
+  A script that edits a document in several places must write what it
+  has before it can fail; recorded because the same shape would have
+  silently dropped any of the other rows.
+
+**Deferred to PR E (m5, ledgered, no action here).** `Rebuild()`
+force-expands every group with members so a first read is the whole
+structure, which means a republish discards a user's collapse. Nothing
+in PR A republishes except a reload, so the cost is currently one lost
+collapse per explicit reload; PR E's mutation funnel republishes on
+every write, at which point expansion state has to be preserved across a
+rebuild rather than reset. Recorded here so PR E inherits the decision
+rather than rediscovering it.
+
+
 ---
 
 ## Round record
@@ -2344,3 +3777,378 @@ the parts-3-and-4 independence claim is withdrawn rather than scoped,
 because provenance in a lexical scan is line-wide and cannot support it.
 **By decision, scan residue past this point is 0b's parser**; no further
 lexical strengthening is in scope for 0a.
+
+### PR A — Codex adversarial round 1 — NOT SAFE, 5 blockers + 1 major
+
+Blockers B1/B2/B6 all landed on focus and selection delivery, and that
+made **four consecutive rounds** with a finding in the same behaviour
+(red-team I2's connection-row follow, M2's retarget theft and
+registry-hit gap, round 4's two facts that could not fail, and now
+codex's three). **Stopping rule 4 applied**: one design pass instead of
+three more point fixes — written up as the rewritten **A14**, which is
+now the design's contract rather than a description of the code.
+
+The class, named: **edge-triggered delivery with no durable state,
+tested by supplying the trigger.** Focus was delivered at the instant
+something fired, to whoever happened to be subscribed and in the right
+state, and every fact called the delivery method itself. Three
+independent things can make that instant wrong — the surface is not
+mounted, is not visible, or its virtualized container does not exist —
+and none of them is observable from the document. Each round fixed the
+instance and left the shape. A14's rewrite replaces it: the request is
+state, every surface retries on every condition that can change the
+answer, realization is part of delivery, only a realized container
+counts as delivered, and one authority owns focus per tab kind.
+
+Point fixes, each with its own contract amendment: **B3** the rename
+DESTINATION reloads (A1); **B4** containment becomes physical and the
+closure fails closed (CD-38); **B5** the announcer is retired with its
+document (A5).
+
+**Every guard in this round is mutation-verified**: removing the open
+funnel's canvas request fails three integration facts; restoring the
+tree-focus fallback fails the realization fact; deleting MainWindow's
+early return fails the source guard; dropping the announcer's
+shut-down flag fails the late-post half of the lifecycle fact; deleting
+the media gate opens an `.exe`.
+
+### PR A — Codex adversarial round 2 — NOT SAFE, 2 blockers + 2 majors
+
+All four valid; none re-opened a design, so point fixes (the focus
+design pass held — codex found no new instance of the delivery class,
+which was round 1's rule-4 subject).
+
+- **B1 (TOCTOU in the media gate).** The gate resolved a path string and
+  `ShellExecute` re-resolved the namespace later, so an in-vault-write
+  attacker — exactly this gate's threat model — could swap a checked
+  directory for an outward junction in between. Narrowed both ways the
+  ruling named: resolution is through an OPENED HANDLE
+  (`GetFinalPathNameByHandle`) and the launcher is handed the
+  fully-resolved terminal path, and containment is revalidated
+  immediately before `Process.Start` with nothing in between. The
+  irreducible residual (a path-taking launcher re-resolves; closing it
+  needs a handle-based launcher) is recorded in CD-38 with its
+  precondition and future-work shape — the same claims-match-powers
+  doctrine as the hardlink residual. The handle resolution also replaced
+  the hand-rolled ancestor walk, which was an approximation of exactly
+  that call.
+- **B2 (focus retry incomplete under DataContext churn).**
+  `DataContextChanged` joins the retry triggers: a presenter rebinding
+  A→B with an identical shared `Model` never fired `OnModelChanged`, so a
+  request for B stranded. Pinned.
+- **Major-1 (drive-root vault rejected all media).** The `root +
+  separator` containment prefix produced `C:\` for a drive-root vault.
+  Replaced with `GetRelativePath`, which is root- and case-correct;
+  pinned by a nine-case predicate theory, mutation-verified. (The
+  end-to-end SUBST route could not test it — `GetFinalPathNameByHandle`
+  collapses a SUBST drive to its real path — so the predicate is tested
+  directly, which is the honest discriminating shape.)
+- **Major-2 (round-6 guard false-green, the supplies-its-own-mechanism
+  class a THIRD time).** The dismissal fact called `RequestFocusLanding`
+  itself and never touched MainWindow's arm; the census proved only the
+  early return. The census is two-sided now — early return AND the raise
+  — and mutation-fails when the raise is removed with the bare return
+  left; the delivery half is a separate fact. This class has now appeared
+  in rounds 4, 5 and 6/7; the standing rule for the rest of the series:
+  a guard may not exercise the mechanism it is guarding, and where the
+  production seam is unreachable in-process it is pinned two-sided in the
+  source.
+- **Residuals recorded** (codex-verified, not holes): an ADS-syntax leaf
+  satisfies the extension gate with no escape/execution path found; UNC
+  and device-namespace forms fail closed. Both in CD-38.
+  > **Example corrected (round 6 hygiene):** the leaf named here and in
+  > CD-38 was `photo.png:stream`, which the last-dot parser actually
+  > REFUSES (it reads `png:stream` as the extension). The accepted shape is
+  > an ADS whose stream name ends in a media extension, e.g.
+  > `photo:cover.png`. See CD-38 for the verified table.
+
+### PR A — Codex adversarial round 3 — containment class ended (1 blocker + 1 major)
+
+Containment findings in codex rounds 1, 2 AND 3 — the same subsystem
+three times running, which is the stopping-rule-4 shape a SECOND time in
+this PR (the first was focus delivery). Codex named the class precisely:
+**filesystem identity reduced to path text**, where two normalization or
+case rules on the same string disagree. Every prior fix was another path
+predicate; this round replaces the substrate.
+
+- **B1 (two sub-defects).** Verifying `C:\vault.` and launching a string
+  ShellExecute renormalizes to `C:\vault` was a launch-integrity bug —
+  fixed by keeping the handle-resolved EXTENDED (`\?\`) form end to end.
+  TOCTOU-by-path-text was fixed by revalidating FILE IDENTITY
+  (`BY_HANDLE_FILE_INFORMATION`: volume serial + file index) captured at
+  check and re-compared immediately before launch. The residual shrinks
+  to the re-open→ShellExecute gap and is recorded.
+  > **Superseded:** the identity primitive named here is no longer the one
+  > shipped. Round 4 replaced it with the 128-bit `FILE_ID_INFO` (ReFS
+  > safety) and round 5 deleted the `BY_HANDLE_FILE_INFORMATION` path
+  > entirely — see the round-5 entry and CD-38.
+- **Defect 3 (case-sensitive-directory sibling).** The `GetRelativePath`
+  OrdinalIgnoreCase prefix falsely accepted an adjacent case-different
+  directory under per-directory case sensitivity. Ended by identity: the
+  ancestor chain is compared by `(volumeSerial, fileIndex)`, so an
+  adjacent directory is a different object. The feature needs admin, so
+  the E2E is a bounded/manual residual and the rule is pinned
+  reproducibly by a junction-rooted vault (identity accepts, text prefix
+  rejects), mutation-verified.
+- **Major (driveless folder-mounted volume).** `GetFinalPathNameByHandle`
+  default DOS name returns `ERROR_PATH_NOT_FOUND` for a driveless volume,
+  refusing all its media. `VOLUME_NAME_GUID` fallback added; the
+  primitive is pinned, the E2E (needs admin) is manual.
+
+**The identity-based resolution ends the class:** containment,
+revalidation and launch are all OS file identity now, not path text.
+Where a filesystem feature needs privilege to create (per-dir case
+sensitivity, driveless mount, the TOCTOU race), the identity PRIMITIVE
+is pinned directly and the E2E recorded as manual — the standing
+false-green rule, applied honestly rather than by manufacturing a
+passing E2E that does not exercise the feature.
+
+**Every fix mutation-verified:** identity revalidation (swap → refused),
+`\?\` retention (strip → trailing-dot launches the sibling), identity
+containment (text prefix → junction-rooted vault refused), and the
+identity primitive itself (distinct objects → distinct identities).
+
+### PR A — Codex adversarial round 4 — containment's 4th round, converged (3 blockers)
+
+The FOURTH consecutive codex round with a containment finding — but not a
+new instance of a closed class. Round 3 moved the substrate from path text
+to OS file identity; round 4 found that the identity implementation itself
+still had three fail modes. All three are fixed and, per the pre-declared
+stopping rule for this subsystem, the identity/snapshot logic was then
+swept end to end for any further fail-open and none remains.
+
+- **B1 (snapshot coherence — fail-OPEN).** Containment and the identity
+  CAPTURE were two separate opens: containment resolved through one handle,
+  then the check identity was captured by RE-OPENING the resolved path. A
+  swap between those two opens made the captured identity the OUTSIDE
+  object, and revalidating outside-against-outside passed. Fixed by fusing
+  capture into containment: the leaf is opened ONCE, its identity and
+  resolved path come from THAT handle, and every ancestor handle up to the
+  vault root is opened and HELD simultaneously — one coherent snapshot, and
+  revalidation re-checks the containment handle's own identity. The
+  sub-window is closed by construction. It cannot be driven by an
+  unprivileged in-process race (the swap would have to land inside a single
+  method's handle-held region), so the property is pinned STRUCTURALLY by
+  `CanvasMediaGateCensus.TheSnapshotCapturesIdentityFromTheHeldHandleNotAReopen`
+  (`ResolveContained` reads identity only off held handles, never re-opens
+  by path), mutation-verified against reinstating the re-open; the
+  swap-during-capture E2E is a manual residual. Per the coordinator's
+  instruction, no passing race test was manufactured.
+- **B2 (128-bit identity for ReFS — fail-OPEN).** `nFileIndex` is not
+  unique on ReFS, so the 64-bit identity could call two different files the
+  same. Switched to `GetFileInformationByHandleEx(FileIdInfo)` →
+  `FILE_ID_INFO` (64-bit volume serial + 128-bit file id); the 64-bit
+  `BY_HANDLE_FILE_INFORMATION` index remains only as a pre-Windows-8
+  fallback, which never meets ReFS. Pinned by
+  `IdentityIsThe128BitFileIdInfoNotThe64BitIndex` (the 128-bit class is the
+  one taken on a live handle, mutation-verified against a wrong class value)
+  and `TheLegacy64BitFallbackAlsoDistinguishesFiles`.
+  > **CORRECTED BY ROUND 5.** The claim above — that the retained 64-bit
+  > arm was a pre-Windows-8 capability selection — is FALSE. The arm was
+  > per-CALL: it triggered on any failure of the primary query and
+  > downgraded that individual read to the non-unique index, a fail-open on
+  > ReFS. The scoped re-review that endorsed this wording did not catch it
+  > either. The fallback is deleted in round 5 and
+  > `TheLegacy64BitFallbackAlsoDistinguishesFiles` is replaced by
+  > `IdentityQueryFailureRefusesRatherThanDowngrading`. This entry is left
+  > standing, with its error marked, because the record of what was claimed
+  > is part of the record.
+- **B3 (depth cap — fail-CLOSED availability).** The `ResolveRounds=64`
+  reparse-cycle bound had been mis-applied to the lexical ParentOf walk,
+  refusing valid media more than 64 directories deep. Removed: the walk
+  strictly shortens and terminates at the volume root, so a
+  fixed-point/shortening guard suffices. Pinned by
+  `MediaSeventyDirectoriesDeepStillOpens` (70 levels deep, mutation-verified
+  against reinstating a cap) and `TheAncestorWalkCarriesNoDepthCap` (the
+  symbol is gone).
+
+**The sweep for further fail-opens found none.** A mixed 128-vs-64-bit
+comparison of different files differs in the high half and fails CLOSED;
+UNC and `\\.\`/`\\?\` device forms resolve to a volume whose identity chain
+never lands under a local vault root, and fail CLOSED; an unopenable
+ancestor fails CLOSED; and a final-path buffer too small is grown and
+re-read rather than refusing a legitimate long path (the availability
+sibling of B3). **The single remaining residual** is exactly the
+launch-time re-resolution: `ShellExecute` re-opens the verified path BY
+NAME, which a path-taking launcher cannot avoid; CD-38 now states that as
+the one residual and no longer implies the check→capture gap is covered.
+
+**Stopping rule honoured.** This was the pre-declared final codex round for
+containment; it converged (three concrete fixes, a clean sweep) rather than
+surfacing another instance of a closed class, so the loop ends here rather
+than escalating the design decision to the user.
+
+### PR A — Codex adversarial round 5 — 1 blocker, introduced by round 4's own fix
+
+Genuine, and mine: round 4 replaced the 64-bit identity with the 128-bit
+`FILE_ID_INFO` but RETAINED the old one as a fallback, and this document
+described that fallback as a per-host capability selection confined to
+pre-Windows-8. It was per-CALL. Any transient failure of the primary query
+— not an old OS, just an error — downgraded that single read to the
+ReFS-non-unique `nFileIndex`, i.e. a fail-open that fires exactly when
+something is already wrong. Strictly worse than having no fallback.
+
+**Controller ruling: strongest form — delete it.** `IdentityOfHandle` is
+now `FileIdInfo` or `null`; the `GetFileInformationByHandle` P/Invoke, its
+`BY_HANDLE_FILE_INFORMATION` struct and the legacy test seam are gone.
+
+**The rationale, corrected in the micro-round that followed.** My first
+write-up justified the deletion by minimum OS — that .NET 10 WPF's Windows
+10 1607 floor postdates `FileIdInfo`'s Windows 8 — and concluded the
+deletion cost nothing. Wrong KIND of argument: `FileIdInfo` depends on the
+FILESYSTEM, not the OS version, and FAT32/exFAT and some redirectors and
+virtual filesystems do not answer it. So the deletion DOES have a cost:
+supported media-open volumes are NTFS/ReFS, and on any other volume every
+media open now refuses audibly — a fail-CLOSED availability regression
+against round 4, recorded in CD-38 rather than glossed. Accepted
+deliberately, because the alternative is the fail-open just killed.
+
+- **The failure-injection fact.**
+  `IdentityQueryFailureRefusesRatherThanDowngrading` injects a
+  primary-identity-query failure into the containment flow and pins that
+  the primitive, `ResolveInsideVault` and `OpenMediaInVault` all refuse and
+  nothing reaches the shell — with a before/after premise so a broken
+  fixture cannot pass it. Mutation-verified: reintroducing ANY fallback arm
+  makes the injected failure resolve successfully again, failing both this
+  fact and `TheGateHasExactlyOneIdentityMethod`.
+- **The structural pin.** `CanvasMediaGateCensus.TheGateHasExactlyOneIdentityMethod`
+  requires the legacy symbols ABSENT rather than merely unreached
+  (dormant dead code is how this returned), two-sided against the surviving
+  `TryGetFileIdInfo` so deleting identity altogether cannot satisfy it.
+- **Sweep — no other per-call downgrade.** Recorded in CD-38: the
+  final-path buffer growth retries the SAME method, and the DOS→GUID step
+  is the same call asking for a different spelling of the same object.
+  Neither weakens a primitive; nothing else in the gate does either.
+
+**On the record.** Round 4's entry above is left in place with its error
+marked rather than rewritten, and the fact that the scoped re-review
+endorsed the wrong claim is recorded with it. The claims-match-powers
+doctrine applies to this document too: a fallback described as narrower
+than it was is the same defect class as a guard described as stronger than
+it is.
+
+**Stop condition.** The round-4 stop was pre-declared for a FIFTH
+containment fail-open. The controller adjudicated it unmet in spirit —
+deleting dead code that serves no supported platform is not a product
+decision, and codex specified the closure shape rather than disputing it —
+so the loop continues to a scoped re-review and codex round 6. Recorded in
+the ledger and reversible until the user says otherwise.
+
+### PR A — Round 7 — the outline's Invoke never reached assistive technology
+
+Found while fixing a CI failure, not by review. The
+`CanvasSurfaces_OutlineTreeSelectionAndActivation_AreClean` journey had
+never once executed its assertions: `DemoVaultCanvasDirectory()` walked up
+to `Cargo.toml`, and the shell a11y gate runs on downloaded binaries with
+no checkout, so it threw "repository root not found" in 4 ms on every run.
+With the fixture lookup repaired (linked `Content` items read from
+`AppContext.BaseDirectory`, the mechanism `CitationStyleFixture` already
+proved — and whose comment already warned about exactly this mistake), the
+journey ran its assertions for the first time and immediately failed on
+`Invoke`.
+
+**The defect.** WPF projects a TreeView row into the UIA tree as a
+`TreeViewDataItemAutomationPeer`, not as the `TreeViewItem`'s own peer.
+That data peer implements SelectionItem, ExpandCollapse and ScrollItem
+itself and does NOT forward a custom pattern to the container peer. The
+`Invoke` this PR added to `CanvasOutlineItemAutomationPeer` was therefore
+invisible: an in-process peer walk showed `invoke=NULL` on every row while
+`sel=OK exp=OK`. Contract A8's activation pattern was absent from the only
+surface assistive technology reads. Fixed by overriding both item-peer
+factories to build `CanvasOutlineRowDataPeer` (see A8).
+
+**The false-green class, FOURTH instance — and the one that matters
+most.** `TheTreeItemsCarryTreeSelectionItemExpandCollapseAndInvoke` passed
+throughout by calling `CreatePeerForElement(container)` and interrogating
+the CONTAINER peer — an object no UIA client ever sees. It constructed the
+mechanism it was meant to be checking, exactly like the three earlier
+instances (the unwired seam behind injected sinks, the gate behind a
+stubbed closure, the focus guard calling `RequestFocusLanding` itself).
+The fact now walks `treePeer.GetChildren()` and asserts on the projected
+row peers at both nesting levels; both halves are mutation-verified.
+
+**Codex round 6's SAFE TO MERGE predates this journey's first execution.**
+That verdict was reached while the only test capable of catching this
+defect was dying in setup — so it was never evidence about the outline's
+UIA surface. Recorded plainly because the review ledger should not read as
+though the gauntlet cleared something it never examined.
+
+**A third defect, found and NOT fixed in this round (reported, awaiting
+scope).** With Invoke working the journey advances to its surface-switcher
+assertion and fails deterministically there. Verified in-process: the UIA
+tree exposes `CanvasShowOutline/Table/Visual` flattened directly under
+`CanvasSurface`, with **no `CanvasSurfaceSwitcher` node at all** — the
+switcher is a bare `StackPanel`, which WPF gives no automation peer, so
+its AutomationId and its "Canvas view" name never reach a client. Contract
+A18's "one named group" is not met. Same root class as the Invoke defect:
+`AutomationProperties` set on an element WPF never peers. Not fixed here
+because it is production a11y behaviour needing its own contract evidence
+and mutation-verified test. *(Fixed in round 8, below, along with the
+class-wide sweep and the census that ends it.)*
+
+### PR A — Round 8 — the class ended: inert a11y properties
+
+The switcher defect reported above is fixed, and — the point of this round
+— the CLASS behind it is closed rather than the instance.
+
+**The fix.** The switcher is an `AutomationNamedGroupPanel`, the shared
+peered-container idiom from `AutomationLandmark.cs`. It exposes
+`ControlType.Group` carrying the "Canvas view" name and the
+`CanvasSurfaceSwitcher` AutomationId, with the three radio buttons as its
+UIA children. Verified in-process before and after: the tree went from
+`CanvasSurface | .CanvasShowOutline | .CanvasShowTable | .CanvasShowVisual`
+(flattened, no switcher) to
+`CanvasSurface | .CanvasSurfaceSwitcher[Group]name='Canvas view' |
+..CanvasShowOutline | ..CanvasShowTable | ..CanvasShowVisual`.
+
+**The sweep.** Every `AutomationProperties` usage across all canvas
+surfaces was enumerated and its target's element type resolved. There is
+no XAML under `Canvas/` (CD-31 builds these views in code), so the sweep is
+the five `.cs` files. Result: **one** peerless target — the switcher — and
+every other site already sat on a peered type (`TreeView`, `UserControl`,
+`TextBlock`, `TextBox`, `ListBox`, `RadioButton`, and a `Style` targeting
+`TreeViewItem`). Nothing was deleted as decorative; the full hit list and
+disposition are in the task report. The in-process peer walk corroborates
+the static sweep — every AutomationId in the canvas surfaces now resolves
+to a real node.
+
+**The census that ends the class.** `CanvasAutomationPropertyCensus`
+asserts structurally that no `AutomationProperties.Set*` in the canvas
+sources targets an element type without an automation peer, with peered
+types allow-listed BY NAME so a new element type is a conscious decision
+rather than a silent pass. It is deliberately fail-closed — a target whose
+type it cannot resolve is a failure, not a skip, because a blind spot here
+is indistinguishable from the bug. It also carries a floor on the number
+of sites scanned, so a refactor that moved these calls elsewhere cannot
+leave it passing over nothing. Mutation-verified twice: reverting the
+switcher to a `StackPanel` fails it on both property lines, and adding a
+name to any other bare panel fails it naming that line.
+
+*(One false positive was caught and fixed while writing it: a file-wide
+identifier map let `SetBanner`'s `string text` parameter shadow
+`BannerText`'s local `TextBlock text`. Resolution is scope-aware now —
+locals, then parameters, then fields. A census that cries wolf gets
+suppressed, which would cost more than the bug it guards.)*
+
+**Three defects, one journey, none catchable before it ran.** The
+`CanvasSurfaces_OutlineTreeSelectionAndActivation_AreClean` journey had
+never executed a single assertion: its fixture lookup walked up to
+`Cargo.toml`, and the gate runs on downloaded binaries with no checkout,
+so it threw in 4 ms on every run since it was written. Behind that setup
+failure sat (1) the fixture lookup itself, (2) the outline's Invoke
+sitting on a peer no client reads, and (3) the switcher's inert
+properties. Each was found only by fixing the one in front of it. The
+lesson recorded for the rest of the series: **a journey that has never
+reached its assertions is not evidence of anything**, and a green gate
+containing one is green about the setup, not the behaviour. Codex round
+6's SAFE TO MERGE was reached in exactly that state.
+
+**The false-green tally, closed out.** Instances 1–3 were tests that
+supplied their own mechanism (an unwired seam behind injected sinks, the
+media gate behind a stubbed closure, a focus guard calling
+`RequestFocusLanding` itself). Instance 4 was the Invoke fact
+interrogating a container peer no client sees. Instance 5 is this one —
+properties that reach no client at all. Instances 4 and 5 share a root
+that the earlier three did not: **the assertion targeted a real object,
+but not the object the consumer reads.** That is what the two new censuses
+guard, and it is the form to watch for in PRs B–E.

@@ -1378,4 +1378,309 @@ public static class SurfaceSerializer
          .Raw(",\"height\":").Num(rect.Height)
          .Raw("}");
     }
+
+    // --- W6-1 PR A: the canvas_read section (contract A20) ---------------
+    //
+    // The READ side of the canvas surface, over the same fixture corpus
+    // and the same exclusions as `canvas_queries` (0b-15): the open
+    // info, then the three projections PR A/B/D consume, then per node
+    // in reading order the two per-node reads the outline and the
+    // navigator make. The Swift twin lands with the mac lane and the
+    // committed golden arbitrates, exactly as `canvas_queries` did.
+
+    /// <summary>
+    /// Vault-level artifact: the W6-1 PR A read surface over every
+    /// canvas fixture — <c>open_canvas</c> info, outline rows, table
+    /// rows, the scene, and per node <c>canvas_where_am_i</c> plus
+    /// <c>canvas_neighbors</c>.
+    /// </summary>
+    public static string CanvasReadArtifact(
+        VaultSession session,
+        IReadOnlyList<string> canvasFiles)
+    {
+        var j = new CanonicalJson();
+        j.Raw("{\"canvases\":[");
+        for (int f = 0; f < canvasFiles.Count; f++)
+        {
+            if (f > 0)
+            {
+                j.Raw(",");
+            }
+
+            string rel = canvasFiles[f];
+            CanvasOpenInfo info = session.OpenCanvas(rel);
+            try
+            {
+                j.Raw("{\"file\":").Str(Slash(rel))
+                 .Raw(",\"node_count\":").Num(info.NodeCount)
+                 .Raw(",\"edge_count\":").Num(info.EdgeCount)
+                 .Raw(",\"degraded\":").Bool(info.Degraded)
+                 .Raw(",\"warnings\":[");
+                for (int w = 0; w < info.Warnings.Length; w++)
+                {
+                    if (w > 0)
+                    {
+                        j.Raw(",");
+                    }
+                    j.Raw("{\"kind\":").Str(LoadWarningKindName(info.Warnings[w].Kind))
+                     .Raw(",\"detail\":").Str(info.Warnings[w].Detail)
+                     .Raw("}");
+                }
+                j.Raw("]");
+
+                // A degraded open has nothing worth reading: core
+                // returns an empty canvas and the host releases the
+                // handle at once (contract A3, CD-28). The sections stay
+                // present and EMPTY rather than absent, so the
+                // artifact's shape never varies with the fixture.
+                CanvasOutlineRow[] outline = info.Degraded
+                    ? []
+                    : session.CanvasOutline(info.Handle);
+                CanvasTableRow[] tableRows = info.Degraded
+                    ? []
+                    : session.CanvasTableRows(info.Handle);
+                CanvasScene scene = info.Degraded
+                    ? new CanvasScene([], [])
+                    : session.CanvasScene(info.Handle);
+
+                j.Raw(",\"outline\":[");
+                for (int i = 0; i < outline.Length; i++)
+                {
+                    if (i > 0)
+                    {
+                        j.Raw(",");
+                    }
+                    CanvasOutlineRow row = outline[i];
+                    j.Raw("{\"node_id\":").Str(row.NodeId)
+                     .Raw(",\"depth\":").Num(row.Depth)
+                     .Raw(",\"kind\":").Str(row.Kind)
+                     .Raw(",\"title\":").Str(row.Title)
+                     .Raw(",\"speakable_name\":").Str(row.SpeakableName)
+                     .Raw(",\"group_path\":");
+                    AppendStrings(j, row.GroupPath);
+                    j.Raw(",\"ordinal_n\":").Num(row.OrdinalN)
+                     .Raw(",\"total_m\":").Num(row.TotalM)
+                     .Raw(",\"connection_count\":").Num(row.ConnectionCount)
+                     .Raw(",\"color_name\":");
+                    AppendOptional(j, row.ColorName);
+                    j.Raw("}");
+                }
+                j.Raw("]");
+
+                j.Raw(",\"table\":[");
+                for (int i = 0; i < tableRows.Length; i++)
+                {
+                    if (i > 0)
+                    {
+                        j.Raw(",");
+                    }
+                    CanvasTableRow row = tableRows[i];
+                    j.Raw("{\"node_id\":").Str(row.NodeId)
+                     .Raw(",\"kind\":").Str(row.Kind)
+                     .Raw(",\"title\":").Str(row.Title)
+                     .Raw(",\"speakable_name\":").Str(row.SpeakableName)
+                     .Raw(",\"group_path\":");
+                    AppendStrings(j, row.GroupPath);
+                    j.Raw(",\"target\":").Str(row.Target)
+                     .Raw(",\"connection_count\":").Num(row.ConnectionCount)
+                     .Raw(",\"color_name\":");
+                    AppendOptional(j, row.ColorName);
+                    j.Raw("}");
+                }
+                j.Raw("]");
+
+                j.Raw(",\"scene\":{\"nodes\":[");
+                for (int i = 0; i < scene.Nodes.Length; i++)
+                {
+                    if (i > 0)
+                    {
+                        j.Raw(",");
+                    }
+                    CanvasSceneNode node = scene.Nodes[i];
+                    j.Raw("{\"node_id\":").Str(node.NodeId)
+                     .Raw(",\"kind\":").Str(node.Kind)
+                     .Raw(",\"title\":").Str(node.Title)
+                     .Raw(",\"speakable_name\":").Str(node.SpeakableName)
+                     .Raw(",\"x\":").Num(node.X)
+                     .Raw(",\"y\":").Num(node.Y)
+                     .Raw(",\"width\":").Num(node.Width)
+                     .Raw(",\"height\":").Num(node.Height)
+                     .Raw(",\"color\":");
+                    AppendOptional(j, node.Color);
+                    j.Raw(",\"color_name\":");
+                    AppendOptional(j, node.ColorName);
+                    j.Raw(",\"subpath\":");
+                    AppendOptional(j, node.Subpath);
+                    j.Raw("}");
+                }
+                j.Raw("],\"edges\":[");
+                for (int i = 0; i < scene.Edges.Length; i++)
+                {
+                    if (i > 0)
+                    {
+                        j.Raw(",");
+                    }
+                    CanvasSceneEdge edge = scene.Edges[i];
+                    j.Raw("{\"edge_id\":").Str(edge.EdgeId)
+                     .Raw(",\"from_node\":").Str(edge.FromNode)
+                     .Raw(",\"from_side\":");
+                    AppendSide(j, edge.FromSide);
+                    j.Raw(",\"to_node\":").Str(edge.ToNode)
+                     .Raw(",\"to_side\":");
+                    AppendSide(j, edge.ToSide);
+                    j.Raw(",\"from_arrow\":").Bool(edge.FromArrow)
+                     .Raw(",\"to_arrow\":").Bool(edge.ToArrow)
+                     .Raw(",\"label\":");
+                    AppendOptional(j, edge.Label);
+                    j.Raw(",\"color\":");
+                    AppendOptional(j, edge.Color);
+                    j.Raw("}");
+                }
+                j.Raw("]}");
+
+                j.Raw(",\"nodes\":[");
+                for (int i = 0; i < outline.Length; i++)
+                {
+                    if (i > 0)
+                    {
+                        j.Raw(",");
+                    }
+                    string nodeId = outline[i].NodeId;
+                    j.Raw("{\"node_id\":").Str(nodeId)
+                     .Raw(",\"where_am_i\":");
+                    AppendWhereAmI(j, session, info.Handle, nodeId);
+                    j.Raw(",\"neighbors\":[");
+                    CanvasNeighbor[] neighbors =
+                        session.CanvasNeighbors(info.Handle, nodeId);
+                    for (int n = 0; n < neighbors.Length; n++)
+                    {
+                        if (n > 0)
+                        {
+                            j.Raw(",");
+                        }
+                        CanvasNeighbor neighbor = neighbors[n];
+                        j.Raw("{\"edge_id\":").Str(neighbor.EdgeId)
+                         .Raw(",\"other_node\":").Str(neighbor.OtherNode)
+                         .Raw(",\"other_title\":").Str(neighbor.OtherTitle)
+                         .Raw(",\"direction\":").Str(EdgeDirectionName(neighbor.Direction))
+                         .Raw(",\"self_side\":");
+                        AppendSide(j, neighbor.SelfSide);
+                        j.Raw(",\"label\":");
+                        AppendOptional(j, neighbor.Label);
+                        j.Raw(",\"self_is_from\":").Bool(neighbor.SelfIsFrom)
+                         .Raw("}");
+                    }
+                    j.Raw("]}");
+                }
+                j.Raw("]}");
+            }
+            finally
+            {
+                session.CloseCanvas(info.Handle);
+            }
+        }
+        j.Raw("]}");
+        return j + "\n";
+    }
+
+    /// <summary>
+    /// Where-am-I is MODEL-backed, so under the 0b-6 skew it refuses for
+    /// an id the SQLite-served outline rows still name. The artifact has
+    /// to be able to express that shape, so a refusal serializes as
+    /// <c>null</c> rather than aborting the run — the same shape the
+    /// host handles gracefully (contracts A16/A20).
+    /// </summary>
+    private static void AppendWhereAmI(
+        CanonicalJson j, VaultSession session, ulong handle, string nodeId)
+    {
+        CanvasWhereAmI where;
+        try
+        {
+            where = session.CanvasWhereAmI(handle, nodeId);
+        }
+        catch (VaultException)
+        {
+            j.Null();
+            return;
+        }
+        j.Raw("{\"title\":").Str(where.Title)
+         .Raw(",\"speakable_name\":").Str(where.SpeakableName)
+         .Raw(",\"kind\":").Str(where.Kind)
+         .Raw(",\"group_path\":");
+        AppendStrings(j, where.GroupPath);
+        j.Raw(",\"ordinal_n\":").Num(where.OrdinalN)
+         .Raw(",\"total_m\":").Num(where.TotalM)
+         .Raw(",\"connection_count\":").Num(where.ConnectionCount)
+         .Raw(",\"in_count\":").Num(where.InCount)
+         .Raw(",\"out_count\":").Num(where.OutCount)
+         .Raw(",\"color_name\":");
+        AppendOptional(j, where.ColorName);
+        j.Raw("}");
+    }
+
+    private static void AppendStrings(CanonicalJson j, IReadOnlyList<string> values)
+    {
+        j.Raw("[");
+        for (int i = 0; i < values.Count; i++)
+        {
+            if (i > 0)
+            {
+                j.Raw(",");
+            }
+            j.Str(values[i]);
+        }
+        j.Raw("]");
+    }
+
+    private static void AppendOptional(CanonicalJson j, string? value)
+    {
+        if (value is null)
+        {
+            j.Null();
+        }
+        else
+        {
+            j.Str(value);
+        }
+    }
+
+    private static void AppendSide(CanonicalJson j, CanvasSide? side)
+    {
+        if (side is null)
+        {
+            j.Null();
+        }
+        else
+        {
+            j.Str(SideName(side.Value));
+        }
+    }
+
+    public static string SideName(CanvasSide side) => side switch
+    {
+        CanvasSide.Top => "top",
+        CanvasSide.Right => "right",
+        CanvasSide.Bottom => "bottom",
+        CanvasSide.Left => "left",
+        _ => throw new InvalidOperationException($"unmapped CanvasSide {side}"),
+    };
+
+    public static string EdgeDirectionName(CanvasEdgeDirection direction) => direction switch
+    {
+        CanvasEdgeDirection.Outgoing => "outgoing",
+        CanvasEdgeDirection.Incoming => "incoming",
+        CanvasEdgeDirection.Bidirectional => "bidirectional",
+        CanvasEdgeDirection.Undirected => "undirected",
+        _ => throw new InvalidOperationException(
+            $"unmapped CanvasEdgeDirection {direction}"),
+    };
+
+    public static string LoadWarningKindName(CanvasLoadWarningKind kind) => kind switch
+    {
+        CanvasLoadWarningKind.ParseFailed => "parse_failed",
+        CanvasLoadWarningKind.SkippedEntry => "skipped_entry",
+        CanvasLoadWarningKind.DanglingEdge => "dangling_edge",
+        CanvasLoadWarningKind.IgnoredValue => "ignored_value",
+        _ => throw new InvalidOperationException($"unmapped CanvasLoadWarningKind {kind}"),
+    };
 }

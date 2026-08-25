@@ -320,9 +320,10 @@ internal sealed partial class WorkspaceViewModel
     /// entry. `CitationField.LinkTarget` was populated for both and
     /// rendered as inert text, so a DOI could be read but never
     /// followed; mac renders both as real links
-    /// (CitationPopover.swift:139-152). Routed through the same
-    /// http/https/mailto allowlist the W4-2 panels use, so a hostile
-    /// `.bib` cannot smuggle a `file:` or `javascript:` target in.
+    /// (CitationPopover.swift:139-152). Routed through
+    /// <see cref="ExternalLinkPolicy"/> — the one allowlist every
+    /// shell hand-off shares — so a hostile `.bib` cannot smuggle a
+    /// `file:` or `javascript:` target in.
     /// </summary>
     public System.Windows.Input.ICommand OpenCitationLinkCommand =>
         _openCitationLinkCommand ??= new RelayCommand(
@@ -335,9 +336,7 @@ internal sealed partial class WorkspaceViewModel
         {
             return;
         }
-        bool allowed = Uri.TryCreate(target, UriKind.Absolute, out Uri? uri)
-            && uri.Scheme is "http" or "https" or "mailto";
-        if (!allowed)
+        if (!ExternalLinkPolicy.IsLaunchable(target))
         {
             _announce(new A11yEvent.ExternalLinkUnsupported(target));
             return;

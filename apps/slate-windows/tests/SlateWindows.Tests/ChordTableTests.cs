@@ -649,6 +649,15 @@ public sealed class ChordTableTests
             [ChordScope.None] = "no chord to deliver.",
             [ChordScope.Global] = "checked in both directions below, against "
                 + "MainWindow.xaml's KeyBindings plus the imperative allow-list.",
+            // W6-1 PR A (#745, contract A18): the scope exists so the
+            // canvas rows PR C adds can declare their delivery site,
+            // but PR A's three surface commands are palette- and
+            // menu-only, so no row carries a Canvas chord yet and there
+            // is no key handler to scrape. PR C ships CanvasNavigator's
+            // handler and this entry becomes a scrape.
+            [ChordScope.Canvas] = "no row is delivered at this scope yet — PR A's "
+                + "canvas commands carry no chord; PR C's navigator adds the "
+                + "handler and the scrape with the first Canvas-scoped row.",
         };
 
     /// <summary>

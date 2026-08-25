@@ -158,9 +158,10 @@ internal sealed partial class WorkspaceViewModel
             // dead pane (red team round 1 blocker). Attach before the
             // release sweep so a shared document is never shut down
             // between the two steps.
-            AttachBaseDocumentIfNeeded(active);
+            AttachTabDocumentsIfNeeded(active);
             ReleaseUnreferencedBaseDocuments();
             ReleaseUnreferencedDashboards();
+            ReleaseUnreferencedCanvasDocuments();
             if (peer is not null)
             {
                 active.MirrorDocumentStateFrom(peer);
@@ -207,7 +208,7 @@ internal sealed partial class WorkspaceViewModel
             EditorPreferences,
             startInteractionBackgroundWork: _startInteractionBackgroundWork);
         tab.TaskRepairs = _taskIndexRepairs;
-        AttachBaseDocumentIfNeeded(tab);
+        AttachTabDocumentsIfNeeded(tab);
         if (peer is not null)
         {
             tab.MirrorDocumentStateFrom(peer);
@@ -317,6 +318,7 @@ internal sealed partial class WorkspaceViewModel
         tab.Dispose();
         ReleaseUnreferencedBaseDocuments();
         ReleaseUnreferencedDashboards();
+        ReleaseUnreferencedCanvasDocuments();
         WorkspaceTabViewModel? successor = group.Tabs.Count == 0
             ? null
             : group.Tabs[Math.Min(index, group.Tabs.Count - 1)];
@@ -398,6 +400,7 @@ internal sealed partial class WorkspaceViewModel
         group.Tabs.Clear();
         ReleaseUnreferencedBaseDocuments();
         ReleaseUnreferencedDashboards();
+        ReleaseUnreferencedCanvasDocuments();
         RemoveEmptyGroup(group);
         AnnounceActivePane();
         RequestActiveEditorFocus();
@@ -438,7 +441,7 @@ internal sealed partial class WorkspaceViewModel
             startInteractionBackgroundWork: _startInteractionBackgroundWork);
         // The registry, not a fresh document: a duplicated tab shares
         // its source's ONE document (contract C3).
-        AttachBaseDocumentIfNeeded(duplicate);
+        AttachTabDocumentsIfNeeded(duplicate);
         duplicate.MirrorDocumentStateFrom(tab);
         ActiveGroup.Tabs.Insert(index + 1, duplicate);
         ActiveGroup.ActiveTab = duplicate;
@@ -672,8 +675,24 @@ internal sealed partial class WorkspaceViewModel
     /// <summary>Internal for the window's overlay-close focus
     /// fallback (the Bases overlays restore here when their captured
     /// element died in a republish).</summary>
-    internal void RequestActiveEditorFocus() =>
+    /// <summary>
+    /// The ONE focus-request funnel: every user-initiated open calls it,
+    /// and no background path does. W6-1 PR A hangs the canvas's focus
+    /// landing here (contract A14) for exactly that property — a
+    /// retarget, a session restore of a pane the user is not in, and a
+    /// history reload all publish without asking, and must not steal
+    /// focus; a second tab on an already-open path is a registry hit
+    /// that never publishes, and must still land it.
+    /// </summary>
+    internal void RequestActiveEditorFocus()
+    {
+        // Addressed to the tab that asked: one document serves every
+        // pane on the path, and an unaddressed request lands focus in
+        // all of them.
+        WorkspaceTabViewModel? active = ActiveGroup.ActiveTab;
+        active?.Canvas?.RequestFocusLanding(active);
         EditorPaneFocusRequested?.Invoke(this, ActiveGroup);
+    }
 
     private void AnnounceActivePane()
     {

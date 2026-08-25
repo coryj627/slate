@@ -57,6 +57,15 @@ internal enum ChordScope
     /// <summary>The vault-search overlay (W5-2), live only while the
     /// overlay is open. Its opening chord is <see cref="Global"/>.</summary>
     SearchOverlay,
+
+    /// <summary>The canvas projections' own key handling (W6-1 #745,
+    /// rule R2: typing keys and arrows act only while a canvas
+    /// projection has keyboard focus). No row is delivered at this
+    /// scope until PR C ships the navigator — PR A's three surface
+    /// commands are palette- and menu-only, so they carry no chord and
+    /// <see cref="ChordScope.None"/> through <c>Reg</c>'s own
+    /// rule.</summary>
+    Canvas,
 }
 
 /// <summary>
@@ -254,6 +263,11 @@ internal static class ChordTable
         public const string BasesBuilderAddGroup = "slate.bases.builder.addGroup";
         public const string BasesBuilderEditCondition = "slate.bases.builder.editCondition";
         public const string BasesBuilderRemoveCondition = "slate.bases.builder.removeCondition";
+
+        // Canvas (W6-1 #745). Ids are byte-identical to mac's.
+        public const string CanvasShowOutline = "slate.canvas.showOutline";
+        public const string CanvasShowTable = "slate.canvas.showTable";
+        public const string CanvasShowVisual = "slate.canvas.showVisual";
 
         // Sidebar / file management (mac projects these into CommandSection.sidebar).
         public const string SidebarOpen = "slate.sidebar.open";
@@ -542,6 +556,7 @@ internal static class ChordTable
         rows.AddRange(WorkspaceRows());
         rows.AddRange(EditorRows());
         rows.AddRange(BasesRows());
+        rows.AddRange(CanvasRows());
         rows.AddRange(SidebarRows());
         rows.AddRange(SurfaceChordRows());
         return [.. rows];
@@ -797,6 +812,27 @@ internal static class ChordTable
         "Windows binds no chord: the verb is menu- and palette-only here. "
         + "Recorded so the mac chord stays visible rather than reading as "
         + "an absence.";
+
+    /// <summary>
+    /// W6-1 PR A (#745), contract A18. All three register now so the
+    /// palette lists the whole switcher from the first slice; the two
+    /// whose projections have not shipped resolve to a command whose
+    /// <c>CanExecute</c> is false, so
+    /// <c>SlateCommandRegistrar.DisabledReason</c> answers the
+    /// registrar's canonical unavailable sentence. None carries a chord
+    /// — the surface switcher is a visible control and the palette is
+    /// always a path (rule R1) — so <c>Reg</c>'s own rule gives them
+    /// <c>ChordScope.None</c>.
+    /// </summary>
+    private static IEnumerable<ChordTableEntry> CanvasRows() =>
+    [
+        Reg(Ids.CanvasShowOutline, "Canvas: Show Outline", CommandSection.Canvas,
+            "Show the canvas as an outline of its cards, groups and connections."),
+        Reg(Ids.CanvasShowTable, "Canvas: Show Table", CommandSection.Canvas,
+            "Show the canvas as a sortable table of its cards."),
+        Reg(Ids.CanvasShowVisual, "Canvas: Show Visual", CommandSection.Canvas,
+            "Show the canvas as its spatial board."),
+    ];
 
     private static IEnumerable<ChordTableEntry> SidebarRows()
     {

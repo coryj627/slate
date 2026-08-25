@@ -6115,6 +6115,297 @@ public sealed class ShellAccessibilityTests
         return false;
     }
 
+    /// <summary>
+    /// W6-1 PR A (#745): the canvas outline journey. Opening a
+    /// <c>.canvas</c> from the files tree gives a real UIA Tree whose
+    /// items carry core-composed names and the t0 §3 positional status,
+    /// expand and collapse, drive one shared selection, and open a card
+    /// on Invoke — plus the degraded banner and its focusable warning
+    /// rows on a fixture with preserved-but-unshown entries.
+    /// </summary>
+    /// <remarks>
+    /// Honors the recorded journey traps: peered elements only (the
+    /// outline's Invoke lives on the tree item's own peer, so nothing
+    /// here hunts for a nested button), an async settle after Invoke,
+    /// and a foreground re-assert at every keyboard boundary — a plain
+    /// <c>SetForegroundWindow</c> is DENIED to a background process, and
+    /// the synthetic Alt tap is what satisfies the Windows foreground
+    /// lock.
+    /// </remarks>
+    [Fact]
+    [Trait("gate", "W-C")]
+    public void CanvasSurfaces_OutlineTreeSelectionAndActivation_AreClean()
+    {
+        string testRoot = Path.Combine(
+            Path.GetTempPath(), $"slate-canvas-outline-{Guid.NewGuid():N}");
+        string vaultRoot = Path.Combine(testRoot, "Canvas Vault");
+        string logDirectory = Path.Combine(testRoot, "logs");
+        Directory.CreateDirectory(vaultRoot);
+        // The three fixtures the spec names, byte-exact from the demo
+        // vault: the same bytes the unit facts and the §W-A goldens run
+        // over, so a journey failure is never "a different canvas".
+        foreach (string fixture in new[]
+        {
+            "sample.canvas", "groups_nested.canvas", "malformed.canvas",
+        })
+        {
+            File.Copy(
+                Path.Combine(DemoVaultCanvasDirectory(), fixture),
+                Path.Combine(vaultRoot, fixture));
+        }
+        File.WriteAllText(
+            Path.Combine(vaultRoot, "note.md"), "# Note\n\nBody.\n");
+
+        Process? process = null;
+        try
+        {
+            var startInfo = new ProcessStartInfo(SlateWindowsExe())
+            {
+                UseShellExecute = false,
+            };
+            startInfo.ArgumentList.Add(vaultRoot);
+            startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
+                $"slate-canvas-outline-{Guid.NewGuid():N}";
+            startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            process = Process.Start(startInfo)
+                ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+
+            if (!HasInteractiveDesktop(process, "Canvas"))
+            {
+                return;
+            }
+
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(
+                process,
+                automation,
+                Path.Combine(logDirectory, "slate-windows.log"),
+                TimeSpan.FromSeconds(30));
+            window.SetForeground();
+            window.Focus();
+
+            OpenCanvasFromTree(window, automation, "sample");
+
+            // The projection is a real UIA Tree, named from the host's
+            // label inventory (contract A8).
+            AutomationElement tree = WaitForElement(
+                window, "CanvasOutlineTree", TimeSpan.FromSeconds(20));
+            Assert.Equal(ControlType.Tree, tree.Properties.ControlType.Value);
+            Assert.Equal("Canvas outline", tree.Properties.Name.Value);
+
+            AutomationElement[] items = WaitForTreeItems(automation, tree, 5);
+            // Contract A9: every row's Name is the t0 §1.1 card
+            // reference over core's kind word and core's speakable_name
+            // — never a bare title, never host prose.
+            Assert.Contains(
+                items,
+                item => item.Properties.Name.Value.StartsWith(
+                    "Group \"", StringComparison.Ordinal));
+            Assert.Contains(
+                items,
+                item => item.Properties.Name.Value.StartsWith(
+                    "Text card \"", StringComparison.Ordinal));
+            Assert.Contains(
+                items,
+                item => item.Properties.Name.Value.StartsWith(
+                    "Link card \"", StringComparison.Ordinal));
+
+            // Contract A10: the t0 §3 inspectability slot is READABLE,
+            // not announcement-only.
+            AutomationElement textCard = items.First(item =>
+                item.Properties.Name.Value.StartsWith("Text card \"", StringComparison.Ordinal));
+            Assert.Matches(
+                @"^\d+ of \d+ in .+", textCard.Properties.ItemStatus.Value);
+            Assert.False(
+                string.IsNullOrEmpty(textCard.Properties.HelpText.Value),
+                "every row carries its per-kind activation hint");
+
+            // ExpandCollapse on a group (contract A8).
+            AutomationElement group = items.First(item =>
+                item.Properties.Name.Value.StartsWith("Group \"", StringComparison.Ordinal));
+            Assert.True(
+                group.Patterns.ExpandCollapse.IsSupported,
+                "a group row must expose ExpandCollapse");
+            group.Patterns.ExpandCollapse.Pattern.Collapse();
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+            Assert.Equal(
+                ExpandCollapseState.Collapsed,
+                group.Patterns.ExpandCollapse.Pattern.ExpandCollapseState.Value);
+            group.Patterns.ExpandCollapse.Pattern.Expand();
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+
+            // SelectionItem drives the ONE selection, and the selected
+            // card grows its connection rows (contract A11/A12).
+            Assert.True(
+                textCard.Patterns.SelectionItem.IsSupported,
+                "a card row must expose SelectionItem");
+            textCard.Patterns.SelectionItem.Pattern.Select();
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => textCard.Patterns.SelectionItem.Pattern.IsSelected.Value,
+                    TimeSpan.FromSeconds(10)),
+                "SelectionItem.Select did not take");
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => tree
+                        .FindAllDescendants(automation.ConditionFactory.ByControlType(
+                            ControlType.TreeItem))
+                        .Any(item => item.Properties.ItemStatus.Value.StartsWith(
+                            "connection ", StringComparison.Ordinal)),
+                    TimeSpan.FromSeconds(10)),
+                "the selected card's connection rows never materialized");
+
+            AssertAxeClean(process, "canvas-outline");
+
+            // Invoke on a text card opens the interim read-only detail.
+            // The pattern lives on the ITEM's own peer — no nested
+            // element, which is the peered-elements-only trap.
+            AutomationElement textCardToOpen = tree
+                .FindAllDescendants(
+                    automation.ConditionFactory.ByControlType(ControlType.TreeItem))
+                .First(item => item.Properties.Name.Value.StartsWith(
+                    "Text card \"", StringComparison.Ordinal));
+            Assert.True(
+                textCardToOpen.Patterns.Invoke.IsSupported,
+                "a card row must expose Invoke");
+            textCardToOpen.Patterns.Invoke.Pattern.Invoke();
+            // Invoke is asynchronous by contract: settle before reading.
+            AutomationElement detail = WaitForElement(
+                window, "CanvasCardDetail", TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => detail.Patterns.Value.IsSupported
+                        && !string.IsNullOrEmpty(
+                            detail.Patterns.Value.Pattern.Value.Value),
+                    TimeSpan.FromSeconds(10)),
+                "the interim card detail never carried the card's text");
+            Assert.StartsWith(
+                "Card text:",
+                detail.Properties.Name.Value,
+                StringComparison.Ordinal);
+
+            // Keyboard-only reachability: focus the tree and press Enter
+            // on a row. Foreground is re-asserted first — another app can
+            // take it between launch and here.
+            Keyboard.Press(VirtualKeyShort.ALT);
+            window.SetForeground();
+            Keyboard.Release(VirtualKeyShort.ALT);
+            window.Focus();
+            textCardToOpen.Focus();
+            AssertEventuallyFocused(
+                textCardToOpen, "the outline row never took keyboard focus");
+            PressKey(VirtualKeyShort.RETURN);
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(500));
+
+            // The surface switcher is one named group, and the two
+            // unshipped arms are disabled rather than absent (A18).
+            AutomationElement switcher = WaitForElement(
+                window, "CanvasSurfaceSwitcher", TimeSpan.FromSeconds(10));
+            Assert.Equal("Canvas view", switcher.Properties.Name.Value);
+            AutomationElement tableChoice = WaitForElement(
+                window, "CanvasShowTable", TimeSpan.FromSeconds(10));
+            Assert.False(tableChoice.Properties.IsEnabled.Value);
+
+            // The t0 §5 banner and its focusable detail rows, on a
+            // fixture whose entries core preserved but cannot show.
+            OpenCanvasFromTree(window, automation, "malformed");
+            AutomationElement banner = WaitForElement(
+                window, "CanvasDegradedBanner", TimeSpan.FromSeconds(20));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => banner.Properties.Name.Value.Contains(
+                        "preserved in the file but not shown", StringComparison.Ordinal),
+                    TimeSpan.FromSeconds(10)),
+                $"the degraded banner never arrived; it reads '{banner.Properties.Name.Value}'");
+            AutomationElement warnings = WaitForElement(
+                window, "CanvasWarningRows", TimeSpan.FromSeconds(10));
+            Assert.Equal("Canvas load warnings", warnings.Properties.Name.Value);
+            Assert.NotEmpty(
+                warnings.FindAllDescendants(
+                    automation.ConditionFactory.ByControlType(ControlType.ListItem)));
+
+            AssertAxeClean(process, "canvas-degraded");
+        }
+        finally
+        {
+            if (process is not null && !process.HasExited)
+            {
+                process.CloseMainWindow();
+                if (!process.WaitForExit(5_000))
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            try
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    /// <summary>Open a canvas by selecting its row in the files tree —
+    /// the route a user takes, not a synthesized command.</summary>
+    private static void OpenCanvasFromTree(
+        Window window, UIA3Automation automation, string stem)
+    {
+        AutomationElement filesTree = WaitForElement(
+            window, "FilesTree", TimeSpan.FromSeconds(30));
+        AutomationElement item = filesTree
+            .FindAllDescendants(
+                automation.ConditionFactory.ByControlType(ControlType.TreeItem))
+            .FirstOrDefault(candidate => candidate.Name.StartsWith(
+                stem, StringComparison.OrdinalIgnoreCase))
+            ?? throw new Xunit.Sdk.XunitException(
+                $"the {stem}.canvas TreeItem is absent from the files tree.");
+        item.Patterns.SelectionItem.Pattern.Select();
+    }
+
+    private static AutomationElement[] WaitForTreeItems(
+        UIA3Automation automation, AutomationElement tree, int atLeast)
+    {
+        AutomationElement[] items = [];
+        Assert.True(
+            SpinWait.SpinUntil(
+                () =>
+                {
+                    items = tree.FindAllDescendants(
+                        automation.ConditionFactory.ByControlType(ControlType.TreeItem));
+                    return items.Length >= atLeast;
+                },
+                TimeSpan.FromSeconds(20)),
+            $"the canvas outline never materialized {atLeast} tree items "
+            + $"(saw {items.Length})");
+        return items;
+    }
+
+    /// <summary>
+    /// The committed demo-vault canvases.
+    ///
+    /// Read from the OUTPUT DIRECTORY, never by walking up to a repo root
+    /// — the same rule as <see cref="CitationStyleFixture"/>, and for the
+    /// same reason: this gate downloads built binaries and runs with no
+    /// checkout, so the repo does not exist at run time. The first version
+    /// of THIS helper walked up to <c>Cargo.toml</c>; it passed locally
+    /// and failed on CI in 4 ms, which is precisely the failure
+    /// <c>CitationStyleFixture</c>'s comment already warned about.
+    /// </summary>
+    private static string DemoVaultCanvasDirectory()
+    {
+        string canvases = Path.Combine(AppContext.BaseDirectory, "fixtures", "canvas");
+        Assert.True(
+            Directory.Exists(canvases),
+            $"The canvas fixtures are missing at {canvases}. They are linked "
+            + "Content items in SlateWindows.AccessibilityTests.csproj and "
+            + "must be copied to the output directory.");
+        return canvases;
+    }
+
     /// <summary><c>ERROR_HOTKEY_ALREADY_REGISTERED</c>.</summary>
     private const int ErrorHotkeyAlreadyRegistered = 1409;
 
