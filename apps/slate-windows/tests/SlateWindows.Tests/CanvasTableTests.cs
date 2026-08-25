@@ -886,6 +886,220 @@ public sealed class CanvasTableTests : IDisposable
         document.Shutdown();
     });
 
+    /// <summary>
+    /// Contract A14.3 at the SEAM: asking the substrate to put the
+    /// reader on a row answers whether the REALIZED ROW took focus, not
+    /// whether the row was in the bound set.
+    /// </summary>
+    /// <remarks>
+    /// The two jobs had one answer, and that is what let a grid-level
+    /// fallback report a landing (codex B round 1, B1). Currency and
+    /// selection are still seated either way — that half is what the
+    /// no-focus caller wants — so the fact asserts both: false for the
+    /// focus question, seated for the position one. Mutation-verified:
+    /// restoring the fallback-accepting form (discard
+    /// `FocusCellElement`'s result and return bound-set membership)
+    /// makes the first assertion pass when it must not.
+    /// </remarks>
+    [Fact]
+    public void SeatingTheReaderOnAnUnrealizedRowReportsFailureNotSuccess() =>
+        RunSta(() =>
+        {
+            // Never hosted: the generator has produced no containers, so
+            // no row can take focus.
+            CanvasDocumentViewModel document = NewDocument("table.canvas");
+            document.Load();
+            var table = new CanvasTableView { Model = document };
+            AccessibleDataGrid grid = table.GridForTests;
+            Assert.NotEmpty(grid.Grid.Items);
+
+            Assert.False(
+                grid.SelectRow(row => ((CanvasTableRow)row).NodeId == "pic", moveFocus: true),
+                "an unrealized row cannot have taken focus, and saying it did is "
+                + "what consumes a focus request nothing satisfied");
+            // …and the POSITION half still happened: currency and
+            // selection are what AT reports, and they are seated.
+            Assert.Equal(
+                "pic", Assert.IsType<CanvasTableRow>(grid.Grid.CurrentCell.Item).NodeId);
+            // The other job, unchanged: bound-set membership.
+            Assert.True(grid.SelectRow(row => ((CanvasTableRow)row).NodeId == "zeta"));
+            Assert.False(grid.SelectRow(row => ((CanvasTableRow)row).NodeId == "nope"));
+            document.Shutdown();
+        });
+
+    /// <summary>
+    /// Contract A14.3 end to end on this projection: a request for a
+    /// BOUND but UNREALIZED row is not consumed, and it is delivered
+    /// once the containers exist.
+    /// </summary>
+    /// <remarks>
+    /// The row is deep in the 2,000-node fixture, so it is virtualized
+    /// away by construction rather than by a contrivance. The retry
+    /// route is the surface's — the same set of triggers the outline
+    /// uses, now including the grid's own container-generation signal.
+    /// </remarks>
+    [Fact]
+    public void AnUnrealizedRowLeavesTheRequestPendingUntilItCanBeDelivered() =>
+        RunSta(() =>
+        {
+            File.Copy(
+                Path.Combine(
+                    SourceText.RepoRoot(), "crates", "slate-core", "tests", "fixtures",
+                    "canvas", "large_2000.canvas"),
+                Path.Combine(_fixture.Root, "deep.canvas"),
+                overwrite: true);
+            using WorkspaceViewModel workspace = NewWorkspace();
+            workspace.OpenPath("deep.canvas");
+            WorkspaceTabViewModel tab =
+                Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+            CanvasDocumentViewModel document =
+                Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+            document.ShowSurface(CanvasSurfaceKind.Table);
+
+            // A surface that is in no window: the row is BOUND (the grid
+            // has every row core served) and unrealizable.
+            var offscreen = new CanvasSurfaceView { DataContext = tab, Model = document };
+            string deep = document.TableRows[^1].NodeId;
+            Assert.Contains(
+                offscreen.TableForTests.GridForTests.Grid.Items.Cast<CanvasTableRow>(),
+                row => row.NodeId == deep);
+            Assert.False(offscreen.TableForTests.DeliverFocus(deep));
+
+            document.RequestFocusLanding(tab, deep);
+            Assert.NotNull(document.FocusRequest);
+
+            // Hosted: the containers can be made, so the same still-
+            // pending request lands on the row.
+            var hosted = new CanvasSurfaceView { DataContext = tab, Model = document };
+            using var host = Host(hosted);
+            host.UpdateLayout();
+            Assert.Null(document.FocusRequest);
+            Assert.Equal(
+                deep,
+                Assert.IsType<CanvasTableRow>(
+                    (host.FocusedElement() as FrameworkElement)?.DataContext).NodeId);
+        });
+
+    /// <summary>
+    /// After a sorted republish that renumbers a speakable name, the
+    /// READER, currency and the shared selection are all on the same
+    /// row.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is a CHARACTERIZATION, said plainly rather than dressed as a
+    /// guard: it passes with or without a focus re-seat in
+    /// <c>Rebuild</c>, because while the DataGrid holds focus WPF moves
+    /// focus with currency. That was measured, not assumed — the
+    /// re-seat's own precondition (the reader was in the grid) held, and
+    /// the reader/currency split codex B-2 described still did not
+    /// occur. What the fact is worth: it pins the END STATE a reader
+    /// experiences through the whole namesake path — sort, rename,
+    /// republish, text-keyed restore onto the WRONG card, repair — so a
+    /// future change that does split them fails here.
+    /// </para>
+    /// <para>
+    /// Focus is read as the focused element's own row (the
+    /// consumer-visible object), never as currency, which is the proxy
+    /// that would hide exactly the split this is about.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void AfterANamesakeRepublishTheReaderCurrencyAndSelectionAllAgree() =>
+        RunSta(() =>
+        {
+            string path = Path.Combine(_fixture.Root, "namesake-focus.canvas");
+            File.WriteAllText(
+                path,
+                """
+                {"nodes":[
+                  {"id":"first","type":"text","text":"Shared","x":0,"y":0,"width":100,"height":50},
+                  {"id":"second","type":"text","text":"Shared","x":200,"y":0,"width":100,"height":50},
+                  {"id":"third","type":"text","text":"Alpha","x":400,"y":0,"width":100,"height":50}
+                ],"edges":[]}
+                """);
+            CanvasDocumentViewModel document = NewDocument("namesake-focus.canvas");
+            document.Load();
+            var surface = new CanvasSurfaceView { Model = document };
+            document.ShowSurface(CanvasSurfaceKind.Table);
+            using var host = Host(surface);
+            AccessibleDataGrid grid = surface.TableForTests.GridForTests;
+
+            // The reader is IN the grid, on the first "Shared", with a
+            // sort applied — the state a background republish arrives
+            // into.
+            _ = grid.ApplySort(1, ascending: true);
+            Assert.True(grid.FocusRow(row => ((CanvasTableRow)row).NodeId == "first"));
+            host.UpdateLayout();
+            Assert.Equal("first", FocusedNodeId(host));
+
+            // The rename makes "Shared" the SECOND card's name, so the
+            // substrate's header-text restore has a match and it is the
+            // wrong card.
+            File.WriteAllText(
+                path,
+                """
+                {"nodes":[
+                  {"id":"first","type":"text","text":"Zulu","x":0,"y":0,"width":100,"height":50},
+                  {"id":"second","type":"text","text":"Shared","x":200,"y":0,"width":100,"height":50},
+                  {"id":"third","type":"text","text":"Alpha","x":400,"y":0,"width":100,"height":50}
+                ],"edges":[]}
+                """);
+            _announced.Clear();
+            document.Load();
+            host.UpdateLayout();
+
+            Assert.Equal("first", document.Selection.Selected);
+            Assert.Equal(
+                "first", Assert.IsType<CanvasTableRow>(grid.Grid.CurrentCell.Item).NodeId);
+            Assert.Equal("first", FocusedNodeId(host));
+            // …and it is still silent (B5's other half).
+            document.Announcer.FlushForTests();
+            Assert.Empty(_announced);
+            document.Shutdown();
+        });
+
+    /// <summary>
+    /// A background republish never yanks the reader off the
+    /// separately-focusable SUMMARY region.
+    /// </summary>
+    /// <remarks>
+    /// The §8.7 summary is its own focus stop, and a reader can be
+    /// sitting on it when a publish lands. This is a real guard, and it
+    /// is the one that made codex B-2's proposed fix wrong: re-seating
+    /// the row WITH focus on every rebind — gated on
+    /// <c>IsKeyboardFocusWithin</c>, which on this control INCLUDES the
+    /// summary — moves them onto a row they never asked for. Measured
+    /// while evaluating that fix: with the re-seat applied, focus went
+    /// from the summary to a cell. Mutation-verified in that direction —
+    /// adding the re-seat to <c>Rebuild</c> fails this fact.
+    /// </remarks>
+    [Fact]
+    public void ARepublishNeverYanksTheReaderOffTheSummaryRegion() => RunSta(() =>
+    {
+        (CanvasDocumentViewModel document, CanvasSurfaceView surface,
+            AccessibleDataGrid grid) = Table();
+        using var host = Host(surface);
+        host.UpdateLayout();
+
+        Assert.True(grid.SummaryRegion.Focus());
+        Assert.Same(grid.SummaryRegion, host.FocusedElement());
+
+        // A publish the reader did not ask for.
+        document.Load();
+        host.UpdateLayout();
+
+        Assert.Same(grid.SummaryRegion, host.FocusedElement());
+        Assert.Null(FocusedNodeId(host));
+        document.Shutdown();
+    });
+
+    /// <summary>The node id of the row keyboard focus is actually on —
+    /// the consumer-visible object, not the currency that stands in for
+    /// it.</summary>
+    private static string? FocusedNodeId(HostedWindow host) =>
+        ((host.FocusedElement() as FrameworkElement)?.DataContext as CanvasTableRow)?.NodeId;
+
     /// <summary>Whether a UIA client walking this surface's peers would
     /// reach an element with that automation id — the production
     /// topology, not the visual tree.</summary>

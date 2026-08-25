@@ -142,6 +142,10 @@ internal sealed class CanvasSurfaceView : UserControl
         // (spec §1).
         _table = new CanvasTableView { Visibility = Visibility.Collapsed };
         _table.DetailRequested += FocusDetail;
+        // Same reason as the outline's: a request for a row the panel
+        // had virtualized away is deliverable once containers exist
+        // (A14.3).
+        _table.ContainersRealized += TryDeliverFocus;
 
         _detailHeading = new TextBlock
         {

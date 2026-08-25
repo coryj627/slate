@@ -59,6 +59,11 @@ internal sealed class CanvasTableView : UserControl
             Announce = _ => { },
         };
         _grid.CurrentRowChanged += OnCurrentRowChanged;
+        // A14.3: realization is part of delivery, so a request that
+        // could not reach a virtualized row is retried when the panel
+        // makes containers — the outline's `ContainersRealized` shape,
+        // one projection over.
+        _grid.ContainersRealized += () => ContainersRealized?.Invoke();
         Content = _grid;
     }
 
@@ -72,6 +77,11 @@ internal sealed class CanvasTableView : UserControl
     /// — the surface moves focus there, exactly as the outline does
     /// (contract A13).</summary>
     internal event Action? DetailRequested;
+
+    /// <summary>The grid realized row containers — a pending focus
+    /// request that could not reach its row may be deliverable now
+    /// (contract A14.3, the outline's twin).</summary>
+    internal event Action? ContainersRealized;
 
     internal AccessibleDataGrid GridForTests => _grid;
 
@@ -102,18 +112,23 @@ internal sealed class CanvasTableView : UserControl
     /// see §B's round record.
     /// </para>
     /// <para>
-    /// Delivery is reported only when keyboard focus is actually INSIDE
-    /// the grid. The substrate's own bool answers a different question
-    /// on purpose — "was the row in the bound set", not "did the OS
-    /// grant focus" — and A14's rule is that a surface may not report a
-    /// landing it did not make: the outline's tree-focus fallback
-    /// returning success is the exact defect that rule came from. A
-    /// failed delivery leaves the request pending for the next try.
+    /// Delivery is reported only when the REALIZED ROW took focus.
+    /// <see cref="AccessibleDataGrid.SelectRow"/> with
+    /// <c>moveFocus</c> answers exactly that — a bound row whose
+    /// container does not exist yet returns false, and the substrate's
+    /// grid-level fallback is no longer dressed up as success. The first
+    /// version asked <c>IsKeyboardFocusWithin</c> instead, which is TRUE
+    /// for that fallback and true again whenever the reader was already
+    /// anywhere in the grid: the request was consumed, the reader never
+    /// reached the row, and nothing retried — the exact defect A14.3 was
+    /// rewritten over on the outline, reproduced here (codex B round 1,
+    /// B1). A failed delivery leaves the request pending, and
+    /// <see cref="ContainersRealized"/> brings the surface back when the
+    /// panel makes the container.
     /// </para>
     /// </remarks>
     internal bool DeliverFocus(string nodeId) =>
-        _grid.SelectRow(row => IsNode(row, nodeId), moveFocus: true)
-        && _grid.IsKeyboardFocusWithin;
+        _grid.SelectRow(row => IsNode(row, nodeId), moveFocus: true);
 
     private static void OnModelChanged(
         DependencyObject d, DependencyPropertyChangedEventArgs e)
@@ -211,6 +226,20 @@ internal sealed class CanvasTableView : UserControl
         // The model is the authority the reader comes back to: whatever
         // the header-text restore landed on, the selected NODE is where
         // the reader is seated.
+        //
+        // Currency ONLY, deliberately — and the alternative was tried and
+        // rejected with evidence (codex B round 1, B2). Re-seating WITH
+        // focus when the reader was in the grid is unnecessary: while the
+        // DataGrid holds focus it moves focus with currency, so the
+        // reader, currency and the shared selection all land on the same
+        // row (measured — the reader/currency split the finding
+        // described did not reproduce, with the precondition holding).
+        // It is also harmful: `IsKeyboardFocusWithin` on this control
+        // includes the separately-focusable SUMMARY region, so a reader
+        // sitting on the summary when a background publish arrives would
+        // be yanked onto a row — the W4-6 background-publish focus-steal
+        // defect, reintroduced. `ARepublishNeverYanksTheReaderOffTheSummaryRegion`
+        // now guards that, and fails if this ever grows a focus re-seat.
         ApplySelection();
     }
 

@@ -1852,6 +1852,31 @@ rename through a real reload; mutation-verified against dropping the
 guard, which fails it on both halves (a line is spoken, and the shared
 selection moves to the namesake).
 
+**The repair moves CURRENCY, not focus, and that is a measured decision
+rather than an omission** (codex B round 1, B2). The finding was that
+the repair leaves the reader on the namesake row while the selection
+moves elsewhere — a split in which Enter would open a card the reader is
+not on. It does not reproduce: while the DataGrid holds focus, WPF moves
+focus WITH currency, so after the full sorted-rename-republish path the
+reader, currency and `CanvasSelection` are all on the same row. That was
+measured with the proposed fix's own precondition (the reader was in the
+grid) holding, so the fix would have fired and changed nothing.
+
+Adding it would have COST something, which is why it is recorded here
+rather than taken for safety: `IsKeyboardFocusWithin` on this control
+includes the separately-focusable SUMMARY region (§8.7's own contract),
+so re-seating the row with focus on every rebind yanks a reader who is
+sitting on the summary onto a row they never asked for — the W4-6
+background-publish focus-steal defect, reintroduced. Measured too: with
+the re-seat applied, focus went from the summary `TextBlock` to a
+`DataGridCell`. Both halves are now pinned —
+`AfterANamesakeRepublishTheReaderCurrencyAndSelectionAllAgree` as an
+end-state characterization (labelled as one: it passes with or without a
+re-seat, and says so), and
+`ARepublishNeverYanksTheReaderOffTheSummaryRegion` as the guard, which
+is mutation-verified in the OTHER direction — adding the re-seat fails
+it.
+
 **B6 — Activation and row actions run the document's one seam.** Enter,
 double-click, the substrate's `Invoke` path and the "Open" row action
 all reach `CanvasDocumentViewModel.Activate`, looked up from the table
@@ -4722,3 +4747,47 @@ That is the shape this document was built to catch, and it caught it.
   it belongs to the ledgered expansion-state-preservation decision PR E
   owns, and is recorded here so it lands in that decision rather than
   being rediscovered.
+
+### PR B — codex adversarial round 1 — NOT SAFE, 2 blockers
+
+Both were A14 properties the outline had and the table did not. One was
+real and is fixed; the other did not reproduce and its proposed fix
+would have introduced a defect, so it is recorded with the measurements
+instead.
+
+- **B1 — the focus request was consumed by a grid-level fallback.**
+  Real, and the same class A14.3 was rewritten over on the outline:
+  `SelectRow` reported bound-set membership, `FocusCellElement` fell back
+  to focusing the GRID, and `DeliverFocus` asked only
+  `IsKeyboardFocusWithin` — true for that fallback, and true again
+  whenever the reader was anywhere in the grid already. So a request for
+  a row that could not be realized was marked delivered while the reader
+  never reached it, and nothing retried. **Fixed at the seam**, where the
+  outline's equivalent already is: `FocusCellElement` returns whether the
+  REALIZED CELL took focus (the grid fallback returns false, and the
+  callers that only want the reader's position still ignore it);
+  `SelectRow(moveFocus: true)` returns that instead of set membership,
+  with the split documented on the method; `DeliverFocus` is exactly that
+  bool. Realization joins delivery: the substrate raises
+  `ContainersRealized` off its generator (posted at Background priority —
+  the outline's recorded re-entrancy trap), the table re-raises it and
+  the surface retries, so a request for a virtualized-away row survives
+  until the panel makes the container.
+  `SeatingTheReaderOnAnUnrealizedRowReportsFailureNotSuccess` pins the
+  seam and `AnUnrealizedRowLeavesTheRequestPendingUntilItCanBeDelivered`
+  the end to end, on the last row of the 2,000-node fixture.
+  Mutation-verified: restoring the fallback-accepting form fails both.
+- **B2 — the currency/focus split did not reproduce, and the fix was
+  harmful.** See B5's own paragraph for the measurements. Summary: WPF
+  moves focus with currency while the DataGrid holds focus, so the
+  reader, currency and the shared selection end the namesake path on the
+  same row — measured with the proposed fix's precondition holding, so
+  it would have fired and changed nothing. Meanwhile
+  `IsKeyboardFocusWithin` on this control includes the
+  separately-focusable summary region, so the proposed re-seat pulls a
+  reader off the summary onto a row (measured). The finding is now
+  guarded from the other side:
+  `ARepublishNeverYanksTheReaderOffTheSummaryRegion` fails if the
+  re-seat is ever added. **Recorded as a stop point rather than
+  implemented**, per the standing rule that a fix must not be
+  manufactured to satisfy a mutation that does not fail.

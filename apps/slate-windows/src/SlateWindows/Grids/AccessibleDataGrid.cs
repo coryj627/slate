@@ -126,6 +126,16 @@ internal sealed class AccessibleDataGrid : UserControl
         _grid.MouseDoubleClick += OnActivationDoubleClick;
         _grid.ContextMenuOpening += OnContextMenuOpening;
         _grid.LoadingRow += OnLoadingRow;
+        _grid.ItemContainerGenerator.StatusChanged += (_, _) =>
+        {
+            if (_grid.ItemContainerGenerator.Status
+                == System.Windows.Controls.Primitives.GeneratorStatus.ContainersGenerated)
+            {
+                _ = Dispatcher.BeginInvoke(
+                    System.Windows.Threading.DispatcherPriority.Background,
+                    () => ContainersRealized?.Invoke());
+            }
+        };
         // The menu EXISTS from construction (see OnContextMenuOpening:
         // first-request opening requires it); its items are rebuilt
         // per opening from the current row.
@@ -272,9 +282,17 @@ internal sealed class AccessibleDataGrid : UserControl
     /// <c>syncSelectionFromBinding</c> is silent while its own key
     /// handling announces.
     ///
-    /// Returns whether the row was IN THE BOUND SET — not whether the
-    /// OS granted keyboard focus, which is <see cref="FocusRow"/>'s
-    /// recorded rule and holds for the same reason.
+    /// The RETURN depends on which job was asked for, and the split is
+    /// deliberate. Without <paramref name="moveFocus"/> it reports
+    /// whether the row was IN THE BOUND SET, like <see cref="FocusRow"/>
+    /// — currency and selection, which is what AT reports, are set
+    /// either way. WITH it, the caller is asking to put the reader on
+    /// that row, so the answer is whether the REALIZED CELL took focus:
+    /// a bound row whose container does not exist returns FALSE. A14's
+    /// rule is that only a realized row counts as delivered, and a seam
+    /// that answered "in the set" would let a grid-level fallback
+    /// consume a focus request nothing ever satisfied (codex B round 1,
+    /// B1 — the same defect A14 was rewritten over on the outline).
     /// </summary>
     internal bool SelectRow(Func<object, bool> predicate, bool moveFocus = false)
     {
@@ -292,6 +310,7 @@ internal sealed class AccessibleDataGrid : UserControl
         // column must not be dropped back to column 0 because another
         // pane moved the shared selection.
         DataGridColumn column = _grid.CurrentCell.Column ?? _grid.Columns[0];
+        bool focusedTheRow = false;
         WithoutAnnouncing(() =>
         {
             // This row is where the reader now is, so a later move
@@ -300,15 +319,31 @@ internal sealed class AccessibleDataGrid : UserControl
             _lastAnnouncedRow = match;
             if (moveFocus)
             {
-                _ = FocusCellElement(match, column);
+                focusedTheRow = FocusCellElement(match, column);
                 return;
             }
             _grid.CurrentCell = new DataGridCellInfo(match, column);
             _grid.SelectedCells.Clear();
             _grid.SelectedCells.Add(_grid.CurrentCell);
         });
-        return true;
+        return !moveFocus || focusedTheRow;
     }
+
+    /// <summary>
+    /// The row containers were (re)generated. W6-1 PR B (#745): a focus
+    /// request for a row the panel had virtualized away cannot be
+    /// delivered when it arrives, so the consuming surface retries here
+    /// — the same shape the canvas outline already has on its tree's
+    /// generator (contract A14.3, "realization is part of delivery").
+    /// </summary>
+    /// <remarks>
+    /// Raised POSTED, not inline: this fires from inside the generator's
+    /// own pass, and a delivery attempt lays out and may ask the panel to
+    /// bring an index into view — re-entering generation and throwing
+    /// "Cannot call StartAt when content generation is in progress". The
+    /// outline's own subscriber records the same trap.
+    /// </remarks>
+    internal event Action? ContainersRealized;
 
     /// <summary>
     /// Put keyboard focus on the CELL ELEMENT for (item, column):
@@ -318,6 +353,15 @@ internal sealed class AccessibleDataGrid : UserControl
     /// the realized DataGridCell. Falls back to the grid only when the
     /// container genuinely cannot exist yet (pre-load).
     /// </summary>
+    /// <returns>
+    /// Whether the REALIZED CELL took focus — false for the grid-level
+    /// fallback, which is a different outcome and used to be reported as
+    /// the same one. Currency and selection are set either way, so the
+    /// callers that only want the reader's position keep ignoring this;
+    /// W6-1 PR B's focus delivery reads it, because A14's rule is that
+    /// only a realized row counts as delivered and a fallback that says
+    /// "true" consumes a request nothing ever satisfied.
+    /// </returns>
     private bool FocusCellElement(object item, DataGridColumn column)
     {
         _grid.ScrollIntoView(item, column);
@@ -334,7 +378,10 @@ internal sealed class AccessibleDataGrid : UserControl
         {
             return cell.Focus();
         }
-        return _grid.Focus();
+        // The reader is NOT on the row. Focus still goes somewhere
+        // sensible rather than nowhere, but the caller is told the truth.
+        _ = _grid.Focus();
+        return false;
     }
 
     /// <summary>
