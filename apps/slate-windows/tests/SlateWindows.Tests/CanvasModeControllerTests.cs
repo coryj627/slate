@@ -27,9 +27,15 @@ namespace SlateWindows.Tests;
 /// the whole point of M1 is what the user hears.
 /// </para>
 /// </remarks>
+/// <param name="NewRefusingSpec">
+/// A fresh spec whose commit effect REFUSES and announces its own reason
+/// — PR C's test mode fakes the refusal, PR F supplies a real one (a
+/// canvas that went degraded or lost its handle mid-mode).
+/// </param>
 internal sealed record CanvasModeProbe(
     CanvasModeController Controller,
     Func<CanvasModeSpec> NewSpec,
+    Func<CanvasModeSpec> NewRefusingSpec,
     Func<IReadOnlyList<string>> Announced,
     Action Clear);
 
@@ -77,6 +83,50 @@ internal static class CanvasModeConformance
         Assert.False(probe.Controller.IsActive);
         string line = Assert.Single(probe.Announced());
         Assert.Contains("cancelled", line, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// M2's other half: a REFUSED commit keeps the mode alive, with its
+    /// transient state and its M3 value intact.
+    /// </summary>
+    /// <remarks>
+    /// The machine was modelled as if a commit could not fail, and it
+    /// can: the canvas goes degraded or loses its handle mid-mode and the
+    /// funnel's admission says no. Mac keeps the mode up in that case and
+    /// consumes the key with the refusal, so the user can fix the problem
+    /// or cancel out with the restoration still available — the
+    /// alternative loses their move with neither a commit nor a
+    /// restoration. PR F's real modes commit through the funnel, which is
+    /// exactly where the refusal comes from, so this arm is here now
+    /// rather than after F discovers it.
+    /// </remarks>
+    public static void ARefusedCommitKeepsTheModeAlive(CanvasModeProbe probe)
+    {
+        Assert.True(probe.Controller.Enter(probe.NewRefusingSpec()));
+        string? value = probe.Controller.ContainerValue;
+        Assert.NotNull(value);
+        probe.Clear();
+
+        Assert.False(
+            probe.Controller.Commit(),
+            "a commit whose effect refused must report that it did not apply.");
+        Assert.True(
+            probe.Controller.IsActive,
+            "a refused commit must KEEP the mode — dropping it loses the user's "
+            + "transient state with neither a commit nor a restoration (t0 §2 M2).");
+        Assert.Equal(value, probe.Controller.ContainerValue);
+        Assert.True(
+            probe.Controller.CanCommitOrCancel,
+            "the mode is still running, so its visible controls stay live (M6).");
+        // The effect owns the sentence — the controller has none for a
+        // refusal — but the user is not left in silence.
+        Assert.NotEmpty(probe.Announced());
+
+        // And the mode is still cancellable, which is the escape hatch
+        // the kept state exists for.
+        probe.Clear();
+        Assert.True(probe.Controller.Cancel());
+        Assert.False(probe.Controller.IsActive);
     }
 
     /// <summary>M3: the mode is INSPECTABLE, not merely announced.</summary>
@@ -187,6 +237,8 @@ public sealed class CanvasModeControllerTests
 
         public bool Cancelled { get; private set; }
 
+        public bool Refused { get; private set; }
+
         /// <summary>
         /// A fresh spec for <paramref name="mode"/> — and its commit and
         /// cancel HONOUR that mode rather than always speaking Move's.
@@ -207,7 +259,7 @@ public sealed class CanvasModeControllerTests
                 () =>
                 {
                     Committed = true;
-                    return mode switch
+                    return CanvasModeCommitResult.Committed(mode switch
                     {
                         CanvasMode.Move => new CanvasA11yEvent.CanvasModeCommitted(
                             CanvasTransientVerb.Move,
@@ -217,7 +269,7 @@ public sealed class CanvasModeControllerTests
                             new CanvasModeObject.Card("Research")),
                         _ => new CanvasA11yEvent.CanvasConnected(
                             "Research", "Evidence", null),
-                    };
+                    });
                 },
                 () =>
                 {
@@ -229,6 +281,36 @@ public sealed class CanvasModeControllerTests
                         _ => new CanvasModeRestoration.Unstated(),
                     };
                 });
+
+        /// <summary>
+        /// A spec whose commit REFUSES and speaks its own reason — the
+        /// shape PR F's real modes take when the funnel's admission says
+        /// no (a canvas that went degraded or lost its handle mid-mode).
+        /// </summary>
+        /// <remarks>
+        /// The refusal is announced by the EFFECT, through the same
+        /// funnel the controller uses, because which refusal it is is the
+        /// effect's knowledge — the controller has no sentence for it.
+        /// `CanvasMutationRefused` is the vocabulary's own arm for
+        /// exactly this, so no new copy is invented for a test.
+        /// </remarks>
+        public CanvasModeSpec RefusingSpec(
+            CanvasMode mode, Action<CanvasA11yEvent> announce) =>
+            new(
+                mode,
+                new CanvasModeObject.Card("Research"),
+                () =>
+                {
+                    Refused = true;
+                    announce(new CanvasA11yEvent.CanvasMutationRefused(
+                        CanvasMutationRefusal.ReadOnly));
+                    return CanvasModeCommitResult.Refused();
+                },
+                () =>
+                {
+                    Cancelled = true;
+                    return new CanvasModeRestoration.BackAt("Research");
+                });
     }
 
     private CanvasModeController NewController() =>
@@ -237,9 +319,12 @@ public sealed class CanvasModeControllerTests
     private CanvasModeProbe NewProbe(CanvasMode mode = CanvasMode.Move)
     {
         var test = new TestMode();
+        CanvasModeController controller = NewController();
+        var announcer = new CanvasAnnouncer(_announced.Add, TimeSpan.FromMinutes(1));
         return new CanvasModeProbe(
-            NewController(),
+            controller,
             () => test.Spec(mode),
+            () => test.RefusingSpec(mode, announcer.Announce),
             () => _announced.Select(line => line.Text).ToArray(),
             _announced.Clear);
     }
@@ -280,6 +365,11 @@ public sealed class CanvasModeControllerTests
     [MemberData(nameof(EveryMode))]
     public void M3_TheModeIsReadableFromTheContainerValue(CanvasMode mode) =>
         CanvasModeConformance.TheModeIsReadableFromTheContainerValue(NewProbe(mode));
+
+    [Theory]
+    [MemberData(nameof(EveryMode))]
+    public void M2_ARefusedCommitKeepsTheModeAlive(CanvasMode mode) =>
+        CanvasModeConformance.ARefusedCommitKeepsTheModeAlive(NewProbe(mode));
 
     [Theory]
     [MemberData(nameof(EveryMode))]
@@ -344,7 +434,7 @@ public sealed class CanvasModeControllerTests
         Assert.True(controller.Enter(new CanvasModeSpec(
             CanvasMode.Move,
             @object,
-            () => null,
+            () => CanvasModeCommitResult.Committed(),
             () => new CanvasModeRestoration.CardsReturned(count))));
 
         string spoken = CanvasAnnouncer.RenderLabel(

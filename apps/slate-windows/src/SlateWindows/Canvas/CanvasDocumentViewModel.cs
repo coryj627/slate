@@ -885,9 +885,12 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// newlines, so a needle of nothing but a newline reads as active and
     /// (core trimming it) matches everything. .NET's
     /// <c>IsNullOrWhiteSpace</c> trims newlines too, which would make the
-    /// same needle inactive — so the predicate is spelled out to mac's
-    /// rule rather than borrowed. CD-22 records the trimming differences
-    /// this belongs to.
+    /// same needle inactive — so <c>\n</c> and <c>\r</c> are carved out
+    /// to match mac there. NOT a full transcription of
+    /// <c>.whitespaces</c> (Zs plus tab): U+000B, U+000C, U+0085, U+2028
+    /// and U+2029 read active on mac and inactive here, which C10 records
+    /// rather than chases — they are unreachable from a keyboard and
+    /// belong to the trimming differences CD-22 covers.
     /// </remarks>
     public bool FilterActive => IsFilterActive(_filterText);
 

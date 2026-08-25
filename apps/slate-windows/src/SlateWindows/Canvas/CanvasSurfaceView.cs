@@ -400,17 +400,15 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
             ? _table.CanMoveRow(forward)
             : _outline.CanMoveFocus(forward);
 
-    public void FocusRow(string nodeId)
-    {
-        if (Projection == CanvasSurfaceKind.Table)
-        {
-            _ = _table.DeliverFocus(nodeId);
-        }
-        else
-        {
-            _ = _outline.DeliverFocus(nodeId);
-        }
-    }
+    /// <summary>
+    /// Returns whether the row actually TOOK focus — a row that is gone,
+    /// filtered out, or unrealizable answers false, and a caller with
+    /// nowhere else to put the reader must not treat that as done (m6).
+    /// </summary>
+    public bool FocusRow(string nodeId) =>
+        Projection == CanvasSurfaceKind.Table
+            ? _table.DeliverFocus(nodeId)
+            : _outline.DeliverFocus(nodeId) is not null;
 
     public void FocusProjection()
     {
@@ -457,11 +455,12 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
             model.CloseDetail();
             // Back to the row that opened it (WCAG 2.1.2/2.4.3) — on the
             // projection that opened it, which is the one still showing.
-            if (model.LastActivatedNode is { } row)
-            {
-                FocusRow(row);
-            }
-            else
+            // The FALLBACK is load-bearing and mirrors CloseWhereAmI's: a
+            // row can be gone by now (an external edit plus a reload),
+            // and a delivery that quietly fails would drop focus on the
+            // window root — a keyboard user with nowhere to go, which is
+            // the trap this Escape exists to prevent (m6).
+            if (model.LastActivatedNode is not { } row || !FocusRow(row))
             {
                 FocusProjection();
             }
@@ -503,11 +502,68 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         }
         // Alt-modified keys arrive as Key.System carrying the real key.
         Key key = e.Key == Key.System ? e.SystemKey : e.Key;
+        if (FocusOwnsTheKeyItself(key))
+        {
+            return;
+        }
+        if (EscapeBelongsToTheFocusedPanel(key))
+        {
+            CloseWhereAmI();
+            e.Handled = true;
+            return;
+        }
         if (model.Navigator.HandleKey(key, Keyboard.Modifiers, this))
         {
             e.Handled = true;
         }
     }
+
+    /// <summary>
+    /// Escape pressed with the reader INSIDE the Where-am-I panel belongs
+    /// to the panel, not to the ladder (contract C6, CD-47).
+    /// </summary>
+    /// <remarks>
+    /// Ordered before the ladder by FOCUS LOCUS, the same shape the
+    /// mode-scoped keys have: the panel is a transient region the reader
+    /// is standing in, and its dismissal is its own. That is mac's
+    /// behaviour too — the panel's Close button carries
+    /// <c>.keyboardShortcut(.cancelAction)</c>, which resolves at the
+    /// key-equivalent phase BEFORE the container's ladder — and without
+    /// it an Escape meant to close the panel destroys a typed filter
+    /// needle instead. The ladder still owns Escape when focus is in the
+    /// projections, where rung 3 closes the panel as before.
+    /// </remarks>
+    private bool EscapeBelongsToTheFocusedPanel(Key key) =>
+        key == Key.Escape
+        && Keyboard.Modifiers == ModifierKeys.None
+        && _whereAmIPanel.Visibility == Visibility.Visible
+        && _whereAmIPanel.IsKeyboardFocusWithin;
+
+    /// <summary>
+    /// Whether the focused element owns this key itself, so the canvas
+    /// chord must stand aside (contract C1/C6, M2's ruling).
+    /// </summary>
+    /// <remarks>
+    /// A tunnelling handler runs BEFORE the focused control, so without
+    /// this the mode's Enter reached the stack ahead of every button and
+    /// text box on the surface — pressing Enter on the visible CANCEL
+    /// MODE button would have COMMITTED the mode, inverting the user's
+    /// intent on the exact control M6 exists for, and Enter in the filter
+    /// field would have committed it too. Mac has no such hazard because
+    /// its container's Return handler BUBBLES, so a focused button or
+    /// field consumes it first; this restores that order at the one site
+    /// where the difference bites.
+    ///
+    /// Escape is deliberately NOT in here: the ladder is the canvas's
+    /// answer for it everywhere in the surface, and the panel case above
+    /// is handled by locus rather than by control type.
+    /// </remarks>
+    private static bool FocusOwnsTheKeyItself(Key key) =>
+        key == Key.Enter
+        && Keyboard.FocusedElement
+            is System.Windows.Controls.Primitives.ButtonBase
+            or System.Windows.Controls.Primitives.TextBoxBase
+            or MenuItem;
 
     // --- Lifecycle -------------------------------------------------------
 

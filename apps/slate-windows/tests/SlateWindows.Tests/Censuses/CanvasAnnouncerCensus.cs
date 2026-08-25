@@ -409,6 +409,32 @@ public sealed class CanvasAnnouncerCensus
     [Fact]
     public void TheFilterQueryIsScheduledOffTheDispatcher()
     {
+        // Scanned over the WHOLE canvas directory, not one file (m8): a
+        // `canvas_filter` call added anywhere else under `Canvas/` would
+        // have slipped past a one-file guard silently, and the guard's
+        // whole claim is that there is exactly ONE caller.
+        var offenders = new List<string>();
+        foreach (string file in CanvasSources())
+        {
+            string label = Path.GetRelativePath(CanvasSourceRoot(), file);
+            if (label == "CanvasDocumentViewModel.cs")
+            {
+                continue;
+            }
+            if (CSharpSource.Load("Canvas", label).Root
+                .DescendantNodes()
+                .OfType<MemberAccessExpressionSyntax>()
+                .Any(access => access.Name.Identifier.ValueText == "CanvasFilter"))
+            {
+                offenders.Add(label);
+            }
+        }
+        Assert.True(
+            offenders.Count == 0,
+            "`canvas_filter` is called outside CanvasDocumentViewModel.cs, so the "
+            + "one-caller guard below is scanning the wrong file and the query is "
+            + "somewhere it was never scheduled: " + string.Join(", ", offenders));
+
         CSharpSource source = CSharpSource.Load("Canvas", "CanvasDocumentViewModel.cs");
 
         // Walked UP from each call site to its enclosing MEMBER, not down

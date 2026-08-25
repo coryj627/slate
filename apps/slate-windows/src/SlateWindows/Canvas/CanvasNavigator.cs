@@ -42,8 +42,12 @@ internal interface ICanvasSurfacePresenter
     /// </remarks>
     bool CanMoveWithinProjection(bool forward);
 
-    /// <summary>Put keyboard focus on a row, silently (contract C12).</summary>
-    void FocusRow(string nodeId);
+    /// <summary>Put keyboard focus on a row, silently (contract C12).
+    /// False when the row could not take it — gone, filtered out, or
+    /// unrealizable — so a caller with nowhere else to put the reader
+    /// knows to fall back rather than leaving focus on the window
+    /// root.</summary>
+    bool FocusRow(string nodeId);
 
     /// <summary>Put keyboard focus back on the showing projection.</summary>
     void FocusProjection();
@@ -435,6 +439,11 @@ internal sealed class CanvasNavigator
             ColorName: context.ColorName,
             Marked: _document.Selection.IsMarked(nodeId),
             Mode: _document.Modes.Active?.Mode,
+            // NARROWED, not "a needle is in the field" (mac's key): a
+            // clause built from rows nothing narrowed would read
+            // "9 of 9 shown" and claim a match nobody made, which is the
+            // one thing C10's invariant forbids. Recorded as a
+            // micro-divergence in C11.
             Filter: view.Narrowed
                 ? new CanvasFilterState.Active(
                     (uint)view.Rows.Count, (uint)_document.Outline.Count)
@@ -604,13 +613,35 @@ internal sealed class CanvasNavigator
     }
 
     /// <summary>
-    /// Right/Left, with the precedence mac pins: connection-follow when
-    /// the selected card HAS connections, else the projection's own
-    /// meaning. On the outline that is the tree's expand/collapse; on the
-    /// table it is the grid's CELL navigation, which the Table pattern
-    /// depends on — so the follow chord is outline-only there and the
-    /// palette rows are the table's path (contract C3, CD-44).
+    /// Right/Left FOLLOW, unconditionally, on the outline (contract C3,
+    /// CD-48).
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The spec asked for "connection-follow when the selected card has
+    /// connections, else tree semantics, as mac does". Mac does not do
+    /// that: <c>CanvasOutlineView.swift</c> delivers
+    /// <c>canvasFollowConnection</c> unconditionally and returns handled,
+    /// so a connectionless card ANSWERS there ("No outgoing connection.").
+    /// The blend the spec describes was never shipped, and implementing
+    /// it left one keypress on a leaf doing nothing and saying nothing —
+    /// the never-silent rule broken by a precedence nobody had.
+    /// </para>
+    /// <para>
+    /// Expand/collapse stays keyboard-reachable on the tree without
+    /// arrows: Enter on a group toggles it (the activation seam), the
+    /// numpad <c>+</c>/<c>-</c> are WPF's own <c>TreeViewItem</c> keys,
+    /// and the <c>ExpandCollapse</c> pattern is what a screen reader
+    /// drives — all three pinned by
+    /// <c>ExpandCollapseSurvivesTheArrowsBeingClaimed</c>.
+    /// </para>
+    /// <para>
+    /// The TABLE keeps Left/Right for the grid's CELL navigation, which
+    /// the UIA Table pattern depends on and the W4-1 conformance matrix
+    /// asserts; follow there is the palette row, and it answers the same
+    /// way.
+    /// </para>
+    /// </remarks>
     private bool ArrowFollow(bool forward)
     {
         if (_presenter is not
@@ -618,21 +649,26 @@ internal sealed class CanvasNavigator
         {
             return false;
         }
-        if (_document.Selection.Selected is not { } selected)
-        {
-            return false;
-        }
-        // An UNANSWERABLE lookup keeps the arrow's tree meaning rather
-        // than claiming a connection state nothing returned.
-        if (_document.NeighborsIfKnown(selected) is not { Count: > 0 })
-        {
-            return false;
-        }
         FollowConnection(forward);
         return true;
     }
 
-    private bool CommitModeFromKey() => _document.Modes.IsActive && _document.Modes.Commit();
+    /// <summary>
+    /// Enter commits an active mode — and CONSUMES the key whether or not
+    /// the commit applied, because a mode was running and Enter belonged
+    /// to it (mac consumes Return with the refusal for the same reason).
+    /// Letting a refused commit fall through would hand the key to
+    /// whatever is underneath while the mode is still up.
+    /// </summary>
+    private bool CommitModeFromKey()
+    {
+        if (!_document.Modes.IsActive)
+        {
+            return false;
+        }
+        _ = _document.Modes.Commit();
+        return true;
+    }
 
     private bool EscapeFromKey() =>
         _document.Modes.HandleEscape() != CanvasEscapeRung.WorkspaceTab;

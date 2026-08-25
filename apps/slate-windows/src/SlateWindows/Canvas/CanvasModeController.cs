@@ -80,16 +80,55 @@ internal enum CanvasEscapeRung
 /// instructions (t0 §2 M1).</param>
 /// <param name="Object">What the mode acts on — one titled card, or a
 /// count.</param>
-/// <param name="OnCommit">The commit side effect. Returns the
-/// confirmation EVENT (t0 §1.3), or null to stay silent because the
-/// action announces for itself.</param>
+/// <param name="OnCommit">The commit side effect. Returns whether it
+/// APPLIED, and the confirmation event (t0 §1.3) when it has one of its
+/// own to speak.</param>
 /// <param name="OnCancel">The cancel side effect (restore prior state).
 /// Returns what was put back, which core phrases.</param>
 internal sealed record CanvasModeSpec(
     CanvasMode Mode,
     CanvasModeObject Object,
-    Func<CanvasA11yEvent?> OnCommit,
+    Func<CanvasModeCommitResult> OnCommit,
     Func<CanvasModeRestoration> OnCancel);
+
+/// <summary>
+/// What a mode's commit effect did (t0 §2 M2).
+/// </summary>
+/// <remarks>
+/// <para>
+/// M2 was modelled as infallible and it is not. A commit can be REFUSED
+/// — the canvas went degraded or lost its handle mid-mode, the funnel's
+/// admission says no — and mac keeps the mode alive when that happens:
+/// its container checks <c>admitCanvasMutation</c> BEFORE calling
+/// <c>commit()</c> and consumes the key with the refusal, leaving the
+/// transient state intact so the user can fix the problem or cancel.
+/// </para>
+/// <para>
+/// Modelled as an OUTCOME rather than as mac's call-site pre-gate on
+/// purpose: a pre-gate has to be re-implemented at every entry point —
+/// the key, the header button, the palette row, the menu item — and the
+/// one that forgets loses the user's work silently. Here the machine
+/// cannot clear the stack for an effect that did not apply.
+/// </para>
+/// <para>
+/// A refusal announces for ITSELF. The controller has no sentence for
+/// it: which refusal it is (degraded, detached, conflicted) is the
+/// effect's knowledge, and inventing one here would be host prose.
+/// </para>
+/// </remarks>
+internal readonly record struct CanvasModeCommitResult(
+    bool Applied, CanvasA11yEvent? Confirmation)
+{
+    /// <summary>The effect applied. <paramref name="confirmation"/> is
+    /// the t0 §1.3 sentence, or null when the action announces for
+    /// itself.</summary>
+    internal static CanvasModeCommitResult Committed(
+        CanvasA11yEvent? confirmation = null) => new(true, confirmation);
+
+    /// <summary>The effect REFUSED: the mode and its transient state
+    /// survive, and the effect has already said why.</summary>
+    internal static CanvasModeCommitResult Refused() => new(false, null);
+}
 
 /// <summary>
 /// W6-1 PR C (#745): the canvas mode stack — t0 §2 M1–M7, and the mac
@@ -206,11 +245,25 @@ internal sealed class CanvasModeController : BindableBase
         {
             return false;
         }
-        // Cleared BEFORE the side effect runs: a commit that announces
-        // through a path which asks whether a mode is active (Where-am-I
-        // does) must see the stack as it will be, not as it was.
+        // The effect runs FIRST and the stack is cleared only if it
+        // APPLIED (t0 §2 M2): a refused commit keeps the mode and its
+        // transient state, so the user can fix what refused it or cancel
+        // out with the restoration intact. Clearing first would drop a
+        // move that was never made, with neither a commit nor a
+        // restoration to show for it.
+        CanvasModeCommitResult result = spec.OnCommit();
+        if (!result.Applied)
+        {
+            // Silent HERE, not silent to the user: the refusal is the
+            // effect's own sentence, because which refusal it is is the
+            // effect's knowledge.
+            return false;
+        }
+        // Cleared BEFORE the confirmation is announced: a sentence that
+        // asks whether a mode is active (Where-am-I does) must see the
+        // stack as it will be, not as it was.
         Active = null;
-        if (spec.OnCommit() is { } confirmation)
+        if (result.Confirmation is { } confirmation)
         {
             _announce(confirmation);
         }
