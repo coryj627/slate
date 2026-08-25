@@ -2737,14 +2737,24 @@ which said so.
 and by clearing, and no `canvas_apply` is anywhere near it.
 
 **A reload with an active needle re-asks**, or the surface would show
-every card while the field still claimed to be filtering. It announces
-its new count deliberately: the rows changed under the user while they
-were filtering, and the accurate number is information they need — the
-alternative is a surface quietly holding a different set than the one
-last spoken. It is safe to say because it rides the FILTER coalescing
-class, which is separate from the `navigation` class the degraded-load
-line and every movement use (0a-8), so a reload's count cannot collapse
-the load's own sentence or be collapsed by it.
+every card while the field still claimed to be filtering. It does not
+ANNOUNCE the new count: the count is announced from the filter FIELD,
+by the keystroke that asked for it, and a reload is not a keystroke.
+Whether a reload should speak its new number — the rows changed under a
+reader who was filtering — is a live question, and it is the async
+form's to answer, because only there does the re-ask land on a frame of
+its own. It travels with the rest.
+
+**The cost of typing, stated rather than assumed.** Each keystroke is
+one memoized `canvas_filter` call plus ONE projection rebuild — the
+needle setter raises the republish and the surface deliberately does not
+also render on the property change, or every keystroke would rebuild
+twice. A rebuild at 2,000 rows is the same work PR A already budgets and
+measures on the open path (`A17`'s §K fact, in both scheduling modes),
+so the per-keystroke cost is bounded by a number that is already
+asserted rather than by a hope. mac has the same shape (its list
+re-renders from `filteredOutline`); what neither host does is re-run the
+match, which is what the memo is for.
 
 **C11 — Where-am-I is one render, spoken and shown.** The navigator
 builds one `CanvasWhereAmI` event from core's `canvas_where_am_i` plus
@@ -2924,12 +2934,12 @@ convention.
 |---|---|
 | m1 | **DEFERRED — close-out, and it is a CLASS not a canvas row.** Re-clicking a checked verbosity item unchecks it visually because `IsCheckable` toggles `IsChecked` while the OneWay binding only re-pushes on `PropertyChanged` and the setter early-returns on the same value. Shipped by the math-verbosity precedent this row copied, and live on all five groups (math verbosity, speech style, braille, code preamble, canvas). One fix — re-raise the three `PropertyChanged` unconditionally, or handle `Click` — covers every group, and doing it here would fix a canvas symptom of a shell defect. Recorded as the inspectability class's 6th appearance. |
 | m2 | **TAKEN (record).** C10 said "mac's predicate, spelled out"; it is not exactly — Foundation's `.whitespaces` is Zs plus tab, so U+000B, U+000C, U+0085, U+2028 and U+2029 read ACTIVE on mac and inactive here. The claim is narrowed to what the code does and the five code points are named. |
-| m3 | **TAKEN (record).** Where-am-I's filter clause keys on `Narrowed` where mac keys on `filterActive`, so during an in-flight first answer — or after a ran-and-failed query — Windows omits the clause while a needle sits in the field. Kept on `Narrowed` deliberately: keying on the needle would make the clause say "9 of 9 shown" for rows nothing narrowed, which is a false number, and C10's whole invariant is that the count describes the rows on screen. Recorded as a micro-divergence rather than matched. |
+| m3 | **TAKEN (record).** Where-am-I's filter clause keys on `Narrowed` where mac keys on `filterActive`, so there are states in which a needle sits in the field and Windows omits the clause. On THIS branch the cause is the synchronous one and only one: an active needle with no memo and no handle to build one — the document cannot answer, so nothing is narrowed and the clause is absent while the field still reads as filtering. (The async form adds two more causes, the in-flight first answer and the ran-and-failed query; they travel with it.) Kept on `Narrowed` deliberately either way: keying on the needle would make the clause say "9 of 9 shown" for rows nothing narrowed, which is a false number, and C10's whole invariant is that the count describes the rows on screen. Recorded as a micro-divergence rather than matched. |
 | m4 | **TAKEN (upstream note).** Where-am-I's no-selection fallback is the first UNFILTERED row on BOTH hosts, so with a filter active it can describe a card that is not on screen. Shared-reference quirk; filed in the mac-details register rather than fixed one-sided. |
 | m5 | **TAKEN (upstream note).** Enter-group, follow-connection and trace-path can seat a filtered-out node, and enter-group narrates it. Verified mac-parity (`canvasSelect` has no filtered-set check either), so not a Windows defect — but it grinds against CD-40's ratified "the reader and the selection agreeing IS the contract", so the verb family is recorded together. |
 | m6 | **TAKEN (fixed + fact).** `DismissTransientRegion`'s detail arm ignored `FocusRow`'s answer, so a row that vanished under an external edit left focus on the window root. `FocusRow` now RETURNS whether the row took focus — which is a seam improvement in its own right — and the arm falls back to the projection exactly as `CloseWhereAmI` does. |
 | m7 | **DEFERRED — PR E, with the expansion-state decision.** A durable focus request naming a filtered-out node stays pending and delivers a surprise jump when the filter later clears. `FocusLandingNodeFor` reads the unfiltered map by design (A14's landing rules predate the filter). Superseding the request when the filter excludes its target is a change to A14's own state machine; it belongs with the request-lifecycle work PR E already owns, not bolted on here. |
-| m8 | **TAKEN (fixed).** The scheduler guard scanned one file, so a `canvas_filter` call added anywhere else under `Canvas/` would have evaded the one-caller claim. It scans the whole directory now and names any offender. |
+| m8 | **TRAVELS.** It was taken and fixed — the scheduler guard scanned one file, so a `canvas_filter` call added anywhere else under `Canvas/` would have evaded the one-caller claim, and it scans the whole directory now. But the guard it strengthens is the off-dispatcher scheduling guard, which is not on this branch: a synchronous match has one caller by construction, in the getter, with no scheduled body for a second one to hide in. Both go to the redesign PR together. |
 | m9 | **DEFERRED — PR D, with the surface's focus map.** Ctrl+F reaches nobody when the table shows and focus is in the HEADER: the navigator stands aside for the grid's own gesture, and the grid's binding needs the grid focused. Routing the stand-aside on "the GRID owns focus" rather than "the table is showing" is the fix; it wants the header/projection focus map PR D is already building for the renderer's tab order, and the palette row covers the gap meanwhile. |
 | m10 | **RECORDED (no action).** The `Key.System`/`SystemKey` translation and the `Keyboard.Modifiers` read have no unit exercise — `PressKey` documents that it bypasses the routed event for modified chords, and the CI journey's real Ctrl+Alt+Shift+I is the executable coverage. Named so nobody reads the unit fact as covering it. The AltGr note (Ctrl+Alt chords are typeable glyphs on some layouts) is recorded with it; no current canvas chord collides with a common AltGr glyph. |
 | m11 | **DEFERRED — PR E/F, with the first context menu.** The `MenuOpen` classification's visual-parent fallback (the `ContextMenu` popup chain) is exercised nowhere, because no canvas surface has a context menu until E/F ship the row menus. C8's "one question covers the menu bar, submenus and context menus" is narrowed to what is tested, and the popup arm is named as the untested half so the PR that ships the first context menu owns the fact. |
@@ -5447,10 +5457,10 @@ rather than rediscovering it.
   outside the publication transaction is a second channel.** The
   enumeration (rows → state → controls → selection → next) can never end
   by enumeration, because its population is everything the document
-  exposes. So `Publication` stages the writes and queues the
+  exposes. So `Publication` (travels) stages the writes and queues the
   notifications, and the outermost scope raises them in one defined
   order; every notifying member is read-only outside it; and
-  `TheCanvasModelNotifiesOnlyFromInsideAPublication` is the census that
+  `TheCanvasModelNotifiesOnlyFromInsideAPublication` (travels) is the census that
   keeps the population closed instead of a reviewer doing it one pair at
   a time.
 
@@ -5460,7 +5470,7 @@ rather than rediscovering it.
   (the sentences a retirement owes, while the funnel is open), then
   SILENCE as the first act of everything after, then RELEASE from a
   `finally`. The clears cannot run a callback because there is nothing
-  left that can raise one, and `TeardownSpeaksThenSilencesThenReleases`
+  left that can raise one, and `TeardownSpeaksThenSilencesThenReleases` (travels)
   reads that order out of the source.
 
   What made this a design pass rather than a fifth patch is the test

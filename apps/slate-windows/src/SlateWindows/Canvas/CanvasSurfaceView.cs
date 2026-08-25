@@ -796,7 +796,10 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         if (e.PropertyName is nameof(CanvasDocumentViewModel.State)
             or nameof(CanvasDocumentViewModel.StateMessage)
             or nameof(CanvasDocumentViewModel.Warnings)
-            or nameof(CanvasDocumentViewModel.FilterText)
+            // FilterText is deliberately absent: its setter already
+            // raises OutlinePublished (the displayed rows changed), and
+            // rendering on both signals would rebuild the projection
+            // twice per keystroke.
             or nameof(CanvasDocumentViewModel.DetailText)
             or nameof(CanvasDocumentViewModel.WhereAmIText))
         {
@@ -853,11 +856,10 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         {
             return;
         }
-        // The needle only; the match runs off the dispatcher and the
-        // document announces the count when its answer lands (contract
-        // C10). Announcing from here would have described rows that were
-        // not on screen yet.
         model.FilterText = _filterField.Text;
+        // Debounced by the announcer's FILTER coalescing class (t0 §1.5),
+        // so a keystroke burst collapses into one count.
+        model.Navigator.AnnounceFilterCount();
     }
 
     /// <summary>
@@ -1026,10 +1028,14 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
                 ? $"{CanvasPhrase.FilterSummaryName}: {summary}"
                 : CanvasPhrase.FilterSummaryName);
         _filterSummary.Visibility = filtering ? Visibility.Visible : Visibility.Collapsed;
-        // Clear follows the NEEDLE, not the summary: the moment there is
-        // something in the field there is something to clear, and waiting
-        // for the answer would leave the reader briefly unable to undo
-        // what they just typed.
+        // Clear and the summary follow the same condition here, because
+        // the match is SYNCHRONOUS (contract C10 interim): there is no
+        // frame in which the needle is set and the answer is not. The
+        // rationale that made this its own line — Clear must not wait for
+        // an answer that arrives later, or the reader is briefly unable
+        // to undo what they typed — is the ASYNC form's, and it travels
+        // with it. Written out rather than collapsed into `filtering`
+        // because that is the line the redesign PR has to un-collapse.
         _filterClear.Visibility = model.FilterActive
             ? Visibility.Visible
             : Visibility.Collapsed;

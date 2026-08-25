@@ -545,14 +545,32 @@ public sealed class CanvasNavigatorTests : IDisposable
             Rendered(new CanvasStatusNote.NoCardsMatchFilter()), OneLine(document));
     }
 
+    /// <summary>
+    /// Typing in the FILTER FIELD announces the count, and the number
+    /// spoken is the number on screen (contract C10).
+    /// </summary>
+    /// <remarks>
+    /// Driven through the field rather than by calling the verb, because
+    /// the field is the production trigger and the verb is not: the
+    /// surface's <c>TextChanged</c> handler is the only thing that
+    /// announces a count for a keystroke, and a fact that called
+    /// <c>AnnounceFilterCount</c> itself stayed green while that handler
+    /// was silent. The C-lite extraction proved it: an async-era body
+    /// came across, the announcement was gone, and every filter fact
+    /// passed.
+    /// </remarks>
     [Fact]
-    public void TheAnnouncedCountIsTheRowsTheSurfacesShow()
+    public void TypingInTheFilterFieldAnnouncesTheRowsTheSurfacesShow() => RunSta(() =>
     {
         CanvasDocumentViewModel document = Open("board.canvas");
-        document.FilterText = "zeta";
+        var surface = new CanvasSurfaceView { Model = document };
+        using var host = Host(surface);
         Drain(document);
 
-        document.Navigator.AnnounceFilterCount();
+        surface.FilterFieldForTests.Text = "zeta";
+        host.UpdateLayout();
+
+        Assert.Equal("zeta", document.FilterText);
         Assert.Equal(
             CanvasAnnouncer.RenderLabel(new CanvasA11yEvent.CanvasFilterCount(
                 (uint)document.FilteredOutline.Count)),
@@ -563,7 +581,7 @@ public sealed class CanvasNavigatorTests : IDisposable
             $"{document.FilteredOutline.Count} of ",
             document.Navigator.FilterSummaryText(),
             StringComparison.Ordinal);
-    }
+    });
 
     [Fact]
     public void ClearingTheFilterRestoresEveryCardAndSaysHowMany()
