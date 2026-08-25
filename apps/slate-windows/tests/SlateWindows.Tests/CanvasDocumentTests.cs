@@ -142,7 +142,7 @@ public sealed class CanvasDocumentTests : IDisposable
             Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
         CanvasDocumentViewModel document =
             Assert.IsType<CanvasDocumentViewModel>(first.Canvas);
-        _ = document.Selection.ToggleMark("question");
+        _ = document.ToggleMark("question");
         Assert.True(document.Selection.IsMarked("question"));
 
         ((System.Windows.Input.ICommand)workspace.DuplicateTabCommand).Execute(null);
@@ -177,7 +177,7 @@ public sealed class CanvasDocumentTests : IDisposable
         CanvasDocumentViewModel before =
             Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
         before.SelectNode("evidence");
-        _ = before.Selection.ToggleMark("evidence");
+        _ = before.ToggleMark("evidence");
 
         File.Move(
             Path.Combine(_fixture.Root, "board.canvas"),

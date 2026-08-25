@@ -2489,12 +2489,19 @@ callbacks found so far.
    (`CanvasModeTeardownFailed`) and the teardown carries on rather than
    depending on it.
 2. **SILENCE**, and it is the FIRST act of everything that follows.
-   `RetireObservers` detaches the rows event and mutes the property and
-   selection channels through the publication, which is the only thing
-   that raises them. Every clear below is then a transaction that stages
-   and commits nothing — "teardown must not run a callback" becomes a
-   property of the code rather than a rule to remember. Clearing first
-   and silencing after is the shape that kept producing this class.
+   `RetireObservers` does two different jobs and they are pinned
+   separately. It MUTES: a retired publication commits nothing, so no
+   channel — property, rows, selection, `SurfaceChanged` — can speak,
+   and every clear below is a transaction that raises nothing. That is
+   what makes "teardown must not run a callback" a property of the code
+   rather than a rule to remember, and it holds for a RETAINED document
+   driven long after the tab closed, which is what a persisted workspace
+   can do. It also DETACHES the two events, which is about lifetime
+   rather than silence — a retired document holding a view's handler
+   keeps a dead surface reachable — and `HoldsObserverHandlersForTests`
+   is how that half is asserted, because its only honest observable is
+   the handler list. Clearing first and silencing after is the shape that
+   kept producing this class.
 3. **RELEASE**, from a `finally`, reached however phase 2 went: the
    announcer is silenced (contract A5 — a coalesced line queued on a
    dying document would otherwise speak ~200 ms later about a surface
@@ -2502,11 +2509,20 @@ callbacks found so far.
    closes is a leak no test would ever see.
 
 `TeardownSpeaksThenSilencesThenReleases` reads that order out of the
-source, and `AClosedCanvasRunsNoObserverCallbackAndStillSpeaksItsLastSentence`
+source — the drain before the retirement AND guarded where it stands,
+the clears after it, the announcer silenced from a `finally` before the
+handle closes — and its own doc states what it does not prove, so the
+claim is not read wider than the check: that the retirement covers every
+CHANNEL is the derived census's job, not this one's.
+`AClosedCanvasRunsNoObserverCallbackAndStillSpeaksItsLastSentence`
 drives codex's construction — a canvas with the Where-am-I panel open, a
 filter applied and a mode running, closed: the restoration speaks, no
 observer runs, the clears happen anyway, the funnel refuses everything
-after, and the handle is closed.
+after, and the handle is closed. And
+`ARetiredDocumentDrivenAgainReachesNobodyOnAnyChannel` drives the
+retained object through every mutator that still exists on it — the
+surface switch, the marks, the selection, the filter, Where-am-I, a
+reload — and requires silence on all four channels.
 
 Pinned by `ADepartureHeldAcrossAThrowingCommitStillCancels` (in the
 conformance body PR F reuses),
@@ -2782,11 +2798,36 @@ workspace used to write directly and now restores through
 `RestoreSurface`. The transaction keeps `SetField`'s discipline: a write
 that changes nothing queues nothing.
 
-**`TheDocumentNotifiesOnlyFromInsideAPublication` is what ends it** —
-a source census over the three channels (the property channel, the rows
-event, and the staged fields behind them), failing with the name of any
-write that is outside. The selection's two members need no rule there:
-they are read-only with staging methods, so the compiler carries them.
+**`TheCanvasModelNotifiesOnlyFromInsideAPublication` is what ends it,
+and it DERIVES its population.** The first version listed fields, in one
+file — and a list of fields is the same mistake as a list of pairs, one
+level down: the marked set's own notification and the `SurfaceChanged`
+event were both outside what it could see. So it scans every file under
+`Canvas/`, treats every type that derives from `BindableBase` or
+declares an event as a candidate, and requires each to be the MODEL, a
+VIEW, or a RECORDED EXCLUSION — an unclassified one fails it by name, so
+a new notifying type joins a side by decision. Inside the model the
+CONSTRUCTS are derived too: property raises, an event raise for every
+event the type declares (which is how `SurfaceChanged` arrives without
+anyone adding it to a list), and mutations of the collections behind
+observer-visible members.
+
+The two exclusions are recorded with their reasons. `CanvasModeController`
+notifies on its own channel because the mode stack is not correlated with
+the rows — no projection rebuilds on it, and contract C7 governs its
+lifecycle. `CanvasPreferencesViewModel` is app-level, not per-document
+(t0 §1.2/C13): the verbosity preference is read live at every announce
+site and belongs to no canvas's rows, which is why A7 made it a
+delegate. `CanvasOutlineRowViewModel` is a materialized ROW whose
+notifications are the tree's own binding state.
+
+The selection is fully inside now, including the parts the first pass
+left out: `Marked` is staged by `StageClearMarks`, `StageToggleMark` and
+`StageSeedFrom`, and the document exposes `ClearMarks`, `ToggleMark` and
+`SeedSelectionFrom` that publish them. `SeedFrom` used to raise directly
+on the argument that nothing was bound yet — true today, and exactly the
+kind of unpinned assumption about who is listening that the primitive
+exists to stop depending on.
 
 The SURFACE has one publication handler, and the projections are made
 current in it before anything renders over them. They subscribe first
@@ -5608,7 +5649,7 @@ rather than rediscovering it.
   exposes. So `Publication` stages the writes and queues the
   notifications, and the outermost scope raises them in one defined
   order; every notifying member is read-only outside it; and
-  `TheDocumentNotifiesOnlyFromInsideAPublication` is the census that
+  `TheCanvasModelNotifiesOnlyFromInsideAPublication` is the census that
   keeps the population closed instead of a reviewer doing it one pair at
   a time.
 
@@ -5625,6 +5666,24 @@ rather than rediscovering it.
   shape: the two censuses assert over the POPULATION (every notifying
   write, the whole teardown order), and the behavioural facts drive the
   primitive rather than the pair that happened to be reported.
+- **Round 5 adjudicated as MECHANICAL COMPLETION, not a design
+  continuation — and that adjudication is on the record because it is
+  the kind that gets made too easily.** The design held: codex verified
+  the ordering and the throwing-Shutdown construction. What it found was
+  the design not fully APPLIED — the marked set and the `SurfaceChanged`
+  event still notifying outside the transaction — and a census whose
+  population was a hard-coded field list in one file, which could not
+  have seen either. Both are failures of application and of the check,
+  not of the primitive, so the controller ruled completion rather than a
+  fifth round of the class. **A round-6 breach of the DESIGN itself
+  escalates to the user without further adjudication**, which is what
+  keeps "mechanical" from being a word that can be reused.
+
+  The lesson generalizes past this task: a census that closes a class
+  must derive its own population. Ours now scans the directory, classes
+  every notifying type as model, view or recorded exclusion, and fails on
+  anything unclassified — so the next notifying member joins a side by
+  decision instead of by being absent from a list nobody updated.
 - **The spec's PR A evidence line for the "Accessible canvas (T parity)"
   surface row is still unexecuted.** It says the row moves to "in
   progress — PR A"; the generated matrix still reads `pending`. Left

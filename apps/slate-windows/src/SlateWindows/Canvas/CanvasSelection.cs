@@ -82,52 +82,46 @@ internal sealed class CanvasSelection : BindableBase
     /// <summary>Cleared when the last tab for the path closes (R-B).
     /// The registry drops the whole document there, so this exists for
     /// the retarget seam, which carries the set across a rename
-    /// (CD-32).</summary>
-    internal void ClearMarks()
+    /// (CD-32). STAGING, like every other write here: the document's
+    /// publication owns the notification.</summary>
+    internal bool StageClearMarks()
     {
         if (_marked.Count == 0)
         {
-            return;
+            return false;
         }
         _marked.Clear();
-        OnPropertyChanged(nameof(Marked));
+        return true;
     }
 
     /// <summary>Seed from a document being retired by a retarget
     /// (CD-32): a rename is not a close, so the user's selection and
-    /// marks survive it.</summary>
-    internal void SeedFrom(CanvasSelection source)
+    /// marks survive it. Returns which of the three moved, because the
+    /// publication announces exactly what changed.</summary>
+    internal (bool Marks, bool Selected, bool Surface) StageSeedFrom(
+        CanvasSelection source)
     {
         ArgumentNullException.ThrowIfNull(source);
+        bool marks = _marked.Count > 0 || source._marked.Count > 0;
         _marked.Clear();
         foreach (string id in source._marked)
         {
             _ = _marked.Add(id);
         }
-        OnPropertyChanged(nameof(Marked));
-        // Seeded before any surface is bound to this document (the
-        // retarget builds it, then attaches), so these raise directly
-        // rather than through a publication that has nobody to notify.
-        if (StageSelected(source.Selected))
-        {
-            RaiseStaged(nameof(Selected));
-        }
-        if (StageActiveSurface(source.ActiveSurface))
-        {
-            RaiseStaged(nameof(ActiveSurface));
-        }
+        return (marks, StageSelected(source.Selected), StageActiveSurface(
+            source.ActiveSurface));
     }
 
     /// <summary>PR G's entry point, present now so the marked set is
-    /// never mutated from two places. Returns the new state.</summary>
-    internal bool ToggleMark(string nodeId)
+    /// never mutated from two places. Reports the new state, and whether
+    /// the set moved, to the publication that will announce it.</summary>
+    internal (bool Marked, bool Changed) StageToggleMark(string nodeId)
     {
         bool marked = _marked.Add(nodeId);
         if (!marked)
         {
             _ = _marked.Remove(nodeId);
         }
-        OnPropertyChanged(nameof(Marked));
-        return marked;
+        return (marked, true);
     }
 }

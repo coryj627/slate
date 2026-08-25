@@ -66,6 +66,21 @@ internal sealed class CSharpSource
         string path = System.IO.Path.Combine(
             new[] { SourceText.ShellSourceRoot() }.Concat(relativeSegments).ToArray());
         Assert.True(File.Exists(path), $"{path} does not exist.");
+        return LoadPath(path);
+    }
+
+    /// <summary>The canvas source directory — the population a census
+    /// that DERIVES its own scope scans, rather than naming files.</summary>
+    internal static string CanvasDirectory =>
+        System.IO.Path.Combine(SourceText.ShellSourceRoot(), "Canvas");
+
+    /// <summary>
+    /// Parse one absolute path. The population-deriving censuses
+    /// enumerate a directory, so they cannot name their files.
+    /// </summary>
+    internal static CSharpSource LoadPath(string path)
+    {
+        Assert.True(File.Exists(path), $"{path} does not exist.");
 
         SyntaxTree tree = CSharpSyntaxTree.ParseText(
             File.ReadAllText(path),

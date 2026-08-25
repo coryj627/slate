@@ -391,100 +391,202 @@ public sealed class CanvasAnnouncerCensus
     }
 
     /// <summary>
-    /// Contract C10: NOTHING observer-visible on the document changes
-    /// outside a publication transaction.
+    /// Contract C10: NOTHING observer-visible on the canvas's model
+    /// changes outside a publication transaction — and the POPULATION
+    /// this is over is derived, not listed.
     /// </summary>
     /// <remarks>
     /// <para>
     /// This is the census that ends an enumeration. Four review rounds
     /// found the same class four times — the rows, then the rows with the
-    /// state, then the state with the controls, then the selection
+    /// state, then the state with the CONTROLS, then the selection
     /// re-seat — and every fix ordered one more pair while leaving the
-    /// next unordered write reachable. The population is "everything this
-    /// object exposes", so no list of pairs can close it; what closes it
-    /// is that a notifying write is only expressible inside
-    /// <c>Publication</c>, and that is a fact about the SOURCE, which is
-    /// what this reads.
+    /// next unordered write reachable. No list of pairs can close that,
+    /// and neither can a list of FIELDS: the first version of this census
+    /// carried one, in one file, and a straggler in the selection type
+    /// and an event raise in the document were both outside what it could
+    /// see.
     /// </para>
     /// <para>
-    /// Three rules, one per channel: the property channel
-    /// (<c>OnPropertyChanged</c>), the rows channel
-    /// (<c>OutlinePublished</c>) and the staged fields those two describe.
-    /// The selection's two members need no rule here — they are
-    /// read-only with staging methods, so the compiler carries them.
+    /// So the population is derived. Every C# file under <c>Canvas/</c> is
+    /// scanned; every type that notifies — one that derives from
+    /// <c>BindableBase</c>, or declares an event — is a candidate; each
+    /// candidate is either the MODEL (whose notifications a publication
+    /// owns), or a VIEW (whose own materialized state is not the
+    /// document's), or a recorded exclusion. A new notifying type joins
+    /// one of those three by DECISION, because an unclassified one fails
+    /// this naming it.
+    /// </para>
+    /// <para>
+    /// Inside the model, the constructs are derived too: property raises
+    /// (<c>OnPropertyChanged</c>, <c>SetField</c>), event raises for
+    /// every event the type declares (which is how <c>SurfaceChanged</c>
+    /// arrives without anybody adding it here), and mutations of the
+    /// collections behind observer-visible members. All of them must sit
+    /// inside the primitive or its one commit site.
     /// </para>
     /// </remarks>
     [Fact]
-    public void TheDocumentNotifiesOnlyFromInsideAPublication()
+    public void TheCanvasModelNotifiesOnlyFromInsideAPublication()
     {
-        CSharpSource document = CSharpSource.Load("Canvas", "CanvasDocumentViewModel.cs");
-        ClassDeclarationSyntax publication = document.Root.DescendantNodes()
-            .OfType<ClassDeclarationSyntax>()
-            .Single(type => type.Identifier.ValueText == "Publication");
+        // The MODEL: what a publication owns, because it is what
+        // describes the rows an observer is looking at.
+        string[] model = ["CanvasDocumentViewModel", "CanvasSelection"];
+        // The recorded EXCLUSIONS, each with its reason — a new notifying
+        // type does not get to land here by default.
+        Dictionary<string, string> excluded = new(StringComparer.Ordinal)
+        {
+            ["CanvasModeController"] =
+                "the mode stack is not correlated with the rows: no projection "
+                + "rebuilds on it and its own lifecycle is contract C7's. It "
+                + "notifies on its own channel by decision.",
+            ["CanvasOutlineRowViewModel"] =
+                "a materialized ROW, not the document: its notifications are "
+                + "the tree's own two-way binding state (expansion, selection "
+                + "highlight), raised by the view that built it.",
+            ["CanvasPreferencesViewModel"] =
+                "APP-level, not per-document (t0 §1.2, contract C13): the "
+                + "verbosity preference is read live at every announce site "
+                + "and belongs to no canvas's rows, which is why C7/A7 made it "
+                + "a delegate rather than document state.",
+        };
+        // VIEWS materialize what a publication publishes; their own
+        // notifications are downstream of it by construction.
+        string[] viewBases = ["UserControl", "Control", "TreeView", "DataGrid"];
 
-        bool Inside(SyntaxNode node) =>
-            node.Ancestors().Any(ancestor => ancestor == publication);
-
-        string[] raisedOutside = document.Root.DescendantNodes()
-            .OfType<InvocationExpressionSyntax>()
-            .Where(invocation =>
-                invocation.Expression is IdentifierNameSyntax
+        var unclassified = new List<string>();
+        var offenders = new List<string>();
+        foreach (string file in Directory.EnumerateFiles(
+            CSharpSource.CanvasDirectory, "*.cs", SearchOption.AllDirectories))
+        {
+            CSharpSource source = CSharpSource.LoadPath(file);
+            foreach (TypeDeclarationSyntax type in source.Root.DescendantNodes()
+                .OfType<TypeDeclarationSyntax>())
+            {
+                string[] bases = type.BaseList?.Types
+                    .Select(entry => CSharpSource.Normalize(entry.Type))
+                    .ToArray() ?? [];
+                EventFieldDeclarationSyntax[] events = type.Members
+                    .OfType<EventFieldDeclarationSyntax>()
+                    .ToArray();
+                bool notifies = bases.Contains("BindableBase") || events.Length > 0;
+                if (!notifies)
                 {
-                    Identifier.ValueText: "OnPropertyChanged",
-                })
-            .Where(invocation => !Inside(invocation))
-            .Select(CSharpSource.Normalize)
-            .ToArray();
-        Assert.True(
-            raisedOutside.Length == 0,
-            "the document's property channel is raised only by a publication's "
-            + "commit — every other site is a second channel, which is the class "
-            + "four review rounds kept finding one instance of at a time. "
-            + $"Outside: {string.Join("; ", raisedOutside)}");
+                    continue;
+                }
+                string name = type.Identifier.ValueText;
+                if (viewBases.Any(bases.Contains) || excluded.ContainsKey(name))
+                {
+                    continue;
+                }
+                if (!model.Contains(name))
+                {
+                    unclassified.Add($"{name} ({Path.GetFileName(file)})");
+                    continue;
+                }
+                offenders.AddRange(RaisesOutsideThePublication(type, events));
+            }
+        }
 
-        string[] publishedOutside = document.Root.DescendantNodes()
-            .OfType<InvocationExpressionSyntax>()
-            .Where(invocation => CSharpSource.Normalize(invocation)
-                .StartsWith("OutlinePublished", StringComparison.Ordinal))
-            .Where(invocation => !Inside(invocation))
-            .Select(CSharpSource.Normalize)
-            .ToArray();
         Assert.True(
-            publishedOutside.Length == 0,
-            "the rows event is raised only by a publication's commit. "
-            + $"Outside: {string.Join("; ", publishedOutside)}");
+            unclassified.Count == 0,
+            "a notifying canvas type is neither the model, a view, nor a "
+            + "recorded exclusion — it has to join one by decision, because "
+            + "whichever branch it falls into silently is the next instance of "
+            + $"the class this census closes: {string.Join(", ", unclassified)}");
+        Assert.True(
+            offenders.Count == 0,
+            "every notification the canvas model raises belongs to the "
+            + "publication that will announce it in order — these do not: "
+            + string.Join("; ", offenders));
 
-        // The staged state: the fields behind every notifying member. An
-        // assignment outside the transaction is a value an observer can
-        // read before anything told it to look — which is the same defect
-        // arriving through the back door.
-        string[] staged =
-        [
-            "_view",
-            "_state",
-            "_stateMessage",
-            "_warnings",
-            "_focusRequest",
-            "_whereAmIText",
-            "_detailText",
-            "_detailTitle",
-            "_filterText",
-            "_filterFocusToken",
-            "_filterAnswerFailed",
-        ];
-        string[] writtenOutside = document.Root.DescendantNodes()
-            .OfType<AssignmentExpressionSyntax>()
-            .Where(assignment =>
-                assignment.Left is IdentifierNameSyntax name
-                && staged.Contains(name.Identifier.ValueText))
-            .Where(assignment => !Inside(assignment))
-            .Select(CSharpSource.Normalize)
+        // The census can only be trusted if it FOUND the model, so the
+        // premise is asserted rather than assumed.
+        Assert.Equal(2, model.Length);
+    }
+
+    /// <summary>
+    /// The notifying constructs in a model type that sit outside the
+    /// primitive — derived from the type, not from a list.
+    /// </summary>
+    private static IEnumerable<string> RaisesOutsideThePublication(
+        TypeDeclarationSyntax type,
+        IReadOnlyList<EventFieldDeclarationSyntax> events)
+    {
+        // The primitive, and the ONE commit site it drives on the
+        // selection. Everything else in these two types is a caller.
+        ClassDeclarationSyntax? publication = type.DescendantNodes()
+            .OfType<ClassDeclarationSyntax>()
+            .FirstOrDefault(nested => nested.Identifier.ValueText == "Publication");
+        MethodDeclarationSyntax? commit = type.Members
+            .OfType<MethodDeclarationSyntax>()
+            .FirstOrDefault(method => method.Identifier.ValueText == "RaiseStaged");
+
+        bool Allowed(SyntaxNode node) =>
+            node.Ancestors().Any(ancestor =>
+                ancestor == publication || ancestor == commit);
+
+        string[] eventNames = events
+            .SelectMany(declaration => declaration.Declaration.Variables)
+            .Select(variable => variable.Identifier.ValueText)
             .ToArray();
-        Assert.True(
-            writtenOutside.Length == 0,
-            "every staged field is written by the publication that will "
-            + "announce it, or an observer can be woken by one change and read "
-            + $"another. Outside: {string.Join("; ", writtenOutside)}");
+        string[] raisers = ["OnPropertyChanged", "SetField", .. eventNames];
+
+        foreach (InvocationExpressionSyntax invocation in type.DescendantNodes()
+            .OfType<InvocationExpressionSyntax>())
+        {
+            string call = CSharpSource.Normalize(invocation);
+            if (raisers.Any(raiser =>
+                    call.StartsWith(raiser + "(", StringComparison.Ordinal)
+                    || call.StartsWith(raiser + "?.Invoke", StringComparison.Ordinal))
+                && !Allowed(invocation))
+            {
+                yield return $"{type.Identifier.ValueText}: {call}";
+            }
+        }
+
+        // The collections behind observer-visible members: a mutation is
+        // a change a reader can see, whether or not anything announced it.
+        string[] collections = type.Members
+            .OfType<FieldDeclarationSyntax>()
+            .Where(field =>
+            {
+                string declared = CSharpSource.Normalize(field.Declaration.Type);
+                return declared.StartsWith("HashSet<", StringComparison.Ordinal)
+                    || declared.StartsWith(
+                        "ObservableCollection<", StringComparison.Ordinal);
+            })
+            .SelectMany(field => field.Declaration.Variables)
+            .Select(variable => variable.Identifier.ValueText)
+            .ToArray();
+        string[] mutators = ["Add", "Remove", "Clear", "Insert", "RemoveAt"];
+        foreach (InvocationExpressionSyntax invocation in type.DescendantNodes()
+            .OfType<InvocationExpressionSyntax>())
+        {
+            if (invocation.Expression is not MemberAccessExpressionSyntax
+                {
+                    Expression: IdentifierNameSyntax target,
+                } access
+                || !collections.Contains(target.Identifier.ValueText)
+                || !mutators.Contains(access.Name.Identifier.ValueText)
+                || Allowed(invocation))
+            {
+                continue;
+            }
+            // A staging method is the publication's hands: it mutates and
+            // reports, and the transaction announces. The census reads
+            // that intent off the NAME, which is why they all carry it.
+            MethodDeclarationSyntax? owner = invocation.Ancestors()
+                .OfType<MethodDeclarationSyntax>()
+                .FirstOrDefault();
+            if (owner?.Identifier.ValueText.StartsWith(
+                    "Stage", StringComparison.Ordinal) == true)
+            {
+                continue;
+            }
+            yield return
+                $"{type.Identifier.ValueText}: {CSharpSource.Normalize(invocation)}";
+        }
     }
 
     /// <summary>
@@ -492,12 +594,29 @@ public sealed class CanvasAnnouncerCensus
     /// the order is the contract.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The same shape as the census above, for the same reason: four
     /// rounds each found the next fallible callback reachable while a
     /// document was mutating on its way out. Silencing FIRST — before any
     /// state is cleared — makes "teardown runs no callback" structural,
     /// and this reads the order out of the source so a later edit cannot
     /// quietly put a clear back in front of it.
+    /// </para>
+    /// <para>
+    /// WHAT IT PROVES, stated so the claim is not read wider than the
+    /// check. Four things: the drain runs before the retirement; the
+    /// drain is GUARDED, so a faulting restoration cannot skip what
+    /// follows; the state clears sit after the retirement inside the same
+    /// statement; and the release runs from a `finally`, with the
+    /// announcer silenced BEFORE the handle closes. What it does not
+    /// prove is that the retirement covers every channel — that is the
+    /// derived population's job, and
+    /// <c>TheCanvasModelNotifiesOnlyFromInsideAPublication</c> plus
+    /// <c>AClosedCanvasRunsNoObserverCallbackAndStillSpeaksItsLastSentence</c>
+    /// carry it between them: the first says every channel commits
+    /// through the publication, the second says a retired publication
+    /// commits nothing.
+    /// </para>
     /// </remarks>
     [Fact]
     public void TeardownSpeaksThenSilencesThenReleases()
@@ -516,6 +635,14 @@ public sealed class CanvasAnnouncerCensus
         int speaks = Position(
             statement => CSharpSource.Invokes(statement, "Modes.Shutdown"),
             "drain the mode stack, whose restoration is the last thing owed");
+        // …and the drain is GUARDED where it stands. A restoration effect
+        // is host code; unguarded, a fault there skips every phase below
+        // it, which is the A5 defect reached from the mode side.
+        Assert.True(
+            statements[speaks].DescendantNodes().OfType<CatchClauseSyntax>().Any(),
+            "the SPEAK phase must catch its own failure, or a faulting "
+            + "restoration takes the silencing and the release with it "
+            + "(contract C7).");
         int silences = Position(
             statement => CSharpSource.Invokes(statement, "RetireObservers"),
             "retire its observers");
@@ -553,6 +680,24 @@ public sealed class CanvasAnnouncerCensus
             CSharpSource.Invokes(release, "CloseHandleGuarded"),
             "the handle closes from the same `finally`: a handle nobody closes "
             + "is a leak no test would ever see.");
+
+        // …in that order. The announcer is what a late callback would
+        // speak through, and the handle close is the one step that can
+        // hand off to another thread — silencing after it would leave a
+        // window with neither.
+        List<SyntaxNode> released = release.DescendantNodes().ToList();
+        int silenced = released.FindIndex(node =>
+            node is InvocationExpressionSyntax invocation
+            && CSharpSource.Normalize(invocation).StartsWith(
+                "Announcer.Shutdown", StringComparison.Ordinal));
+        int closed = released.FindIndex(node =>
+            node is InvocationExpressionSyntax invocation
+            && CSharpSource.Normalize(invocation).StartsWith(
+                "CloseHandleGuarded", StringComparison.Ordinal));
+        Assert.True(
+            silenced >= 0 && closed > silenced,
+            "the announcer is silenced BEFORE the handle closes, so nothing "
+            + "the close path does can still reach a reader.");
     }
 
     /// <summary>

@@ -56,7 +56,7 @@ internal sealed partial class WorkspaceViewModel
                 verbosity: () => CanvasPreferences.Verbosity);
             if (seedSelection is not null)
             {
-                document.Selection.SeedFrom(seedSelection);
+                document.SeedSelectionFrom(seedSelection);
             }
             _canvasDocuments[key] = document;
             InstallCanvasDocumentSeams(document);

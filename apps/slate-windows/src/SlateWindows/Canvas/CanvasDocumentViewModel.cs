@@ -524,10 +524,34 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         {
             return;
         }
-        Publish(publication => publication.ActiveSurface = surface);
+        Publish(publication =>
+        {
+            publication.ActiveSurface = surface;
+            publication.SurfaceChanged();
+        });
         Announcer.Announce(new CanvasA11yEvent.CanvasSurfaceShown(surface));
-        SurfaceChanged?.Invoke(this, surface);
     }
+
+    /// <summary>Clear the marked set (R-B) — through the transaction,
+    /// because every materialized row reads it.</summary>
+    internal void ClearMarks() => Publish(publication => publication.ClearMarks());
+
+    /// <summary>Toggle a node's mark (PR G's entry point), reporting the
+    /// new state.</summary>
+    internal bool ToggleMark(string nodeId)
+    {
+        bool marked = false;
+        Publish(publication => marked = publication.ToggleMark(nodeId));
+        return marked;
+    }
+
+    /// <summary>Carry a retired document's selection and marks across a
+    /// retarget (CD-32). Through the transaction like everything else:
+    /// "nobody is bound yet" was true of this seam today, and an
+    /// unpinned assumption about who is listening is exactly what the
+    /// primitive exists to stop relying on.</summary>
+    internal void SeedSelectionFrom(CanvasSelection source) =>
+        Publish(publication => publication.SeedFrom(source));
 
     /// <summary>
     /// Seat the persisted surface on restore (contract A15) — SILENT,
@@ -1091,6 +1115,8 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         private bool _rows;
         private bool _selection;
         private bool _surface;
+        private bool _marks;
+        private bool _surfaceEvent;
 
         /// <summary>
         /// Publish rows. Assigning this ALWAYS republishes to the
@@ -1167,6 +1193,40 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         {
             set => _surface |= document.Selection.StageActiveSurface(value);
         }
+
+        /// <summary>The marked set (R-B). Observer-visible through
+        /// <see cref="CanvasSelection.Marked"/>, and read by every row a
+        /// rebuild materializes, so it is staged like the rest.</summary>
+        internal void ClearMarks() => _marks |= document.Selection.StageClearMarks();
+
+        internal bool ToggleMark(string nodeId)
+        {
+            (bool marked, bool changed) = document.Selection.StageToggleMark(nodeId);
+            _marks |= changed;
+            return marked;
+        }
+
+        internal void SeedFrom(CanvasSelection source)
+        {
+            (bool marks, bool selected, bool surface) =
+                document.Selection.StageSeedFrom(source);
+            _marks |= marks;
+            _selection |= selected;
+            _surface |= surface;
+        }
+
+        /// <summary>
+        /// The A15 surface-change event, queued rather than raised where
+        /// the switch happens.
+        /// </summary>
+        /// <remarks>
+        /// It is an observer channel like any other — the workspace
+        /// persists the token and re-seats tabs on it — so it commits
+        /// with the transaction and, like the rest, cannot fire at all
+        /// after retirement. Raised LAST, when the surface it names is
+        /// the one every projection is already showing.
+        /// </remarks>
+        internal void SurfaceChanged() => _surfaceEvent = true;
 
         internal CanvasFocusRequest? FocusRequest
         {
@@ -1272,9 +1332,17 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             {
                 document.Selection.RaiseStaged(nameof(CanvasSelection.ActiveSurface));
             }
+            if (_marks)
+            {
+                document.Selection.RaiseStaged(nameof(CanvasSelection.Marked));
+            }
             foreach (string property in _properties)
             {
                 document.OnPropertyChanged(property);
+            }
+            if (_surfaceEvent)
+            {
+                document.SurfaceChanged?.Invoke(document, document.Selection.ActiveSurface);
             }
         }
 
@@ -2103,7 +2171,26 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     {
         _observersRetired = true;
         OutlinePublished = null;
+        SurfaceChanged = null;
     }
+
+    /// <summary>
+    /// Whether this document still holds any event handler — the
+    /// DETACHMENT half of <see cref="RetireObservers"/>, which the mute
+    /// does not cover.
+    /// </summary>
+    /// <remarks>
+    /// The two halves do different jobs and are pinned separately. The
+    /// mute is what makes silence structural: a retired publication
+    /// commits nothing, so no channel can speak. The detachment is about
+    /// LIFETIME — a retired document holding a view's handler keeps a
+    /// dead surface reachable — and its only observable is the handler
+    /// list itself, so the fact reads it here rather than through a
+    /// garbage-collection assertion that would pass for the wrong
+    /// reasons on a bad day.
+    /// </remarks>
+    internal bool HoldsObserverHandlersForTests =>
+        OutlinePublished is not null || SurfaceChanged is not null;
 
     private void CloseHandleGuarded()
     {

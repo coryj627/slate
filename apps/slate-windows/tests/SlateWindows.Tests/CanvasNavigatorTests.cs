@@ -1155,6 +1155,75 @@ public sealed class CanvasNavigatorTests : IDisposable
         Assert.Empty(document.NeighborsOf("question"));
     }
 
+    /// <summary>
+    /// Codex round 5: a RETAINED document, driven after retirement,
+    /// reaches nobody — including through the members the first pass of
+    /// the design left outside it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The design was right and its application was not finished: the
+    /// surface-change EVENT was raised where the switch happened rather
+    /// than by the transaction, and the marked set mutated with its own
+    /// direct notification. Both are channels, so "a retired document
+    /// notifies nothing" was true of most members and not of all of them
+    /// — and a shell holding a reference to a closed tab's document is
+    /// not hypothetical, it is what a persisted workspace does.
+    /// </para>
+    /// <para>
+    /// So this drives the retained object through every mutator that
+    /// still exists on it — the surface switch, the marked set, the
+    /// selection, the filter, Where-am-I — and requires silence on every
+    /// channel: the property channel, the rows event, the selection's,
+    /// and <c>SurfaceChanged</c>, which is the one codex named.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void ARetiredDocumentDrivenAgainReachesNobodyOnAnyChannel()
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        var woken = new List<string>();
+        document.PropertyChanged += (_, e) => woken.Add($"document.{e.PropertyName}");
+        document.OutlinePublished += (_, _) => woken.Add("document.OutlinePublished");
+        document.SurfaceChanged += (_, _) => woken.Add("document.SurfaceChanged");
+        document.Selection.PropertyChanged +=
+            (_, e) => woken.Add($"selection.{e.PropertyName}");
+        Assert.True(
+            document.HoldsObserverHandlersForTests,
+            "the premise: this document really is being observed.");
+
+        document.Shutdown();
+        Drain(document);
+        woken.Clear();
+
+        // Retirement DETACHES as well as mutes: the mute is what makes
+        // the silence below structural, and the detachment is what stops
+        // a closed tab's document holding its surface alive.
+        Assert.False(document.HoldsObserverHandlersForTests);
+
+        // Every mutator the shell can still reach on a retained document.
+        document.ShowSurface(CanvasSurfaceKind.Table);
+        document.RestoreSurface(CanvasSurfaceKind.Visual);
+        _ = document.ToggleMark("question");
+        document.ClearMarks();
+        document.SelectNode("evidence");
+        document.SeatSelectionSilently("note");
+        document.FilterText = "zeta";
+        document.ShowWhereAmI("anything");
+        document.CloseDetail();
+        document.RequestFilterFocus();
+        document.RequestFocusLanding(this);
+        document.Load();
+
+        Assert.True(
+            woken.Count == 0,
+            $"a retired document woke {woken.Count} observer(s): "
+            + string.Join(", ", woken));
+        // …and it is still SILENT as well as still, which is the other
+        // half of retirement (contract A5).
+        Assert.Empty(Lines(document));
+    }
+
     /// <summary>The outline projection's MATERIALIZED node rows, in
     /// order — what a reader can reach, not what the model holds.</summary>
     private static string[] OutlineControlRows(CanvasSurfaceView surface)
