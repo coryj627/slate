@@ -7545,14 +7545,30 @@ recoverable this time only because the previous wave's process failure
 had already been turned into a rule. A process rule pays for itself the
 first time the thing it guards against recurs — which was two waves.
 
-**PROCESS RULE 6, and the incident behind it.** `git add -A` swept a
+**PROCESS RULE 6, REWRITTEN AFTER IT FAILED ITS FIRST TEST.** `git add -A` swept a
 scratch mutation script into `02a4e93`; it was removed in `803371a`. This
 is the SECOND time on this branch — the coordinator removed
 `.tmp-boundary.py` in `8b240f3` — which is what makes it a pattern rather
-than a slip. **The scratch sweep runs BEFORE `git add`, and the staged
-list is read back before committing.** Recorded here beside the other
-five because a commit message is not a durable place for a rule, and the
-gate-integrity list is where this branch keeps them.
+than a slip. The rule as first written — "the scratch sweep runs BEFORE
+`git add`, and the staged list is read back before committing" — was
+followed to the letter on the very next wave and a third scratch file was
+committed anyway. The sweep RAN. It PRINTED the file. The staged list was
+read back and showed it added. All three steps happened, chained in one
+command with the `git add` and the `git commit`, and the output was read
+after the commit had already been made.
+
+**So the rule is not a checklist item, it is a GATE: the scratch check
+must ABORT the command rather than report into it.** A check whose
+failure mode is "prints a warning next to the action it should have
+prevented" is a check that has already failed — the same shape as a
+guard whose mutation passes, one altitude up, and the third time this
+branch has met it (the gate-integrity incident printed a red Debug run
+into a report that claimed green; the false-green menu arm printed a pass
+next to a mutation that should have gone red).
+
+Recorded here beside the other five because a commit message is not a
+durable place for a rule, and the gate-integrity list is where this
+branch keeps them.
 
 ### PR C-lite — codex adversarial round 5 — NOT SAFE, 1 blocker + 1 minor
 
