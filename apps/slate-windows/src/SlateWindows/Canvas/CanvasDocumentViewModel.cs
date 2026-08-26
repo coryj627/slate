@@ -142,7 +142,6 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     private Task? _asyncClose;
     private string _filterText = string.Empty;
     private string? _whereAmIText;
-    private int _filterFocusToken;
     private CanvasFilterFocusRequest? _filterFocusRequest;
     private int _filterFocusGeneration;
     private (string Needle, IReadOnlySet<string> Ids)? _filterMatchCache;
@@ -396,9 +395,23 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// newer request supersedes an older one by generation.
     /// </para>
     /// </remarks>
+    /// <summary>
+    /// The pending focus landing, or null — and ALWAYS null once the
+    /// document is retired (contract A14/C7).
+    /// </summary>
+    /// <remarks>
+    /// The terminality is on the READ, not on a list of places that
+    /// clear it. That is the mode stack's lesson one object over: a
+    /// retirement that enumerates what to clear is a list somebody has
+    /// to keep complete, and the surfaces do not consult a document's
+    /// liveness before delivering — they consult this. `Shutdown` also
+    /// drops the field, which is the other half and a different job: the
+    /// request holds the closing tab's `DataContext`, and a retired
+    /// document should not keep that graph alive.
+    /// </remarks>
     public CanvasFocusRequest? FocusRequest
     {
-        get => _focusRequest;
+        get => IsShutDown ? null : _focusRequest;
         private set => SetField(ref _focusRequest, value);
     }
 
@@ -862,19 +875,6 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         _outline.Where(row => ids.Contains(row.NodeId)).ToArray();
 
     /// <summary>
-    /// A request to put keyboard focus in the filter field (Ctrl+F). A
-    /// TOKEN rather than an event: only the surface the user is looking
-    /// at should take focus, and a token lets each surface decide for
-    /// itself when it observes the change (the mac
-    /// <c>canvasFilterFocusToken</c> shape, Codoki #626).
-    /// </summary>
-    public int FilterFocusToken
-    {
-        get => _filterFocusToken;
-        private set => SetField(ref _filterFocusToken, value);
-    }
-
-    /// <summary>
     /// The pending request to put the reader in the filter field, or
     /// null. ADDRESSED and DURABLE, the A14 shape (contract C10).
     /// </summary>
@@ -897,9 +897,24 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// </remarks>
     public CanvasFilterFocusRequest? FilterFocusRequest
     {
-        get => _filterFocusRequest;
+        get => IsShutDown ? null : _filterFocusRequest;
         private set => SetField(ref _filterFocusRequest, value);
     }
+
+    /// <summary>
+    /// Whether the document is still HOLDING either durable request's
+    /// object — retirement's reference half.
+    /// </summary>
+    /// <remarks>
+    /// It needs its own observable because the boundary makes both
+    /// properties read null either way: the two do different jobs, and a
+    /// mechanism whose removal changes nothing observable is a claim
+    /// without a power. This one's job is that a retired document stops
+    /// holding a closed tab's `DataContext`, and through it that tab's
+    /// object graph.
+    /// </remarks>
+    internal bool HoldsPendingRequestsForTests =>
+        _focusRequest is not null || _filterFocusRequest is not null;
 
     /// <param name="owner">
     /// The view the request is FOR — the surface's tab. Null when no
@@ -908,12 +923,9 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// first eligible surface takes it, because a verb the user invoked
     /// must not evaporate.
     /// </param>
-    internal void RequestFilterFocus(object? owner)
-    {
-        FilterFocusToken++;
+    internal void RequestFilterFocus(object? owner) =>
         FilterFocusRequest = new CanvasFilterFocusRequest(
             owner, Interlocked.Increment(ref _filterFocusGeneration));
-    }
 
     /// <summary>
     /// A surface put the reader in its filter field and is saying so.
@@ -1507,7 +1519,10 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         // queued on a dying document would otherwise fire ~200 ms later
         // and speak about a surface that no longer exists.
         Announcer.Shutdown();
+        // BOTH durable requests, because they are twins and a retirement
+        // that dropped one of them was the shape this review found.
         FocusRequest = null;
+        FilterFocusRequest = null;
         if (IsSynchronousForTests)
         {
             CloseHandleGuarded();

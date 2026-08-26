@@ -582,9 +582,10 @@ internal sealed class CanvasOutlineView : UserControl
 
     /// <summary>Core's flat, depth-annotated reading order becomes a
     /// tree — the host derives no containment (R-D; the depth column is
-    /// 0b-8's tree, already). TWO passes under a filter: containment is
-    /// read from the UNFILTERED rows, then the survivors are attached to
-    /// it (CD-45).</summary>
+    /// 0b-8's tree, already). TWO passes, always: containment is read
+    /// from the UNFILTERED rows, then the displayed rows are attached to
+    /// it (CD-45). With no needle the second pass walks the same rows,
+    /// which is the same shape rather than a special case.</summary>
     private void Rebuild()
     {
         _roots.Clear();

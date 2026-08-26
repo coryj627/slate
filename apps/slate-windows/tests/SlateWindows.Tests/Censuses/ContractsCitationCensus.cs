@@ -236,6 +236,7 @@ public sealed class ContractsCitationCensus
             "IInvokeProvider", "AutomationProperties", "RaiseNotificationEvent",
             "SelectedItemChanged", "VirtualizationMode", "DispatcherTimer",
             "TraversalRequest", "IsKeyboardFocusWithin", "UnreachableException",
+            "DataContextChanged", "IsVisibleChanged",
             "IsNullOrWhiteSpace", "OutOfMemoryException", "StackOverflowException",
             "AccessViolationException",
             // XAML attributes, which live in markup rather than in C#.

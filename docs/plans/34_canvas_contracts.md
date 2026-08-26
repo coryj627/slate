@@ -2833,14 +2833,42 @@ measured budget, and the honest number rather than the flattering one.
 Containment that a reader can trust is worth a second pass; a rebuild
 that scales worse than linearly would not be.
 
-**The filter-focus token is a DURABLE request, like A14's.** Ctrl+F and
-the palette row reach the same verb, and only one of them worked: the
-palette owns the keys while it closes, so every surface read as
-ineligible — and the token was acknowledged before eligibility was even
-asked, so nothing retried. It is acknowledged only when the field
-actually took focus now, and every condition that can turn a pending
-request deliverable re-asks both it and the A14 landing, from one place.
-A verb with two routes must not work on one of them.
+**The filter-focus request is A14's TWIN — durable, ADDRESSED, and
+completed on the document.** Ctrl+F and the palette row reach the same
+verb, and only one of them worked: the palette owns the keys while it
+closes, so every surface read as ineligible — and the token was
+acknowledged before eligibility was even asked, so nothing retried. A
+verb with two routes must not work on one of them.
+
+Durability alone was not enough, and the shape of what was missing is
+worth keeping. A request that survives an ineligible surface is a
+request that ineligible surface KEEPS: two panes share one document, so
+the pane that could not satisfy it pulled the reader into ITS filter
+field the next time it saw the keys — the same defect one arrangement
+over. So `CanvasFilterFocusRequest` carries an OWNER and a GENERATION
+like `CanvasFocusRequest`: a surface delivers only what is addressed to
+it, delivery calls `CompleteFilterFocus` so peers stop holding it, and a
+newer request supersedes an older one rather than being consumed by its
+late delivery. The one unaddressed case is a document no surface has
+ever held the keys on, where the first eligible surface takes it rather
+than letting the verb evaporate.
+
+Retirement is the twin's other half, and it is answered at the BOUNDARY
+rather than by a list of clear sites: both requests READ as absent once
+the document is retired, because a surface consults the request and
+never the document's liveness, and the workspace can raise a landing
+after a close. `Shutdown` also drops both fields, which is a different
+job — a retired document must not hold a closed tab's `DataContext` —
+and `HoldsPendingRequestsForTests` is how that half is asserted, since
+the boundary makes the properties read null either way.
+
+The re-ask list is the SURFACE's, deliberately narrower than A14's:
+`Loaded`, `IsVisibleChanged`, `DataContextChanged`, keyboard focus
+arriving, the model changing and the request itself changing. Container
+realization is not on it, because `Render` never hides the filter field
+— only the summary and Clear follow the needle, and the projections
+follow `ready` — so no publish, state change or realization can turn an
+unsatisfiable request into a satisfiable one.
 
 **C11 — Where-am-I is one render, spoken and shown.** The navigator
 builds one `CanvasWhereAmI` event from core's `canvas_where_am_i` plus
@@ -6598,6 +6626,64 @@ described the code, and one defect the first remedy introduced.
   documentation at all, and `FocusFilterField` with two `<summary>`
   elements — which Roslyn does not diagnose, so a 0-warning build said
   nothing. Both repaired.
+- **The "same list" claim, and the asymmetry it produced.** The old
+  block said the filter request re-asks on "the same list
+  `TryDeliverFocus` is on", which was never true. Closed by wiring the
+  outline's container realization back to the A14 landing alone — it can
+  turn a LANDING deliverable and never a filter-field request — so both
+  projections ask the same question again.
+- **Minors:** `Rebuild`'s "one stack pass" summary (two passes now, and
+  always); C10's cost paragraph, which records the second pass rather
+  than leaving the flattering number; `ClearFilter`'s `<summary>`, which
+  presented an unconditional answer three lines above the comment
+  saying otherwise.
+- **The process finding, named because round 1's entry names its own:**
+  this record exists because the C-lite red team's blocker was that the
+  per-round history lived only in the git-ignored ledger. A wave that
+  skipped its own entry would be that finding recurring.
+
+### PR C-lite — scoped re-review, round 2 — REVISE
+
+"The engineering is right; the revision is for records again." The
+ownership defect was closed in the twin's own idiom and the fact failed
+both mutations — and the record describing the mechanism was falsified
+BY THE COMMIT THAT FIXED IT.
+
+- **C10's filter-focus paragraph still called it a token**, still said
+  the re-ask happens "from one place", and still said the outline's
+  realization asks both requests. All three were true one commit
+  earlier; the fix made them false, in the same section the same commit
+  was editing two paragraphs above. Swept to the addressed, completed,
+  boundary-terminated shape it actually has.
+- **The replacement doc block got its own list wrong**, listing
+  container realization as a filter re-ask trigger two sentences before
+  arguing why realization cannot matter. The list is exact now.
+- **`Shutdown` cleared the A14 landing and not its twin** — the one line
+  of A14's shape the commit claiming "A14's full shape" left behind. Now
+  answered at the BOUNDARY (both requests read absent once retired, so
+  no consumer needs to ask whether the document is alive and no list of
+  clear sites has to stay complete) plus the field clear for reference
+  lifetime. Each half has its own observable and its own mutation,
+  because the first pair passed both — two mechanisms covering one
+  assertion is a claim without a power.
+- **The repo's only duplicate `<remarks>`**, introduced by the hunk that
+  fixed a duplicate `<summary>`. Merged.
+- **`FilterFocusToken` retired.** No production code read it after the
+  addressed request landed, its summary described the superseded design,
+  and a table fact watched it — a counter no consumer reads, which would
+  stay green for a request nothing could deliver. The fact watches
+  `FilterFocusRequest` now.
+- The two-pane fact gained its address premise (`Owner` is the tab it
+  was raised for) and a behavioural catch for the completion half.
+
+**THE PATTERN, recorded for the redesign PR to inherit.** Four times in
+this wave — CD-45, CD-43, C4, and now C10 — the record that went stale
+was the one describing the mechanism being changed, and three of those
+were found by review rather than by the change. Sweeping the rows a fix
+CITES is not the rule; the rule is sweeping the row that DESCRIBES what
+the fix changed, which is the one most likely to be read as still true.
+A fix that edits a mechanism should open its contract's own paragraph
+before it opens anything else.
 
 ### PR C — the strategic lesson
 

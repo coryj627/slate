@@ -910,15 +910,18 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
     /// lands, so a peer neither steals it nor holds it.
     /// </para>
     /// <para>
-    /// The re-ask list is this view's own: `Loaded`, `IsVisibleChanged`,
-    /// `DataContextChanged`, the outline's container realization, and —
-    /// the one that matters here — keyboard focus ARRIVING, which is the
-    /// moment a closing palette hands the keys back. It is not the whole
-    /// of A14's list, and it does not need to be: `Render` never hides
-    /// the filter field (only the summary and Clear follow the needle,
-    /// and the projections follow `ready`), so no publish, state change
-    /// or table realization can turn an unsatisfiable request into a
-    /// satisfiable one.
+    /// Asked from three places, and the list is exact because a list
+    /// that is nearly right is how the paragraph this one replaced went
+    /// wrong. Through `TryDeliverPending`: `Loaded`, `IsVisibleChanged`,
+    /// `DataContextChanged`, and — the one that matters here — keyboard
+    /// focus ARRIVING, which is the moment a closing palette hands the
+    /// keys back. Directly: the model changing, and the request property
+    /// itself changing. It is deliberately NOT the whole of A14's list:
+    /// `Render` never hides the filter field (only the summary and Clear
+    /// follow the needle, and the projections follow `ready`), so no
+    /// publish, state change or container realization can turn an
+    /// unsatisfiable request into a satisfiable one — which is why the
+    /// outline's realization asks the A14 landing alone.
     /// </para>
     /// </remarks>
     private void TryDeliverFilterFocus()

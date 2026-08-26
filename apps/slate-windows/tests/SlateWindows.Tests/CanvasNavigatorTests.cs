@@ -242,6 +242,7 @@ public sealed class CanvasNavigatorTests : IDisposable
     /// EXACT sentence its state owes.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The expectation is derived from `ReadRefusal`, the mapping the
     /// verbs route through, so this catches a verb that walks PAST
     /// admission and not a mapping that is wrong — both sides would move
@@ -250,12 +251,13 @@ public sealed class CanvasNavigatorTests : IDisposable
     /// -the-mechanism rule is satisfied across the pair. The weaker "did
     /// something speak" it replaced is what let `clearFilter` announce a
     /// count over an empty outline for eight rounds.
-    /// </remarks>
-    /// <remarks>
+    /// </para>
+    /// <para>
     /// The verb list is the navigator's public read surface. A verb added
     /// without a state answer fails here by name rather than going
     /// quietly silent, which is the failure this whole gate exists to
     /// stop.
+    /// </para>
     /// </remarks>
     [Fact]
     public void EveryReadVerbAnswersInEveryLoadState()
@@ -386,6 +388,16 @@ public sealed class CanvasNavigatorTests : IDisposable
         // Completed on the DOCUMENT, or the peer pane is still holding it.
         Assert.Null(document.FilterFocusRequest);
 
+        // …and paneA does not drag its OWN reader back either: a request
+        // that is not completed is inherited by every pane, its own
+        // included, which is the same defect without a second window to
+        // notice it in.
+        paneA.OutlineForTests.FocusTree();
+        host.UpdateLayout();
+        Assert.False(
+            paneA.FilterFieldForTests.IsKeyboardFocused,
+            "a satisfied request must not re-fire on the pane that satisfied it.");
+
         // Now the reader goes to pane B of their own accord. Nothing may
         // move them again.
         paneB.OutlineForTests.FocusTree();
@@ -408,7 +420,13 @@ public sealed class CanvasNavigatorTests : IDisposable
         paneA.Visibility = Visibility.Collapsed;
         host.UpdateLayout();
         document.Navigator.FilterCards();
-        Assert.NotNull(document.FilterFocusRequest);
+        // THE PREMISE of everything below: the request really is
+        // addressed to the hidden pane. Without this the assertions
+        // below hold for the wrong reason on any WPF build that moves
+        // focus somewhere unexpected when the focused element collapses.
+        CanvasFilterFocusRequest pending =
+            Assert.IsType<CanvasFilterFocusRequest>(document.FilterFocusRequest);
+        Assert.Same(tabA, pending.Owner);
 
         paneB.OutlineForTests.FocusTree();
         host.UpdateLayout();
@@ -427,6 +445,75 @@ public sealed class CanvasNavigatorTests : IDisposable
             paneA.FilterFieldForTests.IsKeyboardFocused,
             "the addressed pane must still be able to satisfy it when it can.");
         Assert.Null(document.FilterFocusRequest);
+    });
+
+    /// <summary>
+    /// A retired document has no PENDING REQUESTS — both of them,
+    /// answered at the boundary rather than by a list of clear sites.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The filter-focus request was built as A14's twin and one line of
+    /// A14's shape was left behind: `Shutdown` cleared the landing and
+    /// not the filter request. A surface reads the REQUEST, never the
+    /// document's liveness, so a bound pane that later regained the keys
+    /// would have delivered a focus move into the filter field of a
+    /// document that no longer exists — and the retired document would
+    /// have held the closed tab's `DataContext` until then.
+    /// </para>
+    /// <para>
+    /// Fixed at the boundary, which is the mode stack's lesson one
+    /// object over: both requests READ as absent once the document is
+    /// retired, so no consumer needs to ask whether it is alive and no
+    /// list of clear sites has to be kept complete. `Shutdown` also
+    /// drops the fields, which is the reference half.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void ARetiredDocumentHasNoPendingRequests() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        var tab = new object();
+        var surface = new CanvasSurfaceView { Model = document, DataContext = tab };
+        using var host = Host(surface);
+        surface.OutlineForTests.FocusTree();
+        host.UpdateLayout();
+
+        // Both requests raised the way production raises them, and both
+        // while the pane cannot take them — an eligible surface would
+        // satisfy each one on the spot, which is the wrong premise for a
+        // fact about what SURVIVES retirement.
+        surface.Visibility = Visibility.Collapsed;
+        host.UpdateLayout();
+        document.RequestFocusLanding(tab);
+        document.Navigator.FilterCards();
+        Assert.NotNull(document.FocusRequest);
+        Assert.NotNull(document.FilterFocusRequest);
+
+        document.Shutdown();
+
+        Assert.Null(document.FocusRequest);
+        Assert.Null(document.FilterFocusRequest);
+        // The RETENTION half, which the boundary hides: the fields are
+        // empty, so a retired document is not holding the closed tab's
+        // object graph through a request nobody will ever deliver.
+        Assert.False(document.HoldsPendingRequestsForTests);
+
+        // The BOUNDARY half, which the clear cannot cover because it has
+        // already run: the workspace raises a landing on tab activation
+        // with no admission gate, so a request CAN still arrive after
+        // retirement — and a bound surface reads the request, never the
+        // document's liveness.
+        document.RequestFocusLanding(tab);
+        Assert.Null(document.FocusRequest);
+
+        // …and the boundary holds for a surface that comes back: the
+        // reader is not dragged anywhere by a request on a dead document.
+        surface.Visibility = Visibility.Visible;
+        host.UpdateLayout();
+        surface.OutlineForTests.FocusTree();
+        host.UpdateLayout();
+        Assert.False(surface.FilterFieldForTests.IsKeyboardFocused);
     });
 
     /// <summary>

@@ -739,11 +739,12 @@ public sealed class CanvasTableTests : IDisposable
             "the canvas subscribes the substrate's filter hook (contract C10), so "
             + "the grid's Ctrl+F must stop continuing-routing past a grid that CAN "
             + "filter.");
-        int before = document.FilterFocusToken;
+        Assert.Null(document.FilterFocusRequest);
         AccessibleDataGrid.FilterCommand.Execute(null, grid);
-        Assert.True(
-            document.FilterFocusToken > before,
-            "the grid's filter chord must reach the ONE canvas filter field.");
+        // The REQUEST, which is what every surface delivers from — a
+        // counter nobody reads would stay green for a request nothing
+        // could ever satisfy.
+        Assert.NotNull(document.FilterFocusRequest);
         document.Shutdown();
     });
 
