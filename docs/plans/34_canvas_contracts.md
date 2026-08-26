@@ -8282,6 +8282,76 @@ satisfies the production predicate, and the way to find out which that is
 is to probe both and compare, not to assume the one that works here is
 the one that works.
 
+### ENVIRONMENT FACT — the CI desktop refuses keyboard focus into a menu (PR E/F must read this)
+
+**Durable, and it is not about this branch's code.** On the GitHub
+windows runner, `MenuItem.Focus()` returns false. Every canvas menu arm
+failed there while passing locally, and the premise message added for the
+purpose named the leg exactly: *the menu item refused keyboard focus*.
+The same runner focuses a `TextBox` in the same window without complaint
+— every non-menu premise in the same facts passes — so this is specific
+to menu elements, not to focus.
+
+Two things were ruled out with evidence rather than argued away. It is
+NOT window activation: two of the six arms use an IN-WINDOW menu and
+failed identically. And it is not only the focus SCOPE: switching
+`FocusManager.IsFocusScope` off on the `Menu` (a local probe shows the
+two shapes reach keyboard focus by different mechanisms) did not save it.
+
+**What the facts do now.** A menu row HOSTS a focusable `TextBox` and the
+keys go there. The chain `TextBox → MenuItem → Menu` satisfies the
+production predicate exactly — `ClassifyFocusLoss` walks ancestors for a
+`MenuBase`, a TYPE test — using the one focus mechanism that desktop is
+proven to support. No synthetic call, and **no production seam invented
+for a test**: the classifier reads `Keyboard.FocusedElement`, so the only
+way to reach it is to put the keys somewhere real, and a hook would have
+been a production change made for CI's convenience.
+
+**And if that is refused too, the arms are still not green for nothing.**
+`TryPutTheKeysInTheMenu` answers whether the desktop allowed it. On
+refusal it writes `DESKTOP REFUSED THE MENU` to the test output naming
+the arrangement, and the arm asserts the REFUSAL INVARIANT — that
+nothing moved, so the arrangement did not half-happen — and stops. That
+is deliberately not a skip attribute: **a skip says "we did not look";
+this says "we looked, the desktop said no, and here is what was true
+anyway".** Proven both ways by mutation: with focus forced to refuse, the
+thirteen arms pass and log six refusals; with the invariant flipped under
+the same conditions, exactly those six go red.
+
+**What is NOT proven on that desktop**, stated so nobody reads the green
+as more than it is: that a reader can reach a menu there at all. Nothing
+can prove it — the desktop refuses. What the arms prove is the thing
+under test, which is that focus inside a `MenuBase` classifies as
+`MenuOpen`.
+
+**The open decision, which is not mine to take.** If the runner refuses
+this arrangement as well, the menu classification becomes OS-unverifiable
+on CI, and the choice is between accepting that with the refusal
+invariant as the standing record, or adding a production-visible hook for
+the predicate. I decline the second unilaterally: this branch has one
+such static (`ShellOverlayIsOpen`) and it exists because the SHELL sets
+it, not because a test needed it. Adding one for CI would be the
+excused-configuration trap wearing a different coat.
+
+**For PR E/F.** Row menus and context menus are E/F's work, and their
+facts will meet this the moment they exist. The pattern that survives:
+drive the classification through the plainest element the desktop will
+focus, keep the real `MenuBase` in the ancestor chain, and assert the
+premise with a message that names the leg. `ContextMenu` popups are a
+separate HWND and are likely WORSE on that desktop than an in-window
+`Menu`; budget a CI round trip for the first one, and write the premise
+message before the first push rather than after.
+
+**A correction to my own reasoning, recorded because it cost the round
+trip's framing.** After the first CI failure I wrote that only leg (b)
+would justify a labelled seam. That was too narrow: leg (a) says *that
+element* refused focus, and says nothing about whether ANY element inside
+a `MenuBase` would. Collapsing "the MenuItem refused" into "the OS route
+is impossible" would have conceded the real route while a cheaper one
+was untried. The distinction is the whole experiment, and it is the same
+error this PR kept making one altitude up — a claim wider than its
+evidence.
+
 ### PR C — the strategic lesson
 
 One asynchronous requirement, inside a PR whose other twelve contracts

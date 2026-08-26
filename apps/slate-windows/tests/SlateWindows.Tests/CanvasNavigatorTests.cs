@@ -35,8 +35,11 @@ public sealed class CanvasNavigatorTests : IDisposable
     private readonly List<RenderedAnnouncement> _announced = [];
     private CanvasVerbosity _verbosity = CanvasVerbosity.Standard;
 
-    public CanvasNavigatorTests()
+    private readonly Xunit.Abstractions.ITestOutputHelper _output;
+
+    public CanvasNavigatorTests(Xunit.Abstractions.ITestOutputHelper output)
     {
+        _output = output;
         _fixture = FixtureVault.Create(3, "canvas-navigator");
         WriteCanvasFixtures();
         _session = VaultSession.OpenFilesystem(_fixture.Root);
@@ -1000,7 +1003,14 @@ public sealed class CanvasNavigatorTests : IDisposable
                         "premise: elsewhere refused keyboard focus, so this arrangement never established.");
                     break;
                 case RestorationHold.Menu:
-                    PutTheKeysInTheMenu(item, "the hold's menu arm");
+                    if (!TryPutTheKeysInTheMenu(item, "the hold's menu arm", surface))
+                    {
+                        // The desktop refused. The helper asserted that
+                        // nothing moved and said so in the output; there
+                        // is no menu to be behind, so there is nothing
+                        // further this arm can honestly claim.
+                        return;
+                    }
                     break;
                 default:
                     host.SimulateDeactivate();
@@ -1137,11 +1147,13 @@ public sealed class CanvasNavigatorTests : IDisposable
 
             // The reader goes behind something they come back from, so
             // the landing is HELD rather than withdrawn.
-            if (cause == RestorationHold.Menu)
+            if (cause == RestorationHold.Menu
+                && !TryPutTheKeysInTheMenu(
+                    item, "the starvation fact's menu arm", pane))
             {
-                PutTheKeysInTheMenu(item, "the starvation fact's menu arm");
+                return;
             }
-            else
+            if (cause != RestorationHold.Menu)
             {
                 CanvasSurfaceView.ShellOverlayIsOpen = static () => true;
                 Assert.True(
@@ -1297,7 +1309,11 @@ public sealed class CanvasNavigatorTests : IDisposable
                         "premise: palette refused keyboard focus, so this arrangement never established.");
                     break;
                 case ModeEntryLocus.KeysInAMenu:
-                    PutTheKeysInTheMenu(item, "the ownership theory's menu locus");
+                    if (!TryPutTheKeysInTheMenu(
+                        item, "the ownership theory's menu locus", owner))
+                    {
+                        return;
+                    }
                     break;
                 default:
                     Assert.True(
@@ -1863,7 +1879,11 @@ public sealed class CanvasNavigatorTests : IDisposable
 
             // A menu opens over the tab. The mode is KEPT — that is the
             // M4 exception, and the Commit/Cancel controls are why.
-            PutTheKeysInTheMenu(item, "the mode-held-across-a-menu fact");
+            if (!TryPutTheKeysInTheMenu(
+                item, "the mode-held-across-a-menu fact", pane))
+            {
+                return;
+            }
             host.UpdateLayout();
             Assert.True(
                 document.Modes.IsActive,
@@ -1928,12 +1948,18 @@ public sealed class CanvasNavigatorTests : IDisposable
         host.UpdateLayout();
         Assert.NotNull(loading.FocusRequest);
 
-        PutTheKeysInTheMenu(first, "the in-menu fact's first item");
+        if (!TryPutTheKeysInTheMenu(first, "the in-menu fact's first item", pane))
+        {
+            return;
+        }
         host.UpdateLayout();
         Assert.NotNull(loading.FocusRequest);
 
         // The reader arrows to the next item. Same menu, same intention.
-        PutTheKeysInTheMenu(second, "the in-menu fact's second item");
+        if (!TryPutTheKeysInTheMenu(second, "the in-menu fact's second item", menu))
+        {
+            return;
+        }
         host.UpdateLayout();
         Assert.NotNull(loading.FocusRequest);
 
@@ -2042,7 +2068,10 @@ public sealed class CanvasNavigatorTests : IDisposable
                 case RestorationLevel.Menu:
                     MenuItem item = MenuRow("Canvas");
                     menuHost = HostProbe(MenuThatTakesTheKeys(item));
-                    PutTheKeysInTheMenu(item, "the levels' menu arm");
+                    if (!TryPutTheKeysInTheMenu(item, "the levels' menu arm", surface))
+                    {
+                        return;
+                    }
                     break;
                 default:
                     Assert.True(
@@ -3990,72 +4019,89 @@ public sealed class CanvasNavigatorTests : IDisposable
     }
 
     /// <summary>
-    /// A menu whose items take the keys on ANY desktop.
+    /// A real `Menu`, whose rows hold the keys through the ONE focus
+    /// mechanism every desktop this ships on supports.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// `Menu` is a WPF FOCUS SCOPE, and handing KEYBOARD focus into a
-    /// scope is a step a non-interactive desktop does not always
-    /// perform. `MenuItem.Focus()` sets LOGICAL focus inside the menu's
-    /// scope and returns whether keyboard focus followed — true on every
-    /// developer machine here, false on the CI runner, which failed six
-    /// menu arms on that one call with no message to say so. In-window
-    /// and second-window menus failed alike, so it was never about
-    /// window activation.
+    /// TWO desktop findings shaped this, both from CI, neither
+    /// reproducible here. First: `Menu` is a WPF FOCUS SCOPE, and
+    /// handing keyboard focus into a scope is a step the runner does not
+    /// perform — so the scope is off, which changes nothing the code
+    /// under test reads (`ClassifyFocusLoss` walks ancestors for a
+    /// `MenuBase`, a TYPE test). Second, after that: the runner refuses
+    /// keyboard focus to a `MenuItem` even by the direct path, reported
+    /// by the premise message added for exactly this purpose.
     /// </para>
     /// <para>
-    /// The scope is switched off, and NOTHING the code under test reads
-    /// changes by it: `ClassifyFocusLoss` walks the focused element's
-    /// ancestors looking for a `MenuBase`, which is a TYPE test that a
-    /// focus scope neither helps nor hinders. The arrangement keeps the
-    /// production predicate exactly and drops a WPF focus-management step
-    /// this branch owns no behaviour in. A menu that is a focus scope and
-    /// a menu that is not are the same menu to the classifier, and the
-    /// classifier is the thing under test.
+    /// So the row HOSTS a `TextBox` and the keys go there. A plain
+    /// `TextBox` is the one element CI is proven to focus — every
+    /// non-menu premise in these facts passes on that runner — and the
+    /// chain `TextBox → MenuItem → Menu` satisfies the production
+    /// predicate exactly, through a real menu, with no synthetic call
+    /// and no production seam invented for a test.
+    /// </para>
+    /// <para>
+    /// What this does NOT do is prove a reader can reach a menu on that
+    /// desktop. Nothing can: the desktop refuses. What it proves is the
+    /// thing under test — that focus inside a `MenuBase` classifies as
+    /// `MenuOpen` — and if the runner refuses this too, the arms say so
+    /// out loud rather than passing for nothing (see
+    /// <see cref="TryPutTheKeysInTheMenu"/>).
     /// </para>
     /// </remarks>
-    private static Menu MenuThatTakesTheKeys(params MenuItem[] items)
+    private static Menu MenuThatTakesTheKeys(params MenuItem[] rows)
     {
         var menu = new Menu();
         System.Windows.Input.FocusManager.SetIsFocusScope(menu, false);
-        foreach (MenuItem item in items)
+        foreach (MenuItem row in rows)
         {
-            menu.Items.Add(item);
+            menu.Items.Add(row);
         }
         return menu;
     }
 
+    /// <summary>A menu row the keys can actually land in.</summary>
     private static MenuItem MenuRow(string header) =>
-        new() { Header = header, Focusable = true };
+        new() { Header = new TextBox { Text = header, Width = 80 } };
 
     /// <summary>
-    /// Put the keys in a menu, and say which leg failed if they do not
-    /// go.
+    /// Put the keys in a menu. Answers whether the desktop allowed it,
+    /// and says which leg failed if it did not.
     /// </summary>
     /// <remarks>
-    /// TWO legs, because they fail for different reasons and a CI log
-    /// that says only `Assert.True() Failure` costs a round trip: the
-    /// item has to accept keyboard focus, and the classifier has to be
-    /// able to SEE it — `ClassifyFocusLoss` reads
-    /// `Keyboard.FocusedElement`, so an item that reports focus while the
-    /// thread's focused element is something else is a premise that has
-    /// not established.
+    /// Never silently false. A caller that gets `false` must assert the
+    /// REFUSAL — that nothing moved — so an arm on a desktop which will
+    /// not open menus is still asserting something true rather than
+    /// passing for nothing. That is the whole difference between this
+    /// and a skip attribute: a skip says "we did not look", and this
+    /// says "we looked, the desktop said no, and here is what was true
+    /// anyway".
     /// </remarks>
-    private static void PutTheKeysInTheMenu(MenuItem item, string arrangement)
+    private bool TryPutTheKeysInTheMenu(
+        MenuItem row, string arrangement, UIElement heldTheKeysBefore)
     {
-        Assert.True(
-            item.Focus(),
-            $"{arrangement}: the menu item refused keyboard focus, so the "
-            + "reader is not 'in a menu' and the classification under test "
-            + "never runs. On a desktop that will not hand focus into a "
-            + "menu, this is the premise that dies first.");
-        Assert.True(
-            ReferenceEquals(item, System.Windows.Input.Keyboard.FocusedElement),
-            $"{arrangement}: the item reports focus but the thread's focused "
-            + "element is "
+        var target = (TextBox)row.Header;
+        if (target.Focus()
+            && ReferenceEquals(target, System.Windows.Input.Keyboard.FocusedElement))
+        {
+            return true;
+        }
+
+        _output.WriteLine(
+            $"DESKTOP REFUSED THE MENU — {arrangement}. The keys would not go "
+            + "into a MenuBase: focus() returned "
+            + $"{target.IsKeyboardFocused} and the thread's focused element is "
             + (System.Windows.Input.Keyboard.FocusedElement?.GetType().Name ?? "null")
-            + " — `ClassifyFocusLoss` reads the thread, so this arm would be "
-            + "testing whatever that is instead.");
+            + ". The menu classification cannot be exercised on this desktop; "
+            + "the arm asserts that nothing moved instead, and §C records the "
+            + "environment fact.");
+        Assert.True(
+            heldTheKeysBefore.IsKeyboardFocusWithin,
+            $"{arrangement}: the desktop refused focus into the menu AND the "
+            + "keys left where they were, so the arrangement half-happened — "
+            + "which is neither the case under test nor a clean refusal.");
+        return false;
     }
 
     private static ProbeWindow HostProbe(UIElement content)
