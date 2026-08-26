@@ -348,6 +348,139 @@ public sealed class ContractsCitationCensus
     private const string DeclaringFile = "ContractsCitationCensus.cs";
 
     /// <summary>
+    /// Every doc comment closes what it opens.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// FIFTH appearance of this class on the branch, which is what makes
+    /// it a guard rather than more care. A new member gets spliced into
+    /// the middle of a neighbour's `&lt;remarks&gt;`, the neighbour's
+    /// closing tags end up orphaned after it, and NOTHING complains:
+    /// Roslyn does not validate doc structure, the build is clean, every
+    /// test passes, and the two members' prose is silently welded
+    /// together for whoever reads it next.
+    /// </para>
+    /// <para>
+    /// The check is a tag stack over each contiguous run of `///` lines —
+    /// which is exactly one member's doc block — so the failure it
+    /// catches is the structural one rather than a style opinion. Only
+    /// the BLOCK tags are tracked; inline `&lt;see/&gt;` and `&lt;c&gt;`
+    /// are another argument and not this one.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void EveryDocCommentClosesWhatItOpens()
+    {
+        var offenders = new List<string>();
+        var runs = 0;
+        foreach ((string label, string text) in DocumentedSources())
+        {
+            string[] lines = text.Replace("\r\n", "\n").Split('\n');
+            var run = new List<string>();
+            var runStart = 0;
+            for (var index = 0; index <= lines.Length; index++)
+            {
+                bool isDoc = index < lines.Length && lines[index].TrimStart().StartsWith(
+                    "///", StringComparison.Ordinal);
+                if (isDoc)
+                {
+                    if (run.Count == 0)
+                    {
+                        runStart = index + 1;
+                    }
+                    run.Add(lines[index]);
+                    continue;
+                }
+                if (run.Count > 0)
+                {
+                    runs++;
+                    if (UnbalancedTag(string.Join("\n", run)) is { } problem)
+                    {
+                        offenders.Add($"{label}:{runStart} — {problem}");
+                    }
+                    run.Clear();
+                }
+            }
+        }
+
+        // The scan can see: a floor, and a SEEDED imbalance of the exact
+        // shape that recurred — a member spliced inside a neighbour's
+        // remarks — which the checker must report.
+        Assert.True(
+            runs > 200,
+            $"only {runs} doc blocks were scanned; the guard is reading almost "
+            + "nothing.");
+        Assert.NotNull(UnbalancedTag(
+            "/// <summary>a</summary>\n/// <remarks>\n/// <para>b</para>"));
+        Assert.NotNull(UnbalancedTag("/// <para>b</para>\n/// </remarks>"));
+        Assert.Null(UnbalancedTag(
+            "/// <summary>a</summary>\n/// <remarks>\n/// <para>b</para>\n"
+            + "/// </remarks>"));
+
+        Assert.True(
+            offenders.Count == 0,
+            "a doc comment does not close what it opens, which is how a "
+            + "member gets spliced into a neighbour's remarks with a clean "
+            + "build and a green suite:\n  "
+            + string.Join("\n  ", offenders));
+    }
+
+    /// <summary>The first structural problem in one doc block, or
+    /// null.</summary>
+    private static string? UnbalancedTag(string block)
+    {
+        var open = new Stack<string>();
+        foreach (Match tag in Regex.Matches(
+            block, @"<(/?)(summary|remarks|para|returns|example)>"))
+        {
+            string name = tag.Groups[2].Value;
+            if (tag.Groups[1].Value.Length == 0)
+            {
+                open.Push(name);
+                continue;
+            }
+            if (open.Count == 0)
+            {
+                return $"</{name}> closes nothing";
+            }
+            string expected = open.Pop();
+            if (!string.Equals(expected, name, StringComparison.Ordinal))
+            {
+                return $"</{name}> closes <{expected}>";
+            }
+        }
+        return open.Count == 0 ? null : $"<{open.Peek()}> is never closed";
+    }
+
+    /// <summary>Canvas production and the canvas-facing tests, which is
+    /// where every instance of this class has appeared.</summary>
+    private static IEnumerable<(string Label, string Text)> DocumentedSources()
+    {
+        string root = SourceText.RepoRoot();
+        (string Dir, string Pattern)[] scopes =
+        [
+            (Path.Combine(
+                root, "apps", "slate-windows", "src", "SlateWindows", "Canvas"), "*.cs"),
+            (Path.Combine(
+                root, "apps", "slate-windows", "tests", "SlateWindows.Tests"),
+                "Canvas*.cs"),
+            (Path.Combine(
+                root, "apps", "slate-windows", "tests", "SlateWindows.Tests",
+                "Censuses"), "*.cs"),
+        ];
+        foreach ((string dir, string pattern) in scopes)
+        {
+            string[] files = Directory.GetFiles(dir, pattern, SearchOption.AllDirectories);
+            Assert.True(
+                files.Length > 0, $"no sources under {dir} matching {pattern}");
+            foreach (string file in files)
+            {
+                yield return (Path.GetFileName(file), File.ReadAllText(file));
+            }
+        }
+    }
+
+    /// <summary>
     /// A STAGED claim whose PR has landed is a lie with a delivery date.
     /// </summary>
     /// <remarks>

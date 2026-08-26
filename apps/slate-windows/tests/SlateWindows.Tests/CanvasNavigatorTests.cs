@@ -1178,6 +1178,139 @@ public sealed class CanvasNavigatorTests : IDisposable
         }
     });
 
+    /// <summary>How a pane stopped showing the canvas.</summary>
+    public enum OwnerExit
+    {
+        ModelReplaced,
+        Closed,
+        WindowClosed,
+        PeerReplaced,
+        PeerHidden,
+    }
+
+    /// <summary>
+    /// A mode does not outlive the PANE that owns it — not when that
+    /// pane's document is replaced under it, and not when it closes.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Ownership had to follow the lifecycle it names. A rename retargets
+    /// pane A from canvas X to canvas Y while pane B keeps X open;
+    /// `OnModelChanged` detached A from X's navigator, and X's mode went
+    /// on naming a surface that no longer shows it. Nobody was then
+    /// entitled to reclassify a departure for that mode — A watches its
+    /// new document, B is not the owner — so it survived with no pane at
+    /// all, while B rendered the shared Commit and Cancel controls for a
+    /// transient state it could apply and did not own. M4 says no mode
+    /// survives without focus; this was a mode surviving without a PANE.
+    /// </para>
+    /// <para>
+    /// EXACTLY ONE restoration, counted, for the same reason the sibling
+    /// fact counts: the owner's departure edge, its watcher and the
+    /// detach transition are three routes to one cancellation, and a mode
+    /// that restores twice has run the reader's undo twice.
+    /// </para>
+    /// </remarks>
+    [Theory]
+    [InlineData(OwnerExit.ModelReplaced)]
+    [InlineData(OwnerExit.Closed)]
+    [InlineData(OwnerExit.WindowClosed)]
+    [InlineData(OwnerExit.PeerReplaced)]
+    [InlineData(OwnerExit.PeerHidden)]
+    public void AModeDoesNotOutliveThePaneThatOwnsIt(OwnerExit exit) => RunSta(() =>
+    {
+        CanvasDocumentViewModel shared = Open("board.canvas");
+        CanvasDocumentViewModel other = Open("connected.canvas");
+        var restorations = 0;
+        var spec = new CanvasModeSpec(
+            CanvasMode.Move,
+            new CanvasModeObject.Card("Research"),
+            CanvasModeCommitResult.Refused,
+            () =>
+            {
+                restorations++;
+                return new CanvasModeRestoration.BackAt("Research");
+            });
+        var owner = new CanvasSurfaceView { Model = shared, DataContext = new object() };
+        var keepsItOpen = new CanvasSurfaceView
+        {
+            Model = shared,
+            DataContext = new object(),
+        };
+        var root = new StackPanel();
+        root.Children.Add(owner);
+        root.Children.Add(keepsItOpen);
+        using var host = Host(root);
+
+        try
+        {
+            Assert.True(owner.FilterFieldForTests.Focus());
+            host.UpdateLayout();
+            Assert.True(shared.Modes.Enter(spec));
+            host.UpdateLayout();
+            Assert.True(shared.Modes.IsActive);
+            // The PREMISE: the peer is showing the same document, so the
+            // mode's controls are on ITS header too — which is what makes
+            // an ownerless mode a thing a reader can still press.
+            Assert.Same(shared, keepsItOpen.Model);
+
+            switch (exit)
+            {
+                case OwnerExit.ModelReplaced:
+                    // The rename lands: this pane now shows a different
+                    // canvas. The peer keeps the old one open.
+                    owner.Model = other;
+                    break;
+                case OwnerExit.Closed:
+                    root.Children.Remove(owner);
+                    break;
+                case OwnerExit.WindowClosed:
+                    // The whole window goes. Unlike removing the element,
+                    // this need not change `IsVisible` on the way out, so
+                    // it is the arm that reaches the UNLOAD transition
+                    // rather than the visibility one.
+                    host.Dispose();
+                    break;
+                default:
+                    // The PEER is retargeted. Nothing about the owner
+                    // changed, and the mode is not the peer's to end.
+                    keepsItOpen.Model = other;
+                    break;
+                case OwnerExit.PeerHidden:
+                    // Never touches the keys — a split pane being
+                    // collapsed. This is the arm that found the same
+                    // defect one altitude below the one this wave was
+                    // sent to fix.
+                    keepsItOpen.Visibility = Visibility.Collapsed;
+                    break;
+            }
+            host.UpdateLayout();
+
+            if (exit is OwnerExit.PeerReplaced or OwnerExit.PeerHidden)
+            {
+                Assert.True(
+                    shared.Modes.IsActive,
+                    "a pane that is not the owner ended the mode by ceasing "
+                    + "to show the canvas — the identity check is what "
+                    + "separates 'the owner left' from 'somebody left'.");
+                Assert.Equal(0, restorations);
+                return;
+            }
+
+            Assert.False(
+                shared.Modes.IsActive,
+                "the mode outlived the pane running it: the peer still "
+                + "renders its Commit and Cancel controls, and nothing is "
+                + "entitled to end a mode whose owner is gone.");
+            Assert.Equal(1, restorations);
+        }
+        finally
+        {
+            shared.Shutdown();
+            other.Shutdown();
+        }
+    });
+
     /// <summary>
     /// A MODE kept alive across a menu is cancelled when the reader turns
     /// out to have left — with no restoration pending anywhere.

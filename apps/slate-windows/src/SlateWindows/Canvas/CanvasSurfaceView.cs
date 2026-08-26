@@ -636,6 +636,15 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
     {
+        // NO owner-departure call here, though the brief asked for one.
+        // Every closure path this shell can produce — removing the pane,
+        // closing the window — drives `IsVisible` to false first, and
+        // that already departs through the classifier with ownership
+        // applied. Written and removed: its mutation could not be made
+        // to fail, while `AModeDoesNotOutliveThePaneThatOwnsIt`'s Closed
+        // and WindowClosed arms assert the INVARIANT, so a future change
+        // that stopped raising the visibility edge is still caught.
+        // Third belt this wave produced and could not earn.
         if (_hostWindow is { } window)
         {
             window.Deactivated -= OnWindowDeactivated;
@@ -790,7 +799,25 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
             // withdrawal-class departure as a hold.
             _awayBecause = departure;
         }
-        _ = Model?.Modes.HandleFocusDeparture(departure);
+        // The mode stack is DOCUMENT-shared, so this call needs the same
+        // question the window watch needed: a departure from a pane that
+        // is not running the mode is not that mode's departure. Hiding a
+        // second pane in a split — which never touches the keys — ended a
+        // mode the reader was running in the first one, and so did that
+        // pane being retargeted or closed. Same class as codex round 5's
+        // blocker, one altitude down: the watcher was taught ownership
+        // and the classifier it routes through was not.
+        //
+        // A null owner means NOBODY owns it (no pane was ever attached
+        // when the mode was entered), and the pre-existing safety net —
+        // any departure ends it — is the right answer there. `Owner`
+        // also reads null when no mode is active, which makes the call
+        // below the no-op it already was.
+        if (Model is { Modes: { } modes }
+            && (modes.Owner is null || ReferenceEquals(modes.Owner, this)))
+        {
+            _ = modes.HandleFocusDeparture(departure);
+        }
     }
 
     /// <summary>
@@ -991,6 +1018,10 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         bool wasTheAttachedPane = false;
         if (e.OldValue is CanvasDocumentViewModel oldModel)
         {
+            // BEFORE the detach below, because after it this surface is
+            // no longer reachable from the old document and the mode it
+            // may be running would have nobody entitled to end it.
+            _ = oldModel.Modes.HandleOwnerDeparture(view);
             oldModel.PropertyChanged -= view.OnModelPropertyChanged;
             oldModel.OutlinePublished -= view.OnOutlinePublished;
             oldModel.Selection.PropertyChanged -= view.OnSelectionPropertyChanged;

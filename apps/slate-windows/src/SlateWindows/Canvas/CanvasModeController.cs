@@ -238,6 +238,19 @@ internal sealed class CanvasModeController : BindableBase
         {
             if (SetField(ref _active, value))
             {
+                if (value is null)
+                {
+                    // The RETENTION half, at the one place every ordinary
+                    // exit passes through. `Owner` already READ as null
+                    // once the mode ended, and that is exactly the shape
+                    // round 2's B3 caught on the request properties: a
+                    // read boundary hides a field that still holds a
+                    // closed pane's control tree. A REFUSED commit never
+                    // reaches here — it keeps its mode — so the
+                    // preservation that case needs is by construction
+                    // rather than by an exception.
+                    _owner = null;
+                }
                 OnPropertyChanged(nameof(IsActive));
                 OnPropertyChanged(nameof(ContainerValue));
             }
@@ -502,6 +515,15 @@ internal sealed class CanvasModeController : BindableBase
             _retired = true;
             _active = null;
             _rungs.Clear();
+            // NO `_owner = null` here, though this path bypasses the
+            // property that clears it. The departure above cancels any
+            // active mode, and `Cancel` nulls `Active` — through the
+            // setter — BEFORE it runs the restoration that could fault,
+            // so the owner is already gone by the time this runs. Written
+            // and removed: its own mutation could not be made to fail,
+            // and `ACompletedModeHoldsNoPane` asserts the INVARIANT after
+            // retirement rather than the line, so a future teardown that
+            // stopped cancelling is still caught.
         }
     }
 
@@ -553,6 +575,44 @@ internal sealed class CanvasModeController : BindableBase
     /// rather than restating the list.
     /// </para>
     /// </remarks>
+    /// <summary>
+    /// The surface RUNNING the mode is going away — its document is being
+    /// replaced under it, or it is unloading.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Ownership has to follow the lifecycle it names. Without this, a
+    /// pane whose tab was retargeted to another canvas detached from this
+    /// navigator and left the mode naming a surface that no longer shows
+    /// the document — so NOBODY was entitled to reclassify a departure
+    /// for it, and a sibling pane went on rendering the shared M6
+    /// controls for a transient state it could commit but not own. M4
+    /// says no mode survives without focus; this is the arrangement where
+    /// the mode survived without a PANE.
+    /// </para>
+    /// <para>
+    /// Routed through <see cref="HandleFocusDeparture"/> rather than
+    /// cancelling here, so the commit-time DEFERRAL applies exactly as it
+    /// does to every other departure: an owner that vanishes mid-commit
+    /// is honoured when the outcome is known, not on top of it. Classed
+    /// as `TabSwitch` because that is what happened — the pane stopped
+    /// showing this canvas.
+    /// </para>
+    /// </remarks>
+    internal bool HandleOwnerDeparture(object presenter)
+    {
+        ArgumentNullException.ThrowIfNull(presenter);
+        return _active is not null
+            && ReferenceEquals(_owner, presenter)
+            && HandleFocusDeparture(CanvasFocusDeparture.TabSwitch);
+    }
+
+    /// <summary>Whether a pane reference is still held. The
+    /// <see cref="Owner"/> read hides it once the mode ends, which is
+    /// precisely why the retention half needs its own observable
+    /// (round 2's B3, one object over).</summary>
+    internal bool HoldsOwnerForTests => _owner is not null;
+
     public bool HandleFocusDeparture(CanvasFocusDeparture departure)
     {
         if (_retired)

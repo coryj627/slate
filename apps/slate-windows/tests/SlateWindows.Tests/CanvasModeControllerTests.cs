@@ -640,19 +640,6 @@ public sealed class CanvasModeControllerTests
     }
 
     /// <summary>
-    /// Codex round 3, B2: the ANNOUNCEMENT is fallible too, and a
-    /// commit that faults there still drains its deferred departure.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Round 2 guarded the exits it could name — applied, refused, the
-    /// effect throwing — and left the confirmation announce sitting
-    /// between the outcome and the drain, unguarded. It renders through
-    /// core, so it can fault; and when it did, the drain below it never
-    /// ran and the slot stayed loaded. The next commit's mode was then
-    /// cancelled by a departure that belonged to the previous press.
-    /// </para>
-    /// <summary>
     /// A mode's OWNER is read through the active mode, so it ends when
     /// the mode does.
     /// </summary>
@@ -704,6 +691,93 @@ public sealed class CanvasModeControllerTests
         Assert.Null(controller.Owner);
     }
 
+    /// <summary>
+    /// A completed mode HOLDS no pane — the retention half, which the
+    /// read boundary hides.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// `Owner` reads null once the mode ends, and that is exactly the
+    /// shape round 2's B3 caught one object over: the request properties
+    /// READ as absent after retirement while the fields still held the
+    /// closed tab's `DataContext` and its whole control tree. A mode's
+    /// owner is a `CanvasSurfaceView`, so the same slip retains a pane —
+    /// its projections, its rows, its automation peers — for as long as
+    /// the document lives, which on a shared canvas is longer than the
+    /// pane.
+    /// </para>
+    /// <para>
+    /// The REFUSED arm is the one that must NOT clear: a refused commit
+    /// keeps its mode, so it keeps its owner, and the clear lives at the
+    /// single place `Active` goes null rather than in a list of exits
+    /// that would have to remember the exception.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void ACompletedModeHoldsNoPane()
+    {
+        var announcer = new CanvasAnnouncer(_announced.Add, TimeSpan.FromMinutes(1));
+        var pane = new object();
+        var controller = new CanvasModeController(announcer.Announce, () => pane);
+        var refusing = new CanvasModeSpec(
+            CanvasMode.Move,
+            new CanvasModeObject.Card("Research"),
+            CanvasModeCommitResult.Refused,
+            () => new CanvasModeRestoration.BackAt("Research"));
+
+        Assert.False(controller.HoldsOwnerForTests);
+        Assert.True(controller.Enter(refusing));
+        Assert.True(controller.HoldsOwnerForTests);
+
+        // A REFUSED commit keeps the mode, so it keeps the pane.
+        Assert.False(controller.Commit());
+        Assert.True(controller.IsActive);
+        Assert.True(
+            controller.HoldsOwnerForTests,
+            "a refused commit dropped the owner of a mode that is still "
+            + "running, so the pane driving it stopped being able to end it.");
+
+        Assert.True(controller.Cancel());
+        Assert.False(
+            controller.HoldsOwnerForTests,
+            "the mode ended and the controller still holds the pane — "
+            + "`Owner` reads null, which is what hides it.");
+
+        // …and through the applied-commit exit, and through retirement.
+        var committing = new CanvasModeSpec(
+            CanvasMode.Move,
+            new CanvasModeObject.Card("Research"),
+            () => CanvasModeCommitResult.Committed(
+                new CanvasA11yEvent.CanvasModeCommitted(
+                    CanvasTransientVerb.Move,
+                    new CanvasModeObject.Card("Research"))),
+            () => new CanvasModeRestoration.BackAt("Research"));
+        Assert.True(controller.Enter(committing));
+        Assert.True(controller.Commit());
+        Assert.False(controller.HoldsOwnerForTests);
+
+        Assert.True(controller.Enter(refusing));
+        Assert.True(controller.HoldsOwnerForTests);
+        controller.Shutdown();
+        Assert.False(
+            controller.HoldsOwnerForTests,
+            "a retired controller still holds the pane it was running for "
+            + "— the teardown path bypasses the property that clears it.");
+    }
+
+    /// <summary>
+    /// Codex round 3, B2: the ANNOUNCEMENT is fallible too, and a
+    /// commit that faults there still drains its deferred departure.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Round 2 guarded the exits it could name — applied, refused, the
+    /// effect throwing — and left the confirmation announce sitting
+    /// between the outcome and the drain, unguarded. It renders through
+    /// core, so it can fault; and when it did, the drain below it never
+    /// ran and the slot stayed loaded. The next commit's mode was then
+    /// cancelled by a departure that belonged to the previous press.
+    /// </para>
     /// <para>
     /// The fix is not another catch. The effect, the outcome and the
     /// announcements are ONE guarded region and the drain is its

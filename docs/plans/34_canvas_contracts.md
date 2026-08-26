@@ -7631,6 +7631,74 @@ matrix.
   which — and it is worth noticing that the correction was needed on a
   section written specifically to record claims outrunning code.
 
+### PR C-lite — codex adversarial round 6 — NOT SAFE, 1 blocker + 1 minor
+
+- **BLOCKER — ownership did not follow the lifecycle it names.** A mode
+  captured its owning pane and nothing told it when that pane stopped
+  being one. Panes A and B on canvas X, mode entered from A, A's tab
+  retargeted to another canvas while B keeps X open: A detaches from X's
+  navigator, the mode goes on naming a surface that no longer shows X,
+  and NOBODY is entitled to end it — A watches its new document, B is not
+  the owner. M4 says no mode survives without focus; this was a mode
+  surviving without a PANE, while B rendered the shared Commit and Cancel
+  controls for transient state it could apply and did not own. A second
+  half: a completed mode READ `Owner` as null while still holding the
+  pane's whole control tree, which is round 2's B3 exactly — a read
+  boundary hiding a retention — one object over.
+
+  `HandleOwnerDeparture` routes through `HandleFocusDeparture`, so the
+  commit-time deferral applies to a vanishing owner as it does to every
+  other departure. The retention half clears at the ONE place `Active`
+  goes null, which is also why a REFUSED commit keeps its owner without
+  needing an exception: it never sets `Active` null.
+  `ACompletedModeHoldsNoPane` asserts the field through a dedicated
+  observable, because the read boundary is what hid it the first time.
+
+- **AND THE SAME DEFECT WAS LIVE ONE ALTITUDE BELOW, found by a mutation
+  that would not fail.** The window watch had been taught ownership in
+  round 5; `Depart` — the classifier it routes THROUGH — had not. So any
+  pane's departure ended any pane's mode: collapsing a second pane in a
+  split, which never touches the keys, cancelled the mode the reader was
+  running in the first. Reached by asking why "owner identity ignored"
+  escaped, building the arm that should have caught it, and finding it
+  caught something else. **A mutation that will not fail is a question
+  about the arrangement, not a defect in the mutation** — the third time
+  on this branch that following an escape led to a live defect rather
+  than to a test edit.
+
+- **THE THIRD AFFINITY NOW HAS THE FIRST TWO'S LIFECYCLE.** C8 named the
+  pattern last round; this round gives the mode's owner the three
+  guarantees the request already had — write-side terminality (the owner
+  cannot outlive its mode), cancellation when the addressed surface stops
+  being an address (the detach transition), and the retention half
+  (nothing held after completion). That is the request-lifecycle doctrine
+  arriving at the mode, and it completes the pattern rather than adding
+  to it: **an affinity is not one field, it is a field plus those three
+  guarantees**, and PR F inherits the whole shape.
+
+- **THREE BELTS WRITTEN AND REMOVED, all for one reason.** An
+  owner-departure call on unload; a `_owner = null` in `Shutdown`; and
+  before them, round 5's clear-and-retry arm. Each was redundant with a
+  path that already ran — the visibility edge, the drain's own cancel —
+  and none could be made to fail. Removed, with the argument recorded at
+  each site, and the FACTS left asserting the invariant rather than the
+  line, so a future change that breaks the covering path is still caught.
+  The lesson is not "write fewer belts": it is that **the redundancy is
+  only visible from the mutation**, and writing the belt first and the
+  mutation second is what surfaces it.
+
+- **MINOR — a member was spliced inside a neighbour's doc block.** The
+  new owner fact's `<summary>`/`<remarks>` opened before
+  `AnAnnouncementThatFaultsAfterTheOutcomeStillDrainsTheSlot`'s remarks
+  closed, leaving that fact's closing tags orphaned after the new method.
+  Roslyn says nothing, the build is clean, the suite is green, and two
+  members' prose is silently welded together for the next reader. FIFTH
+  appearance on this branch — so `EveryDocCommentClosesWhatItOpens` joins
+  the guarded set: a tag stack over each contiguous run of `///` lines,
+  which is exactly one member's block, over canvas production, the canvas
+  tests and the censuses. Seeded both ways so a mistyped checker fails
+  instead of guarding nothing.
+
 ### PR C — the strategic lesson
 
 One asynchronous requirement, inside a PR whose other twelve contracts
