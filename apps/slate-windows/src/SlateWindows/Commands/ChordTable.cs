@@ -830,17 +830,6 @@ internal static class ChordTable
         + "an absence.";
 
     /// <summary>
-    /// W6-1 PR A (#745), contract A18. All three register now so the
-    /// palette lists the whole switcher from the first slice; the two
-    /// whose projections have not shipped resolve to a command whose
-    /// <c>CanExecute</c> is false, so
-    /// <c>SlateCommandRegistrar.DisabledReason</c> answers the
-    /// registrar's canonical unavailable sentence. None carries a chord
-    /// — the surface switcher is a visible control and the palette is
-    /// always a path (rule R1) — so <c>Reg</c>'s own rule gives them
-    /// <c>ChordScope.None</c>.
-    /// </summary>
-    /// <summary>
     /// W6-1 PR C (#745), contract C15: the Where-am-I chord's recorded
     /// divergence. The rule maps ⌃⌘I to Ctrl+Alt+I, which
     /// <c>slate.view.toggleRightPane</c> holds GLOBALLY — a scope that is

@@ -134,6 +134,19 @@ internal sealed class CanvasAnnouncer
         DropAllPending();
     }
 
+    /// <summary>
+    /// How many posts this announcer has REFUSED since retirement.
+    /// </summary>
+    /// <remarks>
+    /// The refusal itself is a `Debug.Fail`, which means the guard only
+    /// speaks in a developer's build — and CI runs Release, so a shipped
+    /// path posting after retirement was invisible to the gate for six
+    /// rounds. `Commit`'s confirmation was doing exactly that. A counter
+    /// makes "retirement composes nothing" assertable in BOTH
+    /// configurations, which is what a guard that matters needs.
+    /// </remarks>
+    internal int RefusedAfterShutdownForTests { get; private set; }
+
     private void Emit(A11yEvent @event, EventClass? eventClass)
     {
         if (_isShutDown)
@@ -141,6 +154,7 @@ internal sealed class CanvasAnnouncer
             // Not merely dropped: a post after retirement means some
             // path outlived the document that owns it, and silence would
             // hide that.
+            RefusedAfterShutdownForTests++;
             Debug.Fail(
                 "CanvasAnnouncer posted after Shutdown: the document it belongs "
                 + "to has been retired, so nothing it says can be about a "

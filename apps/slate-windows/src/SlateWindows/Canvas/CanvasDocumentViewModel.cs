@@ -374,7 +374,8 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
 
     /// <summary>
     /// The pending focus delivery — STATE, not an event edge
-    /// (contract A14).
+    /// (contract A14) — and ALWAYS null once the document is retired
+    /// (C7).
     /// </summary>
     /// <remarks>
     /// <para>
@@ -394,12 +395,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// on visibility, on publish and on container realization, and a
     /// newer request supersedes an older one by generation.
     /// </para>
-    /// </remarks>
-    /// <summary>
-    /// The pending focus landing, or null — and ALWAYS null once the
-    /// document is retired (contract A14/C7).
-    /// </summary>
-    /// <remarks>
+    /// <para>
     /// The terminality is on the READ, not on a list of places that
     /// clear it. That is the mode stack's lesson one object over: a
     /// retirement that enumerates what to clear is a list somebody has
@@ -408,6 +404,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// drops the field, which is the other half and a different job: the
     /// request holds the closing tab's `DataContext`, and a retired
     /// document should not keep that graph alive.
+    /// </para>
     /// </remarks>
     public CanvasFocusRequest? FocusRequest
     {

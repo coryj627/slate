@@ -1047,14 +1047,30 @@ public sealed class CanvasNavigatorTests : IDisposable
         string line = OneLine(document);
         Assert.Contains("cancelled", line, StringComparison.Ordinal);
 
+        // NOTHING WAS COMPOSED after the funnel closed, which is a
+        // stronger claim than "nothing was heard" and the one the A5
+        // guard actually makes. The commit's confirmation used to be
+        // announced into the retired announcer and silently dropped —
+        // invisible in Release, a `Debug.Fail` in Debug, and the reason
+        // this fact was red in the configuration nobody was running.
+        Assert.Equal(0, document.Announcer.RefusedAfterShutdownForTests);
+
         // …and nothing the retired document composes afterwards reaches
         // anybody — including the commit confirmation that resolved after
         // the funnel closed.
         Assert.DoesNotContain(
             Lines(document),
             spoken => spoken.Contains("Moved", StringComparison.Ordinal));
-        document.Announcer.Announce(
-            new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoMarks()));
+        // DELIBERATE misuse, scoped: production marks a post-retirement
+        // announce with `Debug.Fail`, and this fact exists to prove what
+        // happens when someone does it anyway. The suppression wraps this
+        // ONE call, so a `Debug.Fail` from `Shutdown` itself still fails
+        // the run.
+        using (DebugAsserts.Suppressed())
+        {
+            document.Announcer.Announce(
+                new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoMarks()));
+        }
         Assert.Equal(line, OneLine(document));
 
         // The slot is CLEARED at teardown: nothing stale is left to act
@@ -1097,8 +1113,11 @@ public sealed class CanvasNavigatorTests : IDisposable
         Assert.False(document.Modes.IsActive);
         // The queued line was DROPPED and the funnel refuses anything
         // later, which is only true if `Announcer.Shutdown` was reached.
-        document.Announcer.Announce(
-            new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoMarks()));
+        using (DebugAsserts.Suppressed())
+        {
+            document.Announcer.Announce(
+                new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoMarks()));
+        }
         Assert.Empty(Lines(document));
     }
 

@@ -3118,8 +3118,11 @@ public sealed class CanvasDocumentTests : IDisposable
         // And a LATE caller is refused, not merely un-queued. This is
         // the other half of retirement: a path that outlived its
         // document must not reach the dispatcher at all.
-        document.Announcer.Announce(
-            new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoMarks()));
+        using (DebugAsserts.Suppressed())
+        {
+            document.Announcer.Announce(
+                new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoMarks()));
+        }
         document.Announcer.FlushForTests();
         Assert.Empty(posted);
     });

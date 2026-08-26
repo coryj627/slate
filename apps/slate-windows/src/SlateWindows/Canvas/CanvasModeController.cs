@@ -314,7 +314,17 @@ internal sealed class CanvasModeController : BindableBase
                 // (Where-am-I does) must see the stack as it will be,
                 // not as it was.
                 Active = null;
-                if (result.Confirmation is { } confirmation)
+                // NOT on a retired stack. The effect can retire the
+                // document from inside itself — the shell closes the tab
+                // while a commit is running — and the confirmation is
+                // composed after that. The announcer would DROP it, which
+                // is why this looked correct for six rounds; but dropping
+                // is A5's `Debug.Fail`, and a retired object composing a
+                // sentence at all is the thing the guard is there to
+                // catch. Terminality is the SPEAKER's question, not the
+                // funnel's: `Shutdown` has already spoken the only line a
+                // retirement owes.
+                if (!_retired && result.Confirmation is { } confirmation)
                 {
                     // FALLIBLE, like everything else in here: the render
                     // goes through core. It sits INSIDE the try for that
