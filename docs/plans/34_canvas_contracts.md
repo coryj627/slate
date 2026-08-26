@@ -8143,6 +8143,74 @@ because they remember what they meant. Every durable fix on this branch
 has been the same move — take the class the reviewer found by reading,
 and give it something that executes.
 
+### PR C-lite — codex adversarial round 11 — NOT SAFE, 1 major + 1 minor, production sound
+
+Production sound again, every round-10 repair verified accurate, scope
+and delivery exact. Both findings are the SAME class as round 10's, found
+the same way — by enumerating what a claim covers rather than by
+following a diff — and both are the consumers those sweeps missed.
+
+- **MAJOR — the "every read verb" evidence omitted a shipping read
+  path.** `EveryReadVerbAnswersInEveryLoadState` says in its own remarks
+  that a verb added without a state answer "fails here by name". The
+  list was hand-curated and missing `AnnounceFilterCount`, which the
+  filter field's `TextChanged` reaches on every keystroke — including
+  while the canvas is reloading or has failed. So a regression confined
+  to that verb's unreadable branch passed the fact whose entire claim is
+  that such a thing cannot pass. The field-wiring fact drives only a
+  READY canvas and the reload fact checks the summary LABEL rather than
+  the announcement, so nothing else was looking either.
+
+  Both halves fixed. The verb is in the battery, and the battery's
+  inventory is **DERIVED**: reflection over the navigator's public
+  methods, each of which must be a row or a named exclusion carrying its
+  reason, with stale exclusions failing too. The claim "fails here by
+  name" is true by construction now rather than by maintenance. And the
+  PRODUCTION trigger has its own fact — `TypingInTheFieldAnswersInEveryLoadState`
+  drives the field's `TextChanged` in every unreadable state, because
+  calling a verb on the navigator and a reader typing are not the same
+  evidence.
+
+  **This was the last hand-maintained list on the branch**, and it is the
+  fifth instance of the rule it breaks: a list is a claim of completeness
+  that nothing checks. The earlier four were in prose. This one was in a
+  test, which is worse — prose that is wrong reads as wrong to a careful
+  reader, and a green test reads as proof.
+
+- **MINOR — a fact claimed exact mac equivalence the record already
+  rejects.** `TheFilterActivePredicateIsMacs` and the predicate's own
+  comment said the rule is mac's. §C's micro-divergence m2 says
+  otherwise and has since it was written: Foundation's `.whitespaces` is
+  Zs plus tab, `char.IsWhiteSpace` is wider, and five code points
+  (U+000B, U+000C, U+0085, U+2028, U+2029) read INACTIVE here and ACTIVE
+  on mac. The fact is `WhitespaceIsNotAFilterButANewlineIs` now — the
+  bounded claim, which is the newline carve-out — and **the five
+  divergences are arms rather than a paragraph**, because a ratified
+  boundary that nothing executes is a boundary that moves. The comment
+  says what the predicate is spelled out FOR.
+
+  The formulations join the retired-vocabulary census — and its LIMIT is
+  recorded with them rather than implied. That census scans canvas
+  PRODUCTION and the censuses, deliberately not the test tree, because
+  test prose narrates retired mechanisms on purpose. So the row catches
+  the wording in the comment (verified) and would NOT have caught it in
+  the fact's NAME, which is where this instance actually lived. **A test
+  method's name is a claim and nothing guards it**; that is a known gap,
+  named here, and not one a fifth census row would close without a
+  name-shaped rule that has its own false-green risk.
+
+**THE PATTERN ACROSS ROUNDS 10 AND 11, recorded because it is the exit
+condition for this kind of review.** Neither round found a code defect.
+Both found a claim wider than its evidence, in an artefact nobody had
+edited recently — an enum's value names, a test's curated list, a fact's
+title. Diff-following cannot reach those; only enumerating a claim's
+consumers can. **The sweep rule's final form: when a claim is corrected,
+find everything that repeats it in any vocabulary, including the things
+that state it by being NAMED that way.** A test method's name is a
+claim. An enum value is a claim. A curated list is a claim of
+completeness. All three were wrong on this branch while the prose beside
+them was right.
+
 ### PR C — the strategic lesson
 
 One asynchronous requirement, inside a PR whose other twelve contracts

@@ -295,32 +295,99 @@ public sealed class CanvasNavigatorTests : IDisposable
     /// count over an empty outline for eight rounds.
     /// </para>
     /// <para>
-    /// The verb list is the navigator's public read surface. A verb added
-    /// without a state answer fails here by name rather than going
-    /// quietly silent, which is the failure this whole gate exists to
-    /// stop.
+    /// The verb list is the navigator's public read surface, and it is
+    /// DERIVED rather than curated — every public method is either a row
+    /// below or a named exclusion carrying its reason, checked by
+    /// reflection. It was hand-maintained until codex round 11, and it
+    /// was already wrong: `AnnounceFilterCount` was missing, which is a
+    /// shipping read path (the filter field's `TextChanged` reaches it on
+    /// every keystroke, including while the canvas cannot answer), so a
+    /// regression confined to its unreadable branch passed a fact whose
+    /// whole claim is that a verb added without a state answer "fails
+    /// here by name". **A list in a test is a claim of completeness that
+    /// nothing checks** — this branch's own rule, applied last to the
+    /// last hand-maintained list.
     /// </para>
     /// </remarks>
     [Fact]
     public void EveryReadVerbAnswersInEveryLoadState()
     {
-        (string Name, Action<CanvasNavigator> Run)[] verbs =
+        (string Member, string Name, Action<CanvasNavigator> Run)[] verbs =
         [
-            ("nextCard", navigator => navigator.NextCard()),
-            ("previousCard", navigator => navigator.PreviousCard()),
-            ("enterGroup", navigator => navigator.EnterGroup()),
-            ("exitGroup", navigator => navigator.ExitGroup()),
-            ("followForward", navigator => navigator.FollowConnection(forward: true)),
-            ("followBack", navigator => navigator.FollowConnection(forward: false)),
-            ("tracePath", navigator => navigator.TracePath()),
-            ("whereAmI", navigator => navigator.WhereAmI()),
-            ("filterCards", navigator => navigator.FilterCards()),
-            ("clearFilter", navigator => navigator.ClearFilter()),
+            ("NextCard", "nextCard", navigator => navigator.NextCard()),
+            ("PreviousCard", "previousCard", navigator => navigator.PreviousCard()),
+            ("EnterGroup", "enterGroup", navigator => navigator.EnterGroup()),
+            ("ExitGroup", "exitGroup", navigator => navigator.ExitGroup()),
+            ("FollowConnection", "followForward",
+                navigator => navigator.FollowConnection(forward: true)),
+            ("FollowConnection", "followBack",
+                navigator => navigator.FollowConnection(forward: false)),
+            ("TracePath", "tracePath", navigator => navigator.TracePath()),
+            ("WhereAmI", "whereAmI", navigator => navigator.WhereAmI()),
+            ("FilterCards", "filterCards", navigator => navigator.FilterCards()),
+            ("ClearFilter", "clearFilter", navigator => navigator.ClearFilter()),
+            ("AnnounceFilterCount", "announceFilterCount",
+                navigator => navigator.AnnounceFilterCount()),
         ];
+
+        // NOT read verbs, each with the reason it is not — and each must
+        // be FOUND, so an exclusion for a member that has gone fails here
+        // rather than quietly excusing nothing.
+        (string Member, string Why)[] notReadVerbs =
+        [
+            ("FilterSummaryText",
+                "a LABEL, not an announcement: it returns the string the "
+                + "summary region shows, from the same view and the same "
+                + "mapping, and `TheFilterSummaryNeverCountsRowsTheSurfaceIsNotShowing` "
+                + "pins it."),
+            ("CommitMode",
+                "an M2 mode transition. It answers through the mode "
+                + "stack's own vocabulary and its states are the stack's, "
+                + "not the load mapping's (contract C7)."),
+            ("CancelMode",
+                "the same, for M2's other exit."),
+        ];
+
+        string[] publicSurface =
+        [
+            .. typeof(CanvasNavigator)
+                .GetMethods(
+                    System.Reflection.BindingFlags.Public
+                    | System.Reflection.BindingFlags.Instance
+                    | System.Reflection.BindingFlags.DeclaredOnly)
+                .Where(method => !method.IsSpecialName)
+                .Select(method => method.Name)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(name => name, StringComparer.Ordinal),
+        ];
+        Assert.True(publicSurface.Length >= verbs.Length - 1, "the scrape found nothing");
+        string[] accountedFor =
+        [
+            .. verbs.Select(verb => verb.Member)
+                .Concat(notReadVerbs.Select(excluded => excluded.Member))
+                .Distinct(StringComparer.Ordinal),
+        ];
+        string[] unaccounted =
+            [.. publicSurface.Except(accountedFor, StringComparer.Ordinal)];
+        Assert.True(
+            unaccounted.Length == 0,
+            "a PUBLIC member of the navigator is neither exercised in every "
+            + "load state below nor named as something else, so the claim "
+            + "that a verb without a state answer fails here by name is not "
+            + $"true: {string.Join(", ", unaccounted)}");
+        string[] staleExclusions =
+        [
+            .. notReadVerbs.Select(excluded => excluded.Member)
+                .Except(publicSurface, StringComparer.Ordinal),
+        ];
+        Assert.True(
+            staleExclusions.Length == 0,
+            "an exclusion names a member the navigator no longer has, so it "
+            + $"is excusing nothing: {string.Join(", ", staleExclusions)}");
 
         foreach ((string label, Func<CanvasDocumentViewModel> open) in UnreadableStates())
         {
-            foreach ((string name, Action<CanvasNavigator> run) in verbs)
+            foreach ((_, string name, Action<CanvasNavigator> run) in verbs)
             {
                 CanvasDocumentViewModel document = open();
                 // An ACTIVE needle, so `clearFilter` has something to
@@ -358,6 +425,54 @@ public sealed class CanvasNavigatorTests : IDisposable
             }
         }
     }
+
+    /// <summary>
+    /// TYPING in the filter field answers per load state too — the same
+    /// mapping, reached the way a reader reaches it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// `AnnounceFilterCount` is a public read verb, and the fact above
+    /// now drives it in every unreadable state. This one drives its
+    /// PRODUCTION trigger: the field's `TextChanged`, which fires on
+    /// every keystroke including while the canvas is reloading or has
+    /// failed. The two are not the same evidence — the verb fact calls
+    /// the navigator directly, and what a reader actually does is type.
+    /// </para>
+    /// <para>
+    /// The gap this closes was narrow and real: the field-wiring fact
+    /// drives only a READY canvas, and the reload fact checks the summary
+    /// LABEL rather than the announcement, so a regression confined to
+    /// the unreadable branch of the count had nothing looking at it.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void TypingInTheFieldAnswersInEveryLoadState() => RunSta(() =>
+    {
+        foreach ((string label, Func<CanvasDocumentViewModel> open) in UnreadableStates())
+        {
+            CanvasDocumentViewModel document = open();
+            var surface = new CanvasSurfaceView
+            {
+                Model = document,
+                DataContext = new object(),
+            };
+            using var host = Host(surface);
+            CanvasStatusNote expected = Assert.IsType<CanvasStatusNote>(
+                document.ReadRefusal, exactMatch: false);
+            Drain(document);
+
+            // The reader types. Nothing else — no verb, no chord.
+            surface.FilterFieldForTests.Text = "zeta";
+            host.UpdateLayout();
+
+            Assert.Equal("zeta", document.FilterText);
+            Assert.Equal(
+                Rendered(expected),
+                Assert.Single(Lines(document), line => true));
+            document.Shutdown();
+        }
+    });
 
     /// <summary>
     /// Codex C-lite round 1, B1: Filter Cards from the PALETTE reaches
@@ -2931,17 +3046,46 @@ public sealed class CanvasNavigatorTests : IDisposable
     }
 
     /// <summary>
-    /// Whitespace is not a filter — mac's rule, including the one place
-    /// .NET would have disagreed (a bare newline reads as ACTIVE there,
-    /// and core trims it, so it matches everything).
+    /// Whitespace is not a filter, and a bare NEWLINE is — the carve-out
+    /// this predicate exists for, and the exact width of its agreement
+    /// with mac.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The claim is BOUNDED, and this fact used to be called
+    /// `TheFilterActivePredicateIsMacs`, which was wider than the truth
+    /// and wider than the record. Foundation's `.whitespaces` is Zs plus
+    /// tab, so the two hosts agree on the ordinary cases and on the
+    /// newline carve-out (.NET's `IsNullOrWhiteSpace` would have trimmed
+    /// it; mac reads it as active and core trims it, so it matches
+    /// everything) — and they DIVERGE on five code points that
+    /// Foundation excludes and `char.IsWhiteSpace` includes. Those are
+    /// ratified in the contracts document, so they are pinned here as
+    /// arms rather than left as a paragraph: a ratified boundary that
+    /// nothing executes is a boundary that moves.
+    /// </para>
+    /// <para>
+    /// Each of the five reads INACTIVE on this host and ACTIVE on mac.
+    /// That is the recorded divergence, not a defect, and the arms exist
+    /// so a future "let us just use `IsNullOrWhiteSpace`" — or a future
+    /// widening toward mac — has to come back through the record.
+    /// </para>
+    /// </remarks>
     [Theory]
     [InlineData("", false)]
     [InlineData("   ", false)]
     [InlineData("\t", false)]
     [InlineData("\n", true)]
     [InlineData(" a ", true)]
-    public void TheFilterActivePredicateIsMacs(string needle, bool active) =>
+    // The five ratified divergences (CD-22 / §C's micro-divergence m2):
+    // Foundation's `.whitespaces` excludes each, so mac reads them
+    // ACTIVE; `char.IsWhiteSpace` includes them, so this host does not.
+    [InlineData("\u000B", false)]
+    [InlineData("\u000C", false)]
+    [InlineData("\u0085", false)]
+    [InlineData("\u2028", false)]
+    [InlineData("\u2029", false)]
+    public void WhitespaceIsNotAFilterButANewlineIs(string needle, bool active) =>
         Assert.Equal(active, CanvasDocumentViewModel.IsFilterActive(needle));
 
     // --- C11: Where am I --------------------------------------------------

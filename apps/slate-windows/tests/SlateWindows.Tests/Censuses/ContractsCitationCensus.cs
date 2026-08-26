@@ -261,6 +261,15 @@ public sealed class ContractsCitationCensus
                 "INVOCATION",
                 "Enter captures the navigator's attached presenter."),
             (
+                "EXACT mac equivalence for the filter-active predicate "
+                    + "(codex round 11: five ratified divergences, §C m2)",
+                @"(?i)predicate is macs"
+                    + @"|(?i)spelled out to mac's rule"
+                    + @"|(?i)mac's rule, including",
+                "carve-out",
+                "The filter-active predicate is macs: spelled out to mac's "
+                    + "rule rather than borrowed."),
+            (
                 "the CACHE-derived admission (codex round 10: the pane comes "
                     + "from the invocation, and refusals are runtime guards)",
                 @"(?i)owns the keys or owned them last"
