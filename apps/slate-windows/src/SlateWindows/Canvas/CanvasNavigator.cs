@@ -52,6 +52,19 @@ internal interface ICanvasSurfacePresenter
     /// <summary>Put keyboard focus back on the showing projection.</summary>
     void FocusProjection();
 
+    /// <summary>
+    /// The VIEW this surface is for — its tab, the same key contract
+    /// A14's focus request is addressed by.
+    /// </summary>
+    /// <remarks>
+    /// Two panes share one document, so a request that named no owner
+    /// reached both: the pane that could not satisfy it kept it pending
+    /// and pulled the reader into ITS filter field the next time it saw
+    /// the keys. A14 solved that by addressing the request; this is the
+    /// same seam for the same reason (contract C10/A14).
+    /// </remarks>
+    object? Owner { get; }
+
     // Deliberately NOT here: "focus the filter field". Ctrl+F raises the
     // document's focus TOKEN instead, because the field belongs to every
     // pane showing the canvas and only the one the reader is in should
@@ -474,15 +487,20 @@ internal sealed class CanvasNavigator
         {
             return;
         }
-        _document.RequestFilterFocus();
+        _document.RequestFilterFocus(_presenter?.Owner);
     }
 
     /// <summary>
-    /// The palette row and the header's Clear button. Always answers:
-    /// "Filter cleared — ⟨n⟩ cards." is true of the resulting state
-    /// whether or not a needle was in the field, and a verb the user
-    /// invoked that says nothing is the never-silent failure (CD-43 —
-    /// mac guards and stays silent here).
+    /// The palette row and the header's Clear button. It ANSWERS where
+    /// mac stays silent: "Filter cleared — ⟨n⟩ cards." is true of the
+    /// resulting state whether or not a needle was in the field, and a
+    /// verb the user invoked that says nothing is the never-silent
+    /// failure (CD-43 — mac guards and returns).
+    ///
+    /// On a canvas that cannot ANSWER, the mapping's sentence is the
+    /// true one and this says that instead: the count would come from an
+    /// empty outline, and "0 cards" reads as an empty canvas rather than
+    /// an unreadable one.
     /// </summary>
     public void ClearFilter()
     {
@@ -726,12 +744,17 @@ internal sealed class CanvasNavigator
         // an unreadable canvas is no reason to keep a needle they just
         // dismissed.
         _document.FilterText = string.Empty;
-        _presenter?.FocusProjection();
         if (_document.AdmitStructuralRead())
         {
             Announce(new CanvasA11yEvent.CanvasFilterCleared(
                 (uint)_document.Outline.Count));
         }
+        // AFTER the sentence, which is where it was before admission was
+        // added and where it belongs: seating the projection can seat a
+        // first selection when the needle filtered the previous one away,
+        // and that seat has its own line. Speaking the clear first keeps
+        // the two in the order the user's press caused them.
+        _presenter?.FocusProjection();
         return true;
     }
 

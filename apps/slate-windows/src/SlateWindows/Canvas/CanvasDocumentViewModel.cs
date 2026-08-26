@@ -67,6 +67,13 @@ internal enum CanvasActivation
 internal sealed record CanvasFocusRequest(object Owner, string? NodeId, int Generation);
 
 /// <summary>
+/// A pending request to put the reader in the filter field (contract
+/// C10) — <see cref="CanvasFocusRequest"/>'s twin, and addressed for the
+/// same reason: two panes share one document.
+/// </summary>
+internal sealed record CanvasFilterFocusRequest(object? Owner, int Generation);
+
+/// <summary>
 /// What the surfaces are showing for the filter, and whether that answers
 /// the needle now in the field — the mac <c>CanvasDocument.FilterView</c>
 /// twin (contract C10).
@@ -136,6 +143,8 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     private string _filterText = string.Empty;
     private string? _whereAmIText;
     private int _filterFocusToken;
+    private CanvasFilterFocusRequest? _filterFocusRequest;
+    private int _filterFocusGeneration;
     private (string Needle, IReadOnlySet<string> Ids)? _filterMatchCache;
 
     /// <summary>Row lookup by node id — the outline is walked by id from
@@ -865,7 +874,61 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         private set => SetField(ref _filterFocusToken, value);
     }
 
-    internal void RequestFilterFocus() => FilterFocusToken++;
+    /// <summary>
+    /// The pending request to put the reader in the filter field, or
+    /// null. ADDRESSED and DURABLE, the A14 shape (contract C10).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A bare token was neither. A surface that could not satisfy it had
+    /// to choose between consuming it — which is how the palette route
+    /// silently did nothing — and keeping it, which is how the OTHER
+    /// pane on the same document pulled the reader into its own filter
+    /// field minutes later. Both are focus moves the user did not ask
+    /// for; addressing the request removes the choice.
+    /// </para>
+    /// <para>
+    /// Owner-scoped like <see cref="FocusRequest"/>: a surface delivers
+    /// only what is addressed to it, and the delivery clears it on the
+    /// DOCUMENT, so peers stop holding it. Generation-matched, so a
+    /// newer request supersedes an older one rather than being consumed
+    /// by its late delivery.
+    /// </para>
+    /// </remarks>
+    public CanvasFilterFocusRequest? FilterFocusRequest
+    {
+        get => _filterFocusRequest;
+        private set => SetField(ref _filterFocusRequest, value);
+    }
+
+    /// <param name="owner">
+    /// The view the request is FOR — the surface's tab. Null when no
+    /// surface has ever held the keys on this document, which is the one
+    /// case with nobody to address: the request is raised anyway and the
+    /// first eligible surface takes it, because a verb the user invoked
+    /// must not evaporate.
+    /// </param>
+    internal void RequestFilterFocus(object? owner)
+    {
+        FilterFocusToken++;
+        FilterFocusRequest = new CanvasFilterFocusRequest(
+            owner, Interlocked.Increment(ref _filterFocusGeneration));
+    }
+
+    /// <summary>
+    /// A surface put the reader in its filter field and is saying so.
+    /// Only the matching generation clears it, for
+    /// <see cref="CompleteFocusLanding"/>'s reason.
+    /// </summary>
+    internal void CompleteFilterFocus(CanvasFilterFocusRequest delivered)
+    {
+        ArgumentNullException.ThrowIfNull(delivered);
+        if (_filterFocusRequest is { } pending
+            && pending.Generation == delivered.Generation)
+        {
+            FilterFocusRequest = null;
+        }
+    }
 
     // --- Where am I (contract C11) ---------------------------------------
 

@@ -238,9 +238,19 @@ public sealed class CanvasNavigatorTests : IDisposable
 
     /// <summary>
     /// Every read verb answers in every state a user can reach — the t0
-    /// never-silent rule, checked by DRIVING each verb rather than by
-    /// reading the mapping it goes through.
+    /// never-silent rule, checked by DRIVING each verb and asserting the
+    /// EXACT sentence its state owes.
     /// </summary>
+    /// <remarks>
+    /// The expectation is derived from `ReadRefusal`, the mapping the
+    /// verbs route through, so this catches a verb that walks PAST
+    /// admission and not a mapping that is wrong — both sides would move
+    /// together. `TheReadMappingAnswersEveryLoadState` pins what the
+    /// mapping SAYS, per state, independently; the guard-may-not-exercise
+    /// -the-mechanism rule is satisfied across the pair. The weaker "did
+    /// something speak" it replaced is what let `clearFilter` announce a
+    /// count over an empty outline for eight rounds.
+    /// </remarks>
     /// <remarks>
     /// The verb list is the navigator's public read surface. A verb added
     /// without a state answer fails here by name rather than going
@@ -334,6 +344,92 @@ public sealed class CanvasNavigatorTests : IDisposable
         });
 
     /// <summary>
+    /// The re-review's B1 concern: the OTHER pane on the same document
+    /// never inherits a request the first pane already satisfied.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Making the request durable fixed the palette route and opened
+    /// this: two panes share one document, so the pane that could not
+    /// satisfy the request kept it pending — and pulled the reader into
+    /// ITS filter field the next time it gained the keys or became
+    /// visible, minutes later, unasked. That is the same class B1 is
+    /// about, one arrangement over, and it is why the request is
+    /// ADDRESSED and COMPLETED rather than merely retried.
+    /// </para>
+    /// <para>
+    /// The two panes are given distinct `DataContext`s because that is
+    /// what a tab IS to a surface — the owner key A14 already uses.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void ASatisfiedFilterRequestIsNotInheritedByTheOtherPane() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        var tabA = new object();
+        var tabB = new object();
+        var paneA = new CanvasSurfaceView { Model = document, DataContext = tabA };
+        var paneB = new CanvasSurfaceView { Model = document, DataContext = tabB };
+        var root = new StackPanel();
+        root.Children.Add(paneA);
+        root.Children.Add(paneB);
+        using var host = Host(root);
+
+        // The reader is in pane A, so that is the pane the verb is for.
+        paneA.OutlineForTests.FocusTree();
+        host.UpdateLayout();
+        document.Navigator.FilterCards();
+        host.UpdateLayout();
+        Assert.True(
+            paneA.FilterFieldForTests.IsKeyboardFocused,
+            "the premise: the pane the reader was in satisfied the request.");
+        // Completed on the DOCUMENT, or the peer pane is still holding it.
+        Assert.Null(document.FilterFocusRequest);
+
+        // Now the reader goes to pane B of their own accord. Nothing may
+        // move them again.
+        paneB.OutlineForTests.FocusTree();
+        host.UpdateLayout();
+        Assert.False(
+            paneB.FilterFieldForTests.IsKeyboardFocused,
+            "the OTHER pane inherited a request that was already satisfied and "
+            + "moved the reader into its filter field — a focus move nobody "
+            + "asked for (contract C10/A14).");
+        Assert.True(paneB.OutlineForTests.TreeForTests.IsKeyboardFocusWithin);
+
+        // --- And the ADDRESS carries its own weight, which completion
+        // cannot: a request raised for a pane that is not showing must
+        // not be taken by the pane that is. The reader switched away
+        // from A's tab, asked for the filter from the palette, then
+        // clicked into B — B is eligible, visible and holding the keys,
+        // and the request is still not B's.
+        paneA.OutlineForTests.FocusTree();
+        host.UpdateLayout();
+        paneA.Visibility = Visibility.Collapsed;
+        host.UpdateLayout();
+        document.Navigator.FilterCards();
+        Assert.NotNull(document.FilterFocusRequest);
+
+        paneB.OutlineForTests.FocusTree();
+        host.UpdateLayout();
+        Assert.False(
+            paneB.FilterFieldForTests.IsKeyboardFocused,
+            "a request addressed to another pane was answered by this one — "
+            + "the reader asked for A's filter and landed in B's.");
+        Assert.NotNull(document.FilterFocusRequest);
+
+        // …and it is still waiting for the pane it was for.
+        paneA.Visibility = Visibility.Visible;
+        host.UpdateLayout();
+        paneA.OutlineForTests.FocusTree();
+        host.UpdateLayout();
+        Assert.True(
+            paneA.FilterFieldForTests.IsKeyboardFocused,
+            "the addressed pane must still be able to satisfy it when it can.");
+        Assert.Null(document.FilterFocusRequest);
+    });
+
+    /// <summary>
     /// Codex C-lite round 1, B2: a filtered outline never claims
     /// containment the canvas does not have.
     /// </summary>
@@ -424,6 +520,21 @@ public sealed class CanvasNavigatorTests : IDisposable
         }
 
         Assert.NotEmpty(samples);
+
+        // THE PREMISE, asserted rather than assumed: the window this
+        // fact is about was actually sampled. Every assertion below
+        // SKIPS the state-sentence samples, which is the fixed
+        // behaviour — so without this line the fact goes silently green
+        // the day `Load` stops raising a notification while the
+        // projections are hidden, and it would have been green for a
+        // reason that has nothing to do with what it checks.
+        (string Summary, int Shown, bool Visible)[] hidden =
+            [.. samples.Where(sample => !sample.Visible)];
+        Assert.NotEmpty(hidden);
+        Assert.All(hidden, sample => Assert.Equal(
+            Rendered(new CanvasStatusNote.Loading()),
+            sample.Summary));
+
         foreach ((string summary, int shown, bool visible) in samples)
         {
             if (!summary.Contains(" of ", StringComparison.Ordinal))

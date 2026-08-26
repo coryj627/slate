@@ -80,7 +80,6 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
     private readonly TextBox _whereAmIReadback;
     private bool _synchronizingSwitcher;
     private bool _synchronizingFilter;
-    private int _filterFocusToken;
     private IInputElement? _whereAmIReturnFocus;
     private Window? _hostWindow;
 
@@ -317,7 +316,7 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         // request addressed to B would strand. DataContext IS the owner
         // key, so a change to it is exactly the moment to re-ask (B2).
         DataContextChanged += (_, _) => TryDeliverPending();
-        _outline.ContainersRealized += TryDeliverPending;
+        _outline.ContainersRealized += TryDeliverFocus;
         // M4's pane arm, and the navigator's "which surface are the keys
         // coming from" answer, in one subscription.
         IsKeyboardFocusWithinChanged += OnKeyboardFocusWithinChanged;
@@ -346,6 +345,10 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         get => (CanvasDocumentViewModel?)GetValue(ModelProperty);
         set => SetValue(ModelProperty, value);
     }
+
+    /// <summary>The tab this surface is showing (contract C10/A14): the
+    /// key both durable requests are addressed by.</summary>
+    public object? Owner => DataContext;
 
     internal CanvasOutlineView OutlineForTests => _outline;
 
@@ -422,13 +425,15 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         }
     }
 
-    /// <summary>Not a presenter member (see
-    /// <see cref="ICanvasSurfacePresenter"/>): Ctrl+F raises the
-    /// document's focus token and each surface decides for itself
-    /// whether the reader is in IT.</summary>
-    /// <summary>Put the reader in the filter field, reporting whether
-    /// it took the keys — a request nobody could satisfy must not be
-    /// marked satisfied (contract C10/A14).</summary>
+    /// <summary>
+    /// Put the reader in the filter field, reporting whether it took the
+    /// keys — a request nobody could satisfy must not be marked
+    /// satisfied (contract C10/A14).
+    /// </summary>
+    /// <remarks>Not a presenter member (see
+    /// <see cref="ICanvasSurfacePresenter"/>): the verb raises the
+    /// document's ADDRESSED request and each surface decides for itself
+    /// whether the reader is in IT.</remarks>
     private bool FocusFilterField()
     {
         if (!_filterField.Focus())
@@ -729,7 +734,7 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
             model.OutlinePublished += view.OnOutlinePublished;
             model.Selection.PropertyChanged += view.OnSelectionPropertyChanged;
             model.Modes.PropertyChanged += view.OnModePropertyChanged;
-            view._filterFocusToken = model.FilterFocusToken;
+            view.TryDeliverFilterFocus();
         }
         view.Render();
         view.TryDeliverFocus();
@@ -820,9 +825,9 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         {
             TryDeliverFocus();
         }
-        else if (e.PropertyName == nameof(CanvasDocumentViewModel.FilterFocusToken))
+        else if (e.PropertyName == nameof(CanvasDocumentViewModel.FilterFocusRequest))
         {
-            OnFilterFocusRequested();
+            TryDeliverFilterFocus();
         }
     }
 
@@ -872,54 +877,72 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         model.Navigator.AnnounceFilterCount();
     }
 
-    /// <summary>
-    /// Ctrl+F reached the document. Only the surface the reader is
-    /// looking at takes focus: the token is per DOCUMENT, and two panes
-    /// on one canvas would otherwise both grab it (the mac Codoki #626
-    /// rule, restated for panes).
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// DURABLE, like the A14 focus request beside it, and for the same
-    /// reason. The token used to be acknowledged before eligibility was
-    /// even asked, so the PALETTE route — the one a keyboard-only reader
-    /// takes when they do not know the chord — consumed it and did
-    /// nothing: the palette owns the keys while it is closing, every
-    /// surface reads as ineligible, and nothing retried. Ctrl+F worked
-    /// and Filter Cards did not, which is the shape §W-D exists to
-    /// prevent.
-    /// </para>
-    /// <para>
-    /// So the token is acknowledged only when the field ACTUALLY took
-    /// focus, and every condition that can turn a pending request
-    /// deliverable re-asks — the same list `TryDeliverFocus` is on, which
-    /// is why this rides it rather than growing a second one.
-    /// </para>
-    /// </remarks>
     /// <summary>Both durable requests, asked together — a focus landing
     /// (A14) and a filter-field focus (C10). Every condition that can
     /// change the answer calls this.</summary>
     private void TryDeliverPending()
     {
         TryDeliverFocus();
-        OnFilterFocusRequested();
+        TryDeliverFilterFocus();
     }
 
-    private void OnFilterFocusRequested()
+    /// <summary>
+    /// Ctrl+F, or the palette's Filter Cards, reached the document. Only
+    /// the surface it was ADDRESSED to takes focus, and only when it can
+    /// (contract C10).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// DURABLE and ADDRESSED, the A14 focus request's shape, and it took
+    /// both halves to be correct. The request used to be acknowledged
+    /// before eligibility was even asked, so the PALETTE route — the one
+    /// a keyboard-only reader takes when they do not know the chord —
+    /// consumed it and did nothing: the palette owns the keys while it
+    /// closes, every surface reads as ineligible, and nothing retried.
+    /// Ctrl+F worked and Filter Cards did not.
+    /// </para>
+    /// <para>
+    /// Acknowledging only on success fixed that and opened the other
+    /// half: two panes share one document, so the pane that could not
+    /// satisfy the request kept it pending and pulled the reader into
+    /// ITS filter field the next time it saw the keys. The request is
+    /// addressed to a tab now and COMPLETED on the document when it
+    /// lands, so a peer neither steals it nor holds it.
+    /// </para>
+    /// <para>
+    /// The re-ask list is this view's own: `Loaded`, `IsVisibleChanged`,
+    /// `DataContextChanged`, the outline's container realization, and —
+    /// the one that matters here — keyboard focus ARRIVING, which is the
+    /// moment a closing palette hands the keys back. It is not the whole
+    /// of A14's list, and it does not need to be: `Render` never hides
+    /// the filter field (only the summary and Clear follow the needle,
+    /// and the projections follow `ready`), so no publish, state change
+    /// or table realization can turn an unsatisfiable request into a
+    /// satisfiable one.
+    /// </para>
+    /// </remarks>
+    private void TryDeliverFilterFocus()
     {
-        if (Model is not { } model || model.FilterFocusToken == _filterFocusToken)
+        if (Model is not { FilterFocusRequest: { } request } model)
+        {
+            return;
+        }
+        // Addressed to this tab, or to nobody — the second case is a
+        // document no surface has ever held the keys on, where the first
+        // eligible one takes it rather than letting the verb evaporate.
+        if (request.Owner is not null && !ReferenceEquals(request.Owner, DataContext))
         {
             return;
         }
         if (!IsVisible || (!IsKeyboardFocusWithin && AnyOtherPaneHasFocus()))
         {
-            // Not ours to take YET. The token stays unacknowledged, so
-            // the next condition that changes asks again.
+            // Not ours to take YET. The request stays pending, so the
+            // next condition that changes asks again.
             return;
         }
         if (FocusFilterField())
         {
-            _filterFocusToken = model.FilterFocusToken;
+            model.CompleteFilterFocus(request);
         }
     }
 

@@ -2300,9 +2300,20 @@ verb's empty-answer branch reports a card core could not resolve as an
 empty group, or as being at canvas level, or as nothing at all.
 
 `EveryReadVerbAnswersInEveryLoadState` DRIVES every verb in every
-unreadable state rather than reading the mapping they go through — a
-guard may not exercise the mechanism it is guarding, and the mapping's
-own fact is separate.
+unreadable state, and asserts the EXACT sentence each state owes rather
+than that something spoke. The weaker assertion is what let `ClearFilter`
+walk past admission entirely and stay green for eight rounds: it
+announced a count over an empty outline, which is neither silence nor
+the state's answer.
+
+It derives that expected sentence from `ReadRefusal` — the mapping the
+verbs route through — so it no longer catches a WRONG mapping; both
+sides would move together. That is deliberate and it is bounded: this
+fact's job is that every verb GOES THROUGH the mapping, and
+`TheReadMappingAnswersEveryLoadState` pins what the mapping SAYS,
+per state, independently. The guard-may-not-exercise-the-mechanism rule
+is satisfied across the pair rather than inside one fact, which is
+worth stating because the earlier wording claimed it of this one alone.
 
 **C5 — Structural queries are core's, and their FAILURE is a separate
 return.** `TryChildrenOf`, `TryParentOf`, `TryTracePath`, `TryWhereAmI`
@@ -2814,6 +2825,13 @@ so the per-keystroke cost is bounded by a number that is already
 asserted rather than by a hope. mac has the same shape (its list
 re-renders from `filteredOutline`); what neither host does is re-run the
 match, which is what the memo is for.
+
+The rebuild reads the UNFILTERED outline as well as the survivors now
+(CD-45's correction), so its walk is up to twice what it was — two
+linear passes over 2,000 rows plus a dictionary, still inside the same
+measured budget, and the honest number rather than the flattering one.
+Containment that a reader can trust is worth a second pass; a rebuild
+that scales worse than linearly would not be.
 
 **The filter-focus token is a DURABLE request, like A14's.** Ctrl+F and
 the palette row reach the same verb, and only one of them worked: the
@@ -4469,12 +4487,20 @@ this row exists so the pair is not read as drift.
 **CD-43 — Clear Filter always answers; mac stays silent when nothing is
 filtered.** Mac's `canvasClearFilter` guards on `filterActive ||
 !filterText.isEmpty` and returns silently otherwise, so the palette row
-can do nothing and say nothing. Windows announces
-`CanvasFilterCleared{total}` unconditionally: the sentence is true of
-the resulting state either way, and t0's never-silent rule is what
+can do nothing and say nothing. Windows ANSWERS where mac is silent:
+`Filter cleared — ⟨n⟩ cards.` is true of the resulting state whether or
+not a needle was in the field, and t0's never-silent rule is what
 decides the tie. The Escape RUNG keeps the guard — a rung that consumed
 a press without an effect would break "exactly one rung per press" by
 swallowing the rung below it.
+
+The DECISION is unchanged; the mechanism sentence is not. It used to say
+Windows announces "unconditionally", and both paths now go through the
+admission mapping (C4): on a canvas that cannot answer, the count would
+come from an empty outline, so "0 cards" would read as an empty canvas
+rather than an unreadable one — a false sentence, which is the one thing
+never-silent does not buy. The rung still consumes its press and still
+clears the needle in every state; only the sentence is the mapping's.
 
 **CD-44 — `nextCard` the CHORD and `nextCard` the COMMAND visit
 different rows, deliberately.** The chord defers to the projection, so
@@ -4492,14 +4518,26 @@ PROJECTION has nowhere to go, so on a canvas with connections the last
 CARD is not the end while its connection row is still below the cursor.
 `TheBoundaryIsTheProjectionsRowsNotCoresReadingOrder` pins it.
 
-**CD-45 — A filtered-out group's surviving child is promoted to a root
-row.** The Windows outline NESTS (CD-33) and the filter is a row
-subset, so a card whose containing group did not match has no parent
-row to sit under. The depth-stack pass makes it a root. The alternative
-— indenting it under a group that is not on screen — would claim a
+**CD-45 — A filtered-out group's survivor attaches to its nearest
+SURVIVING ancestor, and to the root when it has none.** The Windows
+outline NESTS (CD-33) and the filter is a row subset, so a card whose
+containing group did not match cannot sit under it. The alternative —
+indenting it under a group that is not on screen — would claim a
 containment the reader cannot verify. Mac's outline is flat with
 indentation, so it has no such case; recorded because a reviewer
 comparing the two projections will see the difference.
+
+Both halves of that sentence were wrong until codex round 1 on C-lite.
+The row said "the depth-stack pass makes it a root", and the mechanism
+was the defect: depth is a position in core's READING ORDER, so a stack
+run over the FILTERED rows attached such a survivor to whatever survivor
+happened to be shallower and earlier — a card from an unrelated branch,
+spoken as inside a group it is not in. And the rule was only half
+stated: a survivor whose own group was filtered out but whose
+GRANDparent matched belongs under the grandparent, not at the root.
+Containment is computed from the unfiltered hierarchy now, which is what
+makes the promotion true rather than approximately true;
+`AFilteredOutlineNeverNestsACardUnderAGroupItIsNotIn` pins it.
 
 **CD-46 — Next/previous card route through the read mapping; mac
 returns silently outside `.ready`.** `canvasSelectAdjacent` guards on
@@ -6492,6 +6530,74 @@ a split rather than a revert.
   the controller rather than by an implementer. This section is the fix.
 - Recorded with it: the interim filter's SECOND cost (C10), and five
   minors including extraction residue in the mode controller's comments.
+
+### PR C-lite — codex adversarial round 1 — NOT SAFE, 5 blockers + 2 minors
+
+Every one a SYNC-ERA or SPLIT-CONSEQUENCE defect: the parent's seven
+rounds hunted the asynchronous publish, and none of them looked at the
+code the split kept. That is the argument for reviewing an extracted
+branch on its own terms rather than trusting the layer's history.
+
+- **B1 — the palette could not focus the filter field.** The token was
+  acknowledged before eligibility was asked; a closing palette holds the
+  keys, so every surface read as ineligible, the token was consumed and
+  nothing retried. **Ctrl+F worked and Filter Cards did not** — one verb,
+  two routes, one dead. Fixed to A14's durable shape.
+- **B2 — the filtered outline fabricated containment.** The depth stack
+  ran over the FILTERED rows, so a survivor whose group was filtered out
+  attached to whatever survivor happened to be shallower and earlier — a
+  card from an unrelated branch, spoken as inside a group it is not in.
+  CD-45 swept: containment comes from the unfiltered hierarchy, and the
+  rule is nearest surviving ancestor, else root.
+- **B3 — the delivered set lied.** `commitMode`/`cancelMode` were
+  `implemented` in the parity matrix while nothing on this branch ENTERS
+  a mode; the entrants are PR F's and the conformance suite drives a test
+  mode, which is what §B12's executable rule distinguishes. Both rows
+  returned to `pending` and come back with F.
+- **B4 — Clear Filter bypassed the admission mapping**, announcing a
+  count over an empty outline on a canvas that cannot answer — "0 cards"
+  reading as an empty canvas. Both paths admitted; CD-43's mechanism
+  sentence swept.
+- **B5 — a stale count over zero visible rows.** The memoized answer
+  stayed `Current` while the projections were collapsed under `Loading`,
+  so the summary counted rows nobody could see. The view is current only
+  while the rows are renderable.
+- Minors: the verbosity comment's stale "checkable radio items" (the
+  third site of a correction recorded in this document), and the
+  mixed-EOL trap's FOURTH round-trip, closed as a class with a
+  `.gitattributes` `whitespace=cr-at-eol` entry.
+
+### PR C-lite — scoped re-review — REVISE
+
+The five fixes held; what forced a revision was records that no longer
+described the code, and one defect the first remedy introduced.
+
+- **B1's remedy opened the other half of its own class.** Acknowledging
+  only on success stopped the palette route from evaporating and let the
+  OTHER pane on the same document keep the request pending — so it
+  pulled the reader into ITS filter field the next time it saw the keys.
+  The request is ADDRESSED to a tab and COMPLETED on the document now,
+  which is A14's full shape rather than half of it, and both halves are
+  separately mutation-verified: dropping the address lets a peer answer a
+  request raised for a hidden pane, dropping the completion lets a peer
+  inherit a satisfied one.
+- **Three records contradicted the code** — CD-45's mechanism and rule,
+  CD-43's "unconditionally", and C4's claim that the strengthened
+  never-silent fact does not read the mapping it guards. All swept, and
+  C4 now says what the pair of facts proves between them rather than
+  claiming it of one.
+- **A fact that could go vacuously green.** The B5 fact skips every
+  sample without a count, which is the fixed behaviour — so its whole
+  content lived in samples it might never take. It asserts the hidden
+  window was SAMPLED, and the exact sentence in it.
+- **An unremarked reorder reverted.** The Escape rung's focus move had
+  drifted ahead of its announcement; not required by the remedy, and it
+  can reorder two lines when clearing the needle seats a first selection.
+  Announcement first, as before.
+- **A doc-comment splice** left the method the fix documents with no
+  documentation at all, and `FocusFilterField` with two `<summary>`
+  elements — which Roslyn does not diagnose, so a 0-warning build said
+  nothing. Both repaired.
 
 ### PR C — the strategic lesson
 
