@@ -7467,6 +7467,39 @@ executes.**
    different thing** — and the way to tell is to record the actual
    departures rather than reason about which handler runs first.
 
+**THE UNEXPLAINED DEBUG RED IS IDENTIFIED, and it is not ours.** The
+watch opened two waves ago — one red in a Debug run whose identity was
+lost because the command tailed only the summary — is closed. The FIRST
+Debug run on this wave's commit went red, the rule that came out of that
+incident caught it (captured to a file, fail block grepped), and the
+answer is:
+
+```
+SlateWindows.Tests.ReadingViewTests.CodeCopyButtonCopiesTheSourceAndAnnounces
+System.Runtime.InteropServices.COMException : OpenClipboard Failed
+    (0x800401D0 (CLIPBRD_E_CANT_OPEN))
+```
+
+Another process held the Windows clipboard while the test read it. The
+reflection frames match the earlier red's stack shape exactly and the
+test is a plain `[Fact]` with no async, so the two are almost certainly
+one flake; nine green Debug runs between them is what a clipboard race
+across a 1,600-fact suite looks like.
+
+**It is a finding with an owner, not a footnote** (gate-integrity rule
+4). The owner is the reading view's copy button, W3's; the remedy is the
+standard bounded retry around `Clipboard.GetText`, which the machine-wide
+clipboard lock has always required and which
+`ReadingViewTests.cs:2789` does not have. It was NOT fixed here: the file
+is untouched by this branch (`git log main..HEAD` over it is empty) and
+editing an unrelated suite without a ruling is the drive-by these reviews
+exist to catch. Flagged for a ruling instead.
+
+**The lesson is about the rule, not the flake.** The identity was
+recoverable this time only because the previous wave's process failure
+had already been turned into a rule. A process rule pays for itself the
+first time the thing it guards against recurs — which was two waves.
+
 **PROCESS RULE 6, and the incident behind it.** `git add -A` swept a
 scratch mutation script into `02a4e93`; it was removed in `803371a`. This
 is the SECOND time on this branch — the coordinator removed
