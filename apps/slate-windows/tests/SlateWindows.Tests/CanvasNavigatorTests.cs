@@ -118,6 +118,22 @@ public sealed class CanvasNavigatorTests : IDisposable
               ]
             }
             """);
+        // Two sibling groups, one matching by its own label and one
+        // whose CHILD matches: the shape a depth-stack over the filtered
+        // rows fabricates containment from.
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "branches.canvas"),
+            """
+            {
+              "nodes": [
+                {"id":"alpha","type":"group","x":0,"y":0,"width":400,"height":300,"label":"Alpha zeta"},
+                {"id":"inAlpha","type":"text","text":"plain one","x":40,"y":40,"width":200,"height":100},
+                {"id":"beta","type":"group","x":600,"y":0,"width":400,"height":300,"label":"Beta"},
+                {"id":"inBeta","type":"text","text":"zeta two","x":640,"y":40,"width":200,"height":100}
+              ],
+              "edges": []
+            }
+            """);
         File.WriteAllText(Path.Combine(_fixture.Root, "empty.canvas"), "{}");
         File.WriteAllText(
             Path.Combine(_fixture.Root, "broken.canvas"), "{ this is not json");
@@ -254,14 +270,193 @@ public sealed class CanvasNavigatorTests : IDisposable
             {
                 CanvasDocumentViewModel document = open();
                 Drain(document);
+                CanvasStatusNote expected = Assert.IsType<CanvasStatusNote>(
+                    document.ReadRefusal, exactMatch: false);
                 run(document.Navigator);
-                Assert.True(
-                    Lines(document).Count > 0,
-                    $"`{name}` said NOTHING on a {label} canvas. Every verb answers "
-                    + "in every state (contract C4): a keypress that does nothing "
-                    + "must say so.");
+                // THE EXACT SENTENCE, not "something spoke". A verb that
+                // answers with the wrong state's line is as wrong as one
+                // that says nothing, and the weaker assertion is what let
+                // `clearFilter` walk past the mapping entirely and pass:
+                // it announced `Filter cleared — 0 cards.` on a canvas
+                // that could not answer, which is a count over an empty
+                // outline reading as an empty canvas.
+                Assert.Equal(
+                    Rendered(expected),
+                    Assert.Single(
+                        Lines(document),
+                        line => true));
             }
         }
+    }
+
+    /// <summary>
+    /// Codex C-lite round 1, B1: Filter Cards from the PALETTE reaches
+    /// the field, even though the palette held the keys when it ran.
+    /// </summary>
+    /// <remarks>
+    /// The token was acknowledged before eligibility was asked, so the
+    /// palette route — the one a reader who does not know the chord
+    /// takes — consumed it and did nothing: the palette owns focus while
+    /// it closes, every surface reads as ineligible, and nothing
+    /// retried. Ctrl+F worked and the palette row did not, which is a
+    /// §W-D difference between two routes to one verb. The request is
+    /// durable now, like the A14 focus landing beside it.
+    /// </remarks>
+    [Fact]
+    public void TheFilterVerbReachesTheFieldEvenWhenSomethingElseHoldsTheKeys() =>
+        RunSta(() =>
+        {
+            CanvasDocumentViewModel document = Open("board.canvas");
+            var surface = new CanvasSurfaceView { Model = document };
+            var elsewhere = new Button { Content = "the palette stands here" };
+            var root = new StackPanel();
+            root.Children.Add(elsewhere);
+            root.Children.Add(surface);
+            using var host = Host(root);
+            Assert.True(elsewhere.Focus(), "the premise: another element has the keys.");
+            host.UpdateLayout();
+
+            // The palette's route, with the palette still holding focus.
+            document.Navigator.FilterCards();
+            host.UpdateLayout();
+            Assert.False(
+                surface.FilterFieldForTests.IsKeyboardFocused,
+                "a surface that does not have the keys must not steal them.");
+
+            // …and the moment the keys come back, the request lands.
+            surface.OutlineForTests.FocusTree();
+            host.UpdateLayout();
+            Assert.True(
+                surface.FilterFieldForTests.IsKeyboardFocused,
+                "the request must SURVIVE until a surface can satisfy it — a "
+                + "token acknowledged by a surface that could not focus the "
+                + "field is a verb that silently does nothing.");
+        });
+
+    /// <summary>
+    /// Codex C-lite round 1, B2: a filtered outline never claims
+    /// containment the canvas does not have.
+    /// </summary>
+    /// <remarks>
+    /// Depth is a position in core's READING ORDER, so a depth stack run
+    /// over the filtered rows attached a survivor whose own group was
+    /// filtered out to whatever survivor happened to be shallower and
+    /// earlier — a card from an unrelated branch. A screen reader reads
+    /// that as containment, and it is false. CD-45 promotes such a
+    /// survivor to a ROOT; the containment now comes from the unfiltered
+    /// hierarchy, which is what makes that promotion true rather than
+    /// approximately true.
+    /// </remarks>
+    [Fact]
+    public void AFilteredOutlineNeverNestsACardUnderAGroupItIsNotIn() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("branches.canvas");
+        var surface = new CanvasSurfaceView { Model = document };
+        using var host = Host(surface);
+
+        document.FilterText = "zeta";
+        host.UpdateLayout();
+
+        // The premise: the ALPHA group matched on its own label, and a
+        // card inside BETA matched on its text — so the survivors are a
+        // shallow row from one branch and a deep row from another.
+        IReadOnlyList<CanvasOutlineRowViewModel> roots =
+            surface.OutlineForTests.RootsForTests;
+        string[] rootIds = [.. roots.Select(row => row.Id)];
+        Assert.Contains("alpha", rootIds);
+        Assert.DoesNotContain("inAlpha", rootIds);
+
+        // `inBeta` is a ROOT. Under the depth stack it was a CHILD of
+        // `alpha` — a card in Beta, presented as inside Alpha.
+        Assert.Contains(
+            "inBeta",
+            rootIds);
+        CanvasOutlineRowViewModel alpha =
+            roots.Single(row => row.Id == "alpha");
+        Assert.DoesNotContain(
+            "inBeta",
+            alpha.Children.Select(child => child.Id));
+    });
+
+    /// <summary>
+    /// Codex C-lite round 1, B5: the filter summary never counts rows
+    /// the surface is not showing.
+    /// </summary>
+    /// <remarks>
+    /// C10's one invariant is <i>displayed rows == announced count</i>,
+    /// and a RELOAD broke it from the state side rather than the filter
+    /// side: the projections collapse while the canvas is `Loading`, and
+    /// the memoized answer stayed `Current`, so the region read "2 of 5
+    /// cards match" over a pane showing nothing. The view is only current
+    /// while the rows are renderable now, so the label falls back to the
+    /// state's own sentence for exactly that window.
+    /// </remarks>
+    [Fact]
+    public void TheFilterSummaryNeverCountsRowsTheSurfaceIsNotShowing() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        var surface = new CanvasSurfaceView { Model = document };
+        using var host = Host(surface);
+        document.FilterText = "zeta";
+        host.UpdateLayout();
+        Assert.StartsWith(
+            "2 of ",
+            surface.FilterSummaryForTests.Text,
+            StringComparison.Ordinal);
+
+        var samples = new List<(string Summary, int Shown, bool Visible)>();
+        void Sample() => samples.Add((
+            surface.FilterSummaryForTests.Text,
+            CountMaterializedRows(surface.OutlineForTests.RootsForTests),
+            surface.OutlineForTests.Visibility == Visibility.Visible));
+        void OnProperty(object? sender, PropertyChangedEventArgs e) => Sample();
+        void OnPublished(object? sender, EventArgs e) => Sample();
+        document.PropertyChanged += OnProperty;
+        document.OutlinePublished += OnPublished;
+        try
+        {
+            document.Load();
+        }
+        finally
+        {
+            document.PropertyChanged -= OnProperty;
+            document.OutlinePublished -= OnPublished;
+        }
+
+        Assert.NotEmpty(samples);
+        foreach ((string summary, int shown, bool visible) in samples)
+        {
+            if (!summary.Contains(" of ", StringComparison.Ordinal))
+            {
+                // The state's own sentence, which is the honest answer
+                // while nothing is on screen.
+                continue;
+            }
+            Assert.True(
+                visible,
+                $"the summary counted while the projection was hidden: '{summary}'.");
+            Assert.StartsWith(
+                $"{shown} of ",
+                summary,
+                StringComparison.Ordinal);
+        }
+    });
+
+    /// <summary>Every materialized node row in the tree, connections
+    /// excluded — what a reader can actually reach.</summary>
+    private static int CountMaterializedRows(
+        IEnumerable<CanvasOutlineRowViewModel> rows)
+    {
+        int count = 0;
+        foreach (CanvasOutlineRowViewModel row in rows)
+        {
+            if (!row.IsConnection)
+            {
+                count++;
+            }
+            count += CountMaterializedRows(row.Children);
+        }
+        return count;
     }
 
     /// <summary>The states whose rows the surface does not render, each

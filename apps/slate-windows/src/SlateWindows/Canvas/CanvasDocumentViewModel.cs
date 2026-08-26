@@ -785,6 +785,27 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             {
                 return new CanvasFilterView(_outline, Narrowed: false, Current: true, null);
             }
+            // A COUNT IS A CLAIM ABOUT ROWS ON SCREEN, so it is only
+            // current while rows are on screen (contract C10, C4's
+            // mapping). During a reload the surface collapses both
+            // projections and the memoized answer stayed `Current`, so
+            // the summary read "2 of 5 cards match" over a pane showing
+            // nothing — the one invariant C10 has, broken by a state
+            // change rather than by a filter change. `Current: false`
+            // routes both the label and the announcement through the
+            // state mapping, which has the honest sentence for every
+            // state that is not showing rows. The ROWS are unchanged:
+            // the answer is still the last coherent one, and widening
+            // here would make the reload flash every card the moment it
+            // finished.
+            if (!RendersRetainedSnapshot)
+            {
+                return _filterMatchCache is { } held
+                    ? new CanvasFilterView(
+                        RowsMatching(held.Ids), Narrowed: true, Current: false, held.Ids)
+                    : new CanvasFilterView(
+                        _outline, Narrowed: false, Current: false, null);
+            }
             if (_filterMatchCache is { } cached
                 && string.Equals(cached.Needle, _filterText, StringComparison.Ordinal))
             {

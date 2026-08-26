@@ -652,17 +652,14 @@ W6_1_DELIVERED_COMMANDS = {
     # this set in the PR that makes it EXECUTABLE, not the one that
     # registers it.
     #
-    # `commitMode` and `cancelMode` are PRESENT under that same rule, and
-    # the difference is worth stating because the two look alike from
-    # here. Both pairs are disabled most of the time; only one is
-    # disabled for a reason the PR cannot lift. The mode rows gate on
-    # `CanCommitOrCancel`, so they EXECUTE the moment a mode is running —
-    # and C ships the machine that runs one, drives it from the header's
-    # buttons and the menu items, and pins it with the M1–M7 conformance
-    # suite. `toggleFollowSelection` gates on a viewport that does not
-    # exist in this PR at all: there is no state of the shipped code in
-    # which it does anything. Delivered means REACHABLE, not
-    # unconditionally enabled.
+    # `commitMode` and `cancelMode` are absent for the SAME reason, and
+    # the split is what made that true. They gate on `CanCommitOrCancel`,
+    # so they execute the moment a mode is running — but nothing in the
+    # shipped code ENTERS a mode: the entrants are PR F's (move, resize,
+    # connect), and C-lite ships the machine, not a way in. The M1-M7
+    # conformance suite drives a TEST mode, which is exactly the thing
+    # §B12's rule distinguishes from executable. Both rows return here
+    # with F, which is the PR that makes them reachable.
     "slate.canvas.whereAmI",
     "slate.canvas.nextCard",
     "slate.canvas.previousCard",
@@ -673,8 +670,6 @@ W6_1_DELIVERED_COMMANDS = {
     "slate.canvas.tracePath",
     "slate.canvas.filterCards",
     "slate.canvas.clearFilter",
-    "slate.canvas.commitMode",
-    "slate.canvas.cancelMode",
 }
 
 # W4 delivery, same per-command shape as W3.

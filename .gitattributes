@@ -7,6 +7,20 @@
 # CRLF and the canvas byte-stability suite fails on Windows.
 * -text
 
+# The Windows C# sources carry a few DELIBERATE CRLF terminators inside
+# otherwise-LF files, and two tools disagree about them: `dotnet format`
+# re-emits the trivia it touches using the platform newline and fails the
+# verify gate if those lines are LF, while `git diff --check` reports the
+# CR as trailing whitespace. Four review round-trips were spent on that
+# disagreement before it was named. This tells git the CRs are
+# deliberate; it changes no bytes, so `* -text` above still governs
+# checkout and the canvas byte-stability fixtures are untouched.
+#
+# The alternative considered and rejected: normalize these files to
+# all-CRLF, which satisfies both tools but rewrites every line of every
+# file and buries real diffs under an EOL flip.
+apps/slate-windows/**/*.cs whitespace=cr-at-eol
+
 demo-vault/.obsidian/themes/** binary
 demo-vault/attachments/*.mp3 binary
 demo-vault/attachments/*.pdf binary

@@ -2643,6 +2643,31 @@ PR D ships the viewport. "State only until D" was the alternative and it
 is worse: the toggle's announcement says the viewport follows the
 selection, and with no viewport that is a sentence about nothing.
 
+**And on THIS branch the two mode rows are in the same position, which
+the parity matrix now says.** They gate on `CanCommitOrCancel`, so they
+execute the moment a mode is running — and nothing here ENTERS a mode.
+The entrants are PR F's (move, resize, connect); C-lite ships the
+machine and the M1–M7 conformance suite drives a TEST mode, which is
+precisely the thing §B12's rule distinguishes from executable. So both
+are `pending` in the matrix and out of the generator's delivered set,
+and both return with F. The earlier reading — the contract recording
+mode entry as latent while the matrix called the rows delivered — was a
+split consequence nobody had swept for: the parent branch had the same
+latency, but the matrix row was written when F was expected to follow
+immediately.
+
+**Clearing the filter is a READ VERB, on both of its paths.**
+`Filter cleared — n cards.` is a claim about a canvas, and on a canvas
+that cannot answer it is a false one: the count comes from an empty
+outline, and "0 cards" reads as an empty canvas rather than an
+unreadable one. Both the palette verb and the Escape rung go through the
+admission mapping. The RUNG still consumes its press — there was a
+needle, so Escape belongs to it and must not fall through — and still
+clears the needle, because clearing is what the user asked for; only the
+SENTENCE is the mapping's. `EveryReadVerbAnswersInEveryLoadState` now
+asserts the exact expected sentence per state rather than that something
+spoke, which is the assertion that let this walk past.
+
 **C10 — The filter is ONE view, and every consumer reads it. THE
 IMPLEMENTATION IS THE SYNCHRONOUS INTERIM.**
 
@@ -2678,6 +2703,19 @@ so a keystroke arriving during a load waits for the load to finish. On
 the fixtures and the §K 2,000-node budget that is milliseconds; on a
 slow filesystem it is the length of the open, and the user types into
 it.
+
+**A count is only CURRENT while rows are on screen.** C10's one
+invariant is *displayed rows == announced count*, and a reload broke it
+from the STATE side rather than the filter side: the projections
+collapse while the canvas is `Loading`, and the memoized answer stayed
+current, so the region read "2 of 5 cards match" over a pane showing
+nothing. The view reports `Current: false` whenever the document is not
+rendering its rows, which routes both the label and the announcement
+through the state mapping — the honest sentence for exactly that window.
+The ROWS are unchanged while it lasts: widening them would make the
+reload flash every card the moment it finished.
+`TheFilterSummaryNeverCountsRowsTheSurfaceIsNotShowing` samples the
+summary and the materialized rows together across the whole window.
 
 **THE SECOND COST, and it is the one that is easy to miss.** Typing
 DURING a reload can speak a number that belongs to no canvas. The load
@@ -2777,6 +2815,15 @@ asserted rather than by a hope. mac has the same shape (its list
 re-renders from `filteredOutline`); what neither host does is re-run the
 match, which is what the memo is for.
 
+**The filter-focus token is a DURABLE request, like A14's.** Ctrl+F and
+the palette row reach the same verb, and only one of them worked: the
+palette owns the keys while it closes, so every surface read as
+ineligible — and the token was acknowledged before eligibility was even
+asked, so nothing retried. It is acknowledged only when the field
+actually took focus now, and every condition that can turn a pending
+request deliverable re-asks both it and the A14 landing, from one place.
+A verb with two routes must not work on one of them.
+
 **C11 — Where-am-I is one render, spoken and shown.** The navigator
 builds one `CanvasWhereAmI` event from core's `canvas_where_am_i` plus
 the host state core does not hold (marked, the active mode, the filter
@@ -2810,6 +2857,20 @@ travel with it.) Deliberate either way: keying on the needle would make
 the clause read "9 of 9 shown" for rows that nothing narrowed, and
 C10's whole invariant is that the count describes the rows on screen. A
 micro-divergence recorded rather than matched.
+
+**Containment comes from the WHOLE canvas, never from the survivors**
+(CD-45, and the correction that made CD-45 true). Depth is a position in
+core's reading order, so a depth stack run over the FILTERED rows
+attached a survivor whose own group was filtered out to whatever
+survivor happened to be shallower and earlier — a card from an unrelated
+branch, presented to a screen reader as inside a group it is not in.
+CD-45's promotion-to-root was the right rule described by the wrong
+mechanism. The parent chain is computed once from the unfiltered
+outline, and each survivor attaches to its nearest surviving TRUE
+ancestor or becomes a root.
+`AFilteredOutlineNeverNestsACardUnderAGroupItIsNotIn` pins it on two
+sibling branches, one matching by its own label and one by its child's
+text — the shape that fabricates.
 
 **C12 — Focus delivery lands the reader and says NOTHING (the carried
 A14 defect).** §B filed it: a delivery to `LastActivatedNode` when the

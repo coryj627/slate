@@ -22,10 +22,11 @@ namespace SlateWindows.Canvas;
 /// </para>
 /// <para>
 /// The setting announces NOTHING of its own. The three menu items are
-/// checkable radio items, so a screen reader speaks the selected state
-/// from the element itself (t0 §3's inspectability, and the shape mac's
-/// Settings toggle has), and the honest confirmation of "you are now at
-/// Verbose" is the next card you move to. Inventing a canvas event to
+/// CHECK items bound OneWay to the level — WPF has no radio menu item —
+/// so a screen reader speaks the selected state from the element itself
+/// (t0 §3's inspectability, and the shape mac's Settings toggle has),
+/// and the honest confirmation of "you are now at Verbose" is the next
+/// card you move to. Inventing a canvas event to
 /// say it would put a string in the canonical corpus that mac never
 /// speaks (0a-1's rule), and composing one here would be exactly the
 /// host prose R-C forbids.

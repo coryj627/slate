@@ -595,37 +595,69 @@ internal sealed class CanvasOutlineView : UserControl
         {
             return;
         }
-        var stack = new Stack<(uint Depth, CanvasOutlineRowViewModel Row)>();
-        // The FILTERED rows (contract C10): the filter is a view over
-        // core's reading order, so the tree is simply built from fewer
-        // rows. A surviving child whose containing group did not match is
-        // promoted to a root by the same depth-stack pass that nests
-        // everything else — indenting it under a parent that is not on
-        // screen would be the alternative, and it is worse (CD-45; mac's
-        // flat outline has no such case, CD-33).
+        // CONTAINMENT COMES FROM THE WHOLE CANVAS, not from the rows
+        // that survived a filter (contract C10, CD-45).
+        //
+        // The depth stack used to run over the FILTERED rows, which reads
+        // as the same thing and is not: depth is a position in core's
+        // reading order, so a survivor whose own group was filtered out
+        // attached to whatever survivor happened to be shallower and
+        // earlier — a card from an UNRELATED branch. That is a containment
+        // claim the file does not make, and a screen reader reads it as
+        // one ("Evidence, inside Quarter"), which is worse than the flat
+        // list CD-45 chose over it.
+        //
+        // So the parent chain is computed from the UNFILTERED outline
+        // once, and each survivor attaches to its nearest surviving TRUE
+        // ancestor — or becomes a root, which is CD-45's promotion said
+        // properly. mac's flat outline has no such case (CD-33).
+        var trueParent = new Dictionary<string, string>(StringComparer.Ordinal);
+        var ancestry = new Stack<CanvasOutlineRow>();
+        foreach (CanvasOutlineRow row in model.Outline)
+        {
+            while (ancestry.Count > 0 && ancestry.Peek().Depth >= row.Depth)
+            {
+                _ = ancestry.Pop();
+            }
+            if (ancestry.Count > 0)
+            {
+                trueParent[row.NodeId] = ancestry.Peek().NodeId;
+            }
+            ancestry.Push(row);
+        }
+
         bool filtered = model.FilterActive;
         foreach (CanvasOutlineRow row in model.FilteredOutline)
         {
             var line = CanvasOutlineRowViewModel.ForNode(
                 row, model.Selection.IsMarked(row.NodeId), filtered);
             line.Activate = ActivateRow;
-            while (stack.Count > 0 && stack.Peek().Depth >= row.Depth)
+            // Walk the TRUE chain until a surviving ancestor is found.
+            // The rows arrive in reading order, so an ancestor that
+            // survived has already been materialized.
+            CanvasOutlineRowViewModel? parent = null;
+            string? ancestor = trueParent.GetValueOrDefault(row.NodeId);
+            while (ancestor is not null)
             {
-                _ = stack.Pop();
+                if (_byNode.TryGetValue(ancestor, out CanvasOutlineRowViewModel? found))
+                {
+                    parent = found;
+                    break;
+                }
+                ancestor = trueParent.GetValueOrDefault(ancestor);
             }
-            if (stack.Count == 0)
+            if (parent is null)
             {
                 _roots.Add(line);
             }
             else
             {
-                stack.Peek().Row.Children.Add(line);
-                _parentOf[line] = stack.Peek().Row;
+                parent.Children.Add(line);
+                _parentOf[line] = parent;
                 // A group with members is expandable; it opens by
                 // default so a first read is the whole structure.
-                stack.Peek().Row.IsExpanded = true;
+                parent.IsExpanded = true;
             }
-            stack.Push((row.Depth, line));
             _byNode[row.NodeId] = line;
         }
         ApplySelection();

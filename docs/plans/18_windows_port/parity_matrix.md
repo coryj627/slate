@@ -1,6 +1,6 @@
 # Milestone W parity matrix (§W-F row-level checklist)
 
-Generated 2026-08-25 at `66f1ed2` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
+Generated 2026-08-25 at `4eb5109` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
 
 ## Entry-criteria snapshot (w0_spec §W0-4 item 3)
 
@@ -60,11 +60,11 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 | `slate.canvas.addMedia` | Canvas: Add Media… | — | — | #745 (W6-1) | pending |
 | `slate.canvas.addNote` | Canvas: Add Note to Canvas… | — | — | #745 (W6-1) | pending |
 | `slate.canvas.alignWith` | Canvas: Align With… | — | — | #745 (W6-1) | pending |
-| `slate.canvas.cancelMode` | Canvas: Cancel Mode | — | — | #745 (W6-1) | implemented; local gates green 2026-08-25; interactive CI + human AT pending |
+| `slate.canvas.cancelMode` | Canvas: Cancel Mode | — | — | #745 (W6-1) | pending |
 | `slate.canvas.clearColor` | Canvas: Clear Color | — | — | #745 (W6-1) | pending |
 | `slate.canvas.clearFilter` | Canvas: Clear Filter | — | — | #745 (W6-1) | implemented; local gates green 2026-08-25; interactive CI + human AT pending |
 | `slate.canvas.clearMarks` | Canvas: Clear All Marks | — | — | #745 (W6-1) | pending |
-| `slate.canvas.commitMode` | Canvas: Commit Mode | — | — | #745 (W6-1) | implemented; local gates green 2026-08-25; interactive CI + human AT pending |
+| `slate.canvas.commitMode` | Canvas: Commit Mode | — | — | #745 (W6-1) | pending |
 | `slate.canvas.connectMode` | Canvas: Connect Mode | — | — | #745 (W6-1) | pending |
 | `slate.canvas.connectTo` | Canvas: Connect To… | ⌃⌘C | Control Command C | #745 (W6-1) | pending |
 | `slate.canvas.convertToNote` | Canvas: Convert Card to Note… | — | — | #745 (W6-1) | pending |

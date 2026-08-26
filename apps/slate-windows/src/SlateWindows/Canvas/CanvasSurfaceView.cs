@@ -316,8 +316,8 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         // NOT caught by OnModelChanged — the model did not change — so a
         // request addressed to B would strand. DataContext IS the owner
         // key, so a change to it is exactly the moment to re-ask (B2).
-        DataContextChanged += (_, _) => TryDeliverFocus();
-        _outline.ContainersRealized += TryDeliverFocus;
+        DataContextChanged += (_, _) => TryDeliverPending();
+        _outline.ContainersRealized += TryDeliverPending;
         // M4's pane arm, and the navigator's "which surface are the keys
         // coming from" answer, in one subscription.
         IsKeyboardFocusWithinChanged += OnKeyboardFocusWithinChanged;
@@ -426,10 +426,17 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
     /// <see cref="ICanvasSurfacePresenter"/>): Ctrl+F raises the
     /// document's focus token and each surface decides for itself
     /// whether the reader is in IT.</summary>
-    private void FocusFilterField()
+    /// <summary>Put the reader in the filter field, reporting whether
+    /// it took the keys — a request nobody could satisfy must not be
+    /// marked satisfied (contract C10/A14).</summary>
+    private bool FocusFilterField()
     {
-        _ = _filterField.Focus();
+        if (!_filterField.Focus())
+        {
+            return false;
+        }
         _filterField.SelectAll();
+        return true;
     }
 
     /// <summary>
@@ -551,7 +558,7 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
             _hostWindow = window;
             _hostWindow.Deactivated += OnWindowDeactivated;
         }
-        TryDeliverFocus();
+        TryDeliverPending();
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
@@ -577,7 +584,7 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
             Depart(CanvasFocusDeparture.TabSwitch);
             return;
         }
-        TryDeliverFocus();
+        TryDeliverPending();
     }
 
     private void OnKeyboardFocusWithinChanged(
@@ -589,6 +596,9 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
             // pane the reader is actually in, so the surface says which
             // one that is as soon as it has the keys.
             Model?.Navigator.AttachPresenter(this);
+            // …and this is the moment a palette-driven Ctrl+F becomes
+            // deliverable: the palette has given the keys back.
+            TryDeliverPending();
             return;
         }
         Depart(ClassifyFocusLoss());
@@ -868,16 +878,48 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
     /// on one canvas would otherwise both grab it (the mac Codoki #626
     /// rule, restated for panes).
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// DURABLE, like the A14 focus request beside it, and for the same
+    /// reason. The token used to be acknowledged before eligibility was
+    /// even asked, so the PALETTE route — the one a keyboard-only reader
+    /// takes when they do not know the chord — consumed it and did
+    /// nothing: the palette owns the keys while it is closing, every
+    /// surface reads as ineligible, and nothing retried. Ctrl+F worked
+    /// and Filter Cards did not, which is the shape §W-D exists to
+    /// prevent.
+    /// </para>
+    /// <para>
+    /// So the token is acknowledged only when the field ACTUALLY took
+    /// focus, and every condition that can turn a pending request
+    /// deliverable re-asks — the same list `TryDeliverFocus` is on, which
+    /// is why this rides it rather than growing a second one.
+    /// </para>
+    /// </remarks>
+    /// <summary>Both durable requests, asked together — a focus landing
+    /// (A14) and a filter-field focus (C10). Every condition that can
+    /// change the answer calls this.</summary>
+    private void TryDeliverPending()
+    {
+        TryDeliverFocus();
+        OnFilterFocusRequested();
+    }
+
     private void OnFilterFocusRequested()
     {
         if (Model is not { } model || model.FilterFocusToken == _filterFocusToken)
         {
             return;
         }
-        _filterFocusToken = model.FilterFocusToken;
-        if (IsVisible && (IsKeyboardFocusWithin || !AnyOtherPaneHasFocus()))
+        if (!IsVisible || (!IsKeyboardFocusWithin && AnyOtherPaneHasFocus()))
         {
-            FocusFilterField();
+            // Not ours to take YET. The token stays unacknowledged, so
+            // the next condition that changes asks again.
+            return;
+        }
+        if (FocusFilterField())
+        {
+            _filterFocusToken = model.FilterFocusToken;
         }
     }
 

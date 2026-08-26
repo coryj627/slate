@@ -486,6 +486,17 @@ internal sealed class CanvasNavigator
     /// </summary>
     public void ClearFilter()
     {
+        // Through the ONE admission mapping, like every other verb that
+        // speaks about the rows (contract C4). `Filter cleared — n cards.`
+        // is a claim about a canvas, and on a canvas that cannot answer
+        // it is a false one: the count would be the empty outline's, and
+        // "0 cards" reads as an empty canvas rather than an unreadable
+        // one. The mapping already has the honest sentence for each
+        // state, and this used to walk past it.
+        if (!_document.AdmitStructuralRead())
+        {
+            return;
+        }
         _document.FilterText = string.Empty;
         // The widening is synchronous, so this counts the rows this
         // frame put on screen (contract C10 interim).
@@ -707,9 +718,20 @@ internal sealed class CanvasNavigator
         {
             return false;
         }
+        // The rung CONSUMES the press either way — there was a needle,
+        // so Escape belongs to this rung and must not fall through to
+        // the next one — but what it SAYS goes through the mapping, for
+        // `ClearFilter`'s reason. The needle is cleared before the
+        // admission check, because clearing it is the user's request and
+        // an unreadable canvas is no reason to keep a needle they just
+        // dismissed.
         _document.FilterText = string.Empty;
-        Announce(new CanvasA11yEvent.CanvasFilterCleared((uint)_document.Outline.Count));
         _presenter?.FocusProjection();
+        if (_document.AdmitStructuralRead())
+        {
+            Announce(new CanvasA11yEvent.CanvasFilterCleared(
+                (uint)_document.Outline.Count));
+        }
         return true;
     }
 
