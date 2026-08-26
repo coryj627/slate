@@ -186,7 +186,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         Announcer = announcer;
         _retargetedFrom = retargetedFrom;
         _verbosity = verbosity ?? (static () => CanvasVerbosity.Standard);
-        Modes = new CanvasModeController(Announcer.Announce);
+        Modes = new CanvasModeController(Speak);
         Navigator = new CanvasNavigator(this);
     }
 
@@ -489,7 +489,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             return;
         }
         Selection.ActiveSurface = surface;
-        Announcer.Announce(new CanvasA11yEvent.CanvasSurfaceShown(surface));
+        Speak(new CanvasA11yEvent.CanvasSurfaceShown(surface));
         SurfaceChanged?.Invoke(this, surface);
     }
 
@@ -586,7 +586,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         {
             return true;
         }
-        Announcer.Announce(new CanvasA11yEvent.CanvasStatus(note));
+        Speak(new CanvasA11yEvent.CanvasStatus(note));
         return false;
     }
 
@@ -639,7 +639,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// gave.
     /// </remarks>
     internal void AnnounceSelectionUnresolvable() =>
-        Announcer.Announce(new CanvasA11yEvent.CanvasStatus(
+        Speak(new CanvasA11yEvent.CanvasStatus(
             new CanvasStatusNote.NothingSelected()));
 
     // --- Structural queries (contract C5) --------------------------------
@@ -917,6 +917,42 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     }
 
     /// <summary>
+    /// The ONE place this document speaks (contracts A5/C7).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A retired document composes nothing — the mode stack's `Speak`,
+    /// one object out, and found the same way: the Debug gate caught
+    /// `AdmitStructuralRead` announcing a refusal through a retired
+    /// announcer, because a verb invoked on a document the shell had
+    /// already closed still walked the never-silent mapping. There are
+    /// sixteen announce sites here; gating them one at a time is the
+    /// list this project has now been bitten by four times.
+    /// </para>
+    /// <para>
+    /// The navigator speaks through this too, so the whole canvas has
+    /// one boundary rather than one per class. The announcer keeps its
+    /// `Debug.Fail`: this stops the SPEAKER from composing, and anything
+    /// still reaching the funnel afterwards is a real defect the guard
+    /// should be loud about.
+    /// </para>
+    /// </remarks>
+    internal void Speak(CanvasA11yEvent @event)
+    {
+        // The FUNNEL's retirement, not the document's own shutdown flag.
+        // They are not the same instant and the difference is C7's SPEAK
+        // phase: `Shutdown` marks the document first and then drains the
+        // mode stack, whose restoration is the last sentence a
+        // retirement owes and must still be heard. Everything composed
+        // after `Announcer.Shutdown()` is what has nobody to hear it.
+        if (Announcer.IsRetired)
+        {
+            return;
+        }
+        Announcer.Announce(@event);
+    }
+
+    /// <summary>
     /// Drop any pending request addressed to an owner that no longer
     /// exists (contracts A14/C10).
     /// </summary>
@@ -1191,7 +1227,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             return;
         }
         _announcedDegradedLoad = true;
-        Announcer.Announce(new CanvasA11yEvent.CanvasLoadedDegraded((uint)skipped));
+        Speak(new CanvasA11yEvent.CanvasLoadedDegraded((uint)skipped));
     }
 
     private static string ParseErrorDetail(IReadOnlyList<CanvasLoadWarning> warnings) =>
@@ -1222,14 +1258,14 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             {
                 if (_handle is not { } handle)
                 {
-                    Announcer.Announce(new CanvasA11yEvent.CanvasStatus(
+                    Speak(new CanvasA11yEvent.CanvasStatus(
                         new CanvasStatusNote.NotReadable()));
                     return null;
                 }
                 string? text = _session.CanvasNodeText(handle, nodeId);
                 if (text is null)
                 {
-                    Announcer.Announce(new CanvasA11yEvent.CanvasStatus(
+                    Speak(new CanvasA11yEvent.CanvasStatus(
                         new CanvasStatusNote.NotATextCard()));
                 }
                 return text;
@@ -1237,7 +1273,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         }
         catch (VaultException)
         {
-            Announcer.Announce(new CanvasA11yEvent.CanvasBlocked(
+            Speak(new CanvasA11yEvent.CanvasBlocked(
                 new CanvasBlockedReason.CardTextUnreadable()));
             return null;
         }
@@ -1264,9 +1300,9 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         }
         if (GroupBoundaryEvent(previous?.GroupPath ?? [], row) is { } boundary)
         {
-            Announcer.Announce(boundary);
+            Speak(boundary);
         }
-        Announcer.Announce(new CanvasA11yEvent.CanvasMovedTo(
+        Speak(new CanvasA11yEvent.CanvasMovedTo(
             Verbosity: Verbosity,
             KindLabel: row.Kind,
             Title: row.Title,
@@ -1385,18 +1421,18 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         // speaking the ExternalLink* family would be §W-D drift.
         if (!ExternalLinkPolicy.IsLaunchable(url))
         {
-            Announcer.Announce(new CanvasA11yEvent.CanvasBlocked(
+            Speak(new CanvasA11yEvent.CanvasBlocked(
                 new CanvasBlockedReason.NotAUrl()));
             return CanvasActivation.Refused;
         }
         if (OpenExternalLinkFromSurface?.Invoke(url) == true)
         {
             LastActivatedNode = row.NodeId;
-            Announcer.Announce(new CanvasA11yEvent.CanvasOpened(
+            Speak(new CanvasA11yEvent.CanvasOpened(
                 row.Title, CanvasOpenTarget.Browser));
             return CanvasActivation.Opened;
         }
-        Announcer.Announce(new CanvasA11yEvent.CanvasBlocked(
+        Speak(new CanvasA11yEvent.CanvasBlocked(
             new CanvasBlockedReason.LinkOpenFailed()));
         return CanvasActivation.Refused;
     }
@@ -1422,7 +1458,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         {
             // t0 §5: the card stays navigable; the vocabulary names the
             // recovery (Locate File, PR E).
-            Announcer.Announce(new CanvasA11yEvent.CanvasFileNotFound(
+            Speak(new CanvasA11yEvent.CanvasFileNotFound(
                 target.Length == 0 ? row.Title : target));
             return CanvasActivation.Refused;
         }
@@ -1441,14 +1477,14 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 // host-authored sentence (0a-1). The gap is recorded in
                 // CD-38 as a STOP point: the typed reason is a core
                 // change this task may not make.
-                Announcer.Announce(new CanvasA11yEvent.CanvasActionFailed(
+                Speak(new CanvasA11yEvent.CanvasActionFailed(
                     CanvasFailedAction.CanvasAction, target));
                 return CanvasActivation.Refused;
             }
             if (OpenMediaCardFromSurface?.Invoke(target) == true)
             {
                 LastActivatedNode = row.NodeId;
-                Announcer.Announce(new CanvasA11yEvent.CanvasOpened(
+                Speak(new CanvasA11yEvent.CanvasOpened(
                     row.Title, CanvasOpenTarget.DefaultApp));
                 return CanvasActivation.Opened;
             }
@@ -1469,7 +1505,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             // same recorded STOP: a typed "could not be opened" reason
             // for FILES is a core change this task may not make
             // (CanvasBlockedReason::LinkOpenFailed is for URLs).
-            Announcer.Announce(new CanvasA11yEvent.CanvasActionFailed(
+            Speak(new CanvasA11yEvent.CanvasActionFailed(
                 CanvasFailedAction.CanvasAction, target));
             return CanvasActivation.Refused;
         }

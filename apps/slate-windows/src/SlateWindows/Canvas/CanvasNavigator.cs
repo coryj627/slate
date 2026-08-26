@@ -803,5 +803,7 @@ internal sealed class CanvasNavigator
                 ? new CanvasStatusNote.NoCardsMatchFilter()
                 : new CanvasStatusNote.Empty()));
 
-    private void Announce(CanvasA11yEvent @event) => _document.Announcer.Announce(@event);
+    /// <summary>Through the DOCUMENT's announce boundary, so a verb
+    /// invoked on a retired canvas composes nothing (contract C7).</summary>
+    private void Announce(CanvasA11yEvent @event) => _document.Speak(@event);
 }

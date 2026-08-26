@@ -147,6 +147,10 @@ internal sealed class CanvasAnnouncer
     /// </remarks>
     internal int RefusedAfterShutdownForTests { get; private set; }
 
+    /// <summary>Whether this funnel has been retired — the fact a
+    /// SPEAKER asks before composing (contract A5).</summary>
+    internal bool IsRetired => _isShutDown;
+
     private void Emit(A11yEvent @event, EventClass? eventClass)
     {
         if (_isShutDown)

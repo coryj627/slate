@@ -2514,6 +2514,15 @@ left to run, and rung 1 refuses because `Cancel` does. A check inside
 already answers, and a guard with no power is a claim this task has
 learned the cost of.
 
+**The DOCUMENT has an announce boundary too, and the stack is handed
+it.** Sixteen announce sites live on the document, the navigator adds
+its own, and `AdmitStructuralRead` — the never-silent mapping itself —
+speaks: so a verb invoked on a retired canvas composed a refusal through
+a closed funnel. `CanvasDocumentViewModel.Speak` is the one place the
+canvas reaches the announcer, and its condition is the FUNNEL's
+retirement rather than the document's shutdown flag, because C7's SPEAK
+phase runs between them and owes the drained departure's restoration.
+
 **And the stack SPEAKS through one boundary, which is a different
 question from whether a verb may run.** The entry gates above answer
 "may this verb run", and they necessarily run BEFORE the verb's effect —
@@ -6771,6 +6780,22 @@ correctly and did not ask what the items did to each other.
   compares the pending RECORD by reference now — the contract already
   is that a surface hands back the instance it was given — and both
   counters are retired, because nothing else read them.
+- **AND THE WAVE'S OWN FACT FOUND THE NEXT ONE, in Debug, immediately.**
+  B3's fact calls a verb on a retired document — and `AdmitStructuralRead`
+  announced its refusal through the retired announcer, because the
+  never-silent mapping speaks and the DOCUMENT had no announce boundary.
+  The mode stack had been given one a wave earlier; the document, which
+  owns the funnel and has sixteen announce sites, had not. It has one
+  now, the navigator speaks through it, and the mode stack is handed it
+  instead of the raw funnel — one boundary for the whole canvas.
+
+  Its condition is the FUNNEL's retirement, not the document's own
+  shutdown flag, and the difference is C7's SPEAK phase: `Shutdown`
+  marks the document first and then drains the mode stack, whose
+  restoration is the last sentence a retirement owes. Gating on the
+  document's flag silenced it — caught by the mid-commit-shutdown fact
+  within one run.
+
 - **Min2 — C10 recorded two costs the previous wave's own fix had made
   impossible.** The reload lock-wait and the mixed-handle count both
   required a query during a load, and the getter now returns before it

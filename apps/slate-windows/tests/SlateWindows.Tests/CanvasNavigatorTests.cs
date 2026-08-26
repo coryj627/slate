@@ -682,6 +682,12 @@ public sealed class CanvasNavigatorTests : IDisposable
         // graph retirement exists to drop — while every public read went
         // on saying null. The write side has to refuse, not be hidden.
         Assert.False(document.HoldsPendingRequestsForTests);
+        // …and the verbs those late calls ran COMPOSED nothing. The
+        // never-silent mapping announces its refusal, so a verb invoked
+        // on a retired canvas used to post through a closed funnel — the
+        // Debug gate found it, and this assertion is the half that also
+        // works in Release, where `Debug.Fail` says nothing.
+        Assert.Equal(0, document.Announcer.RefusedAfterShutdownForTests);
 
         // …and the boundary holds for a surface that comes back: the
         // reader is not dragged anywhere by a request on a dead document.
