@@ -1054,12 +1054,25 @@ public sealed class CanvasNavigatorTests : IDisposable
         }
     });
 
-    /// <summary>How the reader got into the mode.</summary>
-    public enum ModeEntry
+    /// <summary>
+    /// Where the KEYS are when the mode is entered — the arrangement's
+    /// focus locus, not the route the entry arrived by.
+    /// </summary>
+    /// <remarks>
+    /// Named for the locus deliberately. Every arm below drives
+    /// `Navigator.EnterMode` directly, which is the SEAM; there is no
+    /// production entrant at this tip to route through, and the shell
+    /// helper a palette row would reach discards the command parameter
+    /// entirely. Calling these "Palette" and "Menu" made the theory read
+    /// as covering two routes it has never touched — so they say what
+    /// they actually vary, which is where the reader's keys are sitting
+    /// when the owner is recorded.
+    /// </remarks>
+    public enum ModeEntryLocus
     {
-        Projection,
-        Palette,
-        Menu,
+        KeysOnTheProjection,
+        KeysInThePalette,
+        KeysInAMenu,
     }
 
     /// <summary>
@@ -1087,19 +1100,21 @@ public sealed class CanvasNavigatorTests : IDisposable
     /// mechanism acts on needs to say WHICH SURFACE, because "the
     /// document has one" and "this pane owns it" are different facts and
     /// only the second licenses acting.</b> The owner comes from the
-    /// INVOCATION — `EnterMode` names the pane — so the palette and menu
-    /// arms below, where the keys are elsewhere at entry, belong to the
-    /// pane that asked rather than to whichever pane held the keys last.
+    /// INVOCATION — `EnterMode` names the pane — so the keys-in-a-palette
+    /// and keys-in-a-menu ARRANGEMENTS below, where the keys are
+    /// elsewhere when the owner is recorded, belong to the pane that
+    /// asked rather than to whichever pane held them last.
     /// This fact drives the NAVIGATOR SEAM; see the PR F hand-off row in
     /// §C for what still has to be carried through the routed-command
     /// boundary when real entrants arrive.
     /// </para>
     /// </remarks>
     [Theory]
-    [InlineData(ModeEntry.Projection)]
-    [InlineData(ModeEntry.Palette)]
-    [InlineData(ModeEntry.Menu)]
-    public void AModeBelongsToThePaneItWasEnteredFrom(ModeEntry entry) => RunSta(() =>
+    [InlineData(ModeEntryLocus.KeysOnTheProjection)]
+    [InlineData(ModeEntryLocus.KeysInThePalette)]
+    [InlineData(ModeEntryLocus.KeysInAMenu)]
+    public void AModeBelongsToThePaneItWasEnteredFrom(ModeEntryLocus locus) =>
+        RunSta(() =>
     {
         CanvasDocumentViewModel document = Open("board.canvas");
         var restorations = 0;
@@ -1132,12 +1147,12 @@ public sealed class CanvasNavigatorTests : IDisposable
             Assert.True(owner.FilterFieldForTests.Focus());
             host.UpdateLayout();
 
-            switch (entry)
+            switch (locus)
             {
-                case ModeEntry.Palette:
+                case ModeEntryLocus.KeysInThePalette:
                     Assert.True(palette.Focus());
                     break;
-                case ModeEntry.Menu:
+                case ModeEntryLocus.KeysInAMenu:
                     Assert.True(item.Focus());
                     break;
                 default:

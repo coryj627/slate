@@ -261,6 +261,15 @@ public sealed class ContractsCitationCensus
                 "INVOCATION",
                 "Enter captures the navigator's attached presenter."),
             (
+                "the CACHE-derived admission (codex round 10: the pane comes "
+                    + "from the invocation, and refusals are runtime guards)",
+                @"(?i)owns the keys or owned them last"
+                    + @"|(?i)no pane has ever held"
+                    + @"|(?i)refuses when no pane",
+                "INVOCATION",
+                "EnterMode supplies the pane that owns the keys or owned "
+                    + "them last, and refuses when no pane has ever held them."),
+            (
                 "the THREE-case attachment rule (codex round 9: a mode entry "
                     + "attaches its invoker, which makes four)",
                 @"(?i)attachment is a THREE-case rule"

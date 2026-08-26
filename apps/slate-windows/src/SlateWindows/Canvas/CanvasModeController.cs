@@ -227,11 +227,14 @@ internal sealed class CanvasModeController : BindableBase
     /// The ambiguity is gone because the state is gone.
     /// </para>
     /// <para>
-    /// `CanvasNavigator.EnterMode` is the production entry that supplies
-    /// it — the pane that owns the keys or owned them last, so a mode
-    /// entered from the palette while the palette holds them still
-    /// belongs to the pane the reader came from — and REFUSES when no
-    /// pane has ever held them.
+    /// `CanvasNavigator.EnterMode` is the production entry, and the pane
+    /// comes from the INVOCATION: the caller names the surface it is
+    /// acting for. So a mode entered while a palette or a menu holds the
+    /// keys belongs to the pane that asked, not to whichever pane held
+    /// the keys most recently — the navigator's cached presenter is not
+    /// consulted. Refusals are runtime guards: a null spec or pane
+    /// throws, and an entry the controller does not admit returns false
+    /// without moving affinity.
     /// </para>
     /// <para>
     /// A plain field read. It was written as a read-through

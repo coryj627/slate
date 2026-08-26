@@ -2860,10 +2860,12 @@ canvas meant every focus movement inside the owning pane fired the
 sibling's watcher, which saw a mode active and the keys outside itself
 and cancelled the mode its reader was in the middle of driving — before
 they could reach the M6 controls that exist for that moment.
-`AModeBelongsToThePaneItWasEnteredFrom` covers entry from the projection,
-the palette and a menu, and counts the restorations, because three routes
-to one cancellation is also three routes to running the reader's undo
-twice.
+`AModeBelongsToThePaneItWasEnteredFrom` drives three NAVIGATOR-SEAM
+ARRANGEMENTS — the keys on the projection, in a palette, in a menu — and
+counts the restorations, because three routes to one cancellation is also
+three routes to running the reader's undo twice. It covers no routed
+entry, because there is none to cover yet: see the PR F obligation in the
+travel table, which is the row that owns that work.
 
 **THE THIRD AFFINITY, and the last one that should have to be
 discovered.** A14's focus landing carries its OWNER; the navigator's
@@ -8089,6 +8091,57 @@ design failing repeatedly.
   repair took one move. That is the whole argument for converting a
   recurring review finding into a check: the seventh instance costs
   thirty seconds instead of a round.
+
+### PR C-lite — codex adversarial round 10 — NOT SAFE, 1 major + 1 minor, ZERO code defects
+
+The first round on this branch to find nothing wrong with the code. Codex
+probed the admission ordering directly: every refusal shape preserves
+affinity, the active refusal speaks before returning, the attach precedes
+`Active`'s publication, and a publication exception lands after `_active`
+is assigned so there is no attachment-without-mode window. Both findings
+are RECORD-only.
+
+- **MAJOR — the ownership theory still presented arrangements as routed
+  coverage.** Round 9 corrected the §C sentence and left the fact's own
+  dimension named `ModeEntry` with values `Palette` and `Menu` — vocabulary
+  that says "how the reader got in" for arms that all drive
+  `Navigator.EnterMode` at the seam. So the correction and the artefact
+  disagreed, and the canonical row still read as covering two routes the
+  branch has never touched. The dimension is `ModeEntryLocus` now —
+  `KeysOnTheProjection`, `KeysInThePalette`, `KeysInAMenu` — which says
+  what the arms actually vary: where the reader's keys are sitting when
+  the owner is recorded. C8 says three navigator-seam ARRANGEMENTS and
+  points at the PR F obligation for the routed work.
+
+  **THE ROOT CAUSE, which is the sweep rule in its sharper form.** Round
+  9's correction followed the EDITED SITES — the sentence that was wrong,
+  and its neighbours in the same file. It did not follow the CONSUMERS of
+  the claim, and the enum was one. **Sweep the claim's consumers, not the
+  diff's neighbours.** This branch has now written three versions of the
+  same rule: sweep the row that describes the mechanism (round 3), sweep
+  the canonical rows rather than the round records (round 7), and now
+  sweep everything that repeats the claim in any vocabulary. They are one
+  rule, and the reason it keeps needing restating is that each time it was
+  applied to the artefact in front of the author rather than to the claim.
+
+- **MINOR — `Owner`'s doc described the retired cache-derived
+  admission**, still saying `EnterMode` supplies "the pane that owns the
+  keys or owned them last" and "refuses when no pane has ever held them".
+  Both were true two rounds ago. Rewritten to invocation-supplied
+  ownership with runtime-guarded refusals, and the escaped formulations
+  are now their own retired-vocabulary row with their own seed — the
+  fifth consecutive round in which a formulation of this mechanism
+  survived a sweep, and the second in which the answer was a census row
+  rather than another sweep.
+
+**What this round says about the process.** Nine rounds found code
+defects; the tenth found only records. The records are the thing that has
+been hardest to get right, and the reason is legible in the last three
+findings: prose has no test, so every claim in it is load-bearing until
+someone re-reads it, and the author is the worst person to do that
+because they remember what they meant. Every durable fix on this branch
+has been the same move — take the class the reviewer found by reading,
+and give it something that executes.
 
 ### PR C — the strategic lesson
 
