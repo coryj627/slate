@@ -2836,12 +2836,22 @@ The older bounds still hold underneath both: `TabSwitch` and
 `WindowDeactivated` fire on their own, and document retirement cancels
 outright, so no mode outlives the thing it belongs to.
 
-**A MODE HAS AN OWNER (codex round 5).** `Enter` captures the navigator's
-attached presenter — the pane that owns the keys or owned them last, so a
-mode entered from the palette or from an open menu still belongs to the
-pane the reader came from — and `Modes.Owner` reads through the active
-mode, so no mode means no owner by construction. Only that surface may
-reclassify a departure on the mode's behalf. Without it, two panes on one
+**A MODE HAS AN OWNER (codex round 5).** `Enter` REQUIRES one, and
+`CanvasNavigator.EnterMode` is the production route: the invoking pane
+names ITSELF, so a mode entered from the palette or from an open menu
+belongs to the pane whose row the reader pressed. `Modes.Owner` is a
+plain read of a field cleared where `Active` goes null, so no mode means
+no owner. Only that surface may reclassify a departure on the mode's
+behalf.
+
+The owner is not looked up, and the two designs that looked it up both
+failed in the same direction. Reading the navigator's attached presenter
+gave a mode to whichever pane had the keys LAST — right for the palette
+case by luck, and wrong the moment that pane detached, because the
+presenter slot is a document-wide CACHE that any pane's departure
+clears: a surviving pane was then refused a mode on a canvas that had
+plainly been focused. **Identity belongs to the invocation**, which is
+the only source that is true at the moment of the call. Without it, two panes on one
 canvas meant every focus movement inside the owning pane fired the
 sibling's watcher, which saw a mode active and the keys outside itself
 and cancelled the mode its reader was in the middle of driving — before
@@ -7903,6 +7913,86 @@ recurring is that fixing it in the derivation feels like fixing it.
 **A correction has not landed until the row a future reader will consult
 says the new thing.** For PR F: read C1–C13 and CD-40..48 against the
 code before starting, not against these sections.
+
+### PR C-lite — codex adversarial round 8 — NOT SAFE, 1 blocker + 1 major + 3 minors
+
+- **BLOCKER — the refusal predicate was reading a CACHE and calling it
+  history.** Round 7 made `EnterMode` supply the owner from
+  `AttachedPresenter` and refuse when it was null, on the reasoning that
+  null meant "no pane has ever held the keys". It does not.
+  `_presenter` is a document-wide slot that ANY pane's detachment
+  clears — so pane A holds focus, A unloads or is retargeted, and the
+  surviving pane B's next mode invocation is refused: on a canvas that
+  has plainly been focused, from a pane that is plainly live. The
+  predicate was answering "has any pane held the keys lately", and no
+  predicate over that cache could have answered the question that was
+  asked.
+
+  **Identity comes from the INVOCATION now.** `EnterMode(spec, pane)` —
+  a chord already carries its presenter, and a palette or menu row knows
+  which pane it serves, because the shell resolved a canvas tab to put
+  the row in front of the reader at all. That source is true at the
+  moment of the call, which is the only moment that matters. The
+  non-null requirement stays where it belongs, at
+  `CanvasModeController.Enter`, so ownerless-active remains
+  unrepresentable.
+
+  **The shape to carry: a cache is not a log.** Twice now on this branch
+  a predicate has been written over `_presenter` as though it recorded
+  history — first for presenter affinity, where the answer happened to be
+  right, and here, where the same read was wrong for the same reason.
+  When a question is about what HAS happened, a field that anything can
+  clear cannot answer it.
+
+- **MAJOR — two surface-hosted facts supplied a fictitious owner**, and
+  the previous report claimed all surface-hosted facts had moved to the
+  production route. They had not: `EnterOnAFocusedModeButtonActivatesTheButtonNotTheChord`
+  and `TheModeIsInspectableAndHasVisibleControls` entered with the opaque
+  stand-in while hosting a real surface — so the ownership-sensitive
+  departure paths were disabled in exactly the facts that build surface
+  state, and the state was created through a route production could
+  refuse. Both now enter through `Navigator.EnterMode` naming their own
+  surface. The stand-in survives ONLY in genuinely surface-free M1–M7
+  facts, where it says something true: this fact is not about panes.
+  **A blanket rewrite reported as complete is a claim like any other**,
+  and this one was checked by the reviewer rather than by me.
+
+- **MINOR 1 — prose describing the removed design.** `Enter` "captures
+  the presenter"; `Owner` "reads through the active mode"; "computed
+  rather than cleared"; the presenter inventory; rung 3's description.
+  All swept against the final code, with the history left in these round
+  records AS history. Two of them were written in the wave that removed
+  the thing they describe.
+
+- **MINOR 2 — the paired evidence short-circuited.** The prerequisite
+  (a mode cannot be entered without a pane) and its downstream
+  consequence (a peer cannot end somebody else's mode) shared one test,
+  in an order where the first assertion made the second unreachable — so
+  the pair proved one thing twice. Split:
+  `AModeCannotBeEnteredWithoutAPane` asserts the refusal alone, and the
+  consequence lives in `AModeDoesNotOutliveThePaneThatOwnsIt`'s
+  `PeerHidden` arm, with each half's failing assertion recorded in the
+  report.
+
+- **MINOR 3 — a battery row claimed an impossible catch.** "Remove the
+  balanced-duplicate seed → caught" cannot happen: the seed IS an
+  assertion inside the test, so removing it removes the check rather than
+  failing it. The row is corrected to the mutation actually run —
+  removing duplicate-summary DETECTION, which the seed then catches.
+  **A mutation table is evidence, and a row nobody could have run is
+  worse than a missing row**, because it reads as coverage.
+
+- **AND A MUTATION ESCAPED, which produced a fact rather than a
+  deletion.** `EnterMode` attaches the invoking pane, and nothing
+  observed it: the mode would belong to one pane while the movement verbs
+  seated the reader in another — the reader/selection disagreement CD-40
+  is about, arriving by a third route. Kept and pinned
+  (`EnteringAModeFromAPaneMakesItThePaneTheVerbsActOn`) rather than
+  deleted, because the invocation naming the pane and the navigator
+  serving a different one is incoherent on its face. Four belts were
+  deleted on this branch for failing their mutations; this one earned a
+  fact instead, and the difference is whether the code says something
+  true that nothing had yet asked about.
 
 ### PR C — the strategic lesson
 

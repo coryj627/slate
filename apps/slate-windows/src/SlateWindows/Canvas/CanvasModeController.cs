@@ -61,9 +61,11 @@ internal enum CanvasEscapeRung
     Filter,
 
     /// <summary>Rung 3 — a transient region inside the canvas (the
-    /// Where-am-I panel, the interim card detail, the filter field
-    /// holding focus with nothing to clear) hands focus back to the
-    /// projection.</summary>
+    /// interim card detail, or the filter field or its result summary
+    /// holding focus with nothing to clear) re-seats the reader through
+    /// C6's seat rule. NOT the Where-am-I panel: an open panel pre-empts
+    /// the whole ladder (CD-47), so no reachable press arrives here with
+    /// it up.</summary>
     Surface,
 
     /// <summary>Rung 4 — nothing in the canvas consumed the press, so it
@@ -644,10 +646,12 @@ internal sealed class CanvasModeController : BindableBase
             && HandleFocusDeparture(CanvasFocusDeparture.TabSwitch);
     }
 
-    /// <summary>Whether a pane reference is still held. The
-    /// <see cref="Owner"/> read hides it once the mode ends, which is
-    /// precisely why the retention half needs its own observable
-    /// (round 2's B3, one object over).</summary>
+    /// <summary>Whether a pane reference is still held. `Owner` is a
+    /// plain read of the same field now, so the two agree — but the
+    /// retention half keeps its own observable because for one wave it
+    /// did NOT: a read-through returned null while the field held the
+    /// pane, which is round 2's B3 one object over, and an assertion on
+    /// the read could not have seen it.</summary>
     internal bool HoldsOwnerForTests => _owner is not null;
 
     /// <summary>The M4 table itself, split out so the deferral above and

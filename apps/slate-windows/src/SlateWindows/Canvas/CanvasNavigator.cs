@@ -14,10 +14,12 @@ namespace SlateWindows.Canvas;
 /// The navigator is per-DOCUMENT (two panes on one canvas share one
 /// command layer, exactly as they share one selection), but focus lives
 /// on a VIEW. This is the seam between the two, and it is deliberately
-/// narrow: three questions and three focus moves — nothing is on it that
-/// the navigator does not call. Everything else the navigator does is
-/// model state and announcements, which is what makes the verb facts
-/// drivable without a window.
+/// narrow: three questions, three focus moves and one IDENTITY —
+/// `Owner`, the tab this pane shows, which is what an addressed request
+/// is addressed TO and what a mode records as its owner. Nothing is on
+/// it that the navigator does not call. Everything else the navigator
+/// does is model state and announcements, which is what makes the verb
+/// facts drivable without a window.
 /// </remarks>
 internal interface ICanvasSurfacePresenter
 {
@@ -187,22 +189,41 @@ internal sealed class CanvasNavigator
     internal ICanvasSurfacePresenter? AttachedPresenter => _presenter;
 
     /// <summary>
-    /// Enter a mode ON BEHALF OF the pane the reader is in (contract C8).
+    /// Enter a mode ON BEHALF OF the pane that invoked it (contract C8).
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The one production route into <see cref="CanvasModeController.Enter"/>,
-    /// and the place the owner comes from: the attached presenter, which
-    /// is the pane that owns the keys or owned them last — so a mode
-    /// entered from the palette, while the palette holds them, still
-    /// belongs to the pane the reader came from. It REFUSES when no pane
-    /// has ever held them, because a mode with no owner is a mode no
-    /// surface can end and no reader can see the controls for. That case
-    /// is a canvas nobody has focused: opening one lands focus on a row
-    /// (A14), so it is the background tab, where no mode verb is
-    /// reachable anyway. PR E/F's real modes enter here.
+    /// and the pane comes from the INVOCATION rather than from this
+    /// navigator's cache. A chord carries its presenter already
+    /// (<see cref="HandleKey"/>); a palette or menu row knows which pane
+    /// it is serving, because the shell resolved a canvas tab to put the
+    /// row in front of the reader at all. Naming it here is free, and it
+    /// is the only source that is true at the moment of the call.
+    /// </para>
+    /// <para>
+    /// It used to read <see cref="AttachedPresenter"/> and refuse when
+    /// that was null. `_presenter` is a detachable CACHE, not a record of
+    /// historical focus: a pane that unloads or is retargeted clears it
+    /// for the whole document, so a surviving second pane invoking a mode
+    /// before it regained the keys was refused — on a canvas that HAS
+    /// been focused, from a pane that is live. The refusal was answering
+    /// "has any pane held the keys lately", which is not the question,
+    /// and no predicate over a cache could have been.
+    /// </para>
+    /// <para>
+    /// The invoker is by definition the pane the reader is in, so it is
+    /// ATTACHED here too — the same affinity a focus edge or a chord
+    /// would have established, established by the fact of the call. PR
+    /// E/F's real modes enter through this.
+    /// </para>
     /// </remarks>
-    internal bool EnterMode(CanvasModeSpec spec) =>
-        _presenter is { } pane && _document.Modes.Enter(spec, pane);
+    internal bool EnterMode(CanvasModeSpec spec, ICanvasSurfacePresenter pane)
+    {
+        ArgumentNullException.ThrowIfNull(pane);
+        AttachPresenter(pane);
+        return _document.Modes.Enter(spec, pane);
+    }
 
     /// <summary>
     /// Detach, reporting whether this presenter WAS the attached one.

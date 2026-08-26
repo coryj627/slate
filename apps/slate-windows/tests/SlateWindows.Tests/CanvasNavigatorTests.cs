@@ -1143,7 +1143,7 @@ public sealed class CanvasNavigatorTests : IDisposable
             }
             host.UpdateLayout();
 
-            Assert.True(document.Navigator.EnterMode(spec));
+            Assert.True(document.Navigator.EnterMode(spec, owner));
             host.UpdateLayout();
             Assert.True(document.Modes.IsActive);
 
@@ -1184,40 +1184,30 @@ public sealed class CanvasNavigatorTests : IDisposable
     });
 
     /// <summary>
-    /// A mode needs a pane to belong to: entry before any pane has held
-    /// the keys is REFUSED, and once one has, a peer cannot end it.
+    /// A mode cannot be entered without a pane to belong to.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// THE CONTRACT, stated because the alternative was a state nobody
-    /// could reason about. `Owner` reads null both for "no mode" and —
-    /// while it was possible — for "a mode nobody owns", so every
-    /// per-surface consumer had to guess which it was looking at, and the
-    /// one that guessed "nobody owns it, so anyone may end it" handed a
-    /// peer's departure to a mode unrelated to it. An owner is required
-    /// at entry now, `CanvasNavigator.EnterMode` is the production route
-    /// that supplies it, and the ownerless-active state is gone rather
-    /// than handled.
+    /// THE PREREQUISITE, on its own. It shared a test with its downstream
+    /// consequence for one wave, in an order where the first assertion
+    /// short-circuited the second — so the pair proved one thing twice
+    /// rather than two things once. The consequence lives in
+    /// <see cref="AModeDoesNotOutliveThePaneThatOwnsIt"/>'s `PeerHidden`
+    /// arm, which is where a peer failing to end somebody else's mode
+    /// belongs.
     /// </para>
     /// <para>
-    /// Refusal is the right answer for the case it covers, and the case
-    /// is narrow: a canvas nobody has focused. Opening one lands focus on
-    /// a row (A14), so this is a background tab — where no mode verb is
-    /// reachable in the first place. PR E/F enter through the same seam
-    /// and inherit the refusal.
-    /// </para>
-    /// <para>
-    /// Note what this fact CANNOT do, and why that is the point: the
-    /// mutation the review asked for — restoring the "or when nobody owns
-    /// it" arm in `Depart` — no longer changes anything observable, and
-    /// not because the arm is harmless. It is because the state it read
-    /// cannot be reached. The paired evidence is in the report: permit
-    /// ownerless entry AND restore the arm, and this fact's second half
-    /// fails again.
+    /// `Owner` reads null for "no mode active", and for one wave it also
+    /// read null for "a mode nobody owns" — so every per-surface consumer
+    /// had to guess which it was seeing, and the one that guessed
+    /// "nobody owns it, so anyone may end it" handed a peer's departure
+    /// to a mode unrelated to it. The second reading is gone rather than
+    /// handled: the controller REFUSES a null owner, and the production
+    /// route cannot be called without naming the invoking pane.
     /// </para>
     /// </remarks>
     [Fact]
-    public void AModeNeedsAPaneToBelongTo() => RunSta(() =>
+    public void AModeCannotBeEnteredWithoutAPane()
     {
         CanvasDocumentViewModel document = Open("board.canvas");
         var spec = new CanvasModeSpec(
@@ -1225,43 +1215,153 @@ public sealed class CanvasNavigatorTests : IDisposable
             new CanvasModeObject.Card("Research"),
             CanvasModeCommitResult.Refused,
             () => new CanvasModeRestoration.BackAt("Research"));
-        var owner = new CanvasSurfaceView { Model = document, DataContext = new object() };
-        var peer = new CanvasSurfaceView { Model = document, DataContext = new object() };
+
+        _ = Assert.Throws<ArgumentNullException>(
+            () => document.Modes.Enter(spec, null!));
+        _ = Assert.Throws<ArgumentNullException>(
+            () => document.Navigator.EnterMode(spec, null!));
+        Assert.False(
+            document.Modes.IsActive,
+            "a refused entry left a mode behind, which would be the "
+            + "ownerless state by another door.");
+        document.Shutdown();
+    }
+
+    /// <summary>
+    /// Entering a mode from a pane makes that pane the one the verbs act
+    /// on.
+    /// </summary>
+    /// <remarks>
+    /// The invocation says which pane the reader is in — that is the
+    /// whole reason the owner comes from it — so it would be incoherent
+    /// for the mode to belong to one pane while the movement verbs seated
+    /// the reader in another. A palette row serves the pane it was opened
+    /// over; a menu row serves the pane it dropped from. `EnterMode`
+    /// attaches the invoker for the same reason a chord does, and this is
+    /// the arrangement where the two panes disagree unless it does: the
+    /// OTHER pane held the keys last.
+    /// </remarks>
+    [Fact]
+    public void EnteringAModeFromAPaneMakesItThePaneTheVerbsActOn() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        var spec = new CanvasModeSpec(
+            CanvasMode.Move,
+            new CanvasModeObject.Card("Research"),
+            CanvasModeCommitResult.Refused,
+            () => new CanvasModeRestoration.BackAt("Research"));
+        var held = new CanvasSurfaceView { Model = document, DataContext = new object() };
+        var invoking = new CanvasSurfaceView
+        {
+            Model = document,
+            DataContext = new object(),
+        };
+        var palette = new TextBox();
         var root = new StackPanel();
-        root.Children.Add(owner);
-        root.Children.Add(peer);
+        root.Children.Add(held);
+        root.Children.Add(invoking);
+        root.Children.Add(palette);
         using var host = Host(root);
 
         try
         {
-            // Two panes are showing the canvas and neither has ever held
-            // the keys, so no pane can be said to be entering anything.
-            Assert.False(owner.IsKeyboardFocusWithin);
-            Assert.False(peer.IsKeyboardFocusWithin);
-            Assert.False(
-                document.Navigator.EnterMode(spec),
-                "a mode was entered with no pane to belong to — the state "
-                + "every per-surface consumer then has to guess about.");
-            Assert.False(document.Modes.IsActive);
-
-            // A pane takes the keys. Now there is an owner to name.
-            Assert.True(owner.FilterFieldForTests.Focus());
+            // The OTHER pane held the keys last, then a palette took
+            // them — the arrangement in which the navigator's cache and
+            // the invoker disagree.
+            Assert.True(held.FilterFieldForTests.Focus());
             host.UpdateLayout();
-            Assert.True(document.Navigator.EnterMode(spec));
-            Assert.True(document.Modes.IsActive);
-
-            // …and the peer, which never had the keys and is not the
-            // owner, stops showing the canvas.
-            peer.Visibility = Visibility.Collapsed;
+            Assert.True(palette.Focus());
             host.UpdateLayout();
+
+            Assert.True(document.Navigator.EnterMode(spec, invoking));
+            document.Navigator.NextCard();
+            host.UpdateLayout();
+
             Assert.True(
-                document.Modes.IsActive,
-                "a pane that does not own the mode ended it by ceasing to "
-                + "show the canvas.");
+                invoking.ProjectionHasFocus,
+                "the mode belongs to one pane while the movement verb seated "
+                + "the reader in another — the invocation named the pane and "
+                + "the navigator went on serving the pane that held the keys "
+                + "last.");
+            Assert.False(held.ProjectionHasFocus);
         }
         finally
         {
             document.Shutdown();
+        }
+    });
+
+    /// <summary>
+    /// A live pane can enter a mode after its PEER has gone, without
+    /// waiting to regain the keys.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The production entry used to take the owner from the navigator's
+    /// attached presenter. That field is a detachable CACHE, not a record
+    /// of historical focus: when a pane unloads or is retargeted it
+    /// detaches, clearing the slot for the WHOLE document — so the
+    /// surviving pane's next mode invocation was refused, on a canvas
+    /// that has plainly been focused, from a pane that is plainly live.
+    /// The predicate was answering "has any pane held the keys lately",
+    /// which is not the question, and no predicate over that cache could
+    /// have been.
+    /// </para>
+    /// <para>
+    /// The invoker names ITSELF now. A chord already carries its
+    /// presenter; a palette or menu row knows which pane it is serving,
+    /// because the shell resolved a canvas tab to put the row in front of
+    /// the reader at all. Identity from the invocation is true at the
+    /// moment of the call, which is the only moment that matters.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void ASurvivingPaneCanEnterAModeAfterItsPeerDetaches() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        CanvasDocumentViewModel elsewhere = Open("connected.canvas");
+        var spec = new CanvasModeSpec(
+            CanvasMode.Move,
+            new CanvasModeObject.Card("Research"),
+            CanvasModeCommitResult.Refused,
+            () => new CanvasModeRestoration.BackAt("Research"));
+        var first = new CanvasSurfaceView { Model = document, DataContext = new object() };
+        var survivor = new CanvasSurfaceView
+        {
+            Model = document,
+            DataContext = new object(),
+        };
+        var root = new StackPanel();
+        root.Children.Add(first);
+        root.Children.Add(survivor);
+        using var host = Host(root);
+
+        try
+        {
+            // The canvas HAS been focused — in the pane that is about to
+            // go away, which is exactly what makes the cache lie.
+            Assert.True(first.FilterFieldForTests.Focus());
+            host.UpdateLayout();
+            first.Model = elsewhere;
+            host.UpdateLayout();
+            Assert.False(survivor.IsKeyboardFocusWithin);
+
+            Assert.True(
+                document.Navigator.EnterMode(spec, survivor),
+                "the surviving pane was refused a mode because the pane that "
+                + "left took the navigator's cached presenter with it.");
+            Assert.True(document.Modes.IsActive);
+
+            // …and it is the SURVIVOR's mode, so the survivor's departure
+            // is what ends it.
+            survivor.Visibility = Visibility.Collapsed;
+            host.UpdateLayout();
+            Assert.False(document.Modes.IsActive);
+        }
+        finally
+        {
+            document.Shutdown();
+            elsewhere.Shutdown();
         }
     });
 
@@ -1333,7 +1433,7 @@ public sealed class CanvasNavigatorTests : IDisposable
         {
             Assert.True(owner.FilterFieldForTests.Focus());
             host.UpdateLayout();
-            Assert.True(shared.Navigator.EnterMode(spec));
+            Assert.True(shared.Navigator.EnterMode(spec, owner));
             host.UpdateLayout();
             Assert.True(shared.Modes.IsActive);
             // The PREMISE: the peer is showing the same document, so the
@@ -1458,7 +1558,7 @@ public sealed class CanvasNavigatorTests : IDisposable
         {
             Assert.True(pane.FilterFieldForTests.Focus());
             host.UpdateLayout();
-            Assert.True(document.Navigator.EnterMode(spec));
+            Assert.True(document.Navigator.EnterMode(spec, pane));
             host.UpdateLayout();
             Assert.True(document.Modes.IsActive);
             // The PREMISE that makes this fact about the mode: no
@@ -3119,7 +3219,7 @@ public sealed class CanvasNavigatorTests : IDisposable
         var surface = new CanvasSurfaceView { Model = document };
         using var host = Host(surface);
         var committed = false;
-        Assert.True(document.Modes.Enter(new CanvasModeSpec(
+        Assert.True(document.Navigator.EnterMode(new CanvasModeSpec(
             CanvasMode.Move,
             new CanvasModeObject.Card("Core question"),
             () =>
@@ -3127,7 +3227,7 @@ public sealed class CanvasNavigatorTests : IDisposable
                 committed = true;
                 return CanvasModeCommitResult.Committed();
             },
-            () => new CanvasModeRestoration.BackAt("Core question")), _modePane));
+            () => new CanvasModeRestoration.BackAt("Core question")), surface));
         host.UpdateLayout();
         Assert.True(surface.CancelModeForTests.Focus());
         host.UpdateLayout();
@@ -3155,7 +3255,7 @@ public sealed class CanvasNavigatorTests : IDisposable
 
         // The same stand-aside protects the filter field, where Return is
         // the field's own key on both platforms.
-        Assert.True(document.Modes.Enter(new CanvasModeSpec(
+        Assert.True(document.Navigator.EnterMode(new CanvasModeSpec(
             CanvasMode.Move,
             new CanvasModeObject.Card("Core question"),
             () =>
@@ -3163,7 +3263,7 @@ public sealed class CanvasNavigatorTests : IDisposable
                 committed = true;
                 return CanvasModeCommitResult.Committed();
             },
-            () => new CanvasModeRestoration.BackAt("Core question")), _modePane));
+            () => new CanvasModeRestoration.BackAt("Core question")), surface));
         Assert.True(surface.FilterFieldForTests.Focus());
         host.UpdateLayout();
         Assert.False(PressKey(surface, Key.Enter, ModifierKeys.None));
@@ -3194,11 +3294,11 @@ public sealed class CanvasNavigatorTests : IDisposable
         Assert.Equal(string.Empty, peer.GetItemStatus());
         Assert.Equal(Visibility.Collapsed, surface.CommitModeForTests.Visibility);
 
-        Assert.True(document.Modes.Enter(new CanvasModeSpec(
+        Assert.True(document.Navigator.EnterMode(new CanvasModeSpec(
             CanvasMode.Move,
             new CanvasModeObject.Card("Core question"),
             () => CanvasModeCommitResult.Committed(),
-            () => new CanvasModeRestoration.BackAt("Core question")), _modePane));
+            () => new CanvasModeRestoration.BackAt("Core question")), surface));
         host.UpdateLayout();
 
         Assert.Equal("Move mode: \"Core question\"", peer.GetItemStatus());
@@ -3358,11 +3458,13 @@ public sealed class CanvasNavigatorTests : IDisposable
             // The premise: the surface really has the keys, so the loss
             // below is a real departure rather than a no-op.
             Assert.True(surface.IsKeyboardFocusWithin);
-            Assert.True(document.Navigator.EnterMode(new CanvasModeSpec(
-                CanvasMode.Move,
-                new CanvasModeObject.Card("Core question"),
-                () => CanvasModeCommitResult.Committed(),
-                () => new CanvasModeRestoration.BackAt("Core question"))));
+            Assert.True(document.Navigator.EnterMode(
+                new CanvasModeSpec(
+                    CanvasMode.Move,
+                    new CanvasModeObject.Card("Core question"),
+                    () => CanvasModeCommitResult.Committed(),
+                    () => new CanvasModeRestoration.BackAt("Core question")),
+                surface));
             Drain(document);
 
             Assert.True(intoMenu ? canvasMenu.Focus() : elsewhere.Focus());

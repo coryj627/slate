@@ -647,18 +647,21 @@ public sealed class CanvasModeControllerTests
     }
 
     /// <summary>
-    /// A mode's OWNER is read through the active mode, so it ends when
-    /// the mode does.
+    /// A mode's OWNER ends when the mode does, through every exit.
     /// </summary>
     /// <remarks>
-    /// The read-terminality this branch applies to every shared record —
-    /// the focus request, the filter request, `_awayBecause` — said one
-    /// object over. A per-surface consumer asks "am I the pane running
-    /// this", and the honest answer once no mode is running is "nobody
-    /// is": a value left behind would name a pane that owns nothing, and
-    /// the next consumer (PR F's mode verbs are the named one) would have
-    /// to remember to ask `IsActive` first. Terminality on the READ means
-    /// they cannot get it wrong by forgetting.
+    /// A per-surface consumer asks "am I the pane running this", and the
+    /// honest answer once no mode is running is "nobody is": a value left
+    /// behind would name a pane that owns nothing, and the next consumer
+    /// (PR F's mode verbs are the named one) would have to remember to
+    /// ask `IsActive` first. This was a read-through for one wave — the
+    /// terminality-on-the-READ shape this branch applies to the focus
+    /// request, the filter request and `_awayBecause` — and it was
+    /// removed once the field gained its clear, because with both in
+    /// place the read-through's own mutation could not be made to fail.
+    /// What holds the property now is the clear, and what pins it is this
+    /// fact plus `ACompletedModeHoldsNoPane`: the clear's mutation fails
+    /// them both.
     /// </remarks>
     [Fact]
     public void AModesOwnerEndsWithTheMode()
@@ -680,8 +683,8 @@ public sealed class CanvasModeControllerTests
         Assert.Null(controller.Owner);
 
         // …and again through the OTHER exit, because "no mode, no owner"
-        // has to hold by construction rather than per exit — which is the
-        // whole reason it is computed rather than cleared. (A REFUSED
+        // has to hold at every exit, and the clear sits at the ONE place
+        // `Active` goes null rather than at each of them. (A REFUSED
         // commit keeps the mode, so this arm needs one that commits.)
         var committing = new CanvasModeSpec(
             CanvasMode.Move,
