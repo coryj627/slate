@@ -2210,10 +2210,14 @@ announcements, which is what lets `CanvasNavigatorTests` drive the verbs
 with no window at all and keeps the windowed facts to the things that
 genuinely need one.
 
-**Attachment is a THREE-case rule.** The presenter is attached when the
-surface gains keyboard focus, on every key press, and — since codex round
-4 — when the DOCUMENT under the surface is replaced and this pane is the
-one the reader is in. It is kept afterwards in every case, so a
+**Attachment is a FOUR-case rule**, and it has been miscounted in this
+row once per case added, which is why the cases are listed rather than
+totalled. The presenter is attached when the surface gains keyboard
+focus; on every key press; when the DOCUMENT under the surface is
+replaced and this pane is the one the reader is in (codex round 4); and
+when a mode is ENTERED from this pane and admitted (codex rounds 8–9),
+because the invocation names the pane the reader is in and it would be
+incoherent for the verbs to serve a different one. It is kept afterwards in every case, so a
 palette-invoked verb still moves the reader in the pane they are actually
 in.
 
@@ -2874,10 +2878,11 @@ was learned separately on the request before the mode inherited all
 three at once:
 
 1. **It cannot be absent while the thing it names is live.** A mode
-   REQUIRES an owner at entry (`Enter(spec, owner)`), and
-   `CanvasNavigator.EnterMode` is the production route that supplies the
-   attached pane and REFUSES when no pane has ever held the keys. An
-   ownerless active mode is unrepresentable rather than handled — it was
+   REQUIRES an owner at entry (`Enter(spec, owner)`, guarded at runtime),
+   and `CanvasNavigator.EnterMode` is the production route: the INVOKING
+   pane names itself, and the navigator's cached presenter is not
+   consulted at all. An ownerless active mode is excluded rather than
+   handled — it was
    representable for one wave, and because `Owner` reads null both for
    "no mode" and for "a mode nobody owns", every consumer had to guess
    which it was seeing and the one that guessed wrong forwarded a peer's
@@ -3048,6 +3053,7 @@ is the census working.
 
 | Travelling | What it was |
 |---|---|
+| **The originating surface, through the routed-command boundary (PR F)** | A mode belongs to the pane that invoked it, and `CanvasNavigator.EnterMode` takes that pane as an argument. Nothing in the shell carries it yet: the command helper resolves `ActiveCanvasDocument` and drops the parameter, so a palette or menu entrant arriving in PR F would have no way to say WHICH pane asked. F owns closing that — the routed command must carry the originating surface end to end — and owes two-window facts where the pane that BOUND the command and the pane the reader is in deliberately differ, because that is the only arrangement in which "the active document" and "the pane that asked" give different answers. |
 | The off-dispatcher match | the filter body on PanelWorkScheduler, the doubled generation guard, the outline-identity third guard, the panic-class catch and its injected-fault fact |
 | The failed-answer bit and the four-branch summary | "ran and failed" vs "has not run yet" vs "no handle" — distinctions only an async match creates |
 | The projection unit | rows, table rows, id index, targets, subpaths, the adjacency memo, the answered needle, the matched ids and both filtered halves as ONE immutable value |
@@ -3405,7 +3411,7 @@ convention.
 ### Tests that pin PR C
 
 `apps/slate-windows/tests/SlateWindows.Tests/CanvasNavigatorTests.cs`:
-C1–C6 and C10–C14 against a REAL `VaultSession` and real `.canvas`
+C1–C8 and C10–C14 against a REAL `VaultSession` and real `.canvas`
 bytes, with every announcement read as the RENDERED text the production
 funnel posted — a machine that built the right variant and rendered
 nothing would pass an object-level check, and what the user hears is the
@@ -7671,10 +7677,21 @@ matrix.
   A mode carries its OWNER now, captured at `Enter` from the navigator's
   attached presenter, and cleared where `Active` goes null, so no mode
   means no owner. `AModeBelongsToThePaneItWasEnteredFrom`
-  covers entry from the projection, the palette and a menu, moves twice
+  drives three ARRANGEMENTS at the navigator seam — the reader on the
+  projection, the keys in a palette, the keys in a menu — moves twice
   inside the owner, and COUNTS the restorations when the reader finally
-  lands in the peer — because three routes to one cancellation is also
+  lands in the peer, because three routes to one cancellation is also
   three routes to running the reader's undo twice.
+
+  **It does NOT cover "entry from the palette" as a route**, and the
+  record said it did until codex round 9. There are no production
+  `EnterMode` callers at this tip — the entrants are PR F's — and the
+  shell helper that a palette row would reach resolves only
+  `ActiveCanvasDocument`, discarding the command parameter. So the fact
+  exercises the seam with the pane supplied directly; what it cannot
+  exercise is the routed-command boundary that would have to carry the
+  originating surface to it. That obligation is written into the travel
+  table rather than left as a green light.
 
 - **THE THIRD AFFINITY, named once so it stops being discovered.** A14's
   landing carries its owner; the navigator's presenter carries the pane
@@ -7993,6 +8010,85 @@ code before starting, not against these sections.
   deleted on this branch for failing their mutations; this one earned a
   fact instead, and the difference is whether the code says something
   true that nothing had yet asked about.
+
+### PR C-lite — codex adversarial round 9 — NOT SAFE, 1 blocker + 1 major + 2 minors
+
+**The user's ruling: continue until SAFE.** Recorded here because the
+alternative — stopping at a round count — would have shipped the blocker
+below, and because the rounds have stopped converging on the same defect
+and started finding successive ones in the same NEIGHBOURHOOD. That is a
+different signal from round 6 of the async filter, which found the same
+design failing repeatedly.
+
+- **BLOCKER — a REFUSED entry still moved the reader's pane.** The attach
+  that makes the invoking pane the reader's pane ran before an admission
+  that can say no. So a second pane asking for a mode while the first
+  pane's was still running left the mode owned by A and every movement
+  verb acting through B, and an entry into a retired controller left the
+  navigator holding a presenter the terminal object had just rejected. A
+  missing spec threw after the attach had already landed.
+
+  **Asking for something and being told no must cost nothing.** Neither
+  half was wrong — the attach is right, the refusal is right — only their
+  ORDER was, which is why the fix is the window the attach sits in rather
+  than its place: it still runs BEFORE publication, so anything reacting
+  to the mode becoming active already sees the pane it belongs to.
+  `AdmitsEntry` is the controller's own condition, used by `Enter`
+  itself, because two spellings of "would this be admitted" is how the
+  answer and the effect drift apart.
+  `ARefusedEntryLeavesAffinityWhereItWas` covers all three refusal
+  shapes — speaks-and-returns-false, silently-returns-false, throws —
+  each asserting the answer AND that affinity is where it was.
+
+- **MAJOR — a fact claimed routes it does not have.** The ownership
+  theory drives three ARRANGEMENTS at the navigator seam; the record
+  called them "entry from the projection, the palette and a menu", which
+  reads as three ROUTES. There are no production `EnterMode` callers at
+  this tip, and the shell helper a palette row would reach resolves only
+  `ActiveCanvasDocument`, discarding the command parameter — so nothing
+  in the shell can yet say WHICH pane asked.
+
+  Corrected to the seam, and the residue is written into the travel table
+  as an OBLIGATION rather than left as a green light: PR F must carry the
+  originating surface through the routed-command boundary, and owes
+  two-window facts where the pane that BOUND the command and the pane the
+  reader is in deliberately differ — the only arrangement in which "the
+  active document" and "the pane that asked" give different answers.
+  **A fact's arrangements are not its routes**, and a record that lists
+  arrangements in the vocabulary of routes will be read as coverage.
+
+- **MINOR 1 — a ratified rationale that was wrong, and the ratification
+  did not make it right.** The previous report explained an escaped
+  mutation by saying ownerless entry had become "inexpressible in the
+  signature". It had not: C# nullable annotations are not type-level
+  non-nullability, this branch writes `null!` twice in the very facts
+  concerned, and the actual exclusion is a RUNTIME `ThrowIfNull` in two
+  places. The pair is reclassified as **not applicable after the API
+  shape changed**, and the true statement recorded: ownerless-active is
+  excluded by runtime guards, independently caught by
+  `AModeCannotBeEnteredWithoutAPane`. Kept as a record entry rather than
+  quietly fixed, because a wrong rationale that survived a ratification
+  is worth more as a caution than as a deletion.
+
+- **MINOR 2 — the prose sweep, one mechanism behind AGAIN.** Five live
+  formulations: the three-case attachment count (four now), "EnterMode
+  supplies the attached pane and refuses", "the affinity a MODE captures"
+  on `AttachedPresenter`, the cache-capture wording in the ownership
+  fact, and C7–C8 missing from both test inventories. Swept together —
+  and, because this is the fourth consecutive round to sweep prose about
+  the SAME mechanism, the surviving formulations are now rows in the
+  retired-vocabulary census ("captures the presenter", "supplies the
+  attached pane", "attachment is a THREE-case rule"). **A class that
+  needs sweeping four times is a class that needs a guard**, which is the
+  rule this branch already wrote and did not apply to itself here.
+
+- **AND THE DOC-TAG GUARD FIRED ON ITS AUTHOR.** Adding `AdmitsEntry`
+  spliced its doc block between `Enter`'s summary and `Enter` — the sixth
+  instance of the class, and **the first caught by the guard rather than
+  by a reviewer**. It named the file, the line and the reason, and the
+  repair took one move. That is the whole argument for converting a
+  recurring review finding into a check: the seventh instance costs
+  thirty seconds instead of a round.
 
 ### PR C — the strategic lesson
 

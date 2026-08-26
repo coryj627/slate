@@ -251,6 +251,22 @@ public sealed class ContractsCitationCensus
                 @"(?i)[Ee]very caller is an Escape rung",
                 "pre-ladder",
                 "there is no such arm, because every caller is an Escape rung."),
+            (
+                "the mode owner CAPTURED from the navigator's cache (codex "
+                    + "rounds 8-9: `_presenter` is a cache, not a log, and the "
+                    + "owner comes from the invocation)",
+                @"(?i)captur\w* (?:at `?Enter`? )?from the navigator"
+                    + @"|(?i)captures the (?:navigator's )?(?:attached )?presenter"
+                    + @"|(?i)supplies the attached pane",
+                "INVOCATION",
+                "Enter captures the navigator's attached presenter."),
+            (
+                "the THREE-case attachment rule (codex round 9: a mode entry "
+                    + "attaches its invoker, which makes four)",
+                @"(?i)attachment is a THREE-case rule"
+                    + @"|(?i)three-case attachment",
+                "FOUR-case",
+                "Attachment is a THREE-case rule, and the third is a replacement."),
         ];
 
     public static TheoryData<string, string, string, string> Retired

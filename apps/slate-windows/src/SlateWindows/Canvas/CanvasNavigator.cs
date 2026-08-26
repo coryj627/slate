@@ -181,11 +181,16 @@ internal sealed class CanvasNavigator
 
     /// <summary>The pane the reader is working in, as this navigator
     /// understands it — the surface that owns the keys, or owned them
-    /// last. Null before any surface has ever held them.</summary>
-    /// <remarks>The affinity a MODE captures when it is entered
-    /// (contract C7): the mode stack is document-shared and every pane
-    /// showing the document can see it, so "is a mode active" is not the
-    /// same question as "is this pane the one running it".</remarks>
+    /// last, or the one that last entered a mode. Null before any of
+    /// those has happened, AND after the holder detaches.</summary>
+    /// <remarks>
+    /// A CACHE, not a log. It is cleared by any pane's detachment, so it
+    /// cannot answer "has a pane ever held the keys" — a question that
+    /// was asked of it once and got a wrong answer that refused a live
+    /// surviving pane a mode. A mode's owner comes from the INVOCATION
+    /// (contract C8); this field is what the verbs act through, and the
+    /// two agree because an admitted entry attaches its invoker.
+    /// </remarks>
     internal ICanvasSurfacePresenter? AttachedPresenter => _presenter;
 
     /// <summary>
@@ -217,11 +222,35 @@ internal sealed class CanvasNavigator
     /// would have established, established by the fact of the call. PR
     /// E/F's real modes enter through this.
     /// </para>
+    /// <para>
+    /// ADMISSION FIRST, and that ordering is the whole of it. The attach
+    /// ran unconditionally for one wave, so a REFUSED entry still moved
+    /// affinity: a second pane asking for a mode while the first pane's
+    /// was running left the mode owned by A and every movement verb
+    /// acting through B, and an entry into a retired controller left it
+    /// holding a presenter the terminal object had just rejected. Both
+    /// are the reader and the selection disagreeing (CD-40), reached by
+    /// asking for something and being told no.
+    /// </para>
+    /// <para>
+    /// It stays BEFORE the publication, though. Anything reacting to the
+    /// mode becoming active — the M6 controls, M3's inspectable state —
+    /// must already see the pane it belongs to, so the attach sits inside
+    /// the admitted window rather than after the return. `AdmitsEntry` is
+    /// the controller's own condition rather than a second copy of it,
+    /// because two spellings of "would this be admitted" is how the
+    /// answer and the effect drift apart. Re-attaching the same presenter
+    /// is an idempotent assignment, so the admitted path costs nothing.
+    /// </para>
     /// </remarks>
     internal bool EnterMode(CanvasModeSpec spec, ICanvasSurfacePresenter pane)
     {
+        ArgumentNullException.ThrowIfNull(spec);
         ArgumentNullException.ThrowIfNull(pane);
-        AttachPresenter(pane);
+        if (_document.Modes.AdmitsEntry)
+        {
+            AttachPresenter(pane);
+        }
         return _document.Modes.Enter(spec, pane);
     }
 

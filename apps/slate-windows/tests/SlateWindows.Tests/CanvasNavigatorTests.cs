@@ -21,7 +21,7 @@ namespace SlateWindows.Tests;
 /// every announcement read as the RENDERED text the production funnel
 /// posted.
 ///
-/// Contracts C1–C6 and C10–C14.
+/// Contracts C1–C8 and C10–C14.
 /// </summary>
 public sealed class CanvasNavigatorTests : IDisposable
 {
@@ -1086,10 +1086,13 @@ public sealed class CanvasNavigatorTests : IDisposable
     /// three is one rule: <b>anything document-shared that a per-surface
     /// mechanism acts on needs to say WHICH SURFACE, because "the
     /// document has one" and "this pane owns it" are different facts and
-    /// only the second licenses acting.</b> Captured at `Enter` from the
-    /// navigator's attached presenter, so the palette and menu arms below
-    /// — where the keys are elsewhere at entry — still belong to the pane
-    /// the reader came from.
+    /// only the second licenses acting.</b> The owner comes from the
+    /// INVOCATION — `EnterMode` names the pane — so the palette and menu
+    /// arms below, where the keys are elsewhere at entry, belong to the
+    /// pane that asked rather than to whichever pane held the keys last.
+    /// This fact drives the NAVIGATOR SEAM; see the PR F hand-off row in
+    /// §C for what still has to be carried through the routed-command
+    /// boundary when real entrants arrive.
     /// </para>
     /// </remarks>
     [Theory]
@@ -1226,6 +1229,120 @@ public sealed class CanvasNavigatorTests : IDisposable
             + "ownerless state by another door.");
         document.Shutdown();
     }
+
+    /// <summary>Why a mode entry was turned down.</summary>
+    public enum EntryRefusal
+    {
+        AnotherModeIsRunning,
+        TheDocumentIsRetired,
+        TheSpecIsMissing,
+    }
+
+    /// <summary>
+    /// A REFUSED entry changes nothing — least of all which pane the
+    /// verbs act on.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The attach that makes the invoking pane the reader's pane ran
+    /// unconditionally for one wave, ahead of an admission that can say
+    /// no. So a second pane asking for a mode while the first pane's was
+    /// still running left the mode owned by A and every movement verb
+    /// acting through B — the reader hears their position change in a
+    /// pane the mode does not belong to — and an entry into a retired
+    /// controller left the navigator holding a presenter the terminal
+    /// object had just rejected.
+    /// </para>
+    /// <para>
+    /// **Asking for something and being told no must cost nothing.** That
+    /// is the general form, and it is worth stating because the defect
+    /// was not in either half: the attach is right, the refusal is right,
+    /// and only their ORDER was wrong. The attach still happens before
+    /// the mode is published — anything reacting to it becoming active
+    /// has to see the pane it belongs to — so the fix is the window it
+    /// sits in, not the place.
+    /// </para>
+    /// <para>
+    /// All three refusal shapes, because they take different routes out:
+    /// an active mode returns false and speaks, retirement returns false
+    /// silently, and a missing spec throws. Each asserts the answer AND
+    /// that affinity is where it was.
+    /// </para>
+    /// </remarks>
+    [Theory]
+    [InlineData(EntryRefusal.AnotherModeIsRunning)]
+    [InlineData(EntryRefusal.TheDocumentIsRetired)]
+    [InlineData(EntryRefusal.TheSpecIsMissing)]
+    public void ARefusedEntryLeavesAffinityWhereItWas(EntryRefusal refusal) => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        CanvasModeSpec Spec() => new(
+            CanvasMode.Move,
+            new CanvasModeObject.Card("Research"),
+            CanvasModeCommitResult.Refused,
+            () => new CanvasModeRestoration.BackAt("Research"));
+        var held = new CanvasSurfaceView { Model = document, DataContext = new object() };
+        var asking = new CanvasSurfaceView { Model = document, DataContext = new object() };
+        var root = new StackPanel();
+        root.Children.Add(held);
+        root.Children.Add(asking);
+        using var host = Host(root);
+
+        try
+        {
+            // The first pane is the reader's, and the premise says so in
+            // the terms the rest of the fact uses.
+            Assert.True(held.FilterFieldForTests.Focus());
+            host.UpdateLayout();
+            Assert.Same(held, document.Navigator.AttachedPresenter);
+
+            if (refusal == EntryRefusal.AnotherModeIsRunning)
+            {
+                Assert.True(document.Navigator.EnterMode(Spec(), held));
+                Assert.True(document.Modes.IsActive);
+            }
+            if (refusal == EntryRefusal.TheDocumentIsRetired)
+            {
+                document.Shutdown();
+            }
+            Drain(document);
+
+            // The SECOND pane asks, and is turned down.
+            if (refusal == EntryRefusal.TheSpecIsMissing)
+            {
+                _ = Assert.Throws<ArgumentNullException>(
+                    () => document.Navigator.EnterMode(null!, asking));
+            }
+            else
+            {
+                Assert.False(
+                    document.Navigator.EnterMode(Spec(), asking),
+                    "the entry was admitted, so this arm is not about a "
+                    + "refusal at all.");
+            }
+
+            Assert.Same(
+                held,
+                document.Navigator.AttachedPresenter);
+
+            // …and the consequence a reader would actually meet.
+            if (refusal != EntryRefusal.TheDocumentIsRetired)
+            {
+                document.Navigator.NextCard();
+                host.UpdateLayout();
+                Assert.True(
+                    held.ProjectionHasFocus,
+                    "a refused entry moved the reader's pane: the verbs now "
+                    + "act through the pane that ASKED rather than the pane "
+                    + "the reader is in.");
+                Assert.False(asking.ProjectionHasFocus);
+            }
+        }
+        finally
+        {
+            document.Shutdown();
+        }
+    });
 
     /// <summary>
     /// Entering a mode from a pane makes that pane the one the verbs act

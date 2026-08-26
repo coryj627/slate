@@ -301,6 +301,21 @@ internal sealed class CanvasModeController : BindableBase
     public bool CanCommitOrCancel => IsActive;
 
     /// <summary>
+    /// Whether an entry would be ADMITTED — asked by callers that must
+    /// not act on a refusal (contract C8).
+    /// </summary>
+    /// <remarks>
+    /// The same condition <see cref="Enter"/> applies, not a copy of it:
+    /// a caller with a side effect to perform needs to know the answer
+    /// BEFORE the effect, and two spellings of "would this be admitted"
+    /// is how the answer and the effect drift apart. `EnterMode`'s
+    /// presenter attach is the caller this exists for — a refused entry
+    /// that had already moved affinity left the mode owned by one pane
+    /// while the verbs acted through another.
+    /// </remarks>
+    internal bool AdmitsEntry => !_retired && _active is null;
+
+    /// <summary>
     /// M1 + M7. Returns false when the entry was REJECTED because a mode
     /// is already active — nothing commits, and the announcement names
     /// the mode that is holding the stack.
@@ -312,21 +327,22 @@ internal sealed class CanvasModeController : BindableBase
         // the state every per-surface consumer had to guess about, so it
         // is not a state this type can be in.
         ArgumentNullException.ThrowIfNull(owner);
-        if (_retired)
+        if (!AdmitsEntry)
         {
-            // TERMINAL, and SILENT — which is not the never-silent table
-            // being broken, it is that table's precondition being absent.
-            // C4 answers a verb the user invoked on a canvas they are
-            // READING; this document has been retired, so there is no
-            // surface showing it and its announcer is already shut — a
-            // sentence composed here would be the A5 `Debug.Fail` rather
-            // than something anybody hears. The refusal is the return
-            // value, for the caller that asked.
-            return false;
-        }
-        if (_active is { } current)
-        {
-            Speak(new CanvasA11yEvent.CanvasModeRejected(current.Mode));
+            // An ACTIVE mode names itself; RETIREMENT is silent — which
+            // is not the never-silent table being broken, it is that
+            // table's precondition being absent. C4 answers a verb the
+            // user invoked on a canvas they are READING; this document
+            // has been retired, so there is no surface showing it and its
+            // announcer is already shut — a sentence composed here would
+            // be the A5 `Debug.Fail` rather than something anybody hears.
+            // The refusal is the return value, for the caller that asked.
+            // (`Shutdown` nulls `_active`, so the two arms cannot both
+            // apply and retirement cannot speak by accident.)
+            if (_active is { } current)
+            {
+                Speak(new CanvasA11yEvent.CanvasModeRejected(current.Mode));
+            }
             return false;
         }
         _owner = owner;
