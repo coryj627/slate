@@ -2170,7 +2170,9 @@ public sealed class CanvasDocumentTests : IDisposable
         using var host = Host(root);
 
         // The reader is in the filter field.
-        Assert.True(surface.FilterFieldForTests.Focus());
+        Assert.True(
+            surface.FilterFieldForTests.Focus(),
+            "premise: surface.FilterField refused keyboard focus, so this arrangement never established.");
         host.UpdateLayout();
         // PREMISE: the verb seats them today, so the attachment exists
         // and this fact is about what the replacement does to it.
@@ -2180,14 +2182,18 @@ public sealed class CanvasDocumentTests : IDisposable
             surface.ProjectionHasFocus,
             "the movement verb did not seat the reader even before the "
             + "rename, so this fact would be about the verb.");
-        Assert.True(surface.FilterFieldForTests.Focus());
+        Assert.True(
+            surface.FilterFieldForTests.Focus(),
+            "premise: surface.FilterField refused keyboard focus, so this arrangement never established.");
         host.UpdateLayout();
 
         if (keysHeldElsewhere)
         {
             // Something transient takes the keys — and the retarget lands
             // while it holds them.
-            Assert.True(palette.Focus());
+            Assert.True(
+                palette.Focus(),
+                "premise: palette refused keyboard focus, so this arrangement never established.");
             host.UpdateLayout();
             Assert.False(surface.IsKeyboardFocusWithin);
         }
@@ -2251,7 +2257,9 @@ public sealed class CanvasDocumentTests : IDisposable
 
         // The keys arrive FIRST. Nothing is attached: there is no
         // navigator to attach to yet.
-        Assert.True(surface.FilterFieldForTests.Focus());
+        Assert.True(
+            surface.FilterFieldForTests.Focus(),
+            "premise: surface.FilterField refused keyboard focus, so this arrangement never established.");
         host.UpdateLayout();
 
         surface.Model = document;
@@ -2292,7 +2300,9 @@ public sealed class CanvasDocumentTests : IDisposable
         panel.Children.Add(elsewhere);
         panel.Children.Add(surface);
         using var host = Host(panel);
-        Assert.True(elsewhere.Focus());
+        Assert.True(
+            elsewhere.Focus(),
+            "premise: elsewhere refused keyboard focus, so this arrangement never established.");
         Assert.Same(elsewhere, host.FocusedElement());
 
         File.Move(
@@ -3329,7 +3339,9 @@ public sealed class CanvasDocumentTests : IDisposable
         using var host = Host(panel);
 
         // A sheet had focus and is dismissing; focus is nowhere useful.
-        Assert.True(elsewhere.Focus());
+        Assert.True(
+            elsewhere.Focus(),
+            "premise: elsewhere refused keyboard focus, so this arrangement never established.");
         Assert.Null(FocusedRow(host));
 
         // What MainWindow's canvas arm does.

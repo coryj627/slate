@@ -702,10 +702,14 @@ public sealed class CanvasNavigatorTests : IDisposable
         using (HostedWindow host = Host(brokenSurface))
         {
             Assert.Equal(CanvasLoadState.ParseError, broken.State);
-            Assert.True(brokenSurface.FilterFieldForTests.Focus());
+            Assert.True(
+                brokenSurface.FilterFieldForTests.Focus(),
+                "premise: brokenSurface.FilterField refused keyboard focus, so this arrangement never established.");
             host.UpdateLayout();
 
-            Assert.True(PressKey(brokenSurface, Key.Escape, ModifierKeys.None));
+            Assert.True(
+                PressKey(brokenSurface, Key.Escape, ModifierKeys.None),
+                "premise: the press was not consumed, so the rung under test never ran.");
             host.UpdateLayout();
             Assert.False(
                 brokenSurface.FilterFieldForTests.IsKeyboardFocused,
@@ -728,10 +732,14 @@ public sealed class CanvasNavigatorTests : IDisposable
         using (HostedWindow host = Host(surface))
         {
             Assert.Equal(CanvasLoadState.Loading, loading.State);
-            Assert.True(surface.FilterFieldForTests.Focus());
+            Assert.True(
+                surface.FilterFieldForTests.Focus(),
+                "premise: surface.FilterField refused keyboard focus, so this arrangement never established.");
             host.UpdateLayout();
 
-            Assert.True(PressKey(surface, Key.Escape, ModifierKeys.None));
+            Assert.True(
+                PressKey(surface, Key.Escape, ModifierKeys.None),
+                "premise: the press was not consumed, so the rung under test never ran.");
             host.UpdateLayout();
             // The reader STAYS in the field, and that is the right
             // answer rather than a shortfall: there is nowhere better on
@@ -890,15 +898,21 @@ public sealed class CanvasNavigatorTests : IDisposable
         using var host = Host(root);
 
         Assert.Equal(CanvasLoadState.Loading, loading.State);
-        Assert.True(surface.FilterFieldForTests.Focus());
+        Assert.True(
+            surface.FilterFieldForTests.Focus(),
+            "premise: surface.FilterField refused keyboard focus, so this arrangement never established.");
         host.UpdateLayout();
-        Assert.True(PressKey(surface, Key.Escape, ModifierKeys.None));
+        Assert.True(
+            PressKey(surface, Key.Escape, ModifierKeys.None),
+            "premise: the press was not consumed, so the rung under test never ran.");
         host.UpdateLayout();
         // The premise: nowhere to sit, so a restoration is pending.
         Assert.NotNull(loading.FocusRequest);
 
         // The reader goes somewhere else of their own accord.
-        Assert.True(elsewhere.Focus());
+        Assert.True(
+            elsewhere.Focus(),
+            "premise: elsewhere refused keyboard focus, so this arrangement never established.");
         host.UpdateLayout();
         Assert.Null(
             loading.FocusRequest);
@@ -954,9 +968,8 @@ public sealed class CanvasNavigatorTests : IDisposable
                 verbosity: () => _verbosity);
             var tab = new object();
             var surface = new CanvasSurfaceView { Model = loading, DataContext = tab };
-            var menu = new Menu();
-            var item = new MenuItem { Header = "Canvas", Focusable = true };
-            menu.Items.Add(item);
+            MenuItem item = MenuRow("Canvas");
+            Menu menu = MenuThatTakesTheKeys(item);
             var elsewhere = new Button { Content = "the overlay's own field" };
             var root = new StackPanel();
             root.Children.Add(surface);
@@ -965,9 +978,13 @@ public sealed class CanvasNavigatorTests : IDisposable
             using ProbeWindow host = HostProbe(root);
 
             Assert.Equal(CanvasLoadState.Loading, loading.State);
-            Assert.True(surface.FilterFieldForTests.Focus());
+            Assert.True(
+                surface.FilterFieldForTests.Focus(),
+                "premise: surface.FilterField refused keyboard focus, so this arrangement never established.");
             host.UpdateLayout();
-            Assert.True(PressKey(surface, Key.Escape, ModifierKeys.None));
+            Assert.True(
+                PressKey(surface, Key.Escape, ModifierKeys.None),
+                "premise: the press was not consumed, so the rung under test never ran.");
             host.UpdateLayout();
             // The premise: nowhere to sit yet, so a RESTORATION is
             // pending — the same premise the withdrawal fact establishes.
@@ -978,10 +995,12 @@ public sealed class CanvasNavigatorTests : IDisposable
             {
                 case RestorationHold.Overlay:
                     CanvasSurfaceView.ShellOverlayIsOpen = static () => true;
-                    Assert.True(elsewhere.Focus());
+                    Assert.True(
+                        elsewhere.Focus(),
+                        "premise: elsewhere refused keyboard focus, so this arrangement never established.");
                     break;
                 case RestorationHold.Menu:
-                    Assert.True(item.Focus());
+                    PutTheKeysInTheMenu(item, "the hold's menu arm");
                     break;
                 default:
                     host.SimulateDeactivate();
@@ -1081,9 +1100,8 @@ public sealed class CanvasNavigatorTests : IDisposable
             // SECOND window makes the OS deactivate this one first, and
             // the arrangement would then be about `WindowDeactivated`
             // rather than about the menu.
-            var menu = new Menu();
-            var item = new MenuItem { Header = "Canvas", Focusable = true };
-            menu.Items.Add(item);
+            MenuItem item = MenuRow("Canvas");
+            Menu menu = MenuThatTakesTheKeys(item);
             var behindIt = new Button { Content = "the overlay's own field" };
             var anotherPane = new Button { Content = "another pane" };
             var root = new StackPanel();
@@ -1107,9 +1125,13 @@ public sealed class CanvasNavigatorTests : IDisposable
 
             // A restoration, deferred the ordinary way: Escape in
             // `Loading` with nowhere to sit.
-            Assert.True(pane.FilterFieldForTests.Focus());
+            Assert.True(
+                pane.FilterFieldForTests.Focus(),
+                "premise: pane.FilterField refused keyboard focus, so this arrangement never established.");
             host.UpdateLayout();
-            Assert.True(PressKey(pane, Key.Escape, ModifierKeys.None));
+            Assert.True(
+                PressKey(pane, Key.Escape, ModifierKeys.None),
+                "premise: the press was not consumed, so the rung under test never ran.");
             host.UpdateLayout();
             Assert.NotNull(loading.FocusRequest);
 
@@ -1117,12 +1139,14 @@ public sealed class CanvasNavigatorTests : IDisposable
             // the landing is HELD rather than withdrawn.
             if (cause == RestorationHold.Menu)
             {
-                Assert.True(item.Focus());
+                PutTheKeysInTheMenu(item, "the starvation fact's menu arm");
             }
             else
             {
                 CanvasSurfaceView.ShellOverlayIsOpen = static () => true;
-                Assert.True(behindIt.Focus());
+                Assert.True(
+                    behindIt.Focus(),
+                    "premise: behindIt refused keyboard focus, so this arrangement never established.");
             }
             host.UpdateLayout();
             Assert.NotNull(loading.FocusRequest);
@@ -1141,7 +1165,9 @@ public sealed class CanvasNavigatorTests : IDisposable
             // revision, and the mutation battery is what caught it.)
             int returnsBefore = returns;
             CanvasSurfaceView.ShellOverlayIsOpen = overlayWas;
-            Assert.True(anotherPane.Focus());
+            Assert.True(
+                anotherPane.Focus(),
+                "premise: anotherPane refused keyboard focus, so this arrangement never established.");
             host.UpdateLayout();
             Assert.Equal(returnsBefore, returns);
 
@@ -1245,9 +1271,8 @@ public sealed class CanvasNavigatorTests : IDisposable
         var owner = new CanvasSurfaceView { Model = document, DataContext = new object() };
         var peer = new CanvasSurfaceView { Model = document, DataContext = new object() };
         var palette = new TextBox();
-        var menu = new Menu();
-        var item = new MenuItem { Header = "Commit mode", Focusable = true };
-        menu.Items.Add(item);
+        MenuItem item = MenuRow("Commit mode");
+        Menu menu = MenuThatTakesTheKeys(item);
         var root = new StackPanel();
         root.Children.Add(owner);
         root.Children.Add(peer);
@@ -1259,19 +1284,25 @@ public sealed class CanvasNavigatorTests : IDisposable
         {
             // The reader is in pane A. This is what makes it the pane the
             // navigator — and therefore the mode — calls theirs.
-            Assert.True(owner.FilterFieldForTests.Focus());
+            Assert.True(
+                owner.FilterFieldForTests.Focus(),
+                "premise: owner.FilterField refused keyboard focus, so this arrangement never established.");
             host.UpdateLayout();
 
             switch (locus)
             {
                 case ModeEntryLocus.KeysInThePalette:
-                    Assert.True(palette.Focus());
+                    Assert.True(
+                        palette.Focus(),
+                        "premise: palette refused keyboard focus, so this arrangement never established.");
                     break;
                 case ModeEntryLocus.KeysInAMenu:
-                    Assert.True(item.Focus());
+                    PutTheKeysInTheMenu(item, "the ownership theory's menu locus");
                     break;
                 default:
-                    Assert.True(owner.FocusRow(document.FilteredOutline[0].NodeId));
+                    Assert.True(
+                        owner.FocusRow(document.FilteredOutline[0].NodeId),
+                        "premise: the row never took focus, so the reader is not on the projection.");
                     break;
             }
             host.UpdateLayout();
@@ -1284,7 +1315,9 @@ public sealed class CanvasNavigatorTests : IDisposable
             // the palette or the menu, or stepping from the projection to
             // the field. Every one of these raises the window's focus
             // event, which every pane hears.
-            Assert.True(owner.FilterFieldForTests.Focus());
+            Assert.True(
+                owner.FilterFieldForTests.Focus(),
+                "premise: owner.FilterField refused keyboard focus, so this arrangement never established.");
             host.UpdateLayout();
             Assert.True(
                 document.Modes.IsActive,
@@ -1295,7 +1328,9 @@ public sealed class CanvasNavigatorTests : IDisposable
 
             // A second movement inside the owner, because the first could
             // have been the returning edge rather than the watch.
-            Assert.True(owner.FocusRow(document.FilteredOutline[0].NodeId));
+            Assert.True(
+                owner.FocusRow(document.FilteredOutline[0].NodeId),
+                "premise: the row never took focus, so the reader is not on the projection.");
             host.UpdateLayout();
             Assert.True(document.Modes.IsActive);
             Assert.Equal(0, restorations);
@@ -1305,7 +1340,9 @@ public sealed class CanvasNavigatorTests : IDisposable
             // owner's own departure edge are three routes to the same
             // cancellation, and a mode that restores twice has run the
             // reader's undo twice.
-            Assert.True(peer.FilterFieldForTests.Focus());
+            Assert.True(
+                peer.FilterFieldForTests.Focus(),
+                "premise: peer.FilterField refused keyboard focus, so this arrangement never established.");
             host.UpdateLayout();
             Assert.False(document.Modes.IsActive);
             Assert.Equal(1, restorations);
@@ -1422,7 +1459,9 @@ public sealed class CanvasNavigatorTests : IDisposable
         {
             // The first pane is the reader's, and the premise says so in
             // the terms the rest of the fact uses.
-            Assert.True(held.FilterFieldForTests.Focus());
+            Assert.True(
+                held.FilterFieldForTests.Focus(),
+                "premise: held.FilterField refused keyboard focus, so this arrangement never established.");
             host.UpdateLayout();
             Assert.Same(held, document.Navigator.AttachedPresenter);
 
@@ -1515,9 +1554,13 @@ public sealed class CanvasNavigatorTests : IDisposable
             // The OTHER pane held the keys last, then a palette took
             // them — the arrangement in which the navigator's cache and
             // the invoker disagree.
-            Assert.True(held.FilterFieldForTests.Focus());
+            Assert.True(
+                held.FilterFieldForTests.Focus(),
+                "premise: held.FilterField refused keyboard focus, so this arrangement never established.");
             host.UpdateLayout();
-            Assert.True(palette.Focus());
+            Assert.True(
+                palette.Focus(),
+                "premise: palette refused keyboard focus, so this arrangement never established.");
             host.UpdateLayout();
 
             Assert.True(document.Navigator.EnterMode(spec, invoking));
@@ -1587,7 +1630,9 @@ public sealed class CanvasNavigatorTests : IDisposable
         {
             // The canvas HAS been focused — in the pane that is about to
             // go away, which is exactly what makes the cache lie.
-            Assert.True(first.FilterFieldForTests.Focus());
+            Assert.True(
+                first.FilterFieldForTests.Focus(),
+                "premise: first.FilterField refused keyboard focus, so this arrangement never established.");
             host.UpdateLayout();
             first.Model = elsewhere;
             host.UpdateLayout();
@@ -1678,7 +1723,9 @@ public sealed class CanvasNavigatorTests : IDisposable
 
         try
         {
-            Assert.True(owner.FilterFieldForTests.Focus());
+            Assert.True(
+                owner.FilterFieldForTests.Focus(),
+                "premise: owner.FilterField refused keyboard focus, so this arrangement never established.");
             host.UpdateLayout();
             Assert.True(shared.Navigator.EnterMode(spec, owner));
             host.UpdateLayout();
@@ -1792,9 +1839,8 @@ public sealed class CanvasNavigatorTests : IDisposable
         // pass through the departure it is supposed to be testing around.
         // That is how the first version of this fact failed, and it is
         // worth the four lines to say so.
-        var menu = new Menu();
-        var item = new MenuItem { Header = "Commit mode", Focusable = true };
-        menu.Items.Add(item);
+        MenuItem item = MenuRow("Commit mode");
+        Menu menu = MenuThatTakesTheKeys(item);
         var anotherPane = new Button { Content = "another pane" };
         var root = new StackPanel();
         root.Children.Add(pane);
@@ -1803,7 +1849,9 @@ public sealed class CanvasNavigatorTests : IDisposable
         using var host = Host(root);
         try
         {
-            Assert.True(pane.FilterFieldForTests.Focus());
+            Assert.True(
+                pane.FilterFieldForTests.Focus(),
+                "premise: pane.FilterField refused keyboard focus, so this arrangement never established.");
             host.UpdateLayout();
             Assert.True(document.Navigator.EnterMode(spec, pane));
             host.UpdateLayout();
@@ -1815,7 +1863,7 @@ public sealed class CanvasNavigatorTests : IDisposable
 
             // A menu opens over the tab. The mode is KEPT — that is the
             // M4 exception, and the Commit/Cancel controls are why.
-            Assert.True(item.Focus());
+            PutTheKeysInTheMenu(item, "the mode-held-across-a-menu fact");
             host.UpdateLayout();
             Assert.True(
                 document.Modes.IsActive,
@@ -1823,7 +1871,9 @@ public sealed class CanvasNavigatorTests : IDisposable
                 + "depends on is not in force and it would prove nothing.");
 
             // …and the reader clicks straight into another pane.
-            Assert.True(anotherPane.Focus());
+            Assert.True(
+                anotherPane.Focus(),
+                "premise: anotherPane refused keyboard focus, so this arrangement never established.");
             host.UpdateLayout();
 
             Assert.False(
@@ -1860,28 +1910,30 @@ public sealed class CanvasNavigatorTests : IDisposable
             synchronousForTests: true,
             verbosity: () => _verbosity);
         var pane = new CanvasSurfaceView { Model = loading, DataContext = new object() };
-        var menu = new Menu();
-        var first = new MenuItem { Header = "Commit mode", Focusable = true };
-        var second = new MenuItem { Header = "Cancel mode", Focusable = true };
-        menu.Items.Add(first);
-        menu.Items.Add(second);
+        MenuItem first = MenuRow("Commit mode");
+        MenuItem second = MenuRow("Cancel mode");
+        Menu menu = MenuThatTakesTheKeys(first, second);
         var root = new StackPanel();
         root.Children.Add(pane);
         root.Children.Add(menu);
         using var host = Host(root);
 
-        Assert.True(pane.FilterFieldForTests.Focus());
+        Assert.True(
+            pane.FilterFieldForTests.Focus(),
+            "premise: pane.FilterField refused keyboard focus, so this arrangement never established.");
         host.UpdateLayout();
-        Assert.True(PressKey(pane, Key.Escape, ModifierKeys.None));
+        Assert.True(
+            PressKey(pane, Key.Escape, ModifierKeys.None),
+            "premise: the press was not consumed, so the rung under test never ran.");
         host.UpdateLayout();
         Assert.NotNull(loading.FocusRequest);
 
-        Assert.True(first.Focus());
+        PutTheKeysInTheMenu(first, "the in-menu fact's first item");
         host.UpdateLayout();
         Assert.NotNull(loading.FocusRequest);
 
         // The reader arrows to the next item. Same menu, same intention.
-        Assert.True(second.Focus());
+        PutTheKeysInTheMenu(second, "the in-menu fact's second item");
         host.UpdateLayout();
         Assert.NotNull(loading.FocusRequest);
 
@@ -1973,7 +2025,9 @@ public sealed class CanvasNavigatorTests : IDisposable
 
             // The surface HAS held the keys, which is what attaches the
             // presenter the palette-driven verb below reaches through.
-            Assert.True(surface.FilterFieldForTests.Focus());
+            Assert.True(
+                surface.FilterFieldForTests.Focus(),
+                "premise: surface.FilterField refused keyboard focus, so this arrangement never established.");
             host.UpdateLayout();
 
             // The reader goes away FIRST, with nothing pending — so the
@@ -1986,14 +2040,14 @@ public sealed class CanvasNavigatorTests : IDisposable
                     CanvasSurfaceView.ShellOverlayIsOpen = static () => true;
                     break;
                 case RestorationLevel.Menu:
-                    var menu = new Menu();
-                    var item = new MenuItem { Header = "Canvas", Focusable = true };
-                    menu.Items.Add(item);
-                    menuHost = HostProbe(menu);
-                    Assert.True(item.Focus());
+                    MenuItem item = MenuRow("Canvas");
+                    menuHost = HostProbe(MenuThatTakesTheKeys(item));
+                    PutTheKeysInTheMenu(item, "the levels' menu arm");
                     break;
                 default:
-                    Assert.True(elsewhere.Focus());
+                    Assert.True(
+                        elsewhere.Focus(),
+                        "premise: elsewhere refused keyboard focus, so this arrangement never established.");
                     break;
             }
             host.UpdateLayout();
@@ -2113,10 +2167,14 @@ public sealed class CanvasNavigatorTests : IDisposable
             document.FilterText = "zzz";
             host.UpdateLayout();
         }
-        Assert.True(surface.FilterFieldForTests.Focus());
+        Assert.True(
+            surface.FilterFieldForTests.Focus(),
+            "premise: surface.FilterField refused keyboard focus, so this arrangement never established.");
         host.UpdateLayout();
         Drain(document);
-        Assert.True(PressKey(surface, Key.Escape, ModifierKeys.None));
+        Assert.True(
+            PressKey(surface, Key.Escape, ModifierKeys.None),
+            "premise: the press was not consumed, so the rung under test never ran.");
         host.UpdateLayout();
         Assert.Equal(string.Empty, document.FilterText);
         // …and the press really did take the rung this case is about,
@@ -2265,7 +2323,9 @@ public sealed class CanvasNavigatorTests : IDisposable
         using var host = Host(root);
 
         string row = document.FilteredOutline[0].NodeId;
-        Assert.True(paneA.FocusRow(row));
+        Assert.True(
+            paneA.FocusRow(row),
+            "premise: the row never took focus, so the reader is not on the projection.");
         host.UpdateLayout();
         document.Navigator.WhereAmI();
         host.UpdateLayout();
@@ -2300,7 +2360,9 @@ public sealed class CanvasNavigatorTests : IDisposable
             }
         };
 
-        Assert.True(PressKey(paneA, Key.Escape, ModifierKeys.None));
+        Assert.True(
+            PressKey(paneA, Key.Escape, ModifierKeys.None),
+            "premise: the press was not consumed, so the rung under test never ran.");
         host.UpdateLayout();
 
         Assert.Null(document.WhereAmIText);
@@ -3302,7 +3364,9 @@ public sealed class CanvasNavigatorTests : IDisposable
 
         // Now the ladder owns it again: the panel is gone, so the next
         // press takes rung 2.
-        Assert.True(PressKey(surface, Key.Escape, ModifierKeys.None));
+        Assert.True(
+            PressKey(surface, Key.Escape, ModifierKeys.None),
+            "premise: the press was not consumed, so the rung under test never ran.");
         Assert.Equal(string.Empty, document.FilterText);
         Assert.Equal(
             CanvasAnnouncer.RenderLabel(new CanvasA11yEvent.CanvasFilterCleared(
@@ -3360,7 +3424,9 @@ public sealed class CanvasNavigatorTests : IDisposable
         Assert.Same(stayPut, Keyboard.FocusedElement);
 
         // And the ladder resumes.
-        Assert.True(PressKey(surface, Key.Escape, ModifierKeys.None));
+        Assert.True(
+            PressKey(surface, Key.Escape, ModifierKeys.None),
+            "premise: the press was not consumed, so the rung under test never ran.");
         Assert.Equal(string.Empty, document.FilterText);
     });
 
@@ -3391,7 +3457,9 @@ public sealed class CanvasNavigatorTests : IDisposable
             Rendered(new CanvasStatusNote.NoConnection(true, null)), OneLine(document));
 
         Drain(document);
-        Assert.True(PressKey(surface, Key.Left, ModifierKeys.None));
+        Assert.True(
+            PressKey(surface, Key.Left, ModifierKeys.None),
+            "premise: the press was not consumed, so the rung under test never ran.");
         Assert.Equal(
             Rendered(new CanvasStatusNote.NoConnection(false, null)), OneLine(document));
 
@@ -3505,7 +3573,9 @@ public sealed class CanvasNavigatorTests : IDisposable
             },
             () => new CanvasModeRestoration.BackAt("Core question")), surface));
         host.UpdateLayout();
-        Assert.True(surface.CancelModeForTests.Focus());
+        Assert.True(
+            surface.CancelModeForTests.Focus(),
+            "premise: surface.CancelMode refused keyboard focus, so this arrangement never established.");
         host.UpdateLayout();
         Drain(document);
 
@@ -3540,7 +3610,9 @@ public sealed class CanvasNavigatorTests : IDisposable
                 return CanvasModeCommitResult.Committed();
             },
             () => new CanvasModeRestoration.BackAt("Core question")), surface));
-        Assert.True(surface.FilterFieldForTests.Focus());
+        Assert.True(
+            surface.FilterFieldForTests.Focus(),
+            "premise: surface.FilterField refused keyboard focus, so this arrangement never established.");
         host.UpdateLayout();
         Assert.False(PressKey(surface, Key.Enter, ModifierKeys.None));
         Assert.False(committed);
@@ -3915,6 +3987,75 @@ public sealed class CanvasNavigatorTests : IDisposable
         internal void UpdateLayout() => window.UpdateLayout();
 
         public void Dispose() => window.Close();
+    }
+
+    /// <summary>
+    /// A menu whose items take the keys on ANY desktop.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// `Menu` is a WPF FOCUS SCOPE, and handing KEYBOARD focus into a
+    /// scope is a step a non-interactive desktop does not always
+    /// perform. `MenuItem.Focus()` sets LOGICAL focus inside the menu's
+    /// scope and returns whether keyboard focus followed — true on every
+    /// developer machine here, false on the CI runner, which failed six
+    /// menu arms on that one call with no message to say so. In-window
+    /// and second-window menus failed alike, so it was never about
+    /// window activation.
+    /// </para>
+    /// <para>
+    /// The scope is switched off, and NOTHING the code under test reads
+    /// changes by it: `ClassifyFocusLoss` walks the focused element's
+    /// ancestors looking for a `MenuBase`, which is a TYPE test that a
+    /// focus scope neither helps nor hinders. The arrangement keeps the
+    /// production predicate exactly and drops a WPF focus-management step
+    /// this branch owns no behaviour in. A menu that is a focus scope and
+    /// a menu that is not are the same menu to the classifier, and the
+    /// classifier is the thing under test.
+    /// </para>
+    /// </remarks>
+    private static Menu MenuThatTakesTheKeys(params MenuItem[] items)
+    {
+        var menu = new Menu();
+        System.Windows.Input.FocusManager.SetIsFocusScope(menu, false);
+        foreach (MenuItem item in items)
+        {
+            menu.Items.Add(item);
+        }
+        return menu;
+    }
+
+    private static MenuItem MenuRow(string header) =>
+        new() { Header = header, Focusable = true };
+
+    /// <summary>
+    /// Put the keys in a menu, and say which leg failed if they do not
+    /// go.
+    /// </summary>
+    /// <remarks>
+    /// TWO legs, because they fail for different reasons and a CI log
+    /// that says only `Assert.True() Failure` costs a round trip: the
+    /// item has to accept keyboard focus, and the classifier has to be
+    /// able to SEE it — `ClassifyFocusLoss` reads
+    /// `Keyboard.FocusedElement`, so an item that reports focus while the
+    /// thread's focused element is something else is a premise that has
+    /// not established.
+    /// </remarks>
+    private static void PutTheKeysInTheMenu(MenuItem item, string arrangement)
+    {
+        Assert.True(
+            item.Focus(),
+            $"{arrangement}: the menu item refused keyboard focus, so the "
+            + "reader is not 'in a menu' and the classification under test "
+            + "never runs. On a desktop that will not hand focus into a "
+            + "menu, this is the premise that dies first.");
+        Assert.True(
+            ReferenceEquals(item, System.Windows.Input.Keyboard.FocusedElement),
+            $"{arrangement}: the item reports focus but the thread's focused "
+            + "element is "
+            + (System.Windows.Input.Keyboard.FocusedElement?.GetType().Name ?? "null")
+            + " — `ClassifyFocusLoss` reads the thread, so this arm would be "
+            + "testing whatever that is instead.");
     }
 
     private static ProbeWindow HostProbe(UIElement content)

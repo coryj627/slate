@@ -8211,6 +8211,77 @@ claim. An enum value is a claim. A curated list is a claim of
 completeness. All three were wrong on this branch while the prose beside
 them was right.
 
+### PR C-lite — the CI divergence: six menu arms, green locally, red on the runner
+
+Every canvas fact passed locally at 1638/0 and six failed on the CI
+windows job — all of them MENU arms, every one a bare
+`Assert.True() Failure` with no message. The failure cost a round trip
+because the log could not say which premise died.
+
+**ROOT CAUSE, reasoned from the signature and then confirmed by probe.**
+The six share exactly one thing: a `MenuItem.Focus()` call reached only
+in the menu arm. Each theory's other arms passed on the same runner, in
+the same test class, executing the same surrounding asserts — so
+elimination alone put it on that call. It is NOT window activation: two
+of the six use an IN-WINDOW menu and failed identically, which retires
+the hypothesis that a second window fails to activate on a runner
+desktop.
+
+`Menu` is a WPF FOCUS SCOPE. A local probe of both shapes:
+
+```
+scope=True   itemFocus=True  keyboard=MenuItem  logicalInMenu=MenuItem
+scope=False  itemFocus=True  keyboard=MenuItem  logicalInMenu=null
+```
+
+Both work here, and they work by DIFFERENT mechanisms. With the scope,
+`Focus()` sets LOGICAL focus inside the menu's scope and keyboard focus
+follows by a handover; without it, keyboard focus is set directly in the
+window's own scope — the same path `TextBox.Focus()` takes, which the
+runner demonstrably supports, because every non-menu premise in the same
+facts passes there.
+
+So the arrangement drops the scope. **Nothing the code under test reads
+changes**: `ClassifyFocusLoss` walks the focused element's ancestors for a
+`MenuBase`, a TYPE test that a focus scope neither helps nor hinders. The
+fact keeps the production predicate exactly and stops depending on a WPF
+focus-management step this branch owns no behaviour in.
+
+**What the evidence does and does not show, stated plainly.** It shows
+the two paths are mechanically different and that the surviving one is
+the path CI is known to support. It does NOT show the runner fails
+specifically at the handover — that is an inference, and the premise
+messages added with the fix are what will confirm or refute it on the
+next run.
+
+**NOT taken: skip-on-CI, and not a synthetic seam either.** An excused
+configuration is where the next failure lands, which is this branch's own
+gate-integrity record. And a seam-driven substitute — legitimate when
+labelled, per round 4's Min3 — was not reached for, because the evidence
+does not say the OS route is impossible there; it says one OS route is
+more portable than another. Reach for the synthetic only with evidence,
+or the fact quietly stops testing the thing.
+
+**THE RULE THIS ADDS, and it is a gate-integrity rule.** **Every premise
+assertion carries a message naming its leg.** Forty-six messageless
+premise asserts across the canvas facts are now written — every
+`.Focus()`, every `PressKey`, every `FocusRow` — because a premise that
+fails on a machine nobody can attach a debugger to must say what it was
+trying to establish. `Assert.True() Failure / Expected: True / Actual:
+False` from a remote runner is not a finding, it is a request for another
+round trip. This joins the list beside "capture the gate run to a file"
+and "the scratch sweep aborts": all three are the same rule, which is
+that a check must be able to explain itself to somebody who was not
+there.
+
+**The local-vs-CI class itself, for PR F.** Every WPF arrangement that
+depends on the desktop's focus policy — menus, activation, foreground —
+is a portability question before it is a test question. The ones that
+survive are the arrangements that use the plainest mechanism which still
+satisfies the production predicate, and the way to find out which that is
+is to probe both and compare, not to assume the one that works here is
+the one that works.
+
 ### PR C — the strategic lesson
 
 One asynchronous requirement, inside a PR whose other twelve contracts
