@@ -45,6 +45,7 @@ namespace SlateWindows.Tests;
 /// </param>
 internal sealed record CanvasModeProbe(
     CanvasModeController Controller,
+    object Pane,
     Func<CanvasModeSpec> NewSpec,
     Func<CanvasModeSpec> NewRefusingSpec,
     Func<bool, CanvasModeSpec> NewDepartingSpec,
@@ -59,7 +60,7 @@ internal static class CanvasModeConformance
     {
         CanvasModeSpec spec = probe.NewSpec();
         probe.Clear();
-        Assert.True(probe.Controller.Enter(spec));
+        Assert.True(probe.Controller.Enter(spec, probe.Pane));
 
         string line = Assert.Single(probe.Announced());
         // Every clause core's template promises, checked as CONTENT
@@ -78,7 +79,7 @@ internal static class CanvasModeConformance
     /// back.</summary>
     public static void CommitRunsTheEffectAndSpeaksItsConfirmation(CanvasModeProbe probe)
     {
-        Assert.True(probe.Controller.Enter(probe.NewSpec()));
+        Assert.True(probe.Controller.Enter(probe.NewSpec(), probe.Pane));
         probe.Clear();
 
         Assert.True(probe.Controller.Commit());
@@ -89,7 +90,7 @@ internal static class CanvasModeConformance
     public static void CancelRestoresAndSaysWhatCameBack(CanvasModeProbe probe)
     {
         CanvasModeSpec spec = probe.NewSpec();
-        Assert.True(probe.Controller.Enter(spec));
+        Assert.True(probe.Controller.Enter(spec, probe.Pane));
         probe.Clear();
 
         Assert.True(probe.Controller.Cancel());
@@ -115,7 +116,7 @@ internal static class CanvasModeConformance
     /// </remarks>
     public static void ARefusedCommitKeepsTheModeAlive(CanvasModeProbe probe)
     {
-        Assert.True(probe.Controller.Enter(probe.NewRefusingSpec()));
+        Assert.True(probe.Controller.Enter(probe.NewRefusingSpec(), probe.Pane));
         string? value = probe.Controller.ContainerValue;
         Assert.NotNull(value);
         probe.Clear();
@@ -171,7 +172,7 @@ internal static class CanvasModeConformance
         CanvasModeProbe probe)
     {
         // --- The effect APPLIED: the departure is moot.
-        Assert.True(probe.Controller.Enter(probe.NewDepartingSpec(true)));
+        Assert.True(probe.Controller.Enter(probe.NewDepartingSpec(true), probe.Pane));
         probe.Clear();
 
         Assert.True(probe.Controller.Commit());
@@ -181,7 +182,7 @@ internal static class CanvasModeConformance
 
         // --- The effect REFUSED: the mode is kept, then the deferred
         // departure cancels it — in that order, and once each.
-        Assert.True(probe.Controller.Enter(probe.NewDepartingSpec(false)));
+        Assert.True(probe.Controller.Enter(probe.NewDepartingSpec(false), probe.Pane));
         probe.Clear();
 
         Assert.False(probe.Controller.Commit());
@@ -219,7 +220,7 @@ internal static class CanvasModeConformance
     public static void ADepartureHeldAcrossAThrowingCommitStillCancels(
         CanvasModeProbe probe)
     {
-        Assert.True(probe.Controller.Enter(probe.NewThrowingDepartingSpec()));
+        Assert.True(probe.Controller.Enter(probe.NewThrowingDepartingSpec(), probe.Pane));
         probe.Clear();
 
         // The failure PROPAGATES — the caller is owed it — and the
@@ -236,7 +237,7 @@ internal static class CanvasModeConformance
         // The slot is empty: the NEXT mode's commit is unaffected by the
         // departure that belonged to the failed one.
         probe.Clear();
-        Assert.True(probe.Controller.Enter(probe.NewSpec()));
+        Assert.True(probe.Controller.Enter(probe.NewSpec(), probe.Pane));
         Assert.True(probe.Controller.Commit());
         Assert.False(probe.Controller.IsActive);
         Assert.DoesNotContain(
@@ -249,7 +250,7 @@ internal static class CanvasModeConformance
     {
         Assert.Null(probe.Controller.ContainerValue);
         CanvasModeSpec spec = probe.NewSpec();
-        Assert.True(probe.Controller.Enter(spec));
+        Assert.True(probe.Controller.Enter(spec, probe.Pane));
 
         string value = Assert.IsType<string>(probe.Controller.ContainerValue);
         // Core's own mode sentence opens with "⟨Mode name⟩ — ⟨object⟩",
@@ -291,7 +292,7 @@ internal static class CanvasModeConformance
         foreach (CanvasFocusDeparture departure
             in Enum.GetValues<CanvasFocusDeparture>())
         {
-            Assert.True(probe.Controller.Enter(probe.NewSpec()));
+            Assert.True(probe.Controller.Enter(probe.NewSpec(), probe.Pane));
             probe.Clear();
 
             bool cancelled = probe.Controller.HandleFocusDeparture(departure);
@@ -320,10 +321,10 @@ internal static class CanvasModeConformance
     public static void ASecondEntryIsRejectedAndCommitsNothing(CanvasModeProbe probe)
     {
         CanvasModeSpec first = probe.NewSpec();
-        Assert.True(probe.Controller.Enter(first));
+        Assert.True(probe.Controller.Enter(first, probe.Pane));
         probe.Clear();
 
-        Assert.False(probe.Controller.Enter(probe.NewSpec()));
+        Assert.False(probe.Controller.Enter(probe.NewSpec(), probe.Pane));
         Assert.Equal(
             CanvasAnnouncer.RenderLabel(
                 new CanvasA11yEvent.CanvasModeRejected(first.Mode)),
@@ -339,6 +340,11 @@ internal static class CanvasModeConformance
 /// </summary>
 public sealed class CanvasModeControllerTests
 {
+    /// <summary>The pane a mode belongs to. Most facts here are not
+    /// about panes, so they name an opaque stand-in — but a mode cannot
+    /// be entered without one, which is the point (contract C8).</summary>
+    private readonly object _modePane = new();
+
     private readonly List<RenderedAnnouncement> _announced = [];
 
     /// <summary>
@@ -506,6 +512,7 @@ public sealed class CanvasModeControllerTests
         var announcer = new CanvasAnnouncer(_announced.Add, TimeSpan.FromMinutes(1));
         return new CanvasModeProbe(
             controller,
+            _modePane,
             () => test.Spec(mode),
             () => test.RefusingSpec(mode, announcer.Announce),
             applies => test.DepartingSpec(mode, applies, controller, announcer.Announce),
@@ -598,7 +605,7 @@ public sealed class CanvasModeControllerTests
     public void ARetiredStackRefusesEveryVerbAndHoldsNoRung()
     {
         CanvasModeProbe probe = NewProbe();
-        Assert.True(probe.Controller.Enter(probe.NewSpec()));
+        Assert.True(probe.Controller.Enter(probe.NewSpec(), _modePane));
         int rungs = 0;
         probe.Controller.RegisterRung(CanvasEscapeRung.Filter, () =>
         {
@@ -617,7 +624,7 @@ public sealed class CanvasModeControllerTests
 
         // …and every door is shut afterwards.
         Assert.False(
-            probe.Controller.Enter(probe.NewSpec()),
+            probe.Controller.Enter(probe.NewSpec(), _modePane),
             "a retired stack must refuse an entry, or an effect runs against "
             + "a document whose handle is gone.");
         Assert.False(probe.Controller.IsActive);
@@ -657,8 +664,8 @@ public sealed class CanvasModeControllerTests
     public void AModesOwnerEndsWithTheMode()
     {
         var announcer = new CanvasAnnouncer(_announced.Add, TimeSpan.FromMinutes(1));
-        var pane = new object();
-        var controller = new CanvasModeController(announcer.Announce, () => pane);
+        object pane = _modePane;
+        var controller = new CanvasModeController(announcer.Announce);
         var spec = new CanvasModeSpec(
             CanvasMode.Move,
             new CanvasModeObject.Card("Research"),
@@ -666,7 +673,7 @@ public sealed class CanvasModeControllerTests
             () => new CanvasModeRestoration.BackAt("Research"));
 
         Assert.Null(controller.Owner);
-        Assert.True(controller.Enter(spec));
+        Assert.True(controller.Enter(spec, _modePane));
         Assert.Same(pane, controller.Owner);
 
         Assert.True(controller.Cancel());
@@ -684,7 +691,7 @@ public sealed class CanvasModeControllerTests
                     CanvasTransientVerb.Move,
                     new CanvasModeObject.Card("Research"))),
             () => new CanvasModeRestoration.BackAt("Research"));
-        Assert.True(controller.Enter(committing));
+        Assert.True(controller.Enter(committing, _modePane));
         Assert.Same(pane, controller.Owner);
         Assert.True(controller.Commit());
         Assert.False(controller.IsActive);
@@ -717,8 +724,8 @@ public sealed class CanvasModeControllerTests
     public void ACompletedModeHoldsNoPane()
     {
         var announcer = new CanvasAnnouncer(_announced.Add, TimeSpan.FromMinutes(1));
-        var pane = new object();
-        var controller = new CanvasModeController(announcer.Announce, () => pane);
+        object pane = _modePane;
+        var controller = new CanvasModeController(announcer.Announce);
         var refusing = new CanvasModeSpec(
             CanvasMode.Move,
             new CanvasModeObject.Card("Research"),
@@ -726,7 +733,7 @@ public sealed class CanvasModeControllerTests
             () => new CanvasModeRestoration.BackAt("Research"));
 
         Assert.False(controller.HoldsOwnerForTests);
-        Assert.True(controller.Enter(refusing));
+        Assert.True(controller.Enter(refusing, _modePane));
         Assert.True(controller.HoldsOwnerForTests);
 
         // A REFUSED commit keeps the mode, so it keeps the pane.
@@ -752,11 +759,11 @@ public sealed class CanvasModeControllerTests
                     CanvasTransientVerb.Move,
                     new CanvasModeObject.Card("Research"))),
             () => new CanvasModeRestoration.BackAt("Research"));
-        Assert.True(controller.Enter(committing));
+        Assert.True(controller.Enter(committing, _modePane));
         Assert.True(controller.Commit());
         Assert.False(controller.HoldsOwnerForTests);
 
-        Assert.True(controller.Enter(refusing));
+        Assert.True(controller.Enter(refusing, _modePane));
         Assert.True(controller.HoldsOwnerForTests);
         controller.Shutdown();
         Assert.False(
@@ -810,7 +817,7 @@ public sealed class CanvasModeControllerTests
                         new CanvasModeObject.Card("Research")));
             },
             () => new CanvasModeRestoration.BackAt("Research"));
-        Assert.True(controller.Enter(departing));
+        Assert.True(controller.Enter(departing, _modePane));
 
         _ = Assert.Throws<InvalidOperationException>(() => controller.Commit());
         Assert.False(controller.IsActive);
@@ -825,7 +832,7 @@ public sealed class CanvasModeControllerTests
             new CanvasModeObject.Card("Evidence"),
             CanvasModeCommitResult.Refused,
             () => new CanvasModeRestoration.SizeRestored());
-        Assert.True(controller.Enter(refusing));
+        Assert.True(controller.Enter(refusing, _modePane));
         Assert.False(controller.Commit());
         Assert.True(
             controller.IsActive,
@@ -862,7 +869,7 @@ public sealed class CanvasModeControllerTests
                 throw new InvalidOperationException("the mutation faulted.");
             },
             () => throw new NotSupportedException("the restoration faulted."));
-        Assert.True(controller.Enter(spec));
+        Assert.True(controller.Enter(spec, _modePane));
 
         // The EFFECT's failure is the one that propagates — not the
         // restoration's, which happened later and only because of it.
@@ -878,7 +885,7 @@ public sealed class CanvasModeControllerTests
             new CanvasModeObject.Card("Evidence"),
             CanvasModeCommitResult.Refused,
             () => new CanvasModeRestoration.SizeRestored());
-        Assert.True(controller.Enter(refusing));
+        Assert.True(controller.Enter(refusing, _modePane));
         Assert.False(controller.Commit());
         Assert.True(controller.IsActive);
     }
@@ -910,12 +917,12 @@ public sealed class CanvasModeControllerTests
         var test = new TestMode();
         CanvasModeController controller = NewController();
 
-        Assert.True(controller.Enter(test.Spec()));
+        Assert.True(controller.Enter(test.Spec(), _modePane));
         Assert.True(controller.Commit());
         Assert.True(test.Committed);
         Assert.False(test.Cancelled);
 
-        Assert.True(controller.Enter(test.Spec()));
+        Assert.True(controller.Enter(test.Spec(), _modePane));
         Assert.True(controller.Cancel());
         Assert.True(test.Cancelled);
     }
@@ -953,7 +960,7 @@ public sealed class CanvasModeControllerTests
             CanvasMode.Move,
             @object,
             () => CanvasModeCommitResult.Committed(),
-            () => new CanvasModeRestoration.CardsReturned(count))));
+            () => new CanvasModeRestoration.CardsReturned(count)), _modePane));
 
         string spoken = CanvasAnnouncer.RenderLabel(
             new CanvasA11yEvent.CanvasModeEntered(CanvasMode.Move, @object));
@@ -1038,7 +1045,7 @@ public sealed class CanvasModeControllerTests
             });
         if (modeActive)
         {
-            Assert.True(controller.Enter(new TestMode().Spec()));
+            Assert.True(controller.Enter(new TestMode().Spec(), _modePane));
         }
 
         string row =

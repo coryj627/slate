@@ -187,10 +187,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         _announcer = announcer;
         _retargetedFrom = retargetedFrom;
         _verbosity = verbosity ?? (static () => CanvasVerbosity.Standard);
-        // The owner lookup is a lambda rather than a value because the
-        // navigator does not exist yet on the line above, and because
-        // the answer changes every time the reader moves panes.
-        Modes = new CanvasModeController(Speak, () => Navigator.AttachedPresenter);
+        Modes = new CanvasModeController(Speak);
         Navigator = new CanvasNavigator(this);
     }
 

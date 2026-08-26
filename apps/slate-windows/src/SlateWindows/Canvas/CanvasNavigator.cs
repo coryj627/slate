@@ -187,6 +187,24 @@ internal sealed class CanvasNavigator
     internal ICanvasSurfacePresenter? AttachedPresenter => _presenter;
 
     /// <summary>
+    /// Enter a mode ON BEHALF OF the pane the reader is in (contract C8).
+    /// </summary>
+    /// <remarks>
+    /// The one production route into <see cref="CanvasModeController.Enter"/>,
+    /// and the place the owner comes from: the attached presenter, which
+    /// is the pane that owns the keys or owned them last — so a mode
+    /// entered from the palette, while the palette holds them, still
+    /// belongs to the pane the reader came from. It REFUSES when no pane
+    /// has ever held them, because a mode with no owner is a mode no
+    /// surface can end and no reader can see the controls for. That case
+    /// is a canvas nobody has focused: opening one lands focus on a row
+    /// (A14), so it is the background tab, where no mode verb is
+    /// reachable anyway. PR E/F's real modes enter here.
+    /// </remarks>
+    internal bool EnterMode(CanvasModeSpec spec) =>
+        _presenter is { } pane && _document.Modes.Enter(spec, pane);
+
+    /// <summary>
     /// Detach, reporting whether this presenter WAS the attached one.
     /// </summary>
     /// <remarks>

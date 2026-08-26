@@ -2190,8 +2190,11 @@ exception and C9 records why.
 
 **C2 — `ICanvasSurfacePresenter` is the only thing the navigator knows
 about views.** Three questions (which projection, does it own the keys,
-can it move one row) and three focus moves (a row, the projection,
-dismiss a transient region). `CanvasSurfaceView` implements it and
+can it move one row), three focus moves (a row, the projection, dismiss a
+transient region) and one identity — `Owner`, the tab this pane is
+showing, which is what `FilterCards` addresses its request to and
+therefore the member that makes the addressed request in the next
+paragraph work at all. `CanvasSurfaceView` implements it and
 routes to whichever projection is showing. Nothing sits on it that the
 navigator does not call — "focus the filter field" was drafted onto it
 and taken off, because Ctrl+F raises the document's addressed filter
@@ -2406,7 +2409,7 @@ is a table test rather than a claim:
 |---|---|---|
 | 1 `Mode` | a mode is active | cancel + restore, announced |
 | 2 `Filter` | the field holds a needle | clear it, announce `CanvasFilterCleared`, re-seat (the seat rule below) |
-| 3 `Surface` | a transient region is open or holds focus | close the Where-am-I panel, or the interim card detail, or leave the filter field — re-seat (the seat rule below) |
+| 3 `Surface` | a transient region is open or holds focus | close the interim card detail, or leave the filter field or its result summary — re-seat (the seat rule below). NOT the Where-am-I panel: an open panel pre-empts the whole ladder (CD-47), so no reachable press arrives here with it up |
 | 4 `WorkspaceTab` | nothing above consumed it | NOT consumed; the press bubbles |
 
 **An OPEN Where-am-I panel takes the press ahead of every rung**
@@ -2435,8 +2438,9 @@ screen reader reads what focus lands on, and a line on top of that is
 the t0 §1.5 doubling rule broken on a dismissal (the same reasoning as
 A12's silent seat).
 
-**THE SEAT RULE.** Escape's two rungs AND the CD-47 pre-ladder
-dismissal re-seat through one helper (`FocusProjection`), and it is
+**THE SEAT RULE.** Escape's two rungs, the CD-47 pre-ladder dismissal,
+AND the Where-am-I panel's own Close button re-seat through one helper
+(`FocusProjection`), and it is
 STATE-AWARE, which PR C-lite's codex round 2 forced: `Render` collapses
 both projections under `Loading` and under every failure state, so "back
 to the projection" was a move to something that is not there — the keys
@@ -2468,7 +2472,11 @@ scoped review caught it: `CloseWhereAmI` is also reached from
 `OnPreviewKeyDown`'s CD-47 path, which by this contract's own text
 dismisses the panel "leaving an active filter and even an active mode
 untouched" — so it runs with a live needle by design, and is a caller
-that is not a rung. On a canvas that
+that is not a rung. **So is the panel's Close BUTTON**, whose `Click`
+reaches the same dismissal by pointer or Invoke with the needle equally
+live. The paragraph that exists to correct a caller enumeration listed
+two of the three; the third was found by reading the call graph again
+rather than the paragraph. On a canvas that
 HAS cards the onboarding region is hidden (`EmptyOnboardingText` keys on
 the UNFILTERED outline) and `Ready` has no focusable banner, so without
 arm 4 the seat falls through to a deferred landing with the panel
@@ -2514,12 +2522,14 @@ is written when THIS surface loses focus, so the move that ends it — the
 menu closing and the reader clicking into another pane — raises nothing
 here. That landing used to be held for the pane's lifetime: neither
 delivered, nor withdrawn, nor completed. The surface therefore also
-watches its host WINDOW's keyboard focus, and when a menu/overlay hold is
-in force and the cause has ended, the DESTINATION decides: back here,
-clear and retry; anywhere else, the same withdrawal `Depart` would have
-made had it been able to see the move — routed through `Depart` itself,
-so the mode stack hears it too and stops keeping alive a mode across a
-menu the reader has left.
+watches its host WINDOW's keyboard focus. It runs whenever this surface
+has something to lose — a deferred restoration, or an active mode it
+OWNS — and when the cause has ended and the keys have gone somewhere
+else, that destination is classified as the `PaneFocus` it is, routed
+through `Depart` itself so the mode stack hears the same thing. Keys
+that came back HERE need no arm: that is a focus-within transition,
+which clears the hold and re-asks on its own, and an arm that did it
+here too was written and removed as provably redundant.
 
 Codex round 3's B1 and codex round 4's M2 are ONE ROW, and they are the
 two failure directions of one lifecycle: the withdrawal existed alone
@@ -2843,14 +2853,49 @@ twice.
 
 **THE THIRD AFFINITY, and the last one that should have to be
 discovered.** A14's focus landing carries its OWNER; the navigator's
-presenter carries the pane the reader is in; a mode now carries the pane
-it was entered from. One rule underneath: **anything DOCUMENT-SHARED
-that a PER-SURFACE mechanism acts upon must say which surface, because
-"the document has one" and "this pane owns it" are different facts and
-only the second licenses acting.** PR F inherits this as a rule rather
-than as three examples — its real modes arrive into a two-pane world, and
-every new document-shared thing they add gets asked the question at
-design time.
+presenter carries the pane the reader is in; a mode carries the pane it
+was entered from. One rule underneath: **anything DOCUMENT-SHARED that a
+PER-SURFACE mechanism acts upon must say which surface, because "the
+document has one" and "this pane owns it" are different facts and only
+the second licenses acting.**
+
+**AN AFFINITY IS A FIELD PLUS THREE LIFECYCLE GUARANTEES**, and each one
+was learned separately on the request before the mode inherited all
+three at once:
+
+1. **It cannot be absent while the thing it names is live.** A mode
+   REQUIRES an owner at entry (`Enter(spec, owner)`), and
+   `CanvasNavigator.EnterMode` is the production route that supplies the
+   attached pane and REFUSES when no pane has ever held the keys. An
+   ownerless active mode is unrepresentable rather than handled — it was
+   representable for one wave, and because `Owner` reads null both for
+   "no mode" and for "a mode nobody owns", every consumer had to guess
+   which it was seeing and the one that guessed wrong forwarded a peer's
+   departure into a mode unrelated to it.
+2. **It ends when the thing it names stops being an address.** A pane
+   whose document is replaced under it reports the departure BEFORE it
+   detaches (`HandleOwnerDeparture`, routed through
+   `HandleFocusDeparture` so the commit-time deferral applies), and a
+   pane that stops showing the canvas departs through the visibility
+   edge. Otherwise a mode goes on naming a surface that no longer shows
+   the document, and nothing is entitled to end it.
+3. **It is RELEASED, not merely hidden.** The backing field is cleared
+   at the one place `Active` goes null, so a completed mode holds no
+   pane — and `Owner` is a plain read of that field rather than a
+   read-through, because once the clear existed the read-through's own
+   mutation could not be made to fail. That ordering is the lesson: a
+   read boundary returning null is exactly what hid the same retention on
+   the request properties (round 2's B3). Reading null is not holding
+   nothing, which is why the retention half has its own observable
+   (`HoldsOwnerForTests`) and why the clear — not the read — is what the
+   facts assert.
+
+Only the OWNING surface acts on the mode's behalf — in the host-window
+watch and in `Depart` itself, which is the classifier the watch routes
+through and which was taught this one wave later than the watch was. PR F
+inherits the whole shape rather than three examples: its real modes
+arrive into a two-pane world, and every new document-shared thing they
+add gets asked the question at design time.
 
 The `ModalOverlay` arm is a **divergence from t0 §2 M4's literal list**
 and is recorded as CD-41 rather than implemented silently. Reasoning, in
@@ -3101,7 +3146,11 @@ the boundary makes the properties read null either way.
 
 The re-ask list is the SURFACE's, deliberately narrower than A14's:
 `Loaded`, `IsVisibleChanged`, `DataContextChanged`, keyboard focus
-arriving, the model changing and the request itself changing. Container
+arriving, the host WINDOW activating, the model changing and the request
+itself changing. (The activation arrived with the deferred-restoration
+hold two waves after this list was written, and the list said it was
+exact — which is why it is spelled out again here rather than left as
+"and so on".) Container
 realization is not on it, because `Render` never hides the filter field
 — only the summary and Clear follow the needle, and the projections
 follow `ready` — so no publish, state change or realization can turn an
@@ -4845,11 +4894,22 @@ was the defect: depth is a position in core's READING ORDER, so a stack
 run over the FILTERED rows attached such a survivor to whatever survivor
 happened to be shallower and earlier — a card from an unrelated branch,
 spoken as inside a group it is not in. And the rule was only half
-stated: a survivor whose own group was filtered out but whose
-GRANDparent matched belongs under the grandparent, not at the root.
-Containment is computed from the unfiltered hierarchy now, which is what
-makes the promotion true rather than approximately true;
-`AFilteredOutlineNeverNestsACardUnderAGroupItIsNotIn` pins it.
+stated: containment must be computed from the UNFILTERED hierarchy, so a
+survivor attaches to its nearest surviving true ancestor and otherwise
+becomes a root. `AFilteredOutlineNeverNestsACardUnderAGroupItIsNotIn`
+pins it.
+
+That is the implementation's general form, and this row used to justify
+it with a case — "a survivor whose own group was filtered out but whose
+GRANDparent matched belongs under the grandparent" — that the headline
+above says cannot occur. Both cannot be true, and the headline is the
+true one: by the ancestor → descendant-GROUP lemma, an intermediate
+group cannot be missing while a higher ancestor survives, so the walk
+never actually finds a grandparent to stop at. The walk stays because it
+is the safe general form and costs nothing, NOT because that case is
+reachable. The reachable shape is the other one: a survivor with no
+surviving ancestor at all, promoted to the root
+(`AGroupThatMatchesInsideANonMatchingGroupIsPromotedToTheRoot`).
 
 **CD-46 — Next/previous card route through the read mapping; mac
 returns silently outside `.ready`.** `canvasSelectAdjacent` guards on
@@ -4905,8 +4965,18 @@ Focus RESTORE is the part that stays locus-dependent, and
 `CloseWhereAmI` owns it: the reader is put back only if they were INSIDE
 the panel. Dismissing a panel someone was not in must not relocate them,
 which is the mirror of the defect the restore exists to prevent. The
-ladder is otherwise unchanged and still owns Escape from the
-projections, where rung 3 closes the panel exactly as before.
+ladder is otherwise unchanged and still owns Escape from the projections.
+
+**Rung 3 no longer closes the panel, and this row said it did.** An OPEN
+panel pre-empts the whole ladder — that is what CD-47 IS — so the press
+never reaches rung 1, let alone rung 3, while the panel is up. Rung 3's
+remaining arms are the interim card detail and leaving the filter field
+(`DismissTransientRegion`). `CloseWhereAmI` is still reached from rung 3
+in code, as the arm that runs when the panel is somehow visible without
+the pre-empt having fired, but no Escape a reader can press takes that
+route. The clause is corrected rather than deleted because "rung 3
+closes the panel" was true for one wave and is the kind of sentence a
+reader checks the ladder table against.
 
 **Why it went silent, and the class it belongs to.** This is CD-41's
 shape a second time: a t0 clause that does not mention the case, so both
@@ -7589,8 +7659,8 @@ matrix.
   used one surface, so it could not see the sibling.
 
   A mode carries its OWNER now, captured at `Enter` from the navigator's
-  attached presenter and read through the active mode, so no mode means
-  no owner by construction. `AModeBelongsToThePaneItWasEnteredFrom`
+  attached presenter, and cleared where `Active` goes null, so no mode
+  means no owner. `AModeBelongsToThePaneItWasEnteredFrom`
   covers entry from the projection, the palette and a menu, moves twice
   inside the owner, and COUNTS the restorations when the reader finally
   lands in the peer — because three routes to one cancellation is also
@@ -7698,6 +7768,141 @@ matrix.
   which is exactly one member's block, over canvas production, the canvas
   tests and the censuses. Seeded both ways so a mistyped checker fails
   instead of guarding nothing.
+
+### PR C-lite — codex adversarial round 7 — NOT SAFE, 1 blocker + 2 minors
+
+- **BLOCKER — the "or when nobody owns it" arm restored the very defect
+  it was written beside.** Round 6 taught `Depart` ownership and left a
+  safety net for the ownerless case. But `Owner` reads null for TWO
+  states — "no mode active" and "a mode nobody owns" — so the net could
+  not tell them apart, and forwarded a peer's departure into a mode
+  unrelated to it. Latent at this tip and reachable in PR F: a palette
+  entry before any pane has focus, then a split change.
+
+  Taken STRUCTURALLY rather than by a smarter predicate, which is the
+  branch's own doctrine (M4's unrepresentability): **an owner is a
+  required argument to `Enter`.** `CanvasNavigator.EnterMode` is the one
+  production route in, supplying the attached pane and REFUSING when no
+  pane has ever held the keys; the null arm is deleted because the state
+  it read no longer exists. The ambiguity is not handled, it is gone.
+
+  **And the evidence had to be paired to be honest.** The review's own
+  mutation — restore the null arm — no longer fails anything, and NOT
+  because the arm is harmless: because the state it reads is
+  unreachable. So the battery runs the pair: restore the arm alone and
+  nothing changes; permit ownerless entry AND restore the arm, and the
+  fact fails again. **When a remedy makes a state unrepresentable, the
+  single mutation stops being evidence and the pair becomes the
+  evidence** — worth naming, because "the mutation passed" would
+  otherwise read as a weaker guard rather than a stronger one.
+
+  The refusal's cost was weighed rather than assumed: it applies only to
+  a canvas nobody has focused, and opening one lands focus on a row
+  (A14), so it is the background tab — where no mode verb is reachable
+  anyway. Recorded in C8, and PR E/F enter through the same seam.
+
+- **MINOR 1 — the doc census was false-green against its own motivating
+  defect.** Two separately-balanced `<summary>`/`<remarks>` pairs in one
+  `///` run pass a LIFO check, and that is exactly what a splice leaves
+  behind: one member carrying both blocks and its neighbour carrying
+  none. There was a live instance in the file the last wave edited —
+  `HandleFocusDeparture` had lost its documentation to
+  `HandleOwnerDeparture`. **A guard written for a defect that does not
+  catch that defect is worse than no guard**, because it retires the
+  reader's suspicion. The rule is now one top-level `<summary>` per run,
+  seeded with the balanced-duplicate case; the scope is enumerated and
+  de-duplicated (the first version read every `Canvas…Census` twice);
+  `ChordTableTests` is in; the FlaUI project is out with its reason
+  recorded; and the floor counts FILES, because a blocks-per-file floor
+  drifts with every paragraph anyone writes and a floor that drifts is a
+  floor nobody re-reads.
+
+- **MINOR 2 — the canonical rows, reconciled against the tip.** The
+  corrections had been landing in ROUND RECORDS while the normative rows
+  they correct went on saying the old thing. That is the whole failure
+  class of this PR at one remove: the derivation is honest and the
+  artefact PR F actually reads is not. Four contradictions closed:
+
+  * **C8** carried the affinity FIELD and not its doctrine. It now
+    carries the doctrine that took three waves to assemble — **an
+    affinity is a field plus three lifecycle guarantees**: it cannot be
+    absent while the thing it names is live; it ends when the thing it
+    names stops being an address; and it is RELEASED rather than merely
+    hidden, because a read boundary that returns null is not a field
+    holding nothing.
+  * **CD-45** said the grandparent case cannot occur and then justified
+    the implementation with that case. Both cannot be true; the headline
+    is the true one, the walk stays because it is the safe general form,
+    and the reachable shape is promotion to the root.
+  * **CD-47** said rung 3 closes the panel — but an open panel PRE-EMPTS
+    the ladder, which is what CD-47 is, so no Escape a reader can press
+    reaches rung 3 while the panel is up.
+  * **§W-C's navigator row** described canvas chords as uniformly gated
+    on projection focus with a panel exception that only applied from
+    inside the panel. Delivery is from the SURFACE and the gate is per
+    ARM; the panel pre-empt keys on the panel being OPEN, not on focus
+    being in it.
+
+  The pass was run over C1–C13, CD-40..48 and the three §W-C rows against
+  the code at the tip rather than against the round history — which is
+  the only way to catch this class, because a row that was true when
+  written reads as true to anyone who remembers writing it. **It found
+  seven more beyond the four the review named**, and the shape of them is
+  the argument for doing it as a pass rather than per finding:
+
+  * C8's own new paragraph said `Owner` "reads through the active mode"
+    — false within the same wave that wrote it, because the read-through
+    was removed hours later on mutation evidence. A row can go stale
+    against a change nobody else has seen yet.
+  * C10's re-ask list called itself EXACT and had missed the window
+    activation for two waves; the code comment beside it repeated the
+    same list, so both said "three places" while the code had five.
+  * §W-C described Enter with mac's bubbling precedence, which C3
+    explicitly REJECTED for Windows — two canonical rows disagreeing
+    about the same key.
+  * C6's seat-rule paragraph — the one written to correct a false caller
+    enumeration — enumerated two of three callers. The Where-am-I
+    panel's Close BUTTON reaches the same dismissal by pointer, with a
+    live needle, which is arm 4's whole justification.
+  * C2's presenter inventory was one member short: `Owner`, the member
+    that makes the addressed filter request the next paragraph describes
+    work at all.
+  * C6's rung table still listed the Where-am-I panel as rung 3's arm
+    (CD-47's correction had not swept it) and omitted the result summary
+    from the leave-the-field arm.
+  * §W-C's panel inventory omitted the Close button — a focusable Invoke
+    target missing from the accessibility instrument's own list.
+
+  **Three of the seven are enumerations, and two of those are inside
+  paragraphs written to correct enumerations.** That is the finding worth
+  carrying: a list in prose is a claim of completeness that nothing
+  checks, and this branch has now got one wrong at four different
+  altitudes. Where a list is load-bearing, derive it or guard it — and
+  where it cannot be, say "among others" rather than "exact".
+
+- **A FOURTH belt removed, and the reason this wave kept making them.**
+  `Owner` was a read-through (`_active is null ? null : _owner`) written
+  one wave before the field gained its clear. Once both existed the
+  read-through's mutation could not be made to fail — `Enter` is the only
+  writer and the clear sits at the one place `Active` goes null — so it
+  went, with `ACompletedModeHoldsNoPane` and `AModesOwnerEndsWithTheMode`
+  both left asserting the invariant (the clear's own mutation now fails
+  two facts, not one). That is four across three waves: the
+  clear-and-retry arm, `Shutdown`'s owner clear, the unload transition,
+  and now the read-through. **They are not carelessness; they are what
+  happens when a lifecycle is built one guarantee per wave.** Each was
+  written defensively before the guarantee that would subsume it existed,
+  and only the mutation could tell. The rule for PR F: when you add a
+  guarantee, re-run the mutations for the guarantees already there.
+
+**THE LAST-MILE RULE, recorded because it is the shape of this whole
+PR.** The round records are the DERIVATION; the canonical rows are the
+ARTEFACT. Every review from round 3 onward found the same thing at some
+altitude — a claim that outran its code — and the reason the class kept
+recurring is that fixing it in the derivation feels like fixing it.
+**A correction has not landed until the row a future reader will consult
+says the new thing.** For PR F: read C1–C13 and CD-40..48 against the
+code before starting, not against these sections.
 
 ### PR C — the strategic lesson
 

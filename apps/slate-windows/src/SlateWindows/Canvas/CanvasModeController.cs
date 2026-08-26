@@ -195,15 +195,12 @@ internal sealed class CanvasModeController : BindableBase
     /// </remarks>
     private CanvasFocusDeparture? _deferredDeparture;
 
-    public CanvasModeController(
-        Action<CanvasA11yEvent> announce, Func<object?>? ownerOfRecord = null)
+    public CanvasModeController(Action<CanvasA11yEvent> announce)
     {
         ArgumentNullException.ThrowIfNull(announce);
         _announce = announce;
-        _ownerOfRecord = ownerOfRecord ?? (static () => null);
     }
 
-    private readonly Func<object?> _ownerOfRecord;
     private object? _owner;
 
     /// <summary>
@@ -219,15 +216,34 @@ internal sealed class CanvasModeController : BindableBase
     /// one pane cancelled the mode another pane's reader was using.
     /// </para>
     /// <para>
-    /// Captured at ENTER from the navigator's attached presenter — the
-    /// pane that owns the keys or owned them last — so a mode entered
-    /// from the palette, while the palette holds them, still belongs to
-    /// the pane the reader came from. Read THROUGH the active mode, so
-    /// there is no list of clear sites to keep complete: no mode, no
-    /// owner, by construction.
+    /// REQUIRED at entry rather than looked up, which is what makes
+    /// "active but ownerless" unrepresentable. It was representable for
+    /// one wave — `Enter` captured whatever the navigator happened to be
+    /// attached to, including nothing — and a null owner then read
+    /// identically to "no mode active" at every consumer, so a peer
+    /// pane's departure was forwarded to a mode that was not its own.
+    /// The ambiguity is gone because the state is gone.
+    /// </para>
+    /// <para>
+    /// `CanvasNavigator.EnterMode` is the production entry that supplies
+    /// it — the pane that owns the keys or owned them last, so a mode
+    /// entered from the palette while the palette holds them still
+    /// belongs to the pane the reader came from — and REFUSES when no
+    /// pane has ever held them.
+    /// </para>
+    /// <para>
+    /// A plain field read. It was written as a read-through
+    /// (`_active is null ? null : _owner`) one wave before the field
+    /// gained its clear, and once both existed the read-through's own
+    /// mutation could not be made to fail: the field is nulled at the one
+    /// place `Active` goes null, and `Enter` is the only writer, so there
+    /// is no state in which a stale owner could be read. Removed on that
+    /// evidence, with `ACompletedModeHoldsNoPane` left asserting the
+    /// invariant — which is the guard a future teardown that stopped
+    /// cancelling would trip, and which a read-through would have hidden.
     /// </para>
     /// </remarks>
-    internal object? Owner => _active is null ? null : _owner;
+    internal object? Owner => _owner;
 
     /// <summary>The active mode, or null. Published so the surface's M3
     /// value and its Commit/Cancel buttons follow it.</summary>
@@ -287,9 +303,13 @@ internal sealed class CanvasModeController : BindableBase
     /// is already active — nothing commits, and the announcement names
     /// the mode that is holding the stack.
     /// </summary>
-    public bool Enter(CanvasModeSpec spec)
+    public bool Enter(CanvasModeSpec spec, object owner)
     {
         ArgumentNullException.ThrowIfNull(spec);
+        // The OWNING pane, required. A mode with no pane running it is
+        // the state every per-surface consumer had to guess about, so it
+        // is not a state this type can be in.
+        ArgumentNullException.ThrowIfNull(owner);
         if (_retired)
         {
             // TERMINAL, and SILENT — which is not the never-silent table
@@ -307,7 +327,7 @@ internal sealed class CanvasModeController : BindableBase
             Speak(new CanvasA11yEvent.CanvasModeRejected(current.Mode));
             return false;
         }
-        _owner = _ownerOfRecord();
+        _owner = owner;
         Active = spec;
         Speak(new CanvasA11yEvent.CanvasModeEntered(spec.Mode, spec.Object));
         return true;
@@ -575,6 +595,23 @@ internal sealed class CanvasModeController : BindableBase
     /// rather than restating the list.
     /// </para>
     /// </remarks>
+    public bool HandleFocusDeparture(CanvasFocusDeparture departure)
+    {
+        if (_retired)
+        {
+            return false;
+        }
+        if (_committing && CancelsFor(departure))
+        {
+            // DEFERRED, not applied: a commit effect is mid-flight and it
+            // owns this press's outcome (M2). The departure is honoured
+            // the moment that outcome is known — see `Commit`.
+            _deferredDeparture = departure;
+            return false;
+        }
+        return CancelsFor(departure) && Cancel();
+    }
+
     /// <summary>
     /// The surface RUNNING the mode is going away — its document is being
     /// replaced under it, or it is unloading.
@@ -612,23 +649,6 @@ internal sealed class CanvasModeController : BindableBase
     /// precisely why the retention half needs its own observable
     /// (round 2's B3, one object over).</summary>
     internal bool HoldsOwnerForTests => _owner is not null;
-
-    public bool HandleFocusDeparture(CanvasFocusDeparture departure)
-    {
-        if (_retired)
-        {
-            return false;
-        }
-        if (_committing && CancelsFor(departure))
-        {
-            // DEFERRED, not applied: a commit effect is mid-flight and it
-            // owns this press's outcome (M2). The departure is honoured
-            // the moment that outcome is known — see `Commit`.
-            _deferredDeparture = departure;
-            return false;
-        }
-        return CancelsFor(departure) && Cancel();
-    }
 
     /// <summary>The M4 table itself, split out so the deferral above and
     /// the application below cannot drift apart.</summary>

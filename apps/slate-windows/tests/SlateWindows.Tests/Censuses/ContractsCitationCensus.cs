@@ -372,9 +372,10 @@ public sealed class ContractsCitationCensus
     public void EveryDocCommentClosesWhatItOpens()
     {
         var offenders = new List<string>();
-        var runs = 0;
+        var files = 0;
         foreach ((string label, string text) in DocumentedSources())
         {
+            files++;
             string[] lines = text.Replace("\r\n", "\n").Split('\n');
             var run = new List<string>();
             var runStart = 0;
@@ -393,7 +394,6 @@ public sealed class ContractsCitationCensus
                 }
                 if (run.Count > 0)
                 {
-                    runs++;
                     if (UnbalancedTag(string.Join("\n", run)) is { } problem)
                     {
                         offenders.Add($"{label}:{runStart} — {problem}");
@@ -403,16 +403,24 @@ public sealed class ContractsCitationCensus
             }
         }
 
-        // The scan can see: a floor, and a SEEDED imbalance of the exact
-        // shape that recurred — a member spliced inside a neighbour's
-        // remarks — which the checker must report.
+        // The scan can see: a floor on FILES (blocks-per-file drifts with
+        // every paragraph anyone writes, and a floor that drifts is a
+        // floor nobody re-reads), and three seeds.
         Assert.True(
-            runs > 200,
-            $"only {runs} doc blocks were scanned; the guard is reading almost "
+            files > 20,
+            $"only {files} files were scanned; the guard is reading almost "
             + "nothing.");
         Assert.NotNull(UnbalancedTag(
             "/// <summary>a</summary>\n/// <remarks>\n/// <para>b</para>"));
         Assert.NotNull(UnbalancedTag("/// <para>b</para>\n/// </remarks>"));
+        // THE MOTIVATING SHAPE, which LIFO balance alone reports as fine:
+        // two separately-balanced blocks in one run, which means one
+        // member carries both and its neighbour carries none. The first
+        // version of this guard passed this and would have passed the
+        // splice that produced it if the splice had been tidier.
+        Assert.NotNull(UnbalancedTag(
+            "/// <summary>a</summary>\n/// <remarks>x</remarks>\n"
+            + "/// <summary>b</summary>\n/// <remarks>y</remarks>"));
         Assert.Null(UnbalancedTag(
             "/// <summary>a</summary>\n/// <remarks>\n/// <para>b</para>\n"
             + "/// </remarks>"));
@@ -430,12 +438,25 @@ public sealed class ContractsCitationCensus
     private static string? UnbalancedTag(string block)
     {
         var open = new Stack<string>();
+        var summaries = 0;
         foreach (Match tag in Regex.Matches(
             block, @"<(/?)(summary|remarks|para|returns|example)>"))
         {
             string name = tag.Groups[2].Value;
             if (tag.Groups[1].Value.Length == 0)
             {
+                // ONE member per run, and a run is one member's doc
+                // block. A second top-level `<summary>` means this block
+                // documents two things — so the first one's member has no
+                // doc comment at all, which is what the splice actually
+                // did and what pure LIFO balance cannot see.
+                if (open.Count == 0
+                    && string.Equals(name, "summary", StringComparison.Ordinal)
+                    && ++summaries > 1)
+                {
+                    return "a second top-level <summary>: this block "
+                        + "documents two members, so one of them has none";
+                }
                 open.Push(name);
                 continue;
             }
@@ -452,30 +473,53 @@ public sealed class ContractsCitationCensus
         return open.Count == 0 ? null : $"<{open.Peek()}> is never closed";
     }
 
-    /// <summary>Canvas production and the canvas-facing tests, which is
-    /// where every instance of this class has appeared.</summary>
+    /// <summary>
+    /// Canvas production and the canvas-facing tests, enumerated
+    /// deliberately and de-duplicated.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The first version recursed the test root for `Canvas*.cs` AND the
+    /// `Censuses` folder for `*.cs`, so every `Canvas…Census` was read
+    /// twice — harmless for correctness and dishonest in the floor, which
+    /// is why the floor now counts FILES and the walk is top-directory
+    /// per scope with a seen-set behind it.
+    /// </para>
+    /// <para>
+    /// `ChordTableTests` is IN: it scrapes `CanvasNavigator.Bind` and is
+    /// canvas-facing in everything but its name. The FlaUI project is
+    /// OUT, recorded rather than forgotten — its canvas journeys live in
+    /// `ShellAccessibilityTests` among every other surface's, so pulling
+    /// the file in would put this guard on the whole shell's prose on the
+    /// strength of one region. That is a scope decision, and it belongs
+    /// to whoever widens it.
+    /// </para>
+    /// </remarks>
     private static IEnumerable<(string Label, string Text)> DocumentedSources()
     {
         string root = SourceText.RepoRoot();
-        (string Dir, string Pattern)[] scopes =
+        string tests = Path.Combine(
+            root, "apps", "slate-windows", "tests", "SlateWindows.Tests");
+        (string Dir, string Pattern, SearchOption Depth)[] scopes =
         [
-            (Path.Combine(
-                root, "apps", "slate-windows", "src", "SlateWindows", "Canvas"), "*.cs"),
-            (Path.Combine(
-                root, "apps", "slate-windows", "tests", "SlateWindows.Tests"),
-                "Canvas*.cs"),
-            (Path.Combine(
-                root, "apps", "slate-windows", "tests", "SlateWindows.Tests",
-                "Censuses"), "*.cs"),
+            (Path.Combine(root, "apps", "slate-windows", "src", "SlateWindows", "Canvas"),
+                "*.cs", SearchOption.AllDirectories),
+            (tests, "Canvas*.cs", SearchOption.TopDirectoryOnly),
+            (tests, "ChordTableTests.cs", SearchOption.TopDirectoryOnly),
+            (Path.Combine(tests, "Censuses"), "*.cs", SearchOption.TopDirectoryOnly),
         ];
-        foreach ((string dir, string pattern) in scopes)
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach ((string dir, string pattern, SearchOption depth) in scopes)
         {
-            string[] files = Directory.GetFiles(dir, pattern, SearchOption.AllDirectories);
+            string[] found = Directory.GetFiles(dir, pattern, depth);
             Assert.True(
-                files.Length > 0, $"no sources under {dir} matching {pattern}");
-            foreach (string file in files)
+                found.Length > 0, $"no sources under {dir} matching {pattern}");
+            foreach (string file in found)
             {
-                yield return (Path.GetFileName(file), File.ReadAllText(file));
+                if (seen.Add(file))
+                {
+                    yield return (Path.GetFileName(file), File.ReadAllText(file));
+                }
             }
         }
     }

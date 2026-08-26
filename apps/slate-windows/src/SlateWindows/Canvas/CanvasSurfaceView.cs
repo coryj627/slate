@@ -808,13 +808,14 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         // blocker, one altitude down: the watcher was taught ownership
         // and the classifier it routes through was not.
         //
-        // A null owner means NOBODY owns it (no pane was ever attached
-        // when the mode was entered), and the pre-existing safety net —
-        // any departure ends it — is the right answer there. `Owner`
-        // also reads null when no mode is active, which makes the call
-        // below the no-op it already was.
-        if (Model is { Modes: { } modes }
-            && (modes.Owner is null || ReferenceEquals(modes.Owner, this)))
+        // No "or when nobody owns it" arm. That was written as a safety
+        // net and was the defect back: `Owner` reads null both for "no
+        // mode" and for "a mode nobody owns", so the arm forwarded a
+        // peer's departure into a mode unrelated to it. An owner is
+        // REQUIRED at entry now, so the second reading no longer exists
+        // and the first needs no call — `HandleFocusDeparture` answers
+        // false with no active mode anyway.
+        if (Model is { Modes: { } modes } && ReferenceEquals(modes.Owner, this))
         {
             _ = modes.HandleFocusDeparture(departure);
         }
@@ -1257,12 +1258,15 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
     /// lands, so a peer neither steals it nor holds it.
     /// </para>
     /// <para>
-    /// Asked from three places, and the list is exact because a list
-    /// that is nearly right is how the paragraph this one replaced went
-    /// wrong. Through `TryDeliverPending`: `Loaded`, `IsVisibleChanged`,
-    /// `DataContextChanged`, and — the one that matters here — keyboard
-    /// focus ARRIVING, which is the moment a closing palette hands the
-    /// keys back. Directly: the model changing, and the request property
+    /// Asked from a list this comment keeps exact, because a list that
+    /// is nearly right is how the paragraph this one replaced went
+    /// wrong — and because it went nearly-right again: the window
+    /// activation below arrived two waves after the list said "three
+    /// places". Through `TryDeliverPending`: `Loaded`,
+    /// `IsVisibleChanged`, `DataContextChanged`, the host WINDOW
+    /// activating, and — the one that matters here — keyboard focus
+    /// ARRIVING, which is the moment a closing palette hands the keys
+    /// back. Directly: the model changing, and the request property
     /// itself changing. It is deliberately NOT the whole of A14's list:
     /// `Render` never hides the filter field (only the summary and Clear
     /// follow the needle, and the projections follow `ready`), so no
