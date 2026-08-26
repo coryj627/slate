@@ -6905,6 +6905,14 @@ a consequence of that wave rather than a new subsystem.
   change": a reader pressing Ctrl+F twice got no second notification.
   Change detection for the request properties is by REFERENCE now, so
   the notification side agrees with the completion side.
+- **The boundary is a GUARD now, not a convention.**
+  `NoCanvasCodeReachesTheAnnouncerExceptThroughTheBoundary` derives the
+  forbidden surface from the announcer's own members (whatever reaches
+  `Emit`) and scans every production source under `Canvas/`, exempting
+  the boundary and the one B7 relay seat — each of which must be FOUND
+  or the census fails as vacuous. Both historical instances were re-run
+  against it rather than argued: the mode stack's wiring and
+  `AdmitStructuralRead`'s direct call each fail it by name.
 - Recorded rather than fixed: the announce boundary breaks t0 §1.4's
   panel/announcement pairing for one caller — Where-am-I on a retired
   document composes the panel string while the boundary refuses the

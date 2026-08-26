@@ -298,4 +298,158 @@ public sealed class AnnouncementSeamCensus
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
         }
     }
+
+    /// <summary>
+    /// Contract A5/C7: no canvas code reaches the announcer's
+    /// compose-and-post surface except through the ONE boundary.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// PROVENANCE, because this guard is not hypothetical — it is four
+    /// incidents old. The canvas has one announce boundary
+    /// (<c>CanvasDocumentViewModel.Speak</c>) so that a retired document
+    /// composes nothing, and until this arm existed that was a
+    /// CONVENTION: a new <c>Announcer.Announce(…)</c> written anywhere
+    /// under <c>Canvas/</c> passed every census, every fact and the
+    /// build.
+    /// </para>
+    /// <para>
+    /// It would have caught both instances that actually happened, and
+    /// both were re-run against it rather than argued. The mode stack
+    /// composed its confirmation on a retired document; it called an
+    /// injected delegate, so the offending line is the WIRING —
+    /// restoring <c>new CanvasModeController(Announcer.Announce)</c>
+    /// fails this arm, naming that line. And <c>AdmitStructuralRead</c>,
+    /// the never-silent mapping itself, announced a refusal through a
+    /// retired funnel from a direct call — restoring
+    /// <c>Announcer.Announce(new CanvasA11yEvent.CanvasStatus(note))</c>
+    /// fails it too. A third mutation (a new direct call in the
+    /// navigator) and a fourth (emptying the allow-listed seat) close
+    /// the arm's own two halves.
+    /// </para>
+    /// <para>
+    /// The POPULATION is derived on both sides. The forbidden surface is
+    /// every announcer member that reaches <c>Emit</c>, read out of
+    /// `CanvasAnnouncer` itself, so a third poster added tomorrow joins
+    /// without anyone editing this file. The scanned set is every
+    /// production source under <c>Canvas/</c>, the same walk the other
+    /// canvas censuses take. What is NOT derived is the one allow-listed
+    /// seat, which carries its reason — and a stale allow-list fails
+    /// here rather than quietly allowing nothing.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void NoCanvasCodeReachesTheAnnouncerExceptThroughTheBoundary()
+    {
+        CSharpSource announcer = CSharpSource.Load("Canvas", "CanvasAnnouncer.cs");
+        // DERIVED: the compose-and-post surface is whatever reaches
+        // `Emit`. `RenderLabel` renders and posts nothing; `Shutdown`,
+        // `IsRetired` and the test seams say nothing either.
+        string[] posters =
+        [
+            .. announcer.Root.DescendantNodes()
+                .OfType<MethodDeclarationSyntax>()
+                .Where(method => method.DescendantNodes()
+                    .OfType<InvocationExpressionSyntax>()
+                    .Any(call => call.Expression
+                        is IdentifierNameSyntax { Identifier.ValueText: "Emit" }))
+                .Select(method => method.Identifier.ValueText)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(name => name, StringComparer.Ordinal),
+        ];
+        Assert.NotEmpty(posters);
+        Assert.Contains("Announce", posters);
+
+        // The ONE boundary, found rather than assumed: if it is renamed
+        // or removed, every call below becomes an offender and this
+        // assertion says why first. `Method` also fails on an ambiguous
+        // name, which is the decoy shape a scrape has to refuse.
+        CSharpSource document = CSharpSource.Load("Canvas", "CanvasDocumentViewModel.cs");
+        _ = document.Method("Speak");
+        (string File, string Member) boundary = ("CanvasDocumentViewModel.cs", "Speak");
+        bool boundaryFound = false;
+
+        // The ONE allow-listed seat, with its reason. Matched by the
+        // member that holds it rather than by a line number, which rots.
+        (string File, string Member, string Why) relaySeat = (
+            "CanvasTableView.cs",
+            "OnModelChanged",
+            "contract B7: the substrate raises CANONICAL grid events (sort, row "
+            + "move, cell move) and they ride the canvas announcer from here. "
+            + "`Relay` is the seam for exactly that — it posts uncoalesced and "
+            + "carries core's own priority through — and handing the grid a "
+            + "method group is the wiring, not a canvas sentence.");
+        bool relaySeatFound = false;
+
+        var offenders = new List<string>();
+        string[] files = [.. CanvasSources()];
+        Assert.NotEmpty(files);
+        foreach (string file in files)
+        {
+            CSharpSource source = CSharpSource.LoadPath(file);
+            string name = Path.GetFileName(file);
+            foreach (MemberAccessExpressionSyntax access in source.Root
+                .DescendantNodes()
+                .OfType<MemberAccessExpressionSyntax>())
+            {
+                if (!posters.Contains(access.Name.Identifier.ValueText))
+                {
+                    continue;
+                }
+                // The RECEIVER is the announcer: `Announcer`,
+                // `model.Announcer`, `_document.Announcer`. Both an
+                // invocation and a bare method group count — the seam
+                // that let the mode stack past the boundary was a method
+                // group handed to a constructor.
+                string receiver = CSharpSource.Normalize(access.Expression);
+                if (!receiver.EndsWith("Announcer", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+                MethodDeclarationSyntax? owner = access.Ancestors()
+                    .OfType<MethodDeclarationSyntax>()
+                    .FirstOrDefault();
+                if (name == boundary.File
+                    && owner?.Identifier.ValueText == boundary.Member)
+                {
+                    boundaryFound = true;
+                    continue;
+                }
+                if (name == relaySeat.File
+                    && owner?.Identifier.ValueText == relaySeat.Member)
+                {
+                    relaySeatFound = true;
+                    continue;
+                }
+                offenders.Add(
+                    $"{name}:{owner?.Identifier.ValueText ?? "<top level>"} "
+                    + $"— {CSharpSource.Normalize(access)}");
+            }
+        }
+
+        Assert.True(
+            offenders.Count == 0,
+            "canvas code reaches the announcer's post surface without going "
+            + "through `CanvasDocumentViewModel.Speak`, so a retired document "
+            + "can compose a sentence for a closed funnel — the defect this "
+            + $"branch fixed twice: {string.Join("; ", offenders)}");
+        Assert.True(
+            boundaryFound,
+            "the boundary itself never reached the announcer, so this census "
+            + "scanned a canvas whose sentences go somewhere else entirely — "
+            + "it is asserting about nothing.");
+        Assert.True(
+            relaySeatFound,
+            "the allow-listed B7 relay seat was not found, so this census is "
+            + $"exempting nothing and the entry is stale. {relaySeat.Why}");
+    }
+
+    private static IEnumerable<string> CanvasSources()
+    {
+        string root = Path.Combine(SourceText.ShellSourceRoot(), "Canvas");
+        Assert.True(Directory.Exists(root), $"the canvas source root is missing: {root}");
+        return Directory
+            .EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
+            .OrderBy(file => file, StringComparer.Ordinal);
+    }
 }
