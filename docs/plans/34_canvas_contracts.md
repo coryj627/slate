@@ -2514,6 +2514,21 @@ left to run, and rung 1 refuses because `Cancel` does. A check inside
 already answers, and a guard with no power is a claim this task has
 learned the cost of.
 
+**And the stack SPEAKS through one boundary, which is a different
+question from whether a verb may run.** The entry gates above answer
+"may this verb run", and they necessarily run BEFORE the verb's effect —
+the only code that can retire the document mid-verb. So a stack can be
+live at entry, retired by its own effect, and still composing:
+`Commit`'s confirmation is built after the effect, and `Cancel` builds
+its sentence from `spec.OnCancel()` as the ARGUMENT is evaluated.
+`Speak` refuses when retired and is the only place `_announce` is
+reached, so it reads retirement at EMIT time — which the argument
+evaluation order makes both possible and necessary.
+`ACancelRestorationThatRetiresTheDocumentComposesNothing` pins the verb
+the first fix did not gate, and
+`CanvasAnnouncer.RefusedAfterShutdownForTests` makes the claim
+assertable in Release as well as Debug, where `Debug.Fail` is silent.
+
 The refusal is SILENT, and that is the never-silent table's
 PRECONDITION being absent rather than the table being broken (C4): a
 retired document has no surface the user is reading and its announcer is
@@ -5597,14 +5612,31 @@ rather than rediscovering it.
   mutation-verified rather than trusted: breaking one assertion makes it
   fail in 4 s, and restoring it makes it pass in 6 s — the same envelope
   as the two canvas journeys already known to execute their bodies.
-- **`NothingSpeaksAfterTheLastTabClosed` fails in a DEBUG test run and
-  passes in Release, at BASE as well as here.** It deliberately posts
+- **`NothingSpeaksAfterTheLastTabClosed` used to fail in DEBUG and pass
+  in Release — and THAT EXCUSE COST A DEFECT.** It deliberately posts
   through a retired announcer, which contract A5 makes a `Debug.Fail`,
-  and xUnit turns that into an exception. CI runs
-  `--configuration Release`, where `Debug.Fail` compiles out, so the
-  gate is green either way. Verified against a stashed tree so it is not
-  read as a PR C regression; recorded because the next person to run the
-  suite locally in Debug will see it.
+  and the test host turns that into an exception. The original
+  disposition was "CI runs `--configuration Release`, where `Debug.Fail`
+  compiles out, so the gate is green either way", verified at BASE so it
+  would not read as a PR C regression.
+
+  **That reasoning was wrong in the way excuses are wrong: it was true.**
+  Release was green, CI was green, and a configuration nobody runs is
+  where the next real failure lands. Two more facts joined the red set —
+  both written by this PR, in the same shape, months of rounds apart —
+  and neither was noticed. The third failure in that set was not a test
+  artefact at all: `Commit` was announcing its confirmation into a
+  retired announcer, which the funnel dropped, so every Release run and
+  every behavioural assertion looked right.
+
+  Repaired rather than re-excused. `DebugAsserts.Suppressed()` scopes the
+  ONE deliberate call in each of the three facts — never a test body,
+  never a production teardown — so a `Debug.Fail` raised by SHIPPED code
+  still fails the run, and `CanvasAnnouncer.RefusedAfterShutdownForTests`
+  makes "retirement composes nothing" assertable in Release too. **The
+  standing gate is now Debug AND Release**, both on a
+  porcelain-clean committed tree, with the tail line of each run quoted
+  in the report rather than summarised.
 - **Three build warnings are pre-existing on this branch**
   (`ModalSurfaces.cs:228` CS8524, `FilesSidebarViewModel.FileManagement.cs:1117`
   CS8604, `MutationHarnessCensus.cs:59` CS8620), all in files this task
@@ -6676,6 +6708,17 @@ BY THE COMMIT THAT FIXED IT.
 - The two-pane fact gained its address premise (`Owner` is the tab it
   was raised for) and a behavioural catch for the completion half.
 
+**The C7 asymmetry this exposed, recorded because it outlives the
+incident.** The mode stack gates its ENTRY points on retirement
+(`Enter`, `Commit`, `Cancel`, `HandleFocusDeparture`) and did not gate
+its ANNOUNCE. Those are different boundaries: an entry check answers
+"may this verb run", and it necessarily runs BEFORE the verb's effect —
+which is the only code that can retire the document mid-verb. A stack
+can therefore be live at entry, retired by its own effect, and still
+composing. Terminality needs both: the command boundary for the verbs,
+and one announce boundary that reads retirement when the sentence is
+actually emitted.
+
 **THE PATTERN, recorded for the redesign PR to inherit.** Four times in
 this wave — CD-45, CD-43, C4, and now C10 — the record that went stale
 was the one describing the mechanism being changed, and three of those
@@ -6684,6 +6727,55 @@ CITES is not the rule; the rule is sweeping the row that DESCRIBES what
 the fix changed, which is the one most likely to be read as still true.
 A fix that edits a mechanism should open its contract's own paragraph
 before it opens anything else.
+
+### PR C-lite — the gate-integrity incident, and the rule that came out of it
+
+A wave whose only finding was in the CONTROLLER's own process, so it is
+recorded where the process is.
+
+**What happened.** A report claimed "unit suite 1562/0". The run was
+real, it was Release, and Release is what CI runs — and the Debug suite
+was failing three canvas facts deterministically. One was PR A's,
+recorded early in this PR as acceptable ("CI runs Release, so the gate
+is green either way"). The other two were written BY this PR, in the
+same shape as the one already excused, and nobody re-ran Debug after
+adding them. The third was not a test artefact: `Commit` composed its
+confirmation into a retired announcer, the funnel dropped it, and the
+only witness was a `Debug.Fail` in a configuration that had been
+formally excused.
+
+**The root cause was named correctly and then fixed at the wrong
+altitude**, which is its own lesson. Terminality is the SPEAKER's
+question, not the funnel's — right — but the first fix gated the one
+announce site the failing test walked. `Cancel` had the identical defect
+in a worse form: its restoration runs while the announcement's ARGUMENT
+is being built, so a restoration that retires the document composes a
+cancellation on a retired stack, and no entry check can see it because
+the entry check ran first. One `Speak` boundary now carries all four
+sites and any fifth, and it reads retirement at EMIT time, which is what
+the argument-evaluation order makes both possible and necessary.
+
+**A guard nobody runs is a guard nobody has.** `Debug.Fail` says nothing
+in Release. The announcer counts refusals now, so the claim is
+assertable in both configurations and its mutation fails in both — where
+before it failed only in the configuration nobody ran.
+
+**THE GATE-INTEGRITY RULE, which every later PR in this series
+inherits:**
+
+1. **Both configurations.** Debug is where the `Debug.Fail` guards
+   speak; Release is what CI runs. A green Release over a red Debug is
+   half a gate.
+2. **The committed tree.** `git status --porcelain` must be empty before
+   the run — stash anything uncommitted — so the numbers describe what
+   was committed and not what was in the editor.
+3. **Quote the tail.** The report carries the runner's own final line,
+   not a summary of it. A summarised number cannot be checked; a quoted
+   one can.
+4. **A known failure is a finding with an owner, not a footnote.** If a
+   configuration is red, either it is repaired or the report says which
+   facts, why, and what would make them green — and every wave re-reads
+   that list before adding to it.
 
 ### PR C — the strategic lesson
 

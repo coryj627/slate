@@ -263,11 +263,11 @@ internal sealed class CanvasModeController : BindableBase
         }
         if (_active is { } current)
         {
-            _announce(new CanvasA11yEvent.CanvasModeRejected(current.Mode));
+            Speak(new CanvasA11yEvent.CanvasModeRejected(current.Mode));
             return false;
         }
         Active = spec;
-        _announce(new CanvasA11yEvent.CanvasModeEntered(spec.Mode, spec.Object));
+        Speak(new CanvasA11yEvent.CanvasModeEntered(spec.Mode, spec.Object));
         return true;
     }
 
@@ -314,24 +314,16 @@ internal sealed class CanvasModeController : BindableBase
                 // (Where-am-I does) must see the stack as it will be,
                 // not as it was.
                 Active = null;
-                // NOT on a retired stack. The effect can retire the
-                // document from inside itself — the shell closes the tab
-                // while a commit is running — and the confirmation is
-                // composed after that. The announcer would DROP it, which
-                // is why this looked correct for six rounds; but dropping
-                // is A5's `Debug.Fail`, and a retired object composing a
-                // sentence at all is the thing the guard is there to
-                // catch. Terminality is the SPEAKER's question, not the
-                // funnel's: `Shutdown` has already spoken the only line a
-                // retirement owes.
-                if (!_retired && result.Confirmation is { } confirmation)
+                if (result.Confirmation is { } confirmation)
                 {
                     // FALLIBLE, like everything else in here: the render
                     // goes through core. It sits INSIDE the try for that
                     // reason — an announcement that faulted after the
                     // outcome applied used to skip the drain entirely and
-                    // leave the slot loaded for the next commit.
-                    _announce(confirmation);
+                    // leave the slot loaded for the next commit. And
+                    // the effect may have RETIRED the document from
+                    // inside itself, which the boundary reads.
+                    Speak(confirmation);
                 }
             }
             // A refusal is silent HERE, not silent to the user: which
@@ -360,6 +352,45 @@ internal sealed class CanvasModeController : BindableBase
             _committing = false;
             DrainDeferredDeparture();
         }
+    }
+
+    /// <summary>
+    /// The ONE place this controller speaks (contract C7).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A retired stack composes nothing. That was first fixed as a gate
+    /// on `Commit`'s confirmation — the one site the failing test walked
+    /// — and a per-verb gate is a list somebody has to keep complete:
+    /// `Cancel` had the identical defect in a worse form, and any fifth
+    /// site added later would have had it too. So the check lives where
+    /// every sentence passes instead, which is the move the document
+    /// made for its requests and the ladder made for its rungs.
+    /// </para>
+    /// <para>
+    /// EVALUATION ORDER is why this works, and it looks like a detail.
+    /// C# evaluates a call's ARGUMENTS before its body, so
+    /// `Speak(new CanvasModeCancelled(…, spec.OnCancel()))` runs the
+    /// cancel effect first and reads <c>_retired</c> afterwards. That is
+    /// exactly right: the effect is arbitrary host code that can retire
+    /// the document from inside itself, and a check at call ENTRY would
+    /// have been made before the thing it needs to observe happened. The
+    /// boundary reads retirement at EMIT time.
+    /// </para>
+    /// <para>
+    /// The announcer keeps its own <c>Debug.Fail</c> (A5). This is not a
+    /// silent sink standing in front of it: it stops the SPEAKER from
+    /// composing, and anything that still reaches the funnel after
+    /// retirement is a real defect the guard should be loud about.
+    /// </para>
+    /// </remarks>
+    private void Speak(CanvasA11yEvent @event)
+    {
+        if (_retired)
+        {
+            return;
+        }
+        _announce(@event);
     }
 
     /// <summary>
@@ -461,7 +492,11 @@ internal sealed class CanvasModeController : BindableBase
             return false;
         }
         Active = null;
-        _announce(new CanvasA11yEvent.CanvasModeCancelled(spec.Mode, spec.OnCancel()));
+        // `spec.OnCancel()` runs as this argument is built, so the
+        // boundary inside `Speak` reads a retirement the RESTORATION
+        // caused — which a check written here, before the call, could
+        // not have seen.
+        Speak(new CanvasA11yEvent.CanvasModeCancelled(spec.Mode, spec.OnCancel()));
         return true;
     }
 

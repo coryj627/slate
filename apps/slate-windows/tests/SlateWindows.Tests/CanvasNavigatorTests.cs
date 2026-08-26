@@ -448,6 +448,56 @@ public sealed class CanvasNavigatorTests : IDisposable
     });
 
     /// <summary>
+    /// A cancel RESTORATION that retires the document composes no
+    /// cancellation — the announce boundary, on the verb the first fix
+    /// did not gate.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// `Cancel` builds its sentence as
+    /// `new CanvasModeCancelled(spec.Mode, spec.OnCancel())`, so the
+    /// restoration — arbitrary host code — runs while the ARGUMENT is
+    /// being built, and can close the tab from inside itself exactly as
+    /// a commit effect can. The entry gate cannot see that: it ran
+    /// before the effect. Only a boundary at emit time can.
+    /// </para>
+    /// <para>
+    /// Latent on this branch and not on the next one: C ships a TEST
+    /// mode, and PR F ships restorations that move focus and touch the
+    /// shell. The first fix gated `Commit`'s confirmation — the one site
+    /// the failing test walked — and a per-verb gate is a list somebody
+    /// has to keep complete.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void ACancelRestorationThatRetiresTheDocumentComposesNothing()
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        var spec = new CanvasModeSpec(
+            CanvasMode.Move,
+            new CanvasModeObject.Card("Research"),
+            CanvasModeCommitResult.Refused,
+            () =>
+            {
+                // The restoration retires the document — the shell
+                // closing the tab as the mode unwinds.
+                document.Shutdown();
+                return new CanvasModeRestoration.BackAt("Research");
+            });
+        Assert.True(document.Modes.Enter(spec));
+        Drain(document);
+
+        Assert.True(document.Modes.Cancel());
+
+        // The mode ended, and NOTHING was composed after the funnel
+        // closed. The counter is the half that works in Release too:
+        // `Debug.Fail` says nothing there, and Release is what CI runs.
+        Assert.False(document.Modes.IsActive);
+        Assert.Equal(0, document.Announcer.RefusedAfterShutdownForTests);
+        Assert.Empty(Lines(document));
+    }
+
+    /// <summary>
     /// A retired document has no PENDING REQUESTS — both of them,
     /// answered at the boundary rather than by a list of clear sites.
     /// </summary>
@@ -1119,6 +1169,9 @@ public sealed class CanvasNavigatorTests : IDisposable
                 new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoMarks()));
         }
         Assert.Empty(Lines(document));
+        // The counter has to COUNT, or the zero every other fact asserts
+        // is the zero of a line that never runs.
+        Assert.Equal(1, document.Announcer.RefusedAfterShutdownForTests);
     }
 
     /// <summary>
