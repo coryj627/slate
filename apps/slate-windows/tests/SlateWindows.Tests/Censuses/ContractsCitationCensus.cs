@@ -171,6 +171,18 @@ public sealed class ContractsCitationCensus
     /// new mechanism brings a reviewer back to this table instead of
     /// leaving a dead row behind.
     /// </para>
+    /// <para>
+    /// The limit is worth a CONCRETE example, because "not general" is
+    /// easy to read past. Codex round 4's scoped review found two rows
+    /// that had stopped describing the code — C2's attachment rule, which
+    /// went from two cases to three, and `_awayBecause`'s remark, which
+    /// still said nothing cleared the field after the same wave added a
+    /// line that does. Both were INSIDE this scan's range and invisible
+    /// to it, because neither used a retired NAME. A row can go stale by
+    /// having the world move under it while every word in it stays a word
+    /// nobody retired; that class is caught by reading, and this table
+    /// does not pretend otherwise.
+    /// </para>
     /// </remarks>
     private static readonly
         (string Retired, string Pattern, string Replacement, string Sample)[]
@@ -335,19 +347,34 @@ public sealed class ContractsCitationCensus
     /// the PR they name lands. Codex round 4 found four in one pass.
     /// </para>
     /// <para>
-    /// The SHIPPED set is derived, not listed: a PR has shipped when the
-    /// contracts document has a section for it, which is the same source
-    /// the citation arms above read. So a claim naming PR D stays legal
-    /// until §D exists and fails on the day it does — which is the day
-    /// somebody is already editing this document.
+    /// The SHIPPED set is derived, not listed, from the contracts
+    /// document's own PR section headings. Strictly that predicate is
+    /// "has a section", i.e. SPECIFIED rather than shipped — §C exists
+    /// while PR C is paused and unmerged — and that is the safe
+    /// direction: it fires while somebody is already editing the
+    /// document, rather than after the merge nobody re-reads.
     /// </para>
     /// <para>
-    /// SAMPLED scope, deliberately, and this is the honest limit: the
-    /// command surface and the §W-C matrix, because that is where staged
-    /// claims about chords and projections live and where all four
-    /// misses were. It is not a repo-wide sweep and does not pretend to
-    /// be one; widening it is a decision with its own false-positive
-    /// budget, not an omission.
+    /// SAMPLED scope, and stated exactly: the command surface, the §W-C
+    /// matrix, and the contracts document itself. The document is in
+    /// scope because the first version of this guard exempted it — and
+    /// the leading example in its own round record, A10's "nothing to
+    /// describe until PR C", lived there. A guard that reads a document
+    /// to define "shipped" and then exempts it from the rule is the
+    /// weakest shape available. What stays OUT is the spec tree
+    /// (`w6_1_canvas_spec.md` and its siblings): a spec records the plan
+    /// AS PLANNED, so its staged language is history rather than a claim
+    /// about today, and the call is recorded here rather than left to the
+    /// next reader.
+    /// </para>
+    /// <para>
+    /// TWO known limits, both fail-noisy or recorded. Headings are
+    /// matched on a word boundary, so `## PR D — …` and `## PR D: …`
+    /// both register; a heading that stops naming its PR at all still
+    /// fails LOUDLY through the floor below rather than quietly widening
+    /// what is legal. And `until PR C-lite …` is not a claim about PR C:
+    /// the pattern refuses a hyphenated or word-continued letter, which
+    /// is a real sentence in this document rather than a hypothetical.
     /// </para>
     /// </remarks>
     [Fact]
@@ -357,7 +384,7 @@ public sealed class ContractsCitationCensus
             Path.Combine(SourceText.RepoRoot(), "docs", "plans", ContractsDoc));
         string[] shipped =
         [
-            .. Regex.Matches(doc, @"(?m)^## PR ([A-Z]) ")
+            .. Regex.Matches(doc, @"(?m)^## PR ([A-Z])\b")
                 .Select(match => match.Groups[1].Value)
                 .Distinct(StringComparer.Ordinal)
                 .OrderBy(pr => pr, StringComparer.Ordinal),
@@ -373,6 +400,10 @@ public sealed class ContractsCitationCensus
         // has not. Without this a typo makes the guard permanent green.
         Assert.NotEmpty(StaleClaims($"until PR {shipped[0]} ships the thing", shipped));
         Assert.Empty(StaleClaims("until PR Z ships the thing", shipped));
+        Assert.Empty(StaleClaims(
+            $"until PR {shipped[^1]}-lite ships the thing", shipped));
+        Assert.Empty(StaleClaims(
+            $"a quoted \"until PR {shipped[0]} ships\" narration", shipped));
 
         var offenders = new List<string>();
         foreach ((string where, string text) in StagedClaimScope())
@@ -392,14 +423,30 @@ public sealed class ContractsCitationCensus
             + string.Join("\n  ", offenders));
     }
 
-    private static IEnumerable<string> StaleClaims(string text, string[] shipped) =>
-        Regex.Matches(text, @"until (?:W6-1 )?PR ([A-Z])\b")
+    private static IEnumerable<string> StaleClaims(string text, string[] shipped)
+    {
+        // A MENTION is not a use here either — the round record quotes
+        // the very sentences this table forbids — and `PR C-lite` is not
+        // a claim about PR C, which is why the letter may not be followed
+        // by a hyphen or another word character.
+        //
+        // The context window is cut from the STRIPPED text, not the
+        // original: the strip shortens the string, so a match index used
+        // against the original quotes an offender that is not there. It
+        // did, once, and an offender message nobody can trust is worse
+        // than no message.
+        string prose = Strip(text);
+        return Regex.Matches(prose, @"until (?:W6-1 )?PR ([A-Z])(?![-\w])")
             .Where(match => shipped.Contains(match.Groups[1].Value, StringComparer.Ordinal))
-            .Select(match => text
-                .Substring(
-                    Math.Max(0, match.Index - 40),
-                    Math.Min(text.Length - Math.Max(0, match.Index - 40), 110))
-                .Replace('\n', ' '));
+            .Select(match => "~line "
+                + (prose.Take(match.Index).Count(c => c == '\n') + 1)
+                + ": "
+                + prose
+                    .Substring(
+                        Math.Max(0, match.Index - 40),
+                        Math.Min(prose.Length - Math.Max(0, match.Index - 40), 110))
+                    .Replace('\n', ' '));
+    }
 
     private static IEnumerable<(string Where, string Text)> StagedClaimScope()
     {
@@ -416,6 +463,10 @@ public sealed class ContractsCitationCensus
             SourceText.RepoRoot(), "docs", "plans", "18_windows_port", "w_c_matrix.md");
         Assert.True(File.Exists(matrix), $"the \u00a7W-C matrix is missing at {matrix}");
         yield return ("w_c_matrix.md", File.ReadAllText(matrix));
+        yield return (
+            ContractsDoc,
+            File.ReadAllText(
+                Path.Combine(SourceText.RepoRoot(), "docs", "plans", ContractsDoc)));
     }
 
     private static string Strip(string text) =>

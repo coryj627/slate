@@ -1511,8 +1511,12 @@ hear. The reason those two are disabled is recorded HERE and pinned by
 PR B, which enabled `showTable` — see B10);
 `showTable` enabled in PR B and `showVisual` enables in PR D. None of the three
 carries a chord, so `Scope` resolves to `None` through `Reg`'s own rule
-and `ChordScope.Canvas` has no delivery site until PR C — which is why
-the scope's doc comment names PR C as the first surface that uses it.
+and `ChordScope.Canvas` had no delivery site before PR C. PR C ships the
+navigator and delivers its rows from the surface's tunnelling handler,
+which is why the scope's doc comment names PR C. (The comment itself
+was corrected in codex round 4; this sentence, its twin one file over,
+in the scoped review after it. Two copies of one staged claim, found one
+wave apart, which is why the guard now reads this document too.)
 
 **The switcher is ONE Tab stop, and arrows move within it (added in PR
 B).** Recorded as an ADDITION, not as a description of what PR A
@@ -2203,9 +2207,30 @@ announcements, which is what lets `CanvasNavigatorTests` drive the verbs
 with no window at all and keeps the windowed facts to the things that
 genuinely need one.
 
-The presenter is ATTACHED when the surface gains keyboard focus and on
-every key press, and it is kept afterwards — so a palette-invoked verb
-still moves the reader in the pane they are actually in.
+**Attachment is a THREE-case rule.** The presenter is attached when the
+surface gains keyboard focus, on every key press, and — since codex round
+4 — when the DOCUMENT under the surface is replaced and this pane is the
+one the reader is in. It is kept afterwards in every case, so a
+palette-invoked verb still moves the reader in the pane they are actually
+in.
+
+The third case is the one that had to be added rather than deduced. An
+external rename retargets the tab from document X to Y (CD-32) and the
+surface detaches from X's navigator; nothing then introduces it to Y's,
+because a reader whose keys never leave the filter field produces no
+focus edge and presses no chord. Every movement verb afterwards moved the
+selection and spoke it while the focus call reached nobody — CD-40's
+agreement broken by a rename plus one palette command. "The pane the
+reader is in" has two readings and the rebind takes both: they own the
+keys NOW (`IsKeyboardFocusWithin`), or they owned them LAST and something
+transient — a palette, a menu — is holding them while the replacement
+lands (`DetachPresenter`'s answer, which is why it now returns one).
+Nothing detaches on focus loss, which is what makes the second reading
+available at all.
+
+Two panes on one document cannot fight over this: the attaching edge
+tracks the last pane to own the keys, so a pane owning them now is the
+pane that was attached, and both clauses name the same surface.
 
 **C3 — Down/Up are delivered by the PROJECTION; the navigator answers
 the boundary.** The outline tree's own Up/Down and the grid's own Up/Down
@@ -7368,6 +7393,88 @@ retired vocabulary, staged claims, the announcer's acquisition rule —
 are all the same instrument pointed at the same failure: **prose ages
 against code, and the only prose that stays true is prose something
 executes.**
+
+### PR C-lite — codex round 4's scoped review — REVISE (6 items)
+
+- **The mode half of M2 was claimed and not delivered.** The window watch
+  was gated on a pending restoration, and `_awayBecause` is only ever
+  written while one exists — so the arrangement codex named (mode active,
+  menu open, reader clicks another pane, nothing pending) ran none of it,
+  and the mode survived in a pane nobody was in with its Commit and
+  Cancel controls showing. Both records asserted the closure. The gate
+  serves BOTH constituencies now, because one departure classification
+  holds a restoration and a mode alive on the same evidence, and a rule
+  that releases only one of them leaves the other in the shape it was
+  written to end. `AModeHeldAcrossAMenuIsCancelledWhenTheReaderTurnsOutToHaveLeft`
+  asserts the premise that no landing is pending, which is what makes it
+  a fact about the mode.
+- **The affinity clause had neither a fact nor a mutation.** Every
+  arrangement kept the keys inside the surface, where
+  `IsKeyboardFocusWithin` alone satisfies the rebind — and the battery
+  row aimed at the clause was written `x && !x`, which is a constant
+  false and therefore a second copy of "the rebind dropped". The theory
+  has an arm that hands the keys to something else BEFORE the
+  replacement now, which is the only arrangement in which
+  `wasTheAttachedPane` is the clause doing the work.
+- **The clear-and-retry arm was provably redundant and is gone.** The
+  keys returning to this surface is a false→true focus-within transition,
+  which already clears the hold and re-asks; whichever ran first made the
+  other a no-op. Deleting it turned nothing red, which by this branch's
+  own standard is an unearned guard rather than a belt — the same test
+  that removed a seat-rule arm and then earned the levels theory.
+- **Two describing rows the wave changed and did not sweep.** C2 still
+  stated a two-case attachment rule after the wave made it three;
+  `_awayBecause`'s remark still said "nothing clears this on withdrawal"
+  after the wave added the line that does — and warned the next reader
+  against the very change the wave had made. **Both were inside the
+  retired-vocabulary census's range and invisible to it**, because
+  neither used a retired NAME. A row can go stale while every word in it
+  stays a word nobody retired, and that limit is now written into the
+  census's own remark with these two as the example.
+- **The staged-claim guard exempted the document it reads.** "Where all
+  four misses were" was false: A10's miss lived in this document, which
+  was out of scope, and a live twin of the `ChordScope.Canvas` claim was
+  still sitting in §A. The document is in scope now (with the
+  mention-strip and a refusal to read `PR C-lite` as a claim about PR C),
+  headings match on a word boundary so a reworded one fails loudly rather
+  than widening what is legal, and the spec tree stays OUT with its
+  reason recorded — a spec records the plan AS PLANNED.
+- **Precision, recorded where it will be read.** The retention set is a
+  strict superset of the mode keep-alive set; window activation
+  re-evaluates rather than delivers; `FocusProjection`'s callers cannot
+  run with the keys outside this surface (rather than "all three need the
+  press", which misses the panel's Close button); and the window watch
+  sees SAME-WINDOW destinations only, with a cross-window departure
+  deferred to the next activation rather than held forever.
+
+**TWO TEST-FIDELITY FINDINGS, both from arrangements that passed.**
+
+1. **The false-green menu arm.** The first starvation fact disposed the
+   menu's window before the reader clicked away, which bounced focus back
+   through the surface — so the ORDINARY departure did the withdrawal and
+   the arm stayed green with the fix removed. The mutation battery caught
+   it, not a reviewer, and that is the part worth keeping: a green arm is
+   not evidence; a green arm whose mutation goes red is.
+2. **A second window is not a menu.** Hosting the menu in a second window
+   makes the OS deactivate the first, so `WindowDeactivated` is
+   classified BEFORE `MenuOpen` — and it CANCELS a mode. The mode fact
+   failed on that and the cause took four hypotheses and a temporary
+   instrumentation seam to find, because every guess about focus ordering
+   was wrong. A WPF menu is a popup owned by its window; the fact that
+   needs a menu now uses one in the same window, and the level theory
+   keeps the second window deliberately, for the different property it
+   needs. **The device that makes a thing observable can also make it a
+   different thing** — and the way to tell is to record the actual
+   departures rather than reason about which handler runs first.
+
+**PROCESS RULE 6, and the incident behind it.** `git add -A` swept a
+scratch mutation script into `02a4e93`; it was removed in `803371a`. This
+is the SECOND time on this branch — the coordinator removed
+`.tmp-boundary.py` in `8b240f3` — which is what makes it a pattern rather
+than a slip. **The scratch sweep runs BEFORE `git add`, and the staged
+list is read back before committing.** Recorded here beside the other
+five because a commit message is not a durable place for a rule, and the
+gate-integrity list is where this branch keeps them.
 
 ### PR C — the strategic lesson
 

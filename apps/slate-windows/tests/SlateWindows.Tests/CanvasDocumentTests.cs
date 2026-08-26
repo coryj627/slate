@@ -2138,9 +2138,23 @@ public sealed class CanvasDocumentTests : IDisposable
     /// The premise below is the same verb BEFORE the rename, so a failure
     /// here is the replacement and not the verb.
     /// </para>
+    /// <para>
+    /// TWO arms, because the rebind has two clauses and one of them was
+    /// unpinned for a wave. With the keys still in the surface,
+    /// `IsKeyboardFocusWithin` alone satisfies the rebind and the
+    /// AFFINITY clause does nothing — so the second arm hands the keys to
+    /// something else first (a palette, a menu, an overlay: the reader's
+    /// pane is the one they were LAST in, not the one they are in), which
+    /// is the only arrangement in which `wasTheAttachedPane` is the
+    /// clause doing the work. Nothing detaches on focus loss, which is
+    /// what makes that answer available at all.
+    /// </para>
     /// </remarks>
-    [Fact]
-    public void ARetargetKeepsThePaneTheReaderIsWorkingIn() => RunSta(() =>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ARetargetKeepsThePaneTheReaderIsWorkingIn(
+        bool keysHeldElsewhere) => RunSta(() =>
     {
         using WorkspaceViewModel workspace = NewWorkspace();
         workspace.OpenPath("board.canvas");
@@ -2149,9 +2163,13 @@ public sealed class CanvasDocumentTests : IDisposable
         CanvasDocumentViewModel before =
             Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
         var surface = new CanvasSurfaceView { DataContext = tab, Model = tab.Canvas };
-        using var host = Host(surface);
+        var palette = new TextBox();
+        var root = new StackPanel();
+        root.Children.Add(surface);
+        root.Children.Add(palette);
+        using var host = Host(root);
 
-        // The reader is in the filter field, which is where they stay.
+        // The reader is in the filter field.
         Assert.True(surface.FilterFieldForTests.Focus());
         host.UpdateLayout();
         // PREMISE: the verb seats them today, so the attachment exists
@@ -2165,6 +2183,15 @@ public sealed class CanvasDocumentTests : IDisposable
         Assert.True(surface.FilterFieldForTests.Focus());
         host.UpdateLayout();
 
+        if (keysHeldElsewhere)
+        {
+            // Something transient takes the keys — and the retarget lands
+            // while it holds them.
+            Assert.True(palette.Focus());
+            host.UpdateLayout();
+            Assert.False(surface.IsKeyboardFocusWithin);
+        }
+
         File.Move(
             Path.Combine(_fixture.Root, "board.canvas"),
             Path.Combine(_fixture.Root, "renamed.canvas"));
@@ -2177,7 +2204,9 @@ public sealed class CanvasDocumentTests : IDisposable
         Assert.NotSame(before, after);
         Assert.Equal(CanvasLoadState.Ready, after.State);
         Assert.True(
-            surface.FilterFieldForTests.IsKeyboardFocused,
+            keysHeldElsewhere
+                ? palette.IsKeyboardFocused
+                : surface.FilterFieldForTests.IsKeyboardFocused,
             "the retarget moved the reader, which is a different defect.");
 
         after.Navigator.NextCard();
@@ -2194,6 +2223,51 @@ public sealed class CanvasDocumentTests : IDisposable
         CanvasOutlineRowViewModel row =
             Assert.IsType<CanvasOutlineRowViewModel>(seated.DataContext);
         Assert.Equal(after.Selection.Selected, row.Id);
+    });
+
+    /// <summary>
+    /// A surface that took the keys BEFORE its model arrived still hosts
+    /// the verbs.
+    /// </summary>
+    /// <remarks>
+    /// The other clause of the rebind, and the ordering that earns it.
+    /// The focus edge attaches through <c>Model?.Navigator</c>, so a
+    /// surface that gains keyboard focus while its `Model` is still null
+    /// attaches NOTHING — the null-conditional swallows it. The edge will
+    /// not come again, because focus is already inside. So the model
+    /// arriving has to ask whether the reader is here, and that is what
+    /// `IsKeyboardFocusWithin` answers in `OnModelChanged`. Reachable
+    /// during tab construction, where the template applies and the
+    /// binding resolves in that order.
+    /// </remarks>
+    [Fact]
+    public void ASurfaceThatTookTheKeysBeforeItsModelStillHostsTheVerbs() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = NewDocument("board.canvas");
+        document.Load();
+        var surface = new CanvasSurfaceView { DataContext = new object() };
+        using var host = Host(surface);
+        Assert.Null(surface.Model);
+
+        // The keys arrive FIRST. Nothing is attached: there is no
+        // navigator to attach to yet.
+        Assert.True(surface.FilterFieldForTests.Focus());
+        host.UpdateLayout();
+
+        surface.Model = document;
+        host.UpdateLayout();
+        Assert.Equal(CanvasLoadState.Ready, document.State);
+
+        document.Navigator.NextCard();
+        host.UpdateLayout();
+
+        Assert.True(
+            surface.ProjectionHasFocus,
+            "the verb moved the selection and spoke it while the keys sat in "
+            + "a filter field the navigator had never been told about — the "
+            + "focus edge that would have told it happened before there was "
+            + "a navigator to tell.");
+        document.Shutdown();
     });
 
     /// <summary>

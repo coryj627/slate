@@ -800,31 +800,57 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
     /// </summary>
     /// <remarks>
     /// <para>
-    /// The hold's edge is set by a departure from THIS surface, and a
-    /// departure only fires when this surface loses focus. So the move
-    /// that ENDS the cause is invisible here: a reader who opens a menu
-    /// and then clicks into another pane raises no second event on this
-    /// surface, and the hold would persist for the pane's lifetime —
-    /// never delivered, never withdrawn, never completed. Starvation, and
-    /// the exact mirror of the theft the hold was added to prevent: one
-    /// lifecycle, two failure directions, and a rule that answers only
-    /// one of them answers neither properly.
+    /// A departure is written when THIS surface loses focus, so the move
+    /// that ENDS the cause is invisible to it: a reader who opens a menu
+    /// and then clicks into another pane raises no second event here. Two
+    /// things were then held for the pane's lifetime — a deferred
+    /// restoration, never delivered, withdrawn or completed; and an
+    /// ACTIVE MODE, kept alive by the same classification (the M4 table
+    /// survives `ModalOverlay` and `MenuOpen`) with its Commit and Cancel
+    /// controls showing in a pane the reader had left. Starvation, and
+    /// the exact mirror of the theft the hold was added to prevent.
+    /// </para>
+    /// <para>
+    /// BOTH constituencies, therefore, and that is the gate: a departure
+    /// classification holds a restoration and a mode alive on the same
+    /// evidence, so a rule that released only one of them would leave the
+    /// other in the shape it was written to end. The first version of
+    /// this handler was gated on the restoration alone and the records
+    /// claimed the mode with it — codex round 4's M2, and its scoped
+    /// review, which is where the difference between the claim and the
+    /// code was found.
     /// </para>
     /// <para>
     /// Watching the WINDOW is what makes the destination observable. The
-    /// cause still being up is not a decision — moving between menu items
-    /// raises this repeatedly — so it returns; otherwise the destination
-    /// decides, and it is the same decision `Depart` would have made had
-    /// it been able to see the move: back here, clear and retry; anywhere
-    /// else, the reader went somewhere, which is a withdrawal.
+    /// cause still being up is not a decision — arrowing between menu
+    /// items raises this repeatedly — so it returns; otherwise the
+    /// destination decides, exactly as `Depart` would have decided had it
+    /// been able to see the move.
+    /// </para>
+    /// <para>
+    /// There is deliberately NO "the keys came back here" arm. One was
+    /// written and removed: the keys returning to this surface is a
+    /// false→true `IsKeyboardFocusWithin` transition, which already
+    /// clears the hold and re-asks, and the two paths cannot disagree
+    /// because only one of them can be first and the other is then a
+    /// no-op. Provably redundant, and therefore impossible to pin —
+    /// deleting it turned nothing red, which by this branch's own
+    /// standard makes it an unearned guard rather than a belt.
+    /// </para>
+    /// <para>
+    /// BOUNDARY, recorded rather than implied: only same-window
+    /// destinations are observable here. A reader who leaves the menu for
+    /// a different top-level window deactivates this one instead, and the
+    /// resolution waits until it comes forward again — at which point the
+    /// keys land somewhere and this handler decides. That is a DEFERRED
+    /// answer, not the held-forever shape, because the gate below no
+    /// longer requires the edge that `OnWindowActivated` clears.
     /// </para>
     /// </remarks>
     private void OnHostFocusMoved(object sender, KeyboardFocusChangedEventArgs e)
     {
         ArgumentNullException.ThrowIfNull(e);
-        if (_deferredRestoration is null
-            || _awayBecause is not (CanvasFocusDeparture.MenuOpen
-                or CanvasFocusDeparture.ModalOverlay))
+        if (_deferredRestoration is null && Model is not { Modes.IsActive: true })
         {
             return;
         }
@@ -834,17 +860,11 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         }
         if (IsKeyboardFocusWithin)
         {
-            // Handled by the focus-within edge too; harmless twice, and
-            // this is the arm that keeps the two paths agreeing.
-            _awayBecause = null;
-            TryDeliverPending();
             return;
         }
-        // The menu or overlay closed and the keys went ELSEWHERE. Routed
-        // through the one classifier rather than withdrawing here, so the
-        // mode stack hears the same thing the restoration does — it has
-        // been holding a mode alive across a menu the reader has now
-        // left, which is the same starvation one object over.
+        // The cause ended and the keys went ELSEWHERE. Routed through the
+        // one classifier rather than acting here, so the restoration and
+        // the mode stack hear the same thing from the same place.
         Depart(CanvasFocusDeparture.PaneFocus);
     }
 
@@ -895,16 +915,16 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
     /// null. Only ever one of the three <see cref="Depart"/> retains
     /// on.</summary>
     /// <remarks>
-    /// Nothing clears this on withdrawal, on a model swap or on unload,
-    /// so the value can outlive the restoration it describes — and that
-    /// is contained rather than accidental: the hold is only ever
-    /// consulted for the request that IS
+    /// CLEARED on withdrawal (<see cref="Depart"/>'s first arm), on the
+    /// keys returning to this surface, and on the window activating after
+    /// a deactivation. What still does not clear it is a MODEL SWAP and
+    /// an unload — and that is contained rather than accidental: the hold
+    /// is only ever consulted for the request that IS
     /// <see cref="_deferredRestoration"/> (a reference match in
     /// <c>TryDeliverFocus</c>), and that field is nulled on withdrawal
-    /// and on delivery. A stale departure therefore governs nothing. Said
-    /// here so the next reader does not have to re-derive the
-    /// containment, or "fix" it by clearing the field somewhere that
-    /// re-opens the delivery this exists to hold.
+    /// and on delivery, so a departure left over from a document that is
+    /// gone governs nothing. Said here so the next reader does not have
+    /// to re-derive the containment.
     /// </remarks>
     private CanvasFocusDeparture? _awayBecause;
 

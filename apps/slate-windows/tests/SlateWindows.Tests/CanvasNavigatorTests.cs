@@ -947,7 +947,6 @@ public sealed class CanvasNavigatorTests : IDisposable
         RestorationHold cause) => RunSta(() =>
     {
         Func<bool> overlayWas = CanvasSurfaceView.ShellOverlayIsOpen;
-        ProbeWindow? menuHost = null;
         try
         {
             var loading = new CanvasDocumentViewModel(
@@ -958,13 +957,33 @@ public sealed class CanvasNavigatorTests : IDisposable
                 verbosity: () => _verbosity);
             var tab = new object();
             var pane = new CanvasSurfaceView { Model = loading, DataContext = tab };
+            // In-window, which is what a WPF menu is. A menu hosted in a
+            // SECOND window makes the OS deactivate this one first, and
+            // the arrangement would then be about `WindowDeactivated`
+            // rather than about the menu.
+            var menu = new Menu();
+            var item = new MenuItem { Header = "Canvas", Focusable = true };
+            menu.Items.Add(item);
             var behindIt = new Button { Content = "the overlay's own field" };
             var anotherPane = new Button { Content = "another pane" };
             var root = new StackPanel();
             root.Children.Add(pane);
+            root.Children.Add(menu);
             root.Children.Add(behindIt);
             root.Children.Add(anotherPane);
             using ProbeWindow host = HostProbe(root);
+            // TRANSIT, not end state: the false-green this arrangement
+            // replaced worked by bouncing the keys back through this
+            // surface, and an end-state check cannot see an arrival that
+            // has already left. Counting the arrivals can.
+            var returns = 0;
+            pane.IsKeyboardFocusWithinChanged += (_, changed) =>
+            {
+                if (changed.NewValue is true)
+                {
+                    returns++;
+                }
+            };
 
             // A restoration, deferred the ordinary way: Escape in
             // `Loading` with nowhere to sit.
@@ -978,10 +997,6 @@ public sealed class CanvasNavigatorTests : IDisposable
             // the landing is HELD rather than withdrawn.
             if (cause == RestorationHold.Menu)
             {
-                var menu = new Menu();
-                var item = new MenuItem { Header = "Canvas", Focusable = true };
-                menu.Items.Add(item);
-                menuHost = HostProbe(menu);
                 Assert.True(item.Focus());
             }
             else
@@ -999,18 +1014,16 @@ public sealed class CanvasNavigatorTests : IDisposable
             // surface had already lost focus when the cause began, so it
             // hears nothing at all about the move that ends it.
             //
-            // The menu window is deliberately left open until the
-            // `finally`: disposing it first bounces focus back through
-            // this pane, and the arm would then pass through the ordinary
-            // withdrawal path while proving nothing about the starvation.
-            // (It did, for one revision.)
+            // The menu is deliberately left OPEN: closing it first
+            // bounces focus back through this pane, and the arm would
+            // then pass through the ordinary withdrawal path while
+            // proving nothing about the starvation. (It did, for one
+            // revision, and the mutation battery is what caught it.)
+            int returnsBefore = returns;
             CanvasSurfaceView.ShellOverlayIsOpen = overlayWas;
             Assert.True(anotherPane.Focus());
             host.UpdateLayout();
-            Assert.False(
-                pane.IsKeyboardFocusWithin,
-                "the keys came back through this surface on the way, so the "
-                + "ordinary departure could have done the work.");
+            Assert.Equal(returnsBefore, returns);
 
             Assert.Null(
                 loading.FocusRequest);
@@ -1033,7 +1046,100 @@ public sealed class CanvasNavigatorTests : IDisposable
         finally
         {
             CanvasSurfaceView.ShellOverlayIsOpen = overlayWas;
-            menuHost?.Dispose();
+        }
+    });
+
+    /// <summary>
+    /// A MODE kept alive across a menu is cancelled when the reader turns
+    /// out to have left — with no restoration pending anywhere.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The mode stack's M4 table survives `ModalOverlay` and `MenuOpen`
+    /// precisely because the reader is coming back from them, and the
+    /// M6 controls (Commit Mode, Cancel Mode) stay on screen so they can
+    /// be clicked. A reader who leaves the menu for another pane instead
+    /// has left, and no second event reaches this surface to say so — so
+    /// the mode survived in a pane nobody was in, with its controls
+    /// showing. M4's own rule, failing in the shape its own exception
+    /// created.
+    /// </para>
+    /// <para>
+    /// NOTHING is pending here, which is the whole point: the first
+    /// version of the window watch was gated on a deferred restoration,
+    /// so this arrangement ran none of it while both records claimed the
+    /// mode was covered. The gate serves both constituencies now, because
+    /// one classification holds both of them alive.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void AModeHeldAcrossAMenuIsCancelledWhenTheReaderTurnsOutToHaveLeft() =>
+        RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        var restored = 0;
+        var spec = new CanvasModeSpec(
+            CanvasMode.Move,
+            new CanvasModeObject.Card("Research"),
+            CanvasModeCommitResult.Refused,
+            () =>
+            {
+                restored++;
+                return new CanvasModeRestoration.BackAt("Research");
+            });
+        var pane = new CanvasSurfaceView { Model = document, DataContext = new object() };
+        // The menu is a child of THIS window, which is what a WPF menu is
+        // — a popup owned by the window it drops from. Hosting one in a
+        // second window (the device the level theory needs for a
+        // different reason) makes the OS deactivate this one first, and
+        // `WindowDeactivated` CANCELS a mode: the arrangement would then
+        // pass through the departure it is supposed to be testing around.
+        // That is how the first version of this fact failed, and it is
+        // worth the four lines to say so.
+        var menu = new Menu();
+        var item = new MenuItem { Header = "Commit mode", Focusable = true };
+        menu.Items.Add(item);
+        var anotherPane = new Button { Content = "another pane" };
+        var root = new StackPanel();
+        root.Children.Add(pane);
+        root.Children.Add(menu);
+        root.Children.Add(anotherPane);
+        using var host = Host(root);
+        try
+        {
+            Assert.True(pane.FilterFieldForTests.Focus());
+            host.UpdateLayout();
+            Assert.True(document.Modes.Enter(spec));
+            host.UpdateLayout();
+            Assert.True(document.Modes.IsActive);
+            // The PREMISE that makes this fact about the mode: no
+            // landing is pending on this surface or this document.
+            Assert.Null(document.FocusRequest);
+            Assert.False(document.HoldsPendingRequestsForTests);
+
+            // A menu opens over the tab. The mode is KEPT — that is the
+            // M4 exception, and the Commit/Cancel controls are why.
+            Assert.True(item.Focus());
+            host.UpdateLayout();
+            Assert.True(
+                document.Modes.IsActive,
+                "the menu cancelled the mode, so the M4 exception this fact "
+                + "depends on is not in force and it would prove nothing.");
+
+            // …and the reader clicks straight into another pane.
+            Assert.True(anotherPane.Focus());
+            host.UpdateLayout();
+
+            Assert.False(
+                document.Modes.IsActive,
+                "the mode outlived the reader: kept alive for a menu they "
+                + "left, in a pane they are not in, with its Commit and "
+                + "Cancel controls still showing (contract C7's M4 rule).");
+            Assert.Equal(1, restored);
+        }
+        finally
+        {
+            document.Shutdown();
         }
     });
 
