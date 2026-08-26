@@ -324,18 +324,29 @@ public sealed class AnnouncementSeamCensus
     /// retired funnel from a direct call — restoring
     /// <c>Announcer.Announce(new CanvasA11yEvent.CanvasStatus(note))</c>
     /// fails it too. A third mutation (a new direct call in the
-    /// navigator) and a fourth (emptying the allow-listed seat) close
-    /// the arm's own two halves.
+    /// navigator) and a fourth (pointing a named seam somewhere that is
+    /// not the announcer) close the arm's own two halves.
     /// </para>
     /// <para>
-    /// The POPULATION is derived on both sides. The forbidden surface is
-    /// every announcer member that reaches <c>Emit</c>, read out of
-    /// `CanvasAnnouncer` itself, so a third poster added tomorrow joins
-    /// without anyone editing this file. The scanned set is every
-    /// production source under <c>Canvas/</c>, the same walk the other
-    /// canvas censuses take. What is NOT derived is the one allow-listed
-    /// seat, which carries its reason — and a stale allow-list fails
-    /// here rather than quietly allowing nothing.
+    /// EVERYTHING here is derived; there is no allow-list any more. The
+    /// forbidden surface is every announcer member that reaches
+    /// <c>Emit</c>, read out of `CanvasAnnouncer` itself, so a third
+    /// poster added tomorrow joins without anyone editing this file. The
+    /// scanned set is every production source under <c>Canvas/</c>, the
+    /// same walk the other canvas censuses take. The exempt SEAMS are
+    /// members of the document, found by name with their reasons
+    /// attached, and each must be found — an exemption for a member that
+    /// no longer touches the announcer is an exemption for nothing, and
+    /// fails here rather than quietly widening the boundary.
+    /// </para>
+    /// <para>
+    /// SCOPE, stated because the guarantee is narrower than the sentence
+    /// "production cannot reach the announcer" suggests: this scan is
+    /// <c>Canvas/</c> only. `AnnouncerForTests` is <c>internal</c>, so a
+    /// shell file outside that directory could acquire it unpoliced.
+    /// Nothing does — the residue's whole defence is that its NAME reads
+    /// wrong in shipping code — but the wall is the directory, and the
+    /// rest is the name.
     /// </para>
     /// </remarks>
     [Fact]
@@ -366,7 +377,31 @@ public sealed class AnnouncementSeamCensus
         // name, which is the decoy shape a scrape has to refuse.
         CSharpSource document = CSharpSource.Load("Canvas", "CanvasDocumentViewModel.cs");
         _ = document.Method("Speak");
-        (string File, string Member) boundary = ("CanvasDocumentViewModel.cs", "Speak");
+        const string BoundaryFile = "CanvasDocumentViewModel.cs";
+
+        // DERIVED: the RESIDUE — the member that hands out the announcer
+        // itself. `internal` cannot separate this assembly's tests from
+        // its production code, so one handle survives privatisation, and
+        // the census's first rule is about that member by name. Read out
+        // of the document (an expression-bodied property whose whole body
+        // IS the announcer field) so a rename brings this file with it
+        // rather than leaving it guarding a name nobody uses.
+        string[] residue =
+        [
+            .. document.Root.DescendantNodes()
+                .OfType<PropertyDeclarationSyntax>()
+                .Where(property => property.ExpressionBody?.Expression
+                        is IdentifierNameSyntax field
+                    && field.Identifier.ValueText
+                        .EndsWith("announcer", StringComparison.OrdinalIgnoreCase))
+                .Select(property => property.Identifier.ValueText),
+        ];
+        Assert.True(
+            residue.Length > 0,
+            "no member of CanvasDocumentViewModel hands out the announcer "
+            + "itself, so either the residue is gone — delete the acquisition "
+            + "rule with it — or this census is watching for a name that no "
+            + "longer exists.");
 
         // The TWO named seams, each with its reason. They are members of
         // the document rather than an allow-list of call sites now — the
@@ -394,19 +429,20 @@ public sealed class AnnouncementSeamCensus
         {
             CSharpSource source = CSharpSource.LoadPath(file);
             string name = Path.GetFileName(file);
+            var reaches = new List<SyntaxNode>();
             foreach (MemberAccessExpressionSyntax access in source.Root
                 .DescendantNodes()
                 .OfType<MemberAccessExpressionSyntax>())
             {
                 // TWO rules, and the first is the one that closes the
                 // evasions. ACQUIRING the funnel is forbidden outright:
-                // `AnnouncerForTests` is the only handle production can
-                // still obtain (the field is private), so an alias, a
-                // captured lambda, a conditional access or a transitive
-                // helper all fail HERE, at the point they get it, rather
-                // than at a call site a receiver-shaped scan has to
-                // recognise.
-                bool acquires = access.Name.Identifier.ValueText == "AnnouncerForTests";
+                // the residue is the only handle production can still
+                // obtain (the field is private), so an alias, a captured
+                // lambda, a conditional access or a transitive helper all
+                // fail HERE, at the point they get it, rather than at a
+                // call site a receiver-shaped scan has to recognise.
+                bool acquires = residue.Contains(
+                    access.Name.Identifier.ValueText, StringComparer.Ordinal);
                 // And the older rule stays as the belt: a poster called
                 // on anything announcer-shaped. Both an invocation and a
                 // bare method group count — the seam that let the mode
@@ -419,14 +455,38 @@ public sealed class AnnouncementSeamCensus
                         // property — the boundary's own call is what
                         // proves this scan reaches anything at all.
                         .EndsWith("announcer", StringComparison.OrdinalIgnoreCase);
-                if (!acquires && !posts)
+                if (acquires || posts)
+                {
+                    reaches.Add(access);
+                }
+            }
+            foreach (IdentifierNameSyntax bare in source.Root
+                .DescendantNodes()
+                .OfType<IdentifierNameSyntax>())
+            {
+                // The spelling both rules above miss, because there is no
+                // receiver TEXT to match: an implicit `this` inside the
+                // declaring file. `AnnouncerForTests.Announce(e)` written
+                // in `CanvasDocumentViewModel.cs` reads as a bare name —
+                // and that file is where a new announce site is most
+                // likely to be written in the first place. A qualified
+                // `x.AnnouncerForTests` is skipped here because the
+                // acquisition rule above already has it.
+                if (!residue.Contains(bare.Identifier.ValueText, StringComparer.Ordinal)
+                    || (bare.Parent is MemberAccessExpressionSyntax qualified
+                        && qualified.Name == bare))
                 {
                     continue;
                 }
+                reaches.Add(bare);
+            }
+
+            foreach (SyntaxNode reach in reaches)
+            {
                 // The enclosing MEMBER, method or property: the relay
                 // seam is expression-bodied, and a scan that only knew
                 // methods would have reported it as top-level noise.
-                MemberDeclarationSyntax? owner = access.Ancestors()
+                MemberDeclarationSyntax? owner = reach.Ancestors()
                     .OfType<MemberDeclarationSyntax>()
                     .FirstOrDefault(member =>
                         member is MethodDeclarationSyntax or PropertyDeclarationSyntax);
@@ -436,14 +496,14 @@ public sealed class AnnouncementSeamCensus
                     PropertyDeclarationSyntax property => property.Identifier.ValueText,
                     _ => "<top level>",
                 };
-                if (name == boundary.File
+                if (name == BoundaryFile
                     && seams.Any(seam => seam.Member == ownerName))
                 {
                     _ = seamsFound.Add(ownerName);
                     continue;
                 }
                 offenders.Add(
-                    $"{name}:{ownerName} — {CSharpSource.Normalize(access)}");
+                    $"{name}:{ownerName} — {CSharpSource.Normalize(reach)}");
             }
         }
 

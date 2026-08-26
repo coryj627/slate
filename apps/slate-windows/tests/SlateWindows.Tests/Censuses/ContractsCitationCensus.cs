@@ -172,34 +172,71 @@ public sealed class ContractsCitationCensus
     /// leaving a dead row behind.
     /// </para>
     /// </remarks>
-    private static readonly (string Retired, string Pattern, string Replacement)[]
+    private static readonly
+        (string Retired, string Pattern, string Replacement, string Sample)[]
         RetiredMechanisms =
         [
             (
                 "the request generation counter (codex C-lite round 1: ABA)",
                 @"[Gg]eneration-matched|\bby generation\b|OWNER and a GENERATION",
-                "reference identity"),
+                "reference identity",
+                "a newer request supersedes an older one by generation."),
             (
                 "the focus TOKEN (a one-shot flag, superseded by the durable "
                     + "addressed request)",
                 @"(?i)\bfocus[- ]token|(?i)filter[- ]focus[- ]token",
-                "CanvasFilterFocusRequest"),
+                "CanvasFilterFocusRequest",
+                "Ctrl+F raises the document's focus TOKEN instead."),
             (
                 "the unconditional projection seat (codex round 3, B2: an "
                     + "empty projection takes focus holding nothing)",
                 @"(?i)focus(es)? the projection|(?i)back to the projection",
-                "SEAT RULE"),
+                "SEAT RULE",
+                "clear it, announce the count, focus the projection."),
+            (
+                "unconditional restoration DELIVERY (codex round 3, B1: the "
+                    + "distinction governed the withdrawal end only)",
+                @"(?i)delivered unconditionally"
+                    + @"|(?i)a restoration is delivered (the moment|as soon as)",
+                "HOLDS it",
+                "a restoration is delivered the moment it can be."),
+            (
+                "per-WINDOW owner liveness (codex round 3, M3: a pane that "
+                    + "moved to another canvas is not an address for the one "
+                    + "it left)",
+                @"(?i)still (some|any) canvas owner"
+                    + @"|(?i)any open canvas tab is a live address",
+                "PAIRING",
+                "the sweep asks whether the tab is still some canvas owner."),
+            (
+                "the PUBLIC announcer and its allow-listed relay seat (codex "
+                    + "round 3, M4: unrepresentability first)",
+                @"(?i)allow-list(ed)? seat|(?i)the one allow-listed",
+                "GridRelaySeam",
+                "what is NOT derived is the one allow-listed seat."),
+            (
+                "the descendant-carries-its-ancestor proof step (Min6: core's "
+                    + "group path is ancestor-only)",
+                @"(?i)matches G also matches P|(?i)P survives whenever G does",
+                "ancestor",
+                "every route that matches G also matches P."),
+            (
+                "the removed seat arm's caller enumeration (the scoped review "
+                    + "of round 3: CloseWhereAmI also runs pre-ladder)",
+                @"(?i)[Ee]very caller is an Escape rung",
+                "pre-ladder",
+                "there is no such arm, because every caller is an Escape rung."),
         ];
 
-    public static TheoryData<string, string, string> Retired
+    public static TheoryData<string, string, string, string> Retired
     {
         get
         {
-            var data = new TheoryData<string, string, string>();
-            foreach ((string retired, string pattern, string replacement)
+            var data = new TheoryData<string, string, string, string>();
+            foreach ((string retired, string pattern, string replacement, string sample)
                 in RetiredMechanisms)
             {
-                data.Add(retired, pattern, replacement);
+                data.Add(retired, pattern, replacement, sample);
             }
             return data;
         }
@@ -208,36 +245,51 @@ public sealed class ContractsCitationCensus
     [Theory]
     [MemberData(nameof(Retired))]
     public void NoRetiredMechanismIsStillDescribedAsCurrent(
-        string retired, string pattern, string replacement)
+        string retired, string pattern, string replacement, string sample)
     {
-        // §C's live prose and the canvas production sources. The round
-        // record is deliberately out of range — it lives past §W-G, and
-        // history has to keep the old names or it stops being history.
-        string section = Section(
-            "## PR C — the navigator, the mode stack",
-            "## §W-G canonical-consumption audit",
-            "C");
-        var scanned = new List<(string Where, string Text)>
+        // THE PREMISE, first: a mistyped pattern guards nothing and
+        // passes forever. Each row carries a SAMPLE — a line of the prose
+        // it exists to forbid — and the pattern has to find it in the
+        // sample after the same mention-strip the scan applies. This is
+        // the sibling arm's "the section is long enough and cites enough"
+        // floor, said for a regex.
+        Assert.True(
+            Regex.IsMatch(Strip(sample), pattern),
+            $"the pattern for {retired} does not match its own sample, so it "
+            + "would scan every text below and find nothing forever: "
+            + $"{pattern} vs {sample}");
+
+        var scanned = new List<(string Where, string Text)>();
+        foreach ((string label, string start, string end) in ScannedProse)
         {
-            ("§C of the contracts document", section),
-        };
-        string canvas = Path.Combine(
-            SourceText.RepoRoot(),
-            "apps", "slate-windows", "src", "SlateWindows", "Canvas");
-        string[] sources = Directory.GetFiles(canvas, "*.cs", SearchOption.AllDirectories);
-        Assert.NotEmpty(sources);
-        foreach (string source in sources)
+            scanned.Add((label, Section(start, end, label)));
+        }
+        foreach ((string label, string root) in ScannedSources)
         {
-            scanned.Add((Path.GetFileName(source), File.ReadAllText(source)));
+            string[] sources = Directory.GetFiles(root, "*.cs", SearchOption.AllDirectories);
+            Assert.True(
+                sources.Length > 0,
+                $"{label} contains no sources, so this scan covers nothing there.");
+            foreach (string source in sources)
+            {
+                // A guard is not its own subject. This file has to spell
+                // the retired phrases out — that is the whole table — and
+                // it is also the one file whose escaped-quote literals
+                // (`"\"[^\"]*\""`) shift the mention-strip's pairing, so
+                // scanning it would report the table to itself and get
+                // the line numbers wrong doing it.
+                if (Path.GetFileName(source) == DeclaringFile)
+                {
+                    continue;
+                }
+                scanned.Add(($"{label}/{Path.GetFileName(source)}", File.ReadAllText(source)));
+            }
         }
 
         var offenders = new List<string>();
         foreach ((string where, string text) in scanned)
         {
-            // A MENTION is not a USE: a quoted phrase is the document
-            // narrating what the old promise said, which is exactly what
-            // the corrected rows are supposed to do.
-            string prose = Regex.Replace(text, "\"[^\"]*\"", "\"\"");
+            string prose = Strip(text);
             foreach (Match match in Regex.Matches(prose, pattern))
             {
                 int line = prose.Take(match.Index).Count(c => c == '\n') + 1;
@@ -255,15 +307,84 @@ public sealed class ContractsCitationCensus
             + string.Join("\n  ", offenders));
     }
 
+    /// <summary>
+    /// A MENTION is not a USE: a quoted phrase is prose narrating what
+    /// the old promise said, which is exactly what a corrected row does.
+    /// </summary>
+    /// <remarks>
+    /// Straight ASCII quotes only, and over `.cs` files this also blanks
+    /// every string literal — so a retired mechanism asserted inside an
+    /// assertion message is invisible here. Both are known limits of a
+    /// textual rule rather than oversights; the day the contracts
+    /// document grows typographic quotes, a mention becomes a use and
+    /// this gate false-positives loudly, which is the failure direction
+    /// to prefer.
+    /// </remarks>
+    private const string DeclaringFile = "ContractsCitationCensus.cs";
+
+    private static string Strip(string text) =>
+        Regex.Replace(text, "\"[^\"]*\"", "\"\"");
+
+    /// <summary>
+    /// The prose in range, by HEADING. §C plus the recorded divergences,
+    /// which is a deliberate widening: the scoped review of codex round 3
+    /// found a stale CD-45 row that the §C-only range could not see, and
+    /// divergences are exactly where a retired mechanism's justification
+    /// goes to be forgotten. The ROUND RECORD stays out — history has to
+    /// keep the old names or it stops being history.
+    /// </summary>
+    private static readonly (string Label, string Start, string End)[] ScannedProse =
+    [
+        (
+            "§C",
+            "## PR C — the navigator, the mode stack",
+            "## §W-G canonical-consumption audit"),
+        (
+            "divergences",
+            "## Recorded divergences (owner-recorded; off-limits for re-litigation)",
+            "## Accepted risks (owner-recorded; off-limits for re-litigation)"),
+    ];
+
+    /// <summary>
+    /// The sources in range. Canvas PRODUCTION, plus the canvas censuses
+    /// — the second is the other half of the same widening: the wave that
+    /// retired the allow-listed seat left the words "the one allow-listed
+    /// seat" in the census's own doc comment, and a gate that cannot see
+    /// the file it lives in is a gate for other people's prose.
+    /// </summary>
+    /// <remarks>
+    /// The rest of the test tree stays OUT, and the reason is not
+    /// squeamishness: mutation comments, provenance paragraphs and
+    /// regression names narrate retired mechanisms on purpose, and a rule
+    /// that cannot tell narration from assertion would fire on all of
+    /// them. The censuses are in because they are guards — a guard that
+    /// describes a mechanism nobody has is the exact thing this table is
+    /// for.
+    /// </remarks>
+    private static readonly (string Label, string Root)[] ScannedSources =
+    [
+        (
+            "Canvas",
+            Path.Combine(
+                SourceText.RepoRoot(),
+                "apps", "slate-windows", "src", "SlateWindows", "Canvas")),
+        (
+            "Censuses",
+            Path.Combine(
+                SourceText.RepoRoot(),
+                "apps", "slate-windows", "tests", "SlateWindows.Tests", "Censuses")),
+    ];
+
     /// <summary>The table's own premise: a retired row whose REPLACEMENT
     /// has itself been renamed is guarding a mechanism nobody has, and it
     /// would pass forever.</summary>
     [Theory]
     [MemberData(nameof(Retired))]
     public void EveryRetiredMechanismNamesAReplacementThatExists(
-        string retired, string pattern, string replacement)
+        string retired, string pattern, string replacement, string sample)
     {
         _ = pattern;
+        _ = sample;
         string section = Section(
             "## PR C — the navigator, the mode stack",
             "## §W-G canonical-consumption audit",

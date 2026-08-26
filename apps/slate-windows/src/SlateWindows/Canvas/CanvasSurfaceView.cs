@@ -447,14 +447,27 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         {
             return true;
         }
-        // NOT a "needle matched nothing" arm, though the shape asks for
-        // one. Every caller is an Escape rung, and rung 2 clears the
-        // needle BEFORE it asks for a seat — so by the time this runs
-        // there is no needle, and rung 3 cannot have the press while one
-        // exists. `Ready` + no rows therefore means an empty CANVAS,
-        // which the onboarding arm above already answers. A field arm
-        // here would be a branch no test could reach.
-        //
+        // Ready, with a needle that matched nothing. This arm was once
+        // removed as unreachable, on the strength of "every caller is an
+        // Escape rung" — false. The LADDER callers cannot present a
+        // needle (rung 2 clears it before asking for a seat, and rung 3
+        // cannot have the press while one exists), but `CloseWhereAmI`
+        // is also reached from the CD-47 PRE-LADDER path, which by
+        // design dismisses the panel "leaving an active filter untouched"
+        // and therefore runs with a live needle. On a canvas that HAS
+        // cards the onboarding region is hidden and `Ready` has no
+        // focusable banner, so without this arm the seat falls through
+        // to a deferred landing with the panel already collapsed — and
+        // whether the reader is rescued then depends on the delivery
+        // path's own hold conditions. The field holding the needle is
+        // the one control on this surface that can change the answer,
+        // and seating them here needs nothing to go right afterwards.
+        if (Model is { RendersRetainedSnapshot: true, FilteredOutline.Count: 0 }
+            && _filterField is { IsVisible: true } field
+            && field.Focus())
+        {
+            return true;
+        }
         // Nothing on this surface can hold the reader right now —
         // `Loading` with no rows is the honest case. Leave a DURABLE,
         // addressed landing rather than dropping them on the window
@@ -751,14 +764,21 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
             model.CompleteFocusLanding(deferred);
             _deferredRestoration = null;
         }
-        else if (_deferredRestoration is not null)
+        else if (_deferredRestoration is not null
+            && departure is CanvasFocusDeparture.ModalOverlay
+                or CanvasFocusDeparture.MenuOpen
+                or CanvasFocusDeparture.WindowDeactivated)
         {
             // The OTHER half, and the one that was missing: the reader is
             // coming back, so the restoration is KEPT — and held, because
             // delivering it now would seat them in a canvas they are not
-            // looking at. One line, taken from the same classification
-            // that decides the withdrawal, so the two halves cannot
-            // disagree about which departures are which.
+            // looking at. Taken from the same classification that decides
+            // the withdrawal, so the two halves cannot disagree about
+            // which departures are which — and spelled POSITIVELY rather
+            // than as a bare `else`, which would also fire when the
+            // withdrawal condition failed for a reason that is not the
+            // classification (a null `Model` during a swap) and record a
+            // withdrawal-class departure as a hold.
             _awayBecause = departure;
         }
         _ = Model?.Modes.HandleFocusDeparture(departure);
@@ -788,11 +808,40 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         _awayBecause is not null
         || ShellOverlayIsOpen()
         || FocusIsInAMenu()
-        || AnyOtherPaneHasFocus();
+        || KeysAreOutsideThisSurface();
+
+    /// <summary>
+    /// Whether the keys are somewhere else in this WINDOW.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately not <see cref="AnyOtherPaneHasFocus"/>, which the
+    /// filter-focus delivery uses: that one requires an ACTIVE window,
+    /// because a merely-visible surface must not steal keys from a live
+    /// pane. Holding a restoration wants the opposite default — an
+    /// inactive window is a reader who is not here, and holding is the
+    /// safe answer either way, so the activity clause would only make
+    /// this miss.
+    /// </remarks>
+    private bool KeysAreOutsideThisSurface() =>
+        _hostWindow is { } window
+        && window.IsKeyboardFocusWithin
+        && !IsKeyboardFocusWithin;
 
     /// <summary>The departure the reader has not yet come back from, or
     /// null. Only ever one of the three <see cref="Depart"/> retains
     /// on.</summary>
+    /// <remarks>
+    /// Nothing clears this on withdrawal, on a model swap or on unload,
+    /// so the value can outlive the restoration it describes — and that
+    /// is contained rather than accidental: the hold is only ever
+    /// consulted for the request that IS
+    /// <see cref="_deferredRestoration"/> (a reference match in
+    /// <c>TryDeliverFocus</c>), and that field is nulled on withdrawal
+    /// and on delivery. A stale departure therefore governs nothing. Said
+    /// here so the next reader does not have to re-derive the
+    /// containment, or "fix" it by clearing the field somewhere that
+    /// re-opens the delivery this exists to hold.
+    /// </remarks>
     private CanvasFocusDeparture? _awayBecause;
 
     private static Button ModeButton(string automationId, string content, string name)

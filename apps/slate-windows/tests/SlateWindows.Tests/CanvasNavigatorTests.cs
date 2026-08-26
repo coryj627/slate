@@ -917,6 +917,146 @@ public sealed class CanvasNavigatorTests : IDisposable
         WindowDeactivation,
     }
 
+    /// <summary>Which LEVEL of `RestorationMustWait` answers — named
+    /// apart from <see cref="RestorationHold"/> because these three are
+    /// arrangements with no departure edge at all.</summary>
+    public enum RestorationLevel
+    {
+        Overlay,
+        Menu,
+        KeysOutside,
+    }
+
+    /// <summary>
+    /// A restoration RECORDED while the reader is already away is held
+    /// too — by the levels, with no departure edge to help.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The theory above sets the EDGE in all three of its arms, so the
+    /// three LEVELS in `RestorationMustWait` could be deleted without
+    /// turning a single case red — a guard whose removal changes nothing
+    /// observable, which is the standard this wave applied when it
+    /// deleted a seat-rule arm. This is the arrangement the levels exist
+    /// for and the edge cannot reach: the reader leaves BEFORE any
+    /// restoration exists (so `Depart` has nothing to retain and records
+    /// nothing), and only then does a palette-driven rung ask for a seat
+    /// the surface cannot give — the navigator keeps its attached
+    /// presenter across a palette invocation, which is what makes that
+    /// reachable.
+    /// </para>
+    /// <para>
+    /// Each arm is arranged so that ITS level is the one that answers,
+    /// which took some care: `||` short-circuits in written order, so
+    /// overlay is asked before menu and menu before keys-outside. The
+    /// overlay arm therefore leaves the keys IN the surface (a separate
+    /// top-level overlay window does not clear this window's
+    /// focus-within, and the shell flag is the only thing that knows),
+    /// and the menu arm puts its menu in ANOTHER window — which is what
+    /// a WPF menu popup actually is, and what makes it invisible to the
+    /// keys-outside level.
+    /// </para>
+    /// </remarks>
+    [Theory]
+    [InlineData(RestorationLevel.Overlay)]
+    [InlineData(RestorationLevel.Menu)]
+    [InlineData(RestorationLevel.KeysOutside)]
+    public void ARestorationRecordedWhileAlreadyAwayIsHeldByTheLevels(
+        RestorationLevel level) => RunSta(() =>
+    {
+        Func<bool> overlayWas = CanvasSurfaceView.ShellOverlayIsOpen;
+        ProbeWindow? menuHost = null;
+        try
+        {
+            var loading = new CanvasDocumentViewModel(
+                _session,
+                "board.canvas",
+                new CanvasAnnouncer(_announced.Add, TimeSpan.FromMinutes(1)),
+                synchronousForTests: true,
+                verbosity: () => _verbosity);
+            var tab = new object();
+            var surface = new CanvasSurfaceView { Model = loading, DataContext = tab };
+            var elsewhere = new Button { Content = "another pane" };
+            var root = new StackPanel();
+            root.Children.Add(surface);
+            root.Children.Add(elsewhere);
+            using ProbeWindow host = HostProbe(root);
+
+            // The surface HAS held the keys, which is what attaches the
+            // presenter the palette-driven verb below reaches through.
+            Assert.True(surface.FilterFieldForTests.Focus());
+            host.UpdateLayout();
+
+            // The reader goes away FIRST, with nothing pending — so the
+            // departure retains nothing and no edge is recorded.
+            switch (level)
+            {
+                case RestorationLevel.Overlay:
+                    // Keys deliberately stay here: a separate overlay
+                    // window is the case only the shell flag can see.
+                    CanvasSurfaceView.ShellOverlayIsOpen = static () => true;
+                    break;
+                case RestorationLevel.Menu:
+                    var menu = new Menu();
+                    var item = new MenuItem { Header = "Canvas", Focusable = true };
+                    menu.Items.Add(item);
+                    menuHost = HostProbe(menu);
+                    Assert.True(item.Focus());
+                    break;
+                default:
+                    Assert.True(elsewhere.Focus());
+                    break;
+            }
+            host.UpdateLayout();
+
+            // Now the verb asks for a seat the surface cannot give. Rung
+            // 2 through the navigator, which is the palette's route and
+            // does not need this surface to hold the keys.
+            loading.FilterText = "zzz";
+            host.UpdateLayout();
+            Assert.True(
+                loading.Navigator.HandleKey(Key.Escape, ModifierKeys.None, surface),
+                "rung 2 declined the press, so nothing deferred a landing and "
+                + "this fact would be about nothing.");
+            host.UpdateLayout();
+            Assert.NotNull(loading.FocusRequest);
+
+            // The load finishes while they are still away.
+            loading.Load();
+            host.UpdateLayout();
+            Assert.False(
+                surface.ProjectionHasFocus,
+                "a restoration recorded while the reader was already away was "
+                + "delivered on top of them — the levels answer for exactly "
+                + "the case that raises no departure.");
+            Assert.NotNull(loading.FocusRequest);
+
+            // …and it is HELD, not dropped.
+            CanvasSurfaceView.ShellOverlayIsOpen = overlayWas;
+            if (level == RestorationLevel.Overlay)
+            {
+                // The overlay window closes and this one comes forward.
+                host.SimulateActivate();
+            }
+            else
+            {
+                _ = surface.FilterFieldForTests.Focus();
+            }
+            host.UpdateLayout();
+            Assert.True(
+                surface.ProjectionHasFocus,
+                "the reader came back and the held landing was never "
+                + "delivered.");
+            Assert.Null(loading.FocusRequest);
+            loading.Shutdown();
+        }
+        finally
+        {
+            CanvasSurfaceView.ShellOverlayIsOpen = overlayWas;
+            menuHost?.Dispose();
+        }
+    });
+
     /// <summary>
     /// An EMPTY canvas seats the reader on its ONBOARDING region, never
     /// on an empty projection — from both of <c>FocusProjection</c>'s
@@ -1094,27 +1234,128 @@ public sealed class CanvasNavigatorTests : IDisposable
     });
 
     /// <summary>
-    /// The half of CD-45 that DOES hold: a surviving ancestor carries
-    /// every descendant, so no gap can open BELOW a survivor.
+    /// The CD-47 pre-ladder dismissal seats the reader even when the
+    /// needle has left the projection with no rows.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Escape belongs to an OPEN Where-am-I panel ahead of every rung, so
+    /// unlike rungs 2 and 3 this path runs with a LIVE needle by design —
+    /// which is what makes `Ready` + no rows reachable at the seat. The
+    /// canvas has cards, so the onboarding region is hidden
+    /// (`EmptyOnboardingText` keys on the UNFILTERED outline) and `Ready`
+    /// has no focusable banner: without an arm for it the seat falls
+    /// through to a deferred landing with the panel already collapsed and
+    /// the reader on the window root — the exact trap the dismissal
+    /// exists to prevent.
+    /// </para>
+    /// <para>
+    /// Two panes on one document is the arrangement that reaches it: the
+    /// reader opens the panel from a row in one pane while the other
+    /// narrows the shared filter out from under them, which is what makes
+    /// the remembered element stale. This is the caller a previous
+    /// round's "every caller is an Escape rung" enumeration missed.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void DismissingThePanelSeatsTheReaderEvenWithNoRowsToSitOn() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        var paneA = new CanvasSurfaceView { Model = document, DataContext = new object() };
+        var paneB = new CanvasSurfaceView { Model = document, DataContext = new object() };
+        var root = new StackPanel();
+        root.Children.Add(paneA);
+        root.Children.Add(paneB);
+        using var host = Host(root);
+
+        string row = document.FilteredOutline[0].NodeId;
+        Assert.True(paneA.FocusRow(row));
+        host.UpdateLayout();
+        document.Navigator.WhereAmI();
+        host.UpdateLayout();
+        Assert.True(
+            paneA.WhereAmIPanelForTests.IsKeyboardFocusWithin,
+            "the panel never took focus in this pane, so the dismissal would "
+            + "not restore and this fact would be about nothing.");
+
+        // The OTHER pane narrows the shared filter to nothing, so the row
+        // this pane's reader came from stops existing under them.
+        paneB.FilterFieldForTests.Text = "nothingmatchesthis";
+        host.UpdateLayout();
+        Assert.Empty(document.FilteredOutline);
+        Assert.False(
+            paneA.OnboardingForTests.IsVisible,
+            "the canvas has cards, so the onboarding arm must not be the one "
+            + "that answers here.");
+
+        // Whether the seat was taken HERE or deferred and then rescued by
+        // the delivery path is the difference this arm exists for, and
+        // the two are indistinguishable after the fact — both end with
+        // the reader in the field and no pending request. So the landing
+        // is watched instead: a dismissal that has to raise one is a
+        // dismissal whose outcome depends on the delivery path's hold
+        // conditions still being false a moment later.
+        var landings = new List<string>();
+        document.PropertyChanged += (_, changed) =>
+        {
+            if (changed.PropertyName == nameof(CanvasDocumentViewModel.FocusRequest))
+            {
+                landings.Add(changed.PropertyName);
+            }
+        };
+
+        Assert.True(PressKey(paneA, Key.Escape, ModifierKeys.None));
+        host.UpdateLayout();
+
+        Assert.Null(document.WhereAmIText);
+        // CD-47: the dismissal leaves an active filter untouched.
+        Assert.Equal("nothingmatchesthis", document.FilterText);
+        Assert.True(
+            paneA.IsKeyboardFocusWithin,
+            "the panel collapsed and left the reader on the window root — a "
+            + "keyboard user with nowhere to go, which is the trap this "
+            + "dismissal exists to prevent (m6/C6).");
+        Assert.True(
+            paneA.FilterFieldForTests.IsKeyboardFocused,
+            "nothing matched, so the field holding the needle is the only "
+            + "control on this surface that can change the answer.");
+        Assert.Empty(landings);
+        document.Shutdown();
+    });
+
+    /// <summary>
+    /// The half of CD-45 that DOES hold: a surviving group carries every
+    /// descendant GROUP, so no gap can open between a survivor and a
+    /// surviving ancestor.
     /// </summary>
     /// <remarks>
     /// <para>
     /// Core matches a row on its own title, its kind word, its
     /// activation target, or its ANCESTOR-ONLY group path
-    /// (`queries.rs`). The ancestor-only half is the lemma: when a group
-    /// G survives, every row inside it has G in its group path and
-    /// survives too. So between a survivor and its descendants the chain
-    /// is whole, and `Rebuild`'s nearest-surviving-ancestor walk finds
-    /// the TRUE parent every time.
+    /// (`queries.rs`). Ancestor→descendant-GROUP is the direction that
+    /// survives every route: a matching title lands in every
+    /// descendant's group path, the kind word is shared by every
+    /// descendant group, an ancestor's own group path is a prefix of
+    /// theirs, and a group's target is empty. So an intermediate group
+    /// can never be missing between a survivor and a surviving ancestor,
+    /// and `Rebuild`'s walk finds the TRUE parent whenever one survives.
     /// </para>
     /// <para>
-    /// It does NOT run the other way, and an earlier version of this
-    /// record claimed it did — that every route matching a group G also
-    /// matches its parent P, therefore no survivor can ever lose an
-    /// ancestor. False, and ancestor-ONLY is exactly why: P is not in its
-    /// own group path, so a child never carries a parent.
+    /// The GROUP qualification is load-bearing and was dropped once in
+    /// this record before being put back. It does not extend to every
+    /// descendant ROW: the needle `group` matches a group by its KIND
+    /// word while a text card inside it matches nothing. This fixture
+    /// cannot catch that, because `zeta` appears only in the
+    /// grandparent's TITLE — the one route on which the broad claim
+    /// happens to hold.
+    /// </para>
+    /// <para>
+    /// Nor does it run descendant→ancestor, which an earlier version of
+    /// the record asserted: "every route matching a group G also matches
+    /// its parent P" is false, because ancestor-only means a child never
+    /// carries a parent.
     /// <see cref="AGroupThatMatchesInsideANonMatchingGroupIsPromotedToTheRoot"/>
-    /// is the counterexample, and the case is reachable.
+    /// is that counterexample.
     /// </para>
     /// </remarks>
     [Fact]

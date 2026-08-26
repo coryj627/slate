@@ -166,9 +166,13 @@ public sealed class CanvasAnnouncerCensus
                 .Distinct(StringComparer.Ordinal)
                 .ToArray();
 
+            // The derived seams and nothing else. A literal
+            // `Announcer.Relay` alternative stood here for one wave after
+            // the announcer went private — dead by then (no member named
+            // `Announcer` exists) and a standing invitation to satisfy
+            // this census without going near the derivation it replaced.
             if (!seatings.Any(right =>
-                right.Contains("Announcer.Relay", StringComparison.Ordinal)
-                || relaySeams.Any(seam => right.EndsWith(
+                relaySeams.Any(seam => right.EndsWith(
                     "." + seam, StringComparison.Ordinal))))
             {
                 offenders.Add(

@@ -2406,12 +2406,12 @@ screen reader reads what focus lands on, and a line on top of that is
 the t0 §1.5 doubling rule broken on a dismissal (the same reasoning as
 A12's silent seat).
 
-**THE SEAT RULE.** Both rungs re-seat through one helper
-(`FocusProjection`), and it is STATE-AWARE, which PR C-lite's codex
-round 2 forced: `Render` collapses both projections under `Loading` and
-under every failure state, so "back to the projection" was a move to
-something that is not there — the keys stayed on the window root with
-the press already consumed. In order:
+**THE SEAT RULE.** Escape's two rungs AND the CD-47 pre-ladder
+dismissal re-seat through one helper (`FocusProjection`), and it is
+STATE-AWARE, which PR C-lite's codex round 2 forced: `Render` collapses
+both projections under `Loading` and under every failure state, so "back
+to the projection" was a move to something that is not there — the keys
+stayed on the window root with the press already consumed. In order:
 
 1. the PROJECTION, when the state renders rows **and there are rows to
    render**. The row condition is codex round 3's: `Ready` keeps the
@@ -2423,20 +2423,36 @@ the press already consumed. In order:
    no cards;
 3. the failure BANNER, a tab stop only in the error states (a transient
    "Opening canvas…" is not somewhere to put a reader);
-4. otherwise nothing on this surface can hold them: it leaves the reader
+4. the FILTER FIELD, when `Ready` has rows but the needle matched none
+   of them — the one control on this surface that can change the answer;
+5. otherwise nothing on this surface can hold them: it leaves the reader
    in place and defers an addressed A14 landing that the publish
    delivers.
 
-There is deliberately NO "the needle matched nothing" arm, though the
-shape asks for one. Every caller is an Escape rung, and rung 2 clears
-the needle before it asks for a seat while rung 3 cannot have the press
-while a needle exists — so `Ready` with no rows means an EMPTY CANVAS
-here, which arm 2 already answers. The arm was written, found
-unreachable by its own fact, and removed rather than kept as a branch
-nothing can exercise (claims-match-powers). The equivalent case on the
-DELIVERY path is different and does exist: `TryDeliverFocus`'s
-ready-empty arm falls to the filter field, because a shell-raised
-landing can arrive while a needle is excluding every row.
+**Arm 4's caller is the reason the caller list above says "and the CD-47
+pre-ladder dismissal".** This wave first removed arm 4 as unreachable,
+on the reasoning "every caller is an Escape rung" and no rung can
+present a needle — rung 2 clears it before asking for a seat, and rung 3
+cannot have the press while one exists. That enumeration was false, and
+the
+scoped review caught it: `CloseWhereAmI` is also reached from
+`OnPreviewKeyDown`'s CD-47 path, which by this contract's own text
+dismisses the panel "leaving an active filter and even an active mode
+untouched" — so it runs with a live needle by design, and is a caller
+that is not a rung. On a canvas that
+HAS cards the onboarding region is hidden (`EmptyOnboardingText` keys on
+the UNFILTERED outline) and `Ready` has no focusable banner, so without
+arm 4 the seat falls through to a deferred landing with the panel
+already collapsed, and whether the reader is rescued depends on the
+delivery path's hold conditions still being false a moment later. Arm 4
+seats them with nothing left to go right.
+`DismissingThePanelSeatsTheReaderEvenWithNoRowsToSitOn` drives the real
+`OnPreviewKeyDown` and asserts no landing was raised at all, which is
+what distinguishes the arm from the rescue.
+
+The equivalent arm on the DELIVERY path stays and is a different case:
+`TryDeliverFocus`'s ready-empty arm falls to the filter field because a
+shell-raised landing can arrive while a needle is excluding every row.
 
 That deferred landing is a RESTORATION rather than an INSTRUCTION, and
 the distinction governs BOTH ends of its life. The surface WITHDRAWS it
@@ -2611,6 +2627,19 @@ a closed funnel. `CanvasDocumentViewModel.Speak` is the one place the
 canvas reaches the announcer, and its condition is the FUNNEL's
 retirement rather than the document's shutdown flag, because C7's SPEAK
 phase runs between them and owes the drained departure's restoration.
+
+**And the boundary is STRUCTURAL, not conventional.** The announcer is a
+private field; production reaches it through exactly two named members,
+and there is no allow-list of blessed call sites any more. `Speak` is
+the boundary. `GridRelaySeam` is the other one and is not a canvas
+sentence at all — B7's canonical grid events (sort, row move, cell move)
+ride the funnel uncoalesced, carrying core's own priority through, so
+they get a named member rather than a hole in the boundary. What
+survives privatisation is one test handle whose NAME reads wrong in
+shipping code, and `AnnouncementSeamCensus` fails on ACQUIRING it
+anywhere under `Canvas/` — the point where an alias, a captured lambda,
+a conditional access or a transitive helper would otherwise get the
+funnel out.
 
 **And the stack SPEAKS through one boundary, which is a different
 question from whether a verb may run.** The entry gates above answer
@@ -4658,30 +4687,55 @@ PROJECTION has nowhere to go, so on a canvas with connections the last
 CARD is not the end while its connection row is still below the cursor.
 `TheBoundaryIsTheProjectionsRowsNotCoresReadingOrder` pins it.
 
-**CD-45 — A filtered-out group's survivor is promoted to a ROOT; the
-"nearest surviving ancestor" case cannot occur.** The implementation
-walks to the nearest surviving ancestor and falls to the root, which is
-the safe general form and costs nothing — but the intermediate case
-cannot be reached, and the reason has to be stated exactly because the
-obvious version of it is false.
+**CD-45 — A survivor whose containing group was filtered out is
+promoted to a ROOT; the intermediate "nests under a surviving
+GRANDparent" case cannot occur.** The implementation walks to the
+nearest surviving ancestor and falls to the root, which is the safe
+general form and costs nothing — but the intermediate case cannot be
+reached, and the reason has to be stated exactly, because TWO obvious
+versions of it are false and this row carried one of them for two
+rounds.
 
-**The true lemma is that a matching group carries every descendant
-GROUP**, not every descendant. Core matches on four routes (0b-13/0b-14)
-— title, the kind type word, any element of the group path, and the
-activation target — and the needle `group` refutes the broad claim: it
-matches a parent group by its KIND word while a text card inside it
-matches nothing. What survives is the narrow lemma, and it is enough:
-for a group G inside a parent group P, every route that matches G also
-matches P (G's group path contains P's title, G's kind word is P's,
-G's own title is P's descendant path, and a group's target is empty), so
-P survives whenever G does. A CARD's parent is therefore the only
-ancestor it can lose, and losing it makes the card a root — never a
-grandchild looking for a grandparent. Promotion to the root is the only
-reachable outcome.
+Core matches a row on four routes (0b-13/0b-14): its own title, its kind
+type word, ANY ELEMENT OF ITS GROUP PATH, and its activation target. The
+group path is ANCESTOR-ONLY — root down to the immediate parent, the row
+itself excluded (`canvas/model.rs`).
 
-This row used to claim a fact pinned both halves;
-`AMatchingGroupCarriesItsDescendantsSoNoAncestorGapExists` pins the
-lemma instead, which is what can be held true. The Windows
+**The lemma that holds runs ANCESTOR → DESCENDANT GROUP.** If a group A
+survives, every descendant GROUP of A survives:
+
+* A matched by its own TITLE ⇒ that title is an element of every
+  descendant's group path;
+* A matched by the KIND word ⇒ every descendant group has the same kind
+  word;
+* A matched by an element of its OWN group path ⇒ A's group path is a
+  prefix of every descendant's, so that element is in theirs too;
+* A matched by TARGET ⇒ impossible, a group's target is empty.
+
+Therefore no survivor can sit under a surviving ancestor A with a
+filtered-out group between them: the intermediate group would have
+survived. The nearest-ancestor walk finds the TRUE parent whenever a
+surviving ancestor exists at all, and the only other shape is promotion
+to the root. `AMatchingGroupCarriesItsDescendantsSoNoAncestorGapExists`
+pins it.
+
+**Two directions this does NOT license, both of which this row once
+asserted.** It does not run descendant → ancestor: "every route that
+matches a group G also matches its parent P, so P survives whenever G
+does" is FALSE, because the group path is ancestor-only and a child
+never carries a parent. A group whose own title matches inside a group
+whose title does not is promoted to the root exactly like a card, and
+`AGroupThatMatchesInsideANonMatchingGroupIsPromotedToTheRoot` is that
+case on `promoted.canvas`. And it does not run ancestor → every
+descendant ROW: the needle `group` matches a group by its KIND word
+while a text card inside it matches nothing, which is why the lemma
+above says descendant GROUP and must keep saying it.
+
+The conclusion is unchanged by both corrections — promotion to the root
+is still the only alternative shape — but it now rests on the direction
+that is true. Recorded in full because the wrong proof of a right
+conclusion is the kind of row that survives every review that only
+checks the conclusion. The Windows
 outline NESTS (CD-33) and the filter is a row subset, so a card whose
 containing group did not match cannot sit under it. The alternative —
 indenting it under a group that is not on screen — would claim a
@@ -7087,25 +7141,116 @@ inherits:**
   quoted phrase is a MENTION, not a use, and is skipped. The check found
   two rows I had not, on its first run. It does not detect staleness in
   general — no textual guard can — and the report says so.
-- **Min6 — CD-45's proof step was false, and the case IS reachable.**
+- **Min6 — CD-45's proof step was false; its conclusion was not.**
   "Every route that matches a group also matches its parent" is refuted
-  by the fact that core's group path is ANCESTOR-ONLY: a child never
-  carries a parent. `Pocket zeta` inside `Container` is the
-  counterexample, `Rebuild` already handles it (promotion to root), and
-  the record now carries the NARROWER lemma that does hold — a surviving
-  ancestor carries every descendant, so no gap can open BELOW a
-  survivor. **The epistemics matter more than the correction**: the
+  by core's group path being ANCESTOR-ONLY: a child never carries a
+  parent, so a group whose own title matches inside one whose title does
+  not is promoted to the root like any card. `Pocket zeta` inside
+  `Container` is the counterexample and `Rebuild` already handled it.
+  CD-45 now carries the direction that actually proves it —
+  ancestor → descendant GROUP, route by route — and the conclusion
+  (promotion to root is the only alternative shape) is unchanged.
+  **The GROUP qualification is the part that has now been lost twice.**
+  The first repair of this row wrote "a surviving ancestor carries every
+  descendant", dropping exactly the word round 2 had established:
+  the needle `group` matches a group by its KIND word while a text card
+  inside it matches nothing. The scoped review caught the regression.
+  **And the epistemics matter more than either correction**: the
   original conclusion came from one needle route against one fixture and
   was written up as verified. Enumerating core's four match routes
-  against the shape is what verification meant, and it takes one
-  minute.
-- **AND ONE ARM WAS BUILT AND THEN REMOVED.** The seat rule was given a
-  fourth arm — a needle that matched nothing seats the reader in the
-  filter field — and its own fact proved it unreachable: rung 2 clears
-  the needle before it asks for a seat, and rung 3 cannot have the press
-  while a needle exists, so `Ready` with no rows always means an empty
-  CANVAS there. Removed rather than kept as a branch nothing can
-  exercise. The equivalent case on the DELIVERY path is real and stays.
+  against the shape is what verification meant, and it takes a minute —
+  which is also the whole content of the removed-arm bullet below, at a
+  different altitude. Two "every X" claims in one wave, both proved from
+  memory rather than from the tool.
+- **AND ONE ARM WAS BUILT, REMOVED ON A FALSE ENUMERATION, AND
+  RESTORED.** The seat rule was given a fourth arm — a needle that
+  matched nothing seats the reader in the filter field — and removed
+  again on the reasoning that every caller is an Escape rung and no rung
+  can present a needle. The scoped review of this wave refuted it:
+  `CloseWhereAmI` is also called from the CD-47 PRE-LADDER path, which
+  by C6's own text dismisses the panel with an active filter untouched.
+  Restored, with the real caller named in all three places the false
+  claim had reached (the code, §C, the report), and pinned by a fact
+  that drives `OnPreviewKeyDown` with two panes on one document — the
+  arrangement that makes the remembered element stale while a needle is
+  live.
+  **The lesson is the enumeration, not the arm.** "Unreachable" was
+  asserted from a caller list read off the ladder rather than off the
+  call graph, and one caller of a caller was missed. It is the same
+  failure Min6 records at a different altitude: a claim of the form
+  "every X" proved by listing the X's somebody remembered. When the
+  conclusion is UNREACHABILITY, the enumeration is the whole proof and
+  it has to come from the tool, not the memory.
+
+### PR C-lite — codex round 3's scoped review — REVISE (5 items)
+
+The code was right in substance at every one of round 3's six items. What
+this review returned was **the recorded reasoning**, for the third wave
+running — two justifications false as written, one correction that
+landed everywhere except the canonical row it corrected, and a new gate
+that did not cover the mechanisms its own wave had retired.
+
+- **The removed seat arm came back.** "Every caller is an Escape rung"
+  was false: `CloseWhereAmI` also runs from the CD-47 pre-ladder path,
+  which by C6's own text keeps an active filter — so `Ready` with no rows
+  IS reachable at the seat, on a canvas that has cards. Arm 4 restored
+  and pinned through `OnPreviewKeyDown` with two panes on one document,
+  asserting that NO landing was raised: seating them there and seating
+  them by deferring-and-being-rescued are indistinguishable afterwards,
+  and only the first needs nothing to go right.
+- **CD-45's canonical row still carried the refuted proof step**, while
+  the round record two thousand lines away carried the correction. A
+  correction that does not land on the row a reader will actually consult
+  has not landed. The row now carries the ancestor → descendant-GROUP
+  direction, route by route.
+- **And the repaired lemma had dropped "GROUP"** — the exact
+  qualification round 2 established with the needle `group`. Twice lost
+  now, which is why the fact's own comment says the word is load-bearing
+  and why the fixture's blind spot (`zeta` appears only in a title) is
+  written down beside it.
+- **The announcer census had an implicit-`this` hole.** Both rules were
+  receiver-shaped one spelling over, so `AnnouncerForTests.Announce(e)`
+  inside the declaring file — the file where a new announce site is most
+  likely to be written — escaped. Closed with a bare-identifier rule, and
+  the residue member is DERIVED from the document now rather than spelled
+  as a literal.
+- **B1's three LEVELS had no fact.** All three arms of the first theory
+  set the EDGE, so deleting the levels changed nothing observable — the
+  same standard this branch had just applied to a seat-rule arm, applied
+  asymmetrically. `ARestorationRecordedWhileAlreadyAwayIsHeldByTheLevels`
+  is the arrangement they exist for: the reader leaves BEFORE any
+  restoration exists, so nothing is retained and no edge is recorded.
+  Each arm is built so its own level answers — the overlay arm keeps the
+  keys in the surface, the menu arm puts the menu in another window,
+  which is what a WPF popup is.
+- **The retired-vocabulary gate did not cover this wave's own
+  retirements.** Three rows for the three mechanisms that had already
+  bitten, and none for unconditional delivery, per-window liveness or the
+  allow-listed relay seat — and the review found two live stale rows in
+  precisely those blind spots. Five rows added, the prose range widened
+  to the recorded divergences, the source range widened to the censuses
+  themselves, and each row now carries a SAMPLE its pattern must match,
+  so a mistyped pattern fails instead of guarding nothing.
+
+**THE INCIDENT: one unexplained Debug red.** The first full Debug run on
+`10d943b` reported `Failed: 1, Passed: 1584`, and the identity was never
+recovered because the command tailed only the summary line. Four further
+full Debug runs and six targeted canvas-class runs were green, Release
+and the journeys were green, and assembly-wide parallelisation is
+disabled so the wave's new static swap cannot be the cause. It is
+recorded here, not only in the transient report, because the
+gate-integrity rule's own text says every wave re-reads this list:
+**a red that was not identified is an open finding, not a rounding
+error.** The process correction is a rule, sitting beside the other
+four: **every gate run is captured to a file and its fail block grepped
+out of it, never tailed.** A summary line cannot tell you what failed.
+
+**And the shape both false claims shared.** "Every caller is an Escape
+rung" and "every route that matches G also matches P" are the same
+mistake at two altitudes: a universal claim proved by enumerating the
+cases the author remembered. Whenever the conclusion is UNREACHABILITY,
+the enumeration IS the proof — so it comes from the tool (the call graph,
+core's match routes) or it does not come at all.
 
 ### PR C — the strategic lesson
 
