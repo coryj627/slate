@@ -154,13 +154,13 @@ internal sealed partial class WorkspaceViewModel
         // to a tab, and a document that survives because a SECOND pane
         // still shows it must not go on holding the closed pane's
         // request — or its object graph (contracts A14/C10).
-        var liveOwners = new HashSet<object>(ReferenceEqualityComparer.Instance);
+        List<WorkspaceTabViewModel> canvasTabs = [];
         foreach (WorkspaceTabViewModel tab in Groups.SelectMany(group => group.Tabs))
         {
             if (tab.IsCanvas)
             {
                 _ = live.Add(CanvasKey(tab.Path));
-                _ = liveOwners.Add(tab);
+                canvasTabs.Add(tab);
             }
         }
         foreach (string key in _canvasDocuments.Keys
@@ -177,6 +177,17 @@ internal sealed partial class WorkspaceViewModel
         // being pending.
         foreach (CanvasDocumentViewModel document in _canvasDocuments.Values)
         {
+            // Asked PER DOCUMENT, not once for the window. A tab that is
+            // still open is not thereby still a live address for THIS
+            // document: retarget a tab from canvas X to canvas Y and the
+            // tab survives, so a global "is this tab still some canvas
+            // owner" answered yes and X went on holding a request no
+            // surface would ever deliver — the pane showing that tab now
+            // renders Y. Ownership is the pairing of a tab WITH a
+            // document, so that is what the predicate asks.
+            var liveOwners = new HashSet<object>(
+                canvasTabs.Where(tab => ReferenceEquals(tab.Canvas, document)),
+                ReferenceEqualityComparer.Instance);
             document.DropRequestsAddressedOutside(liveOwners);
         }
     }

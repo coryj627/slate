@@ -110,6 +110,33 @@ public sealed class CanvasAnnouncerCensus
     [Fact]
     public void EveryGridUnderCanvasRidesTheRelay()
     {
+        // What COUNTS as the relay, derived rather than spelled. The
+        // announcer became a private field in codex round 3's M4, so the
+        // relay reaches the grid through a named member of the document
+        // whose whole body is `<announcer>.Relay` — and that member's
+        // NAME is the thing a surface now assigns. Reading it out of the
+        // document means a rename brings this census with it, and a seam
+        // that stops being the relay stops being accepted here.
+        CSharpSource document = CSharpSource.Load("Canvas", "CanvasDocumentViewModel.cs");
+        string[] relaySeams =
+        [
+            .. document.Root.DescendantNodes()
+                .OfType<PropertyDeclarationSyntax>()
+                .Where(property => property.ExpressionBody?.Expression
+                    is MemberAccessExpressionSyntax
+                    {
+                        Name.Identifier.ValueText: "Relay",
+                    } access
+                    && CSharpSource.Normalize(access.Expression)
+                        .EndsWith("announcer", StringComparison.OrdinalIgnoreCase))
+                .Select(property => property.Identifier.ValueText),
+        ];
+        Assert.True(
+            relaySeams.Length > 0,
+            "no member of CanvasDocumentViewModel exposes the announcer's Relay, "
+            + "so this census has no idea what a correct seating looks like and "
+            + "would call every surface an offender.");
+
         var offenders = new List<string>();
         var grids = 0;
         foreach (string file in CanvasSources())
@@ -140,11 +167,14 @@ public sealed class CanvasAnnouncerCensus
                 .ToArray();
 
             if (!seatings.Any(right =>
-                right.Contains("Announcer.Relay", StringComparison.Ordinal)))
+                right.Contains("Announcer.Relay", StringComparison.Ordinal)
+                || relaySeams.Any(seam => right.EndsWith(
+                    "." + seam, StringComparison.Ordinal))))
             {
                 offenders.Add(
                     $"{label}: builds an AccessibleDataGrid but never assigns its "
                     + "Announce seam to the canvas announcer's Relay "
+                    + $"(via {string.Join(" or ", relaySeams)}) "
                     + $"(assignments seen: {(seatings.Length == 0 ? "none" : string.Join(" | ", seatings))})");
             }
         }

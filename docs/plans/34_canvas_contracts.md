@@ -2186,7 +2186,9 @@ can it move one row) and three focus moves (a row, the projection,
 dismiss a transient region). `CanvasSurfaceView` implements it and
 routes to whichever projection is showing. Nothing sits on it that the
 navigator does not call — "focus the filter field" was drafted onto it
-and taken off, because Ctrl+F raises the document's focus TOKEN instead:
+and taken off, because Ctrl+F raises the document's addressed filter
+focus REQUEST instead (C10; a durable record carrying its owner, not a
+token and not a counter):
 the field belongs to every pane showing the canvas and only the one the
 reader is in should take it, which a presenter call would have got wrong
 by picking whichever pane the navigator was holding.
@@ -2374,8 +2376,8 @@ is a table test rather than a claim:
 | Rung | Consumed when | Effect |
 |---|---|---|
 | 1 `Mode` | a mode is active | cancel + restore, announced |
-| 2 `Filter` | the field holds a needle | clear it, announce `CanvasFilterCleared`, focus the projection |
-| 3 `Surface` | a transient region is open or holds focus | close the Where-am-I panel, or the interim card detail, or leave the filter field — focus back to the projection |
+| 2 `Filter` | the field holds a needle | clear it, announce `CanvasFilterCleared`, re-seat (the seat rule below) |
+| 3 `Surface` | a transient region is open or holds focus | close the Where-am-I panel, or the interim card detail, or leave the filter field — re-seat (the seat rule below) |
 | 4 `WorkspaceTab` | nothing above consumed it | NOT consumed; the press bubbles |
 
 **An OPEN Where-am-I panel takes the press ahead of every rung**
@@ -2402,16 +2404,56 @@ rung.
 Rung 3's effect is a focus move and is deliberately unannounced: the
 screen reader reads what focus lands on, and a line on top of that is
 the t0 §1.5 doubling rule broken on a dismissal (the same reasoning as
-A12's silent seat). The move is STATE-AWARE, which PR C-lite's codex
+A12's silent seat).
+
+**THE SEAT RULE.** Both rungs re-seat through one helper
+(`FocusProjection`), and it is STATE-AWARE, which PR C-lite's codex
 round 2 forced: `Render` collapses both projections under `Loading` and
 under every failure state, so "back to the projection" was a move to
 something that is not there — the keys stayed on the window root with
-the press already consumed. It lands on the projection when the state
-renders rows, else on the region the state does show (the failure
-banner), else it leaves the reader in the field and defers an addressed
-A14 landing that the publish delivers. That deferred landing is a
-RESTORATION rather than an instruction, so the surface withdraws it if
-the reader goes elsewhere first. Rungs 2 and 3 are registered ONCE by the navigator
+the press already consumed. In order:
+
+1. the PROJECTION, when the state renders rows **and there are rows to
+   render**. The row condition is codex round 3's: `Ready` keeps the
+   projection visible while empty, and both implementations take focus
+   holding nothing (`TreeView.Focus`, and the grid's own), so asking it
+   first put the reader on a silent empty control with the sentence that
+   would have told them what to do unread beside it;
+2. the ONBOARDING region, which is visible exactly when the canvas has
+   no cards;
+3. the failure BANNER, a tab stop only in the error states (a transient
+   "Opening canvas…" is not somewhere to put a reader);
+4. otherwise nothing on this surface can hold them: it leaves the reader
+   in place and defers an addressed A14 landing that the publish
+   delivers.
+
+There is deliberately NO "the needle matched nothing" arm, though the
+shape asks for one. Every caller is an Escape rung, and rung 2 clears
+the needle before it asks for a seat while rung 3 cannot have the press
+while a needle exists — so `Ready` with no rows means an EMPTY CANVAS
+here, which arm 2 already answers. The arm was written, found
+unreachable by its own fact, and removed rather than kept as a branch
+nothing can exercise (claims-match-powers). The equivalent case on the
+DELIVERY path is different and does exist: `TryDeliverFocus`'s
+ready-empty arm falls to the filter field, because a shell-raised
+landing can arrive while a needle is excluding every row.
+
+That deferred landing is a RESTORATION rather than an INSTRUCTION, and
+the distinction governs BOTH ends of its life. The surface WITHDRAWS it
+when the reader leaves of their own accord (a pane change, a tab
+switch), and HOLDS it — retained, undelivered — while the reader is
+behind something layered over this tab: an open overlay, an open menu,
+or a deactivated window. Those three are exactly the departures the mode
+stack keeps a mode alive across, because the reader is coming back from
+them; delivering a restoration into one of them takes the keys off
+whatever they are actually using. The hold ends when focus returns to
+the surface or the window activates, and the landing is delivered then.
+Codex round 3, B1: the withdrawal existed alone for a round, and a
+distinction that governs one end of a lifecycle is half a distinction —
+this branch had already built the same shape once, as read-side and
+write-side terminality on the request properties.
+
+Rungs 2 and 3 are registered ONCE by the navigator
 rather than by each surface, because two panes on one canvas would
 otherwise claim one rung twice and the order would depend on which pane
 mounted first; `RegisterRung` refuses a duplicate and refuses rungs 1
@@ -2895,8 +2937,9 @@ that scales worse than linearly would not be.
 **The filter-focus request is A14's TWIN — durable, ADDRESSED, and
 completed on the document.** Ctrl+F and the palette row reach the same
 verb, and only one of them worked: the palette owns the keys while it
-closes, so every surface read as ineligible — and the token was
-acknowledged before eligibility was even asked, so nothing retried. A
+closes, so every surface read as ineligible — and the one-shot
+flag the verb used THEN was acknowledged before eligibility was even
+asked, so nothing retried. A
 verb with two routes must not work on one of them.
 
 Durability alone was not enough, and the shape of what was missing is
@@ -2904,13 +2947,23 @@ worth keeping. A request that survives an ineligible surface is a
 request that ineligible surface KEEPS: two panes share one document, so
 the pane that could not satisfy it pulled the reader into ITS filter
 field the next time it saw the keys — the same defect one arrangement
-over. So `CanvasFilterFocusRequest` carries an OWNER and a GENERATION
-like `CanvasFocusRequest`: a surface delivers only what is addressed to
-it, delivery calls `CompleteFilterFocus` so peers stop holding it, and a
+over. So `CanvasFilterFocusRequest` carries an OWNER, like
+`CanvasFocusRequest`: a surface delivers only what is addressed to it,
+delivery calls `CompleteFilterFocus` so peers stop holding it, and a
 newer request supersedes an older one rather than being consumed by its
-late delivery. The one unaddressed case is a document no surface has
-ever held the keys on, where the first eligible surface takes it rather
-than letting the verb evaporate.
+late delivery. Supersession is by REFERENCE IDENTITY of the record —
+there is no generation counter and never was one after codex round 1's
+ABA finding; completion compares the record the surface is holding with
+the one the document has, so a late delivery of a superseded request
+clears nothing even when the two are value-equal. The one unaddressed
+case is a document no surface has ever held the keys on, where the first
+eligible surface takes it rather than letting the verb evaporate.
+
+**A live address is a tab PAIRED WITH THIS DOCUMENT.** The tab-set
+sweep drops requests addressed outside it, and the predicate is asked
+per document, not per window: a pane that is still open but now shows a
+different canvas (`TryOpenItem`'s replace arm) is not an address for the
+canvas it left. Codex round 3, M3.
 
 Retirement is the twin's other half, and it is answered at the BOUNDARY
 rather than by a list of clear sites: both requests READ as absent once
@@ -2943,7 +2996,7 @@ chord admission it has no business being in. `LiveSetting = Off` — pull,
 not push: the announcement is what speaks, and a live region would say
 the same sentence twice. Escape dismisses it ahead of every ladder rung
 while it is OPEN (CD-47), and returns focus to the element the reader
-came from when they were inside it — with the projection as the fallback
+came from when they were inside it — with C6's SEAT RULE as the fallback
 when that element is gone, and no focus move at all when they were never
 in it.
 
@@ -3128,7 +3181,7 @@ convention.
 | m3 | **TAKEN (record).** Where-am-I's filter clause keys on `Narrowed` where mac keys on `filterActive`, so there are states in which a needle sits in the field and Windows omits the clause. On THIS branch the cause is the synchronous one and only one: an active needle with no memo and no handle to build one — the document cannot answer, so nothing is narrowed and the clause is absent while the field still reads as filtering. (The async form adds two more causes, the in-flight first answer and the ran-and-failed query; they travel with it.) Kept on `Narrowed` deliberately either way: keying on the needle would make the clause say "9 of 9 shown" for rows nothing narrowed, which is a false number, and C10's whole invariant is that the count describes the rows on screen. Recorded as a micro-divergence rather than matched. |
 | m4 | **TAKEN (upstream note).** Where-am-I's no-selection fallback is the first UNFILTERED row on BOTH hosts, so with a filter active it can describe a card that is not on screen. Shared-reference quirk; filed in the mac-details register rather than fixed one-sided. |
 | m5 | **TAKEN (upstream note).** Enter-group, follow-connection and trace-path can seat a filtered-out node, and enter-group narrates it. Verified mac-parity (`canvasSelect` has no filtered-set check either), so not a Windows defect — but it grinds against CD-40's ratified "the reader and the selection agreeing IS the contract", so the verb family is recorded together. |
-| m6 | **TAKEN (fixed + fact).** `DismissTransientRegion`'s detail arm ignored `FocusRow`'s answer, so a row that vanished under an external edit left focus on the window root. `FocusRow` now RETURNS whether the row took focus — which is a seam improvement in its own right — and the arm falls back to the projection exactly as `CloseWhereAmI` does. |
+| m6 | **TAKEN (fixed + fact).** `DismissTransientRegion`'s detail arm ignored `FocusRow`'s answer, so a row that vanished under an external edit left focus on the window root. `FocusRow` now RETURNS whether the row took focus — which is a seam improvement in its own right — and the arm falls back through C6's SEAT RULE exactly as `CloseWhereAmI` does. |
 | m7 | **DEFERRED — PR E, with the expansion-state decision.** A durable focus request naming a filtered-out node stays pending and delivers a surprise jump when the filter later clears. `FocusLandingNodeFor` reads the unfiltered map by design (A14's landing rules predate the filter). Superseding the request when the filter excludes its target is a change to A14's own state machine; it belongs with the request-lifecycle work PR E already owns, not bolted on here. |
 | m8 | **TRAVELS.** It was taken and fixed — the scheduler guard scanned one file, so a `canvas_filter` call added anywhere else under `Canvas/` would have evaded the one-caller claim, and it scans the whole directory now. But the guard it strengthens is the off-dispatcher scheduling guard, which is not on this branch: a synchronous match has one caller by construction, in the getter, with no scheduled body for a second one to hide in. Both go to the redesign PR together. |
 | m9 | **DEFERRED — PR D, with the surface's focus map.** Ctrl+F reaches nobody when the table shows and focus is in the HEADER: the navigator stands aside for the grid's own gesture, and the grid's binding needs the grid focused. Routing the stand-aside on "the GRID owns focus" rather than "the table is showing" is the fix; it wants the header/projection focus map PR D is already building for the renderer's tab order, and the palette row covers the gap meanwhile. |
@@ -6967,6 +7020,92 @@ inherits:**
    configuration is red, either it is repaired or the report says which
    facts, why, and what would make them green — and every wave re-reads
    that list before adding to it.
+
+### PR C-lite — codex adversarial round 3 — NOT SAFE, 2 blockers + 2 majors + 2 minors
+
+- **B1 — the restoration/instruction distinction was WITHDRAWAL-ONLY.**
+  A deferred A14 landing was withdrawn when the reader left of their own
+  accord, and delivered unconditionally otherwise — so the three
+  departures the design deliberately RETAINS across (an overlay, an open
+  menu, a deactivated window) were exactly the states in which a
+  finishing load seated the reader in a canvas they were not looking at,
+  taking the keys off the dialog they were typing in. Delivery now asks
+  too: one edge (`_awayBecause`, set from the same classification that
+  decides the withdrawal, so the two halves cannot disagree) and three
+  levels (an overlay already open, a menu already down, the keys already
+  in another pane — the cases with no departure event to withdraw). The
+  hold ends on focus returning to the surface or the window activating.
+  **A distinction that governs one end of a lifecycle is half a
+  distinction, and this branch had built the shape once already**: the
+  read side of request terminality was correct for a wave while the
+  write side let retired fields be repopulated (round 2's B3). The same
+  question — "and what about the other end?" — was the fix both times.
+- **B2 — ready-empty Escape landed on an EMPTY PROJECTION.** `Ready`
+  keeps the projection visible with nothing in it, and both
+  implementations take focus while holding nothing (`TreeView.Focus`,
+  and the grid's own), so C6's seat rule asked the projection first and
+  got a yes: the reader sat on a silent empty control with the one
+  sentence that would have told them what to do unread beside it. The
+  seat rule now requires ROWS before it asks the projection. Pinned in
+  both projections and through both of the helper's callers (rung 2's
+  clear-and-reseat and rung 3's dismissal), with the rung the press took
+  asserted — only rung 2 speaks — so the theory is not one case run four
+  times.
+- **M3 — owner liveness was per WINDOW, not per DOCUMENT.** The sweep
+  asked "is this tab still SOME canvas owner", and a pane pointed at a
+  different canvas (`TryOpenItem`'s replace arm) answered yes — so the
+  canvas it LEFT went on holding a request addressed to a surface that
+  renders something else, with the tab's object graph attached. The
+  predicate is the pairing now. The fact's two re-raise arms are what
+  make it a predicate rather than a one-shot: the same wrong address is
+  dropped again by the next sweep, the right one survives it, and the
+  swept record arriving late clears nothing.
+- **M4 — the announcer census was false-green against ALIASING.**
+  `var sink = document.Announcer; sink.Announce(e);` passed a scan that
+  matched on the receiver's spelling. Taken by UNREPRESENTABILITY first,
+  per the series' doctrine: the announcer is a private field, and the
+  two things production legitimately needs are named members —
+  `Speak` (the boundary) and `GridRelaySeam` (B7's canonical grid
+  relay). `internal` cannot separate this assembly's tests from its
+  production code, so `AnnouncerForTests` remains as the named residue,
+  and the census's first rule is now that ACQUIRING it outside a seam is
+  the offence — which closes alias, conditional access, captured lambda
+  and transitive helper at the point they get the funnel rather than at
+  a call site a receiver-shaped scan has to recognise. The allow-list is
+  gone; the two seams carry their reasons as members, and both must be
+  FOUND or the census reports that it is exempting nothing. Ten
+  mutations, zero escapes: one compile wall (the private field), one
+  compile wall for the renamed boundary, seven census walls, and a stale
+  seam.
+- **Min5 — "all swept" was false AGAIN, for the third round running.**
+  Five more live rows described retired mechanisms. **So the rule stops
+  being discipline.** `ContractsCitationCensus` gained a retired-
+  vocabulary table — each row a phrase that can only assert the retired
+  thing is current, with the replacement that must still be named — over
+  §C's live prose and every `.cs` under `Canvas/`, with the round record
+  deliberately out of range because history has to keep the old names. A
+  quoted phrase is a MENTION, not a use, and is skipped. The check found
+  two rows I had not, on its first run. It does not detect staleness in
+  general — no textual guard can — and the report says so.
+- **Min6 — CD-45's proof step was false, and the case IS reachable.**
+  "Every route that matches a group also matches its parent" is refuted
+  by the fact that core's group path is ANCESTOR-ONLY: a child never
+  carries a parent. `Pocket zeta` inside `Container` is the
+  counterexample, `Rebuild` already handles it (promotion to root), and
+  the record now carries the NARROWER lemma that does hold — a surviving
+  ancestor carries every descendant, so no gap can open BELOW a
+  survivor. **The epistemics matter more than the correction**: the
+  original conclusion came from one needle route against one fixture and
+  was written up as verified. Enumerating core's four match routes
+  against the shape is what verification meant, and it takes one
+  minute.
+- **AND ONE ARM WAS BUILT AND THEN REMOVED.** The seat rule was given a
+  fourth arm — a needle that matched nothing seats the reader in the
+  filter field — and its own fact proved it unreachable: rung 2 clears
+  the needle before it asks for a seat, and rung 3 cannot have the press
+  while a needle exists, so `Ready` with no rows always means an empty
+  CANVAS there. Removed rather than kept as a branch nothing can
+  exercise. The equivalent case on the DELIVERY path is real and stays.
 
 ### PR C — the strategic lesson
 

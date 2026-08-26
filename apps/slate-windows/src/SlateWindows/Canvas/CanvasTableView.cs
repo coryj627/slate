@@ -193,7 +193,7 @@ internal sealed class CanvasTableView : UserControl
             // uncoalesced (they are not canvas vocabulary and have no
             // canvas coalescing class) and carries core's own priority
             // through unwrapped, rather than re-classifying them here.
-            view._grid.Announce = model.Announcer.Relay;
+            view._grid.Announce = model.GridRelaySeam;
         }
         else
         {

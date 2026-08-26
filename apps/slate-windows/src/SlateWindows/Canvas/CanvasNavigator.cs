@@ -79,17 +79,17 @@ internal interface ICanvasSurfacePresenter
     object? Owner { get; }
 
     // Deliberately NOT here: "focus the filter field". Ctrl+F raises the
-    // document's focus TOKEN instead, because the field belongs to every
-    // pane showing the canvas and only the one the reader is in should
-    // take it — a presenter call would have picked whichever pane the
+    // document's ADDRESSED filter-focus REQUEST instead, because the
+    // field belongs to every pane showing the canvas and only the one
+    // the reader is in should take it — a presenter call would have picked whichever pane the
     // navigator happened to be holding (the mac Codoki #626 rule,
     // restated for panes).
 
     /// <summary>
     /// Escape's third rung: dismiss a transient region inside the canvas
     /// (the Where-am-I panel, the interim card detail) or leave the filter
-    /// field, handing focus back to the projection. False when there was
-    /// nothing to leave, which is what lets the press fall through to the
+    /// field, re-seating the reader through C6's seat rule. False when
+    /// there was nothing to leave, which is what lets the press fall through to the
     /// workspace.
     /// </summary>
     bool DismissTransientRegion();
@@ -584,13 +584,16 @@ internal sealed class CanvasNavigator
     /// </summary>
     /// <remarks>
     /// SYNCHRONOUS (contract C10 interim), and the shape follows from
-    /// that: the match runs on this frame, so `Current` has exactly one
-    /// cause — no handle could answer — and it is the cause the state
-    /// mapping already has a sentence for. There is no in-flight frame to
-    /// describe and no failed-query state to distinguish, which is why
-    /// this is two branches rather than four. The count taken against a
-    /// swapped handle — which this comment used to defer to C10 — is no
-    /// longer reachable either: the view is not current while the
+    /// that: the match runs on this frame, so there is no in-flight frame
+    /// to describe and no pending-query state to distinguish — which is
+    /// why this is two branches rather than four.
+    ///
+    /// `Current` is false for TWO reasons, not one, and both land in the
+    /// same branch because the state mapping has the honest sentence for
+    /// each: the surface is not rendering rows (a reload, a failure —
+    /// a count is a claim about rows ON SCREEN), or no handle could
+    /// answer the needle. The first subsumes what this comment used to
+    /// call the swapped-handle case: the view is not current while the
     /// document is not rendering rows, so during a reload there is no
     /// query to take.
     /// </remarks>

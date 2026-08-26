@@ -156,6 +156,99 @@ public sealed class CanvasDocumentTests : IDisposable
             + "a request nobody can ever deliver.");
     });
 
+    /// <summary>
+    /// A pane that still EXISTS but now shows a different canvas is not a
+    /// live address for the one it left.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The sweep's first shape asked one question for the whole window —
+    /// "is this tab still SOME canvas owner" — and a tab pointed at
+    /// another canvas answers yes. Opening a second canvas into the
+    /// current tab is the reachable route (`TryOpenItem`'s replace arm,
+    /// which attaches and then sweeps), and the canvas the tab left
+    /// survives whenever a second pane still shows it. It then went on
+    /// holding a request addressed to a tab whose surface renders
+    /// something else entirely: undeliverable, and holding the tab's
+    /// object graph with it — the same defect the close case fixed, one
+    /// step sideways.
+    /// </para>
+    /// <para>
+    /// Ownership is the PAIRING of a tab with a document, so that is what
+    /// the predicate asks. The re-raise arms below are what distinguish a
+    /// predicate from a one-shot: the same wrong address is dropped again
+    /// by the next sweep, and the right one survives it.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void APaneThatMovedToAnotherCanvasStopsBeingAnAddress() => RunSta(() =>
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel moving =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel left =
+            Assert.IsType<CanvasDocumentViewModel>(moving.Canvas);
+
+        // A second pane on the SAME canvas, so the one the tab leaves
+        // SURVIVES the sweep — otherwise retirement would clear the
+        // requests and this fact would be about `Shutdown`.
+        ((System.Windows.Input.ICommand)workspace.DuplicateTabCommand).Execute(null);
+        WorkspaceTabViewModel staying =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        Assert.Same(left, staying.Canvas);
+        workspace.ActiveGroup.ActiveTab = moving;
+
+        left.RequestFocusLanding(moving);
+        left.RequestFilterFocus(moving);
+        CanvasFocusRequest stale =
+            Assert.IsType<CanvasFocusRequest>(left.FocusRequest);
+        Assert.NotNull(left.FilterFocusRequest);
+
+        // The pane is pointed at a DIFFERENT canvas. The tab is still
+        // open, still a canvas tab, still in the group.
+        workspace.OpenPath("connected.canvas");
+        Assert.NotSame(left, moving.Canvas);
+        Assert.IsType<CanvasDocumentViewModel>(moving.Canvas);
+        Assert.Same(
+            left,
+            staying.Canvas);
+        Assert.Null(left.FocusRequest);
+        Assert.Null(left.FilterFocusRequest);
+        Assert.False(
+            left.HoldsPendingRequestsForTests,
+            "the canvas the pane left is still holding that pane's request — "
+            + "the surface showing it now renders a different document, so "
+            + "nothing will ever deliver it.");
+
+        // A PREDICATE, not a one-shot: the same wrong address raised
+        // again is dropped again by the next sweep.
+        left.RequestFocusLanding(moving);
+        left.RequestFilterFocus(moving);
+        workspace.OpenPath("note0.md", WorkspaceOpenTarget.NewTab);
+        ((System.Windows.Input.ICommand)workspace.CloseActiveTabCommand).Execute(null);
+        Assert.Null(left.FocusRequest);
+        Assert.Null(left.FilterFocusRequest);
+
+        // …and the pane that DID stay keeps its own, through the same
+        // sweep that dropped the other two.
+        left.RequestFocusLanding(staying);
+        left.RequestFilterFocus(staying);
+        CanvasFocusRequest live =
+            Assert.IsType<CanvasFocusRequest>(left.FocusRequest);
+        workspace.OpenPath("note0.md", WorkspaceOpenTarget.NewTab);
+        ((System.Windows.Input.ICommand)workspace.CloseActiveTabCommand).Execute(null);
+        Assert.Same(live, left.FocusRequest);
+        Assert.NotNull(left.FilterFocusRequest);
+
+        // The dropped record arriving late clears NOTHING: completion is
+        // by reference identity, and a swept record is not the live one.
+        left.CompleteFocusLanding(stale);
+        Assert.Same(
+            live,
+            left.FocusRequest);
+    });
+
     [Fact]
     public void OneDocumentIsSharedByEveryTabOnThePath()
     {
@@ -298,7 +391,7 @@ public sealed class CanvasDocumentTests : IDisposable
     {
         CanvasDocumentViewModel document = NewDocument("skipped.canvas");
         document.Load();
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
 
         RenderedAnnouncement spoken = Assert.Single(_announced);
         // Contract A4/CD-3: banner and speech are ONE render, so they
@@ -329,7 +422,7 @@ public sealed class CanvasDocumentTests : IDisposable
             document,
             Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab).Canvas);
 
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         RenderedAnnouncement spoken = Assert.Single(_announced);
         Assert.Equal(document.DegradedBannerText, spoken.Text);
     }
@@ -339,11 +432,11 @@ public sealed class CanvasDocumentTests : IDisposable
     {
         CanvasDocumentViewModel document = NewDocument("skipped.canvas");
         document.Load();
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         Assert.Single(_announced);
 
         document.Load();
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         Assert.Equal(2, _announced.Count);
         document.Shutdown();
     }
@@ -421,7 +514,7 @@ public sealed class CanvasDocumentTests : IDisposable
         _announced.Clear();
 
         document.SelectNode("evidence");
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
 
         CanvasOutlineRow row = Row(document, "evidence");
         RenderedAnnouncement spoken = _announced[^1];
@@ -447,11 +540,11 @@ public sealed class CanvasDocumentTests : IDisposable
         CanvasDocumentViewModel document = NewDocument("board.canvas");
         document.Load();
         document.SelectNode("evidence");
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         _announced.Clear();
 
         document.SelectNode("evidence");
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         Assert.Empty(_announced);
         document.Shutdown();
     }
@@ -500,7 +593,7 @@ public sealed class CanvasDocumentTests : IDisposable
         _announced.Clear();
 
         document.SelectNode("question");
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
 
         CanvasOutlineRow row = Row(document, "question");
         RenderedAnnouncement spoken = Assert.Single(_announced);
@@ -587,7 +680,7 @@ public sealed class CanvasDocumentTests : IDisposable
 
         Assert.Equal(CanvasActivation.Opened, document.Activate(Row(document, "link")));
         Assert.Equal("https://example.org/spec", launched);
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         Assert.Equal(
             SlateUniffiMethods.A11yRender(new A11yEvent.Canvas(
                 new CanvasA11yEvent.CanvasOpened(
@@ -616,7 +709,7 @@ public sealed class CanvasDocumentTests : IDisposable
 
         Assert.Equal(CanvasActivation.Refused, document.Activate(Row(document, "js")));
         Assert.False(launched);
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         Assert.Equal(
             SlateUniffiMethods.A11yRender(new A11yEvent.Canvas(
                 new CanvasA11yEvent.CanvasBlocked(
@@ -645,7 +738,7 @@ public sealed class CanvasDocumentTests : IDisposable
 
         Assert.Equal(CanvasActivation.Refused, document.Activate(Row(document, "gone")));
         Assert.False(navigated);
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         Assert.Equal(
             SlateUniffiMethods.A11yRender(new A11yEvent.Canvas(
                 new CanvasA11yEvent.CanvasFileNotFound("nowhere/missing.md"))).Text,
@@ -668,7 +761,7 @@ public sealed class CanvasDocumentTests : IDisposable
         _announced.Clear();
 
         document.FollowConnection(neighbor);
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         Assert.Equal("evidence", document.Selection.Selected);
         Assert.NotEmpty(_announced);
         document.Shutdown();
@@ -773,7 +866,7 @@ public sealed class CanvasDocumentTests : IDisposable
         // clearing the recorder does not empty the coalescer, and its
         // pending navigation line would land in the middle of the
         // assertion below and read as an arrow-key announcement.
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         _announced.Clear();
 
         // The arrow key's effect: the tree selects the row.
@@ -789,12 +882,12 @@ public sealed class CanvasDocumentTests : IDisposable
             connection.Status);
         // The canvas selection did not move, and nothing was said.
         Assert.Equal("question", document.Selection.Selected);
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         Assert.Empty(_announced);
 
         // Invoke IS the follow path, and it does move.
         connection.RaiseActivate();
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         Assert.Equal("evidence", document.Selection.Selected);
         Assert.NotEmpty(_announced);
         document.Shutdown();
@@ -821,7 +914,7 @@ public sealed class CanvasDocumentTests : IDisposable
         _announced.Clear();
         document.SelectNode("evidence");
         Assert.True(evidence.IsSelected);
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         int afterModelMove = _announced.Count;
         Assert.True(afterModelMove > 0);
 
@@ -829,7 +922,7 @@ public sealed class CanvasDocumentTests : IDisposable
         // re-seat must not echo back through the tree (contract A12).
         loose.IsSelected = true;
         host.UpdateLayout();
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         Assert.Equal("loose", document.Selection.Selected);
         Assert.Equal(afterModelMove + 1, _announced.Count);
         document.Shutdown();
@@ -1456,11 +1549,11 @@ public sealed class CanvasDocumentTests : IDisposable
             workspace.ActiveGroup.ActiveTab!.Canvas);
         Assert.Equal(CanvasSurfaceKind.Outline, document.Selection.ActiveSurface);
         // Already on the outline, so the switch is a no-op and silent.
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         Assert.Empty(_announced);
 
         document.ShowSurface(CanvasSurfaceKind.Table);
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         Assert.Equal(
             SlateUniffiMethods.A11yRender(new A11yEvent.Canvas(
                 new CanvasA11yEvent.CanvasSurfaceShown(CanvasSurfaceKind.Table))).Text,
@@ -1662,7 +1755,7 @@ public sealed class CanvasDocumentTests : IDisposable
         Assert.Equal(CanvasActivation.Opened, document.Activate(Row(document, "pic")));
         Assert.Equal("diagram.png", media);
         Assert.Null(navigated);
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         Assert.Equal(
             SlateUniffiMethods.A11yRender(new A11yEvent.Canvas(
                 new CanvasA11yEvent.CanvasOpened(
@@ -1767,7 +1860,7 @@ public sealed class CanvasDocumentTests : IDisposable
             CanvasMediaPolicy.IdentityForTests(
                 Path.Combine(_fixture.Root, "diagram.png")),
             CanvasMediaPolicy.IdentityForTests(handed));
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         Assert.Equal(
             SlateUniffiMethods.A11yRender(new A11yEvent.Canvas(
                 new CanvasA11yEvent.CanvasOpened(
@@ -1780,7 +1873,7 @@ public sealed class CanvasDocumentTests : IDisposable
         _announced.Clear();
         Assert.Equal(CanvasActivation.Refused, document.Activate(Row(document, "exe")));
         Assert.Empty(launched);
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         RenderedAnnouncement refusal = Assert.Single(_announced);
         Assert.Equal(A11yPriority.High, refusal.Priority);
         Assert.Equal(
@@ -1864,7 +1957,7 @@ public sealed class CanvasDocumentTests : IDisposable
         }
 
         Assert.Empty(launched);
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         RenderedAnnouncement refusal = Assert.Single(_announced);
         Assert.Equal(A11yPriority.High, refusal.Priority);
         Assert.Equal(
@@ -2435,7 +2528,7 @@ public sealed class CanvasDocumentTests : IDisposable
         _announced.Clear();
 
         Assert.Equal(CanvasActivation.Refused, document.Activate(Row(document, "bad")));
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         Assert.NotEmpty(_announced);
         Assert.Equal(A11yPriority.High, _announced[^1].Priority);
     }
@@ -3110,7 +3203,7 @@ public sealed class CanvasDocumentTests : IDisposable
         workspace.OpenPath("renameme.canvas");
         CanvasDocumentViewModel before = Assert.IsType<CanvasDocumentViewModel>(
             workspace.ActiveGroup.ActiveTab!.Canvas);
-        before.Announcer.FlushForTests();
+        before.AnnouncerForTests.FlushForTests();
         Assert.Single(_announced);
         _announced.Clear();
 
@@ -3121,7 +3214,7 @@ public sealed class CanvasDocumentTests : IDisposable
 
         CanvasDocumentViewModel after = Assert.IsType<CanvasDocumentViewModel>(
             workspace.ActiveGroup.ActiveTab!.Canvas);
-        after.Announcer.FlushForTests();
+        after.AnnouncerForTests.FlushForTests();
         Assert.Equal(CanvasLoadState.Ready, after.State);
         // ONE open, one sentence.
         Assert.Single(_announced);
@@ -3159,7 +3252,7 @@ public sealed class CanvasDocumentTests : IDisposable
 
         // The queued line is DROPPED, not flushed: the reason to say it
         // (the user is reading that canvas) stopped being true.
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         Assert.Empty(posted);
 
         // And a LATE caller is refused, not merely un-queued. This is
@@ -3167,10 +3260,10 @@ public sealed class CanvasDocumentTests : IDisposable
         // document must not reach the dispatcher at all.
         using (DebugAsserts.Suppressed())
         {
-            document.Announcer.Announce(
+            document.AnnouncerForTests.Announce(
                 new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoMarks()));
         }
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         Assert.Empty(posted);
     });
 

@@ -151,6 +151,26 @@ public sealed class CanvasNavigatorTests : IDisposable
               "edges": []
             }
             """);
+        // The mirror of `nested-filter`, and the shape that shows the
+        // "no ancestor gap is reachable" claim was false: the OUTER group
+        // does not match and the INNER one does, by its own title. Core
+        // matches a row on its own title, kind, target, or its
+        // ANCESTOR-ONLY group path — ancestor-only, so a parent is never
+        // carried by a child — which leaves the inner group surviving
+        // with an ancestor that did not.
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "promoted.canvas"),
+            """
+            {
+              "nodes": [
+                {"id":"container","type":"group","x":0,"y":0,"width":900,"height":700,"label":"Container"},
+                {"id":"pocket","type":"group","x":40,"y":40,"width":500,"height":400,"label":"Pocket zeta"},
+                {"id":"inPocket","type":"text","text":"plain card","x":80,"y":80,"width":200,"height":100},
+                {"id":"apart","type":"text","text":"plain other","x":1200,"y":0,"width":200,"height":100}
+              ],
+              "edges": []
+            }
+            """);
         File.WriteAllText(Path.Combine(_fixture.Root, "empty.canvas"), "{}");
         File.WriteAllText(
             Path.Combine(_fixture.Root, "broken.canvas"), "{ this is not json");
@@ -190,7 +210,7 @@ public sealed class CanvasNavigatorTests : IDisposable
     /// </summary>
     private IReadOnlyList<string> Lines(CanvasDocumentViewModel document)
     {
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         return _announced.Select(line => line.Text).ToArray();
     }
 
@@ -206,7 +226,7 @@ public sealed class CanvasNavigatorTests : IDisposable
     /// </summary>
     private void Drain(CanvasDocumentViewModel document)
     {
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         _announced.Clear();
     }
 
@@ -526,7 +546,7 @@ public sealed class CanvasNavigatorTests : IDisposable
         // closed. The counter is the half that works in Release too:
         // `Debug.Fail` says nothing there, and Release is what CI runs.
         Assert.False(document.Modes.IsActive);
-        Assert.Equal(0, document.Announcer.RefusedAfterShutdownForTests);
+        Assert.Equal(0, document.AnnouncerForTests.RefusedAfterShutdownForTests);
         Assert.Empty(Lines(document));
     }
 
@@ -774,6 +794,223 @@ public sealed class CanvasNavigatorTests : IDisposable
     });
 
     /// <summary>
+    /// The other half of the same distinction: a restoration is HELD
+    /// while the reader is behind something layered over this tab, and
+    /// delivered when they come back.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The withdrawal above made the restoration/instruction distinction
+    /// exist on the WITHDRAWAL side only, which is half a distinction.
+    /// The three departures `Depart` deliberately does not withdraw on —
+    /// an overlay, a menu, a window deactivation — are things the reader
+    /// is coming BACK from, so the landing is rightly kept; but keeping
+    /// it while delivery was unconditional meant a load that finished
+    /// behind the overlay seated the reader in a canvas they were not
+    /// looking at, taking the keys off the dialog they were typing in.
+    /// </para>
+    /// <para>
+    /// This is a shape this branch has built once already: read-side and
+    /// write-side terminality on the request properties. A rule that
+    /// governs one side of a lifecycle governs the other side too, or it
+    /// governs neither.
+    /// </para>
+    /// </remarks>
+    [Theory]
+    [InlineData(RestorationHold.Overlay)]
+    [InlineData(RestorationHold.Menu)]
+    [InlineData(RestorationHold.WindowDeactivation)]
+    public void ARestorationWaitsWhileTheReaderIsBehindSomethingElse(
+        RestorationHold hold) => RunSta(() =>
+    {
+        Func<bool> overlayWas = CanvasSurfaceView.ShellOverlayIsOpen;
+        try
+        {
+            var loading = new CanvasDocumentViewModel(
+                _session,
+                "board.canvas",
+                new CanvasAnnouncer(_announced.Add, TimeSpan.FromMinutes(1)),
+                synchronousForTests: true,
+                verbosity: () => _verbosity);
+            var tab = new object();
+            var surface = new CanvasSurfaceView { Model = loading, DataContext = tab };
+            var menu = new Menu();
+            var item = new MenuItem { Header = "Canvas", Focusable = true };
+            menu.Items.Add(item);
+            var elsewhere = new Button { Content = "the overlay's own field" };
+            var root = new StackPanel();
+            root.Children.Add(surface);
+            root.Children.Add(menu);
+            root.Children.Add(elsewhere);
+            using ProbeWindow host = HostProbe(root);
+
+            Assert.Equal(CanvasLoadState.Loading, loading.State);
+            Assert.True(surface.FilterFieldForTests.Focus());
+            host.UpdateLayout();
+            Assert.True(PressKey(surface, Key.Escape, ModifierKeys.None));
+            host.UpdateLayout();
+            // The premise: nowhere to sit yet, so a RESTORATION is
+            // pending — the same premise the withdrawal fact establishes.
+            Assert.NotNull(loading.FocusRequest);
+
+            // The thing layers itself over the tab.
+            switch (hold)
+            {
+                case RestorationHold.Overlay:
+                    CanvasSurfaceView.ShellOverlayIsOpen = static () => true;
+                    Assert.True(elsewhere.Focus());
+                    break;
+                case RestorationHold.Menu:
+                    Assert.True(item.Focus());
+                    break;
+                default:
+                    host.SimulateDeactivate();
+                    break;
+            }
+            host.UpdateLayout();
+            Assert.NotNull(loading.FocusRequest);
+
+            // The load finishes WHILE they are behind it.
+            loading.Load();
+            host.UpdateLayout();
+            Assert.False(
+                surface.ProjectionHasFocus,
+                "the canvas seated the reader while they were behind an "
+                + "overlay, a menu or another window — a restoration is not "
+                + "an instruction (contract A14).");
+            Assert.NotNull(loading.FocusRequest);
+
+            // …and it comes back.
+            CanvasSurfaceView.ShellOverlayIsOpen = overlayWas;
+            if (hold == RestorationHold.WindowDeactivation)
+            {
+                host.SimulateActivate();
+            }
+            else
+            {
+                // Discarded deliberately: focus returning to the surface
+                // is what makes the held landing deliverable, and the
+                // delivery takes the keys straight back off the field —
+                // so `Focus` reports false precisely BECAUSE the fix
+                // worked. The assertion below is the one that matters.
+                _ = surface.FilterFieldForTests.Focus();
+            }
+            host.UpdateLayout();
+            Assert.True(
+                surface.ProjectionHasFocus,
+                "the reader came back and the landing this surface deferred "
+                + "for them was never delivered — held is not dropped.");
+            Assert.Null(loading.FocusRequest);
+            loading.Shutdown();
+        }
+        finally
+        {
+            CanvasSurfaceView.ShellOverlayIsOpen = overlayWas;
+        }
+    });
+
+    /// <summary>What a held restoration is waiting behind.</summary>
+    public enum RestorationHold
+    {
+        Overlay,
+        Menu,
+        WindowDeactivation,
+    }
+
+    /// <summary>
+    /// An EMPTY canvas seats the reader on its ONBOARDING region, never
+    /// on an empty projection — from both of <c>FocusProjection</c>'s
+    /// callers, in both projections.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// `Ready` keeps the projection visible with nothing in it, and both
+    /// implementations take focus while holding nothing (`TreeView.Focus`
+    /// and the grid's own), so "ask the projection first" answered yes
+    /// and left the reader on a silent empty control with the one
+    /// sentence that would have told them what to do — "This canvas is
+    /// empty", with the palette chord — sitting unread beside it.
+    /// </para>
+    /// <para>
+    /// Both callers, because the fix is in the shared helper and a fix
+    /// applied at one call site would look identical from the other's
+    /// side of the ladder: rung 2 clears a needle and re-seats, rung 3
+    /// dismisses a transient region and falls back to the same seat.
+    /// </para>
+    /// </remarks>
+    [Theory]
+    [InlineData(CanvasSurfaceKind.Outline, true)]
+    [InlineData(CanvasSurfaceKind.Outline, false)]
+    [InlineData(CanvasSurfaceKind.Table, true)]
+    [InlineData(CanvasSurfaceKind.Table, false)]
+    public void AnEmptyCanvasSeatsTheReaderOnItsOnboarding(
+        CanvasSurfaceKind projection, bool viaTheFilterRung) => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("empty.canvas");
+        document.ShowSurface(projection);
+        var surface = new CanvasSurfaceView
+        {
+            Model = document,
+            DataContext = new object(),
+        };
+        using var host = Host(surface);
+        Assert.Equal(CanvasLoadState.Ready, document.State);
+        Assert.Empty(document.FilteredOutline);
+        // The PREMISE, and the whole reason this fact exists: the
+        // projection is on screen and would have taken the keys.
+        FrameworkElement showing = projection == CanvasSurfaceKind.Table
+            ? surface.TableForTests
+            : surface.OutlineForTests;
+        Assert.True(
+            showing.IsVisible,
+            "the projection was not showing, so nothing here could have "
+            + "seated the reader on it and this fact proves nothing.");
+        Assert.True(surface.OnboardingForTests.IsVisible);
+
+        // Which RUNG the press takes is decided by whether there is a
+        // needle to clear: with one, rung 2 consumes it and re-seats;
+        // without one, rung 2 declines and rung 3's "the reader is in the
+        // filter field" arm seats them instead. Same helper, two callers,
+        // and the press is identical from the reader's side.
+        if (viaTheFilterRung)
+        {
+            document.FilterText = "zzz";
+            host.UpdateLayout();
+        }
+        Assert.True(surface.FilterFieldForTests.Focus());
+        host.UpdateLayout();
+        Drain(document);
+        Assert.True(PressKey(surface, Key.Escape, ModifierKeys.None));
+        host.UpdateLayout();
+        Assert.Equal(string.Empty, document.FilterText);
+        // …and the press really did take the rung this case is about,
+        // because only rung 2 SAYS anything. Without this the theory is
+        // one case run four times.
+        if (viaTheFilterRung)
+        {
+            Assert.Equal(
+                CanvasAnnouncer.RenderLabel(
+                    new CanvasA11yEvent.CanvasFilterCleared(0)),
+                OneLine(document));
+        }
+        else
+        {
+            Assert.Empty(Lines(document));
+        }
+
+        Assert.True(
+            surface.OnboardingForTests.IsKeyboardFocused,
+            "an empty canvas seated the reader somewhere other than the one "
+            + "region that tells them what to do.");
+        Assert.False(
+            surface.ProjectionHasFocus,
+            "the reader is on an empty projection — it takes focus while "
+            + "holding nothing, which is exactly why it must be asked "
+            + "second.");
+        document.Shutdown();
+    });
+
+    /// <summary>
     /// A retired document has no PENDING REQUESTS — both of them,
     /// answered at the boundary rather than by a list of clear sites.
     /// </summary>
@@ -845,7 +1082,7 @@ public sealed class CanvasNavigatorTests : IDisposable
         // on a retired canvas used to post through a closed funnel — the
         // Debug gate found it, and this assertion is the half that also
         // works in Release, where `Debug.Fail` says nothing.
-        Assert.Equal(0, document.Announcer.RefusedAfterShutdownForTests);
+        Assert.Equal(0, document.AnnouncerForTests.RefusedAfterShutdownForTests);
 
         // …and the boundary holds for a surface that comes back: the
         // reader is not dragged anywhere by a request on a dead document.
@@ -857,35 +1094,27 @@ public sealed class CanvasNavigatorTests : IDisposable
     });
 
     /// <summary>
-    /// CD-45's "nearest surviving ancestor" case is UNREACHABLE under
-    /// core's matcher, and this is why.
+    /// The half of CD-45 that DOES hold: a surviving ancestor carries
+    /// every descendant, so no gap can open BELOW a survivor.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// The review asked for the missing half of CD-45: a survivor whose
-    /// DIRECT parent was filtered out while a higher ancestor survived,
-    /// nesting under the grandparent rather than promoting to the root.
-    /// The fixture for it cannot be built, and the reason is core's rule
-    /// rather than an accident of this one — but the lemma is narrower
-    /// than it first looks, and the narrow one is what holds: a matching
-    /// group carries every descendant GROUP. The needle `group` refutes
-    /// the broad version, matching a parent by its KIND word while a
-    /// text card inside it matches nothing. For a group G inside a
-    /// parent group P, though, every route that matches G also matches P
-    /// (`canvas_filter` matches any element of the group path, the kind
-    /// type word, the title and the activation target — and a group's
-    /// target is empty), so P survives whenever G does. A CARD's parent
-    /// is therefore the only ancestor it can lose, and losing it makes
-    /// the card a root, never a grandchild hunting for a grandparent.
+    /// Core matches a row on its own title, its kind word, its
+    /// activation target, or its ANCESTOR-ONLY group path
+    /// (`queries.rs`). The ancestor-only half is the lemma: when a group
+    /// G survives, every row inside it has G in its group path and
+    /// survives too. So between a survivor and its descendants the chain
+    /// is whole, and `Rebuild`'s nearest-surviving-ancestor walk finds
+    /// the TRUE parent every time.
     /// </para>
     /// <para>
-    /// So this pins the REACHABILITY claim instead, which is the honest
-    /// thing the code can be held to: the chain survives whole, and the
-    /// only shape a filtered outline can produce is "under the true
-    /// parent, or promoted to the root". The nearest-ancestor WALK stays
-    /// in `Rebuild` because it is the safe general form and costs
-    /// nothing — but CD-45 no longer claims a fact pins a case that
-    /// cannot occur.
+    /// It does NOT run the other way, and an earlier version of this
+    /// record claimed it did — that every route matching a group G also
+    /// matches its parent P, therefore no survivor can ever lose an
+    /// ancestor. False, and ancestor-ONLY is exactly why: P is not in its
+    /// own group path, so a child never carries a parent.
+    /// <see cref="AGroupThatMatchesInsideANonMatchingGroupIsPromotedToTheRoot"/>
+    /// is the counterexample, and the case is reachable.
     /// </para>
     /// </remarks>
     [Fact]
@@ -918,6 +1147,55 @@ public sealed class CanvasNavigatorTests : IDisposable
             Assert.Equal(
                 ["leaf"],
                 mid.Children.Where(child => !child.IsConnection)
+                    .Select(child => child.Id)
+                    .ToArray());
+        });
+
+    /// <summary>
+    /// The case the record above once called unreachable: a group that
+    /// matches by its OWN title inside a group that does not, promoted to
+    /// the root rather than nested under a parent that is gone.
+    /// </summary>
+    /// <remarks>
+    /// The proof step that ruled this out — "every route that matches a
+    /// group also matches its parent" — is false, because the group path
+    /// core matches against is ANCESTOR-ONLY. A child carries no parent.
+    /// `Pocket zeta` inside `Container` is the whole counterexample, and
+    /// it took one fixture: the earlier conclusion came from a single
+    /// needle route tried against a single fixture, and "verified
+    /// empirically" was doing work that only enumerating core's four
+    /// routes against the shape could do.
+    /// </remarks>
+    [Fact]
+    public void AGroupThatMatchesInsideANonMatchingGroupIsPromotedToTheRoot() =>
+        RunSta(() =>
+        {
+            CanvasDocumentViewModel document = Open("promoted.canvas");
+            var surface = new CanvasSurfaceView { Model = document };
+            using var host = Host(surface);
+
+            document.FilterText = "zeta";
+            host.UpdateLayout();
+
+            // The premise: the INNER group survived on its own title and
+            // the outer one did not survive at all.
+            string[] survivors =
+                [.. document.FilteredOutline.Select(row => row.NodeId)];
+            Assert.Contains("pocket", survivors);
+            Assert.DoesNotContain("container", survivors);
+            Assert.DoesNotContain("apart", survivors);
+
+            IReadOnlyList<CanvasOutlineRowViewModel> roots =
+                surface.OutlineForTests.RootsForTests;
+            Assert.Equal(
+                ["pocket"],
+                roots.Select(row => row.Id).ToArray());
+            // …and its own descendants came with it, which is the lemma
+            // that does hold.
+            Assert.Equal(
+                ["inPocket"],
+                roots.Single().Children
+                    .Where(child => !child.IsConnection)
                     .Select(child => child.Id)
                     .ToArray());
         });
@@ -1459,7 +1737,7 @@ public sealed class CanvasNavigatorTests : IDisposable
         // announced into the retired announcer and silently dropped —
         // invisible in Release, a `Debug.Fail` in Debug, and the reason
         // this fact was red in the configuration nobody was running.
-        Assert.Equal(0, document.Announcer.RefusedAfterShutdownForTests);
+        Assert.Equal(0, document.AnnouncerForTests.RefusedAfterShutdownForTests);
 
         // …and nothing the retired document composes afterwards reaches
         // anybody — including the commit confirmation that resolved after
@@ -1474,7 +1752,7 @@ public sealed class CanvasNavigatorTests : IDisposable
         // the run.
         using (DebugAsserts.Suppressed())
         {
-            document.Announcer.Announce(
+            document.AnnouncerForTests.Announce(
                 new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoMarks()));
         }
         Assert.Equal(line, OneLine(document));
@@ -1521,13 +1799,13 @@ public sealed class CanvasNavigatorTests : IDisposable
         // later, which is only true if `Announcer.Shutdown` was reached.
         using (DebugAsserts.Suppressed())
         {
-            document.Announcer.Announce(
+            document.AnnouncerForTests.Announce(
                 new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoMarks()));
         }
         Assert.Empty(Lines(document));
         // The counter has to COUNT, or the zero every other fact asserts
         // is the zero of a line that never runs.
-        Assert.Equal(1, document.Announcer.RefusedAfterShutdownForTests);
+        Assert.Equal(1, document.AnnouncerForTests.RefusedAfterShutdownForTests);
     }
 
     /// <summary>
@@ -2283,7 +2561,7 @@ public sealed class CanvasNavigatorTests : IDisposable
             // The premise the fact rests on: the two really do differ, so
             // the delivery below is the reachable case A14 describes.
             Assert.NotEqual(landing, document.Selection.Selected);
-            document.Announcer.FlushForTests();
+            document.AnnouncerForTests.FlushForTests();
             Drain(document);
 
             surface.FocusRow(landing);
@@ -2369,6 +2647,42 @@ public sealed class CanvasNavigatorTests : IDisposable
         internal void UpdateLayout() => window.UpdateLayout();
 
         public void Dispose() => window.Close();
+    }
+
+    private static ProbeWindow HostProbe(UIElement content)
+    {
+        var window = new ProbeWindow
+        {
+            Content = content,
+            Width = 900,
+            Height = 700,
+            ShowInTaskbar = false,
+            WindowStyle = WindowStyle.None,
+            ShowActivated = false,
+        };
+        window.Show();
+        window.UpdateLayout();
+        return window;
+    }
+
+    /// <summary>
+    /// A host window whose activation edges a test can cause.
+    /// </summary>
+    /// <remarks>
+    /// `Window.Activated` and `Window.Deactivated` are raised by the OS,
+    /// and a test cannot alt-tab. `OnActivated`/`OnDeactivated` are the
+    /// framework's own documented extension point for exactly this, so
+    /// the fact drives the REAL event through the REAL handler rather
+    /// than reaching past the view into its state — no production seam
+    /// exists for this, and none should.
+    /// </remarks>
+    private sealed class ProbeWindow : Window, IDisposable
+    {
+        internal void SimulateDeactivate() => OnDeactivated(EventArgs.Empty);
+
+        internal void SimulateActivate() => OnActivated(EventArgs.Empty);
+
+        public void Dispose() => Close();
     }
 
     private static void RunSta(Action body)

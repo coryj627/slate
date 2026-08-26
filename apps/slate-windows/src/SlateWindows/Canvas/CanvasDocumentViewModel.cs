@@ -184,7 +184,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     {
         _session = session;
         Path = path;
-        Announcer = announcer;
+        _announcer = announcer;
         _retargetedFrom = retargetedFrom;
         _verbosity = verbosity ?? (static () => CanvasVerbosity.Standard);
         Modes = new CanvasModeController(Speak);
@@ -198,9 +198,50 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
 
     public string DisplayName => System.IO.Path.GetFileNameWithoutExtension(Path);
 
-    /// <summary>The one funnel every canvas surface announces
-    /// through (contract A5).</summary>
-    public CanvasAnnouncer Announcer { get; }
+    /// <summary>
+    /// The one funnel every canvas sentence goes through (contract A5),
+    /// and PRIVATE so that "goes through the boundary" is a fact about
+    /// the type rather than a convention a census has to police.
+    /// </summary>
+    /// <remarks>
+    /// Production reaches it through exactly two named members —
+    /// <see cref="Speak"/> and <see cref="GridRelaySeam"/> — so
+    /// `document.Announcer.Announce(…)`, the shape this branch fixed
+    /// twice, no longer compiles. What accessibility CANNOT separate is
+    /// the test surface: the shell and its tests share an assembly
+    /// boundary via `InternalsVisibleTo`, so
+    /// <see cref="AnnouncerForTests"/> is reachable from production too.
+    /// That residue is named rather than hidden, and the census is the
+    /// second wall over it.
+    /// </remarks>
+    private readonly CanvasAnnouncer _announcer;
+
+    /// <summary>
+    /// The B7 relay seam: the substrate's CANONICAL grid events (sort,
+    /// row move, cell move) ride the canvas funnel uncoalesced, carrying
+    /// core's own priority through unwrapped.
+    /// </summary>
+    /// <remarks>
+    /// Named and narrow on purpose. It is the one production path that
+    /// is not a canvas sentence — the grid composes its own, and
+    /// re-classifying them here would be host prose — so it gets a
+    /// member of its own instead of a hole in the boundary.
+    /// </remarks>
+    internal Action<A11yEvent> GridRelaySeam => _announcer.Relay;
+
+    /// <summary>
+    /// The funnel itself, for facts that drive it deliberately — the
+    /// coalescer flush, the refusal counter, and the misuse a guard
+    /// exists for.
+    /// </summary>
+    /// <remarks>
+    /// The NAME is the guard: `internal` cannot separate this assembly's
+    /// tests from its production code, so what stops production using
+    /// it is that a reviewer reading `AnnouncerForTests` in a shipping
+    /// file knows immediately, and the announce census fails on it by
+    /// name. Recorded as the residue of an otherwise structural fix.
+    /// </remarks>
+    internal CanvasAnnouncer AnnouncerForTests => _announcer;
 
     /// <summary>Shared selection + marks for every pane showing this
     /// canvas (contract A1/R-B).</summary>
@@ -401,7 +442,8 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// As STATE it survives all three: the request stays pending until a
     /// surface actually delivers it and says so, surfaces retry on mount,
     /// on visibility, on publish and on container realization, and a
-    /// newer request supersedes an older one by generation.
+    /// newer request supersedes an older one by REFERENCE IDENTITY of
+    /// the record (there is no generation counter; see `SetRequest`).
     /// </para>
     /// <para>
     /// The terminality is on the READ, not on a list of places that
@@ -933,10 +975,11 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// <para>
     /// Owner-scoped like <see cref="FocusRequest"/>: a surface delivers
     /// only what is addressed to it, and the delivery clears it on the
-    /// DOCUMENT, so peers stop holding it. Generation-matched, so a
-    /// newer request supersedes an older one rather than being consumed
-    /// by its late delivery — by IDENTITY, since the surface hands back
-    /// the instance it was given.
+    /// DOCUMENT, so peers stop holding it. Superseded by REFERENCE
+    /// IDENTITY of the record, so a newer request replaces an older one
+    /// rather than being consumed by its late delivery — the surface
+    /// hands back the instance it was given, and a value-equal record
+    /// from a different raise is not that instance.
     /// </para>
     /// </remarks>
     public CanvasFilterFocusRequest? FilterFocusRequest
@@ -973,12 +1016,12 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         // phase: `Shutdown` marks the document first and then drains the
         // mode stack, whose restoration is the last sentence a
         // retirement owes and must still be heard. Everything composed
-        // after `Announcer.Shutdown()` is what has nobody to hear it.
-        if (Announcer.IsRetired)
+        // after `_announcer.Shutdown()` is what has nobody to hear it.
+        if (_announcer.IsRetired)
         {
             return;
         }
-        Announcer.Announce(@event);
+        _announcer.Announce(@event);
     }
 
     /// <summary>
@@ -1636,7 +1679,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         // announcer has to be silenced (contract A5): a coalesced line
         // queued on a dying document would otherwise fire ~200 ms later
         // and speak about a surface that no longer exists.
-        Announcer.Shutdown();
+        _announcer.Shutdown();
         // BOTH durable requests, because they are twins and a retirement
         // that dropped one of them was the shape this review found.
         FocusRequest = null;

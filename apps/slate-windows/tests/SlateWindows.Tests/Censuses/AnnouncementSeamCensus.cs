@@ -215,7 +215,7 @@ public sealed class AnnouncementSeamCensus
                 Canvas.CanvasDocumentViewModel document =
                     Assert.IsType<Canvas.CanvasDocumentViewModel>(
                         workspace.ActiveGroup.ActiveTab!.Canvas);
-                document.Announcer.FlushForTests();
+                document.AnnouncerForTests.FlushForTests();
 
                 string spoken = Assert.Single(raised);
                 Assert.Equal(document.DegradedBannerText, spoken);
@@ -367,19 +367,25 @@ public sealed class AnnouncementSeamCensus
         CSharpSource document = CSharpSource.Load("Canvas", "CanvasDocumentViewModel.cs");
         _ = document.Method("Speak");
         (string File, string Member) boundary = ("CanvasDocumentViewModel.cs", "Speak");
-        bool boundaryFound = false;
 
-        // The ONE allow-listed seat, with its reason. Matched by the
-        // member that holds it rather than by a line number, which rots.
-        (string File, string Member, string Why) relaySeat = (
-            "CanvasTableView.cs",
-            "OnModelChanged",
-            "contract B7: the substrate raises CANONICAL grid events (sort, row "
-            + "move, cell move) and they ride the canvas announcer from here. "
-            + "`Relay` is the seam for exactly that — it posts uncoalesced and "
-            + "carries core's own priority through — and handing the grid a "
-            + "method group is the wiring, not a canvas sentence.");
-        bool relaySeatFound = false;
+        // The TWO named seams, each with its reason. They are members of
+        // the document rather than an allow-list of call sites now — the
+        // announcer is private, so this is the whole surface, and both
+        // must be FOUND or the census is exempting nothing.
+        (string Member, string Why)[] seams =
+        [
+            ("Speak",
+                "the ONE announce boundary (contracts A5/C7): a retired "
+                + "document composes nothing, and the check has to live in "
+                + "the speaker rather than the funnel."),
+            ("GridRelaySeam",
+                "contract B7: the substrate raises CANONICAL grid events "
+                + "(sort, row move, cell move) and they ride the canvas "
+                + "funnel uncoalesced, carrying core's own priority through. "
+                + "Not a canvas sentence, so it gets a named member rather "
+                + "than a hole in the boundary."),
+        ];
+        var seamsFound = new HashSet<string>(StringComparer.Ordinal);
 
         var offenders = new List<string>();
         string[] files = [.. CanvasSources()];
@@ -392,38 +398,52 @@ public sealed class AnnouncementSeamCensus
                 .DescendantNodes()
                 .OfType<MemberAccessExpressionSyntax>())
             {
-                if (!posters.Contains(access.Name.Identifier.ValueText))
+                // TWO rules, and the first is the one that closes the
+                // evasions. ACQUIRING the funnel is forbidden outright:
+                // `AnnouncerForTests` is the only handle production can
+                // still obtain (the field is private), so an alias, a
+                // captured lambda, a conditional access or a transitive
+                // helper all fail HERE, at the point they get it, rather
+                // than at a call site a receiver-shaped scan has to
+                // recognise.
+                bool acquires = access.Name.Identifier.ValueText == "AnnouncerForTests";
+                // And the older rule stays as the belt: a poster called
+                // on anything announcer-shaped. Both an invocation and a
+                // bare method group count — the seam that let the mode
+                // stack past the boundary was a method group handed to a
+                // constructor.
+                bool posts = posters.Contains(access.Name.Identifier.ValueText)
+                    && CSharpSource.Normalize(access.Expression)
+                        // Case-insensitive on the suffix, so the private
+                        // FIELD (`_announcer`) is matched as readily as a
+                        // property — the boundary's own call is what
+                        // proves this scan reaches anything at all.
+                        .EndsWith("announcer", StringComparison.OrdinalIgnoreCase);
+                if (!acquires && !posts)
                 {
                     continue;
                 }
-                // The RECEIVER is the announcer: `Announcer`,
-                // `model.Announcer`, `_document.Announcer`. Both an
-                // invocation and a bare method group count — the seam
-                // that let the mode stack past the boundary was a method
-                // group handed to a constructor.
-                string receiver = CSharpSource.Normalize(access.Expression);
-                if (!receiver.EndsWith("Announcer", StringComparison.Ordinal))
+                // The enclosing MEMBER, method or property: the relay
+                // seam is expression-bodied, and a scan that only knew
+                // methods would have reported it as top-level noise.
+                MemberDeclarationSyntax? owner = access.Ancestors()
+                    .OfType<MemberDeclarationSyntax>()
+                    .FirstOrDefault(member =>
+                        member is MethodDeclarationSyntax or PropertyDeclarationSyntax);
+                string ownerName = owner switch
                 {
-                    continue;
-                }
-                MethodDeclarationSyntax? owner = access.Ancestors()
-                    .OfType<MethodDeclarationSyntax>()
-                    .FirstOrDefault();
+                    MethodDeclarationSyntax method => method.Identifier.ValueText,
+                    PropertyDeclarationSyntax property => property.Identifier.ValueText,
+                    _ => "<top level>",
+                };
                 if (name == boundary.File
-                    && owner?.Identifier.ValueText == boundary.Member)
+                    && seams.Any(seam => seam.Member == ownerName))
                 {
-                    boundaryFound = true;
-                    continue;
-                }
-                if (name == relaySeat.File
-                    && owner?.Identifier.ValueText == relaySeat.Member)
-                {
-                    relaySeatFound = true;
+                    _ = seamsFound.Add(ownerName);
                     continue;
                 }
                 offenders.Add(
-                    $"{name}:{owner?.Identifier.ValueText ?? "<top level>"} "
-                    + $"— {CSharpSource.Normalize(access)}");
+                    $"{name}:{ownerName} — {CSharpSource.Normalize(access)}");
             }
         }
 
@@ -433,15 +453,14 @@ public sealed class AnnouncementSeamCensus
             + "through `CanvasDocumentViewModel.Speak`, so a retired document "
             + "can compose a sentence for a closed funnel — the defect this "
             + $"branch fixed twice: {string.Join("; ", offenders)}");
+        string[] unusedSeams =
+            [.. seams.Where(seam => !seamsFound.Contains(seam.Member))
+                .Select(seam => $"{seam.Member} ({seam.Why})")];
         Assert.True(
-            boundaryFound,
-            "the boundary itself never reached the announcer, so this census "
-            + "scanned a canvas whose sentences go somewhere else entirely — "
-            + "it is asserting about nothing.");
-        Assert.True(
-            relaySeatFound,
-            "the allow-listed B7 relay seat was not found, so this census is "
-            + $"exempting nothing and the entry is stale. {relaySeat.Why}");
+            unusedSeams.Length == 0,
+            "a named seam never reached the announcer, so this census is "
+            + "exempting nothing there and either the seam is stale or the "
+            + $"scan is broken: {string.Join("; ", unusedSeams)}");
     }
 
     private static IEnumerable<string> CanvasSources()

@@ -148,6 +148,133 @@ public sealed class ContractsCitationCensus
             + "almost nothing.");
     }
 
+    /// <summary>
+    /// The vocabulary of mechanisms this branch RETIRED, with what
+    /// replaced each. A row here is a phrase that can only be an
+    /// ASSERTION that the retired thing is still how it works.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The "sweep follows the mechanism" rule — when a fix replaces a
+    /// mechanism, sweep the rows that DESCRIBE that mechanism, not just
+    /// the rows the fix happens to cite — failed on manual application
+    /// three rounds running, and the third failure was a claim that
+    /// everything HAD been swept. So it stops being discipline. Every
+    /// entry below was a live, false row somebody had to find by
+    /// reading; from here the reading is a gate.
+    /// </para>
+    /// <para>
+    /// What this does NOT do is detect staleness in general — no textual
+    /// guard can. It converts the named vocabulary into a wall, and its
+    /// second assertion is what keeps it from silently guarding nothing:
+    /// each row's REPLACEMENT must still be present, so a rename of the
+    /// new mechanism brings a reviewer back to this table instead of
+    /// leaving a dead row behind.
+    /// </para>
+    /// </remarks>
+    private static readonly (string Retired, string Pattern, string Replacement)[]
+        RetiredMechanisms =
+        [
+            (
+                "the request generation counter (codex C-lite round 1: ABA)",
+                @"[Gg]eneration-matched|\bby generation\b|OWNER and a GENERATION",
+                "reference identity"),
+            (
+                "the focus TOKEN (a one-shot flag, superseded by the durable "
+                    + "addressed request)",
+                @"(?i)\bfocus[- ]token|(?i)filter[- ]focus[- ]token",
+                "CanvasFilterFocusRequest"),
+            (
+                "the unconditional projection seat (codex round 3, B2: an "
+                    + "empty projection takes focus holding nothing)",
+                @"(?i)focus(es)? the projection|(?i)back to the projection",
+                "SEAT RULE"),
+        ];
+
+    public static TheoryData<string, string, string> Retired
+    {
+        get
+        {
+            var data = new TheoryData<string, string, string>();
+            foreach ((string retired, string pattern, string replacement)
+                in RetiredMechanisms)
+            {
+                data.Add(retired, pattern, replacement);
+            }
+            return data;
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(Retired))]
+    public void NoRetiredMechanismIsStillDescribedAsCurrent(
+        string retired, string pattern, string replacement)
+    {
+        // §C's live prose and the canvas production sources. The round
+        // record is deliberately out of range — it lives past §W-G, and
+        // history has to keep the old names or it stops being history.
+        string section = Section(
+            "## PR C — the navigator, the mode stack",
+            "## §W-G canonical-consumption audit",
+            "C");
+        var scanned = new List<(string Where, string Text)>
+        {
+            ("§C of the contracts document", section),
+        };
+        string canvas = Path.Combine(
+            SourceText.RepoRoot(),
+            "apps", "slate-windows", "src", "SlateWindows", "Canvas");
+        string[] sources = Directory.GetFiles(canvas, "*.cs", SearchOption.AllDirectories);
+        Assert.NotEmpty(sources);
+        foreach (string source in sources)
+        {
+            scanned.Add((Path.GetFileName(source), File.ReadAllText(source)));
+        }
+
+        var offenders = new List<string>();
+        foreach ((string where, string text) in scanned)
+        {
+            // A MENTION is not a USE: a quoted phrase is the document
+            // narrating what the old promise said, which is exactly what
+            // the corrected rows are supposed to do.
+            string prose = Regex.Replace(text, "\"[^\"]*\"", "\"\"");
+            foreach (Match match in Regex.Matches(prose, pattern))
+            {
+                int line = prose.Take(match.Index).Count(c => c == '\n') + 1;
+                offenders.Add($"{where}:~{line} — {match.Value}");
+            }
+        }
+
+        Assert.True(
+            offenders.Count == 0,
+            $"a retired mechanism is still described as current: {retired}. "
+            + $"It was replaced by {replacement}. A row that describes a "
+            + "mechanism the code no longer has reads as evidence and is "
+            + "not — sweep the rows that DESCRIBE the change, not only the "
+            + "ones the change cites:\n  "
+            + string.Join("\n  ", offenders));
+    }
+
+    /// <summary>The table's own premise: a retired row whose REPLACEMENT
+    /// has itself been renamed is guarding a mechanism nobody has, and it
+    /// would pass forever.</summary>
+    [Theory]
+    [MemberData(nameof(Retired))]
+    public void EveryRetiredMechanismNamesAReplacementThatExists(
+        string retired, string pattern, string replacement)
+    {
+        _ = pattern;
+        string section = Section(
+            "## PR C — the navigator, the mode stack",
+            "## §W-G canonical-consumption audit",
+            "C");
+        Assert.True(
+            section.Contains(replacement, StringComparison.OrdinalIgnoreCase),
+            $"§C never names {replacement}, which is what replaced {retired} — "
+            + "so the guard above is watching for a ghost and the row that "
+            + "should say what the mechanism IS now is missing.");
+    }
+
     private static string Section(string sectionStart, string sectionEnd, string pr)
     {
         string path = Path.Combine(

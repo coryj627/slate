@@ -417,8 +417,13 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
     {
         // The projections are COLLAPSED unless the state renders rows
         // (`Render`'s own condition), so asking them first only works
-        // when they are there to ask.
-        if (Model is { RendersRetainedSnapshot: true })
+        // when they are there to ask — and an EMPTY one is not somewhere
+        // to put a reader either. Both implementations take focus while
+        // holding nothing (`TreeView.Focus`, and the grid's own), so a
+        // canvas with no cards used to seat the reader on a silent empty
+        // control with the onboarding text unread beside it. Rows first,
+        // then whatever this state is actually SHOWING.
+        if (Model is { RendersRetainedSnapshot: true, FilteredOutline.Count: > 0 })
         {
             bool seated = Projection == CanvasSurfaceKind.Table
                 ? _table.FocusGrid()
@@ -442,6 +447,14 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         {
             return true;
         }
+        // NOT a "needle matched nothing" arm, though the shape asks for
+        // one. Every caller is an Escape rung, and rung 2 clears the
+        // needle BEFORE it asks for a seat — so by the time this runs
+        // there is no needle, and rung 3 cannot have the press while one
+        // exists. `Ready` + no rows therefore means an empty CANVAS,
+        // which the onboarding arm above already answers. A field arm
+        // here would be a branch no test could reach.
+        //
         // Nothing on this surface can hold the reader right now —
         // `Loading` with no rows is the honest case. Leave a DURABLE,
         // addressed landing rather than dropping them on the window
@@ -599,6 +612,10 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         {
             _hostWindow = window;
             _hostWindow.Deactivated += OnWindowDeactivated;
+            // The other half of the deactivation: a restoration held
+            // while the window was away is deliverable again the moment
+            // it comes back, and nothing else re-asks on that edge.
+            _hostWindow.Activated += OnWindowActivated;
         }
         TryDeliverPending();
     }
@@ -608,6 +625,7 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         if (_hostWindow is { } window)
         {
             window.Deactivated -= OnWindowDeactivated;
+            window.Activated -= OnWindowActivated;
             _hostWindow = null;
         }
         Model?.Navigator.DetachPresenter(this);
@@ -615,6 +633,19 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
 
     private void OnWindowDeactivated(object? sender, EventArgs e) =>
         Depart(CanvasFocusDeparture.WindowDeactivated);
+
+    private void OnWindowActivated(object? sender, EventArgs e)
+    {
+        // The window came forward without the keys landing in this
+        // surface — the reader is back in the shell, so the hold on a
+        // deactivation ends here rather than waiting for a focus change
+        // that may never come.
+        if (_awayBecause == CanvasFocusDeparture.WindowDeactivated)
+        {
+            _awayBecause = null;
+        }
+        TryDeliverPending();
+    }
 
     private void OnIsVisibleChanged(
         object sender, DependencyPropertyChangedEventArgs e)
@@ -638,6 +669,9 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
             // pane the reader is actually in, so the surface says which
             // one that is as soon as it has the keys.
             Model?.Navigator.AttachPresenter(this);
+            // The reader is BACK, whatever they were away in — the
+            // overlay closed, the menu closed, the window came forward.
+            _awayBecause = null;
             // …and this is the moment a palette-driven Ctrl+F becomes
             // deliverable: the palette has given the keys back.
             TryDeliverPending();
@@ -717,6 +751,16 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
             model.CompleteFocusLanding(deferred);
             _deferredRestoration = null;
         }
+        else if (_deferredRestoration is not null)
+        {
+            // The OTHER half, and the one that was missing: the reader is
+            // coming back, so the restoration is KEPT — and held, because
+            // delivering it now would seat them in a canvas they are not
+            // looking at. One line, taken from the same classification
+            // that decides the withdrawal, so the two halves cannot
+            // disagree about which departures are which.
+            _awayBecause = departure;
+        }
         _ = Model?.Modes.HandleFocusDeparture(departure);
     }
 
@@ -724,6 +768,32 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
     /// had nowhere to put the reader (contract C6/A14). Null when the
     /// pending landing — if any — came from the shell.</summary>
     private CanvasFocusRequest? _deferredRestoration;
+
+    /// <summary>
+    /// Whether a deferred RESTORATION has to keep waiting, because the
+    /// reader is not in this surface to receive it (contract A14/C6).
+    /// </summary>
+    /// <remarks>
+    /// One EDGE and three LEVELS, for `TryDeliverFocus`'s own reason:
+    /// none of them is "the" moment. The edge is the departure the reader
+    /// has not returned from — the three <see cref="Depart"/> retains on,
+    /// because they are all things layered over this tab rather than
+    /// places the reader went. The levels catch the case with no
+    /// departure at all: a restoration RECORDED while an overlay was
+    /// already open, a menu already down, or the keys already in another
+    /// pane. No departure will ever arrive to withdraw those, and a
+    /// level answers without one.
+    /// </remarks>
+    private bool RestorationMustWait() =>
+        _awayBecause is not null
+        || ShellOverlayIsOpen()
+        || FocusIsInAMenu()
+        || AnyOtherPaneHasFocus();
+
+    /// <summary>The departure the reader has not yet come back from, or
+    /// null. Only ever one of the three <see cref="Depart"/> retains
+    /// on.</summary>
+    private CanvasFocusDeparture? _awayBecause;
 
     private static Button ModeButton(string automationId, string content, string name)
     {
@@ -830,6 +900,25 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         if (Model is not { FocusRequest: { } request } model
             || !ReferenceEquals(request.Owner, DataContext)
             || !IsVisible)
+        {
+            return;
+        }
+        // A RESTORATION is not an INSTRUCTION (contract A14/C6). The
+        // shell raises a landing to PUT the reader into this tab, and it
+        // is delivered the moment it can be. This one exists only because
+        // the reader was already here with nowhere to sit — so delivering
+        // it while they are somewhere else takes the keys off wherever
+        // they actually are, which is the class A14 exists to prevent.
+        //
+        // The WITHDRAWAL side of this distinction already existed, in
+        // `Depart`. The delivery side did not, and that made it half a
+        // distinction: the departures a reader COMES BACK from (a window
+        // deactivation, an overlay, an open menu) deliberately do not
+        // withdraw, so they were precisely the states in which a
+        // finishing load could seat the reader on top of them. Retained
+        // rather than dropped — every condition below ends, and every
+        // ending re-asks.
+        if (ReferenceEquals(_deferredRestoration, request) && RestorationMustWait())
         {
             return;
         }

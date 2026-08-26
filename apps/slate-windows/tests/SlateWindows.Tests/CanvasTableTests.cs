@@ -327,7 +327,7 @@ public sealed class CanvasTableTests : IDisposable
         _announced.Clear();
         MoveReaderTo(grid, "beta");
         Assert.Equal("beta", document.Selection.Selected);
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         Assert.Contains(_announced, line => line.Text == MovedToText(document, "beta"));
 
         // Model → view: another surface (or, from PR C, the navigator)
@@ -339,7 +339,7 @@ public sealed class CanvasTableTests : IDisposable
         Assert.Equal(
             "link",
             Assert.IsType<CanvasTableRow>(grid.Grid.CurrentCell.Item).NodeId);
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         // EXACTLY the canvas line: the grid's re-seat contributed
         // nothing, so the move is spoken once rather than twice.
         Assert.Equal(MovedToText(document, "link"), Assert.Single(_announced).Text);
@@ -430,7 +430,7 @@ public sealed class CanvasTableTests : IDisposable
             new[] { "Zulu", "Shared" },
             document.TableRows.Select(row => row.SpeakableName).ToArray());
 
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         Assert.Empty(_announced);
         // And the reader is still on the card they were on, by NODE id:
         // the model is the authority the re-seat comes back to, not the
@@ -500,7 +500,7 @@ public sealed class CanvasTableTests : IDisposable
                 new A11yEvent.GridRowMoved(string.Empty, "Type: Text")).Text,
             _announced[^1].Text);
         // Coalesced: the canvas move.
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         Assert.Equal(MovedToText(document, "zeta"), _announced[^1].Text);
         document.Shutdown();
     });
@@ -547,7 +547,7 @@ public sealed class CanvasTableTests : IDisposable
             // Attached: the seam IS this document's relay, by identity.
             (CanvasDocumentViewModel document, CanvasSurfaceView surface,
                 AccessibleDataGrid grid) = Table();
-            Assert.Equal<Action<A11yEvent>>(document.Announcer.Relay, grid.Announce);
+            Assert.Equal<Action<A11yEvent>>(document.GridRelaySeam, grid.Announce);
             MoveReaderTo(grid, "beta");
             _announced.Clear();
             AccessibleDataGrid.ToggleSortCommand.Execute(null, grid);
@@ -555,7 +555,7 @@ public sealed class CanvasTableTests : IDisposable
 
             // Detached: the seam is NO LONGER that document's relay…
             surface.Model = null;
-            Assert.NotEqual<Action<A11yEvent>>(document.Announcer.Relay, grid.Announce);
+            Assert.NotEqual<Action<A11yEvent>>(document.GridRelaySeam, grid.Announce);
             // …and it is really inert. Invoking the seam is what the
             // substrate does on every sort, row move and cell move; a
             // grid still wired to the retired document would post here.
@@ -621,7 +621,7 @@ public sealed class CanvasTableTests : IDisposable
             media = null;
             PressEnterOn(grid, "exe");
             Assert.Null(media);
-            document.Announcer.FlushForTests();
+            document.AnnouncerForTests.FlushForTests();
             Assert.Equal(
                 SlateUniffiMethods.A11yRender(new A11yEvent.Canvas(
                     new CanvasA11yEvent.CanvasActionFailed(
@@ -635,7 +635,7 @@ public sealed class CanvasTableTests : IDisposable
             document.CloseDetail();
             PressEnterOn(grid, "grp");
             Assert.Null(document.DetailText);
-            document.Announcer.FlushForTests();
+            document.AnnouncerForTests.FlushForTests();
             Assert.DoesNotContain(
                 _announced,
                 line => line.Text.Contains("failed", StringComparison.OrdinalIgnoreCase));
@@ -1072,7 +1072,7 @@ public sealed class CanvasTableTests : IDisposable
                 "first", Assert.IsType<CanvasTableRow>(grid.Grid.CurrentCell.Item).NodeId);
             Assert.Equal("first", FocusedNodeId(host));
             // …and it is still silent (B5's other half).
-            document.Announcer.FlushForTests();
+            document.AnnouncerForTests.FlushForTests();
             Assert.Empty(_announced);
             document.Shutdown();
         });
@@ -1182,7 +1182,7 @@ public sealed class CanvasTableTests : IDisposable
         Assert.Equal(CanvasSurfaceKind.Table, document.Selection.ActiveSurface);
         // The persisted token followed (contract A15).
         Assert.Equal("table", tab.ActiveCanvasSurface);
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         Assert.Equal(
             SlateUniffiMethods.A11yRender(new A11yEvent.Canvas(
                 new CanvasA11yEvent.CanvasSurfaceShown(CanvasSurfaceKind.Table))).Text,
