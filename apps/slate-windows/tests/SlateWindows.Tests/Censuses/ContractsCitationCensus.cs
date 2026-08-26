@@ -322,6 +322,102 @@ public sealed class ContractsCitationCensus
     /// </remarks>
     private const string DeclaringFile = "ContractsCitationCensus.cs";
 
+    /// <summary>
+    /// A STAGED claim whose PR has landed is a lie with a delivery date.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// "No row is delivered at this scope until PR C ships the
+    /// navigator", "CanExecute is false until PR B and PR D ship their
+    /// projections", "minus the `, filtered` clause, which has nothing to
+    /// describe until PR C" — all true when written, all false by the
+    /// time the reviewer read them, and all in files nobody re-reads when
+    /// the PR they name lands. Codex round 4 found four in one pass.
+    /// </para>
+    /// <para>
+    /// The SHIPPED set is derived, not listed: a PR has shipped when the
+    /// contracts document has a section for it, which is the same source
+    /// the citation arms above read. So a claim naming PR D stays legal
+    /// until §D exists and fails on the day it does — which is the day
+    /// somebody is already editing this document.
+    /// </para>
+    /// <para>
+    /// SAMPLED scope, deliberately, and this is the honest limit: the
+    /// command surface and the §W-C matrix, because that is where staged
+    /// claims about chords and projections live and where all four
+    /// misses were. It is not a repo-wide sweep and does not pretend to
+    /// be one; widening it is a decision with its own false-positive
+    /// budget, not an omission.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void NoStagedClaimOutlivesThePrItNames()
+    {
+        string doc = File.ReadAllText(
+            Path.Combine(SourceText.RepoRoot(), "docs", "plans", ContractsDoc));
+        string[] shipped =
+        [
+            .. Regex.Matches(doc, @"(?m)^## PR ([A-Z]) ")
+                .Select(match => match.Groups[1].Value)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(pr => pr, StringComparer.Ordinal),
+        ];
+        Assert.True(
+            shipped.Length >= 3,
+            "fewer than three PR sections were found in the contracts "
+            + $"document, so this guard knows almost nothing has shipped and "
+            + $"would pass over every staged claim: [{string.Join(", ", shipped)}]");
+
+        // The PREMISE, before the scan: the pattern finds a planted claim
+        // naming a PR that HAS shipped, and leaves one naming a PR that
+        // has not. Without this a typo makes the guard permanent green.
+        Assert.NotEmpty(StaleClaims($"until PR {shipped[0]} ships the thing", shipped));
+        Assert.Empty(StaleClaims("until PR Z ships the thing", shipped));
+
+        var offenders = new List<string>();
+        foreach ((string where, string text) in StagedClaimScope())
+        {
+            foreach (string claim in StaleClaims(text, shipped))
+            {
+                offenders.Add($"{where} — {claim}");
+            }
+        }
+
+        Assert.True(
+            offenders.Count == 0,
+            "a staged claim names a PR that has already shipped, so it "
+            + "describes the code as it was rather than as it is — and the "
+            + "reader most likely to trust it is the one deciding whether a "
+            + "row is live:\n  "
+            + string.Join("\n  ", offenders));
+    }
+
+    private static IEnumerable<string> StaleClaims(string text, string[] shipped) =>
+        Regex.Matches(text, @"until (?:W6-1 )?PR ([A-Z])\b")
+            .Where(match => shipped.Contains(match.Groups[1].Value, StringComparer.Ordinal))
+            .Select(match => text
+                .Substring(
+                    Math.Max(0, match.Index - 40),
+                    Math.Min(text.Length - Math.Max(0, match.Index - 40), 110))
+                .Replace('\n', ' '));
+
+    private static IEnumerable<(string Where, string Text)> StagedClaimScope()
+    {
+        string commands = Path.Combine(
+            SourceText.RepoRoot(),
+            "apps", "slate-windows", "src", "SlateWindows", "Commands");
+        string[] sources = Directory.GetFiles(commands, "*.cs", SearchOption.AllDirectories);
+        Assert.NotEmpty(sources);
+        foreach (string source in sources)
+        {
+            yield return (Path.GetFileName(source), File.ReadAllText(source));
+        }
+        string matrix = Path.Combine(
+            SourceText.RepoRoot(), "docs", "plans", "18_windows_port", "w_c_matrix.md");
+        Assert.True(File.Exists(matrix), $"the \u00a7W-C matrix is missing at {matrix}");
+        yield return ("w_c_matrix.md", File.ReadAllText(matrix));
+    }
+
     private static string Strip(string text) =>
         Regex.Replace(text, "\"[^\"]*\"", "\"\"");
 

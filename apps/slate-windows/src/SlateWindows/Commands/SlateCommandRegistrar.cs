@@ -462,9 +462,10 @@ internal static class SlateCommandRegistrar
             [ChordTable.Ids.BasesResultsPopover] = host => host.Workspace?.BasesResultsCommand,
             [ChordTable.Ids.BasesRefresh] = host => host.Workspace?.BasesRefreshCommand,
 
-            // Canvas (W6-1 #745, contract A18). showTable/showVisual
-            // resolve to a command whose CanExecute is false until PR B
-            // and PR D ship their projections.
+            // Canvas (W6-1 #745, contract A18). showVisual resolves to
+            // a command whose CanExecute is false until PR D ships the
+            // renderer; showTable's projection shipped in PR B, so its
+            // row is live.
             [ChordTable.Ids.CanvasShowOutline] =
                 host => host.Workspace?.CanvasShowOutlineCommand,
             [ChordTable.Ids.CanvasShowTable] =

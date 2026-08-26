@@ -177,12 +177,26 @@ internal sealed class CanvasNavigator
         _presenter = presenter;
     }
 
-    internal void DetachPresenter(ICanvasSurfacePresenter presenter)
+    /// <summary>
+    /// Detach, reporting whether this presenter WAS the attached one.
+    /// </summary>
+    /// <remarks>
+    /// The answer is what carries presenter affinity across a document
+    /// REPLACEMENT (an external rename retargets the tab, contract A1 /
+    /// CD-32): the surface detaches from the old navigator and has to
+    /// tell the new one that it is the pane the reader is working in.
+    /// Attachment otherwise needs a false→true keyboard-focus edge or a
+    /// canvas chord, and a replacement under a persistently-focused
+    /// filter field produces neither.
+    /// </remarks>
+    internal bool DetachPresenter(ICanvasSurfacePresenter presenter)
     {
-        if (ReferenceEquals(_presenter, presenter))
+        if (!ReferenceEquals(_presenter, presenter))
         {
-            _presenter = null;
+            return false;
         }
+        _presenter = null;
+        return true;
     }
 
     /// <summary>

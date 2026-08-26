@@ -1200,9 +1200,13 @@ Windows and mac differ here: mac's outline label spells `title`, this
 one spells `speakable_name`.)
 
 **A10 — The row's ItemStatus is the t0 §3 inspectability slot.**
-`⟨n⟩ of ⟨m⟩ in ⟨container‖canvas⟩[, ⟨color⟩][, marked]` — mac's
-`nodeValue` (`CanvasOutlineView.swift:309–318`) minus the `, filtered`
-clause, which has nothing to describe until PR C ships the filter.
+`⟨n⟩ of ⟨m⟩ in ⟨container‖canvas⟩[, ⟨color⟩][, marked][, filtered]` —
+mac's `nodeValue` (`CanvasOutlineView.swift:309–318`). The `, filtered`
+clause was staged: PR A had no filter to describe and this row said so,
+PR C shipped one (`CanvasOutlineRowViewModel.ForNode` passes
+`model.FilterActive` into `CanvasPhrase.RowStatus`), and the row was
+corrected in codex round 4 rather than at the time — which is why
+staged claims now have a guard of their own.
 `AutomationProperties.ItemStatus` is the Windows slot for mac's
 `accessibilityValue`; `TreeViewItem` supports no Value pattern, and the
 spec's "ItemStatus/Value" names the pair for exactly that reason.
@@ -2459,15 +2463,46 @@ the distinction governs BOTH ends of its life. The surface WITHDRAWS it
 when the reader leaves of their own accord (a pane change, a tab
 switch), and HOLDS it — retained, undelivered — while the reader is
 behind something layered over this tab: an open overlay, an open menu,
-or a deactivated window. Those three are exactly the departures the mode
-stack keeps a mode alive across, because the reader is coming back from
-them; delivering a restoration into one of them takes the keys off
-whatever they are actually using. The hold ends when focus returns to
-the surface or the window activates, and the landing is delivered then.
-Codex round 3, B1: the withdrawal existed alone for a round, and a
-distinction that governs one end of a lifecycle is half a distinction —
-this branch had already built the same shape once, as read-side and
-write-side terminality on the request properties.
+or a deactivated window.
+
+**The RETENTION set is not the mode stack's KEEP-ALIVE set**, and this
+row said it was for two waves. The mode stack's closed M4 table
+(`CanvasModeController.CancelsFor`) keeps a mode alive across exactly
+two departures — `ModalOverlay` and `MenuOpen` — and CANCELS on
+`WindowDeactivated` along with the two the restoration withdraws on. So
+retention is a strict superset, by one: a deactivated window is a reader
+who is coming back to this TAB, which is the restoration's question, and
+not a reader who is still in the middle of a mode, which is the stack's.
+Two questions, two tables, and the row that conflated them made the
+smaller one look like the bigger one's definition.
+
+**The hold ENDS on re-evaluation, not on delivery.** Focus returning to
+this surface, and the window activating, are the two moments that clear
+the departure edge and ask again — and asking again is all they do. The
+levels are consulted afterwards, so a landing whose window came forward
+while an overlay is still up, or while the keys are in another pane, is
+still held. Nothing here promises a seat; it promises that the question
+is re-asked whenever the answer can have changed.
+
+**And the cause can end somewhere the surface cannot see.** A departure
+is written when THIS surface loses focus, so the move that ends it — the
+menu closing and the reader clicking into another pane — raises nothing
+here. That landing used to be held for the pane's lifetime: neither
+delivered, nor withdrawn, nor completed. The surface therefore also
+watches its host WINDOW's keyboard focus, and when a menu/overlay hold is
+in force and the cause has ended, the DESTINATION decides: back here,
+clear and retry; anywhere else, the same withdrawal `Depart` would have
+made had it been able to see the move — routed through `Depart` itself,
+so the mode stack hears it too and stops keeping alive a mode across a
+menu the reader has left.
+
+Codex round 3's B1 and codex round 4's M2 are ONE ROW, and they are the
+two failure directions of one lifecycle: the withdrawal existed alone
+(theft — delivery on top of a reader who was elsewhere), and then the
+hold existed alone (starvation — a landing nothing could ever resolve).
+A rule that governs one end of a lifecycle is half a rule; this branch
+has now built that shape three times, counting read-side and write-side
+terminality on the request properties.
 
 Rungs 2 and 3 are registered ONCE by the navigator
 rather than by each surface, because two panes on one canvas would
@@ -7251,6 +7286,88 @@ mistake at two altitudes: a universal claim proved by enumerating the
 cases the author remembered. Whenever the conclusion is UNREACHABILITY,
 the enumeration IS the proof — so it comes from the tool (the call graph,
 core's match routes) or it does not come at all.
+
+### PR C-lite — codex adversarial round 4 — NOT SAFE, 1 blocker + 1 major + 2 minors
+
+Codex confirmed what the previous wave claimed where it could be checked:
+no `nameof`/reflection/XAML bypass of the announcer census, no conflict
+between the restored seat arm and the pre-ladder path, no mismatch in the
+delivered set. What it found was one live defect, one lifecycle half
+again, and two classes of record drift.
+
+- **B1 — a rename severed presenter affinity while the reader never
+  moved.** An external rename retargets the tab from document X to
+  document Y (CD-32); `OnModelChanged` detached the surface from X's
+  navigator and never introduced it to Y's. Attachment otherwise waits
+  for a false→true keyboard-focus edge or a canvas chord, and a reader
+  whose keys sit in the filter field produces neither — so every palette
+  movement verb afterwards moved the selection and SPOKE the motion while
+  `FocusRow` reached nobody. **The reader and the selection disagreeing
+  IS the contract (CD-40), and the recipe was an ordinary rename plus one
+  palette command.** `DetachPresenter` reports whether it WAS attached
+  now, and a replacement rebinds on that answer or on currently owning
+  the keys — the two senses in which the reader can be "in this pane"
+  while a document is swapped underneath them.
+- **M2 — and the restoration hold starved when its cause ended out of
+  sight.** A departure is written when THIS surface loses focus, so the
+  move that ENDS it is invisible: open a menu, then click into another
+  pane, and this surface hears nothing the second time. The landing was
+  then held for the pane's lifetime — never delivered, never withdrawn,
+  never completed, and holding the tab it was addressed to. The surface
+  watches its host WINDOW's keyboard focus now; while a menu/overlay hold
+  is in force and the cause has ended, the DESTINATION decides, routed
+  back through `Depart` so the mode stack hears the same thing and stops
+  keeping a mode alive across a menu the reader has left.
+
+  **Recorded as ONE ROW with round 3's B1, because they are one
+  lifecycle.** B1 was theft (delivery on top of a reader who was
+  elsewhere); M2 is starvation (a landing nothing could ever resolve).
+  Fixing one direction and stopping is what produced the other. That is
+  the third instance of the shape on this branch, after read-side vs
+  write-side terminality and withdrawal vs delivery — **a rule that
+  governs one end of a lifecycle is half a rule, and the missing half is
+  always the one nobody has a fact for.**
+- **Min3 — three records claimed more than the code does.** C6 said the
+  restoration's RETENTION set is "exactly" the mode stack's KEEP-ALIVE
+  set; it is a strict superset by one, because `WindowDeactivated`
+  CANCELS a mode (`CancelsFor`) while a deactivated window is still a
+  reader coming back to this TAB. C6 also promised DELIVERY on window
+  activation, when activation only clears the deactivation edge and the
+  levels are consulted afterwards — re-evaluation, not a seat. And the
+  levels' theory narrated a "palette-driven rung" it does not have:
+  `ClearFilter`, the palette's own clear, deliberately does not re-seat,
+  and with the keys outside the surface NO production route reaches
+  `FocusProjection`. One arm is a real route end to end (the overlay,
+  where the keys stay here); the other two drive the navigator's seam and
+  now say so. **A fact may not present a synthetic call as production
+  reachability** — the watch-form rule's cousin, and worth its own line
+  because a seam exercise is legitimate and a mislabelled one is not.
+- **Min4 — staged claims outlived their PRs, four at once.** A10's
+  "nothing to describe until PR C ships the filter" (the `, filtered`
+  clause has shipped), the §W-C outline row's ItemStatus string (same
+  clause), `ChordScope.Canvas`'s "no row is delivered at this scope until
+  PR C", and the registrar's "false until PR B and PR D ship their
+  projections" (Table shipped in PR B). All four sit OUTSIDE the
+  retired-vocabulary census's recorded boundaries, which is the honest
+  reading: those boundaries were chosen and written down, and the answer
+  to a claim outside them is another guard rather than a quiet widening.
+
+  `NoStagedClaimOutlivesThePrItNames` is that guard. The SHIPPED set is
+  derived from the contracts document's own PR section headings, so a
+  claim naming PR D stays legal until §D exists and fails on the day it
+  does — the day somebody is already editing this document. Sampled
+  scope, stated as sampled: the command surface and the §W-C matrix,
+  where all four misses were.
+
+**The pattern across rounds 3, 4 and the scoped review between them.**
+Every finding has been a claim that was true when written: "every caller
+is an Escape rung", "every route that matches G also matches P",
+"exactly the departures the mode stack survives", "nothing to describe
+until PR C". None was a coding error. The guards that now exist —
+retired vocabulary, staged claims, the announcer's acquisition rule —
+are all the same instrument pointed at the same failure: **prose ages
+against code, and the only prose that stays true is prose something
+executes.**
 
 ### PR C — the strategic lesson
 

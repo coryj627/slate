@@ -917,6 +917,184 @@ public sealed class CanvasNavigatorTests : IDisposable
         WindowDeactivation,
     }
 
+    /// <summary>
+    /// A held restoration is WITHDRAWN when the cause ends and the reader
+    /// turns out to have gone somewhere else.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The hold's edge is written by a departure FROM this surface, and a
+    /// departure only fires when this surface loses focus. So the move
+    /// that ends the cause is invisible to it: open a menu, then click
+    /// into another pane, and this surface hears nothing the second time.
+    /// The landing was then held for the pane's lifetime — never
+    /// delivered, never withdrawn, never completed. STARVATION, and the
+    /// exact mirror of the theft the hold was added to prevent.
+    /// </para>
+    /// <para>
+    /// Recorded as one pairing rather than two fixes: a lifecycle rule
+    /// that answers only one failure direction answers neither properly,
+    /// which is the third time this branch has met that shape (read-side
+    /// vs write-side terminality, withdrawal vs delivery, and now hold vs
+    /// release). The repair watches the WINDOW, because the destination
+    /// is the thing the surface cannot see.
+    /// </para>
+    /// </remarks>
+    [Theory]
+    [InlineData(RestorationHold.Menu)]
+    [InlineData(RestorationHold.Overlay)]
+    public void AHeldRestorationIsWithdrawnWhenTheReaderTurnsOutToHaveLeft(
+        RestorationHold cause) => RunSta(() =>
+    {
+        Func<bool> overlayWas = CanvasSurfaceView.ShellOverlayIsOpen;
+        ProbeWindow? menuHost = null;
+        try
+        {
+            var loading = new CanvasDocumentViewModel(
+                _session,
+                "board.canvas",
+                new CanvasAnnouncer(_announced.Add, TimeSpan.FromMinutes(1)),
+                synchronousForTests: true,
+                verbosity: () => _verbosity);
+            var tab = new object();
+            var pane = new CanvasSurfaceView { Model = loading, DataContext = tab };
+            var behindIt = new Button { Content = "the overlay's own field" };
+            var anotherPane = new Button { Content = "another pane" };
+            var root = new StackPanel();
+            root.Children.Add(pane);
+            root.Children.Add(behindIt);
+            root.Children.Add(anotherPane);
+            using ProbeWindow host = HostProbe(root);
+
+            // A restoration, deferred the ordinary way: Escape in
+            // `Loading` with nowhere to sit.
+            Assert.True(pane.FilterFieldForTests.Focus());
+            host.UpdateLayout();
+            Assert.True(PressKey(pane, Key.Escape, ModifierKeys.None));
+            host.UpdateLayout();
+            Assert.NotNull(loading.FocusRequest);
+
+            // The reader goes behind something they come back from, so
+            // the landing is HELD rather than withdrawn.
+            if (cause == RestorationHold.Menu)
+            {
+                var menu = new Menu();
+                var item = new MenuItem { Header = "Canvas", Focusable = true };
+                menu.Items.Add(item);
+                menuHost = HostProbe(menu);
+                Assert.True(item.Focus());
+            }
+            else
+            {
+                CanvasSurfaceView.ShellOverlayIsOpen = static () => true;
+                Assert.True(behindIt.Focus());
+            }
+            host.UpdateLayout();
+            Assert.NotNull(loading.FocusRequest);
+
+            // …and then it ends somewhere ELSE: the reader clicks
+            // straight into another pane. The keys go from the menu item
+            // (or the overlay's field) to `anotherPane` WITHOUT passing
+            // through this surface, which is the whole difficulty — this
+            // surface had already lost focus when the cause began, so it
+            // hears nothing at all about the move that ends it.
+            //
+            // The menu window is deliberately left open until the
+            // `finally`: disposing it first bounces focus back through
+            // this pane, and the arm would then pass through the ordinary
+            // withdrawal path while proving nothing about the starvation.
+            // (It did, for one revision.)
+            CanvasSurfaceView.ShellOverlayIsOpen = overlayWas;
+            Assert.True(anotherPane.Focus());
+            host.UpdateLayout();
+            Assert.False(
+                pane.IsKeyboardFocusWithin,
+                "the keys came back through this surface on the way, so the "
+                + "ordinary departure could have done the work.");
+
+            Assert.Null(
+                loading.FocusRequest);
+            Assert.False(
+                loading.HoldsPendingRequestsForTests,
+                "the landing is neither delivered nor withdrawn — it is "
+                + "starving, and it holds the tab it is addressed to with it.");
+
+            // The load finishes and finds nothing to seat, which is the
+            // consumer-visible half: the reader stays where they chose.
+            loading.Load();
+            host.UpdateLayout();
+            Assert.True(
+                anotherPane.IsKeyboardFocused,
+                "the publish pulled the reader back into a canvas they had "
+                + "left by way of a menu (contract A14).");
+            Assert.False(pane.ProjectionHasFocus);
+            loading.Shutdown();
+        }
+        finally
+        {
+            CanvasSurfaceView.ShellOverlayIsOpen = overlayWas;
+            menuHost?.Dispose();
+        }
+    });
+
+    /// <summary>
+    /// Moving WITHIN an open menu is not the reader going somewhere.
+    /// </summary>
+    /// <remarks>
+    /// The other side of the reclassification above, and the reason it
+    /// asks whether the cause has ended before it asks where the keys
+    /// went: a menu raises the window's focus event on every item the
+    /// reader arrows through. A rule that read each of those as a
+    /// destination would withdraw the landing on the first keystroke
+    /// inside the menu the reader opened to keep it.
+    /// </remarks>
+    [Fact]
+    public void MovingWithinAnOpenMenuDoesNotWithdrawTheHeldRestoration() => RunSta(() =>
+    {
+        var loading = new CanvasDocumentViewModel(
+            _session,
+            "board.canvas",
+            new CanvasAnnouncer(_announced.Add, TimeSpan.FromMinutes(1)),
+            synchronousForTests: true,
+            verbosity: () => _verbosity);
+        var pane = new CanvasSurfaceView { Model = loading, DataContext = new object() };
+        var menu = new Menu();
+        var first = new MenuItem { Header = "Commit mode", Focusable = true };
+        var second = new MenuItem { Header = "Cancel mode", Focusable = true };
+        menu.Items.Add(first);
+        menu.Items.Add(second);
+        var root = new StackPanel();
+        root.Children.Add(pane);
+        root.Children.Add(menu);
+        using var host = Host(root);
+
+        Assert.True(pane.FilterFieldForTests.Focus());
+        host.UpdateLayout();
+        Assert.True(PressKey(pane, Key.Escape, ModifierKeys.None));
+        host.UpdateLayout();
+        Assert.NotNull(loading.FocusRequest);
+
+        Assert.True(first.Focus());
+        host.UpdateLayout();
+        Assert.NotNull(loading.FocusRequest);
+
+        // The reader arrows to the next item. Same menu, same intention.
+        Assert.True(second.Focus());
+        host.UpdateLayout();
+        Assert.NotNull(loading.FocusRequest);
+
+        // …and the landing is still THEIRS when they come back.
+        _ = pane.FilterFieldForTests.Focus();
+        host.UpdateLayout();
+        loading.Load();
+        host.UpdateLayout();
+        Assert.True(
+            pane.ProjectionHasFocus,
+            "the landing was withdrawn while the reader was still inside the "
+            + "menu they opened to keep it.");
+        loading.Shutdown();
+    });
+
     /// <summary>Which LEVEL of `RestorationMustWait` answers — named
     /// apart from <see cref="RestorationHold"/> because these three are
     /// arrangements with no departure edge at all.</summary>
@@ -928,32 +1106,41 @@ public sealed class CanvasNavigatorTests : IDisposable
     }
 
     /// <summary>
-    /// A restoration RECORDED while the reader is already away is held
-    /// too — by the levels, with no departure edge to help.
+    /// Each LEVEL of `RestorationMustWait` answers on its own, with no
+    /// departure edge to help — one arm through the production route, two
+    /// through the navigator's own seam, labelled.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// The theory above sets the EDGE in all three of its arms, so the
-    /// three LEVELS in `RestorationMustWait` could be deleted without
-    /// turning a single case red — a guard whose removal changes nothing
-    /// observable, which is the standard this wave applied when it
-    /// deleted a seat-rule arm. This is the arrangement the levels exist
-    /// for and the edge cannot reach: the reader leaves BEFORE any
-    /// restoration exists (so `Depart` has nothing to retain and records
-    /// nothing), and only then does a palette-driven rung ask for a seat
-    /// the surface cannot give — the navigator keeps its attached
-    /// presenter across a palette invocation, which is what makes that
-    /// reachable.
+    /// The edge theory above sets `_awayBecause` in all three of its
+    /// arms, so the three LEVELS could be deleted without turning a case
+    /// red — a guard whose removal changes nothing observable. This
+    /// theory is what earns them, and each arm is arranged so that ITS
+    /// level is the one that answers: `||` short-circuits in written
+    /// order, so overlay is asked before menu and menu before
+    /// keys-outside.
     /// </para>
     /// <para>
-    /// Each arm is arranged so that ITS level is the one that answers,
-    /// which took some care: `||` short-circuits in written order, so
-    /// overlay is asked before menu and menu before keys-outside. The
-    /// overlay arm therefore leaves the keys IN the surface (a separate
-    /// top-level overlay window does not clear this window's
-    /// focus-within, and the shell flag is the only thing that knows),
-    /// and the menu arm puts its menu in ANOTHER window — which is what
-    /// a WPF menu popup actually is, and what makes it invisible to the
+    /// **What is production-reachable, and what is a seam.** The OVERLAY
+    /// arm is a real route end to end: the keys stay in this surface (a
+    /// separate top-level overlay window does not clear this window's
+    /// focus-within, and the shell flag is the only thing that knows), so
+    /// the press goes through `OnPreviewKeyDown` exactly as a reader's
+    /// Escape does. The MENU and KEYS-OUTSIDE arms cannot: with the keys
+    /// outside this surface no production route reaches
+    /// `FocusProjection` at all — its callers are Escape rungs 2 and 3
+    /// and the CD-47 dismissal, and all three need the press, while no
+    /// palette row touches it (`ClearFilter`, the palette's own clear,
+    /// deliberately does not re-seat). Those two arms therefore drive
+    /// `CanvasNavigator.HandleKey` directly, which is the SEAM and not
+    /// the route, and they are here as the levels' unit exercise rather
+    /// than as a reachability claim. Codex round 4, Min3: a fact may not
+    /// present a synthetic call as production reachability, so this says
+    /// which is which.
+    /// </para>
+    /// <para>
+    /// The menu arm puts its menu in ANOTHER window — which is what a WPF
+    /// menu popup actually is, and what makes it invisible to the
     /// keys-outside level.
     /// </para>
     /// </remarks>
@@ -961,7 +1148,7 @@ public sealed class CanvasNavigatorTests : IDisposable
     [InlineData(RestorationLevel.Overlay)]
     [InlineData(RestorationLevel.Menu)]
     [InlineData(RestorationLevel.KeysOutside)]
-    public void ARestorationRecordedWhileAlreadyAwayIsHeldByTheLevels(
+    public void EachLevelOfTheRestorationHoldAnswersOnItsOwn(
         RestorationLevel level) => RunSta(() =>
     {
         Func<bool> overlayWas = CanvasSurfaceView.ShellOverlayIsOpen;
@@ -1009,13 +1196,20 @@ public sealed class CanvasNavigatorTests : IDisposable
             }
             host.UpdateLayout();
 
-            // Now the verb asks for a seat the surface cannot give. Rung
-            // 2 through the navigator, which is the palette's route and
-            // does not need this surface to hold the keys.
+            // Now the verb asks for a seat the surface cannot give:
+            // rung 2, which clears the needle and re-seats.
             loading.FilterText = "zzz";
             host.UpdateLayout();
             Assert.True(
-                loading.Navigator.HandleKey(Key.Escape, ModifierKeys.None, surface),
+                level == RestorationLevel.Overlay
+                    // The ROUTE: the keys are still here, so this is the
+                    // reader's own Escape through `OnPreviewKeyDown`.
+                    ? PressKey(surface, Key.Escape, ModifierKeys.None)
+                    // The SEAM: with the keys elsewhere no production
+                    // route reaches the rung, so these two arms exercise
+                    // the levels through the navigator directly and say
+                    // so rather than dressing it up as a reader.
+                    : loading.Navigator.HandleKey(Key.Escape, ModifierKeys.None, surface),
                 "rung 2 declined the press, so nothing deferred a landing and "
                 + "this fact would be about nothing.");
             host.UpdateLayout();

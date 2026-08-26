@@ -60,11 +60,11 @@ internal enum ChordScope
 
     /// <summary>The canvas projections' own key handling (W6-1 #745,
     /// rule R2: typing keys and arrows act only while a canvas
-    /// projection has keyboard focus). No row is delivered at this
-    /// scope until PR C ships the navigator — PR A's three surface
-    /// commands are palette- and menu-only, so they carry no chord and
-    /// <see cref="ChordScope.None"/> through <c>Reg</c>'s own
-    /// rule.</summary>
+    /// projection has keyboard focus). PR C ships the navigator and its
+    /// rows are delivered here, from the surface's tunnelling handler.
+    /// PR A's three surface commands remain palette- and menu-only, so
+    /// they carry no chord and <see cref="ChordScope.None"/> through
+    /// <c>Reg</c>'s own rule.</summary>
     Canvas,
 }
 

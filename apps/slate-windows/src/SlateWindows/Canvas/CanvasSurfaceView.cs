@@ -625,6 +625,7 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         {
             _hostWindow = window;
             _hostWindow.Deactivated += OnWindowDeactivated;
+            _hostWindow.GotKeyboardFocus += OnHostFocusMoved;
             // The other half of the deactivation: a restoration held
             // while the window was away is deliverable again the moment
             // it comes back, and nothing else re-asks on that edge.
@@ -639,6 +640,7 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         {
             window.Deactivated -= OnWindowDeactivated;
             window.Activated -= OnWindowActivated;
+            window.GotKeyboardFocus -= OnHostFocusMoved;
             _hostWindow = null;
         }
         Model?.Navigator.DetachPresenter(this);
@@ -730,9 +732,12 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
     /// <c>Menu</c> and <c>ContextMenu</c>, which is exactly the pair this
     /// arm is about.
     /// </remarks>
-    private static bool FocusIsInAMenu()
+    private static bool FocusIsInAMenu() =>
+        FocusIsInAMenu(Keyboard.FocusedElement);
+
+    private static bool FocusIsInAMenu(IInputElement? focused)
     {
-        for (DependencyObject? node = Keyboard.FocusedElement as DependencyObject;
+        for (DependencyObject? node = focused as DependencyObject;
             node is not null;
             node = LogicalTreeHelper.GetParent(node)
                 ?? (node is System.Windows.Media.Visual
@@ -763,6 +768,10 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         {
             model.CompleteFocusLanding(deferred);
             _deferredRestoration = null;
+            // Nothing is left for the hold to govern, and leaving a
+            // stale departure behind is how the reclassification below
+            // would later read a withdrawal as a wait.
+            _awayBecause = null;
         }
         else if (_deferredRestoration is not null
             && departure is CanvasFocusDeparture.ModalOverlay
@@ -782,6 +791,61 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
             _awayBecause = departure;
         }
         _ = Model?.Modes.HandleFocusDeparture(departure);
+    }
+
+    /// <summary>
+    /// The reader's keys landed somewhere in this WINDOW. If a held
+    /// restoration is waiting on a cause that has now ended, this is
+    /// where it is re-decided (contract C6/A14).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The hold's edge is set by a departure from THIS surface, and a
+    /// departure only fires when this surface loses focus. So the move
+    /// that ENDS the cause is invisible here: a reader who opens a menu
+    /// and then clicks into another pane raises no second event on this
+    /// surface, and the hold would persist for the pane's lifetime —
+    /// never delivered, never withdrawn, never completed. Starvation, and
+    /// the exact mirror of the theft the hold was added to prevent: one
+    /// lifecycle, two failure directions, and a rule that answers only
+    /// one of them answers neither properly.
+    /// </para>
+    /// <para>
+    /// Watching the WINDOW is what makes the destination observable. The
+    /// cause still being up is not a decision — moving between menu items
+    /// raises this repeatedly — so it returns; otherwise the destination
+    /// decides, and it is the same decision `Depart` would have made had
+    /// it been able to see the move: back here, clear and retry; anywhere
+    /// else, the reader went somewhere, which is a withdrawal.
+    /// </para>
+    /// </remarks>
+    private void OnHostFocusMoved(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        ArgumentNullException.ThrowIfNull(e);
+        if (_deferredRestoration is null
+            || _awayBecause is not (CanvasFocusDeparture.MenuOpen
+                or CanvasFocusDeparture.ModalOverlay))
+        {
+            return;
+        }
+        if (ShellOverlayIsOpen() || FocusIsInAMenu(e.NewFocus))
+        {
+            return;
+        }
+        if (IsKeyboardFocusWithin)
+        {
+            // Handled by the focus-within edge too; harmless twice, and
+            // this is the arm that keeps the two paths agreeing.
+            _awayBecause = null;
+            TryDeliverPending();
+            return;
+        }
+        // The menu or overlay closed and the keys went ELSEWHERE. Routed
+        // through the one classifier rather than withdrawing here, so the
+        // mode stack hears the same thing the restoration does — it has
+        // been holding a mode alive across a menu the reader has now
+        // left, which is the same starvation one object over.
+        Depart(CanvasFocusDeparture.PaneFocus);
     }
 
     /// <summary>The A14 landing THIS surface deferred for itself when it
@@ -895,13 +959,14 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         var view = (CanvasSurfaceView)d;
+        bool wasTheAttachedPane = false;
         if (e.OldValue is CanvasDocumentViewModel oldModel)
         {
             oldModel.PropertyChanged -= view.OnModelPropertyChanged;
             oldModel.OutlinePublished -= view.OnOutlinePublished;
             oldModel.Selection.PropertyChanged -= view.OnSelectionPropertyChanged;
             oldModel.Modes.PropertyChanged -= view.OnModePropertyChanged;
-            oldModel.Navigator.DetachPresenter(view);
+            wasTheAttachedPane = oldModel.Navigator.DetachPresenter(view);
         }
         view._outline.Model = e.NewValue as CanvasDocumentViewModel;
         view._table.Model = e.NewValue as CanvasDocumentViewModel;
@@ -911,6 +976,28 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
             model.OutlinePublished += view.OnOutlinePublished;
             model.Selection.PropertyChanged += view.OnSelectionPropertyChanged;
             model.Modes.PropertyChanged += view.OnModePropertyChanged;
+            // REBIND the affinity the detach above just severed. A model
+            // REPLACEMENT is not a fresh pane: an external rename
+            // retargets this tab from document X to document Y (CD-32)
+            // while the reader is sitting in it, and the new navigator
+            // has never seen this surface. Attachment otherwise waits for
+            // a false→true keyboard-focus edge or a canvas chord — and a
+            // reader whose keys never leave the filter field produces
+            // neither, so every palette movement verb afterwards would
+            // move the selection and SPEAK the motion while
+            // `_presenter?.FocusRow` did nothing at all. The reader and
+            // the selection disagreeing IS the broken contract (CD-40),
+            // and an ordinary rename plus one palette command was the
+            // whole recipe.
+            //
+            // Two clauses, because the reader can be in this pane in two
+            // senses: they own the keys NOW, or they owned them last and
+            // something transient (a palette, a menu) is holding them
+            // while the replacement lands.
+            if (wasTheAttachedPane || view.IsKeyboardFocusWithin)
+            {
+                model.Navigator.AttachPresenter(view);
+            }
             view.TryDeliverFilterFocus();
         }
         view.Render();

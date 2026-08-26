@@ -2118,6 +2118,85 @@ public sealed class CanvasDocumentTests : IDisposable
     // --- M2: focus lands when the user asks, and only then -----------------
 
     /// <summary>
+    /// A retarget replaces the document under a reader who never moved,
+    /// and the movement verbs still seat them.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Presenter attachment needs a false→true keyboard-focus edge or a
+    /// canvas chord, and an external rename produces neither: the tab
+    /// survives, the reader's keys never leave the filter field, and
+    /// `OnModelChanged` detached the surface from X's navigator without
+    /// ever introducing it to Y's. Every palette movement verb afterwards
+    /// moved the selection and SPOKE the motion while `FocusRow` reached
+    /// nobody — the reader hears "card 2 of 5" and the keys are still in
+    /// the filter field. That is CD-40's contract (the reader and the
+    /// selection agree) broken by an ordinary rename plus one palette
+    /// command.
+    /// </para>
+    /// <para>
+    /// The premise below is the same verb BEFORE the rename, so a failure
+    /// here is the replacement and not the verb.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void ARetargetKeepsThePaneTheReaderIsWorkingIn() => RunSta(() =>
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel before =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        var surface = new CanvasSurfaceView { DataContext = tab, Model = tab.Canvas };
+        using var host = Host(surface);
+
+        // The reader is in the filter field, which is where they stay.
+        Assert.True(surface.FilterFieldForTests.Focus());
+        host.UpdateLayout();
+        // PREMISE: the verb seats them today, so the attachment exists
+        // and this fact is about what the replacement does to it.
+        before.Navigator.NextCard();
+        host.UpdateLayout();
+        Assert.True(
+            surface.ProjectionHasFocus,
+            "the movement verb did not seat the reader even before the "
+            + "rename, so this fact would be about the verb.");
+        Assert.True(surface.FilterFieldForTests.Focus());
+        host.UpdateLayout();
+
+        File.Move(
+            Path.Combine(_fixture.Root, "board.canvas"),
+            Path.Combine(_fixture.Root, "renamed.canvas"));
+        workspace.RetargetPath("board.canvas", "renamed.canvas");
+        // What the tab template's binding does; the reader did nothing.
+        surface.Model = tab.Canvas;
+        host.UpdateLayout();
+        CanvasDocumentViewModel after =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        Assert.NotSame(before, after);
+        Assert.Equal(CanvasLoadState.Ready, after.State);
+        Assert.True(
+            surface.FilterFieldForTests.IsKeyboardFocused,
+            "the retarget moved the reader, which is a different defect.");
+
+        after.Navigator.NextCard();
+        host.UpdateLayout();
+
+        Assert.True(
+            surface.ProjectionHasFocus,
+            "the verb moved the selection and spoke the motion while the "
+            + "keys stayed in the filter field — the reader and the "
+            + "selection disagree (CD-40), because the replacement "
+            + "document's navigator never met this surface.");
+        var seated = Assert.IsType<CanvasOutlineItem>(
+            System.Windows.Input.Keyboard.FocusedElement);
+        CanvasOutlineRowViewModel row =
+            Assert.IsType<CanvasOutlineRowViewModel>(seated.DataContext);
+        Assert.Equal(after.Selection.Selected, row.Id);
+    });
+
+    /// <summary>
     /// A retarget publishes without anyone asking, and must not pull
     /// focus out of whatever the user was doing — the invariant the
     /// old code's own comment stated and broke, because focus was a
