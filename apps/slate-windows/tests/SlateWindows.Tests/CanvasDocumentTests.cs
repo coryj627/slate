@@ -156,7 +156,6 @@ public sealed class CanvasDocumentTests : IDisposable
             + "a request nobody can ever deliver.");
     });
 
-
     [Fact]
     public void OneDocumentIsSharedByEveryTabOnThePath()
     {

@@ -456,11 +456,11 @@ internal sealed class CanvasNavigator
         // ONE view, and BOTH numbers read on this frame. The filter is
         // SYNCHRONOUS here (contract C10 interim), so nothing lands
         // BETWEEN the numerator and the denominator: they are one
-        // dispatcher turn's worth of state. That is what this guarantees
-        // and all it guarantees — during a reload the handle can already
-        // be the new canvas's while the rows on screen are still the old
-        // one's, so the PAIR is coherent and the CANVAS it describes can
-        // be a mixture. C10 records that as the interim's second cost.
+        // dispatcher turn's worth of state. The mixed-canvas window this
+        // comment used to warn about is gone — the getter returns before
+        // it queries whenever the document is not rendering rows, so
+        // there is no answer to take against a handle a reload has
+        // already swapped.
         CanvasFilterView view = _document.Filter;
         uint shown = (uint)view.Rows.Count;
         uint total = (uint)_document.Outline.Count;
@@ -485,7 +485,14 @@ internal sealed class CanvasNavigator
                 ? new CanvasFilterState.Active(shown, total)
                 : new CanvasFilterState.Inactive());
         // The panel shows the SAME string the announcement speaks — one
-        // render, no second composition (t0 §1.4/§3).
+        // render, no second composition (t0 §1.4/§3). The pairing has one
+        // narrow exception the announce boundary introduced: on a RETIRED
+        // document whose handle close has not landed yet, admission can
+        // still admit, so the panel string is composed while `Speak`
+        // refuses the line. Nobody is looking at that panel — a retired
+        // document has no surface — and the alternative is composing a
+        // sentence for a closed funnel, which is the trade C7 already
+        // took for the mode stack. Recorded rather than papered over.
         _document.WhereAmIText = CanvasAnnouncer.RenderLabel(readback);
         Announce(readback);
     }
@@ -581,9 +588,11 @@ internal sealed class CanvasNavigator
     /// cause — no handle could answer — and it is the cause the state
     /// mapping already has a sentence for. There is no in-flight frame to
     /// describe and no failed-query state to distinguish, which is why
-    /// this is two branches rather than four. What it does NOT rule out
-    /// is a count taken against a handle a reload has already swapped;
-    /// C10 records that cost rather than this comment claiming it away.
+    /// this is two branches rather than four. The count taken against a
+    /// swapped handle — which this comment used to defer to C10 — is no
+    /// longer reachable either: the view is not current while the
+    /// document is not rendering rows, so during a reload there is no
+    /// query to take.
     /// </remarks>
     public string FilterSummaryText()
     {

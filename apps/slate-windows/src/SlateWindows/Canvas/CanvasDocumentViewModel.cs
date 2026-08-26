@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using SlateWindows.Panels;
 using uniffi.slate_uniffi;
 
@@ -416,7 +417,35 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     public CanvasFocusRequest? FocusRequest
     {
         get => IsShutDown ? null : _focusRequest;
-        private set => SetField(ref _focusRequest, value);
+        private set => SetRequest(ref _focusRequest, value);
+    }
+
+    /// <summary>
+    /// `SetField` for a request: change detection by REFERENCE, because
+    /// that is what a request IS to everything that reads it.
+    /// </summary>
+    /// <remarks>
+    /// The requests are records, so `SetField`'s value equality made an
+    /// identical re-raise a silent no-op — a reader who invokes Ctrl+F
+    /// twice while the first request is still pending got no second
+    /// notification, so the surfaces' request-property trigger never
+    /// fired. That was impossible while the requests carried a
+    /// generation counter, and became reachable the moment the counter
+    /// was dropped for a reference comparison; the completion side
+    /// already compares identity, and this makes the notification side
+    /// agree with it. Raising the SAME instance twice is still silent,
+    /// which is the case the equality check exists for.
+    /// </remarks>
+    private void SetRequest<T>(
+        ref T? field, T? value, [CallerMemberName] string? name = null)
+        where T : class
+    {
+        if (ReferenceEquals(field, value))
+        {
+            return;
+        }
+        field = value;
+        OnPropertyChanged(name);
     }
 
     /// <param name="owner">
@@ -913,7 +942,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     public CanvasFilterFocusRequest? FilterFocusRequest
     {
         get => IsShutDown ? null : _filterFocusRequest;
-        private set => SetField(ref _filterFocusRequest, value);
+        private set => SetRequest(ref _filterFocusRequest, value);
     }
 
     /// <summary>

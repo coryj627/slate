@@ -1045,7 +1045,18 @@ takes. The footer renders only under `Ready`: a parse error's state
 message IS its single `ParseFailed` detail (A3), so listing it below
 would say the same sentence twice.
 
-**A5 — `CanvasAnnouncer` is a relay and a clock, and nothing else.**
+**A5 — `CanvasAnnouncer` is a relay and a clock, and nothing else —
+and it publishes its RETIREMENT so speakers can ask.** `IsRetired` is
+the fact a composer checks before building a sentence: PR C-lite gave
+the canvas one announce boundary (`CanvasDocumentViewModel.Speak`, which
+the navigator and the mode stack both use) and its condition is this
+predicate rather than the document's own shutdown flag, because C7's
+teardown marks the document first and then drains the mode stack, whose
+restoration is the last sentence a retirement owes. The `Debug.Fail`
+below stays: the boundary stops the SPEAKER, and anything that still
+reaches the funnel afterwards is a defect worth being loud about —
+`RefusedAfterShutdownForTests` counts them so the claim is assertable in
+Release too, where `Debug.Fail` is silent.
 R-C. It takes a typed `CanvasA11yEvent`, wraps it in
 `A11yEvent.Canvas`, renders it through `SlateUniffiMethods.A11yRender`,
 and posts the rendered `(text, priority)` pair. The class keys are the
@@ -1316,13 +1327,30 @@ the sites and write the design.
 **The design.**
 
 1. **The request is state, not an edge.** `CanvasFocusRequest
-   { Owner, NodeId, Generation }` lives on the document as
-   `FocusRequest`. `RequestActiveEditorFocus` — the one funnel every
-   user-initiated open calls and no background path does — raises it,
-   addressed to the tab that asked. It stays pending until a surface
-   delivers it and says so (`CompleteFocusLanding`), and a newer request
-   supersedes an older one by generation, so a late delivery of a
-   superseded request cannot clear a live one.
+   { Owner, NodeId }` lives on the document as `FocusRequest`.
+   `RequestActiveEditorFocus` — the one funnel every user-initiated open
+   calls and no background path does — raises it, addressed to the tab
+   that asked. It stays pending until a surface delivers it and says so
+   (`CompleteFocusLanding`), and a newer request supersedes an older one
+   because raising OVERWRITES: completion compares the pending RECORD by
+   reference, so a late delivery of a superseded request cannot clear a
+   live one. (It carried a generation counter until PR C-lite's codex
+   round 2, which pointed out that an int comparison has an ABA window a
+   reference comparison does not — and the contract was already that a
+   surface hands back the instance it was given.)
+
+   **Its LIFECYCLE has two boundaries the original design did not
+   record**, both added by PR C-lite and both found by review rather
+   than by the change that needed them. TERMINALITY is answered on the
+   read AND on the write: a retired document reports no request and
+   REFUSES to store one, because the read alone hid a late write that
+   repopulated the closed tab's owner — the very reference retirement
+   drops. And a request outlives its OWNER only until the tab set
+   changes: two panes share a document, so closing the pane that asked
+   leaves a request no peer may take and nothing supersedes, holding
+   that tab's graph. The workspace drops it where the tab set changes,
+   not in `Unloaded`, which also fires when a pane is merely hidden and
+   whose request must survive.
 2. **Every surface retries on every condition that can change the
    answer**: the model changing, a publish landing, the view loading,
    the view becoming visible, the request being raised, the tree
@@ -2374,7 +2402,16 @@ rung.
 Rung 3's effect is a focus move and is deliberately unannounced: the
 screen reader reads what focus lands on, and a line on top of that is
 the t0 §1.5 doubling rule broken on a dismissal (the same reasoning as
-A12's silent seat). Rungs 2 and 3 are registered ONCE by the navigator
+A12's silent seat). The move is STATE-AWARE, which PR C-lite's codex
+round 2 forced: `Render` collapses both projections under `Loading` and
+under every failure state, so "back to the projection" was a move to
+something that is not there — the keys stayed on the window root with
+the press already consumed. It lands on the projection when the state
+renders rows, else on the region the state does show (the failure
+banner), else it leaves the reader in the field and defers an addressed
+A14 landing that the publish delivers. That deferred landing is a
+RESTORATION rather than an instruction, so the surface withdraws it if
+the reader goes elsewhere first. Rungs 2 and 3 are registered ONCE by the navigator
 rather than by each surface, because two panes on one canvas would
 otherwise claim one rung twice and the order would depend on which pane
 mounted first; `RegisterRung` refuses a duplicate and refuses rungs 1
@@ -2513,6 +2550,16 @@ left to run, and rung 1 refuses because `Cancel` does. A check inside
 `HandleEscape` would answer the same `WorkspaceTab` the empty ladder
 already answers, and a guard with no power is a claim this task has
 learned the cost of.
+
+**The boundary has one recorded consequence, and it is the pairing.**
+Where-am-I renders the panel string and then announces the same event
+(t0 §1.4/§3: one render, no second composition). On a RETIRED document
+whose handle close has not landed, admission can still admit — so the
+panel string is composed while the boundary refuses the line, and the
+pairing is broken for one caller nobody can see, since a retired
+document has no surface. The alternative is composing a sentence for a
+closed funnel, which is the trade C7 already took for the mode stack.
+Recorded rather than papered over.
 
 **The DOCUMENT has an announce boundary too, and the stack is handed
 it.** Sixteen announce sites live on the document, the navigator adds
@@ -4561,13 +4608,27 @@ CARD is not the end while its connection row is still below the cursor.
 **CD-45 — A filtered-out group's survivor is promoted to a ROOT; the
 "nearest surviving ancestor" case cannot occur.** The implementation
 walks to the nearest surviving ancestor and falls to the root, which is
-the safe general form and costs nothing — but core's matcher includes
-ANY ELEMENT OF THE GROUP PATH (0b-13/0b-14), so a group that matches
-carries every descendant with it, and an ancestor can never survive a
-needle its own children fail. Promotion to the root is the only
-reachable outcome. This row used to claim a fact pinned both halves;
+the safe general form and costs nothing — but the intermediate case
+cannot be reached, and the reason has to be stated exactly because the
+obvious version of it is false.
+
+**The true lemma is that a matching group carries every descendant
+GROUP**, not every descendant. Core matches on four routes (0b-13/0b-14)
+— title, the kind type word, any element of the group path, and the
+activation target — and the needle `group` refutes the broad claim: it
+matches a parent group by its KIND word while a text card inside it
+matches nothing. What survives is the narrow lemma, and it is enough:
+for a group G inside a parent group P, every route that matches G also
+matches P (G's group path contains P's title, G's kind word is P's,
+G's own title is P's descendant path, and a group's target is empty), so
+P survives whenever G does. A CARD's parent is therefore the only
+ancestor it can lose, and losing it makes the card a root — never a
+grandchild looking for a grandparent. Promotion to the root is the only
+reachable outcome.
+
+This row used to claim a fact pinned both halves;
 `AMatchingGroupCarriesItsDescendantsSoNoAncestorGapExists` pins the
-reachability instead, which is what can be held true. The Windows
+lemma instead, which is what can be held true. The Windows
 outline NESTS (CD-33) and the filter is a row subset, so a card whose
 containing group did not match cannot sit under it. The alternative —
 indenting it under a group that is not on screen — would claim a
@@ -6804,6 +6865,51 @@ correctly and did not ask what the items did to each other.
   a cost row keeps claiming it until someone re-reads it. **That is the
   describes-what-it-changed rule pointing at a row the change did not
   touch** — the sweep has to follow the MECHANISM, not the diff.
+
+### PR C-lite — codex round 2's closing pass
+
+Extends the entry above; no shipped-behaviour blocker, and every item is
+a consequence of that wave rather than a new subsystem.
+
+- **The B2 fix introduced a focus-steal vector, in the class A14 exists
+  to prevent.** The durable landing it defers had no reader-location
+  guard, so a load finishing after the reader had moved elsewhere pulled
+  them back into the canvas. The landing is a RESTORATION, not an
+  instruction — it exists only because the reader was already there — so
+  the surface WITHDRAWS it when they leave of their own accord
+  (`PaneFocus`/`TabSwitch`, never a window deactivation or an overlay
+  they are coming back from). A shell-raised landing is untouched.
+- **The describes-what-it-changed rule, applied to the wave's own
+  mechanisms.** A14 still documented a `Generation` field that had been
+  deleted and recorded neither the write-side terminality nor the
+  tab-set cancellation the wave added; C6's rung-3 row still promised
+  "focus back to the projection"; A5 was cited by the code for a
+  predicate it did not record; two navigator comments still deferred to
+  a C10 cost C10 now calls impossible. All swept. The rule caught Min2's
+  row last wave and missed four of its own — which is the same failure
+  one level up, and worth saying so.
+- **CD-45's lemma was broader than the code supports.** "A matching
+  group carries every descendant" is refuted by the needle `group`,
+  which matches a parent by its KIND word while a text card inside it
+  matches nothing. The true lemma is "carries every descendant GROUP",
+  and it is enough: every route that matches a group also matches its
+  parent group, so a CARD's own parent is the only ancestor it can lose,
+  and losing it makes the card a root. Stated in the row and in the
+  fact.
+- **Two consequences of replacing the generation counter, both
+  untested until now.** Supersession had no fact at all — and the one
+  written first used different owners, so value equality would have
+  passed it; it uses a VALUE-EQUAL pair now, which is the ABA case the
+  counter used to hide. And an identical re-raise had become a silent
+  no-op, because records have value equality and `SetField` saw "no
+  change": a reader pressing Ctrl+F twice got no second notification.
+  Change detection for the request properties is by REFERENCE now, so
+  the notification side agrees with the completion side.
+- Recorded rather than fixed: the announce boundary breaks t0 §1.4's
+  panel/announcement pairing for one caller — Where-am-I on a retired
+  document composes the panel string while the boundary refuses the
+  line. Nobody can see that panel, and the alternative is composing for
+  a closed funnel.
 
 ### PR C-lite — the gate-integrity incident, and the rule that came out of it
 

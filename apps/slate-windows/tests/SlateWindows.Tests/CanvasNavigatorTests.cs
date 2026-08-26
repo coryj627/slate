@@ -616,6 +616,164 @@ public sealed class CanvasNavigatorTests : IDisposable
     });
 
     /// <summary>
+    /// A newer request supersedes an older one, and the older one's late
+    /// delivery cannot clear it.
+    /// </summary>
+    /// <remarks>
+    /// Supersession went untested through the change that replaced the
+    /// generation counter with a reference comparison — the mechanism
+    /// changed and the property it exists for had no fact. Raising
+    /// OVERWRITES, and completion compares the pending RECORD by
+    /// reference, so a surface that finally delivers request A after B
+    /// has been raised reports A and clears nothing.
+    /// </remarks>
+    [Fact]
+    public void ALateDeliveryOfASupersededRequestClearsNothing()
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        var tabA = new object();
+        var tabB = new object();
+
+        // The SAME owner twice, which is the case that matters: the two
+        // requests are VALUE-EQUAL and distinct instances, so a
+        // comparison by value cannot tell the superseded one from the
+        // live one — the ABA window that dropping the generation counter
+        // opened, and the reason completion compares identity.
+        document.RequestFocusLanding(tabA);
+        CanvasFocusRequest first =
+            Assert.IsType<CanvasFocusRequest>(document.FocusRequest);
+        document.RequestFocusLanding(tabA);
+        CanvasFocusRequest second =
+            Assert.IsType<CanvasFocusRequest>(document.FocusRequest);
+        Assert.NotSame(first, second);
+        Assert.Equal(first, second);
+
+        // The FIRST request's surface finally delivers.
+        document.CompleteFocusLanding(first);
+        Assert.Same(
+            second,
+            document.FocusRequest);
+
+        // …and the live one still completes normally.
+        document.CompleteFocusLanding(second);
+        Assert.Null(document.FocusRequest);
+
+        // The filter twin, same shape and the same value-equal pair.
+        document.RequestFilterFocus(tabB);
+        CanvasFilterFocusRequest firstFilter =
+            Assert.IsType<CanvasFilterFocusRequest>(document.FilterFocusRequest);
+        document.RequestFilterFocus(tabB);
+        CanvasFilterFocusRequest secondFilter =
+            Assert.IsType<CanvasFilterFocusRequest>(document.FilterFocusRequest);
+        document.CompleteFilterFocus(firstFilter);
+        Assert.Same(secondFilter, document.FilterFocusRequest);
+        document.Shutdown();
+    }
+
+    /// <summary>
+    /// Invoking the verb again while an IDENTICAL request is pending
+    /// still reaches the surfaces.
+    /// </summary>
+    /// <remarks>
+    /// The requests are records, so value equality made a re-raise a
+    /// silent no-op: `SetField` saw "no change" and the property
+    /// notification the surfaces deliver on never fired. That was
+    /// impossible while a generation counter made every request
+    /// distinct, and became reachable the moment the counter was dropped
+    /// for a reference comparison — a change to the completion side that
+    /// silently altered the notification side. Change detection is by
+    /// reference now, so the two agree.
+    /// </remarks>
+    [Fact]
+    public void ReInvokingTheFilterVerbStillReachesTheSurfaces()
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        var tab = new object();
+        int notifications = 0;
+        document.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(CanvasDocumentViewModel.FilterFocusRequest))
+            {
+                notifications++;
+            }
+        };
+
+        document.RequestFilterFocus(tab);
+        Assert.Equal(1, notifications);
+        // The SAME owner, the same everything — a reader pressing Ctrl+F
+        // twice because the first press appeared to do nothing.
+        document.RequestFilterFocus(tab);
+        Assert.Equal(
+            2,
+            notifications);
+
+        // And raising the identical INSTANCE is still silent, which is
+        // the case the equality check exists for.
+        CanvasFilterFocusRequest pending =
+            Assert.IsType<CanvasFilterFocusRequest>(document.FilterFocusRequest);
+        document.CompleteFilterFocus(pending);
+        Assert.Equal(3, notifications);
+        document.CompleteFilterFocus(pending);
+        Assert.Equal(3, notifications);
+        document.Shutdown();
+    }
+
+    /// <summary>
+    /// A restoration this surface deferred for itself is WITHDRAWN when
+    /// the reader leaves — the publish seats nobody.
+    /// </summary>
+    /// <remarks>
+    /// The Escape-in-`Loading` fix leaves a durable A14 landing because
+    /// there is nowhere to put the reader yet. That landing is a
+    /// RESTORATION, not an instruction: it exists only because the
+    /// reader was already here. If they go somewhere else while the load
+    /// runs, delivering it drags them back out of wherever they chose —
+    /// which is the class A14 exists to prevent, reintroduced by the fix
+    /// for a different one. A shell-raised landing is untouched: that
+    /// one IS an instruction to put the reader in this tab.
+    /// </remarks>
+    [Fact]
+    public void ADeferredRestorationIsWithdrawnWhenTheReaderLeaves() => RunSta(() =>
+    {
+        var loading = new CanvasDocumentViewModel(
+            _session,
+            "board.canvas",
+            new CanvasAnnouncer(_announced.Add, TimeSpan.FromMinutes(1)),
+            synchronousForTests: true,
+            verbosity: () => _verbosity);
+        var tab = new object();
+        var surface = new CanvasSurfaceView { Model = loading, DataContext = tab };
+        var elsewhere = new Button { Content = "the reader goes here" };
+        var root = new StackPanel();
+        root.Children.Add(surface);
+        root.Children.Add(elsewhere);
+        using var host = Host(root);
+
+        Assert.Equal(CanvasLoadState.Loading, loading.State);
+        Assert.True(surface.FilterFieldForTests.Focus());
+        host.UpdateLayout();
+        Assert.True(PressKey(surface, Key.Escape, ModifierKeys.None));
+        host.UpdateLayout();
+        // The premise: nowhere to sit, so a restoration is pending.
+        Assert.NotNull(loading.FocusRequest);
+
+        // The reader goes somewhere else of their own accord.
+        Assert.True(elsewhere.Focus());
+        host.UpdateLayout();
+        Assert.Null(
+            loading.FocusRequest);
+
+        // …and the publish that ends the load leaves them there.
+        loading.Load();
+        host.UpdateLayout();
+        Assert.True(
+            elsewhere.IsKeyboardFocused,
+            "a load that finished after the reader moved must not pull them "
+            + "back into the canvas (contract A14).");
+        loading.Shutdown();
+    });
+
+    /// <summary>
     /// A retired document has no PENDING REQUESTS — both of them,
     /// answered at the boundary rather than by a list of clear sites.
     /// </summary>
@@ -708,10 +866,17 @@ public sealed class CanvasNavigatorTests : IDisposable
     /// DIRECT parent was filtered out while a higher ancestor survived,
     /// nesting under the grandparent rather than promoting to the root.
     /// The fixture for it cannot be built, and the reason is core's rule
-    /// rather than an accident of this one: `canvas_filter` matches ANY
-    /// ELEMENT OF THE GROUP PATH (0b-13/0b-14), so a group that matches
-    /// carries every descendant with it. An ancestor cannot survive a
-    /// needle that its own children fail.
+    /// rather than an accident of this one — but the lemma is narrower
+    /// than it first looks, and the narrow one is what holds: a matching
+    /// group carries every descendant GROUP. The needle `group` refutes
+    /// the broad version, matching a parent by its KIND word while a
+    /// text card inside it matches nothing. For a group G inside a
+    /// parent group P, though, every route that matches G also matches P
+    /// (`canvas_filter` matches any element of the group path, the kind
+    /// type word, the title and the activation target — and a group's
+    /// target is empty), so P survives whenever G does. A CARD's parent
+    /// is therefore the only ancestor it can lose, and losing it makes
+    /// the card a root, never a grandchild hunting for a grandparent.
     /// </para>
     /// <para>
     /// So this pins the REACHABILITY claim instead, which is the honest

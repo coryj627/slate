@@ -450,6 +450,14 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         if (Model is { } model && Owner is { } owner)
         {
             model.RequestFocusLanding(owner);
+            // REMEMBERED, because this landing is a RESTORATION and not
+            // an instruction. The shell raises landings to put the
+            // reader into a tab; this one exists only because the reader
+            // was already here with nowhere to sit. If they leave before
+            // it can be delivered, it is moot — and delivering it then
+            // would drag them back out of wherever they chose to go,
+            // which is the class A14 exists to prevent.
+            _deferredRestoration = model.FocusRequest;
         }
         return false;
     }
@@ -693,8 +701,29 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         return false;
     }
 
-    private void Depart(CanvasFocusDeparture departure) =>
+    private void Depart(CanvasFocusDeparture departure)
+    {
+        // The reader LEFT — not a window deactivation, not an overlay or
+        // a menu layered over this tab, both of which they are coming
+        // back from. A restoration this surface deferred for itself is
+        // withdrawn here, so the load that finishes afterwards seats
+        // nobody. A shell-raised landing is untouched: it is an
+        // instruction to put the reader in this tab, and the departures
+        // above are not the reader declining it.
+        if (departure is (CanvasFocusDeparture.PaneFocus or CanvasFocusDeparture.TabSwitch)
+            && _deferredRestoration is { } deferred
+            && Model is { } model)
+        {
+            model.CompleteFocusLanding(deferred);
+            _deferredRestoration = null;
+        }
         _ = Model?.Modes.HandleFocusDeparture(departure);
+    }
+
+    /// <summary>The A14 landing THIS surface deferred for itself when it
+    /// had nowhere to put the reader (contract C6/A14). Null when the
+    /// pending landing — if any — came from the shell.</summary>
+    private CanvasFocusRequest? _deferredRestoration;
 
     private static Button ModeButton(string automationId, string content, string name)
     {
@@ -831,6 +860,10 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         if (delivered)
         {
             model.CompleteFocusLanding(request);
+            if (ReferenceEquals(_deferredRestoration, request))
+            {
+                _deferredRestoration = null;
+            }
         }
     }
 
