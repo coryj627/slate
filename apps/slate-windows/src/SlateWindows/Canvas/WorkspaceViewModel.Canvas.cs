@@ -150,11 +150,17 @@ internal sealed partial class WorkspaceViewModel
             return;
         }
         var live = new HashSet<string>(StringComparer.Ordinal);
+        // The TAB objects, not just their paths: a request is addressed
+        // to a tab, and a document that survives because a SECOND pane
+        // still shows it must not go on holding the closed pane's
+        // request — or its object graph (contracts A14/C10).
+        var liveOwners = new HashSet<object>(ReferenceEqualityComparer.Instance);
         foreach (WorkspaceTabViewModel tab in Groups.SelectMany(group => group.Tabs))
         {
             if (tab.IsCanvas)
             {
                 _ = live.Add(CanvasKey(tab.Path));
+                _ = liveOwners.Add(tab);
             }
         }
         foreach (string key in _canvasDocuments.Keys
@@ -165,6 +171,13 @@ internal sealed partial class WorkspaceViewModel
             retired.Shutdown();
             TrackRetiredBasesWork(retired.WhenHandleClosed());
             _ = _canvasDocuments.Remove(key);
+        }
+        // The documents that SURVIVED: this is the tab-set boundary, so
+        // it is where a request addressed to a tab that is gone stops
+        // being pending.
+        foreach (CanvasDocumentViewModel document in _canvasDocuments.Values)
+        {
+            document.DropRequestsAddressedOutside(liveOwners);
         }
     }
 

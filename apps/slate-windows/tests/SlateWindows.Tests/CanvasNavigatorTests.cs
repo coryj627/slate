@@ -134,6 +134,23 @@ public sealed class CanvasNavigatorTests : IDisposable
               "edges": []
             }
             """);
+        // Three levels: a matching grandparent, a NON-matching parent
+        // inside it, and a matching card inside that — the case CD-45's
+        // "nearest surviving ancestor" half is about, which a
+        // sibling-branch fixture cannot reach.
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "nested-filter.canvas"),
+            """
+            {
+              "nodes": [
+                {"id":"gran","type":"group","x":0,"y":0,"width":900,"height":700,"label":"Gran zeta"},
+                {"id":"mid","type":"group","x":40,"y":40,"width":500,"height":400,"label":"Middle"},
+                {"id":"leaf","type":"text","text":"zeta leaf","x":80,"y":80,"width":200,"height":100},
+                {"id":"outside","type":"text","text":"plain","x":1200,"y":0,"width":200,"height":100}
+              ],
+              "edges": []
+            }
+            """);
         File.WriteAllText(Path.Combine(_fixture.Root, "empty.canvas"), "{}");
         File.WriteAllText(
             Path.Combine(_fixture.Root, "broken.canvas"), "{ this is not json");
@@ -281,6 +298,10 @@ public sealed class CanvasNavigatorTests : IDisposable
             foreach ((string name, Action<CanvasNavigator> run) in verbs)
             {
                 CanvasDocumentViewModel document = open();
+                // An ACTIVE needle, so `clearFilter` has something to
+                // clear and the two routes to clearing can be compared
+                // in a state where neither can answer.
+                document.FilterText = "zeta";
                 Drain(document);
                 CanvasStatusNote expected = Assert.IsType<CanvasStatusNote>(
                     document.ReadRefusal, exactMatch: false);
@@ -297,6 +318,18 @@ public sealed class CanvasNavigatorTests : IDisposable
                     Assert.Single(
                         Lines(document),
                         line => true));
+                if (name == "clearFilter")
+                {
+                    // THE EFFECT HAPPENED. Admission chooses the
+                    // sentence, never whether the user's request runs:
+                    // the visible command used to return from admission
+                    // before clearing, so during a reload it announced
+                    // "Opening canvas…" and left the needle in the field
+                    // while the Escape rung cleared it — two routes to
+                    // one operation disagreeing in exactly the window
+                    // C4 and C10 were fixed for.
+                    Assert.Equal(string.Empty, document.FilterText);
+                }
             }
         }
     }
@@ -498,6 +531,91 @@ public sealed class CanvasNavigatorTests : IDisposable
     }
 
     /// <summary>
+    /// Escape from the filter field never strands the reader, in a state
+    /// where NOTHING renders rows.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// `Render` collapses both projections under `Loading` and under
+    /// every failure state, and the restoration focused the projection
+    /// unconditionally and ignored the result — so the keys stayed on
+    /// the window root while the rung had already consumed the press,
+    /// and the transient-region dismissal ate the ones after it. A
+    /// keyboard reader in the filter field of a loading canvas had no
+    /// way out.
+    /// </para>
+    /// <para>
+    /// Two states, because they end differently and both are reachable:
+    /// a FAILURE state has a focusable banner to land on, and `Loading`
+    /// deliberately has none — a transient "Opening canvas…" is not
+    /// somewhere to put a reader — so the restoration leaves an
+    /// addressed A14 landing that the publish will deliver.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void EscapeFromTheFilterFieldNeverStrandsTheReader() => RunSta(() =>
+    {
+        // --- A terminal failure: the banner is the tab stop.
+        CanvasDocumentViewModel broken = Open("broken.canvas");
+        var tabA = new object();
+        var brokenSurface = new CanvasSurfaceView { Model = broken, DataContext = tabA };
+        using (HostedWindow host = Host(brokenSurface))
+        {
+            Assert.Equal(CanvasLoadState.ParseError, broken.State);
+            Assert.True(brokenSurface.FilterFieldForTests.Focus());
+            host.UpdateLayout();
+
+            Assert.True(PressKey(brokenSurface, Key.Escape, ModifierKeys.None));
+            host.UpdateLayout();
+            Assert.False(
+                brokenSurface.FilterFieldForTests.IsKeyboardFocused,
+                "Escape must take the reader OUT of the filter field.");
+            Assert.True(
+                brokenSurface.StateBannerForTests.IsKeyboardFocused,
+                "…and onto the region this state actually shows.");
+        }
+        broken.Shutdown();
+
+        // --- Loading: nothing is focusable, so the request is durable.
+        var loading = new CanvasDocumentViewModel(
+            _session,
+            "board.canvas",
+            new CanvasAnnouncer(_announced.Add, TimeSpan.FromMinutes(1)),
+            synchronousForTests: true,
+            verbosity: () => _verbosity);
+        var tabB = new object();
+        var surface = new CanvasSurfaceView { Model = loading, DataContext = tabB };
+        using (HostedWindow host = Host(surface))
+        {
+            Assert.Equal(CanvasLoadState.Loading, loading.State);
+            Assert.True(surface.FilterFieldForTests.Focus());
+            host.UpdateLayout();
+
+            Assert.True(PressKey(surface, Key.Escape, ModifierKeys.None));
+            host.UpdateLayout();
+            // The reader STAYS in the field, and that is the right
+            // answer rather than a shortfall: there is nowhere better on
+            // a canvas with no rows and no focusable banner, and a
+            // focusable text box beats the window root — which is where
+            // the old unconditional restoration left them. What must NOT
+            // happen is the press being spent with nothing to follow it.
+            Assert.True(surface.FilterFieldForTests.IsKeyboardFocused);
+            // So a landing is pending, addressed to this tab: the way
+            // out exists and the publish delivers it.
+            CanvasFocusRequest pending =
+                Assert.IsType<CanvasFocusRequest>(loading.FocusRequest);
+            Assert.Same(tabB, pending.Owner);
+
+            // …and the publish that ends the load seats them.
+            loading.Load();
+            host.UpdateLayout();
+            Assert.Null(loading.FocusRequest);
+            Assert.True(surface.OutlineForTests.TreeForTests.IsKeyboardFocusWithin);
+        }
+        loading.Shutdown();
+    });
+
+    /// <summary>
     /// A retired document has no PENDING REQUESTS — both of them,
     /// answered at the boundary rather than by a list of clear sites.
     /// </summary>
@@ -555,7 +673,15 @@ public sealed class CanvasNavigatorTests : IDisposable
         // retirement — and a bound surface reads the request, never the
         // document's liveness.
         document.RequestFocusLanding(tab);
+        document.Navigator.FilterCards();
         Assert.Null(document.FocusRequest);
+        Assert.Null(document.FilterFocusRequest);
+        // …and the FIELDS are still empty. The read boundary alone would
+        // hide a late write, so a request arriving after retirement
+        // would have repopulated the closed tab's reference — the exact
+        // graph retirement exists to drop — while every public read went
+        // on saying null. The write side has to refuse, not be hidden.
+        Assert.False(document.HoldsPendingRequestsForTests);
 
         // …and the boundary holds for a surface that comes back: the
         // reader is not dragged anywhere by a request on a dead document.
@@ -565,6 +691,65 @@ public sealed class CanvasNavigatorTests : IDisposable
         host.UpdateLayout();
         Assert.False(surface.FilterFieldForTests.IsKeyboardFocused);
     });
+
+    /// <summary>
+    /// CD-45's "nearest surviving ancestor" case is UNREACHABLE under
+    /// core's matcher, and this is why.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The review asked for the missing half of CD-45: a survivor whose
+    /// DIRECT parent was filtered out while a higher ancestor survived,
+    /// nesting under the grandparent rather than promoting to the root.
+    /// The fixture for it cannot be built, and the reason is core's rule
+    /// rather than an accident of this one: `canvas_filter` matches ANY
+    /// ELEMENT OF THE GROUP PATH (0b-13/0b-14), so a group that matches
+    /// carries every descendant with it. An ancestor cannot survive a
+    /// needle that its own children fail.
+    /// </para>
+    /// <para>
+    /// So this pins the REACHABILITY claim instead, which is the honest
+    /// thing the code can be held to: the chain survives whole, and the
+    /// only shape a filtered outline can produce is "under the true
+    /// parent, or promoted to the root". The nearest-ancestor WALK stays
+    /// in `Rebuild` because it is the safe general form and costs
+    /// nothing — but CD-45 no longer claims a fact pins a case that
+    /// cannot occur.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void AMatchingGroupCarriesItsDescendantsSoNoAncestorGapExists() =>
+        RunSta(() =>
+        {
+            CanvasDocumentViewModel document = Open("nested-filter.canvas");
+            var surface = new CanvasSurfaceView { Model = document };
+            using var host = Host(surface);
+
+            // The needle appears ONLY in the grandparent's label.
+            document.FilterText = "zeta";
+            host.UpdateLayout();
+            Assert.DoesNotContain(
+                "outside",
+                document.FilteredOutline.Select(row => row.NodeId));
+
+            IReadOnlyList<CanvasOutlineRowViewModel> roots =
+                surface.OutlineForTests.RootsForTests;
+            Assert.Equal(
+                ["gran"],
+                roots.Select(row => row.Id).ToArray());
+            // …and the whole chain came with it, so there is no gap for
+            // a nearest-ancestor promotion to fill.
+            CanvasOutlineRowViewModel gran = roots.Single();
+            CanvasOutlineRowViewModel mid = Assert.Single(
+                gran.Children,
+                child => !child.IsConnection);
+            Assert.Equal("mid", mid.Id);
+            Assert.Equal(
+                ["leaf"],
+                mid.Children.Where(child => !child.IsConnection)
+                    .Select(child => child.Id)
+                    .ToArray());
+        });
 
     /// <summary>
     /// Codex C-lite round 1, B2: a filtered outline never claims

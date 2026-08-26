@@ -471,7 +471,10 @@ internal sealed class CanvasOutlineView : UserControl
 
     internal bool HasKeyboardFocus => _tree.IsKeyboardFocusWithin;
 
-    internal void FocusTree() => _ = _tree.Focus();
+    /// <summary>Put the reader on the tree, reporting whether it took
+    /// the keys — a collapsed projection cannot, and a caller with
+    /// nowhere else to go needs to know that (contract C6).</summary>
+    internal bool FocusTree() => _tree.Focus();
 
     /// <summary>The container for a row at any depth, realized if it
     /// can be. Null when the panel would not make it.</summary>

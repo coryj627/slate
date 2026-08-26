@@ -49,8 +49,21 @@ internal interface ICanvasSurfacePresenter
     /// root.</summary>
     bool FocusRow(string nodeId);
 
-    /// <summary>Put keyboard focus back on the showing projection.</summary>
-    void FocusProjection();
+    /// <summary>
+    /// Put keyboard focus back where this state can hold it, reporting
+    /// whether anything took it (contract C6).
+    /// </summary>
+    /// <remarks>
+    /// "The projection" is not always on screen: `Render` collapses both
+    /// under `Loading` and under every failure state, so a restoration
+    /// that focused the projection unconditionally and ignored the
+    /// result left the reader on the window root — and the Escape that
+    /// was supposed to get them out of the filter field had already been
+    /// consumed. State-aware: the projection when it renders rows, else
+    /// the region this state actually shows, else a durable A14 landing
+    /// so the reader is seated when something can hold them.
+    /// </remarks>
+    bool FocusProjection();
 
     /// <summary>
     /// The VIEW this surface is for — its tab, the same key contract
@@ -504,21 +517,28 @@ internal sealed class CanvasNavigator
     /// </summary>
     public void ClearFilter()
     {
-        // Through the ONE admission mapping, like every other verb that
-        // speaks about the rows (contract C4). `Filter cleared — n cards.`
-        // is a claim about a canvas, and on a canvas that cannot answer
-        // it is a false one: the count would be the empty outline's, and
-        // "0 cards" reads as an empty canvas rather than an unreadable
-        // one. The mapping already has the honest sentence for each
-        // state, and this used to walk past it.
-        if (!_document.AdmitStructuralRead())
-        {
-            return;
-        }
+        // THE EFFECT FIRST, then admission choosing which sentence is
+        // true of it — the Escape rung's order, and the right one.
+        // Clearing is what the user asked for and it always succeeds:
+        // the needle is host state, not a question for the canvas.
+        // Gating the CLEAR on admission made the visible command and the
+        // Escape rung disagree during a reload — the command announced
+        // "Opening canvas…" and left the needle in the field, the rung
+        // cleared it — which is two routes to one operation differing in
+        // exactly the window C4 and C10 were fixed for.
         _document.FilterText = string.Empty;
-        // The widening is synchronous, so this counts the rows this
-        // frame put on screen (contract C10 interim).
-        Announce(new CanvasA11yEvent.CanvasFilterCleared((uint)_document.Outline.Count));
+        // Only the SENTENCE is the mapping's (contract C4).
+        // `Filter cleared — n cards.` is a claim about a canvas, and on
+        // one that cannot answer it is false: the count would be the
+        // empty outline's, and "0 cards" reads as an empty canvas rather
+        // than an unreadable one.
+        if (_document.AdmitStructuralRead())
+        {
+            // The widening is synchronous, so this counts the rows this
+            // frame put on screen (contract C10 interim).
+            Announce(new CanvasA11yEvent.CanvasFilterCleared(
+                (uint)_document.Outline.Count));
+        }
     }
 
     /// <summary>

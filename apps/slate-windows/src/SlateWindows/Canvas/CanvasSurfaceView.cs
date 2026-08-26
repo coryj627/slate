@@ -413,16 +413,45 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
             ? _table.DeliverFocus(nodeId)
             : _outline.DeliverFocus(nodeId) is not null;
 
-    public void FocusProjection()
+    public bool FocusProjection()
     {
-        if (Projection == CanvasSurfaceKind.Table)
+        // The projections are COLLAPSED unless the state renders rows
+        // (`Render`'s own condition), so asking them first only works
+        // when they are there to ask.
+        if (Model is { RendersRetainedSnapshot: true })
         {
-            _table.FocusGrid();
+            bool seated = Projection == CanvasSurfaceKind.Table
+                ? _table.FocusGrid()
+                : _outline.FocusTree();
+            if (seated)
+            {
+                return true;
+            }
         }
-        else
+        // Whatever this state DOES show. The empty-canvas onboarding and
+        // the failure banner are both focusable exactly when they are the
+        // thing on screen (the banner is a tab stop only in the error
+        // states — a transient "Opening canvas…" is not somewhere to put
+        // a reader).
+        if (_onboarding is { IsVisible: true } onboarding && onboarding.Focus())
         {
-            _outline.FocusTree();
+            return true;
         }
+        if (_stateBanner is { IsVisible: true, Focusable: true } banner
+            && banner.Focus())
+        {
+            return true;
+        }
+        // Nothing on this surface can hold the reader right now —
+        // `Loading` with no rows is the honest case. Leave a DURABLE,
+        // addressed landing rather than dropping them on the window
+        // root: the publish that ends the load is one of the conditions
+        // that re-asks it (contract A14).
+        if (Model is { } model && Owner is { } owner)
+        {
+            model.RequestFocusLanding(owner);
+        }
+        return false;
     }
 
     /// <summary>

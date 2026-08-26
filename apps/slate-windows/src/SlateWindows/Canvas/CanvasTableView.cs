@@ -170,7 +170,9 @@ internal sealed class CanvasTableView : UserControl
 
     internal bool HasKeyboardFocus => _grid.IsKeyboardFocusWithin;
 
-    internal void FocusGrid() => _ = _grid.FocusFirstCell();
+    /// <summary>The outline's twin, and the same reason: a collapsed
+    /// grid cannot take the keys (contract C6).</summary>
+    internal bool FocusGrid() => _grid.FocusFirstCell();
 
     private static void OnModelChanged(
         DependencyObject d, DependencyPropertyChangedEventArgs e)

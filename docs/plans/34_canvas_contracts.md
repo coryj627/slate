@@ -2723,12 +2723,20 @@ opinion about which sentence the state owes.
 **THE INTERIM, and its cost, stated rather than discovered.** The match
 runs SYNCHRONOUSLY, inside the `Filter` getter, on the dispatcher,
 taking `_ffiLock` — PR A's recorded precedent for a whole-model read,
-and the shape this PR ships. The cost is real and bounded: a LOAD body
-holds that lock across `open_canvas` plus three whole-model projections,
-so a keystroke arriving during a load waits for the load to finish. On
-the fixtures and the §K 2,000-node budget that is milliseconds; on a
-slow filesystem it is the length of the open, and the user types into
-it.
+and the shape this PR ships. Every keystroke pays one `canvas_filter`
+call on the UI thread; that is the interim's cost, and it is why the
+redesign exists.
+
+**Two costs this row used to claim are NOT reachable, and saying so is
+the point.** It said a keystroke arriving DURING a load waits for the
+lock the load body holds, and that typing then could mix the new
+handle's answer with the old outline's rows. Neither survives the fix
+for the stale count: `Load` moves the state to `Loading` before it
+starts any work, and the getter returns before it queries whenever the
+document is not rendering rows — so during a load there is no query to
+block and no answer to mix. The window closed as a side effect of a
+different fix, which is exactly the kind of obsolete cost a row keeps
+claiming until someone re-reads it.
 
 **A count is only CURRENT while rows are on screen.** C10's one
 invariant is *displayed rows == announced count*, and a reload broke it
@@ -2742,26 +2750,6 @@ The ROWS are unchanged while it lasts: widening them would make the
 reload flash every card the moment it finished.
 `TheFilterSummaryNeverCountsRowsTheSurfaceIsNotShowing` samples the
 summary and the materialized rows together across the whole window.
-
-**THE SECOND COST, and it is the one that is easy to miss.** Typing
-DURING a reload can speak a number that belongs to no canvas. The load
-body swaps the handle on the scheduler thread and publishes its rows
-later, through `Post`; a keystroke arriving in that window queries the
-NEW handle and intersects the answer with the OLD outline still on
-screen. The pair is internally coherent — the numerator and the
-denominator are one dispatcher turn's worth of state, which is what the
-synchronous form actually guarantees — but the canvas the pair describes
-is a mixture.
-
-It is bounded, and the bound is why it ships. It is NUMBER-ONLY: the
-rows on screen are the old outline's, and the reload is hidden behind
-`Loading` anyway. It is SELF-HEALING: the reload's own publish re-asks
-and republishes, so the next frame is right. And it needs a keystroke
-inside the window, which is the length of one `open_canvas` plus three
-projections. Recorded rather than fixed, because fixing it IS the
-redesign: a count that cannot be taken against a handle the rows do not
-come from is the coherent unit owning its queries, which is exactly what
-the architecture review named as the fixed point.
 
 That is the whole reason the redesign PR exists. Moving the query off
 the dispatcher makes the rows and the answer arrive on different frames,
@@ -4561,8 +4549,16 @@ PROJECTION has nowhere to go, so on a canvas with connections the last
 CARD is not the end while its connection row is still below the cursor.
 `TheBoundaryIsTheProjectionsRowsNotCoresReadingOrder` pins it.
 
-**CD-45 — A filtered-out group's survivor attaches to its nearest
-SURVIVING ancestor, and to the root when it has none.** The Windows
+**CD-45 — A filtered-out group's survivor is promoted to a ROOT; the
+"nearest surviving ancestor" case cannot occur.** The implementation
+walks to the nearest surviving ancestor and falls to the root, which is
+the safe general form and costs nothing — but core's matcher includes
+ANY ELEMENT OF THE GROUP PATH (0b-13/0b-14), so a group that matches
+carries every descendant with it, and an ancestor can never survive a
+needle its own children fail. Promotion to the root is the only
+reachable outcome. This row used to claim a fact pinned both halves;
+`AMatchingGroupCarriesItsDescendantsSoNoAncestorGapExists` pins the
+reachability instead, which is what can be held true. The Windows
 outline NESTS (CD-33) and the filter is a row subset, so a card whose
 containing group did not match cannot sit under it. The alternative —
 indenting it under a group that is not on screen — would claim a
@@ -6727,6 +6723,62 @@ CITES is not the rule; the rule is sweeping the row that DESCRIBES what
 the fix changed, which is the one most likely to be read as still true.
 A fix that edits a mechanism should open its contract's own paragraph
 before it opens anything else.
+
+### PR C-lite — codex adversarial round 2 — NOT SAFE, 3 blockers + 2 majors + 2 minors
+
+Every finding sat in a SEAM BETWEEN round 1's fixes, or in an unfinished
+half of one. That is the signature of a wave that fixed each item
+correctly and did not ask what the items did to each other.
+
+- **B1 — the two clear routes disagreed in the window they were both
+  fixed for.** The verb returned from admission BEFORE clearing; the
+  Escape rung cleared first and let admission choose only the sentence.
+  So during a reload the visible command announced "Opening canvas…" and
+  left the needle in the field while Escape cleared it. The rung's order
+  was the correct one: clearing is host state and always succeeds;
+  admission decides what is TRUE to say about it, never whether the
+  user's request runs.
+- **B2 — Escape dead-ended in the filter field.** `Render` collapses
+  both projections under `Loading` and every failure state, and the
+  restoration focused the projection unconditionally and discarded the
+  result — so the keys stayed on the window root with the press already
+  consumed. It is result-bearing and state-aware now: the projection
+  when it renders rows, else the region this state actually shows, else
+  a durable addressed A14 landing. `Loading` deliberately reaches the
+  last arm — a transient banner is not somewhere to put a reader — and
+  the reader keeps the field until the publish seats them.
+- **B3 — late writes repopulated retired fields.** Both request-raising
+  methods still wrote after retirement. The READ boundary hid it: every
+  public read said null while the field held the closed tab's owner and
+  its graph — the exact reference C7 claims to drop. Terminality now
+  answers on the WRITE as well, and the fact asserts retention AFTER the
+  late calls, which is the assertion the read boundary cannot fake.
+- **M1 — closing an addressed pane stranded its request.** The document
+  survives when a second pane still shows it, so no peer may take the
+  request (the address gate working), nothing supersedes it, and the
+  closed tab stays reachable. Taken at the TAB-SET boundary, not in
+  `Unloaded`, which also fires on mere hiding — a hidden pane's request
+  must survive, since becoming visible is one of the conditions that
+  delivers it.
+- **M2 — and the missing half of CD-45 turned out to be unreachable.**
+  The review asked for a surviving-grandparent fixture. It cannot be
+  built: core's matcher includes ANY ELEMENT OF THE GROUP PATH, so a
+  group that matches carries every descendant, and an ancestor can never
+  survive a needle its own children fail. The walk stays as the safe
+  general form; CD-45 no longer claims a fact pins a case that cannot
+  occur, and a new fact pins the REACHABILITY that makes it so.
+- **Min1 — generation ABA.** Completion compared int counters. It
+  compares the pending RECORD by reference now — the contract already
+  is that a surface hands back the instance it was given — and both
+  counters are retired, because nothing else read them.
+- **Min2 — C10 recorded two costs the previous wave's own fix had made
+  impossible.** The reload lock-wait and the mixed-handle count both
+  required a query during a load, and the getter now returns before it
+  queries whenever the document is not rendering rows. Swept, with the
+  cause named: a window closed as a side effect of a different fix, and
+  a cost row keeps claiming it until someone re-reads it. **That is the
+  describes-what-it-changed rule pointing at a row the change did not
+  touch** — the sweep has to follow the MECHANISM, not the diff.
 
 ### PR C-lite — the gate-integrity incident, and the rule that came out of it
 

@@ -109,6 +109,54 @@ public sealed class CanvasDocumentTests : IDisposable
 
     // --- A1: the registry ------------------------------------------------
 
+    /// <summary>
+    /// Closing the pane a request was addressed to cancels it, even
+    /// though the document lives on in another pane.
+    /// </summary>
+    /// <remarks>
+    /// Retirement does not cover this: the document is not being
+    /// retired. No peer may take the request (the address gate is doing
+    /// its job), nothing supersedes it, and the closed tab's object
+    /// graph stays reachable through it — a stranded request with no
+    /// expiry, which is half of what made the un-addressed version
+    /// wrong. Taken where the TAB SET changes, not in `Unloaded`, which
+    /// also fires when a pane is merely hidden and whose request must
+    /// survive.
+    /// </remarks>
+    [Fact]
+    public void ClosingTheAddressedPaneCancelsItsPendingRequests() => RunSta(() =>
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel first =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(first.Canvas);
+
+        // A second pane on the SAME path keeps the document alive.
+        ((System.Windows.Input.ICommand)workspace.DuplicateTabCommand).Execute(null);
+        WorkspaceTabViewModel second =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        Assert.Same(document, second.Canvas);
+
+        // Both requests pending, addressed to the tab about to close.
+        document.RequestFocusLanding(second);
+        document.RequestFilterFocus(second);
+        Assert.NotNull(document.FocusRequest);
+        Assert.NotNull(document.FilterFocusRequest);
+
+        ((System.Windows.Input.ICommand)workspace.CloseActiveTabCommand).Execute(null);
+
+        Assert.Same(document, first.Canvas);
+        Assert.Null(document.FocusRequest);
+        Assert.Null(document.FilterFocusRequest);
+        Assert.False(
+            document.HoldsPendingRequestsForTests,
+            "a surviving document must not hold the closed pane's tab through "
+            + "a request nobody can ever deliver.");
+    });
+
+
     [Fact]
     public void OneDocumentIsSharedByEveryTabOnThePath()
     {

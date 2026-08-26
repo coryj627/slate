@@ -64,14 +64,21 @@ internal enum CanvasActivation
 /// instance back when it delivers, and the document can tell a late
 /// delivery of an old request from a live one.
 /// </summary>
-internal sealed record CanvasFocusRequest(object Owner, string? NodeId, int Generation);
+/// <remarks>
+/// No generation counter: completion compares the RECORD, by reference.
+/// The contract already is that a surface hands back the exact instance
+/// it was given, so identity answers "is this the request that is still
+/// pending" exactly — and a counter answers it only until it wraps or
+/// repeats, which is a class of bug with no upside here.
+/// </remarks>
+internal sealed record CanvasFocusRequest(object Owner, string? NodeId);
 
 /// <summary>
 /// A pending request to put the reader in the filter field (contract
 /// C10) — <see cref="CanvasFocusRequest"/>'s twin, and addressed for the
 /// same reason: two panes share one document.
 /// </summary>
-internal sealed record CanvasFilterFocusRequest(object? Owner, int Generation);
+internal sealed record CanvasFilterFocusRequest(object? Owner);
 
 /// <summary>
 /// What the surfaces are showing for the filter, and whether that answers
@@ -88,10 +95,12 @@ internal sealed record CanvasFilterFocusRequest(object? Owner, int Generation);
 /// <param name="Narrowed">True when a filter narrowed
 /// <paramref name="Rows"/> at all.</param>
 /// <param name="Current">True when <paramref name="Rows"/> answer the
-/// needle in the field. False means no handle could answer it and the
-/// PREVIOUS answer is still on screen — the caller must say so rather
-/// than count these rows as if they matched what the user just
-/// typed.</param>
+/// needle in the field AND the surface is showing them. False has two
+/// causes now and one sentence: no handle could answer, or the document
+/// is not rendering rows at all (a load, a failure), so no number
+/// describes what is on screen. Either way the PREVIOUS answer stays up
+/// and the caller says the state's own sentence rather than counting
+/// these rows as if they matched what the user just typed.</param>
 /// <param name="MatchedIds">The matched node ids when narrowed, so the
 /// table projection filters core's table rows by the SAME answer the
 /// outline shows; null when nothing is narrowed.</param>
@@ -143,7 +152,6 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     private string _filterText = string.Empty;
     private string? _whereAmIText;
     private CanvasFilterFocusRequest? _filterFocusRequest;
-    private int _filterFocusGeneration;
     private (string Needle, IReadOnlySet<string> Ids)? _filterMatchCache;
 
     /// <summary>Row lookup by node id — the outline is walked by id from
@@ -370,7 +378,6 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// focus at all.
     /// </remarks>
     private CanvasFocusRequest? _focusRequest;
-    private int _focusRequestGeneration;
 
     /// <summary>
     /// The pending focus delivery — STATE, not an event edge
@@ -425,20 +432,30 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     internal void RequestFocusLanding(object owner, string? nodeId = null)
     {
         ArgumentNullException.ThrowIfNull(owner);
-        FocusRequest = new CanvasFocusRequest(
-            owner, nodeId, Interlocked.Increment(ref _focusRequestGeneration));
+        if (IsShutDown)
+        {
+            // WRITE-side terminality, and it is not redundant with the
+            // read side: the read HIDES a field that was written, so a
+            // late request repopulated the very reference retirement
+            // exists to drop — the closed tab's owner and its object
+            // graph — while every public read went on saying null.
+            // `Shutdown` clears once; a request arriving after it has to
+            // be refused, not cleared again.
+            return;
+        }
+        FocusRequest = new CanvasFocusRequest(owner, nodeId);
     }
 
     /// <summary>
     /// A surface delivered the request and is saying so. Only the
-    /// matching generation clears it: a request raised while an older
-    /// one was still pending must not be consumed by the older one's
-    /// late delivery.
+    /// request that is still PENDING clears it, compared by reference:
+    /// a request raised while an older one was in flight must not be
+    /// consumed by the older one's late delivery.
     /// </summary>
     internal void CompleteFocusLanding(CanvasFocusRequest delivered)
     {
         ArgumentNullException.ThrowIfNull(delivered);
-        if (_focusRequest is { } pending && pending.Generation == delivered.Generation)
+        if (ReferenceEquals(_focusRequest, delivered))
         {
             FocusRequest = null;
         }
@@ -889,13 +906,47 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// only what is addressed to it, and the delivery clears it on the
     /// DOCUMENT, so peers stop holding it. Generation-matched, so a
     /// newer request supersedes an older one rather than being consumed
-    /// by its late delivery.
+    /// by its late delivery — by IDENTITY, since the surface hands back
+    /// the instance it was given.
     /// </para>
     /// </remarks>
     public CanvasFilterFocusRequest? FilterFocusRequest
     {
         get => IsShutDown ? null : _filterFocusRequest;
         private set => SetField(ref _filterFocusRequest, value);
+    }
+
+    /// <summary>
+    /// Drop any pending request addressed to an owner that no longer
+    /// exists (contracts A14/C10).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A request is addressed to a TAB, and a tab can close while the
+    /// document lives on — two panes share one, so closing the pane that
+    /// asked leaves the request pending forever: no peer may take it
+    /// (the address gate), nothing supersedes it, and the closed tab's
+    /// object graph stays reachable through it. Retirement does not
+    /// cover this, because the document is not being retired.
+    /// </para>
+    /// <para>
+    /// Taken at the boundary where the tab SET changes rather than in
+    /// `Unloaded`, which also fires when a tab is merely hidden — a
+    /// hidden pane's request must survive, since becoming visible again
+    /// is one of the conditions that delivers it.
+    /// </para>
+    /// </remarks>
+    internal void DropRequestsAddressedOutside(IReadOnlyCollection<object> liveOwners)
+    {
+        ArgumentNullException.ThrowIfNull(liveOwners);
+        if (_focusRequest is { } landing && !liveOwners.Contains(landing.Owner))
+        {
+            FocusRequest = null;
+        }
+        if (_filterFocusRequest is { Owner: { } owner } && !liveOwners.Contains(owner))
+        {
+            FilterFocusRequest = null;
+        }
     }
 
     /// <summary>
@@ -920,20 +971,25 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// first eligible surface takes it, because a verb the user invoked
     /// must not evaporate.
     /// </param>
-    internal void RequestFilterFocus(object? owner) =>
-        FilterFocusRequest = new CanvasFilterFocusRequest(
-            owner, Interlocked.Increment(ref _filterFocusGeneration));
+    internal void RequestFilterFocus(object? owner)
+    {
+        if (IsShutDown)
+        {
+            // The twin's write-side terminality, for the twin's reason.
+            return;
+        }
+        FilterFocusRequest = new CanvasFilterFocusRequest(owner);
+    }
 
     /// <summary>
     /// A surface put the reader in its filter field and is saying so.
-    /// Only the matching generation clears it, for
-    /// <see cref="CompleteFocusLanding"/>'s reason.
+    /// Only the request that is still PENDING clears it, by reference,
+    /// for <see cref="CompleteFocusLanding"/>'s reason.
     /// </summary>
     internal void CompleteFilterFocus(CanvasFilterFocusRequest delivered)
     {
         ArgumentNullException.ThrowIfNull(delivered);
-        if (_filterFocusRequest is { } pending
-            && pending.Generation == delivered.Generation)
+        if (ReferenceEquals(_filterFocusRequest, delivered))
         {
             FilterFocusRequest = null;
         }
