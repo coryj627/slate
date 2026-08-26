@@ -2801,20 +2801,56 @@ real menu and a real non-menu focus loss in one fact, so it cannot pass
 on a surface that stopped classifying departures at all;
 mutation-verified by collapsing the arm back into `PaneFocus`.
 
-**Menu-then-elsewhere is not re-classified, and that is the pre-existing
-shape this widens rather than a hole it opens.** `IsKeyboardFocusWithin`
-is already false once focus is in the menu, so a subsequent move from
-the menu to some other part of the shell raises nothing and the mode
-survives a departure that would otherwise have cancelled it. Exactly the
-same has been true of `ModalOverlay` since this arm existed — dismissing
-the palette onto another pane never re-fires either — so `MenuOpen`
-inherits the property rather than introducing it. It is bounded, not
-unbounded: the tab going invisible (`TabSwitch`) and the window losing
-activation (`WindowDeactivated`) are separate triggers that still fire,
-and document retirement cancels outright, so no mode outlives the thing
-it belongs to. Recorded here so a future reviewer reads it as known;
-closing it properly wants a focus-restored trigger, which belongs with
-PR F's real modes rather than a test one.
+**Menu-then-elsewhere IS re-classified, since codex round 4.** This row
+recorded the opposite for two waves and deferred the repair to PR F, and
+both halves of that are now wrong. `IsKeyboardFocusWithin` is already
+false once focus is in the menu, so a subsequent move from the menu to
+another pane raises nothing on the surface — which is why the surface
+watches its host WINDOW's keyboard focus instead. When the cause has
+ended (no overlay, the keys not in a menu) and they have landed
+somewhere that is not this surface, the destination is classified as the
+`PaneFocus` it is, through `Depart`, so the mode stack and a deferred
+landing hear the same thing from the same place.
+`AModeHeldAcrossAMenuIsCancelledWhenTheReaderTurnsOutToHaveLeft` is the
+driving fact and asserts that nothing is pending, so it is about the
+mode rather than about a landing.
+
+**Two boundaries, ratified rather than left implicit.** Only SAME-WINDOW
+destinations are observable: a reader who leaves the menu for a different
+top-level window deactivates this one instead, and the answer is DEFERRED
+to the next activation, when the keys land somewhere and the same
+classification runs. And only the mode's OWNING surface reclassifies —
+see the affinity paragraph below — because the stack is document-shared
+and a sibling pane acting on `IsActive` cancels a mode it is not running.
+The older bounds still hold underneath both: `TabSwitch` and
+`WindowDeactivated` fire on their own, and document retirement cancels
+outright, so no mode outlives the thing it belongs to.
+
+**A MODE HAS AN OWNER (codex round 5).** `Enter` captures the navigator's
+attached presenter — the pane that owns the keys or owned them last, so a
+mode entered from the palette or from an open menu still belongs to the
+pane the reader came from — and `Modes.Owner` reads through the active
+mode, so no mode means no owner by construction. Only that surface may
+reclassify a departure on the mode's behalf. Without it, two panes on one
+canvas meant every focus movement inside the owning pane fired the
+sibling's watcher, which saw a mode active and the keys outside itself
+and cancelled the mode its reader was in the middle of driving — before
+they could reach the M6 controls that exist for that moment.
+`AModeBelongsToThePaneItWasEnteredFrom` covers entry from the projection,
+the palette and a menu, and counts the restorations, because three routes
+to one cancellation is also three routes to running the reader's undo
+twice.
+
+**THE THIRD AFFINITY, and the last one that should have to be
+discovered.** A14's focus landing carries its OWNER; the navigator's
+presenter carries the pane the reader is in; a mode now carries the pane
+it was entered from. One rule underneath: **anything DOCUMENT-SHARED
+that a PER-SURFACE mechanism acts upon must say which surface, because
+"the document has one" and "this pane owns it" are different facts and
+only the second licenses acting.** PR F inherits this as a rule rather
+than as three examples — its real modes arrive into a two-pane world, and
+every new document-shared thing they add gets asked the question at
+design time.
 
 The `ModalOverlay` arm is a **divergence from t0 §2 M4's literal list**
 and is recorded as CD-41 rather than implemented silently. Reasoning, in
@@ -7401,13 +7437,22 @@ executes.**
   written while one exists — so the arrangement codex named (mode active,
   menu open, reader clicks another pane, nothing pending) ran none of it,
   and the mode survived in a pane nobody was in with its Commit and
-  Cancel controls showing. Both records asserted the closure. The gate
-  serves BOTH constituencies now, because one departure classification
-  holds a restoration and a mode alive on the same evidence, and a rule
-  that releases only one of them leaves the other in the shape it was
-  written to end. `AModeHeldAcrossAMenuIsCancelledWhenTheReaderTurnsOutToHaveLeft`
-  asserts the premise that no landing is pending, which is what makes it
-  a fact about the mode.
+  Cancel controls showing. Both records asserted the closure. The GATE
+  serves both constituencies after this wave, because one departure
+  classification holds a restoration and a mode alive on the same
+  evidence, and a rule that releases only one of them leaves the other in
+  the shape it was written to end.
+  `AModeHeldAcrossAMenuIsCancelledWhenTheReaderTurnsOutToHaveLeft` asserts
+  the premise that no landing is pending, which is what makes it a fact
+  about the mode.
+
+  **This wave closed the GATE and not OWNERSHIP, and the round-5 section
+  below is where that half lands** — corrected here rather than left
+  reading as a full closure, because a record that claims more than the
+  wave that wrote it is the exact failure these sections keep finding one
+  altitude up. The gate asked "is a mode active", which is a fact about
+  the DOCUMENT; asking "is this pane running it" needed the mode to carry
+  an owner, and it did not yet.
 - **The affinity clause had neither a fact nor a mutation.** Every
   arrangement kept the keys inside the surface, where
   `IsKeyboardFocusWithin` alone satisfies the rebind — and the battery
@@ -7508,6 +7553,67 @@ than a slip. **The scratch sweep runs BEFORE `git add`, and the staged
 list is read back before committing.** Recorded here beside the other
 five because a commit message is not a durable place for a rule, and the
 gate-integrity list is where this branch keeps them.
+
+### PR C-lite — codex adversarial round 5 — NOT SAFE, 1 blocker + 1 minor
+
+No majors, and codex verified clean what the previous wave claimed: both
+rebind-clause pins with independent premises, the clear-and-retry
+removal, the staged-claim guard end to end, the delivered set against the
+matrix.
+
+- **BLOCKER — a sibling pane could cancel the mode the reader was
+  using.** The mode stack is DOCUMENT-shared; every loaded surface
+  subscribes to its host window's focus stream; and the widened gate read
+  `Modes.IsActive` — a fact about the document — as though it were about
+  itself. Two panes on one canvas, mode entered from A: every focus
+  movement INSIDE A (returning from the palette, clicking A's own Commit
+  or Cancel button) fired B's watcher, which saw a mode active and the
+  keys outside B and cancelled the mode, before the reader could reach
+  the M6 controls that exist for that moment. The previous wave's fact
+  used one surface, so it could not see the sibling.
+
+  A mode carries its OWNER now, captured at `Enter` from the navigator's
+  attached presenter and read through the active mode, so no mode means
+  no owner by construction. `AModeBelongsToThePaneItWasEnteredFrom`
+  covers entry from the projection, the palette and a menu, moves twice
+  inside the owner, and COUNTS the restorations when the reader finally
+  lands in the peer — because three routes to one cancellation is also
+  three routes to running the reader's undo twice.
+
+- **THE THIRD AFFINITY, named once so it stops being discovered.** A14's
+  landing carries its owner; the navigator's presenter carries the pane
+  the reader is in; a mode now carries the pane it was entered from.
+  Three waves, three separate discoveries of one rule: **anything
+  DOCUMENT-SHARED that a PER-SURFACE mechanism acts upon must say WHICH
+  SURFACE, because "the document has one" and "this pane owns it" are
+  different facts and only the second licenses acting.** It is written
+  into C8 as a rule for PR F to inherit rather than as three examples for
+  PR F to re-derive, which is the difference between a record and a
+  lesson.
+
+- **MINOR — C8 was two waves stale, in the row describing the very
+  mechanism.** It still said menu-then-elsewhere is not reclassified and
+  deferred the repair to PR F, both falsified by the window watcher. C8
+  now carries the same-window reclassification rule, the ratified
+  cross-window boundary (deferred to the next activation, not held), the
+  ownership rule, and the affinity lesson, citing the driving facts.
+
+  **And it was invisible to BOTH guards, in a third way.** The
+  retired-vocabulary rows could not see it — no retired name, the same
+  class as C2 and `_awayBecause` one wave earlier. The staged-claim rule
+  could not either, and this is the new shape: its question is "does this
+  claim name a PR that has SHIPPED", and the deferral named PR F, which
+  has not. **A deferral to a future PR that the present already carried
+  out is invisible to a shipped-set test by construction.** No textual
+  rule proposed so far catches it; it is recorded in the census's honesty
+  paragraph so the next reviewer looks for it by hand instead of trusting
+  the green.
+
+- **A record correcting itself.** Round 4's section claimed the gate
+  change closed both constituencies. It closed the GATE; ownership was
+  the other half and landed here. That bullet now says which wave did
+  which — and it is worth noticing that the correction was needed on a
+  section written specifically to record claims outrunning code.
 
 ### PR C — the strategic lesson
 

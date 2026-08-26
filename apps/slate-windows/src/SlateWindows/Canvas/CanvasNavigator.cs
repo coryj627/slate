@@ -177,6 +177,15 @@ internal sealed class CanvasNavigator
         _presenter = presenter;
     }
 
+    /// <summary>The pane the reader is working in, as this navigator
+    /// understands it — the surface that owns the keys, or owned them
+    /// last. Null before any surface has ever held them.</summary>
+    /// <remarks>The affinity a MODE captures when it is entered
+    /// (contract C7): the mode stack is document-shared and every pane
+    /// showing the document can see it, so "is a mode active" is not the
+    /// same question as "is this pane the one running it".</remarks>
+    internal ICanvasSurfacePresenter? AttachedPresenter => _presenter;
+
     /// <summary>
     /// Detach, reporting whether this presenter WAS the attached one.
     /// </summary>

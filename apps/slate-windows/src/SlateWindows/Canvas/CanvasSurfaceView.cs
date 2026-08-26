@@ -850,7 +850,16 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
     private void OnHostFocusMoved(object sender, KeyboardFocusChangedEventArgs e)
     {
         ArgumentNullException.ThrowIfNull(e);
-        if (_deferredRestoration is null && Model is not { Modes.IsActive: true })
+        // Both constituencies are asked about THIS surface. The landing
+        // is surface-local by construction; the MODE is not — one
+        // controller serves every pane showing the document, so a
+        // sibling reading `IsActive` as its own reclassified departures
+        // on behalf of a mode it was not running and cancelled it out
+        // from under the reader who was (codex round 5). Ownership is
+        // captured at `Enter` and only the owner answers here.
+        bool ownsTheMode = Model is { Modes: { IsActive: true } modes }
+            && ReferenceEquals(modes.Owner, this);
+        if (_deferredRestoration is null && !ownsTheMode)
         {
             return;
         }

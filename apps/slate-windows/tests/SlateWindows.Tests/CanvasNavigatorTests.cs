@@ -1049,6 +1049,135 @@ public sealed class CanvasNavigatorTests : IDisposable
         }
     });
 
+    /// <summary>How the reader got into the mode.</summary>
+    public enum ModeEntry
+    {
+        Projection,
+        Palette,
+        Menu,
+    }
+
+    /// <summary>
+    /// A mode belongs to the PANE it was entered from, and a sibling pane
+    /// showing the same document may not end it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The mode stack is document-shared: one controller, however many
+    /// panes show the document. The window watch is per-SURFACE and asks
+    /// "is a mode active" — a fact about the document — then acts as
+    /// though the answer were about itself. So with two panes on one
+    /// canvas and the mode entered from A, every focus movement inside A
+    /// (returning from the palette, clicking A's own Commit or Cancel
+    /// button) fired B's watcher, which saw a mode active and the keys
+    /// outside B, and cancelled the mode its reader was in the middle of
+    /// driving — before they could reach the M6 controls that exist for
+    /// exactly that moment.
+    /// </para>
+    /// <para>
+    /// THE THIRD AFFINITY. A14's landing carries its OWNER; the
+    /// navigator's presenter carries the pane the reader is in; a mode
+    /// now carries the pane it was entered from. The rule underneath all
+    /// three is one rule: <b>anything document-shared that a per-surface
+    /// mechanism acts on needs to say WHICH SURFACE, because "the
+    /// document has one" and "this pane owns it" are different facts and
+    /// only the second licenses acting.</b> Captured at `Enter` from the
+    /// navigator's attached presenter, so the palette and menu arms below
+    /// — where the keys are elsewhere at entry — still belong to the pane
+    /// the reader came from.
+    /// </para>
+    /// </remarks>
+    [Theory]
+    [InlineData(ModeEntry.Projection)]
+    [InlineData(ModeEntry.Palette)]
+    [InlineData(ModeEntry.Menu)]
+    public void AModeBelongsToThePaneItWasEnteredFrom(ModeEntry entry) => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        var restorations = 0;
+        var spec = new CanvasModeSpec(
+            CanvasMode.Move,
+            new CanvasModeObject.Card("Research"),
+            CanvasModeCommitResult.Refused,
+            () =>
+            {
+                restorations++;
+                return new CanvasModeRestoration.BackAt("Research");
+            });
+        var owner = new CanvasSurfaceView { Model = document, DataContext = new object() };
+        var peer = new CanvasSurfaceView { Model = document, DataContext = new object() };
+        var palette = new TextBox();
+        var menu = new Menu();
+        var item = new MenuItem { Header = "Commit mode", Focusable = true };
+        menu.Items.Add(item);
+        var root = new StackPanel();
+        root.Children.Add(owner);
+        root.Children.Add(peer);
+        root.Children.Add(palette);
+        root.Children.Add(menu);
+        using var host = Host(root);
+
+        try
+        {
+            // The reader is in pane A. This is what makes it the pane the
+            // navigator — and therefore the mode — calls theirs.
+            Assert.True(owner.FilterFieldForTests.Focus());
+            host.UpdateLayout();
+
+            switch (entry)
+            {
+                case ModeEntry.Palette:
+                    Assert.True(palette.Focus());
+                    break;
+                case ModeEntry.Menu:
+                    Assert.True(item.Focus());
+                    break;
+                default:
+                    Assert.True(owner.FocusRow(document.FilteredOutline[0].NodeId));
+                    break;
+            }
+            host.UpdateLayout();
+
+            Assert.True(document.Modes.Enter(spec));
+            host.UpdateLayout();
+            Assert.True(document.Modes.IsActive);
+
+            // The reader moves WITHIN their own pane — coming back from
+            // the palette or the menu, or stepping from the projection to
+            // the field. Every one of these raises the window's focus
+            // event, which every pane hears.
+            Assert.True(owner.FilterFieldForTests.Focus());
+            host.UpdateLayout();
+            Assert.True(
+                document.Modes.IsActive,
+                "a sibling pane cancelled the mode because the reader moved "
+                + "inside the pane that is running it — `IsActive` is a fact "
+                + "about the DOCUMENT, and the peer read it as its own.");
+            Assert.Equal(0, restorations);
+
+            // A second movement inside the owner, because the first could
+            // have been the returning edge rather than the watch.
+            Assert.True(owner.FocusRow(document.FilteredOutline[0].NodeId));
+            host.UpdateLayout();
+            Assert.True(document.Modes.IsActive);
+            Assert.Equal(0, restorations);
+
+            // …and now the reader really does leave, for the pane next
+            // door. That ends the mode — ONCE. Two watchers plus the
+            // owner's own departure edge are three routes to the same
+            // cancellation, and a mode that restores twice has run the
+            // reader's undo twice.
+            Assert.True(peer.FilterFieldForTests.Focus());
+            host.UpdateLayout();
+            Assert.False(document.Modes.IsActive);
+            Assert.Equal(1, restorations);
+        }
+        finally
+        {
+            document.Shutdown();
+        }
+    });
+
     /// <summary>
     /// A MODE kept alive across a menu is cancelled when the reader turns
     /// out to have left — with no restoration pending anywhere.

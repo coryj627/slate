@@ -195,11 +195,39 @@ internal sealed class CanvasModeController : BindableBase
     /// </remarks>
     private CanvasFocusDeparture? _deferredDeparture;
 
-    public CanvasModeController(Action<CanvasA11yEvent> announce)
+    public CanvasModeController(
+        Action<CanvasA11yEvent> announce, Func<object?>? ownerOfRecord = null)
     {
         ArgumentNullException.ThrowIfNull(announce);
         _announce = announce;
+        _ownerOfRecord = ownerOfRecord ?? (static () => null);
     }
+
+    private readonly Func<object?> _ownerOfRecord;
+    private object? _owner;
+
+    /// <summary>
+    /// The SURFACE running the active mode, or null when no mode is.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The stack is document-shared — one controller, however many panes
+    /// show the document — so `IsActive` is a fact about the DOCUMENT and
+    /// says nothing about which pane the reader is driving. Anything that
+    /// acts on a mode's behalf from a per-surface position needs this
+    /// instead, and a sibling pane reading `IsActive` as its own is how
+    /// one pane cancelled the mode another pane's reader was using.
+    /// </para>
+    /// <para>
+    /// Captured at ENTER from the navigator's attached presenter — the
+    /// pane that owns the keys or owned them last — so a mode entered
+    /// from the palette, while the palette holds them, still belongs to
+    /// the pane the reader came from. Read THROUGH the active mode, so
+    /// there is no list of clear sites to keep complete: no mode, no
+    /// owner, by construction.
+    /// </para>
+    /// </remarks>
+    internal object? Owner => _active is null ? null : _owner;
 
     /// <summary>The active mode, or null. Published so the surface's M3
     /// value and its Commit/Cancel buttons follow it.</summary>
@@ -266,6 +294,7 @@ internal sealed class CanvasModeController : BindableBase
             Speak(new CanvasA11yEvent.CanvasModeRejected(current.Mode));
             return false;
         }
+        _owner = _ownerOfRecord();
         Active = spec;
         Speak(new CanvasA11yEvent.CanvasModeEntered(spec.Mode, spec.Object));
         return true;

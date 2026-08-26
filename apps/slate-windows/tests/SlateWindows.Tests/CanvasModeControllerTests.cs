@@ -652,6 +652,58 @@ public sealed class CanvasModeControllerTests
     /// ran and the slot stayed loaded. The next commit's mode was then
     /// cancelled by a departure that belonged to the previous press.
     /// </para>
+    /// <summary>
+    /// A mode's OWNER is read through the active mode, so it ends when
+    /// the mode does.
+    /// </summary>
+    /// <remarks>
+    /// The read-terminality this branch applies to every shared record —
+    /// the focus request, the filter request, `_awayBecause` — said one
+    /// object over. A per-surface consumer asks "am I the pane running
+    /// this", and the honest answer once no mode is running is "nobody
+    /// is": a value left behind would name a pane that owns nothing, and
+    /// the next consumer (PR F's mode verbs are the named one) would have
+    /// to remember to ask `IsActive` first. Terminality on the READ means
+    /// they cannot get it wrong by forgetting.
+    /// </remarks>
+    [Fact]
+    public void AModesOwnerEndsWithTheMode()
+    {
+        var announcer = new CanvasAnnouncer(_announced.Add, TimeSpan.FromMinutes(1));
+        var pane = new object();
+        var controller = new CanvasModeController(announcer.Announce, () => pane);
+        var spec = new CanvasModeSpec(
+            CanvasMode.Move,
+            new CanvasModeObject.Card("Research"),
+            CanvasModeCommitResult.Refused,
+            () => new CanvasModeRestoration.BackAt("Research"));
+
+        Assert.Null(controller.Owner);
+        Assert.True(controller.Enter(spec));
+        Assert.Same(pane, controller.Owner);
+
+        Assert.True(controller.Cancel());
+        Assert.Null(controller.Owner);
+
+        // …and again through the OTHER exit, because "no mode, no owner"
+        // has to hold by construction rather than per exit — which is the
+        // whole reason it is computed rather than cleared. (A REFUSED
+        // commit keeps the mode, so this arm needs one that commits.)
+        var committing = new CanvasModeSpec(
+            CanvasMode.Move,
+            new CanvasModeObject.Card("Research"),
+            () => CanvasModeCommitResult.Committed(
+                new CanvasA11yEvent.CanvasModeCommitted(
+                    CanvasTransientVerb.Move,
+                    new CanvasModeObject.Card("Research"))),
+            () => new CanvasModeRestoration.BackAt("Research"));
+        Assert.True(controller.Enter(committing));
+        Assert.Same(pane, controller.Owner);
+        Assert.True(controller.Commit());
+        Assert.False(controller.IsActive);
+        Assert.Null(controller.Owner);
+    }
+
     /// <para>
     /// The fix is not another catch. The effect, the outcome and the
     /// announcements are ONE guarded region and the drain is its
