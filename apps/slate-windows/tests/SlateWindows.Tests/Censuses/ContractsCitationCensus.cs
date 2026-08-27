@@ -73,12 +73,25 @@ public sealed class ContractsCitationCensus
                 "## PR C-unit — the coherent projection unit",
                 "## §W-G canonical-consumption audit",
                 6_000,
-                // A DESIGN section cites little that exists yet — its own
-                // types are deliberately in plain text until the day they
-                // do, which is the rule §C's travel table records. The
-                // floor is what it legitimately has, not what a shipped
-                // section would.
-                3),
+                // The floor moved when the section did. It was 3 while
+                // §C-unit was a DESIGN whose own types were deliberately
+                // in plain text; task T1 built eight of them and bound
+                // the names, and a floor below the population is a
+                // decorative floor.
+                //
+                // The number needs one caveat, because getting it wrong
+                // is easy in a way that looks right: this arm counts
+                // OCCURRENCES, not distinct names. §C-unit cited 21
+                // occurrences before T1 bound anything, so any floor at
+                // or below 21 — including one chosen by counting the
+                // eight new NAMES — would be satisfied with every T1
+                // citation removed, which is the decorative floor with
+                // extra steps. 30 sits above the pre-T1 population and
+                // below the current 37, so un-binding the new names
+                // fails while ordinary prose churn does not. It rises
+                // again as T2 onwards bind the lease, the population and
+                // the unit.
+                30),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

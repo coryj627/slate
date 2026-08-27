@@ -4787,6 +4787,32 @@ before then. U4's claim that a loser will 'by then' refuse and U12's
 termination claim are false; the verification plan has no
 sustained-contention/starvation fact."*
 
+**STATUS after T1: discharged for TERMINATION; LIVENESS conditional on
+I4.** The retry loop is gone rather than bounded — publication
+serializes, so every attempt succeeds on its first swap and no
+publisher re-decides, which the battery asserts structurally rather
+than by wall clock. What that trades is recorded here rather than in a
+report, because it is a dependency this row now has and did not before.
+Under the optimistic loop a slow transform cost only its own
+publisher's progress; under the gate it costs EVERY publisher's,
+including the UI thread's. So "the bound is one transform" is a bound
+exactly insofar as transforms are closed and small — which is
+obligation I4, and until T4 lands the transitive purity predicate it is
+enforced by nothing. **I4 is therefore a LIVENESS obligation for I2 and
+not only a purity obligation**, and I2 is not fully closed until it
+lands.
+
+**And the cost T1 created, named so it is not discovered later.** The
+gate introduces a DEADLOCK CLASS the optimistic loop could not have
+had: a monitor with no timeout and no cancellation, so a transform that
+marshals to the UI thread and waits while the UI thread is blocked in
+the same gate deadlocks. The reentrancy refusal T1 landed covers a
+strict subset — same slot, same thread — and does not touch this. Its
+guard is I4's no-callout rule, which is the same conditionality said
+once more: the wait is finite because the transform is closed. Named in
+`CanvasPublicationSlot`'s own doc comment as well, so the hazard sits
+where the mechanism is.
+
 **I3 — Post-swap effects are neither linearized nor given a valid
 thread/lifecycle story.** *"Root cause: CAS linearizes the slot only. It
 cannot make a subsequent external action atomic with validation or
@@ -5201,52 +5227,6 @@ premise would have required. A design that ends smaller than it started
 and hands its unsettled claims to code with the reviewer's own words
 attached is not a failed design.
 
-### Implementation record
-
-**T1 — the slot and its algebra.** Landed
-`CanvasPublication` with its transform algebra, `CanvasPublicationSlot`,
-the two schedules, `CanvasRequestIdentity` and `CanvasModelCopy`. Three
-obligations claimed discharged, each with its mutation returning the
-arrangement its finding NAMES:
-
-* **I5, runtime half.** Every transform allocates, including when it
-  sets the value already there; the slot refuses a transform that hands
-  back its own snapshot; and across an 800-publication run that
-  deliberately cycles content, the install observer reports zero
-  repeated references. *Mutation:* a memoising algebra reinstalls a
-  record, and a stale swap expecting the earlier value then succeeds —
-  I5's B-to-E-to-B interleaving, returned.
-* **I2.** THE RETRY LOOP IS GONE, not bounded. Decision and install are
-  one critical section, so every attempt succeeds on its first swap and
-  no publisher re-decides. The facts assert a publisher and an
-  unconditional retirement both complete under four contending threads
-  in both start orders, and — the part with teeth — that the victim's
-  transform ran exactly once per call, which is the cost model the
-  finding is actually about. *Mutation:* the optimistic loop with a
-  deterministic interleave never terminates, spending a full transform
-  per loss and reaching no terminal refusal.
-* **I7, construction half.** Collections are copied at the one
-  construction site; a caller who retains what it handed in cannot move
-  a published snapshot. *Mutation:* the same value built over a
-  caller-retained array through the immutable-collections marshal
-  mutates in place.
-
-Two things the code decided that the prose had not. The publication is a
-sealed CLASS rather than a record, because currency here is reference
-identity and a generated value equality would give every currency
-question two answers depending on which operator a caller reached for.
-And a reentrant publication is REFUSED — a transform that publishes is
-not a pure function of its snapshot, and a monitor is reentrant, so
-without the refusal an inner publication would install against a
-snapshot the outer attempt still holds. That refusal is also the first
-runtime piece of obligation I4.
-
-One branch is knowingly uncovered and its owner is named: the swap's
-failure path is a bypass detector that no T1 fact can reach, because the
-field is private and one method writes it. Task T4's
-publication-writer census (obligation I8) is what makes that structural
-rather than defensive.
-
 **THE COUNTER-POSITION RULING, load-bearing for implementation.**
 Revision 2 argued against round 1 that a query on a superseded unit
 should be ADMITTED, and it survived rounds 2, 3 and 4: the non-filter
@@ -5301,6 +5281,119 @@ METHOD rather than scope, and the seven rounds are what makes the
 architecture they hand over worth building — the boundary between what
 prose settled and what code must settle is drawn from evidence, not from
 where anyone got tired.
+
+### Implementation record
+
+**T1 — the slot and its algebra.** Landed
+`CanvasPublication` with its transform algebra, `CanvasPublicationSlot`,
+the two schedules, `CanvasRequestIdentity` and `CanvasModelCopy`.
+Claimed discharged: **I2, the runtime half of I5, and the construction
+half of I7** — said that way rather than as "three obligations", because
+two of the three are halves and the other carries a conditionality of
+its own. Each has its mutation returning the arrangement its finding
+NAMES:
+
+* **I5, runtime half.** Every transform allocates, including when it
+  sets the value already there; the slot refuses a transform that hands
+  back its own snapshot; and across an 800-publication run that
+  deliberately cycles content, the install observer reports zero
+  repeated references. *Mutation:* a memoising algebra reinstalls a
+  record, and a stale swap expecting the earlier value then succeeds —
+  I5's B-to-E-to-B interleaving, returned.
+* **I2.** THE RETRY LOOP IS GONE, not bounded. Decision and install are
+  one critical section, so every attempt succeeds on its first swap and
+  no publisher re-decides. The facts assert a publisher and an
+  unconditional retirement both complete under four contending threads
+  in both start orders — with the overlap established by the victim's
+  OWN observation of a foreign publication rather than by a counter
+  sampled after the join — and, the part with teeth, that the victim's
+  transform ran exactly once per call and that every call installed.
+  *Mutation:* the optimistic loop with a deterministic interleave never
+  terminates, spending a full transform per loss; and its victim is a
+  real load delivery, so after sixty-four losses the battery can assert
+  the finding's own semantic claim — the request is still latest, still
+  pending, and the document is not retired, so losing produced none of
+  the three terminal answers the finding names. **This row's liveness
+  half is conditional on I4; see its status note in the ledger.**
+* **I7, construction half.** Collections are copied at the one
+  construction site; a caller who retains what it handed in cannot move
+  a published snapshot. *Mutation:* the same value built over a
+  caller-retained array through the immutable-collections marshal
+  mutates in place.
+
+Two things the code decided that the prose had not. The publication is a
+sealed CLASS rather than a record, because currency here is reference
+identity and a generated value equality would give every currency
+question two answers depending on which operator a caller reached for.
+And a reentrant publication is REFUSED — a transform that publishes is
+not a pure function of its snapshot, and a monitor is reentrant, so
+without the refusal an inner publication would install against a
+snapshot the outer attempt still holds. That refusal is also the first
+runtime piece of obligation I4.
+
+One branch is knowingly uncovered and its owner is named: the swap's
+failure path is a bypass detector that no T1 fact can reach, because the
+field is private and one method writes it. Task T4's
+publication-writer census (obligation I8) is what makes that structural
+rather than defensive.
+
+**Frozen paragraphs the gate SUPERSEDES.** The freeze forbids revising
+them and that is right; this record is the sanctioned place to say which
+of them the implementation has overtaken, so a T2, T3 or T6 owner does
+not read a reclassified clause as current.
+
+| Frozen text | Status after T1 |
+|---|---|
+| U11's "re-decide on failure" clause | SUPERSEDED. U11's other clauses — one publish helper, read once, decide from that snapshot, swap with it as the expected value — are satisfied and still bind. Only the re-decision is gone, and U11 carries no obligation marker, so nothing else in the section says so |
+| The verification plan's "a losing attempt publishes nothing and starts nothing" and "a re-decision after a lost swap refuses when its request has been consumed" | UNREPRESENTABLE, both. There are no losing attempts and no re-decisions to write a fact about. The claims they were protecting are carried instead by the I2 mutation, where losing attempts still exist |
+| U12's "both publications are compare-and-swaps, so they retry until they win" | SUPERSEDED. They are swaps and they win on the first attempt |
+| U12's delivery-versus-teardown walk — "the delivery's swap fails, its re-decision reads retired, it refuses" | SAME OUTCOME, DIFFERENT MECHANISM. The delivery refuses at DECISION time, having read the retired snapshot inside the gate. Recorded here rather than only in a task report, because T2's owner will look here |
+
+**The four mutable authorities T1 introduced, with their
+dispositions.** The frozen rule counts identity and contents
+separately and says every authority the derivation finds must appear in
+the reconciliation table marked absorbed, seam, source-free or removed —
+so four undispositioned authorities would be four findings waiting for
+T4. None is CURRENCY, so the ratified invariant is intact; what was
+missing was writing them down.
+
+| Authority | Kind | Disposition |
+|---|---|---|
+| `CanvasPublicationSlot`'s publishing flag | IDENTITY — a reassigned bool | **NON-CURRENCY OPERATIONAL STATE**, alongside the lease's close-once record. Read and written only under the gate, and only to refuse a reentrant transform; no boundary consults it for admission, validation or delivery |
+| `CanvasPublicationInstallObserver`'s seen-set | CONTENTS — a readonly field holding a mutable set | **INSTRUMENT.** Not attached in production, and the slot behaves identically with and without it. It is round 5's blocker-2 shape by construction, which is why it is dispositioned rather than exempted |
+| The same observer's install and repeat counters | IDENTITY | **INSTRUMENT**, as above |
+
+**A doctrine divergence, recorded rather than left for T4 to find.**
+This codebase's test-seam guard is naming — the two dozen members whose
+suffix tells a reviewer at a glance that production must not call them.
+The observer is a production-visible instrument with no such suffix and
+no census arm enforcing one. The divergence is deliberate: the
+verification plan sanctions observation as an instrument CLASS, and a
+named type documents itself better than a suffix does. But T1's test
+file says the shipped slot carries no test seam at all, and that is true
+of the mutants and not of the observer parameter, so the claim is
+narrowed here.
+
+**A wording collision the binding created.** The bound objects paragraph
+reads "**The PUBLICATION** — `CanvasPublication` — is an immutable
+record". "Record" was English when the name beside it was plain text;
+next to a citation a reader may take it for the C# keyword, and the
+decision T1 made was specifically NOT a record. The freeze forbids
+editing the sentence; this is the note that stops a later reader
+resolving it the wrong way.
+
+**Teardown's starvation has one mutation, deliberately.** The finding
+gives retirement its own sentence and the positive fact covers it; the
+mutation does not, because retirement and delivery run through the same
+loop and a second mutant would exercise the same mechanism twice. The
+decision is recorded rather than left to look like an omission.
+
+**Reentrancy and U12's "or reenters" do not collide.** U12 step 4
+guarantees terminal publication even if the T4 seam throws or reenters;
+that reentrancy is between publish calls, not inside a transform.
+Effects follow a WON swap and therefore run with the gate released, so
+an effect that publishes makes a sequential second call rather than a
+reentrant one. The refusal's scope and U12's anticipation are disjoint.
 
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)

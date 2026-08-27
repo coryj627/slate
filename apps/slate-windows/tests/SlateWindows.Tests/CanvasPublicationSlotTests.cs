@@ -150,6 +150,14 @@ public sealed class CanvasPublicationSlotTests
             "a completion with no queue goes idle.");
 
         Assert.True(
+            CanvasFilterSchedule.Idle.Finished().Running is null
+                && CanvasFilterSchedule.Idle.Finished().Queued is null,
+            "a completion arriving with nothing running cannot invent a running "
+            + "request — the value-level half of the machine's non-running "
+            + "completion cell, whose refusal-and-publish-nothing behaviour is "
+            + "task T6's.");
+
+        Assert.True(
             replaced.Reseeded(null).Running is null
                 && replaced.Reseeded(null).Queued is null,
             "a reload with an empty rebased needle retires BOTH entries; a "
@@ -160,6 +168,101 @@ public sealed class CanvasPublicationSlotTests
                 && replaced.Reseeded(r2).Queued is null,
             "a reload with a needle seeds a NEW request against the new "
             + "population, never the dead machine's.");
+    }
+
+    /// <summary>
+    /// The load schedule's arithmetic — the state that makes the
+    /// publication itself the one-shot latch.
+    /// </summary>
+    /// <remarks>
+    /// It shipped in T1 with no fact of its own, which left the value
+    /// underneath task T3's refusal contract unasserted. The refusal is
+    /// T3's behaviour; these are the numbers it will rest on.
+    /// </remarks>
+    [Fact]
+    public void TheLoadScheduleRecordsLatestAndConsumedSeparately()
+    {
+        var l1 = new CanvasRequestIdentity("L1");
+        var l2 = new CanvasRequestIdentity("L2");
+
+        CanvasLoadSchedule idle = CanvasLoadSchedule.Idle;
+        Assert.True(
+            idle.Latest is null && !idle.Consumed,
+            "premise: a document that has never requested a load has no latest "
+            + "request and nothing consumed.");
+
+        CanvasLoadSchedule requested = idle.Requested(l1);
+        Assert.True(
+            ReferenceEquals(requested.Latest, l1) && !requested.Consumed,
+            "a requested load is latest and PENDING — pending is what a delivery "
+            + "checks, so a request that arrived already consumed could never be "
+            + "accepted.");
+
+        CanvasLoadSchedule consumed = requested.ConsumedBy(l1);
+        Assert.True(
+            ReferenceEquals(consumed.Latest, l1) && consumed.Consumed,
+            "acceptance marks the SAME request consumed rather than clearing it; "
+            + "clearing would leave a repeat delivery reading a schedule that no "
+            + "longer mentions the request it is delivering.");
+
+        CanvasLoadSchedule superseded = consumed.Requested(l2);
+        Assert.True(
+            ReferenceEquals(superseded.Latest, l2) && !superseded.Consumed,
+            "a newer request supersedes and is pending again; the consumed marker "
+            + "belongs to the request that earned it, not to the schedule.");
+
+        Assert.True(
+            !ReferenceEquals(idle, requested)
+                && !ReferenceEquals(requested, consumed)
+                && !ReferenceEquals(consumed, superseded),
+            "every schedule transition allocates, for the same reason every "
+            + "publication transform does.");
+        Assert.True(
+            idle.Latest is null && !requested.Consumed,
+            "and no transition mutated the value it was derived from.");
+    }
+
+    /// <summary>
+    /// The model's values are compared by REFERENCE and never by value —
+    /// the guard for one of the two decisions T1 made.
+    /// </summary>
+    /// <remarks>
+    /// Currency here is derived by comparing against what the slot
+    /// holds, and the install is a compare-and-swap: both are reference
+    /// operations. Converting any of these three to a record would add
+    /// a value equality beside that, so one currency question would
+    /// have two answers depending on which operator a caller reached
+    /// for. Nothing else in the battery would notice — the freshness
+    /// fact uses ReferenceEquals and the observer uses an explicit
+    /// reference comparer — so the decision needs its own guard, the
+    /// way request identity already has one.
+    /// </remarks>
+    [Fact]
+    public void ModelValuesAreComparedByReferenceAndNeverByValue()
+    {
+        CanvasPublication p1 = CanvasPublication.Seed();
+        CanvasPublication p2 = CanvasPublication.Seed();
+        Assert.False(
+            ReferenceEquals(p1, p2),
+            "premise: two seeds are two objects, or the comparison below is "
+            + "trivially true.");
+        Assert.False(
+            p1.Equals(p2),
+            "two publications carrying identical values compared EQUAL, so this "
+            + "type has acquired value equality — and every currency question in "
+            + "the model now has two answers depending on whether the caller used "
+            + "the operator or ReferenceEquals.");
+
+        var request = new CanvasRequestIdentity("L1");
+        Assert.False(
+            CanvasLoadSchedule.Idle.Requested(request)
+                .Equals(CanvasLoadSchedule.Idle.Requested(request)),
+            "the load schedule acquired value equality; it is compared by "
+            + "reference inside a publication and must stay that way.");
+        Assert.False(
+            CanvasFilterSchedule.Idle.Typed(request)
+                .Equals(CanvasFilterSchedule.Idle.Typed(request)),
+            "the filter schedule acquired value equality.");
     }
 
     /// <summary>Reference identity, and no counter: two requests with the
@@ -192,11 +295,15 @@ public sealed class CanvasPublicationSlotTests
         var slot = new CanvasPublicationSlot(CanvasPublication.Seed());
         CanvasPublication before = slot.Current;
 
-        InvalidOperationException error = Assert.Throws<InvalidOperationException>(
-            () => slot.Publish(snapshot => snapshot));
+        CanvasPublicationRefusedException error =
+            Assert.Throws<CanvasPublicationRefusedException>(
+                () => slot.Publish(snapshot => snapshot));
 
-        Assert.Contains(
-            "returned its own snapshot", error.Message, StringComparison.Ordinal);
+        Assert.True(
+            error.Reason == CanvasPublicationRefusal.IdentityReturn,
+            $"the slot refused for {error.Reason} rather than the identity return; "
+            + "the reason is asserted rather than the sentence so that rewording a "
+            + "message cannot silently weaken this fact.");
         Assert.True(
             ReferenceEquals(slot.Current, before),
             "a refused publication must leave the slot exactly where it was.");
@@ -220,7 +327,11 @@ public sealed class CanvasPublicationSlotTests
                 && ReferenceEquals(outcome.Successor, before),
             "a decline reports the snapshot on both sides, so a caller reading the "
             + "outcome never has to ask the slot what happened.");
-        Assert.Equal(0, observer.Installs);
+        Assert.True(
+            observer.Installs == 0,
+            $"a decline installed {observer.Installs} publications; a transform "
+            + "that declines has published nothing, so the observer must not have "
+            + "seen a reference.");
     }
 
     /// <summary>
@@ -236,7 +347,30 @@ public sealed class CanvasPublicationSlotTests
         // Deliberately cycles values — a needle of "a", then "b", then
         // "a" again — because a content-keyed cache is exactly what
         // would hand back a record installed earlier.
+        // ALL EIGHT transforms, not the four the value cycling needs.
+        // A memoising defect in an undriven transform would fail nothing:
+        // the per-transform fact above compares a result only against its
+        // own input, so a previously-built record passes it, and only the
+        // observer can see that record arriving twice.
         var needles = new[] { "a", "b", "a", string.Empty, "b", "a" };
+        // The schedule VALUES are hoisted and cycled, not rebuilt each
+        // round. Rebuilding them hands every transform a key it has
+        // never seen, so a content-keyed memo inside the transform would
+        // never hit and this run would report freshness it did not test
+        // — which is the same "cycle the content" reasoning the needles
+        // above are here for, and it is easy to lose on a value whose
+        // identity is fresh even when its meaning repeats.
+        CanvasLoadSchedule[] loadSchedules =
+        [
+            CanvasLoadSchedule.Idle.Requested(new CanvasRequestIdentity("L-a")),
+            CanvasLoadSchedule.Idle.Requested(new CanvasRequestIdentity("L-b")),
+        ];
+        CanvasFilterSchedule[] filterSchedules =
+        [
+            CanvasFilterSchedule.Idle.Typed(new CanvasRequestIdentity("F-a")),
+            CanvasFilterSchedule.Idle.Typed(new CanvasRequestIdentity("F-b")),
+        ];
+
         for (int round = 0; round < 200; round++)
         {
             string needle = needles[round % needles.Length];
@@ -245,11 +379,17 @@ public sealed class CanvasPublicationSlotTests
                 round % 2 == 0 ? CanvasSurfaceKind.Outline : CanvasSurfaceKind.Table));
             _ = slot.Publish(s => s.WithSelectedIntent(round % 3 == 0 ? "n1" : null));
             _ = slot.Publish(s => s.WithMarkedIntent(round % 2 == 0 ? ["n1"] : []));
+            _ = slot.Publish(s => s.WithRetired());
+            _ = slot.Publish(s => s.WithLoadState(
+                round % 2 == 0 ? CanvasLoadState.Loading : CanvasLoadState.Ready,
+                round % 2 == 0 ? null : "ready"));
+            _ = slot.Publish(s => s.WithLoads(loadSchedules[round % 2]));
+            _ = slot.Publish(s => s.WithFilters(filterSchedules[round % 2]));
         }
 
         Assert.True(
-            observer.Installs == 800,
-            $"premise: the run was supposed to install 800 publications and "
+            observer.Installs == 1_600,
+            $"premise: the run was supposed to install 1600 publications and "
             + $"installed {observer.Installs}, so a freshness claim over it would "
             + "be measuring a shorter run than it says.");
         Assert.True(
@@ -379,26 +519,62 @@ public sealed class CanvasPublicationSlotTests
 
         var victimCompleted = 0;
         var victimDecisions = 0;
+        var victimInstalls = 0;
+
+        // The overlap PROOF, and it is the victim's own observation
+        // rather than a counter sampled after the join. A publication
+        // whose predecessor is not the successor this victim received
+        // last time is a foreign publication that landed in between.
+        var foreignPublicationsObserved = 0;
+
         var stopwatch = Stopwatch.StartNew();
         var victim = new Thread(() =>
         {
-            // 200 publications, each of which the frozen design's retry
-            // loop would have had to win against four contenders.
-            for (var i = 0; i < 200; i++)
+            CanvasPublication? previousSuccessor = null;
+            var i = 0;
+
+            // Runs until BOTH legs hold: two hundred publications, and
+            // at least one observed foreign publication. Looping on the
+            // second leg is what stops the after-the-victim arm passing
+            // on a run where the contenders never got a window —
+            // establishing the arrangement rather than hoping for it.
+            while ((i < 200 || Volatile.Read(ref foreignPublicationsObserved) == 0)
+                && stopwatch.Elapsed < LivenessBudget)
             {
-                _ = retiring
+                CanvasPublicationOutcome outcome = retiring
                     ? slot.Publish(s =>
                     {
                         _ = Interlocked.Increment(ref victimDecisions);
-                        return s.Retired ? null : s.WithRetired();
+
+                        // UNCONDITIONAL, which is the word the finding
+                        // uses for teardown's retirement — so every call
+                        // installs and the decision count below has real
+                        // discriminating power rather than counting 199
+                        // declines.
+                        return s.WithRetired();
                     })
                     : slot.Publish(s =>
                     {
                         _ = Interlocked.Increment(ref victimDecisions);
                         return s.WithMarkedIntent([$"m{i}"]);
                     });
-                _ = Interlocked.Increment(ref victimCompleted);
+
+                if (outcome.Installed)
+                {
+                    _ = Interlocked.Increment(ref victimInstalls);
+                }
+
+                if (previousSuccessor is not null
+                    && !ReferenceEquals(outcome.Predecessor, previousSuccessor))
+                {
+                    _ = Interlocked.Increment(ref foreignPublicationsObserved);
+                }
+
+                previousSuccessor = outcome.Successor;
+                i++;
             }
+
+            Volatile.Write(ref victimCompleted, i);
         })
         { IsBackground = true };
 
@@ -423,10 +599,19 @@ public sealed class CanvasPublicationSlotTests
         }
         stopwatch.Stop();
 
+        // The premise is the victim's OWN observation, so it cannot be
+        // satisfied by contention that happened after the victim
+        // finished. Asserted before the liveness verdict, because a
+        // liveness claim over an uncontended run says nothing.
+        Assert.True(
+            Volatile.Read(ref foreignPublicationsObserved) > 0,
+            $"premise: the victim never observed a foreign publication in "
+            + $"{Volatile.Read(ref victimCompleted)} attempts, so this measured an "
+            + "UNCONTENDED slot whatever the contender counter says, and a "
+            + "termination claim over it would be about the wrong arrangement.");
         Assert.True(
             Volatile.Read(ref contenderPublications) > 0,
-            "premise: no contender ever published, so this measured an "
-            + "uncontended slot and says nothing about obligation I2.");
+            "premise: no contender ever published.");
         Assert.True(
             finished,
             $"a publisher did not terminate under sustained contention: "
@@ -438,7 +623,12 @@ public sealed class CanvasPublicationSlotTests
                 ? ", here for teardown's unconditional retirement, which starves "
                 + "before it can install the absorbing retired state."
                 : "."));
-        Assert.Equal(200, Volatile.Read(ref victimCompleted));
+
+        int completed = Volatile.Read(ref victimCompleted);
+        Assert.True(
+            completed >= 200,
+            $"premise: the victim completed {completed} publications rather than "
+            + "the 200 the arrangement calls for.");
 
         // The teeth. "It finished" is weak evidence — a retry loop under
         // real contention finishes too, usually, which is exactly why
@@ -450,11 +640,31 @@ public sealed class CanvasPublicationSlotTests
         // whenever a swap lost, which with four contenders is not a rare
         // event.
         Assert.True(
-            Volatile.Read(ref victimDecisions) == 200,
-            $"the victim decided {Volatile.Read(ref victimDecisions)} times for 200 "
-            + "publications, so it re-decided at least once. That is obligation "
-            + "I2's cost model — every loss re-runs the full transform — and the "
-            + "gate exists so the count and the call count are the same number.");
+            Volatile.Read(ref victimDecisions) == completed,
+            $"the victim decided {Volatile.Read(ref victimDecisions)} times for "
+            + $"{completed} publications, so it re-decided at least once. That is "
+            + "obligation I2's cost model — every loss re-runs the full transform "
+            + "— and the gate exists so the count and the call count are the same "
+            + "number.");
+
+        // And the teeth only bite if every call INSTALLED. A decline
+        // never retries under the optimistic loop either, so an arm made
+        // mostly of declines would report the same number for the wrong
+        // reason — which is why the retiring victim is unconditional.
+        Assert.True(
+            Volatile.Read(ref victimInstalls) == completed,
+            $"only {Volatile.Read(ref victimInstalls)} of {completed} victim "
+            + "publications installed; a declining attempt does not exercise the "
+            + "loss path the decision count is supposed to discriminate on.");
+
+        if (retiring)
+        {
+            Assert.True(
+                slot.Current.Retired,
+                "the absorbing retired state was never installed, which is exactly "
+                + "what obligation I2 says starvation would look like for "
+                + "teardown.");
+        }
     }
 
     /// <summary>
@@ -474,7 +684,22 @@ public sealed class CanvasPublicationSlotTests
     [Fact]
     public void MutationI2_TheOptimisticRetryLoopNeverTerminates()
     {
-        var mutant = new OptimisticSlotMutant(CanvasPublication.Seed());
+        // The victim is a real LOAD DELIVERY, because the finding's core
+        // sentence is that losing "does not make this delivery consumed,
+        // superseded, or retired" — and a victim with no request has no
+        // consumption state, so that half would be unfalsifiable by
+        // construction rather than true.
+        var request = new CanvasRequestIdentity("L1");
+        CanvasPublication seed = CanvasPublication.Seed()
+            .WithLoads(CanvasLoadSchedule.Idle.Requested(request));
+        var mutant = new OptimisticSlotMutant(seed);
+
+        Assert.True(
+            ReferenceEquals(mutant.Current.Loads.Latest, request)
+                && !mutant.Current.Loads.Consumed,
+            "premise: the delivery must start live, latest and pending, or the "
+            + "assertions below are about a schedule the finding does not "
+            + "describe.");
 
         // FAITHFULNESS premise: uncontended, the mutant publishes
         // exactly as production does, in one attempt.
@@ -488,7 +713,11 @@ public sealed class CanvasPublicationSlotTests
             + "rather than one, so the mutant is not modelling the loop faithfully.");
 
         var transforms = 0;
+        var sawLiveLatestPending = 0;
         var competitor = 0;
+
+        // The finding's own contenders: keystrokes and selections, which
+        // move the publication without touching the load schedule.
         mutant.BeforeSwap = () => mutant.CompetingPublish(
             s => s.WithSelectedIntent($"keystroke{Interlocked.Increment(ref competitor)}"));
 
@@ -500,7 +729,15 @@ public sealed class CanvasPublicationSlotTests
                 // Each loss costs another full re-decision — the
                 // finding's "another full rebase".
                 _ = Interlocked.Increment(ref transforms);
-                return s.WithMarkedIntent([$"m{transforms}"]);
+                if (s.Loads.Consumed || !ReferenceEquals(s.Loads.Latest, request))
+                {
+                    // The only terminal refusal this delivery has. The
+                    // finding says no loss ever produces it.
+                    return null;
+                }
+
+                _ = Interlocked.Increment(ref sawLiveLatestPending);
+                return s.WithLoads(s.Loads.ConsumedBy(request));
             },
             attemptCap: Cap);
 
@@ -517,6 +754,28 @@ public sealed class CanvasPublicationSlotTests
             transforms == Cap,
             $"each loss must cost a full re-decision; {transforms} transforms ran "
             + $"for {Cap} attempts.");
+
+        // The semantic half of the finding, which is the half a
+        // request-free victim cannot express.
+        Assert.True(
+            sawLiveLatestPending == Cap,
+            $"the delivery read a live, latest, pending request on only "
+            + $"{sawLiveLatestPending} of {Cap} attempts; the finding's "
+            + "arrangement is that it reads one REPEATEDLY, losing every time.");
+        Assert.True(
+            !mutant.Current.Loads.Consumed,
+            "losing sixty-four swaps left the delivery CONSUMED, which would mean "
+            + "the loop produced a terminal answer after all.");
+        Assert.True(
+            ReferenceEquals(mutant.Current.Loads.Latest, request),
+            "losing sixty-four swaps left the delivery SUPERSEDED, which would "
+            + "mean the loop produced a terminal answer after all.");
+        Assert.True(
+            !mutant.Current.Retired,
+            "losing sixty-four swaps left the document RETIRED, which would mean "
+            + "the loop produced a terminal answer after all. Consumed, superseded "
+            + "and retired are the three the finding names, and losing produced "
+            + "none of them.");
     }
 
     /// <summary>
@@ -531,14 +790,17 @@ public sealed class CanvasPublicationSlotTests
         var slot = new CanvasPublicationSlot(CanvasPublication.Seed());
         CanvasPublication before = slot.Current;
 
-        InvalidOperationException error = Assert.Throws<InvalidOperationException>(
-            () => slot.Publish(outer =>
-            {
-                _ = slot.Publish(inner => inner.WithNeedleIntent("inner"));
-                return outer.WithNeedleIntent("outer");
-            }));
+        CanvasPublicationRefusedException error =
+            Assert.Throws<CanvasPublicationRefusedException>(
+                () => slot.Publish(outer =>
+                {
+                    _ = slot.Publish(inner => inner.WithNeedleIntent("inner"));
+                    return outer.WithNeedleIntent("outer");
+                }));
 
-        Assert.Contains("reentrantly", error.Message, StringComparison.Ordinal);
+        Assert.True(
+            error.Reason == CanvasPublicationRefusal.Reentrant,
+            $"the slot refused for {error.Reason} rather than reentrancy.");
         Assert.True(
             ReferenceEquals(slot.Current, before),
             "a refused reentrant publication must leave the slot untouched — "
@@ -555,6 +817,7 @@ public sealed class CanvasPublicationSlotTests
         using var stop = new CancellationTokenSource();
         var reads = 0;
         var mixed = 0;
+        var distinctNeedles = new HashSet<string>(StringComparer.Ordinal);
 
         var writer = new Thread(() =>
         {
@@ -579,6 +842,11 @@ public sealed class CanvasPublicationSlotTests
                 {
                     continue;
                 }
+
+                lock (distinctNeedles)
+                {
+                    _ = distinctNeedles.Add(snapshot.NeedleIntent);
+                }
                 if (snapshot.SelectedIntent != snapshot.NeedleIntent
                     || !snapshot.MarkedIntent.Contains(snapshot.NeedleIntent))
                 {
@@ -595,9 +863,18 @@ public sealed class CanvasPublicationSlotTests
         stop.Cancel();
         _ = reader.Join(LivenessBudget);
 
+        int seen;
+        lock (distinctNeedles)
+        {
+            seen = distinctNeedles.Count;
+        }
+
         Assert.True(
-            Volatile.Read(ref reads) > 0,
-            "premise: the reader never ran, so nothing was observed.");
+            seen > 1,
+            $"premise: the reader saw {seen} distinct publications, so it did not "
+            + "OVERLAP the writer — a read count alone can be satisfied entirely "
+            + "after the writer finished, which would make the coherence claim "
+            + "below about a slot nobody was writing.");
         Assert.True(
             Volatile.Read(ref mixed) == 0,
             $"{Volatile.Read(ref mixed)} reads saw a publication whose three "
@@ -648,7 +925,10 @@ public sealed class CanvasPublicationSlotTests
     {
         var source = new List<string> { "a", "b" };
         ImmutableArray<string> copied = CanvasModelCopy.Ordered(source);
-        Assert.Equal(2, copied.Length);
+        Assert.True(
+            copied.Length == 2,
+            $"premise: the copy took {copied.Length} of the two elements it was "
+            + "given, so the aliasing comparison below has the wrong subject.");
 
         source[0] = "mutated";
         source.Add("c");

@@ -4,6 +4,47 @@
 namespace SlateWindows.Canvas;
 
 /// <summary>
+/// W6-1 PR C-unit, task T1: why a publication was refused.
+/// </summary>
+/// <remarks>
+/// Three distinct refusals used to share one exception distinguished by
+/// message substring, and the facts asserted on those substrings — so a
+/// reworded message silently weakened two facts. The reason is a value
+/// now, and the prose is free to change without moving a gate.
+/// </remarks>
+internal enum CanvasPublicationRefusal
+{
+    /// <summary>A transform published, so it is not a pure function of
+    /// its snapshot.</summary>
+    Reentrant,
+
+    /// <summary>A transform handed back its own snapshot — obligation
+    /// I5's identity-return path.</summary>
+    IdentityReturn,
+
+    /// <summary>The slot moved while its gate was held, so a writer
+    /// reached the field without passing through the one method that
+    /// writes it.</summary>
+    SlotBypassed,
+}
+
+/// <summary>
+/// W6-1 PR C-unit, task T1: a publication the slot would not make.
+/// </summary>
+/// <remarks>
+/// Derives from <see cref="InvalidOperationException"/> so that callers
+/// which already treat a refused publication as a programming error
+/// keep working, while a fact can assert the REASON rather than a
+/// sentence.
+/// </remarks>
+internal sealed class CanvasPublicationRefusedException(
+    CanvasPublicationRefusal reason, string message)
+    : InvalidOperationException(message)
+{
+    internal CanvasPublicationRefusal Reason { get; } = reason;
+}
+
+/// <summary>
 /// W6-1 PR C-unit, task T1: what one publication attempt did.
 /// </summary>
 /// <remarks>
@@ -116,6 +157,30 @@ internal sealed class CanvasPublicationInstallObserver
 /// is about.
 /// </para>
 /// <para>
+/// WHAT THE GATE COSTS, recorded next to what it buys because this
+/// PR's discipline is that nothing is silently dropped. First, I2's
+/// discharge is now CONDITIONAL ON I4. "Transforms are small" is a
+/// purity property, and under the optimistic loop a slow transform
+/// cost only its own publisher's progress; under the gate it costs
+/// every publisher's, so I4 is a LIVENESS obligation here and not
+/// only a hygiene one. The bound — one transform — is a bound exactly
+/// insofar as I4 holds, and until task T4 lands the transitive purity
+/// predicate that claim is enforced by nothing.
+/// </para>
+/// <para>
+/// Second, the gate introduces a DEADLOCK CLASS the optimistic loop
+/// could not have had. This is a monitor with no timeout and no
+/// cancellation, so a transform that marshals to the UI thread and
+/// waits, while the UI thread is itself blocked here, deadlocks. The
+/// reentrancy refusal below covers a strict subset — same slot, same
+/// thread — and does not touch this. What closes it is I4's rule that
+/// a transform makes no callout at all, which is the same
+/// conditionality stated once more: the wait is finite because the
+/// transform is closed, and "the transform is closed" is T4's to
+/// enforce. Named here, like the bypass branch, so a later reader
+/// meets the hazard where the mechanism is rather than in a report.
+/// </para>
+/// <para>
 /// The compare-and-swap stays, and does two jobs. It is the install,
 /// which is the ratified direction. And because it can only fail if
 /// some writer reached the field without the gate, its failure branch
@@ -176,7 +241,8 @@ internal sealed class CanvasPublicationSlot
         {
             if (_publishing)
             {
-                throw new InvalidOperationException(
+                throw new CanvasPublicationRefusedException(
+                    CanvasPublicationRefusal.Reentrant,
                     "a publication transform published reentrantly, so it is not a "
                     + "pure function of its snapshot and the outer attempt would "
                     + "install over work it never saw");
@@ -194,7 +260,8 @@ internal sealed class CanvasPublicationSlot
 
                 if (ReferenceEquals(successor, snapshot))
                 {
-                    throw new InvalidOperationException(
+                    throw new CanvasPublicationRefusedException(
+                        CanvasPublicationRefusal.IdentityReturn,
                         "a publication transform returned its own snapshot; a "
                         + "publication reference is never installed twice, and a "
                         + "transform with nothing to say declines by returning null");
@@ -204,7 +271,8 @@ internal sealed class CanvasPublicationSlot
                     Interlocked.CompareExchange(ref _current, successor, snapshot);
                 if (!ReferenceEquals(seen, snapshot))
                 {
-                    throw new InvalidOperationException(
+                    throw new CanvasPublicationRefusedException(
+                        CanvasPublicationRefusal.SlotBypassed,
                         "the publication slot moved while its gate was held, so a "
                         + "writer reached the field without passing through this "
                         + "method");

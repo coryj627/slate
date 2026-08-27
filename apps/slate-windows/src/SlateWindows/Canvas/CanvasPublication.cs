@@ -52,7 +52,9 @@ internal sealed class CanvasLoadSchedule
     internal CanvasRequestIdentity? Latest { get; }
 
     /// <summary>Whether <see cref="Latest"/> has already been accepted.
-    /// A delivery that reads this as true refuses.</summary>
+    /// A delivery that reads this as true refuses — that REFUSAL is
+    /// task T3's behaviour and T3's fact; what T1 owns and asserts is
+    /// the value arithmetic underneath it.</summary>
     internal bool Consumed { get; }
 
     internal CanvasLoadSchedule Requested(CanvasRequestIdentity request) =>
@@ -221,14 +223,28 @@ internal sealed class CanvasPublication
     internal CanvasPublication WithMarkedIntent(IEnumerable<string>? nodeIds) =>
         Copy(markedIntent: CanvasModelCopy.Ids(nodeIds));
 
-    internal CanvasPublication WithNeedleIntent(string needle) =>
-        Copy(needleIntent: needle);
+    /// <remarks>Guarded, because <c>Copy</c> reads null as "not
+    /// supplied": without this, a null needle would silently produce an
+    /// unchanged-valued copy rather than throwing, which is the second
+    /// spelling of one value this design refuses everywhere
+    /// else. Same for the two schedules below.</remarks>
+    internal CanvasPublication WithNeedleIntent(string needle)
+    {
+        ArgumentNullException.ThrowIfNull(needle);
+        return Copy(needleIntent: needle);
+    }
 
-    internal CanvasPublication WithLoads(CanvasLoadSchedule loads) =>
-        Copy(loads: loads);
+    internal CanvasPublication WithLoads(CanvasLoadSchedule loads)
+    {
+        ArgumentNullException.ThrowIfNull(loads);
+        return Copy(loads: loads);
+    }
 
-    internal CanvasPublication WithFilters(CanvasFilterSchedule filters) =>
-        Copy(filters: filters);
+    internal CanvasPublication WithFilters(CanvasFilterSchedule filters)
+    {
+        ArgumentNullException.ThrowIfNull(filters);
+        return Copy(filters: filters);
+    }
 
     /// <summary>
     /// The one copy path, so there is one place where freshness lives.
