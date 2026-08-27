@@ -3457,15 +3457,16 @@ one variant from the C# switch.
 ## PR C-unit — the coherent projection unit (design; by the user's split ruling this revision is the MODEL design only, and the presentation and effect periphery is carried below as a bounded ledger of explicitly unresolved obligations that no model contract may depend on)
 
 **This section is a DESIGN, ratified before any code exists**, at
-revision 6. Rounds 1–5 returned NOT SOUND with ten, eleven, twelve,
-eight and five blockers, and not one of them cost an implementation
-round — which is the DESIGN-FIRST ruling working. Round 3 tripped the
-convergence tripwire and the user ruled: **split the design.** The count
-has dropped twice since, 12 to 8 to 5, with the tripwire quiet both
-times, and round 5's own adversarial walks now ratify U9's fifteen
-cells, U12's refusal sequence, U14's construction-site enforcement,
-D4's twenty-seven rows, and the absence of any new model dependency on
-an unresolved row.
+revision 7. Rounds 1–6 returned NOT SOUND with ten, eleven, twelve,
+eight, five and four blockers, and not one of them cost an
+implementation round — which is the DESIGN-FIRST ruling working. Round 3
+tripped the convergence tripwire and the user ruled: **split the
+design.** The count has dropped three times since, 12 to 8 to 5 to 4,
+with the tripwire quiet each time. Round 6 attacked the design's one
+declared load-bearing premise — that publication is dispatcher-only —
+and was right that it was FALSE against inherited code. Revision 7's
+answer is a removal rather than a mechanism: the publication becomes a
+compare-and-swap, which needs no thread at all.
 
 **Goal.** Move the filter match off the dispatcher without re-opening the
 coherence class, and land the projection unit, the publication and the
@@ -3501,9 +3502,11 @@ What remains in T2 is the SURFACE half: which pane initiated an
 operation, whether that component can be forged or mismatched, and the
 validation of presentation-addressed effects.
 
-**Round 5 moved no line at all**, which is the first revision that can
-say so: all five of its blockers were inside the model, and its own
-walk confirms that revision 5 introduced no new dependency on T1–T6.
+**Rounds 5 and 6 moved no line at all.** All nine of their blockers were
+inside the model, and both rounds' walks confirm no new dependency on
+T1–T6. Round 6 in fact pushed one thing further OUT: the swap makes the
+model thread-agnostic, so the only place affinity is still a problem is
+WPF's own apply, which is T1 and T3 and always was.
 
 **The rule that makes the split honest:** no model-side contract may
 depend on an unresolved row. Where the model must reference the
@@ -3666,10 +3669,88 @@ needle-dependent query and U9 gives it request currency.
 
 ### THE MEMORY MODEL
 
-**Publication is dispatcher-only; currency reads are free-threaded
-volatile reads of the one field.** One writer, so the exchange at the
-publication point is for the atomic PREDECESSOR it returns, not for
-mutual exclusion.
+**Publication is a COMPARE-AND-SWAP on the one field, from any thread;
+currency reads are free-threaded volatile reads of it.** There is no
+thread affinity anywhere in the model.
+
+**This is revision 7's central change, and it is a REMOVAL.** Revision 6
+said publication was dispatcher-only and leaned on that to serialize
+deliveries. Round 6 audited the premise and it was not merely unproven —
+it was FALSE against inherited code. `PanelWorkScheduler`'s post runs
+the callback INLINE on the worker when the captured context is null and
+inline on the caller in synchronous mode, and the canvas async test
+harness deliberately installs a null context so publishes run on the
+worker. Two deliveries could therefore read one snapshot on two pool
+threads, both accept, and each install a lease: one publication lost,
+one handle leaked, and the one-shot property false.
+
+The remedy on offer was a model-owned serial executor with a closed
+delivery entrypoint, its own enqueue lifecycle and its own death story.
+That is a large new mechanism, and this branch has twice done better by
+removing one instead. **Serialization is a property the ONE FIELD can
+have on its own.** Every publication is:
+
+1. read the slot once — the **DECISION SNAPSHOT**;
+2. decide, and compute an immutable successor from that snapshot alone;
+3. install it with a compare-and-swap whose expected value IS the
+   snapshot;
+4. if the swap fails, the publication did not happen: re-read and
+   re-decide from the new snapshot.
+
+Two concurrent publishers cannot both win. The loser's swap fails
+against a slot it no longer recognizes, and it re-decides — where a
+delivery will now find its request consumed or superseded and refuse.
+Codex's breaking arrangement runs to completion with one publication and
+one closed lease, and it becomes a verification fact rather than a
+premise to defend.
+
+**Four rules keep the swap honest.** Each is unrepresentable rather than
+disciplined, and together they are what a serial executor would have
+had to establish anyway:
+
+* **FRESH ALLOCATION — no publication object is ever installed twice**,
+  so the swap cannot compare equal to a value that has come round
+  again. This is not discipline: the publish helper is the only thing
+  that allocates a successor, from a pure transform of the snapshot, so
+  a caller has no way to hand back a record that was installed before.
+  ABA is unrepresentable rather than improbable, which is the shape this
+  branch already required of request identity.
+* **THE TRANSFORM IS PURE.** It may compute an immutable successor and
+  allocate identities; it may not close a handle, start a job, announce,
+  or touch the shell. Nothing observable happens on an attempt that
+  loses, which is what makes a retry safe.
+* **EFFECTS FOLLOW A WON SWAP**, keyed to the predecessor-successor pair
+  the helper returns — starting the promoted filter job, closing the
+  replaced handle, emitting the sentence. A later publication that
+  supersedes before the effect dispatches is caught at DISPATCH by D2,
+  which is machinery the design already had.
+* **PROGRESS IS LOCK-FREE.** A failed swap means another publisher
+  succeeded, so the system always advances; and a delivery's re-decision
+  terminates because refusal is terminal — it cannot fail its way around
+  the loop forever.
+
+**What this buys, beyond the blocker.** The rebase becomes atomic with
+the publication it feeds: revision 6 read the current publication and
+then assigned, so a concurrent writer could stale the rebase between the
+two, and the swap closes that without a separate rule. The retirement
+check becomes atomic with acceptance for the same reason — a delivery
+that decided before a terminal publication cannot install over it,
+because its swap fails and its re-decision sees retired.
+
+**And it dissolves the second blocker.** With no marshal there is no
+posted callback to be rejected or aborted, so a delivery's finally block
+always runs on the thread that produced it, and teardown publishes on
+whichever thread calls it. Round 6's dispatcher-shutdown arrangement —
+a lease owned by a delivery whose callback never runs, and a U12 that
+never enters — has nowhere to occur. The design needs no executor
+lifecycle because it has no executor.
+
+**Where the dispatcher still lives, and it is not here.** WPF's own
+apply — installing rows and text on controls — is dispatcher-bound and
+always was. That is PRESENTATION, it is T1 and T3, and the split
+already owns it. The model is thread-agnostic; the periphery is where
+affinity is a problem, which is one more reason the split's line is in
+the right place.
 
 | Class | Currency authority | Two-write risk |
 |---|---|---|
@@ -3747,23 +3828,29 @@ consumed. A load result is accepted only if its request is still the
 latest, its delivery state is still pending, and the document is live.
 
 *One-shot ownership, WITHOUT a second mutable field* — round 4's blocker
-5 as corrected by round 5's blocker 3. Revision 5 latched delivery with
-an atomic claim on the result, and round 5 was right that this was a
-second mutable authority: two runs with identical publications could
-behave differently because the claim differed. **The latch is the
-publication itself.** Delivery is dispatcher-only, so the dispatcher —
-not an interlocked field — serializes two callbacks, and each one reads
-the slot ONCE and decides:
+5 as corrected by round 5's blocker 3 and round 6's blocker 1. Revision
+5 latched delivery with an atomic claim on the result, and round 5 was
+right that this was a second mutable authority. Revision 6 replaced it
+with the publication transition and rested serialization on a dispatcher
+premise that round 6 showed to be false. **The latch is the publication
+itself, and the SWAP is what serializes it** — no thread, no executor,
+no claim. Delivery runs on whatever thread produced it. It reads the
+slot ONCE as its decision snapshot and decides:
 
 * request not latest, or delivery state not pending, or document retired
   ⇒ REFUSE;
 * otherwise ⇒ ACCEPT, and publish the pending-to-consumed transition in
-  the same assignment that installs the lease and population.
+  the same swap that installs the lease and population.
 
-Spending the claim and installing the lease are therefore the same
-event, and a second delivery of an already-accepted request reads
-*consumed* and refuses. That is the whole latch, and it is a derived
-read of the one field in exactly U5's style.
+Spending and installing are therefore the same event, and a second
+delivery of an already-accepted request reads *consumed* and refuses.
+**If the swap fails, nothing happened** — the delivery re-reads and
+re-decides, and by then its request is consumed, superseded, or the
+document is retired, so it refuses. Two concurrent deliveries on two
+pool threads, which is round 6's breaking arrangement and a shipped test
+configuration, therefore produce exactly one publication and exactly one
+closed lease. That is the whole latch, and it is a derived read of the
+one field in exactly U5's style.
 
 *Which makes the refusal branch's close a DERIVED question too*, and
 this is what stops the double-close revision 4 worried about: **a
@@ -3774,31 +3861,33 @@ on the lease, never consulted as currency — so even a pathological
 second close is a no-op rather than a double free.
 
 *The release obligation, at every point of the window* — round 5's
-blocker 4. Between the moment a delivery is entered and the moment a
-publication names its lease, the RESULT owns that lease and nobody else
-does, so the obligation is scoped and discharged in a finally block that
-wraps the whole delivery:
+blocker 4, with round 6's minor 6 correcting what the table claimed. A
+delivery performs **one decision read and one final ownership read**,
+and nothing else reads the slot; the obligation is discharged in a
+finally block wrapping the whole delivery.
 
 | Point in the window | Who owns the lease | What the finally does |
 |---|---|---|
-| entered, before the slot is read | the result | closes — the slot does not name it |
-| refusal decided | the result | closes |
-| accepted, during rebase, reseed and publication preparation | the result | closes if anything throws — the slot still does not name it |
-| the publishing assignment | the result until it returns | a reference assignment either happened or did not; the guard reads the slot and answers correctly either way |
-| after the publication is installed | the PUBLICATION | does nothing — the slot names it |
+| entered, FRESH delivery | the result alone | closes — the slot does not name it |
+| entered, REDELIVERY of an already-accepted result | the PUBLICATION already owns and names it — round 6's minor 6, which revision 6's table wrongly described as exclusive result ownership | does nothing; the guard's live read finds the lease in the slot |
+| refusal decided | the result, unless this is the redelivery row | closes in the first case, does nothing in the second — one guard, two truths |
+| accepted, during rebase, reseed and successor construction | the result | closes if anything throws — the slot still does not name it |
+| the swap itself | the result until the swap WINS | a compare-and-swap either took or did not; the guard's live read answers correctly either way, and a LOST swap leaves the result owning its lease so the re-decision or the finally closes it |
+| after the swap wins | the PUBLICATION | does nothing — the slot names it |
 
-One guard covers all five, because the guard is not a state machine: it
+One guard covers all six, because the guard is not a state machine: it
 is "close unless the live publication names this lease", evaluated once
-in the finally. An exception after the claim was spent — revision 5's
-gap, where the result had lost its retryable capability and no
-publication had taken ownership — cannot leak, because nothing is spent
-until the publication that takes ownership is installed.
+in the finally, against the slot as it is at that moment. That is why
+the table can carry two different ownership truths at the same entry
+point without the algorithm needing to know which it is in. An exception
+after a claim was spent — revision 5's gap — cannot occur, because
+nothing is spent until the swap that takes ownership wins.
 
 *The REBASE at acceptance* — round 4's blocker 6, which is round 2's
 blocker 1 resurfacing through the absorbs-nothing decision. A load
 result owns ONLY lease and population material: rows, indexes, memo. It
-carries NO document-class state at all. At dispatcher acceptance the
-publisher reads the CURRENT publication once (U11) and carries forward
+carries NO document-class state at all. At acceptance the publisher
+reads its DECISION SNAPSHOT once (U11) and carries forward
 **every DOCUMENT-class member of that snapshot**, which is the rule
 rather than a list, because round 5's blocker 5 found the list short.
 Two kinds:
@@ -3827,8 +3916,8 @@ needle and the surface.
 
 *Transition.* Publish the terminal state for the old lease and
 population; close the old handle under its lock; construct the new lease
-and population off-thread; rebase, carry forward, and publish in one
-assignment. No live publication ever names a closed handle.
+and population off-thread; rebase, carry forward, and install in ONE
+SWAP. No live publication ever names a closed handle.
 
 **U5 — Currency is DERIVED, never carried.** A reference comparison
 against what the slot holds, per class. Physical close is a separate,
@@ -3887,6 +3976,14 @@ population as well, because a reload is one of its events.
 | *(R, none)* | publish *(R, K)*; do not start K | publish R's ANSWER and *(none, none)* | refuse the delivery; publish nothing | as above; R's later completion becomes a non-running completion and is refused | as above; R's completion is refused at delivery and teardown does not wait |
 | *(R, Q)* | publish *(R, K)*; Q is dropped before it ever started | **DISCARD R's answer**, publish *(Q, none)*, then start Q | refuse the delivery; publish nothing | as above; both R and Q are discarded and the rebased needle seeds the new machine | as above; Q is dropped |
 
+**Every cell is a compare-and-swap**, decided from one snapshot and
+retried on failure, which is what makes the machine total across threads
+as well as across events. A filter completion is a writer like any
+other — round 6's audit noted U9 named completion events without a
+serialization boundary, and the answer is the same one the whole model
+now uses rather than a boundary of its own. Starting the promoted job is
+an EFFECT and therefore follows a won swap, never an attempt.
+
 Three consequences worth stating, because revision 4 got each of them
 wrong or left it silent:
 
@@ -3913,10 +4010,30 @@ immutable memo-enriched population successor published with completion
 validation — never an in-place fill, never a shared sentinel. That
 successor is also row 3's one reachable transition.
 
-**U11 — One assignment, and compound consumers hold ONE snapshot.** Any
-consumer reading more than one fact for one purpose acquires the
-publication once. Convenience getters that silently re-read the slot are
-forbidden. U4's rebase is the load path's instance of this rule.
+**U11 — One SWAP, one decision snapshot, and compound consumers hold
+that snapshot.** Round 6's blocker 1. Every writer goes through the one
+publish helper: read once, decide from that snapshot alone, swap with
+the snapshot as the expected value, re-decide on failure. Any consumer
+reading more than one fact for one purpose acquires the publication
+once; convenience getters that silently re-read the slot are forbidden.
+U4's rebase is the load path's instance of this rule, and the swap is
+what makes the rebase atomic with the publication it produces.
+
+**The writer set is CLOSED by construction, not by audit.** The slot is
+private, the publish helper contains the only compare-and-swap in the
+model, and the helper allocates the successor itself from a pure
+transform — so there is no API through which a caller can install a
+record it built, or a record that was ever installed before. U13's
+publication-writer arm asserts exactly that: one swap site, no other
+write to the field, and every publishing path reaching the helper.
+Revision 6 would have needed a census proving every writer was on some
+executor; this needs a census proving there is one writer, which is a
+question a compiler can answer.
+
+**Four writer families**, enumerated so the arm has something to be
+complete against: load completion, filter completion, model-effect
+application, and UI-originated intent publication. All four call the
+helper; none of them marshals, and none of them may assume a thread.
 
 **U12 — Teardown's model SEQUENCE, implementable with T4 unresolved.**
 Round 4's blocker 7 was right that revision 4 named only the terminal
@@ -3948,11 +4065,31 @@ one retired snapshot and every model boundary refuses; the scheduler's
 shutdown cannot precede the model's retirement; and a T4 fault or
 reentrancy still terminalizes.
 
+**Teardown runs on the calling thread, and needs no dispatcher** —
+round 6's blocker 2, which the swap dissolves rather than answers. Both
+publications are compare-and-swaps, so they retry until they win;
+retirement is unconditional and has no refusal branch, which is what
+makes the retry terminate. Because nothing is posted anywhere, there is
+no queued teardown that a stopping dispatcher can drop, and no delivery
+callback that can be rejected while still owning a lease. Round 6's
+arrangement — a worker opens lease L, posts its delivery, and shutdown
+begins before the callback runs, so nobody's finally ever executes — has
+no posting step to build on.
+
+**A delivery racing teardown is safe in both orders, by the same
+mechanism.** If the delivery's swap wins first it installs its lease,
+and the terminal publication then replaces it, so D1's lease row closes
+the handle after the last in-flight call. If teardown's swap wins first,
+the delivery's swap fails, its re-decision reads retired, it refuses,
+and its finally closes the lease it opened because the live publication
+does not name it. There is no third order, because there is one field
+and one swap.
+
 This defines the model's refusal and release without authorizing T4's
 restoration or its sentence, which is the whole of what the split asks
 for.
 
-**U13 — SEVEN census arms, each from an authority independent of what it
+**U13 — NINE census arms, each from an authority independent of what it
 checks, each EXECUTABLE, and PARTITIONED by the split.** Round 4's
 blocker 8 was right that a single gate over every type in the canvas
 tree could pass only by prematurely resolving the periphery or by
@@ -3997,6 +4134,26 @@ fact inside it. This arm derives each payload type's MINIMUM class from
 its own fields and fails when the declared class is coarser. See U14,
 which states the field-level rule the arm executes.
 
+*The SOURCE-TAG arm* — round 6's blocker 3, which is the arm above's own
+anchor. It enumerates every construction site of every class-tagged
+source wrapper and fails if a site sits outside the class it tags, so a
+population value cannot be born document-tagged. Its population is
+deliberately WIDER than the owned-symbol closure, because the FFI-return
+adaptation sites are where a raw value first acquires a class and
+generated FFI internals are outside that closure — an arm that inherited
+the closure would miss the one boundary that matters. It also asserts
+that no transformation coarsens a tag, and that no unwrap-to-raw
+accessor exists.
+
+*The PUBLICATION-WRITER arm* — round 6's blocker 1. The slot field is
+private; exactly one compare-and-swap site exists in the model; no other
+statement writes the field; every publishing path reaches the helper;
+and the helper allocates its successor from a pure transform rather than
+accepting a caller-built record. Revision 6 would have owed a census
+proving every writer ran on some executor, which is a runtime property a
+gate can only sample. This is a compile-time question about one field,
+which is why the removal was worth making.
+
 *The AUTHORITY census* — round 4's blocker 2, with round 5's blocker 2
 correcting the derivation itself. Revision 5 derived authorities from
 WRITE SITES — "every field written outside its constructor" — and round
@@ -4009,10 +4166,22 @@ shell-handoff delegates mutate with no source-level field write at all.
 A predicate that passes over those is not a closure.
 
 **The derivation is now from TYPES, and it separates identity from
-contents.** A type is DEEPLY IMMUTABLE when every instance member is
-readonly and every member's type is itself deeply immutable, seeded from
-a declared base set — primitives, strings, enums, and the immutable
-collection types. Then:
+contents.** Round 6's blocker 4 then corrected what "immutable type"
+may mean: revision 6's predicate was STRUCTURAL, so a field typed as a
+read-only interface counted as immutable while the object behind it was
+a caller's list the caller kept mutating. A read-only surface is not
+evidence about the runtime object or its aliases.
+
+**Deep immutability is therefore NOMINAL and CLOSED-WORLD.** Unknown
+interfaces, abstract types, arrays, delegates and externally implemented
+collections default to MUTABLE. Only two things are immutable: an
+explicitly trusted framework set — primitives, string, enums, and the
+immutable collection types — and owned SEALED types recursively proven,
+with immutable generic arguments. Owned immutable types carry a
+construction constraint as well: one that accepts a collection must COPY
+it into an immutable collection rather than alias the caller's, so the
+population's rows and the publication's marked IDs are immutable
+collections and not read-only views over somebody's array. Then:
 
 * a field or auto-property whose type is NOT deeply immutable
   contributes a **CONTENTS** authority, readonly or not;
@@ -4083,15 +4252,45 @@ depends on nothing. The payload's MINIMUM class is the join of its
 fields' classes down the U3 chain, so a record holding one population
 fact has minimum POPULATION however few other fields it has, and a
 record of literals has no minimum at all. **Declaring a class coarser
-than the minimum is a census failure**, and there is no way to sneak a
-raw count in, because a count that came from rows is typed as having
-come from rows.
+than the minimum is a census failure.**
 
-U13's payload-class arm executes exactly that: derive each payload
-record's minimum from its field types, join it to the FACTS manifest,
-fail on any declared class weaker than the derivation. D4 carries the
-pair — relabel a population-count payload as document-classed and the
-arm must fail; remove the arm and the stale count reaches the boundary.
+*ANCHORING the join — round 6's blocker 3, and the same move made one
+level deeper.* A join over tags proves nothing if a tag can be chosen.
+Revision 6 left source wrappers mintable, so the funnel could read a row
+count, compute an int, and place it in a document-tagged wrapper: the
+payload's join would then be DOCUMENT, the arm would pass, and the stale
+count would emit on document currency. The defect was not the join. It
+was that revision 6 applied its own rule — *the class comes from what
+produced the value, not from what the caller says* — at the payload
+level and stopped there.
+
+**So a source tag is not minted; it is what the class-owning object
+RETURNS.** There is no constructor anywhere that takes a value and a
+class. The population's members return population-tagged values, the
+unit's return unit-tagged, the lease's return lease-tagged, the
+document's return document-tagged, and the loader's adaptation of an FFI
+return produces lease- or population-tagged values because that is what
+it read. Provenance is structural: a wrapper's class is decided by which
+object could have constructed it.
+
+**Transformations PRESERVE or REFINE, never coarsen.** Mapping a
+population-tagged value yields a population-tagged value; combining two
+yields the finer of the two; refining from population to unit is
+allowed, because a unit-classed effect is validated more strictly, and
+going the other way is not expressible. There is no unwrap-to-raw
+operator: a tagged value's only exit is a boundary that validates it,
+which is the same sealed-carriage rule U14 already applies to results,
+applied to the values inside them.
+
+U13 executes both halves. The payload-class arm derives each payload
+record's minimum from its field types and fails on a weaker declaration.
+The SOURCE-TAG arm enumerates every construction site of every wrapper —
+including the FFI-return adaptation sites the owned-symbol closure would
+otherwise miss, since generated FFI internals are outside it — and fails
+if any site sits outside the class it tags. D4 carries both pairs, and
+the source-tag pair is the sharper one: re-tag a population wrapper as
+document-classed and the census must fail BEFORE any payload is
+constructed, which is what "anchored" means.
 
 What this deliberately does NOT cover, and hands to T2: the token's
 SURFACE component, its forgeability, and the validation of
@@ -4112,13 +4311,13 @@ never named (major 6).
 |---|---|---|---|
 | Document | the retired marker | every model boundary refuses | when the registry drops it |
 | Lease | replaced by a terminal or successor publication | admission and revalidation refuse | handle closed ONCE under its lock after the last in-flight call, recorded on the lease |
-| Population | replaced by a new population publication | queries and population-sourced effects refuse | when ALL SIX owners drop it: publication, operation token, sealed result, pending effect, in-flight operation, installed surface |
-| Unit | replaced by a successor publication | unit-scoped reads and unit-sourced effects refuse | the same six |
-| Publication | replaced by the next assignment | none — a value | the slot holds one; predecessors live until every operation and surface holding them drops, so "the slot retains exactly one" is NOT release |
+| Population | replaced by a new population publication | queries and population-sourced effects refuse | when ALL SEVEN owners drop it: publication, operation token, sealed result, pending effect, in-flight operation, installed surface, and — round 6's major 5 — an **UNDELIVERED LOAD RESULT**, which owns a population no publication has yet named and is neither in-flight nor a sealed result |
+| Unit | replaced by a successor publication | unit-scoped reads and unit-sourced effects refuse | the same seven, less the load result, which never holds a unit |
+| Publication | replaced by the next winning swap | none — a value; a LOST attempt's successor is terminal on construction and is simply dropped | the slot holds one; predecessors live until every operation, result, effect and surface holding them drops, so "the slot retains exactly one" is NOT release |
 | Load request | superseded in the load schedule, or marked consumed by an accepting publication | a non-latest or non-pending delivery refuses | with the publication carrying the schedule |
-| Load result — ACCEPTED | the publication that installs its lease also publishes consumed | not applicable; this is the accepted branch | ownership TRANSFERS to the publication and the result releases nothing; its close observation must stay at zero, and a second delivery reads consumed, refuses, and does NOT close because the live publication names that lease |
-| Load result — REFUSED | the acceptance check rejects it | stale, superseded, retired or non-pending | **closes its own lease exactly once**, guarded by "unless the live publication names it", which is what makes a repeat delivery harmless |
-| Load result — FAULT before transfer | the delivery throws between entry and the installing assignment | no publication ever names the lease | the delivery's finally block closes it under the same guard — round 5's blocker 4, and the reason the guard is a derived read rather than a spent flag |
+| Load result — ACCEPTED | the swap that installs its lease also publishes consumed | not applicable; this is the accepted branch | LEASE ownership transfers to the publication and the result releases nothing; its close observation stays at zero, and a redelivery reads consumed, refuses, and does NOT close because the live publication names that lease. Its POPULATION transfers in the same swap |
+| Load result — REFUSED | the acceptance check rejects it, on first decision or after a lost swap | stale, superseded, retired or non-pending | **closes its own lease exactly once**, guarded by "unless the live publication names it". Its POPULATION was never published and is dropped with the result — managed memory, collected when the result is |
+| Load result — FAULT before transfer | the delivery throws between entry and a won swap | no publication ever names the lease | the delivery's finally closes it under the same guard — round 5's blocker 4. The population is dropped with the result, which is why a faulted delivery leaks nothing managed either |
 | Filter request | superseded in the filter schedule, or discarded on promotion | a non-running delivery refuses | an ANSWERED successor deliberately RETAINS its request, so release is with that unit's publication — not on delivery |
 | Filter job | none — not cancellable | revalidated before FFI, refused at delivery | on completion; teardown does not wait |
 | Query operation | none — not cancellable | refused at completion validation | when the call returns |
@@ -4154,9 +4353,9 @@ thing it claims to.
 ENABLES the state.** Round 4 found three whose consequences their
 mutations could not return; each was rewritten to claim what its
 mutation really enables, and round 5 confirmed the resulting
-twenty-seven. Thirty-two now: round 5's five blockers each earn a pair,
-and the delivery row is restated against the publication transition that
-replaced the claim.
+twenty-seven. Round 5's five blockers took it to thirty-two, which round
+6 confirmed. Thirty-eight now, six of them for the swap and the two
+anchored converses.
 
 | Claim | Enable it by | The consequence that returns |
 |---|---|---|
@@ -4180,6 +4379,12 @@ replaced the claim.
 | A reload cannot strand the filter machine | preserving the schedule across load acceptance instead of retiring both entries and reseeding | a dead running request occupying the slot with no callback able to clear it |
 | A stale load cannot overwrite a newer one | removing the load schedule comparison | L1 replacing L2's publication |
 | An unaccepted lease cannot leak | making a refused load delivery return without closing | a handle open with no publication naming it |
+| Two publishers cannot both win | replacing the compare-and-swap with a plain assignment, which is exactly revision 6's design | round 6's own arrangement: two deliveries on pool threads under a null context both accept, one publication is lost and its lease leaks |
+| A publication cannot be installed twice | letting the publish helper accept a caller-built successor instead of allocating it from a pure transform | a record re-installed, so a swap compares equal to a value that came round again |
+| A losing attempt cannot have consequences | letting the transform start the promoted filter job instead of doing it after the swap wins | a job started by an attempt that published nothing |
+| A transformation cannot coarsen a class | allowing a population-tagged value to be re-wrapped as document-tagged downstream | the laundering blocker 3 named, one step further along |
+| A source tag cannot be chosen | giving the source wrapper a constructor that takes a value and a class | a row count born document-tagged, and every join above it honest about a lie |
+| A read-only interface is not evidence | making deep immutability structural again, so a read-only surface counts as immutable | a caller-retained list behind a read-only field, mutating a contents authority the census never found |
 | A delivery cannot run twice | removing the pending-to-consumed transition from the accepting publication, so a repeat delivery still reads pending | the same lease installed twice, and the first one leaked |
 | An accepted lease cannot be closed by a repeat delivery | dropping the "unless the live publication names it" guard from the refusal branch | a live, published handle closed underneath the model |
 | A fault before transfer cannot leak the lease | narrowing the delivery's finally to the refusal branch only | a rebase or publication-preparation throw leaving a handle nobody owns |
@@ -4245,6 +4450,7 @@ mean something.
 | The document's and the surfaces' EVENTS — outline published, surface switched, and their siblings (subscriber lists) | **SOURCE-FREE**, with subscription itself an ordering obligation of the periphery | a subscriber list is observable mutable state; it carries no canvas class, and who may subscribe when is T1/T3's |
 | `PanelWorkScheduler`'s shutdown flag | **SEAM 3** — external, ordered | the preterminal retired publication is published BEFORE the base shutdown, so scheduler-shut implies model-retired and never the converse; no model contract reads the flag; its refusal set is a strict subset of the model's |
 | `PanelWorkScheduler`'s pending-work set and its work lock (CONTENTS — readonly fields holding mutable state) | **SEAM 3** — external | the third shape round 5's blocker 2 named. No model contract reads either; teardown does not wait on the set, and U12 step 4's physical close is what actually waits, under the LEASE's lock rather than this one |
+| `PanelWorkScheduler`'s POST — the inherited marshal | **NEITHER WRAPPED, REPLACED, NOR CONSTRAINED — simply not used for slot writes** | round 6's blocker 1 asked which of the three this design does to the scheduler, and the answer the swap makes available is a fourth: none. The model never routes a publication through post, so post's null-context and synchronous-mode inline paths — the ones that falsified revision 6's premise — are irrelevant to model correctness rather than hazards to be fenced. The scheduler keeps its one job, STARTING background work, and the canvas async harness's deliberate null context becomes a supported arrangement instead of a contradiction. Post remains C-lite's route for PRESENTATION application, which is dispatcher-bound and is T1/T3's |
 | `CanvasAnnouncer`'s retirement, and the document's speak-boundary read of it | **SEAM 4** — external, T4-ordered | the two instants differ deliberately so the last restoration sentence can be heard; the model guarantees only that a class-invalid sentence never reaches the announcer, and T4 owns whether a class-valid one emits |
 | `CanvasModeController`'s active spec, committing flag, terminality, deferred departure and owner; `CanvasNavigator`'s attached presenter; the document's durable focus and filter-focus requests | **SEAM 1** — inherited whole | hardened across twelve codex rounds with their own terminality, addressing, completion and sweep contracts; absorbing them would REPLACE a shipped lifecycle, which the inheritance rules forbid. Divergence under reentrancy is T5 |
 | `CanvasOutlineView`'s expansion, selection, selected row, connection host and count, and both surfaces' selection-sync flags; `CanvasSurfaceView`'s switcher and filter sync flags, where-am-I return focus, host window, deferred restoration and departure edge | **PERIPHERY** — PRESENTATION class, classification-only | marked unresolved against T1, T3 and T6; U13 fails if a model contract consumes one |
@@ -4432,19 +4638,26 @@ which a palette entrant can name a pane.
 ### Verification plan — model side
 
 **Censuses.** U13's arms, in its own order: owned-symbol closure,
-partition, classification manifest (both tables), payload class,
-authority census, capability, effects — each with a discovery floor and
-fail-closed resolution. The partition arm additionally asserts that no
-model contract consumes an unresolved-marked member, and that every
-marker names an open obligation row. The manifest arm additionally
-asserts U4's carry-forward completeness over every DOCUMENT-class entry.
+partition, classification manifest (both tables), payload class, source
+tags, publication writers, authority census, capability, effects — each
+with a discovery floor and fail-closed resolution. The partition arm
+additionally asserts that no model contract consumes an
+unresolved-marked member, and that every marker names an open obligation
+row. The manifest arm additionally asserts U4's carry-forward
+completeness over every DOCUMENT-class entry. The publication-writer arm
+is the one that replaces revision 6's unproven premise, and it is worth
+saying why it can: "every writer is on the executor" is a runtime
+property a gate can only sample, while "there is one swap site and no
+other write to this private field" is a question the compiler answers.
 
-**The authority arm owes a PREMISE fact, because its predicate was wrong
-once.** Plant each of the four shapes round 5's probe found — a readonly
-field holding a mutable set, an auto-property, an event, and a mutable
-static — and assert the derivation finds all four. A closure whose
-predicate cannot see the thing it excludes is the failure this arm
-already had, so it is asserted rather than trusted.
+**The authority arm owes a PREMISE fact, because its predicate has been
+wrong twice.** Plant each of the FIVE shapes the probes have found — a
+readonly field holding a mutable set, an auto-property, an event, a
+mutable static, and round 6's read-only interface over a caller-retained
+list — and assert the derivation finds all five. The fifth is the one
+that matters most: it passed the four-shape battery revision 6 shipped,
+which is the argument for growing the battery with every correction
+rather than trusting the predicate that survived the last one.
 
 **A derived theory over the state product**, enumerated from the type,
 asserting every column of every row — including row 3, constructed
@@ -4470,13 +4683,39 @@ was right to say so; an answer arriving after teardown (dropped); both
 load completion orders; a retire-before-load-delivery barrier (refused,
 and the lease it opened is closed by the delivery).
 
-**One-shot delivery facts, now against the publication rather than a
-latch.** A double delivery of an ACCEPTED load result (the second call
-reads consumed, refuses, and does NOT close: the lease stays live, the
+**ROUND 6'S BREAKING ARRANGEMENT, run as a fact.** Construct the
+document through the shipped null-context production-mode harness — the
+one that made revision 6's premise false — and complete two load workers
+concurrently on pool threads, barriered so both read the same snapshot
+before either swaps. Assert exactly one publication survives, exactly
+one lease is closed, and the close observation totals one. The same
+shape for two filter completions, and for a load racing a filter. A
+design whose premise a review falsified owes its verification plan that
+review's own arrangement, not a paraphrase of it.
+
+**Swap facts.** A losing attempt publishes nothing and starts nothing
+(the promoted job's start count stays at zero for the loser); a
+re-decision after a lost swap refuses when its request has been
+consumed; a publish helper handed a caller-built record does not compile,
+which is the census's job rather than a fact's; and a retirement
+swapping against a concurrent acceptance leaves the document retired in
+both orders.
+
+**One-shot delivery facts, against the publication rather than a latch.**
+A double delivery of an ACCEPTED load result (the second call reads
+consumed, refuses, and does NOT close: the lease stays live, the
 publication is unchanged, and the close observation stays at zero); a
 double delivery of a REFUSED result (the close observation reaches
 exactly one); a delivery arriving during retirement; and two concurrent
-deliveries in both dispatcher orders.
+deliveries in both orders.
+
+**Teardown-without-a-dispatcher facts** — round 6's blocker 2. Tear the
+document down on a pool thread with no synchronization context at all
+and assert the preterminal and terminal publications both land and the
+handle closes; tear down while a delivery is mid-window in both swap
+orders; and tear down with a filter job in flight, asserting the
+terminal publication does not wait and the completion refuses at
+delivery.
 
 **FAULT-INJECTION facts across the ownership window** — one per row of
 U4's five-point table. Throw immediately after the slot is read, during
@@ -4498,8 +4737,11 @@ obtained); a class read from the payload type rather than from the
 caller, so a document-class boundary refuses a population-derived count;
 a payload type whose declared class is coarser than its fields' join is
 rejected by the payload-class arm, with a planted under-describing type
-as that arm's premise; exactly one construction site each for tokens and
-payload types.
+as that arm's premise; a planted population wrapper constructed outside
+the population, and a planted coarsening transformation, each rejected
+by the source-tag arm BEFORE any payload exists, which is that arm's
+premise; exactly one construction site each for tokens and payload
+types.
 
 **Effect-containment facts.** One per model boundary in U8: a retained
 filtered-out row cannot mutate, announce, request focus, or hand off to
@@ -4515,12 +4757,14 @@ after terminalization, the refused load result closes exactly once, and
 a dropped-without-closing mutation is caught by the observation rather
 than by a weak reference.
 
-**Retained-owner facts** — round 5's major 6. A sealed result held
-across a terminal publication keeps its unit and population alive and
-the weak reference must NOT clear; it clears once the result is dropped.
-The same for a constructed-but-undispatched effect. Both are the
-positive form of row 5's corrected claim: terminalization drops the
-slot's owner, not the graph.
+**Retained-owner facts** — round 5's major 6 and round 6's major 5. A
+sealed result held across a terminal publication keeps its unit and
+population alive and the weak reference must NOT clear; it clears once
+the result is dropped. The same for a constructed-but-undispatched
+effect, and the same for an UNDELIVERED LOAD RESULT, whose population
+is unpublished and whose retention is therefore invisible to any
+publication-based accounting. All three are the positive form of row 5's
+corrected claim: terminalization drops the slot's owner, not the graph.
 
 **Ordering facts.** SEAM 3: a load issued between the retired
 publication and the base shutdown is refused by the model, not silently
@@ -4603,6 +4847,35 @@ removes the claim entirely by making the spend a publication transition
 — which keeps one mutable currency authority instead of narrowing the
 invariant to accommodate a latch.
 
+**Round 6 — NOT SOUND, 4 blockers, and the PREMISE ATTACK LANDED.**
+Revision 6's own report flagged one load-bearing assumption for the
+reviewer's attention — that delivery is dispatcher-only — and round 6
+audited it and found it not merely unproven but FALSE against inherited
+code: the scheduler's post runs inline on the worker under a null
+context and inline on the caller in synchronous mode, and the canvas
+async harness installs exactly that null context on purpose. Two
+deliveries could both accept and one lease could leak, in a shipped test
+configuration.
+
+The offered remedy was a model-owned serial executor with its own
+enqueue lifecycle, closed entrypoint and death story — two blockers'
+worth of new mechanism. **Revision 7 removes instead.** The publication
+becomes a compare-and-swap against the decision snapshot, which makes
+serialization a property of the one field rather than of a thread, and
+that single change discharges blocker 1, dissolves blocker 2 by leaving
+nothing to post or abort, makes the rebase atomic with its publication,
+and lets the inherited scheduler stay exactly as it is because the model
+never marshals through it. The third removal of the series, and by some
+distance the largest.
+
+The other two blockers were converses of the two newest rules, each
+right and each the same shape: revision 6 applied "the class comes from
+what produced the value, not from what the caller says" to payload types
+and stopped one level short, so a source wrapper could still be tagged
+by hand — and it defined deep immutability structurally, so a read-only
+interface over a caller's list read as immutable. Both are tightened by
+pushing the existing rule further down rather than adding another.
+
 **THE COUNTER-POSITION RULING, load-bearing for implementation.**
 Revision 2 argued against round 1 that a query on a superseded unit
 should be ADMITTED, and it survived rounds 2, 3 and 4: the non-filter
@@ -4621,14 +4894,20 @@ consumers from invoking or exposing through a closed lease;
 physical-close-outside-currency; the eager memo's placement in the
 population; the pure-query counter-position; the five-class
 classification; and T1, T3, T4 and T6's retention of their round 3
-arrangements. Round 5 added five more: U9's transition table is
-complete at all fifteen cells with the queued-completion cell promoting
-the latest request; U12's refusal sequence is coherent with its finally
-enclosing steps 1–3, which revision 6 now says outright; U14's
-construction-site count is mechanically enforceable and sealed carriage
-does prevent payload/token recombination; delivery-versus-retirement is
-correct in both dispatcher orders; and D4's twenty-seven rows stood,
-with the impossible reverse-job-order fact confirmed gone.
+arrangements. Round 5 added five: U9's transition table is complete at
+all fifteen cells with the queued-completion cell promoting the latest
+request; U12's refusal sequence is coherent with its finally enclosing
+steps 1–3, which revision 6 says outright; U14's construction-site count
+is mechanically enforceable and sealed carriage does prevent
+payload/token recombination; delivery-versus-retirement is correct in
+both orders; and D4's twenty-seven rows stood, with the impossible
+reverse-job-order fact confirmed gone. Round 6 added three more: the
+refusal-close walk is correct with a live publisher and only the
+shutdown case failed, which the swap removes; B5's carry-forward cannot
+be defeated by misclassifying the active surface as rebased, since the
+normative rule and the mid-load barrier both hold it; and D1's nineteen
+and D4's thirty-two rows were confirmed, with the census count stated
+once and referenced rather than recounted.
 
 **The lesson the split records.** Three rounds of prose could not
 converge on the presentation and effect periphery, while the same
