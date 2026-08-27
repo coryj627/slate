@@ -3454,19 +3454,79 @@ one variant from the C# switch.
 
 ---
 
-## PR C-unit — the coherent projection unit (design; by the user's split ruling this revision is the MODEL design only, and the presentation and effect periphery is carried below as a bounded ledger of explicitly unresolved obligations that no model contract may depend on)
+## PR C-unit — the coherent projection unit (design, FROZEN as the ratified baseline; by the user's split ruling the model is designed here and the presentation periphery is a bounded ledger of unresolved obligations, and by the user's design-by-implementation ruling the claims prose could not close are a second ledger discharged by code)
 
-**This section is a DESIGN, ratified before any code exists**, at
+### THE FREEZE — read this first
+
+**This section is CLOSED to further prose revision.** It is the ratified
+baseline for implementation, frozen at revision 7 after seven
+adversarial rounds. Nothing below is to be re-argued on paper; the next
+thing that changes any of it is code.
+
+**Why, in one paragraph.** Seven rounds ran 10, 11, 12, 8, 5, 4, 8
+blockers. The first four rounds each corrected something structural and
+the count fell. Round 7 broke the trajectory, and the shape of the break
+is the finding: six of its eight blockers were class (i) against the
+periphery of ONE mechanism — the compare-and-swap publication — while
+the mechanism's core was ratified in the reviewer's own first sentence,
+*"the CAS correctly prevents two writes against the same predecessor"*.
+That is the signature of a design whose remaining questions are not
+answerable in prose: every prose answer to an ownership, progress,
+purity or census question generated another prose question about the
+answer. The user ruled: **design by implementation.** Prose stops
+arbitrating what code arbitrates better — which is the same lesson the
+split recorded about the periphery, now reaching the model.
+
+**What is RATIFIED, and is therefore the architecture to build.** These
+survived every round and are not open:
+
+* the lease → population → unit chain, with DOCUMENT as the coarsest
+  currency and the nesting rule of U3;
+* ONE publication slot as the single mutable currency authority, with
+  currency DERIVED by comparison and never carried;
+* the five dependency classes and the membership principle;
+* provenance by TYPE rather than by caller declaration — sealed results,
+  minted tokens, and a payload's class read from its own type;
+* the CAS publication DIRECTION: publication is a compare-and-swap
+  against a decision snapshot, which round 7 confirms prevents two
+  writes against the same predecessor;
+* the pure-query counter-position, and the state product built on it;
+* the split itself, and the T-row ledger the periphery lives in.
+
+**What is RECLASSIFIED.** The claims surrounding the swap — its
+ownership transfer, its effect linearization and thread story, its
+progress, its purity, and the censuses that would police all four —
+stop being CONTRACTS and become **IMPLEMENTATION OBLIGATIONS**, carried
+in their own ledger below as I1 through I8. Each one carries round 7's
+finding VERBATIM as its acceptance criteria, exactly as the T-rows carry
+round 3's. They are discharged by code, facts and mutation batteries and
+arbitrated by the implementation gauntlet — not by another revision of
+this document.
+
+**How to read the rest of this section.** Everything below was written
+as a contract and is now a SPECIFICATION with two grades. Where a
+paragraph is in the ratified list above, it binds. Where it makes one of
+the eight reclassified claims, it records the DIRECTION the
+implementation should take and is marked with its obligation number; the
+round-7 text in the I-ledger, not the paragraph, is what the code must
+satisfy. Nothing has been rewritten to look closed, because a paragraph
+edited to survive a review it already failed is the exact failure this
+document has spent seven rounds learning to gate.
+
+### The record of how it got here
+
+**This section was a DESIGN ratified before any code exists**, frozen at
 revision 7. Rounds 1–6 returned NOT SOUND with ten, eleven, twelve,
 eight, five and four blockers, and not one of them cost an
 implementation round — which is the DESIGN-FIRST ruling working. Round 3
 tripped the convergence tripwire and the user ruled: **split the
-design.** The count has dropped three times since, 12 to 8 to 5 to 4,
-with the tripwire quiet each time. Round 6 attacked the design's one
-declared load-bearing premise — that publication is dispatcher-only —
-and was right that it was FALSE against inherited code. Revision 7's
-answer is a removal rather than a mechanism: the publication becomes a
-compare-and-swap, which needs no thread at all.
+design.** The count then dropped three times, 12 to 8 to 5 to 4, with
+the tripwire quiet each time. Round 6 attacked the design's one declared
+load-bearing premise — that publication is dispatcher-only — and was
+right that it was FALSE against inherited code; revision 7's answer was
+a removal rather than a mechanism, and the publication became a
+compare-and-swap that needs no thread at all. Round 7 then found eight,
+and the ruling above followed.
 
 **Goal.** Move the filter match off the dispatcher without re-opening the
 coherence class, and land the projection unit, the publication and the
@@ -3704,30 +3764,41 @@ Codex's breaking arrangement runs to completion with one publication and
 one closed lease, and it becomes a verification fact rather than a
 premise to defend.
 
-**Four rules keep the swap honest.** Each is unrepresentable rather than
-disciplined, and together they are what a serial executor would have
-had to establish anyway:
+**Four rules keep the swap honest** — and **all four are RECLASSIFIED**,
+each to the obligation named on it. Revision 7 asserted them as
+contracts; round 7 showed that each was a claim about code that only
+code can make good, which is the ruling in miniature. They are recorded
+here as the DIRECTION, not as settled:
 
 * **FRESH ALLOCATION — no publication object is ever installed twice**,
   so the swap cannot compare equal to a value that has come round
-  again. This is not discipline: the publish helper is the only thing
-  that allocates a successor, from a pure transform of the snapshot, so
-  a caller has no way to hand back a record that was installed before.
-  ABA is unrepresentable rather than improbable, which is the shape this
-  branch already required of request identity.
+  again. The intent is that the publish helper is the only thing that
+  allocates a successor, from a pure transform of the snapshot.
+  **OBLIGATION I5:** round 7 showed that one swap site and a
+  helper-owned allocation do not prohibit an interned record, a
+  memoized successor, an identity return, or a shared terminal
+  sentinel — the shared-Empty class this branch has met before. The code
+  owes the proof.
 * **THE TRANSFORM IS PURE.** It may compute an immutable successor and
   allocate identities; it may not close a handle, start a job, announce,
-  or touch the shell. Nothing observable happens on an attempt that
-  loses, which is what makes a retry safe.
+  or touch the shell. **OBLIGATION I4:** round 7 confirmed every
+  required decision IS mathematically computable from the snapshot, so
+  the direction is sound — and showed that nothing here enforces it. A
+  closed command algebra or an executable purity predicate over captures
+  and the call graph is what the code owes.
 * **EFFECTS FOLLOW A WON SWAP**, keyed to the predecessor-successor pair
   the helper returns — starting the promoted filter job, closing the
-  replaced handle, emitting the sentence. A later publication that
-  supersedes before the effect dispatches is caught at DISPATCH by D2,
-  which is machinery the design already had.
+  replaced handle, emitting the sentence. **OBLIGATION I3, the largest
+  of the eight:** a swap linearizes the slot and nothing else, so
+  effects are neither linearized with it nor free of the inherited UI
+  affinities, and D2's dispatch check has a TOCTOU window before the
+  external call. The thread story for effects is a code question.
 * **PROGRESS IS LOCK-FREE.** A failed swap means another publisher
-  succeeded, so the system always advances; and a delivery's re-decision
-  terminates because refusal is terminal — it cannot fail its way around
-  the loop forever.
+  succeeded, so the system always advances. **OBLIGATION I2:** system
+  progress is not OPERATION progress. Round 7 was right that a losing
+  delivery is not thereby consumed, superseded or retired, so nothing
+  bounds its retries before a terminal state wins — and that teardown's
+  own retirement swap can starve the same way.
 
 **What this buys, beyond the blocker.** The rebase becomes atomic with
 the publication it feeds: revision 6 read the current publication and
@@ -3862,7 +3933,9 @@ second close is a no-op rather than a double free.
 
 *The release obligation, at every point of the window* — round 5's
 blocker 4, with round 6's minor 6 correcting what the table claimed. A
-delivery performs **one decision read and one final ownership read**,
+delivery performs **one decision read PER ATTEMPT plus one final
+ownership read** — round 7's minor, correcting revision 6's vocabulary,
+since every failed swap costs another decision read by construction —
 and nothing else reads the slot; the obligation is discharged in a
 finally block wrapping the whole delivery.
 
@@ -3877,11 +3950,19 @@ finally block wrapping the whole delivery.
 
 One guard covers all six, because the guard is not a state machine: it
 is "close unless the live publication names this lease", evaluated once
-in the finally, against the slot as it is at that moment. That is why
-the table can carry two different ownership truths at the same entry
-point without the algorithm needing to know which it is in. An exception
-after a claim was spent — revision 5's gap — cannot occur, because
-nothing is spent until the swap that takes ownership wins.
+in the finally, against the slot as it is at that moment.
+
+**OBLIGATION I1 — the sharpest of the eight, and the guard's own
+defect.** Round 7 showed that this guard is an OBSERVATION, not an
+atomic ownership transfer: it was sound while delivery was serialized,
+and the swap deliberately removed that serialization. A faulting
+delivery can read "no publication names L", a concurrent delivery can
+then win the acceptance swap and publish L, and the first can close a
+handle the live publication now names — which the close-once record does
+not prevent, because it is the FIRST close that is wrong. The row above
+that says "the slot still does not name it" is therefore the claim the
+code must make true, by making acceptance impossible before cleanup or
+by synchronizing the two. It is not true of the guard as written.
 
 *The REBASE at acceptance* — round 4's blocker 6, which is round 2's
 blocker 1 resurfacing through the absorbs-nothing decision. A load
@@ -4067,11 +4148,17 @@ reentrancy still terminalizes.
 
 **Teardown runs on the calling thread, and needs no dispatcher** —
 round 6's blocker 2, which the swap dissolves rather than answers. Both
-publications are compare-and-swaps, so they retry until they win;
-retirement is unconditional and has no refusal branch, which is what
-makes the retry terminate. Because nothing is posted anywhere, there is
-no queued teardown that a stopping dispatcher can drop, and no delivery
-callback that can be rejected while still owning a lease. Round 6's
+publications are compare-and-swaps, so they retry until they win.
+**OBLIGATIONS I2 and I3 land here together:** revision 7 argued the
+retirement retry terminates because retirement has no refusal branch,
+and round 7 was right that an unconditional swap can still starve under
+sustained contention; and crossing the mode stack's shutdown, retiring
+the announcer and clearing bound requests are not established as
+pool-thread-safe, whatever the slot write's affinity.
+
+Because nothing is posted anywhere, there is no queued teardown that a
+stopping dispatcher can drop, and no delivery callback that can be
+rejected while still owning a lease. Round 6's
 arrangement — a worker opens lease L, posts its delivery, and shutdown
 begins before the callback runs, so nobody's finally ever executes — has
 no posting step to build on.
@@ -4151,8 +4238,21 @@ statement writes the field; every publishing path reaches the helper;
 and the helper allocates its successor from a pure transform rather than
 accepting a caller-built record. Revision 6 would have owed a census
 proving every writer ran on some executor, which is a runtime property a
-gate can only sample. This is a compile-time question about one field,
+gate can only sample; this is a compile-time question about one field,
 which is why the removal was worth making.
+
+**OBLIGATIONS I5 and I8 both live in this arm**, and together they are
+why it is a code deliverable rather than a paragraph. I8: "no other
+statement writes the field" describes ordinary source assignment and
+says nothing about reflective field setting, serializer hydration,
+unsafe accessors, generated accessors or init-only bypasses — any of
+which installs a publication without passing the swap while this arm
+stays green, so the arm must either close those mechanisms across the
+generated surface or narrow its own claim and name a second boundary.
+I5: nothing above prohibits the helper from RETURNING a cached,
+interned, or sentinel record, which is the other half of freshness. The
+arm as described is a real Roslyn analyzer's worth of work and is
+scoped as such.
 
 *The AUTHORITY census* — round 4's blocker 2, with round 5's blocker 2
 correcting the derivation itself. Revision 5 derived authorities from
@@ -4181,7 +4281,16 @@ with immutable generic arguments. Owned immutable types carry a
 construction constraint as well: one that accepts a collection must COPY
 it into an immutable collection rather than alias the caller's, so the
 population's rows and the publication's marked IDs are immutable
-collections and not read-only views over somebody's array. Then:
+collections and not read-only views over somebody's array.
+
+**OBLIGATION I7.** Round 7 was right that this is asserted and not
+established: a nominally trusted immutable collection can be built over
+a caller-retained array through the marshalling API, giving a trusted
+type with a live external alias — after which a published snapshot can
+mutate in place and take rebase repeatability and swap decision
+stability with it. The code owes a closed whitelist of copying
+operations, transitive constructor and factory analysis, and the planted
+retained-array alias as the battery's sixth shape. Then:
 
 * a field or auto-property whose type is NOT deeply immutable
   contributes a **CONTENTS** authority, readonly or not;
@@ -4287,10 +4396,19 @@ record's minimum from its field types and fails on a weaker declaration.
 The SOURCE-TAG arm enumerates every construction site of every wrapper —
 including the FFI-return adaptation sites the owned-symbol closure would
 otherwise miss, since generated FFI internals are outside it — and fails
-if any site sits outside the class it tags. D4 carries both pairs, and
-the source-tag pair is the sharper one: re-tag a population wrapper as
-document-classed and the census must fail BEFORE any payload is
-constructed, which is what "anchored" means.
+if any site sits outside the class it tags.
+
+**OBLIGATION I6.** Round 7 found the remaining gap and it is a real one:
+lexical ownership of construction does not prove SEMANTIC provenance of
+the value inside. A preserving transformation over a document-tagged
+seed can run inside a population-aware closure, compute a row count, and
+emit a still-document-tagged value with no constructor taking
+value-plus-class, no unwrap, and no syntactic coarsening — and the join
+above it then honestly validates a dishonest tag. Closing this means
+transformations that take every dependency as a TAGGED input and derive
+the join, with ambient reads and arbitrary captures forbidden and
+mutation-tested. That is a call-graph property, which is the same thing
+I4 needs, and the two should be built once.
 
 What this deliberately does NOT cover, and hands to T2: the token's
 SURFACE component, its forgeability, and the validation of
@@ -4337,9 +4455,12 @@ argument.** C-lite's announce boundary is the precedent: a check written
 before a call cannot see a retirement the call's own arguments cause.
 The moments: query validation at CALL, at LOCK and at COMPLETION; effect
 validation at CONSTRUCTION from the sealed result and again at DISPATCH,
-EMIT, REQUEST and HANDOFF; filter and load delivery at DELIVERY, on the
-dispatcher, against the one slot read; the mode stack at its own
-transitions.
+EMIT, REQUEST and HANDOFF; filter and load delivery at DELIVERY, **on
+the PRODUCING THREAD** — round 7's minor, sweeping the last of revision
+6's dispatcher vocabulary — against that attempt's decision read; the
+mode stack at its own transitions. **OBLIGATION I3** owns the hole round
+7 found in this contract: a check at DISPATCH does not cover a
+publication landing between the check and the external call.
 
 **D3 — Every population is DERIVED from an authority independent of what
 it checks.** U13's arms are its own count, quoted from that contract
@@ -4605,6 +4726,154 @@ delivery/calls as a distinct effect class, validating data token,
 initiating surface, and installed presentation immediately before the
 WPF focus call. Add a retained-row direct-focus containment fact."*
 
+### IMPLEMENTATION OBLIGATIONS — the second ledger
+
+**Eight obligations, reclassified from contracts by the user's
+design-by-implementation ruling.** Each carries round 7's finding
+VERBATIM as its acceptance criteria, with link markup and backticks
+flattened for the reason the T-ledger states — a backtick here is a
+citation the census must resolve, and these name code that does not
+exist yet. The discipline is the T-rows' discipline: **nothing is
+claimed resolved, nothing is silently dropped, and no paragraph above
+has been edited to look closed.**
+
+The difference from the T-rows is the arbiter. A T-row waits for a
+periphery cycle. An I-row is discharged **in this PR's implementation**,
+by code plus facts plus a mutation battery, and it is closed when the
+gauntlet says so — not when a revision of this document says so. An
+obligation whose code lands without its battery is not discharged; an
+obligation whose battery passes but whose mutation does not return the
+named breaking arrangement is not discharged either.
+
+**I1 — Refusal and fault cleanup can close a concurrently accepted
+lease.** *"Root cause: 'close unless a final slot read names my lease'
+is an observation, not an atomic ownership transfer. It was safe under
+serialized delivery, but not with free-threaded concurrent deliveries.
+Breaking arrangement: Deliveries A and B share result/lease L while the
+request is pending. A faults during rebase and enters finally. A's final
+read sees no publication naming L. B wins the acceptance CAS and
+publishes L. A closes L based on its earlier read. The live publication
+now names a closed handle. The close-once record prevents double-close,
+not this first erroneous close. This falsifies D1's fault assertion that
+'no publication ever names the lease' and is absent from the
+concurrent-delivery/fault batteries. Refusal or fault must first make
+acceptance impossible through an atomic publication transition, or
+cleanup must otherwise synchronize with acceptance."*
+
+**I2 — The retry loop is lock-free but not terminating.** *"Root cause:
+a failed CAS proves only that some writer progressed. It does not make
+this delivery consumed, superseded, or retired. A load delivery can
+repeatedly read a live, latest, pending request while keystrokes, filter
+completions, selections, or other intents win successive swaps. Each
+loss requires another full rebase; none produces terminal refusal.
+Teardown's unconditional retirement CAS can likewise starve before it
+ever installs the absorbing retired state. Terminal absorption therefore
+bounds retries only after a terminal state wins. Nothing bounds retries
+before then. U4's claim that a loser will 'by then' refuse and U12's
+termination claim are false; the verification plan has no
+sustained-contention/starvation fact."*
+
+**I3 — Post-swap effects are neither linearized nor given a valid
+thread/lifecycle story.** *"Root cause: CAS linearizes the slot only. It
+cannot make a subsequent external action atomic with validation or
+publication. The effect walk is: Lease close: intended free-threaded,
+but finding 1 breaks refusal cleanup. Starting background work:
+free-threaded, but a won schedule can become stranded if starting throws
+or a required marshal is rejected. Announcement: UI-affine; the
+inherited announcer asserts access to its captured dispatcher and owns
+dispatcher timers. Property notifications, events, focus requests,
+presenter calls, mode closures, and shell/tab handoffs: inherited WPF/UI
+authorities, not safe merely because the slot write was free-threaded.
+Teardown on a pool thread: slot reads remain coherent, but crossing
+Modes.Shutdown, shutting down the announcer, and clearing bound requests
+are not established as pool-thread-safe. Direct execution violates
+affinity. Posting restores the marshal—and its rejection, ordering,
+teardown, and drain story—through the back door, but revision 7
+specifies none of that. D2 also has a TOCTOU hole: an effect can
+validate A, a pool writer can publish B, and the effect can act on A
+afterward. 'Caught at DISPATCH' does not cover a publication between the
+dispatch check and the external call. The model effect universe
+explicitly includes announcement, shell handoff, mode closures, and
+focus requests, so T1/T3 cannot absorb this entire defect."*
+
+**I4 — Transform purity is a discipline, not unrepresentable.** *"The
+required decisions are mathematically computable as follows: Admission:
+snapshot plus immutable request input — pure. Provenance validation:
+snapshot plus sealed token/payload type — pure, subject to finding 6.
+Rebase: snapshot intents plus immutable incoming population — pure,
+subject to finding 7. Refusal-close determination: not snapshot-only; it
+deliberately performs a later ownership read and close, producing
+finding 1. Schedule promotion: decision is pure; starting the promoted
+job is an external effect. None inherently needs C-lite authority, a new
+FFI call, or wall-clock time. The design's problem is enforcement: U13
+describes no transitive call/capture census preventing a transform
+delegate or helper from reading C-lite state, invoking FFI, consulting
+time, starting work, or closing a lease. One CAS site and a helper-owned
+allocation do not prove purity. A closed command algebra or an
+executable purity predicate with capture and call-graph restrictions is
+required."*
+
+**I5 — Fresh allocation and ABA are not enforced by the stated writer
+census.** *"Root cause: 'one swap site,' 'no other field write,' and
+'the helper builds the successor' do not prohibit the helper from
+returning an interned record, memoized successor, predecessor identity,
+or shared Empty/terminal sentinel. Interleaving: T reads shared E; other
+writers perform E to B to E; T's stale CAS expecting E succeeds. This is
+precisely the shared-Empty-sentinel class already present in section C
+history. D4 mutates the helper to accept a caller-built record, but does
+not plant helper-internal caching or sentinel reuse. The census must
+prove a fresh publication allocation on every installing attempt and
+prohibit publication-valued caches/statics/interning and identity-return
+paths."*
+
+**I6 — Source tags can still launder finer data through transformations
+or ambient reads.** *"Root cause: lexical ownership of wrapper
+construction does not prove semantic provenance of the value placed
+inside it. A preserving Map over a document-tagged seed can run inside a
+population-aware closure and compute Rows.Count; the output remains
+document-tagged, no constructor takes value-plus-class, no unwrap
+occurs, and the transformation did not syntactically coarsen its input.
+The payload join then honestly validates a dishonest document tag. The
+same escape exists when a class-owning object can reach finer nested
+state and constructs its own nominal tag from it. The source-tag arm
+checks construction location and tag direction, not all data
+dependencies. Transformations must accept every dependency as a tagged
+input and derive the join, with arbitrary captures/ambient reads
+forbidden and mutation-tested."*
+
+**I7 — Copy-not-alias is asserted but not mechanically established.**
+*"Root cause: nominally trusting ImmutableArray or another immutable
+collection does not establish that its backing storage was copied. The
+immutable-collections marshal's as-immutable-array over a
+caller-retained array produces a trusted nominal immutable type while
+retaining a mutable external alias. A published snapshot can then mutate
+in place, invalidating rebase repeatability and CAS decision stability.
+The five-shape premise battery catches a field typed as a read-only
+interface; it does not exercise an owned sealed type whose
+constructor/factory stores an unsafe immutable alias. The construction
+predicate needs a closed whitelist of copying operations, transitive
+constructor/factory analysis, and a planted retained-array alias fact."*
+
+**I8 — "No other write" is not yet a compile-time closed predicate.**
+*"Root cause: the publication-writer arm describes ordinary source
+assignments only. It does not forbid or discover reflective field-info
+set-value, serializer hydration/hooks, unsafe accessors, generated
+accessors, or init-only/private-field bypasses. Any owned path using one
+of these can install a non-fresh publication without reaching the CAS
+site while the direct-write census remains green. The design must either
+prohibit and census these mechanisms across the closed world and
+generated surfaces or explicitly narrow the claim and provide another
+enforcement boundary."*
+
+**What round 7 ratified while finding these**, and what the
+implementation therefore starts from rather than re-litigates: the CAS
+prevents two writes against the same predecessor; the two claimed
+bonuses — atomic rebase-with-publication and retirement-versus-acceptance
+ordering — are valid safety properties once a swap succeeds; the record
+pass is clean at D1's nineteen rows, D4's thirty-eight and U13's nine
+arms; and the undelivered-population owner with its three load-result
+dispositions reconciles correctly.
+
 ### PR F obligations this PR must not silently absorb
 
 §C's travel table carries one row that is F's: the originating surface
@@ -4719,10 +4988,14 @@ delivery.
 
 **FAULT-INJECTION facts across the ownership window** — one per row of
 U4's five-point table. Throw immediately after the slot is read, during
-the rebase, during filter reseeding, immediately before the publishing
-assignment, and immediately after it. The first four must each leave the
-close observation at exactly one; the fifth must leave it at zero with
-the lease live and published. This is round 5's blocker 4 as a battery
+the rebase, during filter reseeding, **immediately before the CAS** —
+round 7's minor, since there is no assignment to be before — and
+immediately after it. The first four must each leave the close
+observation at exactly one; the fifth must leave it at zero with the
+lease live and published. **OBLIGATION I1 rewrites the expected value of
+the first four under concurrency**, which is exactly why it is an
+obligation rather than a paragraph. This is round 5's blocker 4 as a
+battery
 rather than a paragraph.
 
 **Rebase and carry-forward barriers.** A selection of B while a load
@@ -4876,6 +5149,44 @@ by hand — and it defined deep immutability structurally, so a read-only
 interface over a caller's list read as immutable. Both are tightened by
 pushing the existing rule further down rather than adding another.
 
+**Round 7 — NOT SOUND, 8 blockers, and the TRAJECTORY BROKE.** 8 to 5 to
+4 to 8. Six of the eight were class (i), and all six were against the
+PERIPHERY of one mechanism — the swap's ownership transfer, its
+progress, its effects, its purity, its freshness, its census — while the
+mechanism's core was ratified in the reviewer's own opening sentence:
+the compare-and-swap correctly prevents two writes against the same
+predecessor. The record pass was clean, the two claimed bonuses were
+confirmed valid, and the three vocabulary residues were the only
+non-blocker.
+
+Revision 7's report had pre-committed to this reading: it named the
+swap's four honesty rules as the obvious next attack surface and said
+that if round 7 found them failing, the pattern would be that this
+model's remaining defects are exactly the ones prose cannot settle. It
+did, and they are.
+
+**THE USER'S RULING: DESIGN BY IMPLEMENTATION.** Prose stops arbitrating
+what code arbitrates better. This section is FROZEN as the ratified
+baseline; the architecture listed at the top binds; and the eight claims
+prose could not close are reclassified from contracts to IMPLEMENTATION
+OBLIGATIONS I1–I8, each carrying round 7's finding verbatim, discharged
+by code plus facts plus mutations and arbitrated by the implementation
+gauntlet. This is the same ruling the split made about the periphery,
+arriving at the model — and the two rulings now say the same thing about
+the same document, which is the strongest evidence either of them was
+right.
+
+**What the seven rounds bought, since the count alone reads as
+failure.** Nothing here cost an implementation round: every one of these
+findings would otherwise have been found against code, or not at all.
+The chain, the one slot, the five classes, provenance-by-type, the
+pure-query counter-position and the swap's direction are all ratified,
+and three mechanisms were REMOVED rather than patched — the generation
+counter, the delivery claim, and the serial executor the dispatcher
+premise would have required. A design that ends smaller than it started
+and hands its unsettled claims to code with the reviewer's own words
+attached is not a failed design.
+
 **THE COUNTER-POSITION RULING, load-bearing for implementation.**
 Revision 2 argued against round 1 that a query on a superseded unit
 should be ADMITTED, and it survived rounds 2, 3 and 4: the non-filter
@@ -4909,15 +5220,27 @@ normative rule and the mid-load barrier both hold it; and D1's nineteen
 and D4's thirty-two rows were confirmed, with the census count stated
 once and referenced rather than recounted.
 
-**The lesson the split records.** Three rounds of prose could not
-converge on the presentation and effect periphery, while the same
-reviewer's model-side findings narrowed each round. Round 4's drop is
-the first evidence the split was the right instrument rather than only
-the right scope. The difference is not the reviewer and not the effort —
-it is that WPF's presentation semantics are discovered by running them,
-and prose about them is a claim nobody can check until code exists. That
-is the argument for design-by-implementation on the periphery, and it is
-why the split is a ruling about METHOD rather than about scope.
+**The lesson the split records, now confirmed twice over.** Three rounds
+of prose could not converge on the presentation and effect periphery,
+while the same reviewer's model-side findings narrowed each round —
+round 4's drop was the first evidence the split was the right instrument
+and not only the right scope. Round 7 then showed the model reaching its
+own version of the same wall, three rounds later and one layer down.
+
+The difference was never the reviewer and never the effort. It is that
+concurrency semantics — like WPF's presentation semantics before them —
+are discovered by RUNNING them, and prose about them is a claim nobody
+can check until code exists. Ownership under a race, retry termination
+under contention, effect affinity, transform purity, allocation
+freshness: every one of those is a sentence a reviewer can always
+falsify on paper and a battery can settle in an afternoon.
+
+That was the argument for design-by-implementation on the periphery, and
+it is now the argument for it on the model. Both rulings are about
+METHOD rather than scope, and the seven rounds are what makes the
+architecture they hand over worth building — the boundary between what
+prose settled and what code must settle is drawn from evidence, not from
+where anyone got tired.
 
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
