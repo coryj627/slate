@@ -3454,452 +3454,536 @@ one variant from the C# switch.
 
 ---
 
-## PR C-unit — the coherent projection unit (design; nothing implemented)
+## PR C-unit — the coherent projection unit (design; by the user's split ruling this revision is the MODEL design only, and the presentation and effect periphery is carried below as a bounded ledger of explicitly unresolved obligations that no model contract may depend on)
 
 **This section is a DESIGN, ratified before any code exists**, at
-revision 3. Rounds 1 and 2 returned NOT SOUND with ten and eleven
-blockers; none cost an implementation round, which is the split ruling
-working.
+revision 4. Rounds 1–3 returned NOT SOUND with ten, eleven and twelve
+blockers, and not one of them cost an implementation round — which is
+the DESIGN-FIRST ruling working. Round 3 then tripped the convergence
+tripwire: nine of fifteen findings were classified "a new mechanism
+failing" rather than "the invariant not yet reaching a member" — and the
+user ruled: **split the design.** Round 4 verifies the MODEL side only.
 
 **Goal.** Move the filter match off the dispatcher without re-opening the
 coherence class, and land the projection unit, the publication and the
 teardown that §C's travel table sends here. Everything C-lite shipped is
-INHERITED: the navigator verbs and grammar, the mode stack, the chord
-table, Where-am-I, verbosity, the durable requests, the announce
-boundary, the mode owner.
+INHERITED, and the reconciliation section below says exactly which of its
+authorities this design absorbs and which it leaves alone.
 
-### THE INVARIANT — one mutable field
+### Scope, and the line the split draws
 
-Revision 2 answered each coherence question with its own mechanism and
-so kept inventing two-write windows: a lease flag beside the publication,
-a durable selection beside a resolved one, a latest-request field beside
-a pending unit. Round 2 found the same defect three times because it was
-one defect.
+**IN — the model.** The publication slot and everything published through
+it: the lease, the population, the unit, the load and filter request
+schedules, the resolved selection and the durable intents. Query
+admission and revalidation. Effect classification and the validation of
+model-class effects. Teardown's model half. The censuses that guard all
+of it.
 
-**There is exactly ONE mutable field in this design: the publication
-slot.** Every currency question is a comparison against what that field
-holds. Nothing else is written after construction — not a lease flag, not
-a selection intent, not a request marker. A state that would need two
-writes is instead one immutable value published once.
+**OUT — the periphery**, six obligations carried in the ledger below with
+round 3's findings as their acceptance criteria: presentation atomicity;
+the apply's reentrancy and its exception and nesting semantics;
+operation-provenance composed with C-lite's surface provenance, and its
+forgeability; teardown's speech window; and focus DELIVERY as distinct
+from the focus request.
 
-That is the whole design, and every contract below is a consequence of
-it. The test for any future addition is the same single question: *does
-this need a second mutable field?* If it does, it is wrong here.
+**The rule that makes the split honest:** no model-side contract may
+depend on an unresolved row. Where the model must reference the
+periphery, it states its guarantee as ENDING at a named seam rather than
+assuming the other side of it. Every such seam is marked **SEAM** below
+and appears in the ledger.
 
-**Physical close is deliberately NOT currency.** Closing the handle
-happens after the terminal publication, under the lease's own lock, and
-participates in no validation. Conflating logical death with physical
-release is what gave revision 2 its lease two-write; separating them
-costs nothing and removes the window.
+### THE MODEL INVARIANT — one mutable field, and where it stops
 
-### THE FIVE CLASSES — U3's normative core
+**There is exactly one mutable field in the MODEL: the publication
+slot.** Every model currency question is a comparison against what it
+holds. No model object carries a currency flag, and a model state that
+would need a second mutable field is a finding.
 
-Revision 2 claimed three dependency classes and called the list
-exhaustive. Codex's round-2 audit found five, and the fifth —
-PRESENTATION — was the one revision 2 acknowledged informally in its
-apply paragraph while omitting from the principle that was supposed to
-make omissions impossible.
+Revision 3 claimed this absolutely, and round 3 was right that the
+absolute claim could not stand — not because the model needs a second
+field, but because two things OUTSIDE the model have their own and always
+did.
 
-The audit is adopted, verified against its named sites, and extended in
-two places where auditing the auditor found members it did not list.
+**SEAM 1 — C-lite's inherited authorities.** The mode controller's
+terminality, its deferred departure and its owner, and the navigator's
+attached presenter are mutable, are C-lite's, and are inherited whole by
+the rules in the reconciliation section. The model does not absorb them
+and does not derive them from the slot. **No model contract reads them**;
+they are consulted only by the C-lite objects that own them, and the
+document's own gate is additional to theirs rather than a replacement.
+
+**SEAM 2 — the presentation epoch.** Each surface's installed unit is
+mutable and per-surface. The model's guarantee is that the PUBLICATION is
+atomic; presentation atomicity is obligation T1 and is not claimed here.
+
+Physical close remains outside currency: it happens after the terminal
+publication, under the lease's own lock, and participates in no
+validation.
+
+### THE FIVE CLASSES — U2's normative core
+
+Codex's round-2 classification audit, adopted and verified against its
+named sites, with two members added by auditing the auditor. (Round 3's
+minor was right that revision 3 filed this under the wrong contract:
+classification is **U2**; nesting is U3.)
 
 | Class | Readable facts and effects |
 |---|---|
-| **DOCUMENT** | path and display name; retired state; the typed needle as intent; durable selected and marked IDs; the active surface token; presenter and mode ownership; the durable focus and filter-focus requests |
+| **DOCUMENT** | path and display name; retired state; the typed needle as intent; durable selected and marked IDs; the active surface token; presenter and mode ownership *(SEAM 1 — C-lite's, not absorbed)*; the durable focus and filter-focus requests *(SEAM 1)* |
 | **LEASE** | the handle capability; the FFI lock; logical liveness; physical close |
 | **POPULATION** | the full outline and table rows; warnings and preserved count; the ID, target, subpath and adjacency indexes; node text; the population sibling ordinal; anchor; neighbours; parent and children; trace path; last-activated identity |
 | **UNIT** | request, needle and answer state; matched IDs; the filtered rows and their counts; the displayed-unit ordinal; resolved selection; filtered row status; unit-addressed readback and detail |
-| **PRESENTATION** | the installed unit; tree roots and expansion; connection rows; grid sort, current row and current cell; realized containers; focus and return-focus; transient-panel visibility; **the deferred restoration and its departure edge**; **the materialized needle in the filter field** |
-
-**Two additions from auditing the auditor**, both per-surface state
-C-lite shipped and both genuinely presentation-class:
-
-*The deferred restoration and its departure edge.* The A14 landing a
-surface defers for itself, the hold that keeps it while the reader is
-behind an overlay or a menu, and the classification that ends it. They
-belong to one `CanvasSurfaceView`, not to the document, and a second
-pane has its own — which is precisely why C-lite had to give the mode
-stack an owner. Any design that enumerates presentation state and omits
-them will find them the way the parent found the side dictionaries.
-
-*The materialized needle.* The filter field's text is a second copy of
-the document's intent, synchronised in both directions, and the pair has
-its own coherence question during a publish. Naming it here is what makes
-the census's classification arm able to see it.
+| **PRESENTATION** *(SEAM 2 — classified here, atomicity unresolved)* | the installed unit; tree roots and expansion; connection rows; grid sort, current row and current cell; realized containers; focus and return-focus; transient-panel visibility; the deferred restoration and its departure edge; the materialized needle in the filter field |
 
 **MEMBERSHIP PRINCIPLE.** Every readable fact and every effect declares
-which class it depends on, and that declaration IS its membership. A
-fact's storage location decides nothing. The question to ask of any value
-is *what does its truth depend on* — and the answer is now one of five
-named things, each with a currency authority stated below.
+which class it depends on, and that declaration IS its membership.
+Storage location decides nothing. The question is *what does this value's
+truth depend on*, and the answer is one of five named things.
 
-### THE NESTING CHAIN, and where presentation sits
+### U3 — the nesting chain
 
-DOCUMENT ⊃ LEASE ⊃ POPULATION ⊃ UNIT. Each is current only while its
-coarser class is: a current unit implies a current population implies a
-live lease implies a live document. Presentation is NOT in the chain — it
-is per-surface, and each surface's installed unit is its own currency,
-which is why two panes can be mid-apply at different units without either
-being wrong.
+DOCUMENT ⊃ LEASE ⊃ POPULATION ⊃ UNIT, coarsest first: each is current
+only while its coarser class is. PRESENTATION is not in the chain — it is
+per-surface, which is why two panes can be installed at different units
+without either being wrong, and why its atomicity is a separate problem
+rather than a corollary of this one.
 
-**DOCUMENT is a currency, and revision 2 omitted it.** C-lite's C7
-retires the document BEFORE the terminal publication so the mode stack's
-restoration can speak, which means there is an interval where the lease,
-population and unit are all current and the document is not. Revision 2's
-query validation could not see that interval and would have admitted an
-off-dispatcher completion inside it, against a state-product row that
-says refuse.
+**DOCUMENT is a currency.** C-lite's C7 retires the document before the
+terminal publication so the mode stack's restoration can speak, so there
+is an interval where the finer classes are current and the document is
+not. Every model boundary validates the document first. What may legally
+happen inside that interval is obligation T4; **the model claims nothing
+about it and no model contract depends on the answer.**
 
-The retirement's restoration keeps a NARROW TYPED CAPABILITY through that
-interval — the only thing admitted, and it carries no source because it
-depends on no row population. Everything else validates the document
-first.
+### THE STATE PRODUCT — model currencies only
 
-### THE STATE PRODUCT
+One row per coarsest failure. There is **no presentation column**: round
+3 was right that revision 3's prose promised one the table did not have,
+and presentation states now live in the ledger where they can be
+enumerated by whoever resolves T1.
 
-The chain makes the space a chain: the coarsest currency that has failed
-determines the row. Presentation is orthogonal and appears as the
-installed-unit column.
+| # | Coarsest failure | Queries | Unit-scoped reads | Model effects (mutation, shell handoff, announcement, focus request) | Rows readable | Physical retention |
+|---|---|---|---|---|---|---|
+| 1 | none — all current | admitted | admitted | admitted, each against its own class's currency | yes | held |
+| 2 | unit superseded | ADMITTED — a filter change cannot invalidate a graph fact | refused | unit-sourced refused; population-, lease- and document-sourced admitted | yes, as a coherent past | released when the last observer drops it |
+| 3 | population stale | refused | refused | population- and unit-sourced refused; document-sourced admitted | yes, as a coherent past | released |
+| 4 | lease dead | refused | refused | refused except document-sourced | yes | rows are managed memory; the handle closes after the last in-flight call |
+| 5 | document retired | refused | refused | refused — **SEAM, T4**: the retirement's own restoration and its single sentence are the unresolved case, and the model neither admits nor describes them | yes | released at the end of teardown |
 
-| # | Coarsest failure | Queries | Unit-scoped reads | Mutations and shell handoffs | Announcements | Focus requests | Rows readable | Physical retention |
-|---|---|---|---|---|---|---|---|---|
-| 1 | none — all current | admitted | admitted | admitted | admitted | admitted | yes | held |
-| 2 | unit superseded | ADMITTED — a filter change cannot invalidate a graph fact | refused | refused if unit-sourced; admitted if population-sourced | refused if unit-sourced | refused if row-addressed | yes, as a coherent past | released when the last observer drops it |
-| 3 | population stale | refused | refused | refused | refused | refused | yes, as a coherent past | released |
-| 4 | lease dead | refused | refused | refused | refused | refused | yes | rows are managed memory; the handle closes after the last in-flight call |
-| 5 | document retired | refused | refused | refused | ONLY the retirement's own restoration, through its typed capability | refused | yes | released at the end of teardown |
-
-Rows 2 through 5 are ordered by coarseness, so a retired document refuses
-regardless of what is current beneath it. The combination revision 2
-called impossible — a current unit under a dead lease — is impossible by
-U5's derivation rather than by assertion: currency is read from one
-field, and the terminal publication clears every level at once.
-
-**Row 2 is the counter-position, and it survived round 2.** A query on a
-superseded unit is ADMITTED because the non-filter queries are functions
-of the loaded model: children, parent, trace, neighbours, node text,
-target, anchor and core's Where-am-I are population facts, and core's
-sibling ordinal describes position in the model rather than in the
-filtered display. The needle-dependent query is the filter, and U11 gives
-it request currency. **The boundary of that ruling matters as much as the
-ruling:** it holds at the PURE-QUERY level only. A population-valid
-result is not by itself safe to turn into an effect, which is U7.
+**Row 2 is the counter-position, confirmed sound and stable across three
+rounds.** A query on a superseded unit is ADMITTED because the non-filter
+queries are functions of the loaded model: children, parent, trace,
+neighbours, node text, target, anchor and core's Where-am-I are
+population facts, and core's sibling ordinal is a position in the model
+rather than in the filtered display. The filter is the one
+needle-dependent query and U9 gives it request currency.
 
 ### THE MEMORY MODEL
 
 **Publication is dispatcher-only; currency reads are free-threaded
-volatile reads of the one field.** One writer, so `Interlocked.Exchange`
-at the publication point is for the atomic PREDECESSOR it returns, not
-for mutual exclusion.
-
-**The two-write analysis, per class**, because round 2 found the same
-window three times:
+volatile reads of the one field.** One writer, so the exchange at the
+publication point is for the atomic PREDECESSOR it returns, not for
+mutual exclusion.
 
 | Class | Currency authority | Two-write risk |
 |---|---|---|
 | Document | the publication's retired marker | none — published, not flagged |
-| Lease | the publication's lease reference | none — a terminal publication replaces it; physical close is not currency |
+| Lease | the publication's lease reference | none — physical close is not currency |
 | Population | the publication's population reference | none |
 | Unit | the publication's unit reference | none |
-| Presentation | the surface's own installed unit, written once per apply under suppression | none — single-threaded, guarded, and not shared between surfaces |
+| Presentation | *SEAM 2 — the surface's installed unit; unresolved (T1)* | not claimed |
 
-**Selection has no window because it is not two values.** The durable
-intent and the resolved selection are published together in the same
-immutable value. Durability across a reload is achieved by CARRYING the
-intent into the next population when it is built — not by storing it
-outside the atomic state. The same treatment applies to marked IDs
-wherever row-visible marked state is derived.
+**Selection has no window because it is not two values**: the durable
+intent and the resolved selection are published together, and durability
+across a reload is achieved by carrying the intent into the next
+population when it is built.
 
-**Latest-request authority is the publication.** Request identity lives
-ON the unit — pending, answered and could-not-answer units all carry the
-request they belong to, and answered successors RETAIN their request
-identity. "Latest" is therefore `Volatile.Read(slot).Unit.Request`, with
-no separate field to write and no ordering to get wrong.
-
-**Admission is not revocation, and the check happens three times.**
-Before executing (a cheap refusal that avoids the FFI); after acquiring
-the FFI lock and immediately before invoking FFI (which is what stops a
-ten-keystroke backlog from paying for obsolete work); and after the call
-returns, immediately before the result is exposed. Killing a lease does
-not retract a running computation — nothing does — and this design claims
-only that its RESULT cannot be exposed and its ANSWER cannot be
-delivered.
+**Admission is not revocation, and the check happens three times** —
+before executing, after acquiring the FFI lock and immediately before
+invoking FFI, and after the call returns before the result is exposed.
+Killing a lease retracts no running computation; the design claims only
+that a result cannot be exposed and an answer cannot be delivered. Round
+3 confirmed this execution path sound: queued and in-flight consumers
+cannot invoke or expose through a closed lease.
 
 ### The shape, in objects
 
-The names below are in PLAIN TEXT, not backticks, for the reason §C's
-travel table records: a backtick in this document is a CITATION, the
-citation census checks that every one names something this branch
-actually has, and none of these do yet.
+Plain text, not backticks, for the reason §C's travel table records: a
+backtick here is a CITATION and the census checks it names something the
+branch has.
 
-**The publication SLOT** holds the one mutable field.
+**The publication SLOT** holds the one mutable model field.
 
-**The PUBLICATION** is an immutable record: the retired marker, the
-lease, the population, the unit, the durable intents (selected node,
-marked IDs, needle) and the resolved selection. One reference, one
-assignment, every currency question answered from it.
+**The PUBLICATION** is an immutable record: the retired marker; the
+lease; the population; the unit; the durable intents (selected node,
+marked IDs, needle); the resolved selection; the LOAD SCHEDULE; and the
+FILTER SCHEDULE.
 
-**The LEASE** owns the handle capability and the FFI lock. It has no
-mutable liveness flag.
+**The LEASE** owns the handle capability and the FFI lock, with no
+mutable liveness flag. **The POPULATION** owns the full rows, the
+indexes, the eager adjacency memo and the query methods. **The UNIT**
+owns the request, needle, answer state, matched IDs, filtered
+projections, resolved selection and unit-addressed transients.
 
-**The POPULATION** owns the full rows, the indexes, the eager adjacency
-memo and the query methods that reach the handle through the lease.
-
-**The UNIT** owns the request, the needle, the answer state, the matched
-IDs, the filtered projections, the resolved selection and the
-unit-addressed transients.
-
-**The OPERATION TOKEN** is an immutable value naming the population and
-the initiating unit of one operation. It is how a result stays bound to
-where it came from.
+**The OPERATION TOKEN** names the population and the initiating unit of
+one operation, and each effect built from it declares which component
+authorizes it. *(Composition with C-lite's surface provenance, and who
+may mint a token, are obligation T2.)*
 
 **The DOCUMENT** — `CanvasDocumentViewModel` — keeps the mutation funnel,
-the loader, the publisher and nothing else that can be read.
+the loader, the publisher, and the C-lite collaborators it does not own.
 
 ### Contracts
 
-**U1 — One mutable field.** The publication slot. Everything else is
-immutable after construction or derived from that field. A design change
-that needs a second mutable field is a finding.
+**U1 — One mutable model field**, with the two seams named above. A model
+state needing a second mutable field is a finding.
 
-**U2 — Five classes, one membership principle.** Every readable fact and
-effect declares its class per the table above. The classification is
-enforced by U15's classification arm, whose population comes from the
-types rather than from this list.
+**U2 — Five classes, one membership principle**, enforced by U13's
+classification arm, whose population comes from the types rather than
+from the table.
 
-**U3 — The chain nests; presentation is per-surface.** Document, lease,
-population, unit, coarsest-first. Presentation is orthogonal and each
-surface carries its own installed unit.
+**U3 — The chain nests; presentation is per-surface and outside it.**
 
-**U4 — Reload replaces the LEASE, not only the population.** C-lite's
-reload closes and reopens the handle, so it necessarily creates a new
-lease. The dispatcher transition is: publish the terminal state for the
-old lease and population; close the old handle under its own lock;
-construct the new lease and population off-thread; publish both together
-in one assignment. There is never a moment when a live publication names
-a closed handle.
+**U4 — Reload replaces the LEASE, and the load is an OPERATION with
+currency and ownership.** C-lite's reload closes and reopens the handle,
+so a reload necessarily creates a new lease.
 
-**U5 — Currency is DERIVED, never carried.** A reference comparison against
-what the slot holds, per class. No object has a currency flag. Physical
-close is a separate, later, non-currency event.
+*Currency.* The publication carries a LOAD SCHEDULE holding the identity
+of the latest load request. A load result is accepted only if its request
+is still the latest and the document is live; L1 delivering after L2 is
+refused rather than overwriting it.
+
+*Ownership.* A load result OWNS the lease it opened until a dispatcher
+acceptance check succeeds. A delivery that is stale, superseded, retired
+or abandoned **closes its own lease** — which is the rule that stops an
+unaccepted handle leaking when retirement lands between a worker opening
+L1 and its callback running.
+
+*Transition.* Publish the terminal state for the old lease and
+population; close the old handle under its lock; construct the new lease
+and population off-thread; publish both together in one assignment. No
+live publication ever names a closed handle.
+
+**U5 — Currency is DERIVED, never carried.** A reference comparison
+against what the slot holds, per class. Physical close is a separate,
+later, non-currency event.
 
 **U6 — Queries validate document, lease and population — three times.**
-Before the FFI, after the lock and before the call, and after the call
-before exposing. Not unit currency: row 2's ruling.
+Not unit currency: row 2's ruling.
 
-**U7 — PROVENANCE BINDING: a result may not be laundered across units.**
-Every operation carries an immutable token naming its population and its
-INITIATING unit. A query returns a source-bound result, not a raw value.
-Effect constructors consume the token; they may not reacquire the current
-publication to label an effect.
+**U7 — Effects declare their SOURCE CLASS, and each class is validated by
+its own currency.** Revision 3 said an effect's source is the initiating
+unit "full stop", which contradicted its own row 2 and its own payload
+rule — round 3's blocker 4, and it was right. The rule is now:
 
-This is round 2's one surviving defect and it is the round-7 mixing shape
-at the consumer boundary: follow-connection starts on unit A and blocks;
-filter successor B publishes and excludes the target; A's neighbour
-answer passes population validation; and the consumer then reads B's
-resolution, labels the announcement or the focus effect with B, and every
-gate passes. The operation was A's and the effect was B's, and nothing in
-revision 2 could tell.
+* a UNIT-sourced effect validates the token's unit component;
+* a POPULATION-sourced effect validates the population component;
+* a DOCUMENT-sourced effect validates the retired marker only;
+* a PRESENTATION-addressed effect is **SEAM, T2** — the model does not
+  validate it and does not claim to.
 
-**The rule at the consumer boundary:** an effect's source is the token's
-initiating unit, full stop. If that unit is no longer current, the effect
-refuses — even though the query result was valid. A valid answer to a
-question nobody is still asking is not a licence to act.
+**Count-bearing sentences are classified by the facts in their PAYLOAD.**
+The filter-cleared sentence reads its count from the current population,
+so it is population-sourced and validates against the population — which
+is exactly why the "full stop" rule broke: Clear Filter begins on unit A,
+publishes successor B in the same population, and its own confirmation
+must still be allowed to speak. Load-state sentences carry no row facts
+and are document-sourced.
 
-**U8 — The effect universe is every externally observable state change or
-handoff.** Revision 2 restricted it to mutation, announcement and focus,
-which left the shell handoffs and the mode closures outside every gate.
-The universe: document mutation; selection; view expansion; detail and
-panel state; SHELL NAVIGATION AND LAUNCH (opening a note, a browser, a
-media application); persistence; MODE COMMIT AND CANCEL CLOSURES;
-announcement; focus request. Every row-derived route carries a source and
-the boundary validates it.
+**U8 — The model effect universe.** Document mutation; selection; detail
+and panel state; shell navigation and launch; persistence; mode commit
+and cancel closures; announcement; focus REQUEST. Every row-derived route
+carries a token and declares its class, and the boundary validates that
+class.
 
-**Count-bearing sentences are classified by the facts in their
-PAYLOAD**, not by their name. The filter-cleared sentence reads its count
-from the current population, so it is population-sourced and validates —
-revision 2 declared it source-independent, which was wrong for exactly
-the reason the payload makes obvious. Load-state sentences and the mode
-stack's own vocabulary carry no row facts and remain source-free.
+**Focus DELIVERY — the direct row-focus call after a query is consumed —
+is SEAM, T6.** Round 3 was right that a request gate does not govern a
+direct call, and the model does not pretend otherwise: it is listed in
+the ledger as an unresolved effect class rather than covered by
+implication.
 
-**U9 — One assignment, and compound consumers hold ONE snapshot.** The
-publisher builds the whole next value before touching the slot. Any
+**U9 — The filter is a request lifecycle whose SCHEDULE is published.**
+Revision 3 stated a one-running/one-queued policy and encoded nothing,
+so nothing could decide what a third keystroke does — round 3's blocker
+3. The publication now carries a FILTER SCHEDULE: the RUNNING request and
+the QUEUED-LATEST request, together, in the same immutable value.
+
+Transitions, each of them a publication:
+
+* a keystroke with nothing running publishes *(running = R, queued =
+  none)* and starts R;
+* a keystroke while R1 runs publishes *(running = R1, queued = R)*,
+  replacing any previously queued request, which is dropped before it
+  ever starts;
+* a job finishing publishes its answer AND *(running = queued, queued =
+  none)*, starting the newly promoted request if there is one.
+
+So R3 arriving while R1 runs and R2 waits sees both facts, replaces R2,
+and the finishing R1 consumes R3 — the arrangement revision 3 could not
+answer. A burst of ten keystrokes pays for at most two matches, and the
+running job revalidates after acquiring the FFI lock so even the second
+is abandoned before the FFI call when it has been superseded.
+
+**U10 — The eager adjacency memo lives in the POPULATION**, built once
+from the rows. Confirmed correctly placed by round 3. The only sanctioned
+alternative, if the eager cost proves unacceptable, is an immutable
+memo-enriched population successor published with completion validation —
+never an in-place fill, never a shared sentinel.
+
+**U11 — One assignment, and compound consumers hold ONE snapshot.** Any
 consumer reading more than one fact for one purpose acquires the
-publication ONCE and reads everything from that reference. Convenience
-getters that silently re-read the slot are forbidden, because they let an
-operation straddle two publications without any single read being wrong.
+publication once. Convenience getters that silently re-read the slot are
+forbidden.
 
-**U10 — The presentation APPLY is a specified transaction.** One
-`Apply(publication)` entry per surface, with these phases in this order:
+**U12 — Teardown, model half.** The terminal publication clears every
+model currency at once; physical close follows under the lease's lock
+after the last in-flight call returns. **SEAM, T4:** whether and how the
+retiring mode restoration may run and speak inside the
+retire-before-restoration window is unresolved, and no model contract
+depends on the answer — the model refuses everything in row 5 and leaves
+the exception to be designed.
 
-1. enter suppression;
-2. detach or inert the old subtree's callbacks;
-3. apply every dependent control from the CAPTURED publication;
-4. install row delegates permanently closed over their OWN source unit;
-5. reconcile selection and focus;
-6. commit the installed unit;
-7. leave suppression.
+**U13 — Three censuses, each from an authority independent of what it
+checks, and each EXECUTABLE.** Round 3 was right that revision 3's
+closure was neither exact nor machine-readable.
 
-**Old callbacks retain their own unit and refuse; they never acquire the
-unit being installed.** That is the phase revision 2 got backwards:
-removing A's selected row during B's apply raises a selection callback
-that BELONGS to A, and relabelling it with B is how an A-originated event
-mutates B. The travelling publication transaction lands here — deleted at
-the model, re-created at the view, where the tearing it was written for
-actually lives.
+*The owned-symbol closure.* A Roslyn-derived set: every type declared in
+the canvas source tree, plus the named collaborators it reaches —
+`CanvasAnnouncer`, `PanelWorkScheduler`, and the live preferences
+seam. Inherited members are IN only when the base is owned or the base is
+a typed framework seam this branch declares; the rest of the framework
+surface is out by construction rather than by exception.
 
-**U11 — The filter is a request lifecycle whose authority is the
-publication.** Each keystroke creates an immutable request and publishes
-a pending unit carrying it. Delivery validates document, lease,
-population and request identity, where "latest" is read from the slot.
+*The classification manifest.* A machine-readable table mapping every
+member of that closure to a class, or to SOURCE-FREE with a reason. The
+census asserts that every discovered member appears in the manifest and
+that no manifest entry names a member that is gone. This is what makes
+U2's table checkable rather than prose.
 
-**Backlog policy, stated rather than discovered:** at most one running
-job plus one queued latest request per population. A superseded queued
-request is dropped before it starts, and the running job revalidates
-after acquiring the FFI lock, so a ten-keystroke burst pays for at most
-two matches rather than ten. Teardown does not wait for the running one;
-its answer is refused at delivery.
+*Capability.* Every call site reaching the session's canvas FFI surface,
+derived from the session type, must be inside the population or the
+loader.
 
-**U12 — The eager adjacency memo lives in the POPULATION.** Revision 2
-put it on the unit, which both contradicted its own dependency rule and
-charged the whole graph cost on every keystroke. It is built once per
-population, from the rows, and the population is genuinely immutable. The
-only sanctioned alternative, if the eager cost proves unacceptable, is an
-immutable memo-enriched population successor published with completion
-validation — never an in-place fill, never a shared sentinel.
-
-**U13 — The mode stack keeps its OWN terminality; the document gate is
-ADDITIONAL.** C-lite shipped a terminal `CanvasModeController`: every
-verb refuses after retirement and the rung ladder is emptied, with
-`HandleEscape` and `RegisterRung` inside that terminality. Inherited
-whole, not rerouted. The document's gate is a second wall for the
-sourced effects of U8; a retained controller is refused by the controller
-and a retained ROW is refused by the funnel, and those are different
-arrangements with different answers.
-
-**U14 — Teardown: speak, silence, release.** The retired marker is
-published first, with the restoration's typed capability the only thing
-admitted during the speak phase. The terminal publication then clears
-every currency at once. Physical close follows, under the lease's lock,
-after the last in-flight call returns.
-
-**U15 — Three censuses, each from an authority independent of what it
-checks.**
-
-*Capability.* Population: every call site reaching the session's canvas
-FFI surface, derived from the session type. Each must be inside the
-population or the loader.
-
-*Classification.* Population: every readable member of an EXACT
-transitive type closure — the document, `CanvasSelection`, the navigator, the
-mode controller, every canvas view, every row view-model and automation
-peer, and the grid adapter. Members are declared and inherited public and
-internal properties, fields, events and methods with a return value. Each
-must appear in U2's table with a class. An unclassified member fails.
-
-*Effects.* Population: independent call sites rather than the funnel's
-own surface, which was revision 2's circularity — every shell handoff,
-every state-writing delegate, every event handler, every announcer call,
-every focus call and every mutation method. Each must take a source.
+*Effects.* Derived from independent call sites — every shell handoff,
+state-writing delegate, event handler, announcer call, focus call and
+mutation method — each of which must take a token and declare a class, or
+appear in the manifest as source-free with its reason.
 
 Each arm carries a discovery floor and fails closed.
 
 ### The design's own contracts
 
-**D1 — Every lifecycle states logical terminality, cancellation and
-PHYSICAL RELEASE separately.**
+**D1 — Every MODEL lifecycle states logical terminality, cancellation and
+physical release SEPARATELY, and release is stated in terms of ALL
+owners.** Round 3 was right that revision 3 miscounted its own rows and
+claimed releases its own design contradicts. Fifteen rows.
 
-| Lifecycle | Logical terminality | Cancellation / refusal | Physical release |
+| Lifecycle | Logical terminality | Cancellation / refusal | Physical release — by ALL owners |
 |---|---|---|---|
-| Document | the retired marker in the publication | every ordinary boundary refuses; the restoration capability does not | released when the registry drops it |
+| Document | the retired marker | every model boundary refuses | when the registry drops it |
 | Lease | replaced by a terminal or successor publication | admission and revalidation refuse | handle closed under its lock after the last in-flight call |
-| Population | replaced by a new population publication | queries and population-sourced effects refuse | rows released when the last observer drops the publication |
-| Unit | replaced by a successor publication | unit-scoped reads and unit-sourced effects refuse | released with its publication |
-| Publication | replaced by the next assignment | none — it is a value | the slot retains exactly one |
-| Filter request | superseded by the next keystroke's request | delivery refuses a non-latest request | released when its answer is delivered or dropped |
-| Filter job | none — a job is not cancellable | revalidated before FFI and refused at delivery | released on completion; teardown does not wait |
-| Query operation | none — an in-flight FFI call is not cancellable | refused at completion validation | released when the call returns |
-| Operation token | superseded with its initiating unit | effect construction refuses | released with the operation |
-| Adjacency memo | none — eager, built with the population | not applicable | released with the population |
-| Dispatch capability | the controller's own terminality | every verb and rung entry refuses | released with the controller |
-| Presentation apply | the surface's installed unit | old callbacks refuse | old subtree released after phase 2 |
-| Unit-addressed transient | superseded with its unit | the read reports absent | released with the publication |
+| Population | replaced by a new population publication | queries and population-sourced effects refuse | when the last publication, operation and surface holding it drop |
+| Unit | replaced by a successor publication | unit-scoped reads and unit-sourced effects refuse | as population, plus any operation token naming it |
+| Publication | replaced by the next assignment | none — a value | the slot holds one; predecessors live until every operation and surface holding them drops, so "the slot retains exactly one" is NOT release |
+| Load request | superseded in the load schedule | a non-latest delivery refuses | with the publication carrying the schedule |
+| Load result / unpublished lease | never accepted | refused at the acceptance check | **closes its own lease** and releases |
+| Filter request | superseded in the filter schedule | a non-latest delivery refuses | an ANSWERED successor deliberately RETAINS its request, so release is with that unit's publication — not on delivery |
+| Filter job | none — not cancellable | revalidated before FFI, refused at delivery | on completion; teardown does not wait |
+| Query operation | none — not cancellable | refused at completion validation | when the call returns |
+| Operation token | superseded with its data components | effect construction refuses | with the operation |
+| Adjacency memo | none — eager | not applicable | with the population |
+| Pending announcement | the announcer's own retirement (C-lite) | refused at the announce boundary | with the announcer |
+| Durable focus requests | *SEAM 1 — C-lite's, inherited; terminality and release are C-lite's contracts* | — | — |
+| Mode ownership and controller terminality | *SEAM 1 — C-lite's, inherited* | — | — |
 
-**D2 — Every boundary is placed at EMIT or READ time with its
-evaluation-order argument.** C-lite's announce boundary is the precedent:
-a check written before a call cannot see a retirement the call's own
-arguments cause. The moments: query validation at CALL, at LOCK and at
-COMPLETION; effect validation at CONSTRUCTION from the token, and again
-at DISPATCH, EMIT, REQUEST and HANDOFF; filter delivery at DELIVERY; the
-apply at INSTALL; the mode stack at its own transitions.
+Per-surface restoration holds and the installed unit are presentation and
+appear in the ledger, not here.
+
+**D2 — Every boundary is at EMIT or READ time with its evaluation-order
+argument.** C-lite's announce boundary is the precedent: a check written
+before a call cannot see a retirement the call's own arguments cause. The
+moments: query validation at CALL, at LOCK and at COMPLETION; effect
+validation at CONSTRUCTION from the token and again at DISPATCH, EMIT,
+REQUEST and HANDOFF; filter and load delivery at DELIVERY; the mode stack
+at its own transitions.
 
 **D3 — Every population is DERIVED from an authority independent of what
-it checks.** U15 names all three. "Derived from the thing being checked"
-is forbidden, having been tried twice.
+it checks.** U13 names four. "Derived from the thing being checked" is
+forbidden, having been tried twice.
 
 **D4 — Every unreachability claim ships a pair whose mutation ACTUALLY
-ENABLES the state.** Round 2 found three pairs that did not: publishing
-terminal without killing the lease produces a live lease with no current
-unit, not a dead lease with a current unit; leaving a lease live across
-the terminal publication still fails the population check; and admitting
-a stale population on lease alone can stay refused because the reload
-killed a different lease. Each is rewritten to enable its state.
+ENABLES the state.** Round 3 found three that did not, and each is
+rewritten to mutate the remaining authorities rather than one of them.
 
 | Claim | Enable it by | The consequence that returns |
 |---|---|---|
-| A dead lease cannot have a current unit | publishing a successor that names the OLD lease alongside the new population | a query answered through a closed handle |
-| A stale-population query cannot answer | validating lease only, with reload publishing the new lease and population together | a reload's rows read against the old graph |
+| A stale-population query cannot answer | making reload keep its lease AND validating lease only — a same-lease population successor, which is the arrangement lease-only validation actually admits | a reload's rows read against the old graph |
+| A retired document cannot be queried | removing ALL THREE document validations — admission, lock-time and completion — not the first alone | an off-dispatcher completion inside the retirement window |
+| Nothing survives teardown | removing the document, request AND population delivery guards together, so a queued answer has no remaining authority to refuse it | an answer delivered after release |
+| A dead lease cannot have a current unit | publishing a successor naming the OLD lease with the new population | a query answered through a closed handle |
 | A query result cannot outlive its currency | removing the completion validation | an answer from A exposed after B is current |
-| A result cannot become another unit's effect | letting the effect constructor read the slot instead of the token | the follow-connection mix: A's answer, B's announcement |
+| A result cannot become another class's effect | letting an effect constructor read the slot instead of its token | an effect authorized by a currency it did not come from |
 | A filter answer cannot land on a stale needle | removing the request comparison at delivery | rows for one needle resting under another |
 | A filter answer cannot strand a sibling job | requiring base-unit currency instead of population | the newer job dropped, the field never catching up |
 | A burst cannot pay for obsolete work | removing the revalidation after the lock | ten matches for ten keystrokes |
-| A retired document cannot be queried | removing the document check from admission | an off-dispatcher completion inside the speak interval |
-| A retired document cannot announce a row sentence | widening the restoration capability to any announcement | a unit-sourced sentence during teardown |
-| A stale row cannot mutate, announce or request focus | dropping the source from each boundary in turn | one per boundary, three mutations |
-| A stale row cannot launch the shell | dropping the source from the handoff boundary | a filtered-out row opening a browser |
-| A mode closure cannot run unsourced | dropping the source from commit and cancel | a retained closure restoring into a live document |
-| The view cannot tear | removing the apply's suppression | a realization callback reading half of B |
-| An old callback cannot be relabelled | making callbacks read the installing unit | A's removal-triggered selection mutating B |
+| A third keystroke cannot queue behind two | dropping the running component from the filter schedule | two queued jobs, or a third that never runs |
+| A stale load cannot overwrite a newer one | removing the load schedule comparison | L1 replacing L2's publication |
+| An unaccepted lease cannot leak | making a refused load delivery return without closing | a handle open with no publication naming it |
+| A stale row cannot mutate, announce, request focus or hand off to the shell | dropping the token from each boundary in turn | one per boundary, four mutations |
+| A mode closure cannot run unsourced | dropping the token from commit and cancel | a retained closure acting on a live document |
 | A compound read cannot straddle publications | letting a getter re-read the slot | a mixed rows-of-B, selection-of-C composition |
 | The population cannot mutate | filling the adjacency memo lazily in place | two consumers racing one dictionary |
 | Currency cannot be observed inconsistently | replacing a derived read with a second field | either interleaving of the pair |
 | Selection intent and resolution cannot disagree | writing the intent outside the publication | a reentrant observer seeing one with the other |
-| Nothing survives teardown | leaving the lease live across the terminal publication AND removing the population check | a queued answer delivered after release |
 
-**Release pairs**, because D1 claims release for eleven lifecycles and
-round 2 found no pairs for most of them: one mutation per claimed release
-that retains the reference — a static list, a captured closure, an
-un-detached handler — with the weak-reference fact showing the leak. The
-request, job, query operation, publication, memo, controller and
-transient rows each get one.
+**Release pairs.** One per D1 row that claims release: a mutation that
+retains the reference — a static list, a captured closure, an un-detached
+handler — with a weak-reference fact showing the leak. The filter-request
+row's pair reflects that an answered successor retains it, so the fact
+asserts collection with the PUBLICATION rather than on delivery.
 
 **D5 — Every list either derives from an authority or says "among
-others".** U2's table is guarded by U15's classification arm; the state
-product by U15 plus D4; D1 by its own D4 release pairs; D4 by the
-verification plan, which owes one fact per row. **D5 no longer claims D1
-is guarded by the original four pairs** — that claim was false and round
-2 was right to call it out. The C-lite inheritance list and the C10 and
-travel mappings derive from §C's own closed rows. Every other list is
-illustrative and says so.
+others".** U2's table is guarded by U13's classification manifest; the
+state product by U13 plus D4; D1 by its own release pairs; D4 by the
+verification plan, which owes one fact per row. The C-lite reconciliation
+and the C10 and travel mappings derive from §C's own closed rows. Every
+other list is illustrative and says so.
 
 **D6 — Records are swept by the CLAIM's consumers, not the diff's
-neighbours** — including a test method's name, an enum value, a fixture
-name.
+neighbours.**
 
-### What C-lite shipped, which this PR must NOT re-open
+### C-lite reconciliation — what the publication absorbs, and what it does not
 
-Derived from §C's own contract rows: the mode owner (C8), the durable
-requests (A14 and C10's twin), the announce boundary (A5/C7), the
-restoration hold and its classifier (C6/C8), the seat rule (C6),
-presenter attachment (C2), and the terminal mode stack (C7). The last is
-the one revision 1 contradicted and U13 now states explicitly.
+Round 3's blocker 2 asked which of C-lite's mutable document-class
+authorities this schema takes over. The answer is **none of them**, and
+saying so is the reconciliation rather than a gap.
+
+**Absorbed into the publication:** the durable selected node, the marked
+IDs, the typed needle, the resolved selection, the retired marker, and
+the load and filter schedules.
+
+**NOT absorbed — inherited whole, per the C-lite inheritance rules
+(SEAM 1):** `CanvasModeController`'s terminality, its deferred departure
+and its owner; `CanvasNavigator`'s attached presenter; the durable focus
+and filter-focus requests. These were hardened across twelve codex rounds
+with their own terminality, addressing, completion and sweep contracts;
+absorbing them would REPLACE a shipped lifecycle, which the inheritance
+rules forbid, and would be a far larger change than this PR's goal.
+
+**The consequence, stated rather than left implicit:** the model's
+one-field invariant is a claim about the MODEL, not about the process. No
+model contract reads a C-lite authority, and the document's own gate is
+additional to the controller's rather than a replacement for it. Whether
+those two authorities can diverge under reentrancy — round 3's breaking
+arrangement — is obligation T5.
+
+### UNRESOLVED OBLIGATIONS — the periphery ledger
+
+Six obligations, split out by the user's ruling. Each carries round 3's
+finding as its acceptance criteria, words unchanged, with link markup and
+backticks flattened so the citation census is not asked to resolve names
+that describe another cycle's code. **Nothing here is claimed resolved,
+and no model contract depends on any of it.**
+
+*A reading note:* the criteria quote round 3, which reviewed revision 3's
+numbering. Removing the periphery contracts renumbered what remains, so
+old U7 is now U6–U7, old U10 is the apply and is gone to T3, old U11 is
+now U9, old U14 is now U12, and old U15 is now U13. The quotes keep the
+numbers they were written with, because a corrected quote is not a quote.
+
+**T1 — Presentation atomicity.** Acceptance criteria, from round 3
+blocker 1: *"Presentation is explicitly a second mutable currency
+authority. U1 says the publication slot is the only mutable field and
+nothing else is written after construction; U3 and the memory table
+instead make each surface's installed unit its own mutable currency
+authority. 'Written once per apply' still means repeatedly mutable, and
+the materialized filter text plus deferred-restoration state are
+additional presentation copies. Breaking arrangement: slot B publishes;
+phase 3 writes B's needle while rows remain partly A and installed-unit
+remains A until phase 6. A reentrant UIA reader observes B's text with
+A's rows. User editing creates the inverse interval: the WPF text is B
+before its handler publishes B. Remedy: either narrow the invariant to
+one model authority and define a second, explicit presentation epoch with
+reconciliation, or stage a complete immutable presentation snapshot
+off-tree and atomically swap it."*
+
+Revision 4 takes the first half of that remedy — the invariant is
+narrowed to the model — and leaves the presentation epoch to this cycle.
+
+**T2 — Operation provenance composed with surface provenance, and
+forgeability.** From blocker 5: *"Operation provenance does not compose
+with C-lite's surface provenance and is forgeable as specified. Two panes
+share the same unit, so unit identity cannot identify the initiating
+pane. 'Immutable value' also does not say who may mint it; a consumer
+could manufacture a token naming the current unit and relabel a raw stale
+result. Breaking arrangement: a follow/trace operation starts in pane P1;
+while it waits, P2 becomes the navigator's attached presenter without
+changing population or unit. The token validates and the consumer focuses
+or expands P2. Remedy: use an opaque, operation-minted composite
+capability containing data provenance and initiating surface for
+presentation-addressed effects. Encapsulate the result with that
+capability so consumers cannot accept raw values or construct replacement
+tokens."*
+
+**T3 — The apply as a transaction: reentrancy, exceptions, nesting.**
+From blockers 6 and 7: *"Suppression prevents selected callbacks; it does
+not make sequential WPF property writes atomic or stop UIA/property
+readers. New B callbacks are enabled in phase 4 while installed-unit
+remains A until phase 6. Breaking arrangement: a B realization/focus
+callback fires during phases 4–5. If it validates against slot B it acts
+on a half-B view; if it validates against installed A it refuses a
+callback phase 5 may require. A raw UIA read bypasses either gate."* And:
+*"There is no finally, rollback, fault publication, latest-apply queue,
+or rule for Apply(C) reentering while Apply(B) is in phases 3–5.
+Breaking arrangement: a control setter throws in phase 3. Suppression
+stays entered, callbacks are detached, controls are mixed, and
+installed-unit remains A. Remedy: specify transactional staging with
+commit/rollback, guaranteed suppression exit, deterministic fault
+posture, and latest-wins serialization of nested applies. Add fault
+injection at every phase and a B→C nested-apply barrier test."*
+
+**T4 — Teardown's speech window.** From blocker 8: *"Retire-before-restoration
+makes the restoration effect illegal, and its speech is not source-free.
+C-lite's cancellation invokes arbitrary OnCancel host code before
+announcing. The result can contain a row-derived count or title,
+contradicting 'depends on no row population'. Breaking arrangement:
+retirement publishes; OnCancel then attempts to restore selection or
+geometry. The document gate must refuse it. If the controller still
+announces BackAt(title), it reports a restoration that did not occur and
+launders row payload through the typed exception. Remedy: run and
+authorize restoration under the pre-retirement publication, capture its
+immutable outcome, then publish retired and allow only that captured
+sentence; or define a capability bound to the exact retiring unit that
+explicitly authorizes both restoration and its one announcement."*
+
+**T5 — Divergence between the model and C-lite's inherited authorities.**
+From blocker 2's remaining half: *"Current C-lite has mutable _active,
+_retired, _deferredDeparture, and _owner in the controller, mutable
+_presenter in the navigator, and mutable scheduler terminality. Breaking
+arrangement: retirement publishes while _retired is still false; a
+reentrant retained controller admits mode entry and writes a new owner
+before Modes.Shutdown performs the second write. The document funnel may
+refuse its sentence, but the controller state has already diverged."*
+The model does not absorb these (see the reconciliation); whether the two
+authorities can diverge observably, and what to do if they can, is this
+obligation.
+
+**T6 — Focus delivery as a distinct effect class.** From blocker 12:
+*"The widened effect universe still omits actual focus delivery. C-lite
+has direct FocusRow / WPF Focus() effects after query consumption. A
+request gate does not govern those calls. Breaking arrangement: an A
+query completes after B; the consumer directly focuses a row through the
+current presenter. No focus request is created, so the only specified
+focus boundary is bypassed. Remedy: add focus delivery/calls as a
+distinct effect class, validating data token, initiating surface, and
+installed presentation immediately before the WPF focus call. Add a
+retained-row direct-focus containment fact."*
 
 ### PR F obligations this PR must not silently absorb
 
 §C's travel table carries one row that is F's: the originating surface
-through the routed-command boundary. This PR touches the document that
-F's command helper resolves, which makes it the PR that could absorb the
+through the routed-command boundary. This PR touches the document F's
+command helper resolves, which makes it the PR that could absorb the
 obligation by accident. It does not, and this design adds no path by
 which a palette entrant can name a pane.
 
@@ -3907,134 +3991,123 @@ which a palette entrant can name a pane.
 
 | The interim's cost | Resolution |
 |---|---|
-| Every keystroke pays one match on the UI thread, under the FFI lock | U11: a pending unit publishes immediately, the match runs off the dispatcher, and the backlog policy bounds a burst to two matches |
-| The rows and the answer can come from different handles | U6's three validations plus U7's provenance binding. Admission alone does not close it; neither does completion validation without provenance |
-| The count and the state are two fields, so a reload can make the count describe a pane showing nothing | U1 and U9 at the model, U10 at the view. The model half alone does not make the DISPLAY coherent |
-| A stale answer must not widen the rows | U11's request identity, with the publication as its authority |
+| Every keystroke pays one match on the UI thread, under the FFI lock | U9: a pending unit publishes immediately, the match runs off the dispatcher, and the published schedule bounds a burst to two matches |
+| The rows and the answer can come from different handles | U6's three validations plus U7's class-validated tokens |
+| The count and the state are two fields, so a reload can make the count describe a pane showing nothing | U1 and U11 at the model. The DISPLAY half is T1 and is not claimed resolved |
+| A stale answer must not widen the rows | U9's request identity, with the publication as its authority |
 
 ### Where every travelling row lands
 
 | Travelling (from §C) | Lands |
 |---|---|
-| The off-dispatcher match | U11 |
-| The failed-answer bit and the four-branch summary | U11's answer state, on the unit |
+| The off-dispatcher match | U9 |
+| The failed-answer bit and the four-branch summary | U9's answer state, on the unit |
 | The projection unit | U2's population and unit classes |
-| The publication transaction | U10 — deleted at the model, re-created at the view |
-| Silence-first teardown | U14 |
-| Their censuses | U15's three arms |
+| The publication transaction | model half in U11; presentation half is **T1/T3, UNRESOLVED** |
+| Silence-first teardown | model half in U12; the speech window is **T4, UNRESOLVED** |
+| Their censuses | U13's four arms |
 | Their facts | the verification plan below |
 | The originating surface (PR F) | not absorbed |
 
-### Verification plan
+### Verification plan — model side
 
-**Censuses.** U15's three arms, each with a discovery floor and
+**Censuses.** U13's four arms: owned-symbol closure, classification
+manifest, capability, effects — each with a discovery floor and
 fail-closed resolution.
 
-**A derived theory over the state product**, enumerated from the type
-rather than listed, asserting every column of every row — including row
-5, which revision 2 could not prove because it lacked document currency.
+**A derived theory over the state product**, enumerated from the type,
+asserting every column of every row.
 
-**Barrier-driven concurrency facts**, deterministic by injected barrier
-rather than by timing:
+**Barrier-driven concurrency facts**, deterministic by injected barrier:
+a query completing after a same-population successor (exposed); after a
+new population (refused); after lease death (refused, nothing
+cancelled); a waiter acquiring the FFI lock after death (refused before
+FFI); ten requests scheduled (at most two matches, and the schedule's
+running/queued pair asserted at each transition); both J1/J2 completion
+orders; an answer arriving after teardown (dropped); both load completion
+orders; a retire-before-load-delivery barrier (refused, and the lease it
+opened is closed by the delivery).
 
-* a query that completes after a same-population successor — result
-  exposed;
-* the same after a new population — refused;
-* the same after lease death — refused, nothing cancelled;
-* **source laundering A→B through an actual CONSUMER** — follow-connection
-  on A, B publishes, and the effect refuses rather than relabelling;
-* a waiter that acquires the FFI lock after lease death — refused before
-  invoking FFI;
-* **ten requests scheduled** — at most two matches run;
-* both J1/J2 completion orders — the resting state answers the latest
-  needle;
-* an answer arriving after teardown — dropped;
-* an abandoned dispatcher delivery — the operation releases.
+**Effect-containment facts.** One per model boundary in U8: a retained
+filtered-out row cannot mutate, announce, request focus, or hand off to
+the shell; a retained mode closure cannot run unsourced. Focus DELIVERY
+is T6's fact, not this cycle's.
 
-**Presentation facts.** An old-A callback raised BY B's installation —
-refuses, and does not acquire B. Forced reentrancy mid-apply, with
-assertions on the CONTROLS. Selection intent and resolution observed from
-a reentrant handler — never disagreeing.
+**Retention facts.** Publication and unit collection under a same-lease
+successor; population collection after a reload; lease collection only
+after terminalization and physical close; and one per D1 release row —
+including the load-result lease, which must close itself when refused.
 
-**Effect-containment facts.** One per boundary in U8's universe: a
-retained filtered-out row cannot mutate, announce, request focus, expand,
-open a note, launch a browser or run a mode closure.
+**Mutation pairs.** One per D4 row, run and reported as a pair, each with
+its first half demonstrated to actually enable the state.
 
-**Retention facts, corrected.** Round 2 was right that one weak-reference
-fact was impossible as written: a same-lease successor necessarily
-retains the lease. Three separate facts — publication and unit collection
-under a same-lease successor; population collection after a reload; lease
-collection only after terminalization and physical close — plus one per
-D1 release claim.
-
-**Mutation pairs.** One per D4 row, run and reported as a pair, with the
-pair's first half demonstrated to actually enable the state.
-
-**What this plan cannot catch:** a race the barriers do not model, and a
-WPF binding path outside U15's declared type closure. It CAN prove every
-modelled interleaving, and the closure is derived rather than remembered.
+**What this plan cannot catch:** a race the barriers do not model; a WPF
+binding path outside the owned-symbol closure; and everything in the
+ledger, which is the point of the ledger.
 
 **Gates.** Unit suite in both configurations, the FlaUI journeys, and the
 format gate across all three projects.
 
 ### Deliberate departures from the architecture review's Option A
 
-Option A specified "a generation-stamped query token bound to the handle
-it was built from". The intent is kept; four things differ, each on
-evidence produced after the review.
-
 **The token is a reference, not a stamp** — a counter carries the ABA
 shape this branch retired, and the handle it would stamp is a reused
-integer.
-
-**Currency is four nested classes plus presentation, not one.** Option A
-had the handle; revisions 1 and 2 had two and three; the audit found
-five. The middle terms are what make the state product derivable.
-
-**Currency is DERIVED from one field, never carried.** Every flag beside
-the publication reintroduced a two-write window, three times.
-
-**A valid result is not a licence to act.** Option A bound the query to
-its handle; U7 binds the RESULT to its initiating unit, because the
-mixing that survives handle-binding happens at the consumer.
+integer. **Currency is four nested model classes plus presentation**, not
+one. **Currency is DERIVED from one field, never carried.** **A valid
+result is not a licence to act** — Option A bound the query to its
+handle; U7 binds the effect to the currency class its payload depends on.
 
 ### Design round record
 
-**Round 1 — NOT SOUND, 10 blockers.** Revision 1 classified projection by
-STORAGE TYPE rather than coherence dependency, leaving row-correlated
-reads and every projection-originated effect outside the boundary.
+**Round 1 — NOT SOUND, 10 blockers.** Projection was classified by
+STORAGE TYPE rather than coherence dependency.
 
-**Round 2 — NOT SOUND, 11 blockers.** The count rose and the shape
-converged: revision 2's three classes were right as far as they went, and
-its remaining defects were one mistake repeated — a mechanism per
-question instead of one authority — which is why revision 3 is organised
-around the single mutable field.
+**Round 2 — NOT SOUND, 11 blockers.** Three classes were right as far as
+they went; the defects were one mistake repeated — a mechanism per
+question instead of one authority.
+
+**Round 3 — NOT SOUND, 12 blockers, and the TRIPWIRE FIRED.** The tally
+the coordinator had set the tripwire against: **nine of fifteen findings
+classified "(i) a new mechanism failing"** rather than "the one-field
+invariant not yet reaching a member". That is the treadmill signature —
+each revision's new mechanisms generating the next round's findings — and
+it escalated.
+
+**THE USER'S RULING: split the design.** Round 4 verifies the MODEL side
+only. The presentation and effect periphery becomes six explicit
+obligations with round 3's findings as acceptance criteria, to be
+resolved in their own cycle — possibly by design-by-implementation, since
+prose has now failed three times in exactly the region where code-level
+arbitration succeeded repeatedly on C-lite.
 
 **THE COUNTER-POSITION RULING, load-bearing for implementation.**
-Revision 2 argued against round 1's blocker 4 that a query on a
-superseded unit should be ADMITTED. **That survived**, and the reasoning
-is ratified: the non-filter queries are functions of the loaded model,
-core's sibling ordinal is a model position rather than a display
-position, the filter is the one needle-dependent query and has its own
-currency, and population currency derived from the slot has no two-write
-problem.
+Revision 2 argued against round 1 that a query on a superseded unit
+should be ADMITTED, and it survived rounds 2 and 3: the non-filter
+queries are functions of the loaded model, core's sibling ordinal is a
+model position, the filter is the one needle-dependent query and has its
+own currency. **Its boundary is the other half:** it holds at the
+PURE-QUERY level. A population-valid result is not by itself a licence to
+act, which is U7 — and the composition of data provenance with SURFACE
+provenance is T2.
 
-**Its boundary is the other half of the ruling and matters as much.** It
-holds at the PURE-QUERY level. A population-valid result is not
-provenance-bound to the unit that asked, so a consumer can reacquire a
-successor and turn A's completion into a B-sourced effect — round 7's
-mixing shape moved to the consumer boundary. U7 is that missing half.
-**Admitting the query was right; letting the answer travel unlabelled was
-not.**
+**What round 3 confirmed sound and three-rounds-stable**, and what this
+revision therefore does not touch: the lease→population→unit chain; the
+slot's execution path, where terminal publication plus
+admission/under-lock/completion validation stops queued and in-flight
+consumers from invoking or exposing through a closed lease;
+physical-close-outside-currency; the eager memo's placement in the
+population; the pure-query counter-position; and the five-class
+classification.
 
-**The lesson worth keeping.** Three revisions, and each one's defects
-were narrower than the last's while the count did not fall monotonically.
-The count is a poor signal; the SHAPE is the signal, and the shape went
-from "the boundary is in the wrong place" to "the boundary is right and
-the mechanisms multiply" to a single field. What made that possible was
-the reviewer's classification audit — a design is easiest to fix when
-somebody enumerates what it must cover from the code rather than from the
-design's own claims.
+**The lesson the split records.** Three rounds of prose could not
+converge on the presentation and effect periphery, while the same
+reviewer's model-side findings narrowed each round and three of the
+model's mechanisms are now stable. The difference is not the reviewer and
+not the effort — it is that WPF's presentation semantics are discovered
+by running them, and prose about them is a claim nobody can check until
+code exists. That is the argument for design-by-implementation on the
+periphery, and it is why the split is a ruling about METHOD rather than
+about scope.
 
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
