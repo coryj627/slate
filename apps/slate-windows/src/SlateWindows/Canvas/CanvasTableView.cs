@@ -59,6 +59,13 @@ internal sealed class CanvasTableView : UserControl
             Announce = _ => { },
         };
         _grid.CurrentRowChanged += OnCurrentRowChanged;
+        // Spec §7 / §PR B's consumes-note: the substrate's Ctrl+F is the
+        // TABLE's delivery site for `slate.canvas.filterCards`, so it
+        // subscribes to the ONE canvas filter rather than the canvas
+        // shadowing the grid's own route. With a subscriber the gesture
+        // stops continuing-routing, which is what keeps the app-level
+        // find from firing behind a grid that CAN filter (contract C10).
+        _grid.FilterRequested += () => Model?.Navigator.FilterCards();
         // A14.3: realization is part of delivery, so a request that
         // could not reach a virtualized row is retried when the panel
         // makes containers — the outline's `ContainersRealized` shape,
@@ -127,8 +134,45 @@ internal sealed class CanvasTableView : UserControl
     /// panel makes the container.
     /// </para>
     /// </remarks>
-    internal bool DeliverFocus(string nodeId) =>
-        _grid.SelectRow(row => IsNode(row, nodeId), moveFocus: true);
+    internal bool DeliverFocus(string nodeId)
+    {
+        if (Model is not { } model)
+        {
+            return false;
+        }
+        // Contract C12 / CD-40, the outline's twin one projection over:
+        // seating currency IS taking focus in a DataGrid, so the guard
+        // covers the whole delivery and the shared selection is seated
+        // silently rather than narrated. The paragraph this replaces
+        // recorded the doubling as inherited behaviour and filed it for
+        // PR C; PR C is here, and it is fixed in BOTH projections
+        // together, because a table-only fix would make the two behave
+        // differently on the same request.
+        _syncingSelection = true;
+        try
+        {
+            bool delivered = _grid.SelectRow(row => IsNode(row, nodeId), moveFocus: true);
+            if (delivered)
+            {
+                model.SeatSelectionSilently(nodeId);
+            }
+            return delivered;
+        }
+        finally
+        {
+            _syncingSelection = false;
+        }
+    }
+
+    /// <summary>The navigator's boundary question (contract C3) — the
+    /// grid's own order, which the reader's sort may have changed.</summary>
+    internal bool CanMoveRow(bool forward) => _grid.CanMoveRow(forward);
+
+    internal bool HasKeyboardFocus => _grid.IsKeyboardFocusWithin;
+
+    /// <summary>The outline's twin, and the same reason: a collapsed
+    /// grid cannot take the keys (contract C6).</summary>
+    internal bool FocusGrid() => _grid.FocusFirstCell();
 
     private static void OnModelChanged(
         DependencyObject d, DependencyPropertyChangedEventArgs e)
@@ -149,7 +193,7 @@ internal sealed class CanvasTableView : UserControl
             // uncoalesced (they are not canvas vocabulary and have no
             // canvas coalescing class) and carries core's own priority
             // through unwrapped, rather than re-classifying them here.
-            view._grid.Announce = model.Announcer.Relay;
+            view._grid.Announce = model.GridRelaySeam;
         }
         else
         {
@@ -175,9 +219,19 @@ internal sealed class CanvasTableView : UserControl
     /// </summary>
     private void Rebuild()
     {
-        IReadOnlyList<CanvasTableRow> rows = Model?.TableRows ?? [];
+        // The FILTERED rows (contract C10) — narrowed by the same match
+        // set the outline shows, so the two projections never disagree
+        // about what the needle answered.
+        IReadOnlyList<CanvasTableRow> rows = Model?.FilteredTableRows ?? [];
+        // The summary counts the WHOLE canvas, filtered or not, and
+        // always has: it is a never-announced label describing the
+        // document ("Canvas table: 7 cards, 2 groups."), not a match
+        // count — the filter's own count lives in the header's result
+        // summary, which is the one bound by *displayed rows == announced
+        // count* (contract C10, VA-1's recorded carve-out).
+        IReadOnlyList<CanvasTableRow> whole = Model?.TableRows ?? [];
         int cards = 0;
-        foreach (CanvasTableRow row in rows)
+        foreach (CanvasTableRow row in whole)
         {
             if (!IsGroup(row))
             {
@@ -212,7 +266,7 @@ internal sealed class CanvasTableView : UserControl
             _grid.Bind(
                 Columns(),
                 rows.Cast<object>().ToArray(),
-                summary: CanvasPhrase.TableSummary(cards, rows.Count - cards),
+                summary: CanvasPhrase.TableSummary(cards, whole.Count - cards),
                 accessibilityLabel: CanvasPhrase.TableName,
                 rowAudioDescription: null,
                 rowActions: RowActions(),
@@ -257,6 +311,10 @@ internal sealed class CanvasTableView : UserControl
         {
             return;
         }
+        // SAVED and restored, not forced false — the outline's twin
+        // reason: `DeliverFocus` seats the shared selection inside its
+        // own guard and re-enters here through the property change.
+        bool outer = _syncingSelection;
         _syncingSelection = true;
         try
         {
@@ -267,7 +325,7 @@ internal sealed class CanvasTableView : UserControl
         }
         finally
         {
-            _syncingSelection = false;
+            _syncingSelection = outer;
         }
     }
 

@@ -637,13 +637,39 @@ W5_4_DELIVERED_COMMANDS = {
 # projection. `showVisual` stays out until PR D ships the renderer,
 # where its resolver stops answering CanExecute false.
 W6_1_STATUS = (
-    "implemented; local gates green 2026-08-24; "
+    "implemented; local gates green 2026-08-25; "
     "interactive CI + human AT pending"
 )
 
 W6_1_DELIVERED_COMMANDS = {
+    # PR A / PR B: the two projections that exist.
     "slate.canvas.showOutline",
     "slate.canvas.showTable",
+    # PR C: the navigator command layer, the filter, Where-am-I and the
+    # mode transitions. `slate.canvas.toggleFollowSelection` is
+    # deliberately absent — it registers in C and stays disabled until
+    # PR D ships the viewport, and §B12's rule is that a command joins
+    # this set in the PR that makes it EXECUTABLE, not the one that
+    # registers it.
+    #
+    # `commitMode` and `cancelMode` are absent for the SAME reason, and
+    # the split is what made that true. They gate on `CanCommitOrCancel`,
+    # so they execute the moment a mode is running — but nothing in the
+    # shipped code ENTERS a mode: the entrants are PR F's (move, resize,
+    # connect), and C-lite ships the machine, not a way in. The M1-M7
+    # conformance suite drives a TEST mode, which is exactly the thing
+    # §B12's rule distinguishes from executable. Both rows return here
+    # with F, which is the PR that makes them reachable.
+    "slate.canvas.whereAmI",
+    "slate.canvas.nextCard",
+    "slate.canvas.previousCard",
+    "slate.canvas.enterGroup",
+    "slate.canvas.exitGroup",
+    "slate.canvas.followConnectionForward",
+    "slate.canvas.followConnectionBack",
+    "slate.canvas.tracePath",
+    "slate.canvas.filterCards",
+    "slate.canvas.clearFilter",
 }
 
 # W4 delivery, same per-command shape as W3.

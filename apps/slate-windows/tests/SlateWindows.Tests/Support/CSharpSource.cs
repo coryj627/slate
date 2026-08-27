@@ -65,6 +65,21 @@ internal sealed class CSharpSource
     {
         string path = System.IO.Path.Combine(
             new[] { SourceText.ShellSourceRoot() }.Concat(relativeSegments).ToArray());
+        return LoadPath(path);
+    }
+
+    /// <summary>
+    /// Parse one ABSOLUTE path, for a census that ENUMERATES its
+    /// population instead of naming it.
+    /// </summary>
+    /// <remarks>
+    /// A census whose scope is "every file under this directory" cannot
+    /// go through <see cref="Load"/>, which takes the segments of a file
+    /// somebody wrote down — and a census that names its files is a list
+    /// that stops being complete the day someone adds one.
+    /// </remarks>
+    internal static CSharpSource LoadPath(string path)
+    {
         Assert.True(File.Exists(path), $"{path} does not exist.");
 
         SyntaxTree tree = CSharpSyntaxTree.ParseText(

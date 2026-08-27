@@ -215,7 +215,7 @@ public sealed class AnnouncementSeamCensus
                 Canvas.CanvasDocumentViewModel document =
                     Assert.IsType<Canvas.CanvasDocumentViewModel>(
                         workspace.ActiveGroup.ActiveTab!.Canvas);
-                document.Announcer.FlushForTests();
+                document.AnnouncerForTests.FlushForTests();
 
                 string spoken = Assert.Single(raised);
                 Assert.Equal(document.DegradedBannerText, spoken);
@@ -297,5 +297,238 @@ public sealed class AnnouncementSeamCensus
         {
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
         }
+    }
+
+    /// <summary>
+    /// Contract A5/C7: no canvas code reaches the announcer's
+    /// compose-and-post surface except through the ONE boundary.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// PROVENANCE, because this guard is not hypothetical — it is four
+    /// incidents old. The canvas has one announce boundary
+    /// (<c>CanvasDocumentViewModel.Speak</c>) so that a retired document
+    /// composes nothing, and until this arm existed that was a
+    /// CONVENTION: a new <c>Announcer.Announce(…)</c> written anywhere
+    /// under <c>Canvas/</c> passed every census, every fact and the
+    /// build.
+    /// </para>
+    /// <para>
+    /// It would have caught both instances that actually happened, and
+    /// both were re-run against it rather than argued. The mode stack
+    /// composed its confirmation on a retired document; it called an
+    /// injected delegate, so the offending line is the WIRING —
+    /// restoring <c>new CanvasModeController(Announcer.Announce)</c>
+    /// fails this arm, naming that line. And <c>AdmitStructuralRead</c>,
+    /// the never-silent mapping itself, announced a refusal through a
+    /// retired funnel from a direct call — restoring
+    /// <c>Announcer.Announce(new CanvasA11yEvent.CanvasStatus(note))</c>
+    /// fails it too. A third mutation (a new direct call in the
+    /// navigator) and a fourth (pointing a named seam somewhere that is
+    /// not the announcer) close the arm's own two halves.
+    /// </para>
+    /// <para>
+    /// EVERYTHING here is derived; there is no allow-list any more. The
+    /// forbidden surface is every announcer member that reaches
+    /// <c>Emit</c>, read out of `CanvasAnnouncer` itself, so a third
+    /// poster added tomorrow joins without anyone editing this file. The
+    /// scanned set is every production source under <c>Canvas/</c>, the
+    /// same walk the other canvas censuses take. The exempt SEAMS are
+    /// members of the document, found by name with their reasons
+    /// attached, and each must be found — an exemption for a member that
+    /// no longer touches the announcer is an exemption for nothing, and
+    /// fails here rather than quietly widening the boundary.
+    /// </para>
+    /// <para>
+    /// SCOPE, stated because the guarantee is narrower than the sentence
+    /// "production cannot reach the announcer" suggests: this scan is
+    /// <c>Canvas/</c> only. `AnnouncerForTests` is <c>internal</c>, so a
+    /// shell file outside that directory could acquire it unpoliced.
+    /// Nothing does — the residue's whole defence is that its NAME reads
+    /// wrong in shipping code — but the wall is the directory, and the
+    /// rest is the name.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void NoCanvasCodeReachesTheAnnouncerExceptThroughTheBoundary()
+    {
+        CSharpSource announcer = CSharpSource.Load("Canvas", "CanvasAnnouncer.cs");
+        // DERIVED: the compose-and-post surface is whatever reaches
+        // `Emit`. `RenderLabel` renders and posts nothing; `Shutdown`,
+        // `IsRetired` and the test seams say nothing either.
+        string[] posters =
+        [
+            .. announcer.Root.DescendantNodes()
+                .OfType<MethodDeclarationSyntax>()
+                .Where(method => method.DescendantNodes()
+                    .OfType<InvocationExpressionSyntax>()
+                    .Any(call => call.Expression
+                        is IdentifierNameSyntax { Identifier.ValueText: "Emit" }))
+                .Select(method => method.Identifier.ValueText)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(name => name, StringComparer.Ordinal),
+        ];
+        Assert.NotEmpty(posters);
+        Assert.Contains("Announce", posters);
+
+        // The ONE boundary, found rather than assumed: if it is renamed
+        // or removed, every call below becomes an offender and this
+        // assertion says why first. `Method` also fails on an ambiguous
+        // name, which is the decoy shape a scrape has to refuse.
+        CSharpSource document = CSharpSource.Load("Canvas", "CanvasDocumentViewModel.cs");
+        _ = document.Method("Speak");
+        const string BoundaryFile = "CanvasDocumentViewModel.cs";
+
+        // DERIVED: the RESIDUE — the member that hands out the announcer
+        // itself. `internal` cannot separate this assembly's tests from
+        // its production code, so one handle survives privatisation, and
+        // the census's first rule is about that member by name. Read out
+        // of the document (an expression-bodied property whose whole body
+        // IS the announcer field) so a rename brings this file with it
+        // rather than leaving it guarding a name nobody uses.
+        string[] residue =
+        [
+            .. document.Root.DescendantNodes()
+                .OfType<PropertyDeclarationSyntax>()
+                .Where(property => property.ExpressionBody?.Expression
+                        is IdentifierNameSyntax field
+                    && field.Identifier.ValueText
+                        .EndsWith("announcer", StringComparison.OrdinalIgnoreCase))
+                .Select(property => property.Identifier.ValueText),
+        ];
+        Assert.True(
+            residue.Length > 0,
+            "no member of CanvasDocumentViewModel hands out the announcer "
+            + "itself, so either the residue is gone — delete the acquisition "
+            + "rule with it — or this census is watching for a name that no "
+            + "longer exists.");
+
+        // The TWO named seams, each with its reason. They are members of
+        // the document rather than an allow-list of call sites now — the
+        // announcer is private, so this is the whole surface, and both
+        // must be FOUND or the census is exempting nothing.
+        (string Member, string Why)[] seams =
+        [
+            ("Speak",
+                "the ONE announce boundary (contracts A5/C7): a retired "
+                + "document composes nothing, and the check has to live in "
+                + "the speaker rather than the funnel."),
+            ("GridRelaySeam",
+                "contract B7: the substrate raises CANONICAL grid events "
+                + "(sort, row move, cell move) and they ride the canvas "
+                + "funnel uncoalesced, carrying core's own priority through. "
+                + "Not a canvas sentence, so it gets a named member rather "
+                + "than a hole in the boundary."),
+        ];
+        var seamsFound = new HashSet<string>(StringComparer.Ordinal);
+
+        var offenders = new List<string>();
+        string[] files = [.. CanvasSources()];
+        Assert.NotEmpty(files);
+        foreach (string file in files)
+        {
+            CSharpSource source = CSharpSource.LoadPath(file);
+            string name = Path.GetFileName(file);
+            var reaches = new List<SyntaxNode>();
+            foreach (MemberAccessExpressionSyntax access in source.Root
+                .DescendantNodes()
+                .OfType<MemberAccessExpressionSyntax>())
+            {
+                // TWO rules, and the first is the one that closes the
+                // evasions. ACQUIRING the funnel is forbidden outright:
+                // the residue is the only handle production can still
+                // obtain (the field is private), so an alias, a captured
+                // lambda, a conditional access or a transitive helper all
+                // fail HERE, at the point they get it, rather than at a
+                // call site a receiver-shaped scan has to recognise.
+                bool acquires = residue.Contains(
+                    access.Name.Identifier.ValueText, StringComparer.Ordinal);
+                // And the older rule stays as the belt: a poster called
+                // on anything announcer-shaped. Both an invocation and a
+                // bare method group count — the seam that let the mode
+                // stack past the boundary was a method group handed to a
+                // constructor.
+                bool posts = posters.Contains(access.Name.Identifier.ValueText)
+                    && CSharpSource.Normalize(access.Expression)
+                        // Case-insensitive on the suffix, so the private
+                        // FIELD (`_announcer`) is matched as readily as a
+                        // property — the boundary's own call is what
+                        // proves this scan reaches anything at all.
+                        .EndsWith("announcer", StringComparison.OrdinalIgnoreCase);
+                if (acquires || posts)
+                {
+                    reaches.Add(access);
+                }
+            }
+            foreach (IdentifierNameSyntax bare in source.Root
+                .DescendantNodes()
+                .OfType<IdentifierNameSyntax>())
+            {
+                // The spelling both rules above miss, because there is no
+                // receiver TEXT to match: an implicit `this` inside the
+                // declaring file. `AnnouncerForTests.Announce(e)` written
+                // in `CanvasDocumentViewModel.cs` reads as a bare name —
+                // and that file is where a new announce site is most
+                // likely to be written in the first place. A qualified
+                // `x.AnnouncerForTests` is skipped here because the
+                // acquisition rule above already has it.
+                if (!residue.Contains(bare.Identifier.ValueText, StringComparer.Ordinal)
+                    || (bare.Parent is MemberAccessExpressionSyntax qualified
+                        && qualified.Name == bare))
+                {
+                    continue;
+                }
+                reaches.Add(bare);
+            }
+
+            foreach (SyntaxNode reach in reaches)
+            {
+                // The enclosing MEMBER, method or property: the relay
+                // seam is expression-bodied, and a scan that only knew
+                // methods would have reported it as top-level noise.
+                MemberDeclarationSyntax? owner = reach.Ancestors()
+                    .OfType<MemberDeclarationSyntax>()
+                    .FirstOrDefault(member =>
+                        member is MethodDeclarationSyntax or PropertyDeclarationSyntax);
+                string ownerName = owner switch
+                {
+                    MethodDeclarationSyntax method => method.Identifier.ValueText,
+                    PropertyDeclarationSyntax property => property.Identifier.ValueText,
+                    _ => "<top level>",
+                };
+                if (name == BoundaryFile
+                    && seams.Any(seam => seam.Member == ownerName))
+                {
+                    _ = seamsFound.Add(ownerName);
+                    continue;
+                }
+                offenders.Add(
+                    $"{name}:{ownerName} — {CSharpSource.Normalize(reach)}");
+            }
+        }
+
+        Assert.True(
+            offenders.Count == 0,
+            "canvas code reaches the announcer's post surface without going "
+            + "through `CanvasDocumentViewModel.Speak`, so a retired document "
+            + "can compose a sentence for a closed funnel — the defect this "
+            + $"branch fixed twice: {string.Join("; ", offenders)}");
+        string[] unusedSeams =
+            [.. seams.Where(seam => !seamsFound.Contains(seam.Member))
+                .Select(seam => $"{seam.Member} ({seam.Why})")];
+        Assert.True(
+            unusedSeams.Length == 0,
+            "a named seam never reached the announcer, so this census is "
+            + "exempting nothing there and either the seam is stale or the "
+            + $"scan is broken: {string.Join("; ", unusedSeams)}");
+    }
+
+    private static IEnumerable<string> CanvasSources()
+    {
+        string root = Path.Combine(SourceText.ShellSourceRoot(), "Canvas");
+        Assert.True(Directory.Exists(root), $"the canvas source root is missing: {root}");
+        return Directory
+            .EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
+            .OrderBy(file => file, StringComparer.Ordinal);
     }
 }

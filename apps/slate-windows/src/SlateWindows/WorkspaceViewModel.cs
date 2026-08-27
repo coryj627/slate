@@ -1486,6 +1486,9 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             ?? (_ => WorkspaceDirtyNavigationDecision.Cancel);
         EditorPreferences = new EditorPreferencesViewModel(
             _announce, preferencesStore: preferencesStore);
+        // W6-1 PR C (#745), contract C13: app-level canvas verbosity,
+        // read live by every open canvas document.
+        CanvasPreferences = new Canvas.CanvasPreferencesViewModel(preferencesStore);
         // Math prefs are session-honored (get_math_blocks reads them on
         // every call): apply the persisted values once at construction,
         // then on every change re-render any open reading projections
@@ -1692,6 +1695,10 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     ];
     public IReadOnlyList<WorkspaceLeafOption> LeafOptions => Leaves;
     public EditorPreferencesViewModel EditorPreferences { get; }
+
+    /// <summary>W6-1 PR C (#745): the canvas announcement verbosity
+    /// (t0 §1.2), read live at every canvas announce.</summary>
+    public Canvas.CanvasPreferencesViewModel CanvasPreferences { get; }
 
     /// <summary>The W4-2 link/structure leaf data (backlinks, outgoing
     /// links, outline, embeds).</summary>

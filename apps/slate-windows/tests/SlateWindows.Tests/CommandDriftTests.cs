@@ -348,6 +348,14 @@ public sealed class CommandDriftTests
                 "Parameterized: the menu passes the braille code to select.",
             ["Workspace.EditorPreferences.SetCodePreambleVerbosityCommand"] =
                 "Parameterized: the menu passes the preamble verbosity to select.",
+            // W6-1 PR C (#745): the same shape one surface over. The
+            // Canvas menu's three verbosity items pass "terse" /
+            // "standard" / "verbose"; mac declares no SlateCommandID for
+            // canvas verbosity either, so there is no twin to be out of
+            // parity with. The chord table records the three levels as
+            // unregistered rows with the same reason.
+            ["Workspace.CanvasPreferences.SetVerbosityCommand"] =
+                "Parameterized: the menu passes the canvas verbosity to select.",
         };
 
     /// <summary>

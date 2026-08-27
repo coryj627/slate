@@ -110,6 +110,33 @@ public sealed class CanvasAnnouncerCensus
     [Fact]
     public void EveryGridUnderCanvasRidesTheRelay()
     {
+        // What COUNTS as the relay, derived rather than spelled. The
+        // announcer became a private field in codex round 3's M4, so the
+        // relay reaches the grid through a named member of the document
+        // whose whole body is `<announcer>.Relay` — and that member's
+        // NAME is the thing a surface now assigns. Reading it out of the
+        // document means a rename brings this census with it, and a seam
+        // that stops being the relay stops being accepted here.
+        CSharpSource document = CSharpSource.Load("Canvas", "CanvasDocumentViewModel.cs");
+        string[] relaySeams =
+        [
+            .. document.Root.DescendantNodes()
+                .OfType<PropertyDeclarationSyntax>()
+                .Where(property => property.ExpressionBody?.Expression
+                    is MemberAccessExpressionSyntax
+                    {
+                        Name.Identifier.ValueText: "Relay",
+                    } access
+                    && CSharpSource.Normalize(access.Expression)
+                        .EndsWith("announcer", StringComparison.OrdinalIgnoreCase))
+                .Select(property => property.Identifier.ValueText),
+        ];
+        Assert.True(
+            relaySeams.Length > 0,
+            "no member of CanvasDocumentViewModel exposes the announcer's Relay, "
+            + "so this census has no idea what a correct seating looks like and "
+            + "would call every surface an offender.");
+
         var offenders = new List<string>();
         var grids = 0;
         foreach (string file in CanvasSources())
@@ -139,12 +166,19 @@ public sealed class CanvasAnnouncerCensus
                 .Distinct(StringComparer.Ordinal)
                 .ToArray();
 
+            // The derived seams and nothing else. A literal
+            // `Announcer.Relay` alternative stood here for one wave after
+            // the announcer went private — dead by then (no member named
+            // `Announcer` exists) and a standing invitation to satisfy
+            // this census without going near the derivation it replaced.
             if (!seatings.Any(right =>
-                right.Contains("Announcer.Relay", StringComparison.Ordinal)))
+                relaySeams.Any(seam => right.EndsWith(
+                    "." + seam, StringComparison.Ordinal))))
             {
                 offenders.Add(
                     $"{label}: builds an AccessibleDataGrid but never assigns its "
                     + "Announce seam to the canvas announcer's Relay "
+                    + $"(via {string.Join(" or ", relaySeams)}) "
                     + $"(assignments seen: {(seatings.Length == 0 ? "none" : string.Join(" | ", seatings))})");
             }
         }
@@ -329,6 +363,90 @@ public sealed class CanvasAnnouncerCensus
             method.Body!.Statements.IndexOf(guard) <= 1,
             "the canvas short-circuit must run before FocusEditorPane's own "
             + "focus attempts, or it protects nothing.");
+    }
+
+    /// <summary>
+    /// Contract C4: the snapshot-visibility predicate is DERIVED from
+    /// what the surface renders, not from a state's name — so changing
+    /// which states show rows forces the predicate to follow.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The mac twin (<c>the_snapshot_visibility_predicate_matches_the_container_switch</c>)
+    /// exists because writing the condition out by hand made the gate
+    /// miss a state whose retained rows the container DOES render — the
+    /// curated-condition class. The Windows surface's answer is one
+    /// expression in <c>Render</c>, so this parses THAT and requires the
+    /// predicate to say the same thing.
+    /// </para>
+    /// <para>
+    /// The VIEW is the authority: a future state that renders a
+    /// projection has to appear on both sides or this fails naming the
+    /// disagreement.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void TheSnapshotVisibilityPredicateMatchesTheSurfaceRender()
+    {
+        MethodDeclarationSyntax render =
+            CSharpSource.Load("Canvas", "CanvasSurfaceView.cs").Method("Render");
+        string[] readyDeclarations = render.DescendantNodes()
+            .OfType<VariableDeclaratorSyntax>()
+            .Where(declarator => declarator.Identifier.ValueText == "ready")
+            .Select(declarator => CSharpSource.Normalize(declarator.Initializer!.Value))
+            .ToArray();
+        string surfaceCondition = Assert.Single(readyDeclarations);
+
+        PropertyDeclarationSyntax predicate = CSharpSource
+            .Load("Canvas", "CanvasDocumentViewModel.cs")
+            .Root.DescendantNodes()
+            .OfType<PropertyDeclarationSyntax>()
+            .Single(property =>
+                property.Identifier.ValueText == "RendersRetainedSnapshot");
+        string predicateCondition =
+            CSharpSource.Normalize(predicate.ExpressionBody!.Expression);
+
+        // The surface says `model.State == …`; the document says
+        // `State == …`. Compare the STATE TEST, which is the part that
+        // can drift.
+        Assert.Equal(
+            surfaceCondition.Replace("model.", string.Empty, StringComparison.Ordinal),
+            predicateCondition);
+        Assert.Contains(
+            "CanvasLoadState.Ready",
+            predicateCondition,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Contract C8: M4's one keep-alive arm depends on the shell
+    /// answering "is an overlay open", and the answer is a static seam
+    /// with a safe default. A default left installed would silently turn
+    /// every palette open into a mode cancellation — which is the exact
+    /// behaviour the arm exists to prevent — and nothing in-process can
+    /// see it, because <c>MainWindow</c> is not reachable from a unit
+    /// fact.
+    /// </summary>
+    [Fact]
+    public void TheShellInstallsTheModalOverlayAnswerForModeCancellation()
+    {
+        ConstructorDeclarationSyntax constructor = CSharpSource
+            .Load("MainWindow.xaml.cs")
+            .Root.DescendantNodes()
+            .OfType<ConstructorDeclarationSyntax>()
+            .Single(declaration => declaration.Identifier.ValueText == "MainWindow");
+
+        AssignmentExpressionSyntax[] installs = constructor.DescendantNodes()
+            .OfType<AssignmentExpressionSyntax>()
+            .Where(assignment => CSharpSource.Normalize(assignment.Left)
+                .EndsWith("CanvasSurfaceView.ShellOverlayIsOpen", StringComparison.Ordinal))
+            .ToArray();
+
+        AssignmentExpressionSyntax install = Assert.Single(installs);
+        Assert.Contains(
+            "OpenModalSurface",
+            CSharpSource.Normalize(install.Right),
+            StringComparison.Ordinal);
     }
 
     private static IEnumerable<string> CanvasSources()

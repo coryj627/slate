@@ -1,6 +1,6 @@
 # Milestone W parity matrix (§W-F row-level checklist)
 
-Generated 2026-08-25 at `2e6ec5d` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
+Generated 2026-08-25 at `4eb5109` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
 
 ## Entry-criteria snapshot (w0_spec §W0-4 item 3)
 
@@ -62,7 +62,7 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 | `slate.canvas.alignWith` | Canvas: Align With… | — | — | #745 (W6-1) | pending |
 | `slate.canvas.cancelMode` | Canvas: Cancel Mode | — | — | #745 (W6-1) | pending |
 | `slate.canvas.clearColor` | Canvas: Clear Color | — | — | #745 (W6-1) | pending |
-| `slate.canvas.clearFilter` | Canvas: Clear Filter | — | — | #745 (W6-1) | pending |
+| `slate.canvas.clearFilter` | Canvas: Clear Filter | — | — | #745 (W6-1) | implemented; local gates green 2026-08-25; interactive CI + human AT pending |
 | `slate.canvas.clearMarks` | Canvas: Clear All Marks | — | — | #745 (W6-1) | pending |
 | `slate.canvas.commitMode` | Canvas: Commit Mode | — | — | #745 (W6-1) | pending |
 | `slate.canvas.connectMode` | Canvas: Connect Mode | — | — | #745 (W6-1) | pending |
@@ -76,24 +76,24 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 | `slate.canvas.duplicate` | Canvas: Duplicate | — | — | #745 (W6-1) | pending |
 | `slate.canvas.editCard` | Canvas: Edit Card Text… | — | — | #745 (W6-1) | pending |
 | `slate.canvas.editConnection` | Canvas: Edit Connection… | — | — | #745 (W6-1) | pending |
-| `slate.canvas.enterGroup` | Canvas: Enter Group | — | — | #745 (W6-1) | pending |
-| `slate.canvas.exitGroup` | Canvas: Exit Group | — | — | #745 (W6-1) | pending |
-| `slate.canvas.filterCards` | Canvas: Filter Cards… | — | — | #745 (W6-1) | pending |
+| `slate.canvas.enterGroup` | Canvas: Enter Group | — | — | #745 (W6-1) | implemented; local gates green 2026-08-25; interactive CI + human AT pending |
+| `slate.canvas.exitGroup` | Canvas: Exit Group | — | — | #745 (W6-1) | implemented; local gates green 2026-08-25; interactive CI + human AT pending |
+| `slate.canvas.filterCards` | Canvas: Filter Cards… | — | — | #745 (W6-1) | implemented; local gates green 2026-08-25; interactive CI + human AT pending |
 | `slate.canvas.fitCanvas` | Canvas: Fit Canvas | — | — | #745 (W6-1) | pending |
-| `slate.canvas.followConnectionBack` | Canvas: Follow Connection Back | — | — | #745 (W6-1) | pending |
-| `slate.canvas.followConnectionForward` | Canvas: Follow Connection Forward | — | — | #745 (W6-1) | pending |
+| `slate.canvas.followConnectionBack` | Canvas: Follow Connection Back | — | — | #745 (W6-1) | implemented; local gates green 2026-08-25; interactive CI + human AT pending |
+| `slate.canvas.followConnectionForward` | Canvas: Follow Connection Forward | — | — | #745 (W6-1) | implemented; local gates green 2026-08-25; interactive CI + human AT pending |
 | `slate.canvas.groupMarked` | Canvas: Group Marked Cards… | — | — | #745 (W6-1) | pending |
 | `slate.canvas.locateFile` | Canvas: Locate File… | — | — | #745 (W6-1) | pending |
 | `slate.canvas.moveIntoGroup` | Canvas: Move into Group… | — | — | #745 (W6-1) | pending |
 | `slate.canvas.moveMode` | Canvas: Move Mode | ⌃⌘G | Control Command G | #745 (W6-1) | pending |
 | `slate.canvas.newCard` | Canvas: New Card | ⌥⌘N | Option Command N | #745 (W6-1) | pending |
 | `slate.canvas.newGroup` | Canvas: New Group… | — | — | #745 (W6-1) | pending |
-| `slate.canvas.nextCard` | Canvas: Next Card | — | — | #745 (W6-1) | pending |
+| `slate.canvas.nextCard` | Canvas: Next Card | — | — | #745 (W6-1) | implemented; local gates green 2026-08-25; interactive CI + human AT pending |
 | `slate.canvas.placeAbove` | Canvas: Place Above… | — | — | #745 (W6-1) | pending |
 | `slate.canvas.placeBelow` | Canvas: Place Below… | — | — | #745 (W6-1) | pending |
 | `slate.canvas.placeLeftOf` | Canvas: Place Left Of… | — | — | #745 (W6-1) | pending |
 | `slate.canvas.placeRightOf` | Canvas: Place Right Of… | — | — | #745 (W6-1) | pending |
-| `slate.canvas.previousCard` | Canvas: Previous Card | — | — | #745 (W6-1) | pending |
+| `slate.canvas.previousCard` | Canvas: Previous Card | — | — | #745 (W6-1) | implemented; local gates green 2026-08-25; interactive CI + human AT pending |
 | `slate.canvas.removeFromGroup` | Canvas: Remove from Group | — | — | #745 (W6-1) | pending |
 | `slate.canvas.renameGroup` | Canvas: Rename Group… | — | — | #745 (W6-1) | pending |
 | `slate.canvas.resizeDefaultSize` | Canvas: Resize to Default Size | — | — | #745 (W6-1) | pending |
@@ -101,13 +101,13 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 | `slate.canvas.resizeMode` | Canvas: Resize Mode | ⌃⌘R | Control Command R | #745 (W6-1) | pending |
 | `slate.canvas.setColor` | Canvas: Set Color… | — | — | #745 (W6-1) | pending |
 | `slate.canvas.showMarks` | Canvas: Show Marked Cards | — | — | #745 (W6-1) | pending |
-| `slate.canvas.showOutline` | Canvas: Show Outline | — | — | #745 (W6-1) | implemented; local gates green 2026-08-24; interactive CI + human AT pending |
-| `slate.canvas.showTable` | Canvas: Show Table | — | — | #745 (W6-1) | implemented; local gates green 2026-08-24; interactive CI + human AT pending |
+| `slate.canvas.showOutline` | Canvas: Show Outline | — | — | #745 (W6-1) | implemented; local gates green 2026-08-25; interactive CI + human AT pending |
+| `slate.canvas.showTable` | Canvas: Show Table | — | — | #745 (W6-1) | implemented; local gates green 2026-08-25; interactive CI + human AT pending |
 | `slate.canvas.showVisual` | Canvas: Show Visual | — | — | #745 (W6-1) | pending |
 | `slate.canvas.toggleFollowSelection` | Canvas: Toggle Viewport Follows Selection | — | — | #745 (W6-1) | pending |
 | `slate.canvas.toggleMark` | Canvas: Toggle Mark | ⌃⌘M | Control Command M | #745 (W6-1) | pending |
-| `slate.canvas.tracePath` | Canvas: Trace Path from Selected Card | — | — | #745 (W6-1) | pending |
-| `slate.canvas.whereAmI` | Canvas: Where Am I? | ⌃⌘I | Control Command I | #745 (W6-1) | pending |
+| `slate.canvas.tracePath` | Canvas: Trace Path from Selected Card | — | — | #745 (W6-1) | implemented; local gates green 2026-08-25; interactive CI + human AT pending |
+| `slate.canvas.whereAmI` | Canvas: Where Am I? | ⌃⌘I | Control Command I | #745 (W6-1) | implemented; local gates green 2026-08-25; interactive CI + human AT pending |
 | `slate.canvas.zoomIn` | Canvas: Zoom In | ⌘= | Command Equals | #745 (W6-1) | pending |
 | `slate.canvas.zoomOut` | Canvas: Zoom Out | ⌘- | Command Minus | #745 (W6-1) | pending |
 | `slate.canvas.zoomToSelection` | Canvas: Zoom to Selection | — | — | #745 (W6-1) | pending |

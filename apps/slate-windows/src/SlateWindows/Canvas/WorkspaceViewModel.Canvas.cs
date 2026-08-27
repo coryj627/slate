@@ -49,7 +49,11 @@ internal sealed partial class WorkspaceViewModel
                 path,
                 new CanvasAnnouncer(_announceRendered),
                 synchronousForTests: !_startInteractionBackgroundWork,
-                retargetedFrom: retargetedFrom);
+                retargetedFrom: retargetedFrom,
+                // Contract C13: the verbosity is READ at every announce,
+                // not copied in — a live switch reaches every open canvas
+                // with nothing to push.
+                verbosity: () => CanvasPreferences.Verbosity);
             if (seedSelection is not null)
             {
                 document.Selection.SeedFrom(seedSelection);
@@ -146,11 +150,17 @@ internal sealed partial class WorkspaceViewModel
             return;
         }
         var live = new HashSet<string>(StringComparer.Ordinal);
+        // The TAB objects, not just their paths: a request is addressed
+        // to a tab, and a document that survives because a SECOND pane
+        // still shows it must not go on holding the closed pane's
+        // request — or its object graph (contracts A14/C10).
+        List<WorkspaceTabViewModel> canvasTabs = [];
         foreach (WorkspaceTabViewModel tab in Groups.SelectMany(group => group.Tabs))
         {
             if (tab.IsCanvas)
             {
                 _ = live.Add(CanvasKey(tab.Path));
+                canvasTabs.Add(tab);
             }
         }
         foreach (string key in _canvasDocuments.Keys
@@ -161,6 +171,24 @@ internal sealed partial class WorkspaceViewModel
             retired.Shutdown();
             TrackRetiredBasesWork(retired.WhenHandleClosed());
             _ = _canvasDocuments.Remove(key);
+        }
+        // The documents that SURVIVED: this is the tab-set boundary, so
+        // it is where a request addressed to a tab that is gone stops
+        // being pending.
+        foreach (CanvasDocumentViewModel document in _canvasDocuments.Values)
+        {
+            // Asked PER DOCUMENT, not once for the window. A tab that is
+            // still open is not thereby still a live address for THIS
+            // document: retarget a tab from canvas X to canvas Y and the
+            // tab survives, so a global "is this tab still some canvas
+            // owner" answered yes and X went on holding a request no
+            // surface would ever deliver — the pane showing that tab now
+            // renders Y. Ownership is the pairing of a tab WITH a
+            // document, so that is what the predicate asks.
+            var liveOwners = new HashSet<object>(
+                canvasTabs.Where(tab => ReferenceEquals(tab.Canvas, document)),
+                ReferenceEqualityComparer.Instance);
+            document.DropRequestsAddressedOutside(liveOwners);
         }
     }
 
@@ -260,4 +288,106 @@ internal sealed partial class WorkspaceViewModel
     /// projection (contract A18).</summary>
     public System.Windows.Input.ICommand CanvasShowVisualCommand =>
         _canvasShowVisualCommand ??= new RelayCommand(_ => { }, _ => false);
+
+    // --- Navigator, filter, Where-am-I, modes (contract C1) -------------
+
+    private RelayCommand? _canvasNextCardCommand;
+    private RelayCommand? _canvasPreviousCardCommand;
+    private RelayCommand? _canvasEnterGroupCommand;
+    private RelayCommand? _canvasExitGroupCommand;
+    private RelayCommand? _canvasFollowForwardCommand;
+    private RelayCommand? _canvasFollowBackCommand;
+    private RelayCommand? _canvasTracePathCommand;
+    private RelayCommand? _canvasWhereAmICommand;
+    private RelayCommand? _canvasFilterCardsCommand;
+    private RelayCommand? _canvasClearFilterCommand;
+    private RelayCommand? _canvasCommitModeCommand;
+    private RelayCommand? _canvasCancelModeCommand;
+    private RelayCommand? _canvasToggleFollowSelectionCommand;
+
+    /// <summary>
+    /// Every navigator row is enabled whenever a canvas is active,
+    /// whatever its load state — rule R1's "commands are always
+    /// reachable" plus t0's never-silent rule: a verb the palette
+    /// disabled cannot tell the user why the canvas will not answer, and
+    /// answering accurately is exactly what the navigator's state mapping
+    /// is for (contract C4).
+    /// </summary>
+    private RelayCommand NavigatorCommand(Action<CanvasNavigator> verb) =>
+        new(
+            _ =>
+            {
+                if (ActiveCanvasDocument is { } document)
+                {
+                    verb(document.Navigator);
+                }
+            },
+            _ => ActiveCanvasDocument is not null);
+
+    public System.Windows.Input.ICommand CanvasNextCardCommand =>
+        _canvasNextCardCommand ??= NavigatorCommand(
+            navigator => navigator.NextCard());
+
+    public System.Windows.Input.ICommand CanvasPreviousCardCommand =>
+        _canvasPreviousCardCommand ??= NavigatorCommand(
+            navigator => navigator.PreviousCard());
+
+    public System.Windows.Input.ICommand CanvasEnterGroupCommand =>
+        _canvasEnterGroupCommand ??= NavigatorCommand(
+            navigator => navigator.EnterGroup());
+
+    public System.Windows.Input.ICommand CanvasExitGroupCommand =>
+        _canvasExitGroupCommand ??= NavigatorCommand(
+            navigator => navigator.ExitGroup());
+
+    public System.Windows.Input.ICommand CanvasFollowConnectionForwardCommand =>
+        _canvasFollowForwardCommand ??= NavigatorCommand(
+            navigator => navigator.FollowConnection(forward: true));
+
+    public System.Windows.Input.ICommand CanvasFollowConnectionBackCommand =>
+        _canvasFollowBackCommand ??= NavigatorCommand(
+            navigator => navigator.FollowConnection(forward: false));
+
+    public System.Windows.Input.ICommand CanvasTracePathCommand =>
+        _canvasTracePathCommand ??= NavigatorCommand(
+            navigator => navigator.TracePath());
+
+    public System.Windows.Input.ICommand CanvasWhereAmICommand =>
+        _canvasWhereAmICommand ??= NavigatorCommand(
+            navigator => navigator.WhereAmI());
+
+    public System.Windows.Input.ICommand CanvasFilterCardsCommand =>
+        _canvasFilterCardsCommand ??= NavigatorCommand(
+            navigator => navigator.FilterCards());
+
+    public System.Windows.Input.ICommand CanvasClearFilterCommand =>
+        _canvasClearFilterCommand ??= NavigatorCommand(
+            navigator => navigator.ClearFilter());
+
+    /// <summary>
+    /// M6/M2 through the palette. Unlike the movement rows these are
+    /// gated on a mode being active: there is no vocabulary for "no mode
+    /// is running", and the registrar's own unavailable sentence IS the
+    /// answer a disabled row gives (contract C9).
+    /// </summary>
+    public System.Windows.Input.ICommand CanvasCommitModeCommand =>
+        _canvasCommitModeCommand ??= new RelayCommand(
+            _ => ActiveCanvasDocument?.Navigator.CommitMode(),
+            _ => ActiveCanvasDocument?.Modes.CanCommitOrCancel == true);
+
+    public System.Windows.Input.ICommand CanvasCancelModeCommand =>
+        _canvasCancelModeCommand ??= new RelayCommand(
+            _ => ActiveCanvasDocument?.Navigator.CancelMode(),
+            _ => ActiveCanvasDocument?.Modes.CanCommitOrCancel == true);
+
+    /// <summary>
+    /// Registered now, disabled until PR D ships the viewport (contract
+    /// C9). "State only until D" was the alternative and it is worse:
+    /// the toggle's own announcement says the viewport follows the
+    /// selection, and with no viewport that is a sentence about nothing —
+    /// the t2 rule against advertising a command that does not exist yet,
+    /// applied to a command that exists and cannot act.
+    /// </summary>
+    public System.Windows.Input.ICommand CanvasToggleFollowSelectionCommand =>
+        _canvasToggleFollowSelectionCommand ??= new RelayCommand(_ => { }, _ => false);
 }

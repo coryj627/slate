@@ -109,6 +109,146 @@ public sealed class CanvasDocumentTests : IDisposable
 
     // --- A1: the registry ------------------------------------------------
 
+    /// <summary>
+    /// Closing the pane a request was addressed to cancels it, even
+    /// though the document lives on in another pane.
+    /// </summary>
+    /// <remarks>
+    /// Retirement does not cover this: the document is not being
+    /// retired. No peer may take the request (the address gate is doing
+    /// its job), nothing supersedes it, and the closed tab's object
+    /// graph stays reachable through it — a stranded request with no
+    /// expiry, which is half of what made the un-addressed version
+    /// wrong. Taken where the TAB SET changes, not in `Unloaded`, which
+    /// also fires when a pane is merely hidden and whose request must
+    /// survive.
+    /// </remarks>
+    [Fact]
+    public void ClosingTheAddressedPaneCancelsItsPendingRequests() => RunSta(() =>
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel first =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(first.Canvas);
+
+        // A second pane on the SAME path keeps the document alive.
+        ((System.Windows.Input.ICommand)workspace.DuplicateTabCommand).Execute(null);
+        WorkspaceTabViewModel second =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        Assert.Same(document, second.Canvas);
+
+        // Both requests pending, addressed to the tab about to close.
+        document.RequestFocusLanding(second);
+        document.RequestFilterFocus(second);
+        Assert.NotNull(document.FocusRequest);
+        Assert.NotNull(document.FilterFocusRequest);
+
+        ((System.Windows.Input.ICommand)workspace.CloseActiveTabCommand).Execute(null);
+
+        Assert.Same(document, first.Canvas);
+        Assert.Null(document.FocusRequest);
+        Assert.Null(document.FilterFocusRequest);
+        Assert.False(
+            document.HoldsPendingRequestsForTests,
+            "a surviving document must not hold the closed pane's tab through "
+            + "a request nobody can ever deliver.");
+    });
+
+    /// <summary>
+    /// A pane that still EXISTS but now shows a different canvas is not a
+    /// live address for the one it left.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The sweep's first shape asked one question for the whole window —
+    /// "is this tab still SOME canvas owner" — and a tab pointed at
+    /// another canvas answers yes. Opening a second canvas into the
+    /// current tab is the reachable route (`TryOpenItem`'s replace arm,
+    /// which attaches and then sweeps), and the canvas the tab left
+    /// survives whenever a second pane still shows it. It then went on
+    /// holding a request addressed to a tab whose surface renders
+    /// something else entirely: undeliverable, and holding the tab's
+    /// object graph with it — the same defect the close case fixed, one
+    /// step sideways.
+    /// </para>
+    /// <para>
+    /// Ownership is the PAIRING of a tab with a document, so that is what
+    /// the predicate asks. The re-raise arms below are what distinguish a
+    /// predicate from a one-shot: the same wrong address is dropped again
+    /// by the next sweep, and the right one survives it.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void APaneThatMovedToAnotherCanvasStopsBeingAnAddress() => RunSta(() =>
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel moving =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel left =
+            Assert.IsType<CanvasDocumentViewModel>(moving.Canvas);
+
+        // A second pane on the SAME canvas, so the one the tab leaves
+        // SURVIVES the sweep — otherwise retirement would clear the
+        // requests and this fact would be about `Shutdown`.
+        ((System.Windows.Input.ICommand)workspace.DuplicateTabCommand).Execute(null);
+        WorkspaceTabViewModel staying =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        Assert.Same(left, staying.Canvas);
+        workspace.ActiveGroup.ActiveTab = moving;
+
+        left.RequestFocusLanding(moving);
+        left.RequestFilterFocus(moving);
+        CanvasFocusRequest stale =
+            Assert.IsType<CanvasFocusRequest>(left.FocusRequest);
+        Assert.NotNull(left.FilterFocusRequest);
+
+        // The pane is pointed at a DIFFERENT canvas. The tab is still
+        // open, still a canvas tab, still in the group.
+        workspace.OpenPath("connected.canvas");
+        Assert.NotSame(left, moving.Canvas);
+        Assert.IsType<CanvasDocumentViewModel>(moving.Canvas);
+        Assert.Same(
+            left,
+            staying.Canvas);
+        Assert.Null(left.FocusRequest);
+        Assert.Null(left.FilterFocusRequest);
+        Assert.False(
+            left.HoldsPendingRequestsForTests,
+            "the canvas the pane left is still holding that pane's request — "
+            + "the surface showing it now renders a different document, so "
+            + "nothing will ever deliver it.");
+
+        // A PREDICATE, not a one-shot: the same wrong address raised
+        // again is dropped again by the next sweep.
+        left.RequestFocusLanding(moving);
+        left.RequestFilterFocus(moving);
+        workspace.OpenPath("note0.md", WorkspaceOpenTarget.NewTab);
+        ((System.Windows.Input.ICommand)workspace.CloseActiveTabCommand).Execute(null);
+        Assert.Null(left.FocusRequest);
+        Assert.Null(left.FilterFocusRequest);
+
+        // …and the pane that DID stay keeps its own, through the same
+        // sweep that dropped the other two.
+        left.RequestFocusLanding(staying);
+        left.RequestFilterFocus(staying);
+        CanvasFocusRequest live =
+            Assert.IsType<CanvasFocusRequest>(left.FocusRequest);
+        workspace.OpenPath("note0.md", WorkspaceOpenTarget.NewTab);
+        ((System.Windows.Input.ICommand)workspace.CloseActiveTabCommand).Execute(null);
+        Assert.Same(live, left.FocusRequest);
+        Assert.NotNull(left.FilterFocusRequest);
+
+        // The dropped record arriving late clears NOTHING: completion is
+        // by reference identity, and a swept record is not the live one.
+        left.CompleteFocusLanding(stale);
+        Assert.Same(
+            live,
+            left.FocusRequest);
+    });
+
     [Fact]
     public void OneDocumentIsSharedByEveryTabOnThePath()
     {
@@ -251,7 +391,7 @@ public sealed class CanvasDocumentTests : IDisposable
     {
         CanvasDocumentViewModel document = NewDocument("skipped.canvas");
         document.Load();
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
 
         RenderedAnnouncement spoken = Assert.Single(_announced);
         // Contract A4/CD-3: banner and speech are ONE render, so they
@@ -282,7 +422,7 @@ public sealed class CanvasDocumentTests : IDisposable
             document,
             Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab).Canvas);
 
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         RenderedAnnouncement spoken = Assert.Single(_announced);
         Assert.Equal(document.DegradedBannerText, spoken.Text);
     }
@@ -292,11 +432,11 @@ public sealed class CanvasDocumentTests : IDisposable
     {
         CanvasDocumentViewModel document = NewDocument("skipped.canvas");
         document.Load();
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         Assert.Single(_announced);
 
         document.Load();
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         Assert.Equal(2, _announced.Count);
         document.Shutdown();
     }
@@ -374,7 +514,7 @@ public sealed class CanvasDocumentTests : IDisposable
         _announced.Clear();
 
         document.SelectNode("evidence");
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
 
         CanvasOutlineRow row = Row(document, "evidence");
         RenderedAnnouncement spoken = _announced[^1];
@@ -400,11 +540,11 @@ public sealed class CanvasDocumentTests : IDisposable
         CanvasDocumentViewModel document = NewDocument("board.canvas");
         document.Load();
         document.SelectNode("evidence");
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         _announced.Clear();
 
         document.SelectNode("evidence");
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         Assert.Empty(_announced);
         document.Shutdown();
     }
@@ -453,7 +593,7 @@ public sealed class CanvasDocumentTests : IDisposable
         _announced.Clear();
 
         document.SelectNode("question");
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
 
         CanvasOutlineRow row = Row(document, "question");
         RenderedAnnouncement spoken = Assert.Single(_announced);
@@ -540,7 +680,7 @@ public sealed class CanvasDocumentTests : IDisposable
 
         Assert.Equal(CanvasActivation.Opened, document.Activate(Row(document, "link")));
         Assert.Equal("https://example.org/spec", launched);
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         Assert.Equal(
             SlateUniffiMethods.A11yRender(new A11yEvent.Canvas(
                 new CanvasA11yEvent.CanvasOpened(
@@ -569,7 +709,7 @@ public sealed class CanvasDocumentTests : IDisposable
 
         Assert.Equal(CanvasActivation.Refused, document.Activate(Row(document, "js")));
         Assert.False(launched);
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         Assert.Equal(
             SlateUniffiMethods.A11yRender(new A11yEvent.Canvas(
                 new CanvasA11yEvent.CanvasBlocked(
@@ -598,7 +738,7 @@ public sealed class CanvasDocumentTests : IDisposable
 
         Assert.Equal(CanvasActivation.Refused, document.Activate(Row(document, "gone")));
         Assert.False(navigated);
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         Assert.Equal(
             SlateUniffiMethods.A11yRender(new A11yEvent.Canvas(
                 new CanvasA11yEvent.CanvasFileNotFound("nowhere/missing.md"))).Text,
@@ -621,7 +761,7 @@ public sealed class CanvasDocumentTests : IDisposable
         _announced.Clear();
 
         document.FollowConnection(neighbor);
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         Assert.Equal("evidence", document.Selection.Selected);
         Assert.NotEmpty(_announced);
         document.Shutdown();
@@ -726,7 +866,7 @@ public sealed class CanvasDocumentTests : IDisposable
         // clearing the recorder does not empty the coalescer, and its
         // pending navigation line would land in the middle of the
         // assertion below and read as an arrow-key announcement.
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         _announced.Clear();
 
         // The arrow key's effect: the tree selects the row.
@@ -742,12 +882,12 @@ public sealed class CanvasDocumentTests : IDisposable
             connection.Status);
         // The canvas selection did not move, and nothing was said.
         Assert.Equal("question", document.Selection.Selected);
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         Assert.Empty(_announced);
 
         // Invoke IS the follow path, and it does move.
         connection.RaiseActivate();
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         Assert.Equal("evidence", document.Selection.Selected);
         Assert.NotEmpty(_announced);
         document.Shutdown();
@@ -774,7 +914,7 @@ public sealed class CanvasDocumentTests : IDisposable
         _announced.Clear();
         document.SelectNode("evidence");
         Assert.True(evidence.IsSelected);
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         int afterModelMove = _announced.Count;
         Assert.True(afterModelMove > 0);
 
@@ -782,7 +922,7 @@ public sealed class CanvasDocumentTests : IDisposable
         // re-seat must not echo back through the tree (contract A12).
         loose.IsSelected = true;
         host.UpdateLayout();
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         Assert.Equal("loose", document.Selection.Selected);
         Assert.Equal(afterModelMove + 1, _announced.Count);
         document.Shutdown();
@@ -1409,11 +1549,11 @@ public sealed class CanvasDocumentTests : IDisposable
             workspace.ActiveGroup.ActiveTab!.Canvas);
         Assert.Equal(CanvasSurfaceKind.Outline, document.Selection.ActiveSurface);
         // Already on the outline, so the switch is a no-op and silent.
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         Assert.Empty(_announced);
 
         document.ShowSurface(CanvasSurfaceKind.Table);
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         Assert.Equal(
             SlateUniffiMethods.A11yRender(new A11yEvent.Canvas(
                 new CanvasA11yEvent.CanvasSurfaceShown(CanvasSurfaceKind.Table))).Text,
@@ -1615,7 +1755,7 @@ public sealed class CanvasDocumentTests : IDisposable
         Assert.Equal(CanvasActivation.Opened, document.Activate(Row(document, "pic")));
         Assert.Equal("diagram.png", media);
         Assert.Null(navigated);
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         Assert.Equal(
             SlateUniffiMethods.A11yRender(new A11yEvent.Canvas(
                 new CanvasA11yEvent.CanvasOpened(
@@ -1720,7 +1860,7 @@ public sealed class CanvasDocumentTests : IDisposable
             CanvasMediaPolicy.IdentityForTests(
                 Path.Combine(_fixture.Root, "diagram.png")),
             CanvasMediaPolicy.IdentityForTests(handed));
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         Assert.Equal(
             SlateUniffiMethods.A11yRender(new A11yEvent.Canvas(
                 new CanvasA11yEvent.CanvasOpened(
@@ -1733,7 +1873,7 @@ public sealed class CanvasDocumentTests : IDisposable
         _announced.Clear();
         Assert.Equal(CanvasActivation.Refused, document.Activate(Row(document, "exe")));
         Assert.Empty(launched);
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         RenderedAnnouncement refusal = Assert.Single(_announced);
         Assert.Equal(A11yPriority.High, refusal.Priority);
         Assert.Equal(
@@ -1817,7 +1957,7 @@ public sealed class CanvasDocumentTests : IDisposable
         }
 
         Assert.Empty(launched);
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         RenderedAnnouncement refusal = Assert.Single(_announced);
         Assert.Equal(A11yPriority.High, refusal.Priority);
         Assert.Equal(
@@ -1978,6 +2118,167 @@ public sealed class CanvasDocumentTests : IDisposable
     // --- M2: focus lands when the user asks, and only then -----------------
 
     /// <summary>
+    /// A retarget replaces the document under a reader who never moved,
+    /// and the movement verbs still seat them.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Presenter attachment needs a false→true keyboard-focus edge or a
+    /// canvas chord, and an external rename produces neither: the tab
+    /// survives, the reader's keys never leave the filter field, and
+    /// `OnModelChanged` detached the surface from X's navigator without
+    /// ever introducing it to Y's. Every palette movement verb afterwards
+    /// moved the selection and SPOKE the motion while `FocusRow` reached
+    /// nobody — the reader hears "card 2 of 5" and the keys are still in
+    /// the filter field. That is CD-40's contract (the reader and the
+    /// selection agree) broken by an ordinary rename plus one palette
+    /// command.
+    /// </para>
+    /// <para>
+    /// The premise below is the same verb BEFORE the rename, so a failure
+    /// here is the replacement and not the verb.
+    /// </para>
+    /// <para>
+    /// TWO arms, because the rebind has two clauses and one of them was
+    /// unpinned for a wave. With the keys still in the surface,
+    /// `IsKeyboardFocusWithin` alone satisfies the rebind and the
+    /// AFFINITY clause does nothing — so the second arm hands the keys to
+    /// something else first (a palette, a menu, an overlay: the reader's
+    /// pane is the one they were LAST in, not the one they are in), which
+    /// is the only arrangement in which `wasTheAttachedPane` is the
+    /// clause doing the work. Nothing detaches on focus loss, which is
+    /// what makes that answer available at all.
+    /// </para>
+    /// </remarks>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ARetargetKeepsThePaneTheReaderIsWorkingIn(
+        bool keysHeldElsewhere) => RunSta(() =>
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel before =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        var surface = new CanvasSurfaceView { DataContext = tab, Model = tab.Canvas };
+        var palette = new TextBox();
+        var root = new StackPanel();
+        root.Children.Add(surface);
+        root.Children.Add(palette);
+        using var host = Host(root);
+
+        // The reader is in the filter field.
+        Assert.True(
+            surface.FilterFieldForTests.Focus(),
+            "premise: surface.FilterField refused keyboard focus, so this arrangement never established.");
+        host.UpdateLayout();
+        // PREMISE: the verb seats them today, so the attachment exists
+        // and this fact is about what the replacement does to it.
+        before.Navigator.NextCard();
+        host.UpdateLayout();
+        Assert.True(
+            surface.ProjectionHasFocus,
+            "the movement verb did not seat the reader even before the "
+            + "rename, so this fact would be about the verb.");
+        Assert.True(
+            surface.FilterFieldForTests.Focus(),
+            "premise: surface.FilterField refused keyboard focus, so this arrangement never established.");
+        host.UpdateLayout();
+
+        if (keysHeldElsewhere)
+        {
+            // Something transient takes the keys — and the retarget lands
+            // while it holds them.
+            Assert.True(
+                palette.Focus(),
+                "premise: palette refused keyboard focus, so this arrangement never established.");
+            host.UpdateLayout();
+            Assert.False(surface.IsKeyboardFocusWithin);
+        }
+
+        File.Move(
+            Path.Combine(_fixture.Root, "board.canvas"),
+            Path.Combine(_fixture.Root, "renamed.canvas"));
+        workspace.RetargetPath("board.canvas", "renamed.canvas");
+        // What the tab template's binding does; the reader did nothing.
+        surface.Model = tab.Canvas;
+        host.UpdateLayout();
+        CanvasDocumentViewModel after =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        Assert.NotSame(before, after);
+        Assert.Equal(CanvasLoadState.Ready, after.State);
+        Assert.True(
+            keysHeldElsewhere
+                ? palette.IsKeyboardFocused
+                : surface.FilterFieldForTests.IsKeyboardFocused,
+            "the retarget moved the reader, which is a different defect.");
+
+        after.Navigator.NextCard();
+        host.UpdateLayout();
+
+        Assert.True(
+            surface.ProjectionHasFocus,
+            "the verb moved the selection and spoke the motion while the "
+            + "keys stayed in the filter field — the reader and the "
+            + "selection disagree (CD-40), because the replacement "
+            + "document's navigator never met this surface.");
+        var seated = Assert.IsType<CanvasOutlineItem>(
+            System.Windows.Input.Keyboard.FocusedElement);
+        CanvasOutlineRowViewModel row =
+            Assert.IsType<CanvasOutlineRowViewModel>(seated.DataContext);
+        Assert.Equal(after.Selection.Selected, row.Id);
+    });
+
+    /// <summary>
+    /// A surface that took the keys BEFORE its model arrived still hosts
+    /// the verbs.
+    /// </summary>
+    /// <remarks>
+    /// The other clause of the rebind, and the ordering that earns it.
+    /// The focus edge attaches through <c>Model?.Navigator</c>, so a
+    /// surface that gains keyboard focus while its `Model` is still null
+    /// attaches NOTHING — the null-conditional swallows it. The edge will
+    /// not come again, because focus is already inside. So the model
+    /// arriving has to ask whether the reader is here, and that is what
+    /// `IsKeyboardFocusWithin` answers in `OnModelChanged`. Reachable
+    /// during tab construction, where the template applies and the
+    /// binding resolves in that order.
+    /// </remarks>
+    [Fact]
+    public void ASurfaceThatTookTheKeysBeforeItsModelStillHostsTheVerbs() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = NewDocument("board.canvas");
+        document.Load();
+        var surface = new CanvasSurfaceView { DataContext = new object() };
+        using var host = Host(surface);
+        Assert.Null(surface.Model);
+
+        // The keys arrive FIRST. Nothing is attached: there is no
+        // navigator to attach to yet.
+        Assert.True(
+            surface.FilterFieldForTests.Focus(),
+            "premise: surface.FilterField refused keyboard focus, so this arrangement never established.");
+        host.UpdateLayout();
+
+        surface.Model = document;
+        host.UpdateLayout();
+        Assert.Equal(CanvasLoadState.Ready, document.State);
+
+        document.Navigator.NextCard();
+        host.UpdateLayout();
+
+        Assert.True(
+            surface.ProjectionHasFocus,
+            "the verb moved the selection and spoke it while the keys sat in "
+            + "a filter field the navigator had never been told about — the "
+            + "focus edge that would have told it happened before there was "
+            + "a navigator to tell.");
+        document.Shutdown();
+    });
+
+    /// <summary>
     /// A retarget publishes without anyone asking, and must not pull
     /// focus out of whatever the user was doing — the invariant the
     /// old code's own comment stated and broke, because focus was a
@@ -1999,7 +2300,9 @@ public sealed class CanvasDocumentTests : IDisposable
         panel.Children.Add(elsewhere);
         panel.Children.Add(surface);
         using var host = Host(panel);
-        Assert.True(elsewhere.Focus());
+        Assert.True(
+            elsewhere.Focus(),
+            "premise: elsewhere refused keyboard focus, so this arrangement never established.");
         Assert.Same(elsewhere, host.FocusedElement());
 
         File.Move(
@@ -2388,7 +2691,7 @@ public sealed class CanvasDocumentTests : IDisposable
         _announced.Clear();
 
         Assert.Equal(CanvasActivation.Refused, document.Activate(Row(document, "bad")));
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         Assert.NotEmpty(_announced);
         Assert.Equal(A11yPriority.High, _announced[^1].Priority);
     }
@@ -3036,7 +3339,9 @@ public sealed class CanvasDocumentTests : IDisposable
         using var host = Host(panel);
 
         // A sheet had focus and is dismissing; focus is nowhere useful.
-        Assert.True(elsewhere.Focus());
+        Assert.True(
+            elsewhere.Focus(),
+            "premise: elsewhere refused keyboard focus, so this arrangement never established.");
         Assert.Null(FocusedRow(host));
 
         // What MainWindow's canvas arm does.
@@ -3063,7 +3368,7 @@ public sealed class CanvasDocumentTests : IDisposable
         workspace.OpenPath("renameme.canvas");
         CanvasDocumentViewModel before = Assert.IsType<CanvasDocumentViewModel>(
             workspace.ActiveGroup.ActiveTab!.Canvas);
-        before.Announcer.FlushForTests();
+        before.AnnouncerForTests.FlushForTests();
         Assert.Single(_announced);
         _announced.Clear();
 
@@ -3074,7 +3379,7 @@ public sealed class CanvasDocumentTests : IDisposable
 
         CanvasDocumentViewModel after = Assert.IsType<CanvasDocumentViewModel>(
             workspace.ActiveGroup.ActiveTab!.Canvas);
-        after.Announcer.FlushForTests();
+        after.AnnouncerForTests.FlushForTests();
         Assert.Equal(CanvasLoadState.Ready, after.State);
         // ONE open, one sentence.
         Assert.Single(_announced);
@@ -3112,15 +3417,18 @@ public sealed class CanvasDocumentTests : IDisposable
 
         // The queued line is DROPPED, not flushed: the reason to say it
         // (the user is reading that canvas) stopped being true.
-        document.Announcer.FlushForTests();
+        document.AnnouncerForTests.FlushForTests();
         Assert.Empty(posted);
 
         // And a LATE caller is refused, not merely un-queued. This is
         // the other half of retirement: a path that outlived its
         // document must not reach the dispatcher at all.
-        document.Announcer.Announce(
-            new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoMarks()));
-        document.Announcer.FlushForTests();
+        using (DebugAsserts.Suppressed())
+        {
+            document.AnnouncerForTests.Announce(
+                new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoMarks()));
+        }
+        document.AnnouncerForTests.FlushForTests();
         Assert.Empty(posted);
     });
 

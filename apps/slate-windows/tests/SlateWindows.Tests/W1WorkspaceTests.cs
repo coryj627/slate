@@ -577,11 +577,29 @@ public sealed class W1QuickSwitcherAndChordTests
         ];
         Assert.All(required, id => Assert.Contains(commands, command => command.GetProperty("id").GetString() == id));
 
-        string[] active = commands
+        // The collision claim is SCOPE-KEYED. Two commands live in the
+        // same focus scope may not share a chord; two in different scopes
+        // may, and W6-1 PR C is where that first became true of COMMAND
+        // rows (Ctrl+F on a canvas table, Escape's ladder rung against
+        // cancel-import). This restates the invariant for the projected
+        // file; the cross-scope sharings themselves are dispositioned by
+        // id pair in `ChordTableTests.SharedCommandChords`, which is
+        // where a new one has to be argued.
+        var byScope = commands
             .Where(command => command.GetProperty("windows").ValueKind == JsonValueKind.String)
-            .Select(command => command.GetProperty("windows").GetString()!)
-            .ToArray();
-        Assert.Equal(active.Length, active.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+            .GroupBy(command => command.GetProperty("scope").GetString()!, StringComparer.Ordinal);
+        foreach (IGrouping<string, JsonElement> scope in byScope)
+        {
+            string[] active = scope
+                .Select(command => command.GetProperty("windows").GetString()!)
+                .ToArray();
+            Assert.True(
+                active.Length == active.Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+                $"two commands in {scope.Key} scope share a chord: "
+                + string.Join(", ", active.GroupBy(chord => chord, StringComparer.OrdinalIgnoreCase)
+                    .Where(group => group.Count() > 1)
+                    .Select(group => group.Key)));
+        }
     }
 
     private static string RepoRoot()

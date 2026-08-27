@@ -25,7 +25,21 @@ internal sealed record AppPreferencesState(
     [property: JsonPropertyName("mathBrailleCode")]
     string MathBrailleCode = "nemeth",
     [property: JsonPropertyName("historyShowChangesSinceOpen")]
-    bool HistoryShowChangesSinceOpen = false);
+    bool HistoryShowChangesSinceOpen = false,
+    /// <summary>
+    /// W6-1 PR C (#745): the canvas announcement verbosity (t0 §1.2).
+    /// </summary>
+    /// <remarks>
+    /// The VALUES are mac's — <c>terse</c> / <c>standard</c> /
+    /// <c>verbose</c>, its own <c>CanvasVerbosity</c> case names — so a
+    /// future shared prefs schema needs no value migration. The STORE is
+    /// not shared and contract C13 says so: mac keeps its
+    /// <c>CanvasPrefs</c> under the <c>slate.prefs.canvas</c> UserDefaults
+    /// key, this file is the device-local Windows peer, and neither is
+    /// the vault's <c>.slate/prefs.json</c>.
+    /// </remarks>
+    [property: JsonPropertyName("canvasVerbosity")]
+    string CanvasVerbosity = "standard");
 
 /// <summary>Bounded device-local storage for app-level preferences.</summary>
 internal sealed class AppPreferencesStore
@@ -89,6 +103,10 @@ internal sealed class AppPreferencesStore
             if (state.MathBrailleCode is null)
             {
                 state = state with { MathBrailleCode = "nemeth" };
+            }
+            if (state.CanvasVerbosity is null)
+            {
+                state = state with { CanvasVerbosity = "standard" };
             }
             return state;
         }

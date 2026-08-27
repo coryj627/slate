@@ -60,11 +60,11 @@ internal enum ChordScope
 
     /// <summary>The canvas projections' own key handling (W6-1 #745,
     /// rule R2: typing keys and arrows act only while a canvas
-    /// projection has keyboard focus). No row is delivered at this
-    /// scope until PR C ships the navigator — PR A's three surface
-    /// commands are palette- and menu-only, so they carry no chord and
-    /// <see cref="ChordScope.None"/> through <c>Reg</c>'s own
-    /// rule.</summary>
+    /// projection has keyboard focus). PR C ships the navigator and its
+    /// rows are delivered here, from the surface's tunnelling handler.
+    /// PR A's three surface commands remain palette- and menu-only, so
+    /// they carry no chord and <see cref="ChordScope.None"/> through
+    /// <c>Reg</c>'s own rule.</summary>
     Canvas,
 }
 
@@ -268,6 +268,22 @@ internal static class ChordTable
         public const string CanvasShowOutline = "slate.canvas.showOutline";
         public const string CanvasShowTable = "slate.canvas.showTable";
         public const string CanvasShowVisual = "slate.canvas.showVisual";
+        public const string CanvasWhereAmI = "slate.canvas.whereAmI";
+        public const string CanvasNextCard = "slate.canvas.nextCard";
+        public const string CanvasPreviousCard = "slate.canvas.previousCard";
+        public const string CanvasEnterGroup = "slate.canvas.enterGroup";
+        public const string CanvasExitGroup = "slate.canvas.exitGroup";
+        public const string CanvasFollowConnectionForward =
+            "slate.canvas.followConnectionForward";
+        public const string CanvasFollowConnectionBack =
+            "slate.canvas.followConnectionBack";
+        public const string CanvasTracePath = "slate.canvas.tracePath";
+        public const string CanvasFilterCards = "slate.canvas.filterCards";
+        public const string CanvasClearFilter = "slate.canvas.clearFilter";
+        public const string CanvasCommitMode = "slate.canvas.commitMode";
+        public const string CanvasCancelMode = "slate.canvas.cancelMode";
+        public const string CanvasToggleFollowSelection =
+            "slate.canvas.toggleFollowSelection";
 
         // Sidebar / file management (mac projects these into CommandSection.sidebar).
         public const string SidebarOpen = "slate.sidebar.open";
@@ -814,15 +830,32 @@ internal static class ChordTable
         + "an absence.";
 
     /// <summary>
-    /// W6-1 PR A (#745), contract A18. All three register now so the
-    /// palette lists the whole switcher from the first slice; the two
-    /// whose projections have not shipped resolve to a command whose
-    /// <c>CanExecute</c> is false, so
-    /// <c>SlateCommandRegistrar.DisabledReason</c> answers the
-    /// registrar's canonical unavailable sentence. None carries a chord
-    /// — the surface switcher is a visible control and the palette is
-    /// always a path (rule R1) — so <c>Reg</c>'s own rule gives them
-    /// <c>ChordScope.None</c>.
+    /// W6-1 PR C (#745), contract C15: the Where-am-I chord's recorded
+    /// divergence. The rule maps ⌃⌘I to Ctrl+Alt+I, which
+    /// <c>slate.view.toggleRightPane</c> holds GLOBALLY — a scope that is
+    /// live while a canvas is focused — so the two would be a real
+    /// collision rather than a disjoint pair. Owner decision D-2 resolves
+    /// it with the G18 disambiguation precedent: add Shift.
+    /// </summary>
+    private const string WhereAmIShiftDisambiguation =
+        "D-2: the rule predicts Ctrl+Alt+I, which slate.view.toggleRightPane holds "
+        + "at Global scope — live at the same moment as a focused canvas, so this is "
+        + "a collision and not a disjoint pair. Disambiguated with Shift per the G18 "
+        + "precedent.";
+
+    /// <summary>
+    /// W6-1 PR A (#745), contract A18 + PR C, contract C15. The three
+    /// surface commands register with no chord — the switcher is a
+    /// visible control and the palette is always a path (rule R1) — and
+    /// PR C adds the navigator, filter, Where-am-I and mode rows.
+    ///
+    /// The chorded ones are delivered at <c>ChordScope.Canvas</c> from
+    /// <c>CanvasNavigator</c>'s own map, which
+    /// <c>ChordTableTests.CanvasChords</c> scrapes in both directions.
+    /// Rows without a Windows chord get <c>ChordScope.None</c> through
+    /// <c>Reg</c>'s own rule; their mac chord is still recorded, so the
+    /// mac column shows the real binding rather than reading as an
+    /// absence.
     /// </summary>
     private static IEnumerable<ChordTableEntry> CanvasRows() =>
     [
@@ -832,7 +865,87 @@ internal static class ChordTable
             "Show the canvas as a sortable table of its cards."),
         Reg(Ids.CanvasShowVisual, "Canvas: Show Visual", CommandSection.Canvas,
             "Show the canvas as its spatial board."),
+
+        Reg(Ids.CanvasWhereAmI, "Canvas: Where Am I?", CommandSection.Canvas,
+            "Read the selected card's full context: position, group, connections, "
+            + "color, and marks. Also rendered in a panel you can read at leisure.",
+            "⌃⌘I", "Ctrl+Alt+Shift+I", ChordScope.Canvas,
+            divergence: WhereAmIShiftDisambiguation),
+
+        // The movements. The arrows are delivered by the PROJECTION the
+        // reader is in — the tree's own Up/Down and the grid's own
+        // Up/Down already move the reader and land on the document's one
+        // narrating selection mutation — and the navigator answers the
+        // boundary they cannot speak to (contract C3). The palette rows
+        // are the always-available card-to-card equivalents (rule R1).
+        Reg(Ids.CanvasNextCard, "Canvas: Next Card", CommandSection.Canvas,
+            "Select the next card in reading order.",
+            "↓", "Down", ChordScope.Canvas),
+        Reg(Ids.CanvasPreviousCard, "Canvas: Previous Card", CommandSection.Canvas,
+            "Select the previous card in reading order.",
+            "↑", "Up", ChordScope.Canvas),
+        Reg(Ids.CanvasEnterGroup, "Canvas: Enter Group", CommandSection.Canvas,
+            "Move into the selected group's first card."),
+        Reg(Ids.CanvasExitGroup, "Canvas: Exit Group", CommandSection.Canvas,
+            "Move out to the containing group."),
+        Reg(Ids.CanvasFollowConnectionForward, "Canvas: Follow Connection Forward",
+            CommandSection.Canvas,
+            "Jump along the selected card's first outgoing connection.",
+            "→", "Right", ChordScope.Canvas),
+        Reg(Ids.CanvasFollowConnectionBack, "Canvas: Follow Connection Back",
+            CommandSection.Canvas,
+            "Jump along the selected card's first incoming connection.",
+            "←", "Left", ChordScope.Canvas),
+        Reg(Ids.CanvasTracePath, "Canvas: Trace Path from Selected Card",
+            CommandSection.Canvas,
+            "Walk the outgoing chain, announcing each hop and the visited count."),
+
+        Reg(Ids.CanvasFilterCards, "Canvas: Filter Cards…", CommandSection.Canvas,
+            "Focus the filter field (Ctrl+F on a canvas): narrows by title, type, "
+            + "group, or target.",
+            "⌘F", "Ctrl+F", ChordScope.Canvas),
+        Reg(Ids.CanvasClearFilter, "Canvas: Clear Filter", CommandSection.Canvas,
+            "Show every card again (also the Escape rung while filtering)."),
+
+        // Return and Escape carry no mac GLYPH: mac's palette rows
+        // declare no hotkey and its container handles the two keys
+        // directly, and the mac column's per-character glyph walk has no
+        // spelling for a named key. The Windows delivery site is the
+        // canvas surface's own handler, which is what ChordScope.Canvas
+        // records.
+        Reg(Ids.CanvasCommitMode, "Canvas: Commit Mode", CommandSection.Canvas,
+            "Apply the active move or resize (same as Enter).",
+            win: "Enter", scope: ChordScope.Canvas),
+        Reg(Ids.CanvasCancelMode, "Canvas: Cancel Mode", CommandSection.Canvas,
+            "Cancel the active move or resize and restore the prior position "
+            + "(same as Escape).",
+            win: "Escape", scope: ChordScope.Canvas),
+
+        Reg(Ids.CanvasToggleFollowSelection, "Canvas: Toggle Viewport Follows Selection",
+            CommandSection.Canvas,
+            "When on (the default), the visual view pans to keep the selection visible."),
+
+        // The verbosity values (t0 §1.2), one row each. Unregistered for
+        // the math-verbosity reason (PR-4): the menu supplies the value
+        // as a CommandParameter, which a palette row has no way to
+        // provide — a bare "Set Canvas Verbosity" command could not know
+        // WHICH level. Verified against mac: SlateCommands.swift declares
+        // no id for canvas verbosity either, so there is no twin to be
+        // out of parity with.
+        Unreg("windows.canvas.setVerbosityTerse", "Canvas Verbosity: Terse",
+            CommandSection.Canvas, CanvasVerbosityReason),
+        Unreg("windows.canvas.setVerbosityStandard", "Canvas Verbosity: Standard",
+            CommandSection.Canvas, CanvasVerbosityReason),
+        Unreg("windows.canvas.setVerbosityVerbose", "Canvas Verbosity: Verbose",
+            CommandSection.Canvas, CanvasVerbosityReason),
     ];
+
+    private const string CanvasVerbosityReason =
+        "PR-4, the math-verbosity precedent: the three canvas verbosity levels are "
+        + "selected by one parameterized setter the Canvas menu binds with the level "
+        + "as its CommandParameter. Each level is a row so the catalog records the "
+        + "closed set, and none is registered because a palette row cannot supply "
+        + "the parameter. mac declares no SlateCommandID for these either.";
 
     private static IEnumerable<ChordTableEntry> SidebarRows()
     {
