@@ -744,7 +744,23 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
     private static bool FocusIsInAMenu() =>
         FocusIsInAMenu(Keyboard.FocusedElement);
 
-    private static bool FocusIsInAMenu(IInputElement? focused)
+    /// <summary>
+    /// Whether THIS element sits inside a menu — the same walk the
+    /// classification uses, exposed so a test can establish its premise
+    /// with the production predicate instead of a second copy of it.
+    /// </summary>
+    /// <remarks>
+    /// Widened from private for one reason, and it is worth stating so
+    /// nobody widens the next one casually: a canvas fact has to know
+    /// whether the keys it just moved landed somewhere this code calls a
+    /// menu, and asking with a re-implemented walk is how a test comes to
+    /// disagree with production about the thing it is testing. That
+    /// happened — on a runner desktop, an arrangement reported "the keys
+    /// would not go into a menu" while focus had in fact landed on the
+    /// menu's own control. No behaviour is added here and no state is
+    /// exposed; it is the existing pure predicate, asked by name.
+    /// </remarks>
+    internal static bool FocusIsInAMenu(IInputElement? focused)
     {
         for (DependencyObject? node = focused as DependencyObject;
             node is not null;

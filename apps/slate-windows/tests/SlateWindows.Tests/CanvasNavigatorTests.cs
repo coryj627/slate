@@ -3817,9 +3817,8 @@ public sealed class CanvasNavigatorTests : IDisposable
         {
             CanvasDocumentViewModel document = Open("board.canvas");
             var surface = new CanvasSurfaceView { Model = document };
-            var menu = new Menu();
-            var canvasMenu = new MenuItem { Header = "Canvas" };
-            menu.Items.Add(canvasMenu);
+            MenuItem canvasMenu = MenuRow("Canvas");
+            Menu menu = MenuThatTakesTheKeys(canvasMenu);
             var elsewhere = new TextBox { Width = 40 };
             var root = new DockPanel();
             DockPanel.SetDock(menu, Dock.Top);
@@ -3844,7 +3843,28 @@ public sealed class CanvasNavigatorTests : IDisposable
                 surface));
             Drain(document);
 
-            Assert.True(intoMenu ? canvasMenu.Focus() : elsewhere.Focus());
+            if (intoMenu)
+            {
+                // The LAST raw `MenuItem.Focus()` on the branch, and the
+                // reason this fact started failing on CI a commit after
+                // the other six: it was not in the original six, so it
+                // did not get the shared arrangement — and it carried the
+                // one premise with no message, which is the rule this
+                // wave instituted and then missed a site of.
+                if (!TryPutTheKeysInTheMenu(
+                    canvasMenu, "the M4 menu arm's end-to-end fact", surface))
+                {
+                    return;
+                }
+            }
+            else
+            {
+                Assert.True(
+                    elsewhere.Focus(),
+                    "premise: the non-menu destination refused keyboard focus, "
+                    + "so the departure this arm compares against never "
+                    + "happened.");
+            }
             host.UpdateLayout();
             Assert.False(
                 surface.IsKeyboardFocusWithin,
@@ -4081,27 +4101,59 @@ public sealed class CanvasNavigatorTests : IDisposable
     private bool TryPutTheKeysInTheMenu(
         MenuItem row, string arrangement, UIElement heldTheKeysBefore)
     {
+        _ = heldTheKeysBefore;
         var target = (TextBox)row.Header;
-        if (target.Focus()
-            && ReferenceEquals(target, System.Windows.Input.Keyboard.FocusedElement))
+        bool took = target.Focus();
+        // SETTLE before deciding. Focus that crosses a window boundary is
+        // not always delivered by the time `Focus()` returns — one arm
+        // hosts its menu in a second window on purpose — and the first
+        // version of this helper decided on the unsettled state and then
+        // built its message from the settled one. It reported "the keys
+        // would not go into a menu: focus() returned True", contradicting
+        // itself in the one line anybody would read from CI.
+        Pump();
+        IInputElement? landed = System.Windows.Input.Keyboard.FocusedElement;
+        // PRODUCTION'S OWN walk, not a second copy of it. What the
+        // arrangement needs is precisely what `ClassifyFocusLoss` will
+        // ask a moment later, and a test that re-implements the question
+        // can answer it differently from the code it is testing.
+        bool inAMenu = CanvasSurfaceView.FocusIsInAMenu(landed);
+        if (took && inAMenu)
         {
             return true;
         }
 
+        // EVERY value below is the one the decision used. Nothing is
+        // re-read.
         _output.WriteLine(
-            $"DESKTOP REFUSED THE MENU — {arrangement}. The keys would not go "
-            + "into a MenuBase: focus() returned "
-            + $"{target.IsKeyboardFocused} and the thread's focused element is "
-            + (System.Windows.Input.Keyboard.FocusedElement?.GetType().Name ?? "null")
-            + ". The menu classification cannot be exercised on this desktop; "
-            + "the arm asserts that nothing moved instead, and §C records the "
-            + "environment fact.");
-        Assert.True(
-            heldTheKeysBefore.IsKeyboardFocusWithin,
-            $"{arrangement}: the desktop refused focus into the menu AND the "
-            + "keys left where they were, so the arrangement half-happened — "
-            + "which is neither the case under test nor a clean refusal.");
+            $"DESKTOP REFUSED THE MENU — {arrangement}: Focus() returned "
+            + $"{took}, the keys landed on "
+            + (landed?.GetType().Name ?? "null")
+            + $", and production's own walk reports inAMenu={inAMenu}. The "
+            + "menu classification cannot be exercised on this desktop; §C "
+            + "records the environment fact.");
+        // The refusal still asserts something that can FAIL: if the keys
+        // did land on the row this arrangement built, then production
+        // must agree that row is in a menu. The two disagreeing would
+        // mean the arrangement built something that is not a menu — a
+        // worse finding than a desktop that says no, and the one thing a
+        // refusal path must never wave through.
+        Assert.False(
+            ReferenceEquals(target, landed) && !inAMenu,
+            $"{arrangement}: the keys landed on the menu row this fact "
+            + "built, and production's own walk says that row is not inside "
+            + "a menu. The arrangement is not what it claims to be.");
         return false;
+    }
+
+    /// <summary>Let the dispatcher deliver what is already queued.</summary>
+    private static void Pump()
+    {
+        var frame = new System.Windows.Threading.DispatcherFrame();
+        _ = System.Windows.Threading.Dispatcher.CurrentDispatcher.BeginInvoke(
+            System.Windows.Threading.DispatcherPriority.Background,
+            new Action(() => frame.Continue = false));
+        System.Windows.Threading.Dispatcher.PushFrame(frame);
     }
 
     private static ProbeWindow HostProbe(UIElement content)

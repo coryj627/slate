@@ -8324,6 +8324,58 @@ can prove it — the desktop refuses. What the arms prove is the thing
 under test, which is that focus inside a `MenuBase` classifies as
 `MenuOpen`.
 
+**SECOND CI ROUND: 6 → 2, and the TextBox route is confirmed on that
+desktop.** Four menu arms went green there, which settles the question the
+previous round could only reason about: the runner refuses focus to a
+`MenuItem` and allows it to a `TextBox` hosted in one. The production
+predicate is exercised on CI by a real menu.
+
+**The two survivors were both MY defects, not the desktop's.**
+
+- **The diagnostic contradicted itself**, and that is the more useful
+  finding. It reported *"the keys would not go into a MenuBase: focus()
+  returned True and the thread's focused element is TextBox"* — a
+  sentence that refutes itself in its own clause. Cause: the decision was
+  taken on one sample and the MESSAGE was built by RE-READING the state
+  afterwards, so it described a later world than the one that was
+  judged. **A diagnostic that re-reads is not a diagnostic**; every value
+  in that message is now the value the decision used. The self-refuting
+  sentence is what made the defect findable, which is the argument for
+  messages stated twice over.
+- **Cross-window focus had not settled.** One arm hosts its menu in a
+  second window on purpose (it is the only way to isolate the menu level
+  from the keys-outside level), and on that desktop the transfer is not
+  delivered by the time `Focus()` returns. The helper pumps the
+  dispatcher before it decides. That was hypothesis (2) from the first
+  round, unfalsified then and confirmed now.
+- **The refusal invariant was the wrong invariant.** It asserted "nothing
+  moved", which is false precisely when focus DID move — asynchronously,
+  into the menu — so the arm went red on the path designed to be
+  green-with-log. It now asserts the arrangement's INTEGRITY: if the keys
+  landed on the row this fact built, production's own walk must agree
+  that row is inside a menu. That can fail, and does — blinding the walk
+  turns seven facts red — so the refusal path is still never
+  green-for-nothing.
+
+**ONE PREDICATE, NOT TWO.** The premise check no longer re-implements the
+question: `CanvasSurfaceView.FocusIsInAMenu` is widened from private to
+internal and asked by name. A test that re-implements the walk can
+disagree with production about the very thing it is testing, and it did —
+the arrangement said "not in a menu" about an element production would
+have called in-menu. No behaviour is added and no state exposed; it is
+the existing pure predicate, asked rather than copied. That is a
+different act from inventing a hook, and the difference is that nothing
+in production changed.
+
+**And a seventh fact was found by the rule this wave wrote.**
+`OpeningAMenuKeepsTheModeAliveAndLeavingTheCanvasCancelsIt` was not in
+the original six, so it never got the shared arrangement — and it carried
+a premise with NO message, the one rule this wave had just instituted at
+46 other sites. It is on the shared helper now. **A rule applied to the
+sites a failure named is a rule applied to a diff**, which is this
+branch's oldest lesson arriving one more time, in the wave that wrote it
+down.
+
 **The open decision, which is not mine to take.** If the runner refuses
 this arrangement as well, the menu classification becomes OS-unverifiable
 on CI, and the choice is between accepting that with the refusal
