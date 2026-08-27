@@ -3848,14 +3848,28 @@ in-flight consumers cannot invoke or expose through a closed lease.
 
 Plain text, not backticks, for the reason §C's travel table records: a
 backtick here is a CITATION and the census checks it names something the
-branch has.
+branch has. **As each task builds a type, its name binds** — the entry
+moves from plain text to a citation, and the census that used to reject
+the name now has to find it. That is the only edit the freeze admits,
+and it is a record operation rather than a revision: what the paragraph
+SAYS does not change, only whether the name in it is real yet.
 
-**The publication SLOT** holds the one mutable model field.
+**The publication SLOT** — `CanvasPublicationSlot` — holds the one
+mutable model field. Its publish returns a `CanvasPublicationOutcome`,
+so a publisher never re-reads the slot to learn what its own attempt
+did, and it accepts an optional `CanvasPublicationInstallObserver`,
+which is obligation I5's runtime instrument. *(Bound by T1.)*
 
-**The PUBLICATION** is an immutable record: the retired marker; the load
-state and its message; the lease; the population; the unit; the active
-surface token; the durable intents (selected node, marked IDs, needle);
-the resolved selection; the LOAD SCHEDULE; and the FILTER SCHEDULE.
+**The PUBLICATION** — `CanvasPublication` — is an immutable record: the
+retired marker; the load state and its message; the lease; the
+population; the unit; the active surface token; the durable intents
+(selected node, marked IDs, needle); the resolved selection; the LOAD
+SCHEDULE — `CanvasLoadSchedule` — and the FILTER SCHEDULE —
+`CanvasFilterSchedule`. Both schedules key on `CanvasRequestIdentity`,
+which is a reference and never a counter. *(Bound by T1 for the
+document-class members and the schedules; the three finer classes bind
+with their types in T2.)* Collections enter it only through
+`CanvasModelCopy`, which is obligation I7's construction half.
 
 **The LEASE** owns the handle capability, the FFI lock and the
 close-once record, with no mutable liveness flag. **The POPULATION**
@@ -5186,6 +5200,52 @@ counter, the delivery claim, and the serial executor the dispatcher
 premise would have required. A design that ends smaller than it started
 and hands its unsettled claims to code with the reviewer's own words
 attached is not a failed design.
+
+### Implementation record
+
+**T1 — the slot and its algebra.** Landed
+`CanvasPublication` with its transform algebra, `CanvasPublicationSlot`,
+the two schedules, `CanvasRequestIdentity` and `CanvasModelCopy`. Three
+obligations claimed discharged, each with its mutation returning the
+arrangement its finding NAMES:
+
+* **I5, runtime half.** Every transform allocates, including when it
+  sets the value already there; the slot refuses a transform that hands
+  back its own snapshot; and across an 800-publication run that
+  deliberately cycles content, the install observer reports zero
+  repeated references. *Mutation:* a memoising algebra reinstalls a
+  record, and a stale swap expecting the earlier value then succeeds —
+  I5's B-to-E-to-B interleaving, returned.
+* **I2.** THE RETRY LOOP IS GONE, not bounded. Decision and install are
+  one critical section, so every attempt succeeds on its first swap and
+  no publisher re-decides. The facts assert a publisher and an
+  unconditional retirement both complete under four contending threads
+  in both start orders, and — the part with teeth — that the victim's
+  transform ran exactly once per call, which is the cost model the
+  finding is actually about. *Mutation:* the optimistic loop with a
+  deterministic interleave never terminates, spending a full transform
+  per loss and reaching no terminal refusal.
+* **I7, construction half.** Collections are copied at the one
+  construction site; a caller who retains what it handed in cannot move
+  a published snapshot. *Mutation:* the same value built over a
+  caller-retained array through the immutable-collections marshal
+  mutates in place.
+
+Two things the code decided that the prose had not. The publication is a
+sealed CLASS rather than a record, because currency here is reference
+identity and a generated value equality would give every currency
+question two answers depending on which operator a caller reached for.
+And a reentrant publication is REFUSED — a transform that publishes is
+not a pure function of its snapshot, and a monitor is reentrant, so
+without the refusal an inner publication would install against a
+snapshot the outer attempt still holds. That refusal is also the first
+runtime piece of obligation I4.
+
+One branch is knowingly uncovered and its owner is named: the swap's
+failure path is a bypass detector that no T1 fact can reach, because the
+field is private and one method writes it. Task T4's
+publication-writer census (obligation I8) is what makes that structural
+rather than defensive.
 
 **THE COUNTER-POSITION RULING, load-bearing for implementation.**
 Revision 2 argued against round 1 that a query on a superseded unit
