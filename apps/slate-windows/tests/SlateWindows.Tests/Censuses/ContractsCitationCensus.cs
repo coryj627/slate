@@ -60,9 +60,25 @@ public sealed class ContractsCitationCensus
             (
                 "C",
                 "## PR C — the navigator, the mode stack",
-                "## §W-G canonical-consumption audit",
+                // Terminated by §C-unit for §B's reason, one section
+                // later: a section inserted between §C and its old
+                // terminator would otherwise be read as part of §C, and
+                // the retired-vocabulary scan would silently widen with
+                // it.
+                "## PR C-unit — the coherent projection unit",
                 8_000,
                 30),
+            (
+                "C-unit",
+                "## PR C-unit — the coherent projection unit",
+                "## §W-G canonical-consumption audit",
+                6_000,
+                // A DESIGN section cites little that exists yet — its own
+                // types are deliberately in plain text until the day they
+                // do, which is the rule §C's travel table records. The
+                // floor is what it legitimately has, not what a shipped
+                // section would.
+                3),
         ];
 
     public static TheoryData<string, string, string> SectionRanges
@@ -709,6 +725,10 @@ public sealed class ContractsCitationCensus
         (
             "§C",
             "## PR C — the navigator, the mode stack",
+            "## PR C-unit — the coherent projection unit"),
+        (
+            "§C-unit",
+            "## PR C-unit — the coherent projection unit",
             "## §W-G canonical-consumption audit"),
         (
             "divergences",

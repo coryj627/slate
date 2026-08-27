@@ -3454,6 +3454,377 @@ one variant from the C# switch.
 
 ---
 
+## PR C-unit — the coherent projection unit (design; nothing implemented)
+
+**This section is a DESIGN, ratified before any code exists.** The
+seven-round history in §C is why: every round of the async-filter work
+fixed what the previous round's boundary missed, and every boundary was
+drawn by enumerating members. The architecture review's conclusion was
+that enumeration cannot reach a fixed point here, because the document
+exposes three populations — the members that RAISE, the state that is
+READ, and the queries that RUN — and only the first two were ever inside
+the design. This is the structural answer, and codex reviews it as a
+design before an implementation exists to argue about.
+
+**Goal.** Move the filter match off the dispatcher without re-opening the
+coherence class, and land the projection unit, the publication and the
+teardown that §C's travel table sends here. Everything C-lite shipped is
+INHERITED, not revisited: the navigator verbs and grammar, the mode
+stack, the chord table, Where-am-I, verbosity, the durable requests, the
+announce boundary, the mode owner.
+
+### The shape, in three objects
+
+The three names below are in PLAIN TEXT, not backticks, for the reason
+§C's travel table records: a backtick in this document is a CITATION, the
+citation census checks that every one of them names something this branch
+actually has, and none of these do yet. They become citations on the day
+they exist.
+
+**The LEASE owns the handle.** CanvasHandleLease is the host-side
+identity of one opened canvas: it holds the raw handle, the FFI lock, and
+a monotonic live flag. Every FFI read goes through it. Opening a canvas
+creates one; retiring or replacing it kills that one and creates another.
+
+**The UNIT is what observers and verbs hold.** CanvasProjectionUnit
+carries the rows, the table rows, the id index, the targets, the
+subpaths, the adjacency memo, the answered needle, the matched ids and
+both filtered halves — one immutable value — AND the query methods that
+reach past them into the handle. It holds the lease it was built from.
+
+**The DOCUMENT shrinks to three jobs:** the mutation funnel (the verbs
+that change something), the loader that BUILDS units, and the publisher
+that SWAPS them. `CanvasDocumentViewModel` stops being a place where
+state lives.
+
+### Contracts
+
+**U1 — The published value is ONE reference, and reading it twice in a
+row cannot disagree with itself.** CanvasPublication is an immutable
+record carrying the load state and, when there is one, the unit. The
+document holds exactly one field of that type and the publisher assigns
+it. Observers read the field once and answer every question from what
+they got.
+
+This is the direct structural answer to §C's C10 defect, and it is worth
+naming because that defect was not in the filter at all: the count read
+current while the projections were collapsed, because STATE and the
+memoized answer were two fields and a reload moved one of them. Any
+design with two fields has that class in it; one reference does not. The
+invariant *displayed rows == announced count* stops being maintained and
+becomes a consequence of both numbers coming out of one object.
+
+**U2 — The unit owns the rows, the side-state and the QUERIES.** The
+members that move out of the document, in full, because this list is the
+population every other rule in this section is stated over:
+
+*Projection state:* the outline rows, the table rows, the warnings and
+the preserved count, the row index, the activation targets, the subpaths,
+the adjacency memo, the needle that was answered, the matched ids, and
+the filtered outline and filtered table rows.
+
+*Queries against the handle:* the neighbours of a node (both the
+answering and the may-be-unknown forms), a node's text, a node's anchor,
+the children of a group, the parent of a node, the trace path from a
+node, and the Where-am-I context.
+
+*Derived reads that must not disagree with the rows:* the degraded banner
+text, the empty-onboarding text, and `CanvasFilterView`'s four answers
+(rows, narrowed, current, matched ids).
+
+The document keeps what is not projection: the load lifecycle, the needle
+the reader typed, the selection, the transient regions (card detail,
+Where-am-I readback), the durable requests, the announce boundary, the
+mode stack and the navigator.
+
+**U3 — Query admission is by UNIT IDENTITY, and rows outlive it
+deliberately.** A unit is CURRENT until the publisher publishes its
+successor or its lease dies; the flag is monotonic and set in exactly one
+place. A query on a superseded unit REFUSES.
+
+Its rows do not. That asymmetry is the contract, and its argument is the
+whole design in one sentence: **rows are a VALUE — a past state,
+coherent in itself, and safe to keep showing — while a query is a
+QUESTION TO THE PRESENT, and only the current unit is entitled to ask
+one.** §C round 7's deepest blocker was exactly this distinction going
+unmade: a live-handle query could run against handle B while the visible
+unit was still A, because query-source identity was never part of the
+coherence boundary. Here the query cannot be reached except through a
+unit, and the unit knows whether it is still the one.
+
+The behaviour C10 needs falls out rather than being arranged: when a
+needle changed and nothing could answer it, the previous rows stay on
+screen — because they are the previous unit's rows, and reading them is
+reading a coherent past, not a torn present.
+
+**U4 — The lease is the handle's identity, because the handle is not.**
+The FFI handle is an integer. Integers are reused, so comparing them
+answers "is this the same NUMBER", not "is this the same canvas" — the
+ABA shape §C's round 1 already found in a counter, one object over. The
+lease is a reference; a new open allocates a new one; reference identity
+cannot ABA.
+
+The live flag is monotonic — live to dead, never back — which is the same
+terminality this series already applies to the announcer and the mode
+stack, and the reason a mutable flag is safe here when a mutable cache
+would not be. **A cache is not a log. The lease is the log entry.**
+
+**U5 — Terminality sits at the single command-dispatch boundary.** Every
+mode verb, every rung registration, every navigator verb that mutates
+reaches the document through one dispatch point, and that point holds the
+retirement gate. `CanvasModeController` and `CanvasNavigator` are
+consumers of it, not holders of their own copies. §C reached this by
+enumeration over seven rounds and still had `HandleEscape` and
+`RegisterRung` outside it at round 7; the
+design starts with the gate and the enumeration is what the census
+derives, not what a reviewer maintains.
+
+The gate reads retirement at DISPATCH time, not at composition time, for
+the reason §C's announce boundary records: a verb's own effect can retire
+the document, and arguments evaluate before the body they are passed to.
+
+**U6 — Publication is ONE assignment, and notification follows it.** The
+publisher builds the whole next value — unit included — before it touches
+the field, assigns once, and only then raises. There is no staged-write
+protocol, no queued-notification protocol and no nesting-by-joining,
+because there is nothing to stage: the value is complete before it is
+visible, and an observer that reads during a notification reads the new
+value, whichever notification it is on.
+
+That deletes the publication transaction rather than porting it. §C's
+travel table sends "staged writes, queued notifications, the
+rows→selection→properties order, nesting by joining, and the retirement
+mute" here; U6 is where they land, and they land as a DELETION with a
+reason. What survives is the ORDER of notifications, which is still a
+decision (rows, then selection, then the properties that describe them),
+and the retirement mute, which becomes U8's silence phase.
+
+**U7 — The asynchronous match produces a UNIT, never a mutation.** The
+filter job runs off the dispatcher, and its result is delivered by
+building a successor unit that carries the needle it answered, the
+matched ids and both filtered halves. An answer whose lease is dead, or
+whose base unit is no longer current, is DROPPED — the correlation is
+unit identity, not a stamped counter.
+
+The four-branch summary §C's travel table sends here ("ran and failed",
+"has not run yet", "no handle", "answered") lives on the unit as the
+state of its own answer, so the summary label and the announcement read
+one field of one object rather than agreeing with each other.
+
+**U8 — Teardown speaks, then silences, then releases — and the lease
+dies first.** The order is C-lite's (the mode stack's restoration is the
+last sentence a retirement owes, so the announcer is silenced after it,
+not before), with one addition: killing the lease is the FIRST release
+step, because it is what makes every in-flight query and every queued
+filter answer refuse without needing to be found. §C spent a round on
+"three of five channels un-retired"; a design where refusal is a property
+of the lease has no channel list to keep complete.
+
+**U9 — The census has ONE rule: nothing reaches projection state or a
+query except through the unit it holds.** The population is the unit's
+own API, which is why this replaces the derivation arms race rather than
+extending it. The document must expose no rows, no side-state and no
+query; a canvas source that names one is an offender; the unit's members
+are found by reflection, not listed.
+
+### The design's own contracts
+
+These are not architecture — they are the rules that made the seven-round
+loop expensive, written as obligations on this design so codex can check
+the DESIGN against them.
+
+**D1 — Every lifecycle carries all three affinity guarantees from
+birth.** C-lite learned these one review round at a time on the request,
+the presenter and the mode owner; here they are stated for every
+lifecycle before any of it exists. The three: it cannot be ABSENT while
+the thing it names is live; it ENDS when the thing it names stops being
+an address; and it is RELEASED, not merely hidden behind a read.
+
+| Lifecycle | Cannot be absent | Ends when | Released |
+|---|---|---|---|
+| The lease | a unit cannot be built without one; the constructor requires it | the handle is closed, replaced or retired | the flag is monotonic and the handle is closed at the same point |
+| The unit | the publication carries one in every state that renders rows | its successor is published, or its lease dies | superseded units are unreachable from the document; observers holding one hold a value, not a channel |
+| The pending filter answer | it names the unit it was computed for | that unit stops being current | dropped on delivery, never queued for a later unit |
+| The publication | every state has exactly one value | replaced by the next assignment | the previous value is not retained by the document |
+
+**D2 — Every boundary is placed at EMIT or READ time, with its
+evaluation-order argument stated.** C-lite's announce boundary is the
+precedent and the reason: a check written before a call cannot see a
+retirement that the call's own arguments cause, because arguments
+evaluate first. This design has three boundaries and each states its
+moment: U3's query admission reads the unit's currency when the query
+RUNS; U5's dispatch gate reads retirement when the verb DISPATCHES; U8's
+announce gate reads the funnel's retirement when the sentence EMITS.
+
+**D3 — Every population is DERIVED.** No census in this PR may carry a
+hand-kept list of members. U9's population is the unit's API by
+reflection; the dispatch gate's population is the dispatch point's own
+callees; the notification order's population is the publication record's
+fields. §C shipped the last hand-maintained list in this series and it
+was already wrong when it was found.
+
+**D4 — Every claimed-unreachable state ships a PAIRED-MUTATION evidence
+plan.** When a design makes a state unrepresentable, the single mutation
+that would prove the guard stops failing — because the state cannot be
+reached to test it. The evidence is then a pair: permit the state, and
+show the consequence returns. Every "cannot happen" below carries its
+pair, and a claim without one is not ratified:
+
+* *a stale unit answering a query* — pair: make `IsCurrent` always true,
+  and the mixed-source read returns.
+* *a filter answer landing on the wrong unit* — pair: drop the identity
+  check on delivery, and the torn count returns.
+* *an integer handle ABA* — pair: compare handles instead of leases, and
+  a reopened canvas accepts a dead unit's query.
+* *a torn read across state and rows* — pair: split the publication back
+  into two fields, and C10's reload defect returns.
+
+**D5 — Every list either says how it is guarded, or says "among
+others".** Prose lists are claims of completeness that nothing checks;
+this series got one wrong at four altitudes, including inside paragraphs
+written to correct list errors. U2's member list is guarded by U9's
+census; D1's lifecycle table is guarded by D4's pairs; every other list
+in this section is illustrative and says so.
+
+**D6 — Records are swept by the CLAIM's consumers, not by the diff's
+neighbours.** When a contract here changes, everything that repeats it in
+any vocabulary changes with it — including the things that state it by
+being NAMED that way: a test method's name, an enum value, a fixture
+name. The retired-vocabulary and staged-claim censuses inherit this
+section's terms.
+
+### What C-lite shipped, which this PR must NOT re-open
+
+Each of these was hardened across twelve codex rounds, and the unit
+touches the object it lives on. They are inherited whole; a change to any
+of them is a finding against this design, not a refactor.
+
+* **The mode owner (C8).** A mode belongs to the pane that invoked it,
+  supplied by the invocation and required at entry. The unit design does
+  not move mode state and must not make the owner reachable through a
+  projection.
+* **The durable requests (A14, C10's twin).** The addressed focus landing
+  and the filter-focus request, with read-and-write terminality, owner
+  addressing, reference-identity completion and the tab-set sweep. They
+  live on the document and stay there: they are not projection.
+* **The announce boundary (A5/C7).** One place the canvas reaches the
+  announcer, gated on the funnel's retirement at emit time, with the
+  private announcer and its two named seams. The unit must not become a
+  second way to speak.
+* **The restoration hold and its classifier (C6/C8).** The deferred
+  landing's hold, the host-window watch and the departure classification,
+  including the same-window boundary and the ownership check in the
+  classifier itself.
+* **The seat rule (C6).** Four arms in order, with arm 4's caller being
+  the CD-47 pre-ladder dismissal and the panel's Close button.
+* **Presenter attachment (C2).** Four cases, the fourth being an admitted
+  mode entry.
+
+### PR F obligations this PR must not silently absorb
+
+§C's travel table carries one row that is F's, not this PR's: **the
+originating surface through the routed-command boundary.** A mode belongs
+to the pane that invoked it and the navigator takes that pane as an
+argument, but nothing in the shell carries it — the command helper
+resolves the active document and drops the parameter. This PR touches the
+document that helper resolves, which makes it exactly the PR that could
+absorb the obligation by accident and leave F with a green light. It does
+not: the obligation stays F's, and this design adds no path by which a
+palette entrant can name a pane.
+
+### C10's interim costs, and where each is resolved
+
+| The interim's cost | Resolution |
+|---|---|
+| Every keystroke pays one match on the UI thread, under the FFI lock | U7: the match runs off the dispatcher and delivers a successor unit |
+| The rows and the answer can come from different handles | U3 + U4: a query is reachable only through a unit, and a unit's queries refuse once its lease dies or it is superseded |
+| The count and the state are two fields, so a reload can make the count describe a pane showing nothing | U1: one published reference; the count and the rows come out of the same object |
+| A stale answer must not widen the rows | U3: the previous unit's rows are a coherent past and stay readable |
+
+### Where every travelling row lands
+
+| Travelling (from §C) | Lands |
+|---|---|
+| The off-dispatcher match | U7 |
+| The failed-answer bit and the four-branch summary | U7, as state ON the unit |
+| The projection unit | U2 |
+| The publication transaction | U6 — as a DELETION with its reason, keeping the notification order |
+| Silence-first teardown | U8 |
+| Their censuses | U9 (one rule) and U6's notification-order census |
+| Their facts | the verification plan below |
+| The originating surface (PR F) | not absorbed; see above |
+
+### Verification plan — what the implementation will owe
+
+Stated now so codex reviews CLAIMS against DESIGN, and so the
+implementation cannot negotiate its own evidence later.
+
+**Censuses.**
+
+* *Nothing reaches projection state or a query except through a unit* —
+  the population derived from the unit's API by reflection, scanned over
+  every canvas source, with the document asserted to expose none of them.
+* *The notification order* — derived from the publication record's own
+  fields, not a list.
+* *The dispatch gate covers every verb* — derived from the dispatch
+  point's callees, including rung registration.
+
+**Facts, by contract.**
+
+* U1: a reload samples the state and the rows together across the whole
+  window and cannot catch them disagreeing.
+* U3: a superseded unit's rows still read; its queries refuse. Both
+  halves, because the asymmetry IS the contract.
+* U4: a canvas closed and reopened does not accept the first unit's
+  queries, with the pair from D4 as the mutation.
+* U5: every verb and rung registration refuses after retirement, derived
+  rather than listed.
+* U6: an observer reading during any notification sees the complete new
+  value.
+* U7: an answer whose base unit was superseded is dropped, and the
+  displayed count never disagrees with the displayed rows across a
+  keystroke burst.
+* U8: teardown speaks its restoration, then silences, then releases; an
+  in-flight query and a queued answer both refuse afterwards without
+  either being cancelled by name.
+
+**Mutation pairs.** Each D4 row is run as a pair and reported as a pair —
+the guard's own mutation is expected to stop failing once the state is
+unrepresentable, and reporting that as a weaker guard rather than a
+stronger one is how a battery lies.
+
+**Gates.** Unit suite in both configurations, the FlaUI journeys, and the
+format gate — all three projects, since the format gate's mixed-EOL trap
+has now appeared five times on this series.
+
+### Deliberate departures from the architecture review's Option A
+
+Option A specified "a generation-stamped query token bound to the handle
+it was built from". This design keeps the intent and changes the
+mechanism twice, both times for evidence this series produced after the
+review was written.
+
+**The token is a reference, not a stamp.** A counter has the ABA shape
+the branch already met and retired; and the handle it would stamp is an
+integer, which is reused, so the stamp would be comparing numbers rather
+than identities. The lease is a reference allocated per open, and
+reference identity cannot ABA.
+
+**Currency is two questions, not one.** Option A's token answers "is my
+handle still the live one". That is necessary and not sufficient: two
+units can share one lease — a filter answer builds a successor without
+reopening anything — and a query on the superseded one would mix a live
+answer with stale rows, which is round 7's blocker inside a single lease.
+So admission asks both, and the second is the unit's own monotonic
+currency.
+
+**And one addition Option A did not name:** the published value carries
+the state and the unit TOGETHER. The review's fixed point removed the
+mutable document as a source of DATA; C10's reload defect showed that two
+immutable fields published separately reproduce the same class at one
+remove. One reference is the fixed point of the fixed point.
+
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same
