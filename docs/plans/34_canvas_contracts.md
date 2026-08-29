@@ -3871,12 +3871,14 @@ document-class members and the schedules; the three finer classes bind
 with their types in T2.)* Collections enter it only through
 `CanvasModelCopy`, which is obligation I7's construction half.
 
-**The LEASE** owns the handle capability, the FFI lock and the
-close-once record, with no mutable liveness flag. **The POPULATION**
-owns the full rows, the indexes, the eager adjacency memo and the query
-methods. **The UNIT** owns the request, needle, answer state, matched
-IDs, filtered projections, resolved selection and unit-addressed
-transients.
+**The LEASE** — `CanvasHandleLease` — owns the handle capability, the
+FFI lock and the close-once record, with no mutable liveness flag.
+**The POPULATION** — `CanvasPopulation` — owns the full rows, the
+indexes, the eager adjacency memo and the query methods. **The UNIT** —
+`CanvasProjectionUnit` — owns the request, needle, answer state,
+matched IDs, filtered projections, resolved selection and
+unit-addressed transients. The ownership transfer between the first of
+those and the publication is `CanvasLeaseTransfer`. *(Bound by T2.)*
 
 **The OPERATION TOKEN** is opaque and names the lease, the population
 and the initiating unit of one operation. **The SEALED RESULT** is what
@@ -4774,6 +4776,21 @@ concurrent-delivery/fault batteries. Refusal or fault must first make
 acceptance impossible through an atomic publication transition, or
 cleanup must otherwise synchronize with acceptance."*
 
+**STATUS after T2: DISCHARGED.** Cleanup is a TRANSFORM. A release that
+still owns its lease publishes a terminal state for its own request
+before it closes anything, and an acceptance reads that state and
+declines — so codex's own first remedy branch, "make acceptance
+impossible through an atomic publication transition", is what the code
+does. The two orders are the only two: release-first publishes the
+terminal state and the acceptance declines; acceptance-first publishes
+the lease and the release reads a publication that names it and closes
+nothing. There is no third interleaving because there is one field and
+one gate, and both decisions read it inside that gate. *Mutation:* the
+observation the frozen design described — read the slot, then close —
+with a barrier landing the acceptance between the read and the close,
+returns the finding's arrangement exactly: a live publication naming a
+closed handle.
+
 **I2 — The retry loop is lock-free but not terminating.** *"Root cause:
 a failed CAS proves only that some writer progressed. It does not make
 this delivery consumed, superseded, or retired. A load delivery can
@@ -5337,6 +5354,85 @@ field is private and one method writes it. Task T4's
 publication-writer census (obligation I8) is what makes that structural
 rather than defensive.
 
+**T2 — the model types and the lease's ownership primitive.** Landed
+`CanvasHandleLease`, `CanvasPopulation`, `CanvasProjectionUnit` and
+`CanvasLeaseTransfer`; the publication grew to hold the three finer
+classes and the load schedule gained the terminal state I1's mechanism
+publishes.
+
+* **I1 — discharged**, per the status note in its ledger row. The
+  mutation restores the observation and returns the named arrangement.
+* **The round-6 probe set, now facts rather than prose:** two racing
+  loads leave one publication and one closed lease; a load delivering
+  during a reload is refused and the reload's lease survives; a refused
+  delivery whose lease the live publication names closes nothing. Plus
+  the acceptance-versus-release race run two hundred times, asserting
+  the only two reachable end states.
+* **The close-once record**, whose disposition U1 already carried,
+  now has its facts: close happens once however many callers ask, and
+  concurrent closes collapse to one with every caller waiting for the
+  handle to actually be gone rather than for somebody to have started.
+
+**The seam between the close-once record and I5's freshness, resolved
+as the dispatch asked.** A closed lease is not resurrectable through a
+retained unit, and the mechanism is a SLOT-DERIVED read rather than a
+second field: admission is "does the live publication name this lease",
+a lease is closed only when it does not, so closed implies unadmitted
+and the closed handle is unreachable through the admission path instead
+of guarded behind a flag. The lease's invoke carries a detector for the
+contradiction — admitted while closed — which unlike task T1's bypass
+branch IS reachable, since a caller supplies the predicate.
+
+**Obligation I7 reached one level further down.** A core row is a
+uniffi record carrying a mutable group-path array, so copying the row
+SEQUENCE leaves an alias one field down. The population re-materialises
+every row with a group path of its own, and the fact plants both
+aliases — the caller's list and the caller's array — and shows neither
+moves it. What stays open is a consumer mutating an array through a row
+it obtained FROM the population; that needs an owned row type or an
+analyzer and is I7's structural half, T4's.
+
+**The two mutable authorities T2 introduced, dispositioned.** The
+lease's close-once record is the NON-CURRENCY OPERATIONAL STATE the
+restated U1 already enumerates; T2 is where it becomes real, and it is
+read for idempotence and never to decide admission, validation, effect
+legality or delivery. The lease's closing capability — a readonly field
+holding a delegate, and therefore a CONTENTS authority under the
+corrected predicate — is SOURCE-FREE: it is the loader's call into the
+session, installed once at construction, and it depends on no canvas
+class.
+
+**Three things the code decided that the prose had not.** A release
+whose request has been SUPERSEDED closes and publishes nothing: the
+terminal state is published only for a request that is still latest,
+because writing RELEASED under an older request's name would overwrite
+the newer request's schedule entry — I1's defect family arriving from
+the other side — and acceptance of a superseded request was already
+impossible before the release read the slot, so its close needs no
+publication to be safe. The unit holds no reference to its population:
+the chain nests, so a unit is current only while the population
+published beside it is, and naming that population from inside
+`CanvasProjectionUnit` would put one fact in two places for a currency
+comparison to disagree about. And T1's two freshness facts were
+extended to the three transforms T2 added — the finer classes
+installed, the unit replaced, the terminal publication — with the
+defect injected FIRST, as the lesson below says to: a memo keyed on the
+lease-population-unit triple made the per-transform arm fail on its own
+and the cycling run report 198 repeated references in 200 rounds. Then
+reverted, byte-for-byte.
+
+**Two lessons from T1's review worth keeping in the record**, because
+both were about the gates rather than the code. A remedy that looked
+correct was not: extending the freshness run to all eight transforms
+caught nothing until the run also CYCLED the schedule values, because
+rebuilding them handed every transform a key it had never seen and a
+content memo could never hit — found only by injecting the defect and
+watching the remedy fail to catch it. And a floor is decorative unless
+it is above the population it guards: the citation arm counts
+occurrences rather than distinct names, so raising it by counting the
+newly bound names would have left it satisfiable with every one of them
+removed.
+
 **Frozen paragraphs the gate SUPERSEDES.** The freeze forbids revising
 them and that is right; this record is the sanctioned place to say which
 of them the implementation has overtaken, so a T2, T3 or T6 owner does
@@ -5348,6 +5444,17 @@ not read a reclassified clause as current.
 | The verification plan's "a losing attempt publishes nothing and starts nothing" and "a re-decision after a lost swap refuses when its request has been consumed" | UNREPRESENTABLE, both. There are no losing attempts and no re-decisions to write a fact about. The claims they were protecting are carried instead by the I2 mutation, where losing attempts still exist |
 | U12's "both publications are compare-and-swaps, so they retry until they win" | SUPERSEDED. They are swaps and they win on the first attempt |
 | U12's delivery-versus-teardown walk — "the delivery's swap fails, its re-decision reads retired, it refuses" | SAME OUTCOME, DIFFERENT MECHANISM. The delivery refuses at DECISION time, having read the retired snapshot inside the gate. Recorded here rather than only in a task report, because T2's owner will look here |
+
+**Frozen paragraphs T2's ownership transfer supersedes**, in the same
+table's terms, because the finally table and D1's load-result rows are
+where a T3 owner will go to build the delivery pipeline:
+
+| Frozen text | Status after T2 |
+|---|---|
+| The finally table's one guard — "close unless the live publication names this lease, evaluated once in the finally, against the slot as it is at that moment" | SUPERSEDED. The guard is a TRANSFORM, `CanvasLeaseTransfer`'s release, not an observation: it decides inside the gate and publishes a terminal state for its request BEFORE it closes. That table's "the slot still does not name it" cells are true by construction now, rather than the claim I1 said the code had to make true |
+| The same table's "a LOST swap leaves the result owning its lease so the re-decision or the finally closes it" | UNREPRESENTABLE, for T1's reason: there are no lost swaps and no re-decisions. The finally still closes, and it is the only thing that does |
+| D1's "Load result — REFUSED: the acceptance check rejects it, on first decision or after a lost swap … closes its own lease exactly once, guarded by 'unless the live publication names it'" | SAME OUTCOME, DIFFERENT MECHANISM. The lease closes exactly once and a lease the publication names is never closed; but the guard is the terminal publication rather than a read, and "after a lost swap" is the unrepresentable branch above |
+| D1's "Load request: superseded in the load schedule, or marked consumed by an accepting publication" | EXTENDED. A third terminal state, RELEASED, is published by a refusing or faulting delivery, and a redelivery reads it and refuses exactly as it reads consumed. `CanvasLoadDelivery` is the enumeration; the bool T1 shipped had nowhere to put it |
 
 **The four mutable authorities T1 introduced, with their
 dispositions.** The frozen rule counts identity and contents

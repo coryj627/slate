@@ -28,40 +28,81 @@ internal sealed class CanvasRequestIdentity(string label)
 }
 
 /// <summary>
-/// W6-1 PR C-unit, task T1: the load schedule — the latest load
-/// request and whether its delivery has been consumed.
+/// W6-1 PR C-unit, task T2: how far one load request's delivery got.
+/// </summary>
+/// <remarks>
+/// Task T1 shipped this as a bool, which could say "accepted" but not
+/// "released". Obligation I1 needs the third state: a delivery that
+/// refuses or faults publishes a TERMINAL state for its own request
+/// BEFORE it closes anything, and that published state is what makes a
+/// concurrent acceptance of the same request impossible rather than
+/// merely unlikely. A bool had nowhere to put it.
+/// </remarks>
+internal enum CanvasLoadDelivery
+{
+    /// <summary>Requested and not yet delivered. The only state an
+    /// acceptance may proceed from.</summary>
+    Pending,
+
+    /// <summary>Accepted: the publication took ownership of the lease
+    /// this request opened.</summary>
+    Consumed,
+
+    /// <summary>Released: refused or faulted, its lease closed or about
+    /// to be, and no acceptance of this request can follow.</summary>
+    Released,
+}
+
+/// <summary>
+/// W6-1 PR C-unit, task T1: the load schedule - the latest load
+/// request and how far its delivery got.
 /// </summary>
 /// <remarks>
 /// The delivery state is what makes the publication itself the
 /// one-shot latch, so that no second mutable field is needed to stop
 /// a repeat delivery. Task T3 lands the pipeline that drives it;
-/// T1 lands the shape so the publication record and its transform
-/// algebra are whole.
+/// T1 landed the shape and T2 gave it the terminal state obligation
+/// I1's mechanism publishes.
 /// </remarks>
 internal sealed class CanvasLoadSchedule
 {
-    private CanvasLoadSchedule(CanvasRequestIdentity? latest, bool consumed)
+    private CanvasLoadSchedule(
+        CanvasRequestIdentity? latest, CanvasLoadDelivery delivery)
     {
         Latest = latest;
-        Consumed = consumed;
+        Delivery = delivery;
     }
 
     /// <summary>No load has ever been requested.</summary>
-    internal static CanvasLoadSchedule Idle { get; } = new(null, consumed: false);
+    internal static CanvasLoadSchedule Idle { get; } =
+        new(null, CanvasLoadDelivery.Pending);
 
     internal CanvasRequestIdentity? Latest { get; }
 
+    internal CanvasLoadDelivery Delivery { get; }
+
     /// <summary>Whether <see cref="Latest"/> has already been accepted.
-    /// A delivery that reads this as true refuses — that REFUSAL is
+    /// A delivery that reads this as true refuses - that REFUSAL is
     /// task T3's behaviour and T3's fact; what T1 owns and asserts is
     /// the value arithmetic underneath it.</summary>
-    internal bool Consumed { get; }
+    internal bool Consumed => Delivery == CanvasLoadDelivery.Consumed;
+
+    /// <summary>Whether <paramref name="request"/> can still be
+    /// accepted here: it must be the latest, and its delivery must not
+    /// have reached either terminal state.</summary>
+    internal bool Admits(CanvasRequestIdentity request) =>
+        ReferenceEquals(Latest, request) && Delivery == CanvasLoadDelivery.Pending;
 
     internal CanvasLoadSchedule Requested(CanvasRequestIdentity request) =>
-        new(request, consumed: false);
+        new(request, CanvasLoadDelivery.Pending);
 
     internal CanvasLoadSchedule ConsumedBy(CanvasRequestIdentity request) =>
-        new(request, consumed: true);
+        new(request, CanvasLoadDelivery.Consumed);
+
+    /// <summary>The terminal refusal obligation I1's cleanup publishes
+    /// before it closes anything.</summary>
+    internal CanvasLoadSchedule ReleasedBy(CanvasRequestIdentity request) =>
+        new(request, CanvasLoadDelivery.Released);
 }
 
 /// <summary>
@@ -136,11 +177,12 @@ internal sealed class CanvasFilterSchedule
 /// a value that has come round again.
 /// </para>
 /// <para>
-/// T1 carries the DOCUMENT-class state and the two schedules. The
-/// lease, population and unit references — the finer classes of the
-/// nesting chain — arrive with their types in task T2, and the record
-/// grows to hold them. Nothing here stubs them, because a stub is a
-/// fictitious owner and this branch has paid for those before.
+/// T1 carried the DOCUMENT-class state and the two schedules; T2 adds
+/// the three finer classes of the nesting chain. All three are
+/// NULLABLE and all three are null before the first load lands, which
+/// is a real state rather than a stub: a document with no lease has
+/// not opened a handle, and every boundary that would use one refuses
+/// on the document's own currency long before it looks.
 /// </para>
 /// </remarks>
 internal sealed class CanvasPublication
@@ -154,7 +196,10 @@ internal sealed class CanvasPublication
         ImmutableHashSet<string> markedIntent,
         string needleIntent,
         CanvasLoadSchedule loads,
-        CanvasFilterSchedule filters)
+        CanvasFilterSchedule filters,
+        CanvasHandleLease? lease,
+        CanvasPopulation? population,
+        CanvasProjectionUnit? unit)
     {
         Retired = retired;
         LoadState = loadState;
@@ -165,6 +210,9 @@ internal sealed class CanvasPublication
         NeedleIntent = needleIntent;
         Loads = loads;
         Filters = filters;
+        Lease = lease;
+        Population = population;
+        Unit = unit;
     }
 
     /// <summary>The first publication for a document: nothing loaded,
@@ -178,7 +226,10 @@ internal sealed class CanvasPublication
         markedIntent: CanvasModelCopy.Ids(null),
         needleIntent: string.Empty,
         loads: CanvasLoadSchedule.Idle,
-        filters: CanvasFilterSchedule.Idle);
+        filters: CanvasFilterSchedule.Idle,
+        lease: null,
+        population: null,
+        unit: null);
 
     /// <summary>DOCUMENT class, and the coarsest currency: every model
     /// boundary validates this first.</summary>
@@ -208,6 +259,23 @@ internal sealed class CanvasPublication
     internal CanvasLoadSchedule Loads { get; }
 
     internal CanvasFilterSchedule Filters { get; }
+
+    /// <summary>LEASE class. Null until a load lands. Naming a lease
+    /// here is what makes it live - the lease itself carries no
+    /// liveness flag and cannot answer the question.</summary>
+    internal CanvasHandleLease? Lease { get; }
+
+    /// <summary>POPULATION class. Replaced whole by a reload, together
+    /// with the lease, in one swap.</summary>
+    internal CanvasPopulation? Population { get; }
+
+    /// <summary>UNIT class, the finest in the chain.</summary>
+    internal CanvasProjectionUnit? Unit { get; }
+
+    /// <summary>Whether this publication names <paramref name="lease"/>
+    /// - the one question "is this lease live" reduces to, asked by
+    /// reference because a lease IS its reference.</summary>
+    internal bool Names(CanvasHandleLease lease) => ReferenceEquals(Lease, lease);
 
     internal CanvasPublication WithRetired() => Copy(retired: true);
 
@@ -246,6 +314,40 @@ internal sealed class CanvasPublication
         return Copy(filters: filters);
     }
 
+    /// <summary>Install a lease and the population it loaded, together.
+    /// One transform, because a publication naming a new lease beside
+    /// an old population is a state the chain forbids and nothing
+    /// should be able to spell.</summary>
+    internal CanvasPublication WithLoaded(
+        CanvasHandleLease lease,
+        CanvasPopulation population,
+        CanvasProjectionUnit unit)
+    {
+        ArgumentNullException.ThrowIfNull(lease);
+        ArgumentNullException.ThrowIfNull(population);
+        ArgumentNullException.ThrowIfNull(unit);
+        return Copy(
+            lease: lease, leaseSet: true,
+            population: population, populationSet: true,
+            unit: unit, unitSet: true);
+    }
+
+    internal CanvasPublication WithUnit(CanvasProjectionUnit unit)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        return Copy(unit: unit, unitSet: true);
+    }
+
+    /// <summary>The terminal publication: every model currency cleared
+    /// at once. Physical close follows, under the lease's own lock,
+    /// after the last in-flight call returns - it is not part of
+    /// this.</summary>
+    internal CanvasPublication WithTerminal() => Copy(
+        retired: true,
+        lease: null, leaseSet: true,
+        population: null, populationSet: true,
+        unit: null, unitSet: true);
+
     /// <summary>
     /// The one copy path, so there is one place where freshness lives.
     /// </summary>
@@ -266,7 +368,13 @@ internal sealed class CanvasPublication
         ImmutableHashSet<string>? markedIntent = null,
         string? needleIntent = null,
         CanvasLoadSchedule? loads = null,
-        CanvasFilterSchedule? filters = null) => new(
+        CanvasFilterSchedule? filters = null,
+        CanvasHandleLease? lease = null,
+        bool leaseSet = false,
+        CanvasPopulation? population = null,
+        bool populationSet = false,
+        CanvasProjectionUnit? unit = null,
+        bool unitSet = false) => new(
             retired ?? Retired,
             loadState ?? LoadState,
             loadMessageSet ? loadMessage : LoadMessage,
@@ -275,5 +383,8 @@ internal sealed class CanvasPublication
             markedIntent ?? MarkedIntent,
             needleIntent ?? NeedleIntent,
             loads ?? Loads,
-            filters ?? Filters);
+            filters ?? Filters,
+            leaseSet ? lease : Lease,
+            populationSet ? population : Population,
+            unitSet ? unit : Unit);
 }

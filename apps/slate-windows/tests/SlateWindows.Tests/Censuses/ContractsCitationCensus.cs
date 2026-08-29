@@ -86,12 +86,19 @@ public sealed class ContractsCitationCensus
                 // or below 21 — including one chosen by counting the
                 // eight new NAMES — would be satisfied with every T1
                 // citation removed, which is the decorative floor with
-                // extra steps. 30 sits above the pre-T1 population and
-                // below the current 37, so un-binding the new names
-                // fails while ordinary prose churn does not. It rises
-                // again as T2 onwards bind the lease, the population and
-                // the unit.
-                30),
+                // extra steps. 30 sat above the pre-T1 population and
+                // below the then-current 37, so un-binding T1's names
+                // failed while ordinary prose churn did not.
+                //
+                // T2 bound the lease, the population, the unit and the
+                // ownership transfer, taking the section to 48. Same
+                // rule one task later: 40 sits above the pre-T2
+                // population of 37, so un-binding T2's four names fails
+                // too. Each task raises this above what the section
+                // carried BEFORE it — the only reading under which the
+                // floor guards that task's work rather than its
+                // predecessors'.
+                40),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

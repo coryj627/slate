@@ -85,6 +85,32 @@ public sealed class CanvasPublicationSlotTests
         CanvasPublication retired = seed.WithRetired();
         AssertFreshAndUnchanged(
             retired, retired.WithRetired(), p => p.Retired, "retirement");
+
+        // The three finer-class transforms task T2 added. Same hard
+        // case: reinstalling the very references already there. A
+        // content memo keyed on the triple is the cheapest identity
+        // return these could grow, and it is exactly what I5 names.
+        var lease = new CanvasHandleLease(1, _ => { });
+        CanvasPopulation population = CanvasPopulation.Empty();
+        CanvasProjectionUnit unit = CanvasProjectionUnit.Unfiltered(population);
+        CanvasPublication loaded = seed.WithLoaded(lease, population, unit);
+        AssertFreshAndUnchanged(
+            loaded, loaded.WithLoaded(lease, population, unit),
+            p => ReferenceEquals(p.Lease, lease)
+                && ReferenceEquals(p.Population, population)
+                && ReferenceEquals(p.Unit, unit),
+            "loaded");
+        AssertFreshAndUnchanged(
+            loaded, loaded.WithUnit(unit),
+            p => ReferenceEquals(p.Unit, unit), "unit");
+
+        // Terminal is one-way, like retirement, and asserted the same
+        // way: from the terminal state, terminalising again.
+        CanvasPublication terminal = loaded.WithTerminal();
+        AssertFreshAndUnchanged(
+            terminal, terminal.WithTerminal(),
+            p => p.Retired && p.Lease is null && p.Population is null && p.Unit is null,
+            "terminal");
     }
 
     private static void AssertFreshAndUnchanged(
@@ -347,7 +373,7 @@ public sealed class CanvasPublicationSlotTests
         // Deliberately cycles values — a needle of "a", then "b", then
         // "a" again — because a content-keyed cache is exactly what
         // would hand back a record installed earlier.
-        // ALL EIGHT transforms, not the four the value cycling needs.
+        // ALL ELEVEN transforms, not the four the value cycling needs.
         // A memoising defect in an undriven transform would fail nothing:
         // the per-transform fact above compares a result only against its
         // own input, so a previously-built record passes it, and only the
@@ -370,6 +396,20 @@ public sealed class CanvasPublicationSlotTests
             CanvasFilterSchedule.Idle.Typed(new CanvasRequestIdentity("F-a")),
             CanvasFilterSchedule.Idle.Typed(new CanvasRequestIdentity("F-b")),
         ];
+        // The finer classes, hoisted for the same reason: two leases,
+        // two populations, two units, cycled, so that a memo keyed on
+        // the triple — or on the unit alone — would hit.
+        CanvasHandleLease[] leases =
+        [
+            new CanvasHandleLease(1, _ => { }),
+            new CanvasHandleLease(2, _ => { }),
+        ];
+        CanvasPopulation[] populations = [CanvasPopulation.Empty(), CanvasPopulation.Empty()];
+        CanvasProjectionUnit[] units =
+        [
+            CanvasProjectionUnit.Unfiltered(populations[0]),
+            CanvasProjectionUnit.Unfiltered(populations[1]),
+        ];
 
         for (int round = 0; round < 200; round++)
         {
@@ -385,11 +425,15 @@ public sealed class CanvasPublicationSlotTests
                 round % 2 == 0 ? null : "ready"));
             _ = slot.Publish(s => s.WithLoads(loadSchedules[round % 2]));
             _ = slot.Publish(s => s.WithFilters(filterSchedules[round % 2]));
+            _ = slot.Publish(s => s.WithLoaded(
+                leases[round % 2], populations[round % 2], units[round % 2]));
+            _ = slot.Publish(s => s.WithUnit(units[round % 2]));
+            _ = slot.Publish(s => s.WithTerminal());
         }
 
         Assert.True(
-            observer.Installs == 1_600,
-            $"premise: the run was supposed to install 1600 publications and "
+            observer.Installs == 2_200,
+            $"premise: the run was supposed to install 2200 publications and "
             + $"installed {observer.Installs}, so a freshness claim over it would "
             + "be measuring a shorter run than it says.");
         Assert.True(
