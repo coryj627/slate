@@ -91,7 +91,7 @@ public sealed class ContractsCitationCensus
                 // failed while ordinary prose churn did not.
                 //
                 // T2 bound the lease, the population, the unit and the
-                // ownership transfer, taking the section to 48. Same
+                // ownership transfer, taking the section to 50. Same
                 // rule one task later: 40 sits above the pre-T2
                 // population of 37, so un-binding T2's four names fails
                 // too. Each task raises this above what the section

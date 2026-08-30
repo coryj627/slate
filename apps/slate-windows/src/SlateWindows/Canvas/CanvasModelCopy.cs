@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Collections.Immutable;
+using uniffi.slate_uniffi;
 
 namespace SlateWindows.Canvas;
 
@@ -66,4 +67,25 @@ internal static class CanvasModelCopy
     /// it.</summary>
     internal static ImmutableArray<T> Ordered<T>(IEnumerable<T>? source) =>
         source is null ? [] : ImmutableArray.CreateRange(source);
+
+    /// <summary>
+    /// Rows of the model's own: the sequence copied, and each row
+    /// re-materialised with a group path this copy owns.
+    /// </summary>
+    /// <remarks>
+    /// Obligation I7 one level down. A core row is a uniffi record
+    /// carrying a <c>string[]</c>, so copying the SEQUENCE leaves an
+    /// alias one field in — the caller's array, reachable through a
+    /// published snapshot. It lives here rather than in the population
+    /// so there stays ONE construction site that collections and rows
+    /// enter the model through, which is what makes I7's construction
+    /// half a claim a census can check instead of a habit.
+    /// </remarks>
+    internal static ImmutableArray<CanvasOutlineRow> Rows(
+        IEnumerable<CanvasOutlineRow>? source) =>
+        Ordered(source?.Select(row => row with { GroupPath = [.. row.GroupPath] }));
+
+    internal static ImmutableArray<CanvasTableRow> Rows(
+        IEnumerable<CanvasTableRow>? source) =>
+        Ordered(source?.Select(row => row with { GroupPath = [.. row.GroupPath] }));
 }

@@ -151,6 +151,56 @@ internal sealed class CanvasFilterSchedule
 }
 
 /// <summary>
+/// W6-1 PR C-unit, task T2: the three finer classes of the nesting
+/// chain — LEASE, POPULATION and UNIT — as one value, present together
+/// or absent together.
+/// </summary>
+/// <remarks>
+/// <para>
+/// The chain says a unit is current only while its population is, and
+/// a population only while its lease is. Three nullable fields on the
+/// publication could spell every combination the chain forbids — a
+/// unit beside no population, a lease beside no unit — and the T2
+/// review found the invariant being carried by a doc comment on one
+/// transform. One nullable value holding all three makes those
+/// combinations unspellable: the only way to have a unit is to have the
+/// population it projects and the lease that population was loaded
+/// through.
+/// </para>
+/// <para>
+/// What this does NOT close is a unit projected from a DIFFERENT
+/// population than the one beside it. The unit carries no population
+/// reference — the record says why — so <see cref="WithUnit"/> cannot
+/// check it structurally. Task T6's filter pipeline projects from the
+/// population it reads out of the same snapshot it publishes against,
+/// which is the discipline; a census that keeps it honest is task T4's.
+/// </para>
+/// </remarks>
+internal sealed class CanvasLoaded
+{
+    internal CanvasLoaded(
+        CanvasHandleLease lease, CanvasPopulation population, CanvasProjectionUnit unit)
+    {
+        ArgumentNullException.ThrowIfNull(lease);
+        ArgumentNullException.ThrowIfNull(population);
+        ArgumentNullException.ThrowIfNull(unit);
+        Lease = lease;
+        Population = population;
+        Unit = unit;
+    }
+
+    internal CanvasHandleLease Lease { get; }
+
+    internal CanvasPopulation Population { get; }
+
+    internal CanvasProjectionUnit Unit { get; }
+
+    /// <summary>The same lease and population under a successor unit -
+    /// a filter request publishing, in the chain's terms.</summary>
+    internal CanvasLoaded WithUnit(CanvasProjectionUnit unit) => new(Lease, Population, unit);
+}
+
+/// <summary>
 /// W6-1 PR C-unit, task T1: THE PUBLICATION — the immutable value the
 /// one slot holds, and the whole of the model's currency.
 /// </summary>
@@ -178,11 +228,13 @@ internal sealed class CanvasFilterSchedule
 /// </para>
 /// <para>
 /// T1 carried the DOCUMENT-class state and the two schedules; T2 adds
-/// the three finer classes of the nesting chain. All three are
-/// NULLABLE and all three are null before the first load lands, which
-/// is a real state rather than a stub: a document with no lease has
-/// not opened a handle, and every boundary that would use one refuses
-/// on the document's own currency long before it looks.
+/// the three finer classes of the nesting chain as ONE nullable value,
+/// <see cref="CanvasLoaded"/>, so that a unit beside no population or
+/// a lease beside no unit is unspellable rather than forbidden by a
+/// comment. It is null before the first load lands, which is a real
+/// state rather than a stub: a document with no lease has not opened a
+/// handle, and every boundary that would use one refuses on the
+/// document's own currency long before it looks.
 /// </para>
 /// </remarks>
 internal sealed class CanvasPublication
@@ -197,9 +249,7 @@ internal sealed class CanvasPublication
         string needleIntent,
         CanvasLoadSchedule loads,
         CanvasFilterSchedule filters,
-        CanvasHandleLease? lease,
-        CanvasPopulation? population,
-        CanvasProjectionUnit? unit)
+        CanvasLoaded? loaded)
     {
         Retired = retired;
         LoadState = loadState;
@@ -210,9 +260,7 @@ internal sealed class CanvasPublication
         NeedleIntent = needleIntent;
         Loads = loads;
         Filters = filters;
-        Lease = lease;
-        Population = population;
-        Unit = unit;
+        Loaded = loaded;
     }
 
     /// <summary>The first publication for a document: nothing loaded,
@@ -227,9 +275,7 @@ internal sealed class CanvasPublication
         needleIntent: string.Empty,
         loads: CanvasLoadSchedule.Idle,
         filters: CanvasFilterSchedule.Idle,
-        lease: null,
-        population: null,
-        unit: null);
+        loaded: null);
 
     /// <summary>DOCUMENT class, and the coarsest currency: every model
     /// boundary validates this first.</summary>
@@ -260,17 +306,20 @@ internal sealed class CanvasPublication
 
     internal CanvasFilterSchedule Filters { get; }
 
-    /// <summary>LEASE class. Null until a load lands. Naming a lease
-    /// here is what makes it live - the lease itself carries no
-    /// liveness flag and cannot answer the question.</summary>
-    internal CanvasHandleLease? Lease { get; }
+    /// <summary>The finer classes, together. Null until a load lands.
+    /// Naming a lease here is what makes it live - the lease itself
+    /// carries no liveness flag and cannot answer the question.</summary>
+    internal CanvasLoaded? Loaded { get; }
+
+    /// <summary>LEASE class, read through <see cref="Loaded"/>.</summary>
+    internal CanvasHandleLease? Lease => Loaded?.Lease;
 
     /// <summary>POPULATION class. Replaced whole by a reload, together
     /// with the lease, in one swap.</summary>
-    internal CanvasPopulation? Population { get; }
+    internal CanvasPopulation? Population => Loaded?.Population;
 
     /// <summary>UNIT class, the finest in the chain.</summary>
-    internal CanvasProjectionUnit? Unit { get; }
+    internal CanvasProjectionUnit? Unit => Loaded?.Unit;
 
     /// <summary>Whether this publication names <paramref name="lease"/>
     /// - the one question "is this lease live" reduces to, asked by
@@ -314,28 +363,34 @@ internal sealed class CanvasPublication
         return Copy(filters: filters);
     }
 
-    /// <summary>Install a lease and the population it loaded, together.
-    /// One transform, because a publication naming a new lease beside
-    /// an old population is a state the chain forbids and nothing
-    /// should be able to spell.</summary>
+    /// <summary>Install a lease, the population it loaded and the
+    /// unit projected from it, together. One transform and one value,
+    /// because a publication naming a new lease beside an old
+    /// population is a state the chain forbids and nothing can
+    /// spell.</summary>
     internal CanvasPublication WithLoaded(
         CanvasHandleLease lease,
         CanvasPopulation population,
-        CanvasProjectionUnit unit)
-    {
-        ArgumentNullException.ThrowIfNull(lease);
-        ArgumentNullException.ThrowIfNull(population);
-        ArgumentNullException.ThrowIfNull(unit);
-        return Copy(
-            lease: lease, leaseSet: true,
-            population: population, populationSet: true,
-            unit: unit, unitSet: true);
-    }
+        CanvasProjectionUnit unit) =>
+        Copy(loaded: new CanvasLoaded(lease, population, unit), loadedSet: true);
 
+    /// <summary>A successor unit over the SAME lease and population.
+    /// Refused outright on a publication with no population to project
+    /// - a unit without one is the state the chain forbids, and a
+    /// transform that could spell it would be carrying the invariant
+    /// in a comment.</summary>
     internal CanvasPublication WithUnit(CanvasProjectionUnit unit)
     {
         ArgumentNullException.ThrowIfNull(unit);
-        return Copy(unit: unit, unitSet: true);
+        if (Loaded is null)
+        {
+            throw new InvalidOperationException(
+                "a unit was installed on a publication with no population to "
+                + "project: the nesting chain has no such state, so the publisher "
+                + "decided from a snapshot it did not read");
+        }
+
+        return Copy(loaded: Loaded.WithUnit(unit), loadedSet: true);
     }
 
     /// <summary>The terminal publication: every model currency cleared
@@ -344,9 +399,7 @@ internal sealed class CanvasPublication
     /// this.</summary>
     internal CanvasPublication WithTerminal() => Copy(
         retired: true,
-        lease: null, leaseSet: true,
-        population: null, populationSet: true,
-        unit: null, unitSet: true);
+        loaded: null, loadedSet: true);
 
     /// <summary>
     /// The one copy path, so there is one place where freshness lives.
@@ -369,12 +422,8 @@ internal sealed class CanvasPublication
         string? needleIntent = null,
         CanvasLoadSchedule? loads = null,
         CanvasFilterSchedule? filters = null,
-        CanvasHandleLease? lease = null,
-        bool leaseSet = false,
-        CanvasPopulation? population = null,
-        bool populationSet = false,
-        CanvasProjectionUnit? unit = null,
-        bool unitSet = false) => new(
+        CanvasLoaded? loaded = null,
+        bool loadedSet = false) => new(
             retired ?? Retired,
             loadState ?? LoadState,
             loadMessageSet ? loadMessage : LoadMessage,
@@ -384,7 +433,5 @@ internal sealed class CanvasPublication
             needleIntent ?? NeedleIntent,
             loads ?? Loads,
             filters ?? Filters,
-            leaseSet ? lease : Lease,
-            populationSet ? population : Population,
-            unitSet ? unit : Unit);
+            loadedSet ? loaded : Loaded);
 }

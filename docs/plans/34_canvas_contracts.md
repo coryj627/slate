@@ -5403,9 +5403,10 @@ session, installed once at construction, and it depends on no canvas
 class.
 
 **Three things the code decided that the prose had not.** A release
-whose request has been SUPERSEDED closes and publishes nothing: the
-terminal state is published only for a request that is still latest,
-because writing RELEASED under an older request's name would overwrite
+whose request has been SUPERSEDED, or whose document has retired,
+closes and publishes nothing: the terminal state is published only for
+a request that is still latest and pending on a live document, because
+writing RELEASED under an older request's name would overwrite
 the newer request's schedule entry — I1's defect family arriving from
 the other side — and acceptance of a superseded request was already
 impossible before the release read the slot, so its close needs no
@@ -5433,6 +5434,68 @@ occurrences rather than distinct names, so raising it by counting the
 newly bound names would have left it satisfiable with every one of them
 removed.
 
+**T2's review, and what it moved.** Ten findings, none against the
+ownership transfer's mechanism and all against its periphery and the
+batteries' teeth — T1's shape again. All addressed.
+
+* **The displaced lease had no owner.** A reload's acceptance swapped a
+  new lease in over the one the publication named, and after the swap
+  nothing could reach the old one — no publication named it, no release
+  owned it — so every reload leaked a native handle. The swap's effect
+  step now closes what its decision snapshot named, from the outcome
+  rather than a second read. The frozen transition text's other order,
+  un-naming the old lease before the new load is built, stays T3's to
+  choose, and under it nothing is displaced.
+* **Acceptance did not reseed.** The frozen "a reload cannot strand the
+  filter machine" row was being carried by a comment: a running filter
+  request survived the reload with no callback able to clear it, and
+  every later keystroke queued behind it. Acceptance now retires both
+  schedule entries and reseeds from the carried needle in the same
+  publication, and the request it mints is read back from the successor
+  and handed out in `CanvasLoadAcceptance`, because it is the job T6 has
+  to start.
+* **The chain was a comment.** Three nullable fields could spell a unit
+  beside no population; `CanvasLoaded` holds the three finer classes as
+  one value, so the only way to have a unit is to have the population it
+  projects and the lease that loaded it. A unit projected from a
+  DIFFERENT population than the one beside it stays open — the unit
+  carries no population reference, by the decision above — and is named
+  as T6's discipline and T4's census.
+* **The release reported a decision, not a deed.** A superseded
+  request's release said "published and closed" having published
+  nothing, and "already released" depended on whether an unrelated newer
+  request had moved the schedule. The close-once record now answers its
+  one question to the caller — was this the call that closed — and the
+  release reports that; its `Closed` says plainly that the terminal
+  state is published only when the request was still latest. A release
+  after the TERMINAL publication declines rather than installing a later
+  record over the one every holder treats as final.
+* **A throwing close** is issued once, never retried, and the exception
+  reaches the caller: re-arming would hand the next caller a second
+  close of a handle whose first may have half-completed. Sequencing that
+  fault against the one a finally is cleaning up after is T3's.
+* **The ancestry walk was wrong on a depth gap.** Depth-indexed parents
+  attached two rows at depth 2 under a root to each other. The
+  population now uses the outline view's stack of open ancestors, and
+  the old walk, restored, fails the new fact with the reviewer's exact
+  arrangement — one parent empty, the other a sibling.
+* **Three facts had no teeth, and have them now.** Concurrent closes
+  waited on a yield, so the exchange-outside-the-lock mutant passed on
+  any run where the second thread had not been scheduled; the fact now
+  observes the second caller BLOCKED before it asks. "Publish before
+  close" was pinned by end state alone, which cannot tell the two orders
+  apart; the close delegate now reads the slot at the moment it runs.
+  And assertions ran on raw threads whose faults abort the host; they
+  run on a worker that captures and rethrows. Each was proven the T1
+  way — defect injected, fact failing, defect reverted — and each failed
+  on the sentence written for it.
+* **Smaller.** T1's I2 mutation replica admitted a RELEASED request,
+  its predicate predating the third state; it reads production's
+  admission now, and the schedule's arithmetic fact carries the released
+  row. The projection is built outside the gate, the displayed ordinal
+  is an index, and the row re-materialisation moved into
+  `CanvasModelCopy` so I7's construction half keeps one site.
+
 **Frozen paragraphs the gate SUPERSEDES.** The freeze forbids revising
 them and that is right; this record is the sanctioned place to say which
 of them the implementation has overtaken, so a T2, T3 or T6 owner does
@@ -5455,6 +5518,7 @@ where a T3 owner will go to build the delivery pipeline:
 | The same table's "a LOST swap leaves the result owning its lease so the re-decision or the finally closes it" | UNREPRESENTABLE, for T1's reason: there are no lost swaps and no re-decisions. The finally still closes, and it is the only thing that does |
 | D1's "Load result — REFUSED: the acceptance check rejects it, on first decision or after a lost swap … closes its own lease exactly once, guarded by 'unless the live publication names it'" | SAME OUTCOME, DIFFERENT MECHANISM. The lease closes exactly once and a lease the publication names is never closed; but the guard is the terminal publication rather than a read, and "after a lost swap" is the unrepresentable branch above |
 | D1's "Load request: superseded in the load schedule, or marked consumed by an accepting publication" | EXTENDED. A third terminal state, RELEASED, is published by a refusing or faulting delivery, and a redelivery reads it and refuses exactly as it reads consumed. `CanvasLoadDelivery` is the enumeration; the bool T1 shipped had nowhere to put it |
+| The acceptance transition's "publish the terminal state for the old lease and population; close the old handle under its lock; construct the new lease and population off-thread; … install in ONE SWAP" | EITHER ORDER, after the review. The acceptance closes whatever lease its swap displaced, from the decision snapshot, so the one-swap order leaks nothing; the un-name-first order stays T3's to choose, and under it nothing is displaced. "No live publication ever names a closed handle" holds in both |
 
 **The four mutable authorities T1 introduced, with their
 dispositions.** The frozen rule counts identity and contents

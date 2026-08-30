@@ -145,9 +145,67 @@ public sealed class CanvasPopulationTests
             + "round again.");
     }
 
+    /// <summary>The parent chain is the nearest SHALLOWER row, not the
+    /// row at depth-1: a depth gap attaches a row to its true ancestor,
+    /// and two rows at the same depth under it are siblings. The T2
+    /// review found the depth-indexed walk attaching them to each
+    /// other.</summary>
+    [Fact]
+    public void AncestryCrossesADepthGapToTheNearestShallowerRow()
+    {
+        CanvasPopulation population =
+            Outline(("root", 0), ("x", 2), ("y", 2), ("z", 1), ("w", 3));
+
+        Assert.True(
+            population.Parent("x") == "root" && population.Parent("y") == "root",
+            $"rows at depth 2 under a depth-0 root have parents "
+            + $"{population.Parent("x")} and {population.Parent("y")}; a sibling "
+            + "was taken for a parent.");
+        Assert.True(
+            population.Children("root").SequenceEqual(["x", "y", "z"]),
+            "the root's children are every row whose nearest shallower row it is.");
+        Assert.True(
+            population.Parent("z") == "root"
+                && population.Parent("w") == "z"
+                && population.Children("x").IsEmpty
+                && population.Children("y").IsEmpty,
+            "a later shallower row closes the gap's branch, and the next deeper "
+            + "row attaches to it.");
+        Assert.True(population.Parent("root") is null, "and a root has no parent.");
+    }
+
     // ---------------------------------------------------------------
     // The unit
     // ---------------------------------------------------------------
+
+    /// <summary>A unit without a population is unspellable: the chain's
+    /// three finer classes are one value, so a unit installed on a
+    /// publication with nothing loaded — or on the terminal one — is
+    /// refused outright rather than published beside a null.</summary>
+    [Fact]
+    public void AUnitCannotBeInstalledWithoutThePopulationItProjects()
+    {
+        CanvasPopulation population = Outline(("root", 0));
+        CanvasProjectionUnit unit = CanvasProjectionUnit.Unfiltered(population);
+
+        _ = Assert.Throws<InvalidOperationException>(
+            () => { _ = CanvasPublication.Seed().WithUnit(unit); });
+
+        CanvasPublication loaded = CanvasPublication.Seed()
+            .WithLoaded(new CanvasHandleLease(1, _ => { }), population, unit);
+        CanvasPublication successor = loaded.WithUnit(unit.Failed());
+        Assert.True(
+            ReferenceEquals(successor.Lease, loaded.Lease)
+                && ReferenceEquals(successor.Population, population)
+                && successor.Unit!.Answer == CanvasAnswerState.Failed,
+            "a successor unit keeps the lease and population it sits beside.");
+
+        _ = Assert.Throws<InvalidOperationException>(
+            () => { _ = loaded.WithTerminal().WithUnit(unit); });
+        Assert.True(
+            loaded.WithTerminal().Loaded is null,
+            "and the terminal publication clears all three together.");
+    }
 
     /// <summary>An unfiltered unit shows the whole population, in
     /// population order, and holds no request.</summary>

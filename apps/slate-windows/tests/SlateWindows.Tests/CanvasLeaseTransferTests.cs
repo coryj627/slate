@@ -1,6 +1,8 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Diagnostics;
+using System.Runtime.ExceptionServices;
 using SlateWindows.Canvas;
 using uniffi.slate_uniffi;
 
@@ -48,9 +50,13 @@ public sealed class CanvasLeaseTransferTests
             "premise: a fresh lease is open, or the counts below start from the "
             + "wrong state.");
 
-        lease.Close();
-        lease.Close();
-        lease.Close();
+        bool first = lease.Close();
+        bool second = lease.Close();
+        bool third = lease.Close();
+
+        Assert.True(
+            first && !second && !third,
+            "the close reports which call did it: the first, and only the first.");
 
         Assert.True(
             closes == 1,
@@ -62,49 +68,65 @@ public sealed class CanvasLeaseTransferTests
     /// <summary>Concurrent closes collapse to one, and every caller
     /// returns only after the handle is actually gone — which is why
     /// the exchange sits inside the lock rather than before it.</summary>
+    /// <remarks>
+    /// The waiting is ESTABLISHED rather than hoped for: the second
+    /// caller is observed blocked in the lock — or finished, which is
+    /// what the exchange-outside-the-lock mutant does — before the fact
+    /// asks whether it returned. A yield in that place passed the
+    /// mutant on any run where the second thread had not been scheduled
+    /// yet, which the T2 review pointed out.
+    /// </remarks>
     [Fact]
     public void ConcurrentClosesCollapseToOneAndAllWaitForIt()
     {
         var closes = 0;
-        var closeStarted = new ManualResetEventSlim(false);
-        var releaseClose = new ManualResetEventSlim(false);
+        var bodyReleased = false;
+        using var closeStarted = new ManualResetEventSlim(false);
+        using var releaseClose = new ManualResetEventSlim(false);
         var lease = new CanvasHandleLease(7, handle =>
         {
             closeStarted.Set();
-            Assert.True(
-                releaseClose.Wait(LivenessBudget),
-                "premise: the close body was never released, so this arrangement "
-                + "did not establish.");
+            bodyReleased = releaseClose.Wait(LivenessBudget);
             _ = Interlocked.Increment(ref closes);
         });
 
-        var first = new Thread(lease.Close) { IsBackground = true };
+        var first = new Worker(() => _ = lease.Close());
         first.Start();
         Assert.True(
             closeStarted.Wait(LivenessBudget),
             "premise: the first close never entered its body.");
 
         var secondReturned = 0;
-        var second = new Thread(() =>
+        var second = new Worker(() =>
         {
-            lease.Close();
+            _ = lease.Close();
             Volatile.Write(ref secondReturned, 1);
-        })
-        { IsBackground = true };
+        });
         second.Start();
 
-        // The second caller must NOT return while the handle is still
-        // being closed: "closed" has to mean the call returned, not
-        // that somebody started.
-        Thread.Yield();
+        // Until the second caller is BLOCKED — on the lock the first
+        // holds — or has finished, which only the mutant manages while
+        // the first is still inside the handle close.
+        var stopwatch = Stopwatch.StartNew();
+        while (!second.IsBlockedOrFinished && stopwatch.Elapsed < LivenessBudget)
+        {
+            Thread.Yield();
+        }
+
+        Assert.True(
+            second.IsBlockedOrFinished,
+            "premise: the second caller neither blocked nor finished, so the "
+            + "arrangement did not establish.");
         Assert.True(
             Volatile.Read(ref secondReturned) == 0,
             "a second close returned while the first was still inside the handle "
             + "close; that would make IsClosed mean somebody STARTED closing.");
 
         releaseClose.Set();
-        Assert.True(first.Join(LivenessBudget) && second.Join(LivenessBudget),
+        Assert.True(
+            first.Join(LivenessBudget) && second.Join(LivenessBudget),
             "premise: a close thread did not finish.");
+        Assert.True(bodyReleased, "premise: the close body was never released.");
         Assert.True(closes == 1, $"the handle closed {closes} times.");
     }
 
@@ -153,7 +175,7 @@ public sealed class CanvasLeaseTransferTests
 
         _ = slot.Publish(s => s.WithLoads(s.Loads.Requested(request)));
         Assert.True(
-            CanvasLeaseTransfer.TryAccept(slot, request, lease, Population("a", "b")),
+            CanvasLeaseTransfer.TryAccept(slot, request, lease, Population("a", "b")).Accepted,
             "premise: the acceptance must land, or the release below is deciding "
             + "about a lease nobody published.");
 
@@ -173,15 +195,27 @@ public sealed class CanvasLeaseTransferTests
     }
 
     /// <summary>A release that wins publishes a terminal state for its
-    /// request, and that published state is what makes a later
-    /// acceptance impossible rather than unlikely.</summary>
+    /// request BEFORE it closes, and that published state is what makes
+    /// a later acceptance impossible rather than unlikely.</summary>
+    /// <remarks>
+    /// The ORDER is pinned by the close itself: the close delegate
+    /// reads the slot at the moment it runs. End state alone cannot
+    /// tell "published, then closed" from "closed, then published", and
+    /// the second is exactly the window obligation I1 exists to remove
+    /// — the T2 review found nothing else pinning it.
+    /// </remarks>
     [Fact]
     public void AReleasePublishesTerminalStateBeforeItCloses()
     {
         var closes = 0;
         var slot = new CanvasPublicationSlot(CanvasPublication.Seed());
         var request = new CanvasRequestIdentity("L1");
-        var lease = new CanvasHandleLease(1, _ => Interlocked.Increment(ref closes));
+        CanvasLoadDelivery? deliveryAtClose = null;
+        var lease = new CanvasHandleLease(1, handle =>
+        {
+            deliveryAtClose = slot.Current.Loads.Delivery;
+            _ = Interlocked.Increment(ref closes);
+        });
 
         _ = slot.Publish(s => s.WithLoads(s.Loads.Requested(request)));
         Assert.True(
@@ -196,13 +230,19 @@ public sealed class CanvasLeaseTransferTests
             $"the release reported {outcome} rather than closing.");
         Assert.True(closes == 1, $"the lease closed {closes} times.");
         Assert.True(
+            deliveryAtClose == CanvasLoadDelivery.Released,
+            $"at the moment the handle closed, the request's delivery read "
+            + $"{deliveryAtClose} rather than Released: the close ran BEFORE the "
+            + "terminal state was published, which is the window an acceptance "
+            + "lands in.");
+        Assert.True(
             slot.Current.Loads.Delivery == CanvasLoadDelivery.Released,
             "the terminal state was not published, so an acceptance could still "
             + "follow a close — which is the whole of obligation I1.");
 
         // The acceptance that would have raced it now cannot land.
         Assert.False(
-            CanvasLeaseTransfer.TryAccept(slot, request, lease, Population("a")),
+            CanvasLeaseTransfer.TryAccept(slot, request, lease, Population("a")).Accepted,
             "an acceptance succeeded AFTER its request was released, so the "
             + "terminal publication did not make it impossible.");
         Assert.True(
@@ -231,6 +271,17 @@ public sealed class CanvasLeaseTransferTests
             again == CanvasLeaseRelease.AlreadyReleased,
             $"the second release reported {again}.");
         Assert.True(closes == 1, $"the handle closed {closes} times across two releases.");
+
+        // And once a NEWER request has moved the schedule on, a third
+        // release of the old one still reports what it did — nothing —
+        // rather than re-deriving "closed" from a schedule that no
+        // longer mentions it.
+        _ = slot.Publish(s => s.WithLoads(s.Loads.Requested(new CanvasRequestIdentity("L2"))));
+        CanvasLeaseRelease later = CanvasLeaseTransfer.Release(slot, request, lease);
+        Assert.True(
+            later == CanvasLeaseRelease.AlreadyReleased,
+            $"the third release reported {later} once a newer request was latest.");
+        Assert.True(closes == 1, $"the handle closed {closes} times across three releases.");
     }
 
     /// <summary>A superseded release closes its own lease and does NOT
@@ -345,6 +396,11 @@ public sealed class CanvasLeaseTransferTests
         Assert.True(
             reloadCloses == 0 && slot.Current.Names(reloadLease),
             "and the reload's lease is the live one.");
+        Assert.True(
+            originalCloses == 1 && originalLease.IsClosed,
+            $"the reload displaced the first lease and closed it {originalCloses} "
+            + "times; the swap that un-named it is the only thing that can still "
+            + "reach it, so the swap's effect step owns that close.");
     }
 
     /// <summary>
@@ -423,19 +479,17 @@ public sealed class CanvasLeaseTransferTests
             var accepted = false;
             var releaseOutcome = CanvasLeaseRelease.Transferred;
 
-            var acceptor = new Thread(() =>
+            var acceptor = new Worker(() =>
             {
                 start.Wait(LivenessBudget);
                 accepted = CanvasLeaseTransfer.TryAccept(
-                    slot, request, lease, Population("a"));
-            })
-            { IsBackground = true };
-            var releaser = new Thread(() =>
+                    slot, request, lease, Population("a")).Accepted;
+            });
+            var releaser = new Worker(() =>
             {
                 start.Wait(LivenessBudget);
                 releaseOutcome = CanvasLeaseTransfer.Release(slot, request, lease);
-            })
-            { IsBackground = true };
+            });
 
             acceptor.Start();
             releaser.Start();
@@ -513,7 +567,7 @@ public sealed class CanvasLeaseTransferTests
             slot2,
             lease2,
             betweenReadAndClose: () => acceptedInWindow = CanvasLeaseTransfer.TryAccept(
-                slot2, request2, lease2, Population("a")));
+                slot2, request2, lease2, Population("a")).Accepted);
 
         Assert.True(
             acceptedInWindow,
@@ -548,13 +602,219 @@ public sealed class CanvasLeaseTransferTests
             return CanvasLeaseRelease.Transferred;
         }
 
-        lease.Close();
+        _ = lease.Close();
         return CanvasLeaseRelease.Closed;
+    }
+
+    /// <summary>A reload closes the lease it displaced, exactly once,
+    /// from the decision snapshot — the only place that lease is still
+    /// reachable once the swap has un-named it.</summary>
+    [Fact]
+    public void AReloadClosesTheLeaseItDisplaced()
+    {
+        var slot = new CanvasPublicationSlot(CanvasPublication.Seed());
+        var first = new CanvasRequestIdentity("L1");
+        var second = new CanvasRequestIdentity("L2");
+        var firstCloses = 0;
+        var secondCloses = 0;
+        var firstLease = new CanvasHandleLease(1, _ => Interlocked.Increment(ref firstCloses));
+        var secondLease = new CanvasHandleLease(2, _ => Interlocked.Increment(ref secondCloses));
+
+        _ = slot.Publish(s => s.WithLoads(s.Loads.Requested(first)));
+        Assert.True(
+            Deliver(slot, first, firstLease, Population("a")),
+            "premise: the first load must land, or there is nothing to displace.");
+        Assert.True(
+            firstCloses == 0 && slot.Current.Names(firstLease),
+            "premise: and its lease is live and open.");
+
+        _ = slot.Publish(s => s.WithLoads(s.Loads.Requested(second)));
+        Assert.True(
+            Deliver(slot, second, secondLease, Population("b")),
+            "premise: the reload must land.");
+
+        Assert.True(
+            slot.Current.Names(secondLease) && secondCloses == 0,
+            "the reload's lease is the live one, and open.");
+        Assert.True(
+            firstCloses == 1 && firstLease.IsClosed,
+            $"the displaced lease closed {firstCloses} times. Nothing names it "
+            + "and nothing else can reach it, so a reload that does not close it "
+            + "leaks one native handle per reload.");
+
+        // A late release of the displaced lease finds it already closed
+        // and says so.
+        Assert.True(
+            CanvasLeaseTransfer.Release(slot, first, firstLease)
+                == CanvasLeaseRelease.AlreadyReleased,
+            "a late release of the displaced lease re-closed or re-published it.");
+        Assert.True(firstCloses == 1, $"and the handle still closed {firstCloses} times.");
+    }
+
+    /// <summary>A release arriving after the TERMINAL publication
+    /// closes its lease and publishes nothing: acceptance was already
+    /// impossible, and the terminal record has to stay the last
+    /// one.</summary>
+    [Fact]
+    public void AReleaseAfterTheTerminalPublicationClosesAndPublishesNothing()
+    {
+        var closes = 0;
+        var observer = new CanvasPublicationInstallObserver();
+        var slot = new CanvasPublicationSlot(CanvasPublication.Seed(), observer);
+        var request = new CanvasRequestIdentity("L1");
+        var lease = new CanvasHandleLease(1, _ => Interlocked.Increment(ref closes));
+
+        _ = slot.Publish(s => s.WithLoads(s.Loads.Requested(request)));
+        _ = slot.Publish(s => s.WithTerminal());
+        CanvasPublication terminal = slot.Current;
+        int installsBefore = observer.Installs;
+
+        Assert.False(
+            CanvasLeaseTransfer.TryAccept(slot, request, lease, Population("a")).Accepted,
+            "premise: an acceptance after the terminal publication must be refused.");
+
+        CanvasLeaseRelease outcome = CanvasLeaseTransfer.Release(slot, request, lease);
+
+        Assert.True(
+            outcome == CanvasLeaseRelease.Closed && closes == 1,
+            $"the release reported {outcome} with {closes} closes; the lease is the "
+            + "caller's and nobody else will close it.");
+        Assert.True(
+            ReferenceEquals(slot.Current, terminal) && observer.Installs == installsBefore,
+            "a release published OVER the terminal publication. Every holder "
+            + "treats that record as the last one, and a later, different "
+            + "reference in the slot says it was not.");
+    }
+
+    /// <summary>Acceptance reseeds the filter machine from the CARRIED
+    /// needle: both schedule entries retired, a fresh request seeded,
+    /// the unit pending on it — the frozen "a reload cannot strand the
+    /// filter machine" row, with the request T6 must start read from
+    /// the outcome rather than from a second look at the slot.</summary>
+    [Fact]
+    public void AnAcceptanceReseedsTheFilterMachineFromTheCarriedNeedle()
+    {
+        var slot = new CanvasPublicationSlot(CanvasPublication.Seed());
+        var request = new CanvasRequestIdentity("L1");
+        var running = new CanvasRequestIdentity("F1");
+        var queued = new CanvasRequestIdentity("F2");
+        var lease = new CanvasHandleLease(1, _ => { });
+
+        // A needle typed, one match running and another queued behind
+        // it, when the load lands.
+        _ = slot.Publish(s => s.WithNeedleIntent("q"));
+        _ = slot.Publish(s => s.WithFilters(s.Filters.Typed(running).Typed(queued)));
+        _ = slot.Publish(s => s.WithLoads(s.Loads.Requested(request)));
+
+        CanvasLoadAcceptance acceptance =
+            CanvasLeaseTransfer.TryAccept(slot, request, lease, Population("a", "b"));
+
+        Assert.True(acceptance.Accepted, "premise: the load must land.");
+        CanvasPublication published = slot.Current;
+        Assert.True(
+            acceptance.Reseeded is not null
+                && ReferenceEquals(published.Filters.Running, acceptance.Reseeded)
+                && published.Filters.Queued is null
+                && !ReferenceEquals(published.Filters.Running, running),
+            "the dead machine survived the reload: a running request whose job "
+            + "can never publish against this population occupies the slot, and "
+            + "every later keystroke queues behind it.");
+        Assert.True(
+            published.Unit!.Answer == CanvasAnswerState.Pending
+                && ReferenceEquals(published.Unit.Request, acceptance.Reseeded)
+                && published.Unit.Needle == "q"
+                && published.Unit.VisibleCount == 2,
+            "the unit is pending on the reseeded request, over the new rows, "
+            + "under the carried needle.");
+        Assert.True(
+            published.NeedleIntent == "q",
+            "and the needle INTENT is carried, not reset — it is document-class.");
+
+        // With no needle there is nothing to seed: idle, and unfiltered.
+        var slot2 = new CanvasPublicationSlot(CanvasPublication.Seed());
+        var request2 = new CanvasRequestIdentity("L2");
+        _ = slot2.Publish(s => s.WithFilters(s.Filters.Typed(running)));
+        _ = slot2.Publish(s => s.WithLoads(s.Loads.Requested(request2)));
+        CanvasLoadAcceptance quiet = CanvasLeaseTransfer.TryAccept(
+            slot2, request2, new CanvasHandleLease(2, _ => { }), Population("a"));
+        Assert.True(
+            quiet.Accepted
+                && quiet.Reseeded is null
+                && slot2.Current.Filters.Running is null
+                && slot2.Current.Unit!.Answer == CanvasAnswerState.Unfiltered,
+            "an empty needle reseeds to idle, and the unit is unfiltered.");
+    }
+
+    /// <summary>A close whose delegate throws is issued once and not
+    /// retried: the record reports the attempt and the fault reaches
+    /// the caller. Re-arming would hand the next caller a second close
+    /// of a handle whose first may have half-completed.</summary>
+    [Fact]
+    public void AThrowingCloseIsIssuedOnceAndNotRetried()
+    {
+        var attempts = 0;
+        var lease = new CanvasHandleLease(9, handle =>
+        {
+            _ = Interlocked.Increment(ref attempts);
+            throw new InvalidOperationException("the session is gone");
+        });
+
+        InvalidOperationException fault =
+            Assert.Throws<InvalidOperationException>(() => { _ = lease.Close(); });
+        Assert.True(
+            fault.Message == "the session is gone",
+            "the delegate's own fault reaches the caller, unwrapped.");
+        Assert.True(lease.IsClosed, "the one close call was issued, and the record says so.");
+
+        Assert.False(lease.Close(), "a second close after a faulting first re-issued it.");
+        Assert.True(attempts == 1, $"the delegate ran {attempts} times.");
     }
 
     // ---------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------
+
+    /// <summary>
+    /// A background thread whose fault reaches the fact instead of the
+    /// test host: an assertion failing on a raw thread aborts the whole
+    /// run. The suite's capture-and-rethrow convention, applied here.
+    /// </summary>
+    private sealed class Worker
+    {
+        private readonly Thread _thread;
+        private ExceptionDispatchInfo? _fault;
+
+        internal Worker(Action body)
+        {
+            _thread = new Thread(() =>
+            {
+                try
+                {
+                    body();
+                }
+                catch (Exception fault)
+                {
+                    _fault = ExceptionDispatchInfo.Capture(fault);
+                }
+            })
+            { IsBackground = true };
+        }
+
+        /// <summary>Blocked in a wait, sleep or join — a contended lock
+        /// reports as one — or already finished.</summary>
+        internal bool IsBlockedOrFinished =>
+            (_thread.ThreadState & (System.Threading.ThreadState.WaitSleepJoin | System.Threading.ThreadState.Stopped)) != 0;
+
+        internal void Start() => _thread.Start();
+
+        /// <summary>Join, then rethrow whatever the body threw.</summary>
+        internal bool Join(TimeSpan budget)
+        {
+            bool finished = _thread.Join(budget);
+            _fault?.Throw();
+            return finished;
+        }
+    }
 
     /// <summary>One delivery: accept, and release in a finally whatever
     /// happened — the shape task T3 will build the real pipeline
@@ -568,7 +828,7 @@ public sealed class CanvasLeaseTransferTests
         var accepted = false;
         try
         {
-            accepted = CanvasLeaseTransfer.TryAccept(slot, request, lease, population);
+            accepted = CanvasLeaseTransfer.TryAccept(slot, request, lease, population).Accepted;
             return accepted;
         }
         finally

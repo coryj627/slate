@@ -149,16 +149,6 @@ internal sealed class CanvasProjectionUnit
     /// node is not visible here. Distinct from core's sibling ordinal,
     /// which is a position in the model — the two disagreeing is the
     /// whole reason they are different classes.</summary>
-    internal int DisplayedOrdinal(string nodeId)
-    {
-        for (var i = 0; i < FilteredOrder.Length; i++)
-        {
-            if (string.Equals(FilteredOrder[i], nodeId, StringComparison.Ordinal))
-            {
-                return i + 1;
-            }
-        }
-
-        return 0;
-    }
+    internal int DisplayedOrdinal(string nodeId) =>
+        FilteredOrder.IndexOf(nodeId, 0, StringComparer.Ordinal) + 1;
 }

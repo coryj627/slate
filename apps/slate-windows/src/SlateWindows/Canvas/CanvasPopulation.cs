@@ -35,8 +35,9 @@ namespace SlateWindows.Canvas;
 /// <see cref="CanvasModelCopy"/>, which copies. But a core row is a
 /// uniffi record carrying a <c>string[]</c> group path, and an array
 /// the caller still holds is exactly I7's arrangement one field down —
-/// so each row is re-materialised here with a group path of this
-/// population's own. What that does NOT close is a consumer mutating
+/// so each row is re-materialised, by the same helper so there stays
+/// one construction site, with a group path of this population's own.
+/// What that does NOT close is a consumer mutating
 /// the array through a row it obtained from this population; making
 /// that unrepresentable means an owned row type or an analyzer, and it
 /// is obligation I7's structural half, owned by task T4. The boundary
@@ -57,8 +58,8 @@ internal sealed class CanvasPopulation
         uint preservedCount,
         string? lastActivatedNode)
     {
-        Outline = CanvasModelCopy.Ordered(outline?.Select(Own));
-        Table = CanvasModelCopy.Ordered(table?.Select(Own));
+        Outline = CanvasModelCopy.Rows(outline);
+        Table = CanvasModelCopy.Rows(table);
         Warnings = CanvasModelCopy.Ordered(warnings);
         PreservedCount = preservedCount;
         LastActivatedNode = lastActivatedNode;
@@ -71,23 +72,28 @@ internal sealed class CanvasPopulation
         var children =
             new Dictionary<string, ImmutableArray<string>.Builder>(StringComparer.Ordinal);
 
-        // One walk. Depth-indexed ancestry: the row at depth d-1 most
-        // recently seen is the parent of a row at depth d, which is the
-        // shape a flattened outline has by construction.
-        var ancestry = new List<string>();
+        // One walk, by the derivation the outline view already uses: a
+        // stack of open ancestors, popped down to the nearest row
+        // SHALLOWER than this one. Depth-indexed ancestry — "the slot
+        // at depth-1 is the parent" — reads as the same thing and is
+        // not: a depth gap leaves that slot holding a sibling, and the
+        // T2 review showed two rows at depth 2 under a root attaching
+        // to each other. Core's outline is gap-free today; this
+        // constructor accepts any sequence, and must not build a wrong
+        // tree quietly on the day that changes.
+        var ancestry = new Stack<CanvasOutlineRow>();
         foreach (CanvasOutlineRow row in Outline)
         {
             byId[row.NodeId] = row;
 
-            var depth = (int)row.Depth;
-            if (ancestry.Count > depth)
+            while (ancestry.Count > 0 && ancestry.Peek().Depth >= row.Depth)
             {
-                ancestry.RemoveRange(depth, ancestry.Count - depth);
+                _ = ancestry.Pop();
             }
 
-            if (depth > 0 && ancestry.Count == depth)
+            if (ancestry.Count > 0)
             {
-                string parent = ancestry[depth - 1];
+                string parent = ancestry.Peek().NodeId;
                 parents[row.NodeId] = parent;
                 if (!children.TryGetValue(parent, out ImmutableArray<string>.Builder? kids))
                 {
@@ -97,7 +103,7 @@ internal sealed class CanvasPopulation
                 kids.Add(row.NodeId);
             }
 
-            ancestry.Add(row.NodeId);
+            ancestry.Push(row);
         }
 
         _byId = byId.ToImmutable();
@@ -162,13 +168,4 @@ internal sealed class CanvasPopulation
     internal ImmutableHashSet<string> ResolveMarks(IEnumerable<string>? intents) =>
         CanvasModelCopy.Ids(intents?.Where(_byId.ContainsKey));
 
-    /// <summary>
-    /// A row of this population's own, so no array a caller still holds
-    /// reaches a published snapshot.
-    /// </summary>
-    private static CanvasOutlineRow Own(CanvasOutlineRow row) =>
-        row with { GroupPath = [.. row.GroupPath] };
-
-    private static CanvasTableRow Own(CanvasTableRow row) =>
-        row with { GroupPath = [.. row.GroupPath] };
 }

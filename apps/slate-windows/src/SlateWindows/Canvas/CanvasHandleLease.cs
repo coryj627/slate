@@ -47,6 +47,19 @@ namespace SlateWindows.Canvas;
 /// arriving mid-close blocks until the handle is gone — and then refuses
 /// on admission, because by then the publication has moved.
 /// </para>
+/// <para>
+/// A CLOSE THAT THROWS is issued once and not retried. The record marks
+/// the attempt before the call, so a delegate that faults — a session
+/// already torn down, a handle the core no longer knows — leaves
+/// <see cref="IsClosed"/> true and the exception with the caller. The
+/// alternative, re-arming on fault, would hand the next caller a second
+/// close of a handle whose first close may have half-completed, which
+/// is the double-free the once-only rule exists to prevent. So the
+/// record answers "was the one close call issued", the delegate's fault
+/// is the loader's to surface, and a caller releasing from a finally
+/// must not let that fault mask the one it is cleaning up after — task
+/// T3's pipeline, where the finally lives.
+/// </para>
 /// </remarks>
 internal sealed class CanvasHandleLease
 {
@@ -71,14 +84,16 @@ internal sealed class CanvasHandleLease
     }
 
     /// <summary>
-    /// LEASE-class readable fact: whether the handle has been closed.
+    /// LEASE-class readable fact: whether the one close call has been
+    /// issued.
     /// </summary>
     /// <remarks>
     /// Readable because the five-class table lists physical close as a
     /// lease-class fact, and because the frozen verification plan makes
     /// the CLOSE OBSERVATION the instrument for native release — weak
     /// references cannot prove it in either direction. It is not a
-    /// currency answer and no boundary treats it as one.
+    /// currency answer and no boundary treats it as one. A close whose
+    /// delegate threw still counts as issued; see the remarks above.
     /// </remarks>
     internal bool IsClosed => Volatile.Read(ref _closed) == 1;
 
@@ -94,16 +109,22 @@ internal sealed class CanvasHandleLease
     /// what makes "closed" mean "the call has returned" rather than
     /// "somebody has started closing".
     /// </remarks>
-    internal void Close()
+    /// <returns>Whether THIS call issued the close. False means an
+    /// earlier call did, and this one waited for it to return. It is
+    /// the close-once record's one question, handed to the caller so a
+    /// release can report what it did without re-deriving it from
+    /// anything else.</returns>
+    internal bool Close()
     {
         lock (_ffiLock)
         {
             if (Interlocked.Exchange(ref _closed, 1) == 1)
             {
-                return;
+                return false;
             }
 
             _close(_handle);
+            return true;
         }
     }
 

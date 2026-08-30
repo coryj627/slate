@@ -237,10 +237,28 @@ public sealed class CanvasPublicationSlotTests
             "a newer request supersedes and is pending again; the consumed marker "
             + "belongs to the request that earned it, not to the schedule.");
 
+        CanvasLoadSchedule released = requested.ReleasedBy(l1);
+        Assert.True(
+            ReferenceEquals(released.Latest, l1)
+                && released.Delivery == CanvasLoadDelivery.Released
+                && !released.Consumed
+                && !released.Admits(l1),
+            "a released request is still latest — nothing newer arrived — but it "
+            + "is terminal: not consumed, and not admissible, which is the state "
+            + "obligation I1's cleanup publishes to make an acceptance impossible.");
+        Assert.True(
+            requested.Admits(l1)
+                && !consumed.Admits(l1)
+                && !superseded.Admits(l1)
+                && superseded.Admits(l2),
+            "admission is exactly latest-and-pending: a consumed, released or "
+            + "superseded request is refused and the newest pending one is not.");
+
         Assert.True(
             !ReferenceEquals(idle, requested)
                 && !ReferenceEquals(requested, consumed)
-                && !ReferenceEquals(consumed, superseded),
+                && !ReferenceEquals(consumed, superseded)
+                && !ReferenceEquals(requested, released),
             "every schedule transition allocates, for the same reason every "
             + "publication transform does.");
         Assert.True(
@@ -773,7 +791,7 @@ public sealed class CanvasPublicationSlotTests
                 // Each loss costs another full re-decision — the
                 // finding's "another full rebase".
                 _ = Interlocked.Increment(ref transforms);
-                if (s.Loads.Consumed || !ReferenceEquals(s.Loads.Latest, request))
+                if (!s.Loads.Admits(request))
                 {
                     // The only terminal refusal this delivery has. The
                     // finding says no loss ever produces it.
