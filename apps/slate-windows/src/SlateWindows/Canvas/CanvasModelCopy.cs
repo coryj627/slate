@@ -88,4 +88,23 @@ internal static class CanvasModelCopy
     internal static ImmutableArray<CanvasTableRow> Rows(
         IEnumerable<CanvasTableRow>? source) =>
         Ordered(source?.Select(row => row with { GroupPath = [.. row.GroupPath] }));
+
+    /// <summary>The subpath index from core's scene nodes: one string
+    /// per file card that names one. Strings are immutable, so this is
+    /// a fresh dictionary over values nothing can move.</summary>
+    internal static ImmutableDictionary<string, string> Subpaths(
+        IEnumerable<CanvasSceneNode>? scene)
+    {
+        ImmutableDictionary<string, string>.Builder builder =
+            ImmutableDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
+        foreach (CanvasSceneNode node in scene ?? [])
+        {
+            if (node.Subpath is { Length: > 0 } subpath)
+            {
+                builder[node.NodeId] = subpath;
+            }
+        }
+
+        return builder.ToImmutable();
+    }
 }

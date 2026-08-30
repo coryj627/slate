@@ -58,6 +58,14 @@ internal enum CanvasLeaseRelease
 }
 
 /// <summary>
+/// W6-1 PR C-unit, task T3: the load state a refusing or faulting
+/// delivery publishes WITH its terminal state — one swap, so a document
+/// is never Failed under a request that could still be accepted, nor
+/// released under a state that still says Loading.
+/// </summary>
+internal readonly record struct CanvasLoadFailure(CanvasLoadState State, string? Message);
+
+/// <summary>
 /// W6-1 PR C-unit, task T2: OBLIGATION I1's mechanism — the ownership
 /// transfer of a lease, made atomic by being a publication rather than
 /// an observation.
@@ -144,7 +152,8 @@ internal static class CanvasLeaseTransfer
         CanvasPublicationSlot slot,
         CanvasRequestIdentity request,
         CanvasHandleLease lease,
-        CanvasPopulation population)
+        CanvasPopulation population,
+        CanvasLoadProbeForTests? probeForTests = null)
     {
         ArgumentNullException.ThrowIfNull(slot);
         ArgumentNullException.ThrowIfNull(request);
@@ -159,6 +168,7 @@ internal static class CanvasLeaseTransfer
 
         CanvasPublicationOutcome outcome = slot.Publish(snapshot =>
         {
+            probeForTests?.Reached(CanvasLoadPoint.SnapshotRead);
             if (snapshot.Retired || !snapshot.Loads.Admits(request))
             {
                 return null;
@@ -166,6 +176,7 @@ internal static class CanvasLeaseTransfer
 
             CanvasProjectionUnit unit = unfiltered.WithResolvedSelection(
                 population.Resolve(snapshot.SelectedIntent));
+            probeForTests?.Reached(CanvasLoadPoint.Rebase);
             CanvasRequestIdentity? reseed = null;
             if (snapshot.NeedleIntent.Length > 0)
             {
@@ -173,16 +184,23 @@ internal static class CanvasLeaseTransfer
                 unit = unit.Pending(reseed, snapshot.NeedleIntent);
             }
 
-            return snapshot
+            probeForTests?.Reached(CanvasLoadPoint.Reseed);
+            CanvasPublication successor = snapshot
                 .WithLoaded(lease, population, unit)
                 .WithLoads(snapshot.Loads.ConsumedBy(request))
-                .WithFilters(snapshot.Filters.Reseeded(reseed));
+                .WithFilters(snapshot.Filters.Reseeded(reseed))
+                // U4: "the load state the acceptance itself writes".
+                .WithLoadState(CanvasLoadState.Ready, null);
+            probeForTests?.Reached(CanvasLoadPoint.BeforeSwap);
+            return successor;
         });
 
         if (!outcome.Installed)
         {
             return new CanvasLoadAcceptance(false, null);
         }
+
+        probeForTests?.Reached(CanvasLoadPoint.AfterSwap);
 
         CanvasHandleLease? displaced = outcome.Predecessor.Lease;
         if (displaced is not null && !ReferenceEquals(displaced, lease))
@@ -211,7 +229,8 @@ internal static class CanvasLeaseTransfer
     internal static CanvasLeaseRelease Release(
         CanvasPublicationSlot slot,
         CanvasRequestIdentity request,
-        CanvasHandleLease lease)
+        CanvasHandleLease lease,
+        CanvasLoadFailure? failure = null)
     {
         ArgumentNullException.ThrowIfNull(slot);
         ArgumentNullException.ThrowIfNull(request);
@@ -227,21 +246,7 @@ internal static class CanvasLeaseTransfer
                 return null;
             }
 
-            if (snapshot.Retired || !snapshot.Loads.Admits(request))
-            {
-                // Acceptance of this request is ALREADY impossible —
-                // the document retired, the request superseded by a
-                // newer one, or a terminal state already reached — so
-                // a publication would add nothing, and would be wrong
-                // in two different ways: after the terminal publication
-                // it would install a later record over the one every
-                // holder treats as final, and under a newer request it
-                // would overwrite that request's schedule entry with an
-                // older request's name.
-                return null;
-            }
-
-            return snapshot.WithLoads(snapshot.Loads.ReleasedBy(request));
+            return Terminal(snapshot, request, failure);
         });
 
         if (outcome.Predecessor.Names(lease))
@@ -257,5 +262,58 @@ internal static class CanvasLeaseTransfer
         return lease.Close()
             ? CanvasLeaseRelease.Closed
             : CanvasLeaseRelease.AlreadyReleased;
+    }
+
+    /// <summary>
+    /// Task T3: refuse a request that never held a handle — the open
+    /// itself threw — publishing its failure with its terminal state
+    /// while it is still the latest, and nothing once a newer request
+    /// owns the schedule.
+    /// </summary>
+    internal static bool Refuse(
+        CanvasPublicationSlot slot, CanvasRequestIdentity request, CanvasLoadFailure failure)
+    {
+        ArgumentNullException.ThrowIfNull(slot);
+        ArgumentNullException.ThrowIfNull(request);
+        return slot.Publish(snapshot => Terminal(snapshot, request, failure)).Installed;
+    }
+
+    /// <summary>
+    /// Task T3, U12 step 4: the terminal publication, with the lease it
+    /// un-named handed back for the caller to close — on the caller's
+    /// thread of choice, because production closes off the dispatcher
+    /// and a test closes inline. The close follows the publication, so
+    /// no live publication ever names a closed handle.
+    /// </summary>
+    internal static CanvasHandleLease? Terminalize(CanvasPublicationSlot slot)
+    {
+        ArgumentNullException.ThrowIfNull(slot);
+        return slot.Publish(snapshot => snapshot.WithTerminal()).Predecessor.Lease;
+    }
+
+    /// <summary>The terminal transition for a request, or a decline
+    /// when acceptance is already impossible — shared by the release
+    /// and the lease-less refusal.</summary>
+    private static CanvasPublication? Terminal(
+        CanvasPublication snapshot, CanvasRequestIdentity request, CanvasLoadFailure? failure)
+    {
+        if (snapshot.Retired || !snapshot.Loads.Admits(request))
+        {
+            // Acceptance of this request is ALREADY impossible — the
+            // document retired, the request superseded by a newer one,
+            // or a terminal state already reached — so a publication
+            // would add nothing, and would be wrong in two different
+            // ways: after the terminal publication it would install a
+            // later record over the one every holder treats as final,
+            // and under a newer request it would overwrite that
+            // request's schedule entry — and now its load state — with
+            // an older request's.
+            return null;
+        }
+
+        CanvasPublication released = snapshot.WithLoads(snapshot.Loads.ReleasedBy(request));
+        return failure is { } state
+            ? released.WithLoadState(state.State, state.Message)
+            : released;
     }
 }

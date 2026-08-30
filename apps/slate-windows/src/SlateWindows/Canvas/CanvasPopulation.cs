@@ -56,13 +56,15 @@ internal sealed class CanvasPopulation
         IEnumerable<CanvasTableRow>? table,
         IEnumerable<CanvasLoadWarning>? warnings,
         uint preservedCount,
-        string? lastActivatedNode)
+        string? lastActivatedNode,
+        IEnumerable<CanvasSceneNode>? scene = null)
     {
         Outline = CanvasModelCopy.Rows(outline);
         Table = CanvasModelCopy.Rows(table);
         Warnings = CanvasModelCopy.Ordered(warnings);
         PreservedCount = preservedCount;
         LastActivatedNode = lastActivatedNode;
+        Subpaths = CanvasModelCopy.Subpaths(scene);
 
         ImmutableDictionary<string, CanvasOutlineRow>.Builder byId =
             ImmutableDictionary.CreateBuilder<string, CanvasOutlineRow>(
@@ -135,6 +137,15 @@ internal sealed class CanvasPopulation
     /// whose activation opened a card belongs to the graph it was found
     /// in, so a reload does not carry it forward.</summary>
     internal string? LastActivatedNode { get; }
+
+    /// <summary>The JSON Canvas subpath per file card that names one,
+    /// from core's scene — population-class because it is a function
+    /// of ONE load, and the only thing the scene contributes to the
+    /// model: geometry is the renderer's and never enters here.</summary>
+    internal ImmutableDictionary<string, string> Subpaths { get; }
+
+    internal string? Subpath(string nodeId) =>
+        Subpaths.TryGetValue(nodeId, out string? subpath) ? subpath : null;
 
     internal int Count => Outline.Length;
 

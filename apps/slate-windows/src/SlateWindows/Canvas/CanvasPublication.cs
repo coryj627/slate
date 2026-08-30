@@ -374,6 +374,16 @@ internal sealed class CanvasPublication
         CanvasProjectionUnit unit) =>
         Copy(loaded: new CanvasLoaded(lease, population, unit), loadedSet: true);
 
+    /// <summary>The reload's first step: lease, population and unit
+    /// un-named together, the document NOT retired. Task T3's
+    /// un-name-first order — the frozen transition's "publish the
+    /// terminal state for the old lease and population" — so that one
+    /// native handle is open at a time and the old lease's close, which
+    /// follows under its own lock, closes nothing a publication names.
+    /// Presentation is outside the chain, so a surface keeps the rows it
+    /// has as a coherent past until the new ones land.</summary>
+    internal CanvasPublication WithUnloaded() => Copy(loaded: null, loadedSet: true);
+
     /// <summary>A successor unit over the SAME lease and population.
     /// Refused outright on a publication with no population to project
     /// - a unit without one is the state the chain forbids, and a

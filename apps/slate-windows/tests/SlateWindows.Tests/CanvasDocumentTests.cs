@@ -2402,6 +2402,36 @@ public sealed class CanvasDocumentTests : IDisposable
         ready.Shutdown();
     });
 
+    /// <summary>
+    /// SEAM 3's ordering, pinned at the source: the retired publication
+    /// precedes the base shutdown in <c>Shutdown</c>, so a load issued
+    /// between the two is refused by the model rather than silently
+    /// dropped by the scheduler (task T3). Reversing the writes returns
+    /// the silent drop — a request published onto a document whose
+    /// worker will never run — and the window between two adjacent
+    /// writes is not one a barrier can be put into, so the order is
+    /// asserted where it lives, the way the render predicate is.
+    /// </summary>
+    [Fact]
+    public void TheRetiredPublicationPrecedesTheBaseShutdown()
+    {
+        string source = File.ReadAllText(Path.Combine(
+            SourceText.RepoRoot(), "apps", "slate-windows", "src", "SlateWindows",
+            "Canvas", "CanvasDocumentViewModel.cs"));
+        int shutdown = source.IndexOf(
+            "internal override void Shutdown()", StringComparison.Ordinal);
+        Assert.True(shutdown >= 0, "premise: the teardown method moved.");
+        int retired = source.IndexOf(
+            "_slot.Publish(s => s.WithRetired())", shutdown, StringComparison.Ordinal);
+        int baseShutdown = source.IndexOf("base.Shutdown();", shutdown, StringComparison.Ordinal);
+        Assert.True(retired >= 0 && baseShutdown >= 0, "premise: a write moved out of the teardown.");
+        Assert.True(
+            retired < baseShutdown,
+            "the base shutdown precedes the retired publication: a load issued in "
+            + "between is accepted by the model and dropped by the scheduler — the "
+            + "silent drop SEAM 3 exists to make impossible.");
+    }
+
     // --- M3: the production scheduling mode's own interleavings -------------
 
     /// <summary>

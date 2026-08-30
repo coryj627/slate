@@ -120,15 +120,18 @@ internal sealed record CanvasFilterView(
 /// on that path (contract A1); the workspace registry owns creation and
 /// shutdown.
 ///
-/// Threading (contract A17), stated as it is: the LOAD and the CLOSE run
-/// inside <see cref="PanelWorkScheduler.StartWork"/> bodies, marshal
-/// their publications through <c>Post</c> and re-check the generation;
-/// the per-node DETAIL reads (<see cref="NeighborsOf"/>,
-/// <see cref="NodeTextOf"/>) and the activation identity read are
-/// synchronous UI-thread calls. Every one of them — scheduled or not —
-/// holds <c>_ffiLock</c> for its FFI section, which is what makes a
-/// handle replacement unable to race a read. The handle is closed
-/// exactly once: on replacement inside the load body, or on shutdown.
+/// Threading (contract A17), stated as it is since task T3: the LOAD
+/// runs inside a <see cref="PanelWorkScheduler.StartWork"/> body and
+/// publishes to the one slot from whatever thread it is on — the slot's
+/// gate serializes it, and nothing marshals a publication. What is
+/// marshalled through <c>Post</c> is the PROJECTION of the publication
+/// onto this object's bindable properties, which reads the slot once at
+/// dispatch and applies whatever is current. The per-node DETAIL reads
+/// (<see cref="NeighborsOf"/>, <see cref="NodeTextOf"/>) go through the
+/// lease the publication names, admitted under that lease's own lock,
+/// which is what makes a handle replacement unable to race a read. The
+/// handle is closed exactly once, by whoever un-named its lease: the
+/// reload's worker, or the terminal publication's caller.
 ///
 /// Canvas tabs are never dirty: mutations write through on commit
 /// (PR E), so the U1 close gate is bypassed for canvas tabs
@@ -137,10 +140,19 @@ internal sealed record CanvasFilterView(
 internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
 {
     private readonly VaultSession _session;
-    private readonly object _ffiLock = new();
     private readonly string? _retargetedFrom;
-    private ulong? _handle;
-    private int _generation;
+
+    /// <summary>
+    /// The one mutable currency authority (U1), and the pipeline that
+    /// writes it. Task T3: the handle, the generation counter and the
+    /// FFI lock this class used to own are the LEASE's now — reached
+    /// only through the publication that names it — and the load state
+    /// below is a PROJECTION of the publication, applied on the
+    /// dispatcher by <see cref="ApplyPublication"/>.
+    /// </summary>
+    private readonly CanvasPublicationSlot _slot = new(CanvasPublication.Seed());
+    private readonly CanvasLoadPipeline _pipeline;
+    private CanvasPublication? _applied;
     private CanvasLoadState _state = CanvasLoadState.Loading;
     private string? _stateMessage;
     private IReadOnlyList<CanvasOutlineRow> _outline = [];
@@ -187,6 +199,14 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         _announcer = announcer;
         _retargetedFrom = retargetedFrom;
         _verbosity = verbosity ?? (static () => CanvasVerbosity.Standard);
+        _pipeline = new CanvasLoadPipeline(_slot, new SessionSource(this));
+        // The UI-originated intent publications — U11's fourth writer
+        // family. The shared selection stays the surfaces' authority
+        // for what they SHOW; what it publishes here is the INTENT the
+        // rebase resolves against the next population, so a selection
+        // made while a load is in flight survives that load's
+        // acceptance (task T3).
+        Selection.PropertyChanged += (_, changed) => PublishIntent(changed.PropertyName);
         Modes = new CanvasModeController(Speak);
         Navigator = new CanvasNavigator(this);
     }
@@ -644,7 +664,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
 
     /// <summary>This document's refusal, or null when it can answer.</summary>
     internal CanvasStatusNote? ReadRefusal =>
-        ReadRefusalFor(State, _handle is not null);
+        ReadRefusalFor(State, _slot.Current.Lease is not null);
 
     /// <summary>
     /// Admission for a read verb: true when the document can answer,
@@ -749,16 +769,14 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         detail = string.Empty;
         try
         {
-            lock (_ffiLock)
+            CanvasWhereAmI? answer = null;
+            if (!Query(handle => answer = _session.CanvasWhereAmI(handle, nodeId)))
             {
-                if (_handle is not { } handle)
-                {
-                    context = null;
-                    return false;
-                }
-                context = _session.CanvasWhereAmI(handle, nodeId);
-                return true;
+                context = null;
+                return false;
             }
+            context = answer;
+            return true;
         }
         catch (VaultException exception)
         {
@@ -807,16 +825,14 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     {
         try
         {
-            lock (_ffiLock)
+            T? answer = default;
+            if (!Query(handle => answer = read(handle)))
             {
-                if (_handle is not { } handle)
-                {
-                    value = fallback;
-                    return false;
-                }
-                value = read(handle);
-                return true;
+                value = fallback;
+                return false;
             }
+            value = answer!;
+            return true;
         }
         catch (VaultException)
         {
@@ -825,6 +841,37 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             value = fallback;
             return false;
         }
+    }
+
+    /// <summary>
+    /// One FFI read through the lease the publication names, admitted
+    /// at LOCK time: the publication must still name that lease and the
+    /// document must not be retired. False means no answer — nothing
+    /// loaded, the lease replaced while the call waited, or the document
+    /// retired — and the caller decides which sentence that owes.
+    /// </summary>
+    /// <remarks>
+    /// U6's three validations in one predicate: a lease named by a live
+    /// publication is current, and so is the population beside it,
+    /// because the chain is one value. The predicate reads the slot and
+    /// takes no gate, so there is no lock order here to get wrong; and
+    /// it is evaluated INSIDE the lease's lock, because a check made
+    /// before the lock cannot see a reload that landed while this
+    /// caller was waiting for it (task T3).
+    /// </remarks>
+    private bool Query(Action<ulong> call)
+    {
+        if (_slot.Current.Lease is not { } lease)
+        {
+            return false;
+        }
+        return lease.Invoke(
+            () =>
+            {
+                CanvasPublication now = _slot.Current;
+                return !now.Retired && now.Names(lease);
+            },
+            call);
     }
 
     // --- Filter (contract C10) -------------------------------------------
@@ -845,6 +892,10 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 return;
             }
             _filterText = next;
+            // The needle INTENT — document-class, carried through a
+            // reload and reseeding its filter machine at acceptance
+            // (task T3); the job that answers it is task T6's.
+            _ = _slot.Publish(s => s.Retired ? null : s.WithNeedleIntent(next));
             OnPropertyChanged(nameof(FilterText));
             OnPropertyChanged(nameof(FilterActive));
             OutlinePublished?.Invoke(this, EventArgs.Empty);
@@ -1131,104 +1182,114 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// table, scene — the mac <c>load</c> twin. A reload IS an open, so
     /// the once-per-open degraded announcement re-arms here
     /// (contract A4).</summary>
+    /// <remarks>
+    /// Task T3: U4's operation. The request publishes Loading and
+    /// un-names the old lease in one swap, on this thread; the worker
+    /// closes that lease, opens, builds and delivers on its own; and
+    /// the projection of whatever the slot then holds is posted back
+    /// here. A retired document requests nothing — the publication says
+    /// so, and the scheduler's own refusal is the second wall.
+    /// </remarks>
     public void Load()
     {
-        if (IsShutDown)
+        if (_pipeline.Request() is not { } request)
         {
-            // A shut-down document must not even MUTATE state: the
-            // scheduler would refuse the body, leaving a permanent
-            // "Loading" lie on whatever UI still observes this VM (the
-            // Bases lesson).
             return;
         }
-        int generation = Interlocked.Increment(ref _generation);
-        State = CanvasLoadState.Loading;
-        StateMessage = null;
         _announcedDegradedLoad = false;
         CloseDetail();
-        StartWork(() => LoadBody(generation));
+        ApplyPublication();
+        StartWork(() =>
+        {
+            _ = _pipeline.Deliver(request);
+            Post(ApplyPublication);
+        });
     }
 
-    private void LoadBody(int generation)
+    /// <summary>
+    /// The projection: read the slot ONCE and apply what it holds to the
+    /// bindable surface — the load state and message, the rows, the
+    /// warnings, the indexes — on the dispatcher.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The effect obligation I3 names for the load path, with its
+    /// validation at DISPATCH: a posted projection reads the slot when
+    /// it runs, not when it was posted, so one queued behind a newer
+    /// load applies the newer load, and one arriving after retirement
+    /// applies nothing. Idempotent, because two deliveries post two of
+    /// them and the second finds its publication already applied.
+    /// </para>
+    /// <para>
+    /// The rows are this object's COHERENT PAST while a reload is in
+    /// flight: the publication has no population then, and the surface
+    /// collapses its projections under Loading anyway, so the rows stay
+    /// until the new ones land or a failure clears them — presentation
+    /// outside the chain, as the design says.
+    /// </para>
+    /// </remarks>
+    private void ApplyPublication()
     {
-        CanvasOpenInfo info;
-        CanvasOutlineRow[] outline;
-        CanvasTableRow[] tableRows;
-        CanvasScene scene;
-        try
+        CanvasPublication current = _slot.Current;
+        if (current.Retired || ReferenceEquals(current, _applied))
         {
-            lock (_ffiLock)
-            {
-                if (Volatile.Read(ref _generation) != generation)
-                {
-                    return;
-                }
-                CloseHandleLocked();
-                info = _session.OpenCanvas(Path);
-                if (info.Degraded)
-                {
-                    // Read-only by construction (contract A3): nothing
-                    // will use the handle, so release it now rather
-                    // than holding native state until teardown.
-                    _session.CloseCanvas(info.Handle);
-                    CanvasOpenInfo degraded = info;
-                    Post(() =>
-                    {
-                        if (Volatile.Read(ref _generation) != generation)
-                        {
-                            return;
-                        }
-                        PublishEmpty();
-                        Warnings = degraded.Warnings;
-                        StateMessage = ParseErrorDetail(degraded.Warnings);
-                        State = CanvasLoadState.ParseError;
-                        OutlinePublished?.Invoke(this, EventArgs.Empty);
-                    });
-                    return;
-                }
-                _handle = info.Handle;
-                outline = _session.CanvasOutline(info.Handle);
-                tableRows = _session.CanvasTableRows(info.Handle);
-                scene = _session.CanvasScene(info.Handle);
-            }
-        }
-        // Not just VaultException (m6): the scheduler's contract is that
-        // bodies catch their own failures, and a panic-class uniffi
-        // exception escaping here faults the tracked task silently and
-        // leaves the tab reading "Opening canvas…" forever. Anything the
-        // process cannot survive still propagates.
-        catch (Exception exception) when (
-            exception is not OutOfMemoryException
-                and not StackOverflowException
-                and not AccessViolationException)
-        {
-            Post(() =>
-            {
-                if (Volatile.Read(ref _generation) != generation)
-                {
-                    return;
-                }
-                PublishEmpty();
-                Warnings = [];
-                StateMessage = _retargetedFrom is { } from
-                    ? CanvasPhrase.RetargetAbsent(from, Path, exception)
-                    : CanvasPhrase.OpenFailed(Path, exception);
-                State = _retargetedFrom is null
-                    ? CanvasLoadState.Failed
-                    : CanvasLoadState.RetargetAbsent;
-                OutlinePublished?.Invoke(this, EventArgs.Empty);
-            });
             return;
         }
-        CanvasOpenInfo opened = info;
-        Post(() =>
+        CanvasPublication? was = _applied;
+        _applied = current;
+        switch (current.LoadState)
         {
-            if (Volatile.Read(ref _generation) != generation)
-            {
-                return;
-            }
-            PublishReady(opened, outline, tableRows, scene);
-        });
+            case CanvasLoadState.Loading:
+                StateMessage = null;
+                State = CanvasLoadState.Loading;
+                break;
+            case CanvasLoadState.Ready:
+                // Ready names a population by construction — the
+                // acceptance writes both in one swap — and the same
+                // population under a later publication (an intent moved)
+                // is already on screen.
+                if (current.Loaded is { } loaded
+                    && !ReferenceEquals(loaded.Population, was?.Population))
+                {
+                    PublishReady(loaded.Population, loaded.Unit);
+                }
+                break;
+            default:
+                if (was?.LoadState != current.LoadState
+                    || was.LoadMessage != current.LoadMessage)
+                {
+                    PublishEmpty();
+                    Warnings = [];
+                    StateMessage = current.LoadMessage;
+                    State = current.LoadState;
+                    OutlinePublished?.Invoke(this, EventArgs.Empty);
+                }
+                break;
+        }
+    }
+
+    /// <summary>The UI-originated intents, published as they change —
+    /// captured BEFORE the gate, because a transform that read the live
+    /// selection would be reading C-lite state inside it (I4).</summary>
+    private void PublishIntent(string? property)
+    {
+        switch (property)
+        {
+            case nameof(CanvasSelection.Selected):
+                string? selected = Selection.Selected;
+                _ = _slot.Publish(s => s.Retired ? null : s.WithSelectedIntent(selected));
+                break;
+            case nameof(CanvasSelection.ActiveSurface):
+                CanvasSurfaceKind surface = Selection.ActiveSurface;
+                _ = _slot.Publish(s => s.Retired ? null : s.WithActiveSurface(surface));
+                break;
+            case nameof(CanvasSelection.Marked):
+                string[] marked = [.. Selection.Marked];
+                _ = _slot.Publish(s => s.Retired ? null : s.WithMarkedIntent(marked));
+                break;
+            default:
+                break;
+        }
     }
 
     private void PublishEmpty()
@@ -1248,11 +1309,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         Selection.Selected = null;
     }
 
-    private void PublishReady(
-        CanvasOpenInfo info,
-        IReadOnlyList<CanvasOutlineRow> outline,
-        IReadOnlyList<CanvasTableRow> tableRows,
-        CanvasScene scene)
+    private void PublishReady(CanvasPopulation population, CanvasProjectionUnit unit)
     {
         _rows.Clear();
         _targets.Clear();
@@ -1260,37 +1317,33 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         _neighbors.Clear();
         _filterMatchCache = null;
         WhereAmIText = null;
-        foreach (CanvasOutlineRow row in outline)
+        foreach (CanvasOutlineRow row in population.Outline)
         {
             _rows[row.NodeId] = row;
         }
-        foreach (CanvasTableRow row in tableRows)
+        foreach (CanvasTableRow row in population.Table)
         {
             _targets[row.NodeId] = row.Target;
         }
-        foreach (CanvasSceneNode node in scene.Nodes)
+        foreach ((string nodeId, string subpath) in population.Subpaths)
         {
-            if (node.Subpath is { Length: > 0 } subpath)
-            {
-                _subpaths[node.NodeId] = subpath;
-            }
+            _subpaths[nodeId] = subpath;
         }
-        Warnings = info.Warnings;
-        Outline = outline;
-        TableRows = tableRows;
+        Warnings = population.Warnings;
+        Outline = population.Outline;
+        TableRows = population.Table;
         StateMessage = null;
         State = CanvasLoadState.Ready;
         // A reload keeps the selection when the node survived; a
         // selection pointing at a node that is gone would leave every
-        // selection-scoped verb acting on nothing (contract A12).
-        if (Selection.Selected is not { } selected || !_rows.ContainsKey(selected))
-        {
-            // Silent seat (contract A12): the focus lands on the row
-            // and the screen reader reads it; a CanvasMovedTo on top of
-            // that is the t0 §1.5 doubling rule broken at the first
-            // keystroke of the surface's life.
-            Selection.Selected = outline.Count > 0 ? outline[0].NodeId : null;
-        }
+        // selection-scoped verb acting on nothing (contract A12). The
+        // REBASE decided this at acceptance, against the decision
+        // snapshot's intent — so a selection made while the load was in
+        // flight is the one that survives, not the one the load began
+        // under. Silent seat either way (A12): the focus lands on the
+        // row and the screen reader reads it.
+        Selection.Selected = unit.ResolvedSelection
+            ?? (population.Count > 0 ? population.Outline[0].NodeId : null);
         OutlinePublished?.Invoke(this, EventArgs.Empty);
         AnnounceDegradedLoadIfNeeded();
     }
@@ -1334,22 +1387,19 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     {
         try
         {
-            lock (_ffiLock)
+            string? text = null;
+            if (!Query(handle => text = _session.CanvasNodeText(handle, nodeId)))
             {
-                if (_handle is not { } handle)
-                {
-                    Speak(new CanvasA11yEvent.CanvasStatus(
-                        new CanvasStatusNote.NotReadable()));
-                    return null;
-                }
-                string? text = _session.CanvasNodeText(handle, nodeId);
-                if (text is null)
-                {
-                    Speak(new CanvasA11yEvent.CanvasStatus(
-                        new CanvasStatusNote.NotATextCard()));
-                }
-                return text;
+                Speak(new CanvasA11yEvent.CanvasStatus(
+                    new CanvasStatusNote.NotReadable()));
+                return null;
             }
+            if (text is null)
+            {
+                Speak(new CanvasA11yEvent.CanvasStatus(
+                    new CanvasStatusNote.NotATextCard()));
+            }
+            return text;
         }
         catch (VaultException)
         {
@@ -1604,19 +1654,16 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
 
     /// <summary>
     /// Whether the vault knows this target. A session-level identity
-    /// read — it touches no handle — but it runs under <c>_ffiLock</c>
-    /// anyway (contract A17): "every FFI section holds the lock" is a
-    /// rule worth being able to state without an exception, and the cost
-    /// is one uncontended acquire on an activation.
+    /// read that touches no handle, so it has no lease to hold: A17's
+    /// lock is the LEASE's since task T3, and it guards handle
+    /// replacement against handle reads — a rule with nothing to say
+    /// about a call that names no handle.
     /// </summary>
     private bool TargetExistsInVault(string target)
     {
         try
         {
-            lock (_ffiLock)
-            {
-                return _session.CanonicalPath(target) is not null;
-            }
+            return _session.CanonicalPath(target) is not null;
         }
         catch (VaultException)
         {
@@ -1655,59 +1702,81 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// "cleared when the last tab closes".</summary>
     internal override void Shutdown()
     {
-        base.Shutdown();
-        _ = Interlocked.Increment(ref _generation);
-        // M4's last case, the deferred-departure drain with it, and the
-        // stack's own retirement. All of it BEFORE the announcer is
-        // silenced or the restorations would never be spoken — closing
-        // the tab a mode is running in is exactly the departure M4 names,
-        // and a departure still held from a failed commit owes a sentence
-        // too (contract C7).
-        //
-        // FALLIBLE, and retirement is not allowed to depend on it: a
-        // restoration effect is host code and can fault. Without this
-        // guard the announcer below was never silenced, so a coalesced
-        // line stayed queued on a document that no longer exists and
-        // spoke ~200 ms later — the A5 defect reached from the mode side
-        // — and the handle below was never closed either.
+        // U12's sequence (task T3). Step 1: the PRETERMINAL retired
+        // publication — the marker set, everything else retained — so
+        // the retired interval is a published model state and every
+        // model boundary refuses from here. Step 2: before the base
+        // shutdown (SEAM 3), so the scheduler's refusal can never
+        // precede the model's. Step 3: the T4 seam — the mode stack's
+        // last sentence, the announcer, the durable requests — which
+        // the model neither authorizes nor describes. Step 4, in the
+        // finally: the TERMINAL publication, unconditionally, and the
+        // close of whatever lease it un-named, under that lease's own
+        // lock and off the dispatcher in production.
+        _ = _slot.Publish(s => s.WithRetired());
         try
         {
-            Modes.Shutdown();
+            base.Shutdown();
+            // M4's last case, the deferred-departure drain with it, and
+            // the stack's own retirement. All of it BEFORE the announcer
+            // is silenced or the restorations would never be spoken —
+            // closing the tab a mode is running in is exactly the
+            // departure M4 names, and a departure still held from a
+            // failed commit owes a sentence too (contract C7).
+            //
+            // FALLIBLE, and retirement is not allowed to depend on it: a
+            // restoration effect is host code and can fault. Without
+            // this guard the announcer below was never silenced, so a
+            // coalesced line stayed queued on a document that no longer
+            // exists and spoke ~200 ms later — the A5 defect reached
+            // from the mode side — and the handle below was never
+            // closed either.
+            try
+            {
+                Modes.Shutdown();
+            }
+            catch (Exception exception) when (
+                exception is not OutOfMemoryException
+                    and not StackOverflowException
+                    and not AccessViolationException)
+            {
+                HostLog.Write(HostDiagnosticEvent.CanvasModeTeardownFailed, exception);
+            }
+            WhereAmIText = null;
+            // Every retirement route reaches here — the release sweep,
+            // the retarget, the vault-close drain — so this is the one
+            // place the announcer has to be silenced (contract A5): a
+            // coalesced line queued on a dying document would otherwise
+            // fire ~200 ms later and speak about a surface that no
+            // longer exists.
+            _announcer.Shutdown();
+            // BOTH durable requests, because they are twins and a
+            // retirement that dropped one of them was the shape this
+            // review found.
+            FocusRequest = null;
+            FilterFocusRequest = null;
         }
-        catch (Exception exception) when (
-            exception is not OutOfMemoryException
-                and not StackOverflowException
-                and not AccessViolationException)
+        finally
         {
-            HostLog.Write(HostDiagnosticEvent.CanvasModeTeardownFailed, exception);
+            if (CanvasLeaseTransfer.Terminalize(_slot) is { } unnamed)
+            {
+                if (IsSynchronousForTests)
+                {
+                    CloseGuarded(unnamed);
+                }
+                else
+                {
+                    _asyncClose = Task.Run(() => CloseGuarded(unnamed));
+                }
+            }
         }
-        WhereAmIText = null;
-        // Every retirement route reaches here — the release sweep, the
-        // retarget, the vault-close drain — so this is the one place the
-        // announcer has to be silenced (contract A5): a coalesced line
-        // queued on a dying document would otherwise fire ~200 ms later
-        // and speak about a surface that no longer exists.
-        _announcer.Shutdown();
-        // BOTH durable requests, because they are twins and a retirement
-        // that dropped one of them was the shape this review found.
-        FocusRequest = null;
-        FilterFocusRequest = null;
-        if (IsSynchronousForTests)
-        {
-            CloseHandleGuarded();
-            return;
-        }
-        _asyncClose = Task.Run(CloseHandleGuarded);
     }
 
-    private void CloseHandleGuarded()
+    private static void CloseGuarded(CanvasHandleLease lease)
     {
         try
         {
-            lock (_ffiLock)
-            {
-                CloseHandleLocked();
-            }
+            _ = lease.Close();
         }
         catch (Exception exception) when (
             exception is VaultException or ObjectDisposedException)
@@ -1717,15 +1786,39 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         }
     }
 
-    internal Task WhenHandleClosed() => _asyncClose ?? Task.CompletedTask;
+    /// <summary>Every native handle this document could still hold is
+    /// closed: the terminal close, and any tracked delivery whose finally
+    /// closes a handle it opened mid-flight — the drain the workspace
+    /// awaits before the session disposes (INV-2).</summary>
+    internal Task WhenHandleClosed() =>
+        Task.WhenAll(_asyncClose ?? Task.CompletedTask, WhenWorkDrained());
 
-    private void CloseHandleLocked()
+    /// <summary>The pipeline's view of this document's session: the five
+    /// FFI calls, and the two pieces of host prose the pipeline
+    /// publishes on the document's behalf (contract A3's states and
+    /// messages).</summary>
+    private sealed class SessionSource(CanvasDocumentViewModel document) : ICanvasLoadSource
     {
-        if (_handle is { } handle)
-        {
-            _handle = null;
-            _session.CloseCanvas(handle);
-        }
+        public CanvasOpenInfo Open() => document._session.OpenCanvas(document.Path);
+
+        public void Close(ulong handle) => document._session.CloseCanvas(handle);
+
+        public CanvasOutlineRow[] Outline(ulong handle) => document._session.CanvasOutline(handle);
+
+        public CanvasTableRow[] TableRows(ulong handle) =>
+            document._session.CanvasTableRows(handle);
+
+        public CanvasScene Scene(ulong handle) => document._session.CanvasScene(handle);
+
+        public CanvasLoadFailure FailureFor(Exception exception) =>
+            document._retargetedFrom is { } from
+                ? new(
+                    CanvasLoadState.RetargetAbsent,
+                    CanvasPhrase.RetargetAbsent(from, document.Path, exception))
+                : new(CanvasLoadState.Failed, CanvasPhrase.OpenFailed(document.Path, exception));
+
+        public CanvasLoadFailure ParseError(IReadOnlyList<CanvasLoadWarning> warnings) =>
+            new(CanvasLoadState.ParseError, ParseErrorDetail(warnings));
     }
 }
 

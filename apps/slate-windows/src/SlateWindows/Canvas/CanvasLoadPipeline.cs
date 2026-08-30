@@ -1,0 +1,351 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+using uniffi.slate_uniffi;
+
+namespace SlateWindows.Canvas;
+
+/// <summary>
+/// W6-1 PR C-unit, task T3: the FFI surface one load walks, as the
+/// pipeline sees it.
+/// </summary>
+/// <remarks>
+/// An interface rather than the session type, so the pipeline names no
+/// FFI surface and its battery can drive it with an in-memory source
+/// that faults and blocks on demand — the frozen verification plan's
+/// fault injection needs a source that throws at a chosen call, and a
+/// real session cannot be asked to. The two non-FFI members are the
+/// host's PROSE: which failure state an exception maps to, and what a
+/// parse error's message is. They are here because the pipeline
+/// publishes a failure in the same swap that releases its request, so
+/// the words have to be in hand at that moment — but the words are the
+/// document's (contract A3), never the pipeline's.
+/// </remarks>
+internal interface ICanvasLoadSource
+{
+    CanvasOpenInfo Open();
+
+    void Close(ulong handle);
+
+    CanvasOutlineRow[] Outline(ulong handle);
+
+    CanvasTableRow[] TableRows(ulong handle);
+
+    CanvasScene Scene(ulong handle);
+
+    CanvasLoadFailure FailureFor(Exception exception);
+
+    CanvasLoadFailure ParseError(IReadOnlyList<CanvasLoadWarning> warnings);
+}
+
+/// <summary>
+/// The points of U4's ownership window a fact can fault or barrier at.
+/// Four are INSIDE the acceptance transform, so a throw there leaves
+/// the swap unmade; the last is after it.
+/// </summary>
+internal enum CanvasLoadPoint
+{
+    /// <summary>After the reads: the population is built and the lease
+    /// is still the delivery's own. Where a barrier holds deliveries
+    /// before either publishes.</summary>
+    Built,
+
+    /// <summary>Inside the transform, immediately after the decision
+    /// snapshot is read.</summary>
+    SnapshotRead,
+
+    /// <summary>Inside the transform, during the rebase.</summary>
+    Rebase,
+
+    /// <summary>Inside the transform, during the filter reseed.</summary>
+    Reseed,
+
+    /// <summary>Inside the transform, immediately before the swap.</summary>
+    BeforeSwap,
+
+    /// <summary>After the swap installed, before the displaced close.</summary>
+    AfterSwap,
+}
+
+/// <summary>
+/// W6-1 PR C-unit, task T3: the instrument the fault-injection and
+/// barrier facts drive — one callback at each point of the window.
+/// </summary>
+/// <remarks>
+/// Named with the suffix this codebase's test-seam guard is built on
+/// (task T1's observer went without one, and the record calls that a
+/// divergence): a reviewer reading it in a shipping file knows at once
+/// that production never constructs one. Not attached in production,
+/// and the pipeline behaves identically with and without it. A
+/// callback that THROWS is the fault; one that BLOCKS is the barrier.
+/// Four of its points run inside the transform — an open callout under
+/// the gate, obligation I4's forbidden shape — which is exactly why it
+/// is an instrument and not a parameter production could reach for.
+/// </remarks>
+internal sealed class CanvasLoadProbeForTests
+{
+    internal Action<CanvasLoadPoint>? OnPoint { get; set; }
+
+    internal void Reached(CanvasLoadPoint point) => OnPoint?.Invoke(point);
+}
+
+/// <summary>One load REQUEST as the pipeline hands it to its worker:
+/// the identity the schedule now names, and the lease the request
+/// un-named — closed by the worker, under that lease's own lock,
+/// before the new open.</summary>
+internal sealed record CanvasLoadRequest(
+    CanvasRequestIdentity Identity, CanvasHandleLease? Displaced);
+
+/// <summary>What one delivery did.</summary>
+internal enum CanvasLoadOutcome
+{
+    /// <summary>Installed: the publication names the lease and the
+    /// population, under a Ready load state.</summary>
+    Accepted,
+
+    /// <summary>Refused: superseded, already delivered, or the document
+    /// retired. This delivery published nothing, and whatever it opened
+    /// is closed.</summary>
+    Refused,
+
+    /// <summary>The open was degraded: ParseError published, the handle
+    /// closed at once.</summary>
+    ParseError,
+
+    /// <summary>Something threw before the swap: the mapped failure
+    /// published while the request was still latest, and whatever was
+    /// opened is closed.</summary>
+    Faulted,
+
+    /// <summary>The swap installed and something AFTER it threw — an
+    /// effect fault, not the load's. The publication is Ready and names
+    /// the lease.</summary>
+    FaultedAfterAccept,
+}
+
+/// <summary>
+/// W6-1 PR C-unit, task T3: THE LOAD PIPELINE — U4's operation, from
+/// the request that un-names the old lease to the finally that releases
+/// whatever the delivery still owns.
+/// </summary>
+/// <remarks>
+/// <para>
+/// The frozen transition, in its own order: publish the terminal state
+/// for the old lease and population; close the old handle under its
+/// lock; construct the new lease and population off-thread; rebase,
+/// carry forward, and install in ONE SWAP. <see cref="Request"/> is the
+/// first step and <see cref="Deliver"/> is the rest. Nothing here
+/// marshals: the request runs on its caller's thread, the delivery on
+/// whatever thread the host gives it, and every publication is the
+/// slot's gate. What the host does AFTER a delivery — project the new
+/// publication onto its bindable surface — is the host's effect, on
+/// the host's thread.
+/// </para>
+/// <para>
+/// UN-NAME FIRST, the choice task T2 left open. The other order —
+/// displace the old lease at acceptance — leaks nothing either, since
+/// T2's acceptance closes what it displaces; this one keeps one native
+/// handle open at a time, as the inherited load did, and the surface
+/// keeps its rows as a coherent past because presentation is outside
+/// the chain. The request hands the worker the lease it un-named, from
+/// the decision snapshot, so the close needs no second read; and the
+/// worker closes it rather than the requester, so a dispatcher never
+/// waits under a lease's lock for an in-flight FFI call.
+/// </para>
+/// <para>
+/// THE RELEASE OBLIGATION is discharged in a finally wrapping the whole
+/// delivery, and that finally is the one place a close fault is let go:
+/// a session that died first makes the close throw, and that exception
+/// must not replace the delivery's own. So the release is guarded, and
+/// what it swallows is exactly the pair the inherited teardown
+/// swallowed for the same reason.
+/// </para>
+/// </remarks>
+internal sealed class CanvasLoadPipeline
+{
+    private readonly CanvasPublicationSlot _slot;
+    private readonly ICanvasLoadSource _source;
+    private readonly CanvasLoadProbeForTests? _probe;
+
+    internal CanvasLoadPipeline(
+        CanvasPublicationSlot slot,
+        ICanvasLoadSource source,
+        CanvasLoadProbeForTests? probeForTests = null)
+    {
+        ArgumentNullException.ThrowIfNull(slot);
+        ArgumentNullException.ThrowIfNull(source);
+        _slot = slot;
+        _source = source;
+        _probe = probeForTests;
+    }
+
+    /// <summary>
+    /// Step one: publish the request — the schedule's new latest, the
+    /// Loading state, and the old lease un-named — in one swap.
+    /// </summary>
+    /// <returns>What the worker needs, or null when the document is
+    /// retired: a retired document loads nothing, ever, and the refusal
+    /// publishes nothing.</returns>
+    internal CanvasLoadRequest? Request()
+    {
+        var identity = new CanvasRequestIdentity("load");
+        CanvasPublicationOutcome outcome = _slot.Publish(snapshot =>
+            snapshot.Retired
+                ? null
+                : snapshot
+                    .WithUnloaded()
+                    .WithLoads(snapshot.Loads.Requested(identity))
+                    .WithLoadState(CanvasLoadState.Loading, null));
+        return outcome.Installed
+            ? new CanvasLoadRequest(identity, outcome.Predecessor.Lease)
+            : null;
+    }
+
+    /// <summary>
+    /// The rest: close what the request un-named, open, read, build,
+    /// and deliver — accepting or releasing, in a finally, whatever this
+    /// delivery still owns.
+    /// </summary>
+    internal CanvasLoadOutcome Deliver(CanvasLoadRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        CanvasRequestIdentity identity = request.Identity;
+
+        // The old handle first, under its own lock, so the last
+        // in-flight call on it has returned before the new open.
+        if (request.Displaced is { } displaced)
+        {
+            CloseGuarded(displaced);
+        }
+
+        CanvasHandleLease? lease = null;
+        CanvasLoadFailure? failure = null;
+        CanvasLoadOutcome outcome = CanvasLoadOutcome.Refused;
+        try
+        {
+            outcome = Attempt();
+        }
+        finally
+        {
+            // The release obligation, whatever happened above — and the
+            // one place the outcome is corrected: a fault AFTER a swap
+            // that installed leaves the lease named, which the release
+            // reports as a transfer.
+            if (lease is not null)
+            {
+                CanvasLeaseRelease? released = ReleaseGuarded(identity, lease, failure);
+                if (released == CanvasLeaseRelease.Transferred
+                    && outcome == CanvasLoadOutcome.Faulted)
+                {
+                    outcome = CanvasLoadOutcome.FaultedAfterAccept;
+                }
+            }
+            else if (failure is { } unopened)
+            {
+                _ = CanvasLeaseTransfer.Refuse(_slot, identity, unopened);
+            }
+        }
+
+        return outcome;
+
+        CanvasLoadOutcome Attempt()
+        {
+            try
+            {
+                // One read, and a cheap refusal: a request already
+                // superseded or retired opens no handle at all. The
+                // DECISION is the transform's, inside the gate; this
+                // only spares the native open.
+                CanvasPublication before = _slot.Current;
+                if (before.Retired || !before.Loads.Admits(identity))
+                {
+                    return CanvasLoadOutcome.Refused;
+                }
+
+                CanvasOpenInfo info = _source.Open();
+                lease = new CanvasHandleLease(info.Handle, _source.Close);
+                if (info.Degraded)
+                {
+                    // Read-only by construction (contract A3): nothing
+                    // will use the handle, so the finally releases it.
+                    failure = _source.ParseError(info.Warnings);
+                    return CanvasLoadOutcome.ParseError;
+                }
+
+                CanvasOutlineRow[]? outline = null;
+                CanvasTableRow[]? tableRows = null;
+                CanvasScene? scene = null;
+                bool admitted = lease.Invoke(
+                    () =>
+                    {
+                        CanvasPublication now = _slot.Current;
+                        return !now.Retired && now.Loads.Admits(identity);
+                    },
+                    handle =>
+                    {
+                        outline = _source.Outline(handle);
+                        tableRows = _source.TableRows(handle);
+                        scene = _source.Scene(handle);
+                    });
+                if (!admitted)
+                {
+                    return CanvasLoadOutcome.Refused;
+                }
+
+                var population = new CanvasPopulation(
+                    outline,
+                    tableRows,
+                    info.Warnings,
+                    preservedCount: (uint)info.Warnings.Count(
+                        warning => warning.Kind == CanvasLoadWarningKind.SkippedEntry),
+                    lastActivatedNode: null,
+                    scene: scene!.Nodes);
+                _probe?.Reached(CanvasLoadPoint.Built);
+
+                CanvasLoadAcceptance acceptance =
+                    CanvasLeaseTransfer.TryAccept(_slot, identity, lease, population, _probe);
+                return acceptance.Accepted
+                    ? CanvasLoadOutcome.Accepted
+                    : CanvasLoadOutcome.Refused;
+            }
+            catch (Exception exception) when (
+                exception is not OutOfMemoryException
+                    and not StackOverflowException
+                    and not AccessViolationException)
+            {
+                failure = _source.FailureFor(exception);
+                return CanvasLoadOutcome.Faulted;
+            }
+        }
+    }
+
+    /// <summary>The release, with its close fault contained: the
+    /// publication half cannot throw, and a close that does means the
+    /// session died first — the handle died with it.</summary>
+    private CanvasLeaseRelease? ReleaseGuarded(
+        CanvasRequestIdentity identity, CanvasHandleLease lease, CanvasLoadFailure? failure)
+    {
+        try
+        {
+            return CanvasLeaseTransfer.Release(_slot, identity, lease, failure);
+        }
+        catch (Exception exception) when (
+            exception is VaultException or ObjectDisposedException)
+        {
+            return null;
+        }
+    }
+
+    private static void CloseGuarded(CanvasHandleLease lease)
+    {
+        try
+        {
+            _ = lease.Close();
+        }
+        catch (Exception exception) when (
+            exception is VaultException or ObjectDisposedException)
+        {
+            // Teardown race: the session died first.
+        }
+    }
+}

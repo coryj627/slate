@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Diagnostics;
-using System.Runtime.ExceptionServices;
 using SlateWindows.Canvas;
 using uniffi.slate_uniffi;
 
@@ -90,14 +89,14 @@ public sealed class CanvasLeaseTransferTests
             _ = Interlocked.Increment(ref closes);
         });
 
-        var first = new Worker(() => _ = lease.Close());
+        var first = new CanvasWorker(() => _ = lease.Close());
         first.Start();
         Assert.True(
             closeStarted.Wait(LivenessBudget),
             "premise: the first close never entered its body.");
 
         var secondReturned = 0;
-        var second = new Worker(() =>
+        var second = new CanvasWorker(() =>
         {
             _ = lease.Close();
             Volatile.Write(ref secondReturned, 1);
@@ -479,13 +478,13 @@ public sealed class CanvasLeaseTransferTests
             var accepted = false;
             var releaseOutcome = CanvasLeaseRelease.Transferred;
 
-            var acceptor = new Worker(() =>
+            var acceptor = new CanvasWorker(() =>
             {
                 start.Wait(LivenessBudget);
                 accepted = CanvasLeaseTransfer.TryAccept(
                     slot, request, lease, Population("a")).Accepted;
             });
-            var releaser = new Worker(() =>
+            var releaser = new CanvasWorker(() =>
             {
                 start.Wait(LivenessBudget);
                 releaseOutcome = CanvasLeaseTransfer.Release(slot, request, lease);
@@ -773,48 +772,6 @@ public sealed class CanvasLeaseTransferTests
     // ---------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------
-
-    /// <summary>
-    /// A background thread whose fault reaches the fact instead of the
-    /// test host: an assertion failing on a raw thread aborts the whole
-    /// run. The suite's capture-and-rethrow convention, applied here.
-    /// </summary>
-    private sealed class Worker
-    {
-        private readonly Thread _thread;
-        private ExceptionDispatchInfo? _fault;
-
-        internal Worker(Action body)
-        {
-            _thread = new Thread(() =>
-            {
-                try
-                {
-                    body();
-                }
-                catch (Exception fault)
-                {
-                    _fault = ExceptionDispatchInfo.Capture(fault);
-                }
-            })
-            { IsBackground = true };
-        }
-
-        /// <summary>Blocked in a wait, sleep or join — a contended lock
-        /// reports as one — or already finished.</summary>
-        internal bool IsBlockedOrFinished =>
-            (_thread.ThreadState & (System.Threading.ThreadState.WaitSleepJoin | System.Threading.ThreadState.Stopped)) != 0;
-
-        internal void Start() => _thread.Start();
-
-        /// <summary>Join, then rethrow whatever the body threw.</summary>
-        internal bool Join(TimeSpan budget)
-        {
-            bool finished = _thread.Join(budget);
-            _fault?.Throw();
-            return finished;
-        }
-    }
 
     /// <summary>One delivery: accept, and release in a finally whatever
     /// happened — the shape task T3 will build the real pipeline

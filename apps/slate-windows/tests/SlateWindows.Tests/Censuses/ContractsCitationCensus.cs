@@ -98,7 +98,11 @@ public sealed class ContractsCitationCensus
                 // carried BEFORE it — the only reading under which the
                 // floor guards that task's work rather than its
                 // predecessors'.
-                40),
+                //
+                // T3 bound the pipeline and its types, taking the
+                // section to 58. 55 sits above the pre-T3 population
+                // of 50 — the same rule, a third time.
+                55),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

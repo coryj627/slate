@@ -104,6 +104,9 @@ public sealed class CanvasPublicationSlotTests
             loaded, loaded.WithUnit(unit),
             p => ReferenceEquals(p.Unit, unit), "unit");
 
+        AssertFreshAndUnchanged(
+            seed, seed.WithUnloaded(), p => p.Loaded is null, "unloaded");
+
         // Terminal is one-way, like retirement, and asserted the same
         // way: from the terminal state, terminalising again.
         CanvasPublication terminal = loaded.WithTerminal();
@@ -391,7 +394,7 @@ public sealed class CanvasPublicationSlotTests
         // Deliberately cycles values — a needle of "a", then "b", then
         // "a" again — because a content-keyed cache is exactly what
         // would hand back a record installed earlier.
-        // ALL ELEVEN transforms, not the four the value cycling needs.
+        // ALL TWELVE transforms, not the four the value cycling needs.
         // A memoising defect in an undriven transform would fail nothing:
         // the per-transform fact above compares a result only against its
         // own input, so a previously-built record passes it, and only the
@@ -447,11 +450,12 @@ public sealed class CanvasPublicationSlotTests
                 leases[round % 2], populations[round % 2], units[round % 2]));
             _ = slot.Publish(s => s.WithUnit(units[round % 2]));
             _ = slot.Publish(s => s.WithTerminal());
+            _ = slot.Publish(s => s.WithUnloaded());
         }
 
         Assert.True(
-            observer.Installs == 2_200,
-            $"premise: the run was supposed to install 2200 publications and "
+            observer.Installs == 2_400,
+            $"premise: the run was supposed to install 2400 publications and "
             + $"installed {observer.Installs}, so a freshness claim over it would "
             + "be measuring a shorter run than it says.");
         Assert.True(

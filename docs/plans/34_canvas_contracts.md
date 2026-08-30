@@ -4791,6 +4791,12 @@ with a barrier landing the acceptance between the read and the close,
 returns the finding's arrangement exactly: a live publication naming a
 closed handle.
 
+**And after T3:** driven under fault injection at all five points of
+the ownership window — the four inside leave the close observation at
+exactly one with acceptance impossible, the one after leaves the lease
+live and published — which is the rewrite of expected values the
+frozen plan said this obligation would demand.
+
 **I2 — The retry loop is lock-free but not terminating.** *"Root cause:
 a failed CAS proves only that some writer progressed. It does not make
 this delivery consumed, superseded, or retired. A load delivery can
@@ -4852,6 +4858,16 @@ afterward. 'Caught at DISPATCH' does not cover a publication between the
 dispatch check and the external call. The model effect universe
 explicitly includes announcement, shell handoff, mode closures, and
 focus requests, so T1/T3 cannot absorb this entire defect."*
+
+**STATUS after T3: OPEN, with the load path's shape landed.** The
+delivery's projection is an effect validated at DISPATCH — it reads the
+slot when it runs and applies the newest publication or nothing — and a
+won schedule cannot be stranded by its own start, because the request
+transform and the start share the caller's thread with the scheduler's
+refusal ordered BEHIND the model's (SEAM 3's fact). What remains is the
+rest of the effect universe: announcement, focus requests, presenter
+calls and shell handoffs are still inherited WPF authorities with no
+validated story, and this row stays open until they have one.
 
 **I4 — Transform purity is a discipline, not unrepresentable.** *"The
 required decisions are mathematically computable as follows: Admission:
@@ -5496,6 +5512,92 @@ batteries' teeth — T1's shape again. All addressed.
   is an index, and the row re-materialisation moved into
   `CanvasModelCopy` so I7's construction half keeps one site.
 
+**T3 — the load pipeline, the projection, and teardown's sequence.**
+Landed `CanvasLoadPipeline` and `ICanvasLoadSource`, the transforms the
+operation needed — `WithUnloaded`, the acceptance writing Ready,
+`CanvasLoadFailure` published with a release, the lease-less `Refuse`,
+`Terminalize` — the population's subpath index, and the document's
+rewiring: the handle, the generation counter and the FFI lock are GONE
+from the view model. The lease owns the handle, the schedule is the
+generation, and the lock is the lease's. The full unit suite —
+1,706 tests, T3's battery included — passes on top of the rewiring,
+which is the parity claim for a change of this size.
+
+* **The reload order, decided.** UN-NAME FIRST: the request publishes
+  Loading with the chain cleared and hands its worker the displaced
+  lease from the decision snapshot; the worker closes it under its own
+  lock BEFORE the new open. One native handle at a time — the inherited
+  load's rule and the frozen transition's own order — and a dispatcher
+  never waits under a lease's lock. The fact pins the ORDER itself, on
+  the source log, and the mutation that closes after the open fails on
+  that sentence.
+* **U4's operation, fact by fact.** A delivery superseded after its
+  build refuses and closes only its own handle; two concurrent
+  deliveries, barriered so BOTH hold open handles before either reaches
+  the gate, leave one publication and one closed lease — round 6's
+  breaking arrangement, run as the plan demanded. Fault injection at
+  the five points of the ownership window: a throw at the snapshot
+  read, the rebase, the reseed or before the swap leaves the close
+  observation at exactly one, with the failure and the terminal state
+  published together; a throw after the swap leaves it at zero with the
+  lease live and published — the rewrite of expected values the frozen
+  plan said obligation I1 would demand.
+* **The failure states are the release's.** A refusing or faulting
+  delivery publishes its ParseError, Failed or RetargetAbsent state IN
+  the swap that releases its request, so a document is never Failed
+  under a request that could still be accepted; a request whose open
+  itself threw is refused lease-less by the same terminal transform.
+  The words stay the host's: the pipeline takes them through
+  `ICanvasLoadSource`, which is also what lets the battery drive an
+  in-memory source that faults and blocks on demand.
+* **Teardown is U12's sequence.** The preterminal retired publication
+  first; the base shutdown second — SEAM 3's ordering, pinned by a
+  source-order fact because the window between two adjacent writes
+  admits no barrier; the T4 seam guarded as inherited; the terminal
+  publication in a finally, with `Terminalize` handing back the lease
+  it un-named for its caller to close AFTER the publication. A delivery
+  racing teardown is a fact in both orders. The workspace drain got
+  strictly stronger: the close-drain now also awaits the tracked
+  delivery whose finally closes a mid-flight handle — INV-2's claim
+  made whole under the new ownership.
+* **The projection is I3's load-path shape.** The view model's bindable
+  surface is a PROJECTION of the publication, applied on the dispatcher
+  by a posted effect that reads the slot ONCE at dispatch — a
+  projection queued behind a newer load applies the newer load, and one
+  arriving after retirement applies nothing. The rows are the view
+  model's coherent past during a reload, which is presentation outside
+  the chain, exactly where the design put it. I3 is NOT discharged by
+  this; its ledger row says what remains.
+* **The intents write the slot.** U11's fourth writer family arrives:
+  selection, marks, surface and needle publish as they change, captured
+  BEFORE the gate, because a transform reading the live selection would
+  be obligation I4's forbidden ambient read. The rebase barriers are
+  facts — a selection, a mark, a surface switch and a needle each
+  arriving mid-load survive acceptance, the needle reseeding the new
+  machine — and the mutation that rebases from a read that is not the
+  decision snapshot fails on the selection sentence.
+* **Mutations, the T1 way.** Close-after-open, injected: the order fact
+  fails on the trace. A stale rebase, injected: the barrier fact fails
+  with the rolled-back selection. A lease dropped without release: the
+  close observation catches what a weak reference cannot. Each defect
+  reverted byte-for-byte, each fact green after.
+
+**The instruments and authorities T3 introduced, dispositioned.**
+`CanvasLoadProbeForTests` is an INSTRUMENT carrying the codebase's own
+test-seam suffix — the divergence T1's observer recorded does not
+recur — and four of its points are open callouts under the gate, which
+is exactly why production never constructs one and task T4's purity
+census will treat it as it treats the observer. The view model's
+`_applied` reference is PRESENTATION state: the last publication
+projected onto the bindable surface, read and written on the dispatcher
+only and consulted by no model boundary — the "installed unit" shape
+the periphery ledger's T1 owns, named here so T4's authority census
+meets it already dispositioned. The pipeline itself holds no mutable
+state at all. The request a worker receives is a `CanvasLoadRequest`,
+what its delivery did is a `CanvasLoadOutcome`, and the window's named
+points are `CanvasLoadPoint` — bound here so the floor below has teeth
+over T3's names.
+
 **Frozen paragraphs the gate SUPERSEDES.** The freeze forbids revising
 them and that is right; this record is the sanctioned place to say which
 of them the implementation has overtaken, so a T2, T3 or T6 owner does
@@ -5520,6 +5622,15 @@ where a T3 owner will go to build the delivery pipeline:
 | D1's "Load request: superseded in the load schedule, or marked consumed by an accepting publication" | EXTENDED. A third terminal state, RELEASED, is published by a refusing or faulting delivery, and a redelivery reads it and refuses exactly as it reads consumed. `CanvasLoadDelivery` is the enumeration; the bool T1 shipped had nowhere to put it |
 | The acceptance transition's "publish the terminal state for the old lease and population; close the old handle under its lock; construct the new lease and population off-thread; … install in ONE SWAP" | EITHER ORDER, after the review. The acceptance closes whatever lease its swap displaced, from the decision snapshot, so the one-swap order leaks nothing; the un-name-first order stays T3's to choose, and under it nothing is displaced. "No live publication ever names a closed handle" holds in both |
 
+
+**Frozen paragraphs T3's pipeline supersedes**, in the same terms:
+
+| Frozen text | Status after T3 |
+|---|---|
+| U4's "one decision read PER ATTEMPT plus one final ownership read … discharged in a finally block wrapping the whole delivery" | SAME OBLIGATION, FEWER READS. There are no attempts to count and no final ownership read: the decision is one snapshot inside the gate, and the release's transform reads the slot inside the same gate. The finally remains, and it is where the release lives |
+| The finally table's "a LOST swap … the re-decision or the finally closes it" as it reaches the delivery — "the delivery re-reads and re-decides, and by then its request is consumed, superseded, or the document is retired, so it refuses" | UNREPRESENTABLE — T1's reason reaching the delivery. A delivery decides once; the three refusal arms are unchanged, read from the one decision snapshot |
+| D1's "Load result — FAULT before transfer … the delivery's finally closes it under the same guard" | SAME OUTCOME, DIFFERENT MECHANISM. The finally closes through the release, which publishes the failure state and the terminal state FIRST — T2's publication-not-observation row, now driven by a real pipeline |
+| The verification plan's "two load workers … barriered so both read the same snapshot before either swaps" | UNREPRESENTABLE under the gate: two transforms cannot hold one snapshot concurrently. The arrangement's teeth survive as the BUILT barrier — both workers hold open handles before either reaches the gate — and the assertion is unchanged: one publication, one closed lease, a close observation totalling one |
 **The four mutable authorities T1 introduced, with their
 dispositions.** The frozen rule counts identity and contents
 separately and says every authority the derivation finds must appear in
