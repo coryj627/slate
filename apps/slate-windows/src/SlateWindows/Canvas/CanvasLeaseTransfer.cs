@@ -22,9 +22,13 @@ namespace SlateWindows.Canvas;
 /// <param name="Reseeded">The filter request seeded from the carried
 /// needle, or null when the needle was empty or the acceptance did not
 /// land.</param>
+/// <param name="ReseededNeedle">The carried needle the reseed was
+/// minted under — what task T6's machine matches for. Null exactly when
+/// <paramref name="Reseeded"/> is.</param>
 internal readonly record struct CanvasLoadAcceptance(
     bool Accepted,
-    CanvasRequestIdentity? Reseeded);
+    CanvasRequestIdentity? Reseeded,
+    string? ReseededNeedle);
 
 /// <summary>
 /// W6-1 PR C-unit, task T2: what a release did.
@@ -197,7 +201,7 @@ internal static class CanvasLeaseTransfer
 
         if (!outcome.Installed)
         {
-            return new CanvasLoadAcceptance(false, null);
+            return new CanvasLoadAcceptance(false, null, null);
         }
 
         probeForTests?.Reached(CanvasLoadPoint.AfterSwap);
@@ -208,7 +212,12 @@ internal static class CanvasLeaseTransfer
             _ = displaced.Close();
         }
 
-        return new CanvasLoadAcceptance(true, outcome.Successor.Filters.Running);
+        return new CanvasLoadAcceptance(
+            true,
+            outcome.Successor.Filters.Running,
+            outcome.Successor.Filters.Running is null
+                ? null
+                : outcome.Successor.Unit!.Needle);
     }
 
     /// <summary>

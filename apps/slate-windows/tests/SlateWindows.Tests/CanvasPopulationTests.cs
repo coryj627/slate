@@ -281,27 +281,35 @@ public sealed class CanvasPopulationTests
 
     /// <summary>An empty answer and a failed one are different facts,
     /// which is why the answer state has four branches and not a "no
-    /// rows" flag.</summary>
+    /// rows" flag — and a failed answer KEEPS the rows it was showing,
+    /// because widening to the full canvas on a fault would show every
+    /// card while the field still claims to filter (contract
+    /// C10).</summary>
     [Fact]
     public void AnEmptyAnswerIsNotAFailedOne()
     {
-        CanvasPopulation population = Outline(("root", 0));
-        CanvasProjectionUnit empty = CanvasProjectionUnit
+        CanvasPopulation population = Outline(("root", 0), ("a", 1));
+        var request = new CanvasRequestIdentity("F1");
+        CanvasProjectionUnit answered = CanvasProjectionUnit
             .Unfiltered(population)
-            .Answered(population, []);
-        CanvasProjectionUnit failed = CanvasProjectionUnit
-            .Unfiltered(population)
-            .Failed();
+            .Pending(request, "roo")
+            .Answered(population, ["root"]);
+        CanvasProjectionUnit empty =
+            answered.Pending(request, "zzz").Answered(population, []);
+        CanvasProjectionUnit failed = answered.Pending(request, "zzz").Failed();
 
-        Assert.True(
-            empty.VisibleCount == 0 && failed.VisibleCount == 0,
-            "premise: both show nothing, or the distinction below is visible for "
-            + "the wrong reason.");
         Assert.True(
             empty.Answer == CanvasAnswerState.Answered
                 && failed.Answer == CanvasAnswerState.Failed,
             "a match that ran and found nothing must stay distinguishable from a "
             + "match that could not run; a reader is owed different sentences.");
+        Assert.True(
+            empty.VisibleCount == 0,
+            "the empty answer shows nothing: zero matches IS the answer.");
+        Assert.True(
+            failed.VisibleCount == 1 && failed.Matched.Contains("root"),
+            "the failed answer keeps the rows it was showing — the coherent past "
+            + "lingers, and only the answer STATE says the match could not run.");
     }
 
     /// <summary>The DISPLAYED ordinal is a position in the unit, and

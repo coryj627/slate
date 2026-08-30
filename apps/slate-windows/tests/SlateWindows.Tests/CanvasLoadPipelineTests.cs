@@ -258,7 +258,7 @@ public sealed class CanvasLoadPipelineTests
         var source = new FakeSource();
         var slot = new CanvasPublicationSlot(CanvasPublication.Seed());
         var probe = new CanvasLoadProbeForTests();
-        var pipeline = new CanvasLoadPipeline(slot, source, probe);
+        var pipeline = new CanvasLoadPipeline(slot, source, probeForTests: probe);
         CanvasLoadRequest first = pipeline.Request()!;
         CanvasLoadRequest? second = null;
         probe.OnPoint = point =>
@@ -315,7 +315,7 @@ public sealed class CanvasLoadPipelineTests
                 }
             },
         };
-        var pipeline = new CanvasLoadPipeline(slot, source, probe);
+        var pipeline = new CanvasLoadPipeline(slot, source, probeForTests: probe);
         // A needle, so the reseed point has work to do.
         _ = slot.Publish(s => s.WithNeedleIntent("q"));
         CanvasLoadRequest request = pipeline.Request()!;
@@ -355,7 +355,7 @@ public sealed class CanvasLoadPipelineTests
                 }
             },
         };
-        var pipeline = new CanvasLoadPipeline(slot, source, probe);
+        var pipeline = new CanvasLoadPipeline(slot, source, probeForTests: probe);
 
         CanvasLoadOutcome outcome = pipeline.Deliver(pipeline.Request()!);
 
@@ -397,7 +397,7 @@ public sealed class CanvasLoadPipelineTests
                 }
             },
         };
-        var pipeline = new CanvasLoadPipeline(slot, source, probe);
+        var pipeline = new CanvasLoadPipeline(slot, source, probeForTests: probe);
 
         CanvasLoadRequest first = pipeline.Request()!;
         CanvasLoadOutcome firstOutcome = CanvasLoadOutcome.Refused;
@@ -458,7 +458,7 @@ public sealed class CanvasLoadPipelineTests
                 }
             },
         };
-        var pipeline = new CanvasLoadPipeline(slot, source, probe);
+        var pipeline = new CanvasLoadPipeline(slot, source, probeForTests: probe);
 
         CanvasLoadOutcome outcome = pipeline.Deliver(pipeline.Request()!);
 
@@ -514,7 +514,7 @@ public sealed class CanvasLoadPipelineTests
                 }
             },
         };
-        var pipeline = new CanvasLoadPipeline(slot, source, probe);
+        var pipeline = new CanvasLoadPipeline(slot, source, probeForTests: probe);
 
         Assert.True(
             pipeline.Deliver(pipeline.Request()!) == CanvasLoadOutcome.Accepted,
@@ -546,7 +546,7 @@ public sealed class CanvasLoadPipelineTests
         var source = new FakeSource { CloseFault = new ObjectDisposedException("session") };
         var slot = new CanvasPublicationSlot(CanvasPublication.Seed());
         var probe = new CanvasLoadProbeForTests();
-        var pipeline = new CanvasLoadPipeline(slot, source, probe);
+        var pipeline = new CanvasLoadPipeline(slot, source, probeForTests: probe);
         CanvasLoadRequest first = pipeline.Request()!;
         probe.OnPoint = point =>
         {

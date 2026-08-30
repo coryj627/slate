@@ -5640,6 +5640,73 @@ are unreviewed. All four addressed:
   failure clear the seat, restores the file, and finds the selection
   back.
 
+**T6 — the filter machine, and the match off the dispatcher.** Landed
+`CanvasFilterMachine` and `ICanvasFilterSource`: U9's total state
+machine, driven, with the schedule and the unit AS the state — the
+machine holds none of its own, because a private copy of the schedule
+would be a second authority for the one question the publication
+answers. The §C travelling rows land: the off-dispatcher match, the
+failed-answer bit, and the four-branch summary.
+
+* **Every event is one transform.** The keystroke publishes the needle
+  intent, the `CanvasFilterSchedule` transition and — when the request starts at
+  once — the pending unit, in one swap; the completion publishes the
+  answer with the running entry retired, or DISCARDS it and promotes
+  the queued request, because R's rows under Q's needle is the
+  arrangement U9 exists to prevent; the non-running completion
+  publishes nothing; the inactive needle retires both entries and
+  widens, with the selection re-resolved from the durable intent. Every
+  cell of U9's table is a fact, and starting a job is an EFFECT after a
+  won swap, read from the outcome — predecessor against successor —
+  never from a captured local.
+* **The burst rule, priced.** Ten keystrokes pay for two matches — the
+  one in flight and the last one standing — with the queue observable
+  because the battery's runner releases jobs by hand. The lock-time
+  revalidation is its other half: a job parked before its lock is
+  abandoned BEFORE its own FFI call once superseded, and the fact
+  parks one with a barrier and clears the needle over it. Both
+  mutations are replicas in the battery: the completion that publishes
+  over a queue returns R's needle on screen under Q's intent, and the
+  job that answers admission without reading reaches the FFI for a
+  dead request. Both were also INJECTED into production the T1 way —
+  the queue-removed machine paid its burst with two matches of the
+  same needle, the revalidation-removed job reached the FFI once where
+  `CanvasFilterMachineTests` prices zero — and the restores are
+  byte-for-byte.
+* **The reseed's job.** Acceptance mints the request (task T3);
+  the pipeline now hands it to the machine — an effect after that won
+  swap, carried on `CanvasLoadAcceptance` with its needle rather than
+  through a second read — and the machine's job answers against the
+  new population. The needle typed before the load is answered after
+  it, end to end.
+* **The failed answer keeps its rows.** `Failed()` retained nothing,
+  which would have widened the surface silently on a fault — the exact
+  arrangement the inherited filter's comments forbid. It keeps the
+  matched set and the filtered order now; only the `CanvasAnswerState`
+  changes, which is the bit the surface needs for the honest sentence.
+  A panic-class fault out of the match becomes that state rather than
+  a faulted task.
+* **The surface reads the applied unit.** The view model's filter view
+  derives from the APPLIED publication — the same value its rows came
+  from — so the count and the rows cannot disagree, which is C10's one
+  invariant; the memoized match cache is gone with the synchronous
+  query it memoized. The four-branch summary follows: a current answer
+  counts, a previous answer still on screen counts, an in-flight first
+  match renders nothing rather than a claim, and everything else is
+  the state mapping's sentence. The count boundary says nothing while
+  an answer is in flight — the completion's projection is the
+  debounced count's moment — and in synchronous tests the machine runs
+  inline, so every keystroke is answered before its setter returns and
+  the inherited C10 facts pass unchanged.
+
+**T6's instruments and authorities, dispositioned.** The machine holds
+no mutable state; its runner is the document's tracked worker,
+source-free, with the projection posted after every job.
+`CanvasFilterProbeForTests` is an instrument with the test-seam suffix,
+and none of its points is inside the gate. The applied-unit derivation
+adds no authority: it reads the same `_applied` reference the load's
+projection owns, on the dispatcher only.
+
 **Frozen paragraphs the gate SUPERSEDES.** The freeze forbids revising
 them and that is right; this record is the sanctioned place to say which
 of them the implementation has overtaken, so a T2, T3 or T6 owner does
@@ -5673,6 +5740,13 @@ where a T3 owner will go to build the delivery pipeline:
 | The finally table's "a LOST swap … the re-decision or the finally closes it" as it reaches the delivery — "the delivery re-reads and re-decides, and by then its request is consumed, superseded, or the document is retired, so it refuses" | UNREPRESENTABLE — T1's reason reaching the delivery. A delivery decides once; the three refusal arms are unchanged, read from the one decision snapshot |
 | D1's "Load result — FAULT before transfer … the delivery's finally closes it under the same guard" | SAME OUTCOME, DIFFERENT MECHANISM. The finally closes through the release, which publishes the failure state and the terminal state FIRST — T2's publication-not-observation row, now driven by a real pipeline |
 | The verification plan's "two load workers … barriered so both read the same snapshot before either swaps" | UNREPRESENTABLE under the gate: two transforms cannot hold one snapshot concurrently. The arrangement's teeth survive as the BUILT barrier — both workers hold open handles before either reaches the gate — and the assertion is unchanged: one publication, one closed lease, a close observation totalling one |
+
+**Frozen paragraphs T6's machine supersedes**, in the same terms:
+
+| Frozen text | Status after T6 |
+|---|---|
+| U9's "Every cell is a compare-and-swap, decided from one snapshot and retried on failure, which is what makes the machine total across threads" | SAME TOTALITY, NO RETRIES — T1's reason reaching the machine. Every cell is a transform under the gate; a cell that loses does not exist, so totality across threads is the gate's property rather than a retry loop's |
+| §C's "contract C10 interim" — the synchronous match, "no in-flight frame to describe", the two-branch summary | RETIRED. The match runs off the dispatcher, the in-flight frame exists and renders the previous answer as a coherent past, and the summary has the four branches the travelling row said only an async match creates |
 **The four mutable authorities T1 introduced, with their
 dispositions.** The frozen rule counts identity and contents
 separately and says every authority the derivation finds must appear in

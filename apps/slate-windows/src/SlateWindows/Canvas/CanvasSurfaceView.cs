@@ -1447,10 +1447,11 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
                 _synchronizingFilter = false;
             }
         }
-        // SYNCHRONOUS (contract C10 interim): the match runs on this
-        // frame, so an active needle always has a count to show and an
-        // inactive one has nothing to summarise. There is no in-flight
-        // frame to render, which is what the async form needed a null for.
+        // ASYNC since task T6: an active needle's summary comes from the
+        // applied unit — the previous answer while a match is in flight,
+        // an empty region for a first match — and an inactive one has
+        // nothing to summarise. The in-flight frame renders what the
+        // rows themselves show.
         bool filtering = model.FilterActive;
         string summary = filtering ? model.Navigator.FilterSummaryText() : string.Empty;
         _filterSummary.Text = summary;

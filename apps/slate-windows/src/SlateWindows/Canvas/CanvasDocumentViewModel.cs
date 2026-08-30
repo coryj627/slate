@@ -152,6 +152,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// </summary>
     private readonly CanvasPublicationSlot _slot = new(CanvasPublication.Seed());
     private readonly CanvasLoadPipeline _pipeline;
+    private readonly CanvasFilterMachine _machine;
     private CanvasPublication? _applied;
     private bool _applying;
     private CanvasLoadState _state = CanvasLoadState.Loading;
@@ -166,7 +167,6 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     private string _filterText = string.Empty;
     private string? _whereAmIText;
     private CanvasFilterFocusRequest? _filterFocusRequest;
-    private (string Needle, IReadOnlySet<string> Ids)? _filterMatchCache;
 
     /// <summary>Row lookup by node id — the outline is walked by id from
     /// selection, activation and the tree's own callbacks.</summary>
@@ -200,7 +200,30 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         _announcer = announcer;
         _retargetedFrom = retargetedFrom;
         _verbosity = verbosity ?? (static () => CanvasVerbosity.Standard);
-        _pipeline = new CanvasLoadPipeline(_slot, new SessionSource(this));
+        _machine = new CanvasFilterMachine(
+            _slot,
+            new FilterSource(this),
+            // The tracked worker, with the projection posted after every
+            // job — inline in synchronous tests, so a keystroke's answer
+            // is applied before the setter returns, exactly as the
+            // synchronous filter behaved (task T6).
+            run: body => StartWork(() =>
+            {
+                try
+                {
+                    body();
+                }
+                finally
+                {
+                    Post(ApplyPublication);
+                }
+            }));
+        _pipeline = new CanvasLoadPipeline(
+            _slot,
+            new SessionSource(this),
+            // U9's load column, second half: the reseeded request the
+            // acceptance minted goes to the machine for its job.
+            onReseeded: (request, needle) => _machine.StartReseeded(request, needle));
         // The UI-originated intent publications — U11's fourth writer
         // family. The shared selection stays the surfaces' authority
         // for what they SHOW; what it publishes here is the INTENT the
@@ -893,10 +916,13 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 return;
             }
             _filterText = next;
-            // The needle INTENT — document-class, carried through a
-            // reload and reseeding its filter machine at acceptance
-            // (task T3); the job that answers it is task T6's.
-            _ = _slot.Publish(s => s.Retired ? null : s.WithNeedleIntent(next));
+            // The keystroke event, U9's first column: the needle INTENT,
+            // the schedule transition and — when the request starts at
+            // once — the pending unit, published together, and the job
+            // runs off the dispatcher (task T6). Inline in synchronous
+            // tests, so the answer is applied before this setter
+            // returns.
+            _machine.Typed(next, IsFilterActive(next));
             OnPropertyChanged(nameof(FilterText));
             OnPropertyChanged(nameof(FilterActive));
             OutlinePublished?.Invoke(this, EventArgs.Empty);
@@ -930,6 +956,20 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     internal static bool IsFilterActive(string needle) =>
         needle.Any(character => !char.IsWhiteSpace(character) || character is '\n' or '\r');
 
+    /// <summary>Whether an active needle's answer has not landed yet:
+    /// the document renders rows, a needle is in the field, and the
+    /// applied unit's answer is neither the ANSWER nor the FAILURE for
+    /// that needle. The count boundary says nothing in this state — the
+    /// completion's projection announces when the answer lands — which
+    /// is the distinction only an async match creates (§C's travelling
+    /// row, task T6).</summary>
+    internal bool FilterAnswerInFlight =>
+        RendersRetainedSnapshot
+        && FilterActive
+        && (_applied?.Unit is not { } unit
+            || unit.Answer is CanvasAnswerState.Unfiltered or CanvasAnswerState.Pending
+            || !string.Equals(unit.Needle, _filterText, StringComparison.Ordinal));
+
     /// <summary>
     /// What the surfaces show for the current needle, in reading order —
     /// ONE value, so the rows on screen, the summary's number and the
@@ -938,11 +978,13 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// <remarks>
     /// The MATCH is core's <c>canvas_filter</c> (0b-13/0b-14): title, the
     /// kind type word, any one element of the group path, and the
-    /// activation target. The needle goes over UNTRIMMED — core trims it,
-    /// and an empty needle matches everything, so whitespace answers the
-    /// full outline exactly as <see cref="FilterActive"/> says it should.
-    /// The answer is memoized per needle and invalidated by every publish,
-    /// because the ids can move under an unchanged needle.
+    /// activation target, run off the dispatcher by the machine (task
+    /// T6). The needle goes over UNTRIMMED — core trims it, and an empty
+    /// needle matches everything, so whitespace answers the full outline
+    /// exactly as <see cref="FilterActive"/> says it should. The view
+    /// derives from the APPLIED unit, so it moves when the projection
+    /// applies — never mid-read — and the ids moving under an unchanged
+    /// needle is a reload, which reseeds.
     /// </remarks>
     internal CanvasFilterView Filter
     {
@@ -952,57 +994,38 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             {
                 return new CanvasFilterView(_outline, Narrowed: false, Current: true, null);
             }
-            // A COUNT IS A CLAIM ABOUT ROWS ON SCREEN, so it is only
-            // current while rows are on screen (contract C10, C4's
-            // mapping). During a reload the surface collapses both
-            // projections and the memoized answer stayed `Current`, so
-            // the summary read "2 of 5 cards match" over a pane showing
-            // nothing — the one invariant C10 has, broken by a state
-            // change rather than by a filter change. `Current: false`
-            // routes both the label and the announcement through the
-            // state mapping, which has the honest sentence for every
-            // state that is not showing rows. The ROWS are unchanged:
-            // the answer is still the last coherent one, and widening
-            // here would make the reload flash every card the moment it
-            // finished.
-            if (!RendersRetainedSnapshot)
+            // Derived from the APPLIED unit — the same publication the
+            // rows on screen came from — never from a fresh query (task
+            // T6). The unit and the rows it filters are one immutable
+            // value, so the count and the rows cannot disagree, which
+            // is the one invariant C10 has.
+            if (_applied?.Unit is not { } unit)
             {
-                return _filterMatchCache is { } held
-                    ? new CanvasFilterView(
-                        RowsMatching(held.Ids), Narrowed: true, Current: false, held.Ids)
-                    : new CanvasFilterView(
-                        _outline, Narrowed: false, Current: false, null);
+                // Nothing ever applied: the unfiltered outline IS the
+                // prior view, and `Narrowed: false` keeps the summary
+                // from claiming these rows matched anything.
+                return new CanvasFilterView(_outline, Narrowed: false, Current: false, null);
             }
-            if (_filterMatchCache is { } cached
-                && string.Equals(cached.Needle, _filterText, StringComparison.Ordinal))
+            if (unit.Answer == CanvasAnswerState.Answered
+                && string.Equals(unit.Needle, _filterText, StringComparison.Ordinal))
             {
                 return new CanvasFilterView(
-                    RowsMatching(cached.Ids), Narrowed: true, Current: true, cached.Ids);
+                    RowsMatching(unit.Matched),
+                    Narrowed: true,
+                    Current: RendersRetainedSnapshot,
+                    unit.Matched);
             }
-            if (TryQuery<IReadOnlyList<string>>(
-                handle => _session.CanvasFilter(handle, _filterText),
-                [],
-                out IReadOnlyList<string> matched))
-            {
-                var ids = matched.ToHashSet(StringComparer.Ordinal);
-                _filterMatchCache = (_filterText, ids);
-                return new CanvasFilterView(
-                    RowsMatching(ids), Narrowed: true, Current: true, ids);
-            }
-            if (_filterMatchCache is { } stale)
-            {
-                // The needle changed and nothing could answer it. The
-                // PREVIOUS rows stay on screen and `Current` is false:
-                // widening silently back to the full outline would show
-                // every card while the field still claims to be
-                // filtering, and then speak that number as a match count.
-                return new CanvasFilterView(
-                    RowsMatching(stale.Ids), Narrowed: true, Current: false, stale.Ids);
-            }
-            // Nothing was ever applied, so the unfiltered outline IS the
-            // prior view. `Narrowed: false` keeps the summary from
-            // claiming these rows matched anything.
-            return new CanvasFilterView(_outline, Narrowed: false, Current: false, null);
+            // Pending, failed, or answered for an older needle: the
+            // previous answer stays on screen and `Current` is false —
+            // widening silently back to the full outline would show
+            // every card while the field still claims to be filtering,
+            // and then speak that number as a match count.
+            bool lingering =
+                unit.Matched.Count > 0 || unit.VisibleCount != _outline.Count;
+            return lingering
+                ? new CanvasFilterView(
+                    RowsMatching(unit.Matched), Narrowed: true, Current: false, unit.Matched)
+                : new CanvasFilterView(_outline, Narrowed: false, Current: false, null);
         }
     }
 
@@ -1270,10 +1293,28 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 // acceptance writes both in one swap — and the same
                 // population under a later publication (an intent moved)
                 // is already on screen.
-                if (current.Loaded is { } loaded
-                    && !ReferenceEquals(loaded.Population, was?.Population))
+                if (current.Loaded is not { } loaded)
+                {
+                    break;
+                }
+                if (!ReferenceEquals(loaded.Population, was?.Population))
                 {
                     PublishReady(loaded.Population, loaded.Unit);
+                    break;
+                }
+                if (!ReferenceEquals(loaded.Unit, was?.Unit))
+                {
+                    // A filter completion's successor unit (task T6):
+                    // same population, new projection. The surfaces
+                    // rebuild on the publish event, and a landed answer
+                    // — or its failure — is the debounced count's moment
+                    // to speak.
+                    OutlinePublished?.Invoke(this, EventArgs.Empty);
+                    if (loaded.Unit.Answer
+                        is CanvasAnswerState.Answered or CanvasAnswerState.Failed)
+                    {
+                        Navigator.AnnounceFilterCount();
+                    }
                 }
                 break;
             default:
@@ -1329,11 +1370,6 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         _targets.Clear();
         _subpaths.Clear();
         _neighbors.Clear();
-        // A read cache never outlives the rows it describes (contract
-        // C10): the memoized match set names ids that are about to stop
-        // existing, and a stale answer that still LOOKS like an answer is
-        // the filter's own second failure mode.
-        _filterMatchCache = null;
         WhereAmIText = null;
         Outline = [];
         TableRows = [];
@@ -1346,7 +1382,6 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         _targets.Clear();
         _subpaths.Clear();
         _neighbors.Clear();
-        _filterMatchCache = null;
         WhereAmIText = null;
         foreach (CanvasOutlineRow row in population.Outline)
         {
@@ -1861,6 +1896,16 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
 
         public CanvasLoadFailure ParseError(IReadOnlyList<CanvasLoadWarning> warnings) =>
             new(CanvasLoadState.ParseError, ParseErrorDetail(warnings));
+    }
+
+    /// <summary>The machine's one FFI call, through this document's
+    /// session — core's <c>canvas_filter</c> (0b-13/0b-14): title, the
+    /// kind type word, any one element of the group path, and the
+    /// activation target, the needle passed untrimmed.</summary>
+    private sealed class FilterSource(CanvasDocumentViewModel document) : ICanvasFilterSource
+    {
+        public string[] Match(ulong handle, string needle) =>
+            document._session.CanvasFilter(handle, needle);
     }
 }
 

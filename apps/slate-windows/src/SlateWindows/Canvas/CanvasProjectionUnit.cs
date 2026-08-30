@@ -119,9 +119,16 @@ internal sealed class CanvasProjectionUnit
                 : null);
     }
 
+    /// <summary>The failed answer KEEPS the rows it was showing — the
+    /// coherent past lingers, exactly as a pending unit's does, because
+    /// widening to the full canvas on a fault would show every card
+    /// while the field still claims to filter (contract C10). What
+    /// changes is the ANSWER STATE, the bit a surface needs to say the
+    /// honest sentence — §C's travelling failed-answer bit, task
+    /// T6.</summary>
     internal CanvasProjectionUnit Failed() => new(
         Request, Needle, CanvasAnswerState.Failed,
-        CanvasModelCopy.Ids(null), [], null);
+        Matched, FilteredOrder, ResolvedSelection);
 
     internal CanvasProjectionUnit WithResolvedSelection(string? nodeId) => new(
         Request, Needle, Answer, Matched, FilteredOrder, nodeId);

@@ -170,17 +170,24 @@ internal sealed class CanvasLoadPipeline
 {
     private readonly CanvasPublicationSlot _slot;
     private readonly ICanvasLoadSource _source;
+    private readonly Action<CanvasRequestIdentity, string>? _onReseeded;
     private readonly CanvasLoadProbeForTests? _probe;
 
+    /// <param name="onReseeded">Where the reseeded filter request goes —
+    /// task T6's machine, which owes it a job. An effect after the won
+    /// acceptance swap (U9's load column), handed the request and its
+    /// needle from the outcome rather than from a second read.</param>
     internal CanvasLoadPipeline(
         CanvasPublicationSlot slot,
         ICanvasLoadSource source,
+        Action<CanvasRequestIdentity, string>? onReseeded = null,
         CanvasLoadProbeForTests? probeForTests = null)
     {
         ArgumentNullException.ThrowIfNull(slot);
         ArgumentNullException.ThrowIfNull(source);
         _slot = slot;
         _source = source;
+        _onReseeded = onReseeded;
         _probe = probeForTests;
     }
 
@@ -316,6 +323,11 @@ internal sealed class CanvasLoadPipeline
 
                 CanvasLoadAcceptance acceptance =
                     CanvasLeaseTransfer.TryAccept(_slot, identity, lease, population, _probe);
+                if (acceptance is { Accepted: true, Reseeded: { } reseeded })
+                {
+                    _onReseeded?.Invoke(reseeded, acceptance.ReseededNeedle!);
+                }
+
                 return acceptance.Accepted
                     ? CanvasLoadOutcome.Accepted
                     : CanvasLoadOutcome.Refused;

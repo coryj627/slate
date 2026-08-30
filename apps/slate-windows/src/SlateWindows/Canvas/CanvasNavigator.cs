@@ -544,12 +544,12 @@ internal sealed class CanvasNavigator
                 CanvasFailedAction.WhereAmI, detail));
             return;
         }
-        // ONE view, and BOTH numbers read on this frame. The filter is
-        // SYNCHRONOUS here (contract C10 interim), so nothing lands
-        // BETWEEN the numerator and the denominator: they are one
-        // dispatcher turn's worth of state. The mixed-canvas window this
-        // comment used to warn about is gone — the getter returns before
-        // it queries whenever the document is not rendering rows, so
+        // ONE view, and BOTH numbers read on this frame. The match is
+        // ASYNC since task T6, but the VIEW is one applied publication's
+        // worth of state — the unit and the rows it filters are one
+        // immutable value — so nothing lands BETWEEN the numerator and
+        // the denominator. The mixed-canvas window stays gone: the view
+        // derives from the applied unit, never from a fresh query, so
         // there is no answer to take against a handle a reload has
         // already swapped.
         CanvasFilterView view = _document.Filter;
@@ -632,8 +632,9 @@ internal sealed class CanvasNavigator
         // than an unreadable one.
         if (_document.AdmitStructuralRead())
         {
-            // The widening is synchronous, so this counts the rows this
-            // frame put on screen (contract C10 interim).
+            // The widening is synchronous even under task T6's async
+            // match — an inactive needle is the view's own answer, no
+            // job — so this counts the rows this frame put on screen.
             Announce(new CanvasA11yEvent.CanvasFilterCleared(
                 (uint)_document.Outline.Count));
         }
@@ -658,13 +659,22 @@ internal sealed class CanvasNavigator
             return;
         }
         CanvasFilterView view = _document.Filter;
-        if (!view.Current)
+        if (view.Current)
         {
-            Announce(new CanvasA11yEvent.CanvasStatus(
-                _document.ReadRefusal ?? new CanvasStatusNote.Reopening()));
+            Announce(new CanvasA11yEvent.CanvasFilterCount((uint)view.Rows.Count));
             return;
         }
-        Announce(new CanvasA11yEvent.CanvasFilterCount((uint)view.Rows.Count));
+        if (_document.FilterAnswerInFlight)
+        {
+            // The async match has not landed (task T6): a count now
+            // would describe rows the needle did not choose, and the
+            // completion's projection announces the honest one. Saying
+            // nothing here is not a silent verb — the debounced count
+            // is the keystroke's echo, and it arrives with the answer.
+            return;
+        }
+        Announce(new CanvasA11yEvent.CanvasStatus(
+            _document.ReadRefusal ?? new CanvasStatusNote.Reopening()));
     }
 
     /// <summary>
@@ -674,10 +684,11 @@ internal sealed class CanvasNavigator
     /// owes.
     /// </summary>
     /// <remarks>
-    /// SYNCHRONOUS (contract C10 interim), and the shape follows from
-    /// that: the match runs on this frame, so there is no in-flight frame
-    /// to describe and no pending-query state to distinguish — which is
-    /// why this is two branches rather than four.
+    /// ASYNC since task T6, and the four-branch shape follows from
+    /// that: a current answer counts; a previous answer still on screen
+    /// counts, because the number describes displayed rows; an
+    /// in-flight first match renders nothing rather than a claim; and
+    /// everything else is the state mapping's sentence.
     ///
     /// `Current` is false for TWO reasons, not one, and both land in the
     /// same branch because the state mapping has the honest sentence for
@@ -691,10 +702,24 @@ internal sealed class CanvasNavigator
     public string FilterSummaryText()
     {
         CanvasFilterView view = _document.Filter;
-        return view.Current
-            ? CanvasPhrase.FilterSummary(view.Rows.Count, _document.Outline.Count)
-            : CanvasAnnouncer.RenderLabel(new CanvasA11yEvent.CanvasStatus(
-                _document.ReadRefusal ?? new CanvasStatusNote.Reopening()));
+        if (view.Current || (_document.FilterAnswerInFlight && view.Narrowed))
+        {
+            // Current, or the PREVIOUS answer still on screen while the
+            // new match runs (task T6): either way the number counts
+            // the rows the surface is showing, which is the one
+            // invariant C10 has.
+            return CanvasPhrase.FilterSummary(view.Rows.Count, _document.Outline.Count);
+        }
+        if (_document.FilterAnswerInFlight)
+        {
+            // Nothing narrowed yet and the answer in flight: no number
+            // is true of a match nobody made, and the state mapping has
+            // no sentence for a healthy document. The region renders
+            // empty until the completion's projection lands.
+            return string.Empty;
+        }
+        return CanvasAnnouncer.RenderLabel(new CanvasA11yEvent.CanvasStatus(
+            _document.ReadRefusal ?? new CanvasStatusNote.Reopening()));
     }
 
     // --- Modes (t0 §2) ---------------------------------------------------
