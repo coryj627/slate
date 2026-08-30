@@ -2403,6 +2403,41 @@ public sealed class CanvasDocumentTests : IDisposable
     });
 
     /// <summary>
+    /// A failure does not erase the durable selection intent: the
+    /// failed load clears the SEAT — there are no rows — but the next
+    /// successful load's rebase resolves the intent and the selection
+    /// comes back (task T3; the design's "a node that comes back on the
+    /// next load should come back selected").
+    /// </summary>
+    [Fact]
+    public void AFailedLoadKeepsTheSelectionIntentForTheNextOne()
+    {
+        string board = Path.Combine(_fixture.Root, "board.canvas");
+        string moved = Path.Combine(_fixture.Root, "board.canvas.away");
+        CanvasDocumentViewModel document = NewDocument("board.canvas");
+        document.Load();
+        document.SelectNode("evidence", announce: false);
+        Assert.Equal("evidence", document.Selection.Selected);
+
+        File.Move(board, moved);
+        try
+        {
+            document.Load();
+            Assert.Equal(CanvasLoadState.Failed, document.State);
+            Assert.Null(document.Selection.Selected);
+        }
+        finally
+        {
+            File.Move(moved, board);
+        }
+
+        document.Load();
+        Assert.Equal(CanvasLoadState.Ready, document.State);
+        Assert.Equal("evidence", document.Selection.Selected);
+        document.Shutdown();
+    }
+
+    /// <summary>
     /// SEAM 3's ordering, pinned at the source: the retired publication
     /// precedes the base shutdown in <c>Shutdown</c>, so a load issued
     /// between the two is refused by the model rather than silently

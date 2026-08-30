@@ -5523,14 +5523,19 @@ generation, and the lock is the lease's. The full unit suite —
 1,706 tests, T3's battery included — passes on top of the rewiring,
 which is the parity claim for a change of this size.
 
-* **The reload order, decided.** UN-NAME FIRST: the request publishes
-  Loading with the chain cleared and hands its worker the displaced
-  lease from the decision snapshot; the worker closes it under its own
-  lock BEFORE the new open. One native handle at a time — the inherited
-  load's rule and the frozen transition's own order — and a dispatcher
-  never waits under a lease's lock. The fact pins the ORDER itself, on
-  the source log, and the mutation that closes after the open fails on
-  that sentence.
+* **The reload order, decided — then corrected by the review.**
+  UN-NAME FIRST, by the WORKER: the request publishes Loading and keeps
+  the chain; the worker's first publication un-names the old lease and
+  closes it, under its own lock, BEFORE the new open. One native handle
+  at a time — the inherited load's rule and the frozen transition's own
+  order — and a dispatcher never waits under a lease's lock. As first
+  shipped, the REQUEST un-named, and the T3 review found the leak that
+  buys: a worker the scheduler refuses to run — a shutdown landing
+  between the request and the pool — left an un-named lease nothing
+  could reach. Un-named by the worker instead, a dropped worker leaves
+  the lease NAMED and teardown's terminal publication closes it; one
+  fact pins that window, the order fact pins close-before-open on the
+  source log, and the close-after-open mutation fails on its sentence.
 * **U4's operation, fact by fact.** A delivery superseded after its
   build refuses and closes only its own handle; two concurrent
   deliveries, barriered so BOTH hold open handles before either reaches
@@ -5597,6 +5602,43 @@ state at all. The request a worker receives is a `CanvasLoadRequest`,
 what its delivery did is a `CanvasLoadOutcome`, and the window's named
 points are `CanvasLoadPoint` — bound here so the floor below has teeth
 over T3's names.
+
+**T3's review, and what it moved.** The correctness verifiers returned
+four findings — two confirmed, two plausible — and refuted seven with
+code-constructible evidence; the cleanup-side pass NEVER REPORTED and
+is recorded here as not run, so T3's reuse and simplification angles
+are unreviewed. All four addressed:
+
+* **The displaced lease could leak.** The request un-named the old
+  lease and handed the only reference to a worker the scheduler may
+  silently drop after shutdown — teardown then found nothing to close,
+  the handle leaked for the session's life, and the drain reported
+  success. The un-name is the WORKER's first publication now: a dropped
+  worker leaves the lease NAMED, and teardown closes it. The window has
+  its fact, and the request-side un-name, re-injected, fails it.
+* **A panic-class close fault escaped.** A panic out of the FFI is not
+  a VaultException, and the reload's displaced close ran outside the
+  delivery's catch: it could fault the tracked body, pin the tab on
+  "Opening canvas…" forever and fault the teardown drain — the defect
+  the inherited load's broad catch existed for, reintroduced by a
+  narrow filter. The displaced close now sits inside the fault-mapped
+  try, so a panic publishes Failed with the request's terminal state;
+  the release's and the terminal close's guards catch everything
+  survivable; and the body's finally posts the projection whatever the
+  delivery did. The swallow-instead-of-map mutant fails the new fact.
+* **The apply could clobber a newer selection.** The projection seated
+  the acceptance-time resolution unconditionally, undoing a selection
+  made between the swap and the posted apply. It re-seats only when the
+  selection AS IT IS AT APPLY TIME did not survive the new rows — the
+  inherited contract, which the workspace's own comment still states —
+  with the rebase's resolution as the fallback.
+* **A failure erased the durable selection intent.** The failure path's
+  empty seat flowed back through the intent hook as a null
+  `WithSelectedIntent`, although the model's own terminal transform
+  deliberately preserves every intent. Apply-time seats no longer
+  publish intents, and the end-to-end fact breaks a file, watches the
+  failure clear the seat, restores the file, and finds the selection
+  back.
 
 **Frozen paragraphs the gate SUPERSEDES.** The freeze forbids revising
 them and that is right; this record is the sanctioned place to say which

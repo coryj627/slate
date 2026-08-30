@@ -374,8 +374,8 @@ internal sealed class CanvasPublication
         CanvasProjectionUnit unit) =>
         Copy(loaded: new CanvasLoaded(lease, population, unit), loadedSet: true);
 
-    /// <summary>The reload's first step: lease, population and unit
-    /// un-named together, the document NOT retired. Task T3's
+    /// <summary>The reload WORKER's first act: lease, population and
+    /// unit un-named together, the document NOT retired. Task T3's
     /// un-name-first order — the frozen transition's "publish the
     /// terminal state for the old lease and population" — so that one
     /// native handle is open at a time and the old lease's close, which

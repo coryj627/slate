@@ -153,6 +153,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     private readonly CanvasPublicationSlot _slot = new(CanvasPublication.Seed());
     private readonly CanvasLoadPipeline _pipeline;
     private CanvasPublication? _applied;
+    private bool _applying;
     private CanvasLoadState _state = CanvasLoadState.Loading;
     private string? _stateMessage;
     private IReadOnlyList<CanvasOutlineRow> _outline = [];
@@ -1201,8 +1202,16 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         ApplyPublication();
         StartWork(() =>
         {
-            _ = _pipeline.Deliver(request);
-            Post(ApplyPublication);
+            try
+            {
+                _ = _pipeline.Deliver(request);
+            }
+            finally
+            {
+                // Whatever the delivery did, the surface reflects the
+                // publication that resulted — a failure's included.
+                Post(ApplyPublication);
+            }
         });
     }
 
@@ -1237,6 +1246,19 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         }
         CanvasPublication? was = _applied;
         _applied = current;
+        _applying = true;
+        try
+        {
+            Apply(current, was);
+        }
+        finally
+        {
+            _applying = false;
+        }
+    }
+
+    private void Apply(CanvasPublication current, CanvasPublication? was)
+    {
         switch (current.LoadState)
         {
             case CanvasLoadState.Loading:
@@ -1273,6 +1295,15 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// selection would be reading C-lite state inside it (I4).</summary>
     private void PublishIntent(string? property)
     {
+        if (_applying)
+        {
+            // The apply's own seats are not user intents: a failure
+            // clearing the selection must not erase the durable intent
+            // the NEXT load's rebase exists to resolve — "a node that
+            // comes back on the next load should come back selected"
+            // (the T3 review's fourth finding).
+            return;
+        }
         switch (property)
         {
             case nameof(CanvasSelection.Selected):
@@ -1336,14 +1367,19 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         State = CanvasLoadState.Ready;
         // A reload keeps the selection when the node survived; a
         // selection pointing at a node that is gone would leave every
-        // selection-scoped verb acting on nothing (contract A12). The
-        // REBASE decided this at acceptance, against the decision
-        // snapshot's intent — so a selection made while the load was in
-        // flight is the one that survives, not the one the load began
-        // under. Silent seat either way (A12): the focus lands on the
-        // row and the screen reader reads it.
-        Selection.Selected = unit.ResolvedSelection
-            ?? (population.Count > 0 ? population.Outline[0].NodeId : null);
+        // selection-scoped verb acting on nothing (contract A12).
+        // Checked against the selection AS IT IS NOW, at apply time —
+        // the user may have moved between the swap and this apply, and
+        // the T3 review caught the rebase's answer clobbering that
+        // move. The rebase's resolution is the FALLBACK: when the
+        // current seat did not survive, the resolved intent is what
+        // comes back, else the first row. Silent seat either way (A12):
+        // the focus lands on the row and the screen reader reads it.
+        if (Selection.Selected is not { } kept || !_rows.ContainsKey(kept))
+        {
+            Selection.Selected = unit.ResolvedSelection
+                ?? (population.Count > 0 ? population.Outline[0].NodeId : null);
+        }
         OutlinePublished?.Invoke(this, EventArgs.Empty);
         AnnounceDegradedLoadIfNeeded();
     }
@@ -1779,10 +1815,16 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             _ = lease.Close();
         }
         catch (Exception exception) when (
-            exception is VaultException or ObjectDisposedException)
+            exception is not OutOfMemoryException
+                and not StackOverflowException
+                and not AccessViolationException)
         {
-            // Teardown race: the session died first — the handle died
-            // with it.
+            // Teardown race, or a panic out of the FFI — either way the
+            // attempt is on the record, and a faulted close task here
+            // would fault the vault-close drain over a handle that is
+            // already unusable. PanicException is a UniffiException,
+            // not a VaultException, which is why the filter is the
+            // survivable set rather than the narrow pair (T3 review).
         }
     }
 

@@ -100,7 +100,7 @@ public sealed class ContractsCitationCensus
                 // predecessors'.
                 //
                 // T3 bound the pipeline and its types, taking the
-                // section to 58. 55 sits above the pre-T3 population
+                // section to 59. 55 sits above the pre-T3 population
                 // of 50 — the same rule, a third time.
                 55),
         ];

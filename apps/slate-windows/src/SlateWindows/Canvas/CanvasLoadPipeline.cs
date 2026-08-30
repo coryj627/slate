@@ -90,11 +90,13 @@ internal sealed class CanvasLoadProbeForTests
 }
 
 /// <summary>One load REQUEST as the pipeline hands it to its worker:
-/// the identity the schedule now names, and the lease the request
-/// un-named — closed by the worker, under that lease's own lock,
-/// before the new open.</summary>
-internal sealed record CanvasLoadRequest(
-    CanvasRequestIdentity Identity, CanvasHandleLease? Displaced);
+/// the identity the schedule now names. The request deliberately does
+/// NOT un-name the old lease — the worker's first publication does —
+/// because a worker the scheduler refuses to run would leave an
+/// un-named lease with no owner at all, while a NAMED one is
+/// teardown's to close. The T3 review found exactly that leak in a
+/// request-side un-name.</summary>
+internal sealed record CanvasLoadRequest(CanvasRequestIdentity Identity);
 
 /// <summary>What one delivery did.</summary>
 internal enum CanvasLoadOutcome
@@ -142,15 +144,18 @@ internal enum CanvasLoadOutcome
 /// the host's thread.
 /// </para>
 /// <para>
-/// UN-NAME FIRST, the choice task T2 left open. The other order —
-/// displace the old lease at acceptance — leaks nothing either, since
-/// T2's acceptance closes what it displaces; this one keeps one native
-/// handle open at a time, as the inherited load did, and the surface
-/// keeps its rows as a coherent past because presentation is outside
-/// the chain. The request hands the worker the lease it un-named, from
-/// the decision snapshot, so the close needs no second read; and the
-/// worker closes it rather than the requester, so a dispatcher never
-/// waits under a lease's lock for an in-flight FFI call.
+/// UN-NAME FIRST, the choice task T2 left open — and un-named by the
+/// WORKER, not the request. The other order — displace the old lease
+/// at acceptance — leaks nothing either, since T2's acceptance closes
+/// what it displaces; this one keeps one native handle open at a time,
+/// as the inherited load did, and the surface keeps its rows as a
+/// coherent past because presentation is outside the chain. The
+/// worker's own un-name publication hands it the displaced lease from
+/// that decision snapshot, so the close needs no second read and a
+/// dispatcher never waits under a lease's lock — and a worker the
+/// scheduler refuses to run leaves the old lease NAMED, owned by the
+/// terminal publication, rather than un-named and unreachable, which
+/// is the leak the T3 review found in a request-side un-name.
 /// </para>
 /// <para>
 /// THE RELEASE OBLIGATION is discharged in a finally wrapping the whole
@@ -180,8 +185,8 @@ internal sealed class CanvasLoadPipeline
     }
 
     /// <summary>
-    /// Step one: publish the request — the schedule's new latest, the
-    /// Loading state, and the old lease un-named — in one swap.
+    /// Step one: publish the request — the schedule's new latest and
+    /// the Loading state, the chain deliberately KEPT — in one swap.
     /// </summary>
     /// <returns>What the worker needs, or null when the document is
     /// retired: a retired document loads nothing, ever, and the refusal
@@ -193,12 +198,9 @@ internal sealed class CanvasLoadPipeline
             snapshot.Retired
                 ? null
                 : snapshot
-                    .WithUnloaded()
                     .WithLoads(snapshot.Loads.Requested(identity))
                     .WithLoadState(CanvasLoadState.Loading, null));
-        return outcome.Installed
-            ? new CanvasLoadRequest(identity, outcome.Predecessor.Lease)
-            : null;
+        return outcome.Installed ? new CanvasLoadRequest(identity) : null;
     }
 
     /// <summary>
@@ -210,13 +212,6 @@ internal sealed class CanvasLoadPipeline
     {
         ArgumentNullException.ThrowIfNull(request);
         CanvasRequestIdentity identity = request.Identity;
-
-        // The old handle first, under its own lock, so the last
-        // in-flight call on it has returned before the new open.
-        if (request.Displaced is { } displaced)
-        {
-            CloseGuarded(displaced);
-        }
 
         CanvasHandleLease? lease = null;
         CanvasLoadFailure? failure = null;
@@ -252,14 +247,31 @@ internal sealed class CanvasLoadPipeline
         {
             try
             {
-                // One read, and a cheap refusal: a request already
-                // superseded or retired opens no handle at all. The
-                // DECISION is the transform's, inside the gate; this
-                // only spares the native open.
-                CanvasPublication before = _slot.Current;
-                if (before.Retired || !before.Loads.Admits(identity))
+                // The worker's first act, and its own early refusal:
+                // UN-NAME the old lease — a publication, declined when
+                // the request is already superseded or the document
+                // retired, in which case nothing opens. Un-naming here
+                // rather than at the request keeps the old lease OWNED
+                // at every instant: it stays named until this worker
+                // actually runs, so a worker the scheduler never runs
+                // leaves it for teardown's terminal publication.
+                CanvasPublicationOutcome unnamed = _slot.Publish(snapshot =>
+                    snapshot.Retired || !snapshot.Loads.Admits(identity)
+                        ? null
+                        : snapshot.WithUnloaded());
+                if (!unnamed.Installed)
                 {
                     return CanvasLoadOutcome.Refused;
+                }
+
+                // Then the old handle, under its own lock, so the last
+                // in-flight call on it has returned before the new
+                // open. INSIDE the try: a close that throws — even
+                // panic-class — maps to the failure state instead of
+                // faulting the tracked body.
+                if (unnamed.Predecessor.Lease is { } displaced)
+                {
+                    _ = displaced.Close();
                 }
 
                 CanvasOpenInfo info = _source.Open();
@@ -330,22 +342,15 @@ internal sealed class CanvasLoadPipeline
             return CanvasLeaseTransfer.Release(_slot, identity, lease, failure);
         }
         catch (Exception exception) when (
-            exception is VaultException or ObjectDisposedException)
+            exception is not OutOfMemoryException
+                and not StackOverflowException
+                and not AccessViolationException)
         {
+            // The close's fault, not the delivery's: a session that
+            // died first, or a panic-class exception out of the FFI —
+            // either way the attempt is on the record, and the tracked
+            // body must not fault over it.
             return null;
-        }
-    }
-
-    private static void CloseGuarded(CanvasHandleLease lease)
-    {
-        try
-        {
-            _ = lease.Close();
-        }
-        catch (Exception exception) when (
-            exception is VaultException or ObjectDisposedException)
-        {
-            // Teardown race: the session died first.
         }
     }
 }

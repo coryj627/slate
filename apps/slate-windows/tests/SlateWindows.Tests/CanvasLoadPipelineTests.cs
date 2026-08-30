@@ -27,48 +27,74 @@ public sealed class CanvasLoadPipelineTests
     // The request
     // ---------------------------------------------------------------
 
-    /// <summary>Un-name first: the request publishes Loading with the
-    /// chain cleared and hands its worker the lease it un-named, from
-    /// the decision snapshot. The request closes nothing itself.</summary>
+    /// <summary>The request publishes Loading and KEEPS the chain: the
+    /// old lease stays named — and therefore owned — until the worker's
+    /// own first publication un-names it. A worker the scheduler never
+    /// runs then leaves the lease for teardown, which is the leak the
+    /// T3 review found in a request-side un-name.</summary>
     [Fact]
-    public void ARequestUnNamesTheOldLeaseAndPublishesLoading()
+    public void TheOldLeaseStaysOwnedBetweenTheRequestAndItsWorker()
     {
         var source = new FakeSource();
         var slot = new CanvasPublicationSlot(CanvasPublication.Seed());
         var pipeline = new CanvasLoadPipeline(slot, source);
-
-        CanvasLoadRequest first = pipeline.Request()!;
         Assert.True(
-            first.Displaced is null
-                && slot.Current.LoadState == CanvasLoadState.Loading
-                && slot.Current.Loads.Admits(first.Identity),
-            "premise: a first request has nothing to displace and publishes Loading.");
-        Assert.True(
-            pipeline.Deliver(first) == CanvasLoadOutcome.Accepted,
+            pipeline.Deliver(pipeline.Request()!) == CanvasLoadOutcome.Accepted,
             "premise: the first load lands.");
         CanvasHandleLease live = slot.Current.Lease!;
 
         CanvasLoadRequest reload = pipeline.Request()!;
 
         Assert.True(
-            ReferenceEquals(reload.Displaced, live),
-            "the request hands its worker the lease it un-named — from the decision "
-            + "snapshot, not a second read, and not nothing.");
-        Assert.True(
-            slot.Current.Loaded is null
+            slot.Current.Names(live)
+                && !live.IsClosed
                 && slot.Current.LoadState == CanvasLoadState.Loading
                 && !slot.Current.Retired,
-            "lease, population and unit are un-named together and the document is "
-            + "NOT retired: a reload is not a teardown.");
+            "the request publishes Loading and keeps the old lease NAMED: un-named "
+            + "here, a dropped worker would leave a handle nobody can reach.");
+
+        // The worker never runs — a shutdown landed instead. The lease
+        // is still named, so the terminal publication owns its close.
+        _ = slot.Publish(s => s.WithRetired());
+        CanvasHandleLease? unnamed = CanvasLeaseTransfer.Terminalize(slot);
         Assert.True(
-            !live.IsClosed && source.TotalCloses == 0,
-            "the request itself closed nothing; the close is the worker's, under the "
-            + "lease's own lock, so a dispatcher never waits there for an in-flight "
-            + "FFI call.");
+            ReferenceEquals(unnamed, live) && unnamed!.Close() && source.TotalCloses == 1,
+            $"teardown closed the requested-but-undelivered document's lease "
+            + $"{source.TotalCloses} times; the request left it reachable.");
+
+        // And the worker, arriving late, opens nothing.
         Assert.True(
-            !live.Invoke(() => slot.Current.Names(live), _ => { }),
-            "and a query through the un-named lease is refused from the moment of "
-            + "the request.");
+            pipeline.Deliver(reload) == CanvasLoadOutcome.Refused && source.Opens == 1,
+            "the late worker refused at its un-name and opened nothing.");
+    }
+
+    /// <summary>A displaced close that throws — panic-class included —
+    /// maps to the failure state instead of faulting the tracked body:
+    /// the attempt is on the record, nothing opens, and the request is
+    /// terminal.</summary>
+    [Fact]
+    public void ADisplacedCloseThatThrowsPublishesTheFailure()
+    {
+        var source = new FakeSource();
+        var slot = new CanvasPublicationSlot(CanvasPublication.Seed());
+        var pipeline = new CanvasLoadPipeline(slot, source);
+        Assert.True(
+            pipeline.Deliver(pipeline.Request()!) == CanvasLoadOutcome.Accepted,
+            "premise: the first load lands.");
+        source.CloseFault = new InvalidOperationException("panic");
+
+        CanvasLoadOutcome outcome = pipeline.Deliver(pipeline.Request()!);
+
+        Assert.True(outcome == CanvasLoadOutcome.Faulted, $"the reload reported {outcome}.");
+        Assert.True(
+            source.TotalCloses == 1 && source.Opens == 1,
+            $"one close attempt is on the record ({source.TotalCloses}) and nothing "
+            + $"new opened ({source.Opens}).");
+        Assert.True(
+            slot.Current.LoadState == CanvasLoadState.Failed
+                && slot.Current.Loads.Delivery == CanvasLoadDelivery.Released
+                && slot.Current.Loaded is null,
+            "the failure and the terminal state published together.");
     }
 
     /// <summary>A retired document requests nothing, and publishes
@@ -593,7 +619,7 @@ public sealed class CanvasLoadPipelineTests
 
         internal Exception? ReadFault { get; init; }
 
-        internal Exception? CloseFault { get; init; }
+        internal Exception? CloseFault { get; set; }
 
         internal int Opens => Volatile.Read(ref _opens);
 
