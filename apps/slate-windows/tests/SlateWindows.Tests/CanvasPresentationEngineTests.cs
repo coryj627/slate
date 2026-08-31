@@ -265,4 +265,28 @@ public sealed class CanvasPresentationEngineTests
             () => frame.Continue = false);
         Dispatcher.PushFrame(frame);
     }
+
+    /// <summary>Task TD-3: the retained set is the third authority —
+    /// a commit rebuilds the installed state, and an identical set is
+    /// deduplicated exactly as an identity viewport transform is.</summary>
+    [Fact]
+    public void ARetainedCommitRebuildsAndAnEqualSetDoesNot()
+    {
+        var engine = new CanvasPresentationEngine(synchronousForTests: true);
+        engine.OnPublicationApplied(CanvasPublication.Seed());
+        var installs = 0;
+        engine.StateInstalled += (_, _) => installs++;
+        engine.CommitRetained([CanvasPeerKey.Card("x")]);
+        Assert.True(
+            installs == 1
+                && engine.Current is { } state
+                && state.Retained.Contains(CanvasPeerKey.Card("x")),
+            "the retained commit did not rebuild the installed state with "
+            + "its snapshot (TD-3's third authority).");
+        engine.CommitRetained([CanvasPeerKey.Card("x")]);
+        Assert.True(
+            installs == 1,
+            "an equal retained set rebuilt anyway: set equality is the "
+            + "deduplication, exactly as geometry is the viewport's.");
+    }
 }

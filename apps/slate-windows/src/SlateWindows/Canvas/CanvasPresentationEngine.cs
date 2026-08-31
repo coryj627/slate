@@ -37,6 +37,8 @@ internal sealed class CanvasPresentationEngine
     private CanvasPublication? _source;
     private int _textScaleRevision;
     private int _themeRevision;
+    private System.Collections.Immutable.ImmutableHashSet<CanvasPeerKey> _retained =
+        [];
     private bool _building;
     private int _discarded;
 
@@ -102,6 +104,23 @@ internal sealed class CanvasPresentationEngine
         RequestBuild();
     }
 
+    /// <summary>The third authority (task TD-3): the externally
+    /// retained peer keys — realized or referenced by clients — whose
+    /// off-window survivors carry tombstones. Committed on the
+    /// dispatcher exactly as the viewport is.</summary>
+    internal void CommitRetained(
+        System.Collections.Immutable.ImmutableHashSet<CanvasPeerKey> retained)
+    {
+        ArgumentNullException.ThrowIfNull(retained);
+        AssertCommitThread();
+        if (_retained.SetEquals(retained))
+        {
+            return;
+        }
+        _retained = retained;
+        RequestBuild();
+    }
+
     /// <summary>The theme half of the revision pair.</summary>
     internal void CommitThemeRevision(int revision)
     {
@@ -157,15 +176,16 @@ internal sealed class CanvasPresentationEngine
         _building = true;
         CanvasPublication source = _source;
         CanvasViewportState viewport = _viewport;
+        System.Collections.Immutable.ImmutableHashSet<CanvasPeerKey> retained = _retained;
         int textScale = _textScaleRevision;
         int theme = _themeRevision;
         if (_synchronous)
         {
-            Install(Derive(source, viewport, textScale, theme));
+            Install(Derive(source, viewport, retained, textScale, theme));
             return;
         }
         _ = System.Threading.Tasks.Task.Run(
-                () => Derive(source, viewport, textScale, theme))
+                () => Derive(source, viewport, retained, textScale, theme))
             .ContinueWith(
                 done => Install(done.Result),
                 System.Threading.CancellationToken.None,
@@ -180,9 +200,18 @@ internal sealed class CanvasPresentationEngine
     private static CanvasPresentationState Derive(
         CanvasPublication source,
         CanvasViewportState viewport,
+        System.Collections.Immutable.ImmutableHashSet<CanvasPeerKey> retained,
         int textScaleRevision,
         int themeRevision) =>
-        new(source, viewport, textScaleRevision, themeRevision);
+        new(
+            source,
+            viewport,
+            source.Loaded?.Population is { } population
+                ? CanvasPeerTopology.Derive(population, viewport, retained)
+                : CanvasPeerTopology.Empty(),
+            retained,
+            textScaleRevision,
+            themeRevision);
 
     private void Install(CanvasPresentationState built)
     {
@@ -193,6 +222,7 @@ internal sealed class CanvasPresentationEngine
         // detected here and never installed.
         bool stale =
             !ReferenceEquals(built.Source, _source)
+            || !ReferenceEquals(built.Retained, _retained)
             || !built.Viewport.SameGeometry(_viewport)
             || built.TextScaleRevision != _textScaleRevision
             || built.ThemeRevision != _themeRevision;

@@ -6850,6 +6850,36 @@ and a second mutant would exercise the same wall twice. ID-3 is
 discharged pending TD-2's review round; D2's failure-pane and
 renderer-consumption halves land with TD-6.
 
+**TD-3 — the peer topology and the third authority, landed.**
+`CanvasPeerTopology`: the three-cell table as data — materialized
+placements with document-space rectangles, tombstones ONLY for
+externally retained keys, and the UNREALIZED cell deliberately
+ABSENT: the population's descriptor index answers a first touch, so
+storing an entry per unrealized card would be the index copied per
+state, which is what obligation ID-3 just forbade. Identity is
+discriminated (card or edge plus core id; the renderer and document
+halves structural). Edges window by their RENDERED bounds — the
+endpoints' bounding box, containing the straight path and its label
+chip — pinned by
+`ALongEdgeCrossingTheWindowMaterializesWithoutItsEndpoints`, the
+exact arrangement obligation ID-4 forbade narrowing. The engine
+gains its third dispatcher-committed authority — the retained set,
+deduplicated by set equality
+(`ARetainedCommitRebuildsAndAnEqualSetDoesNot`) — and the installed
+state carries topology and retained snapshot for the install-time
+revalidation; a discarded build's topology vanishes with the build,
+which is half the retirement rule, the registry's weak-identity
+half arriving with TD-6's peer objects. Also pinned:
+`CardsMaterializeByTheWindowPlusOneMargin`,
+`AnUnlabelledEdgeIsNeverAPeer` (DD-2), and
+`TombstonesAreRetainedOnlyAndIdentityIsDiscriminated`. Mutations,
+injected and restored byte-for-byte: endpoint-membership windowing
+(the crossing fact red) and tombstones-for-everyone (the
+materialization fact red on the far card's entry). ID-4 is
+discharged pending TD-3's review round; the Ready-publication
+integration fact rides TD-6's renderer battery, where the full
+transfer path exists.
+
 ---
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)

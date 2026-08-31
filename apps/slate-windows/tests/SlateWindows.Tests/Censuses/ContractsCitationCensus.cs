@@ -142,7 +142,11 @@ public sealed class ContractsCitationCensus
                 // TD-2 bound the scene's copy, its index and their
                 // facts, taking the section to 33; 30 sits above the
                 // pre-task population of 28 — a second time.
-                30),
+                //
+                // TD-3 bound the topology, the third authority and
+                // their sentinels, taking the section to 39; 35 sits
+                // above the pre-task population of 33 — a third time.
+                35),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

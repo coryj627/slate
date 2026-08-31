@@ -16,16 +16,33 @@ internal sealed class CanvasPresentationState
     internal CanvasPresentationState(
         CanvasPublication source,
         CanvasViewportState viewport,
+        CanvasPeerTopology topology,
+        System.Collections.Immutable.ImmutableHashSet<CanvasPeerKey> retained,
         int textScaleRevision,
         int themeRevision)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(viewport);
+        ArgumentNullException.ThrowIfNull(topology);
+        ArgumentNullException.ThrowIfNull(retained);
         Source = source;
         Viewport = viewport;
+        Topology = topology;
+        Retained = retained;
         TextScaleRevision = textScaleRevision;
         ThemeRevision = themeRevision;
     }
+
+    /// <summary>The peer topology this state was derived with (§D D3,
+    /// task TD-3): materialized placements and the retained keys'
+    /// tombstones — peers read THIS, and a discarded build's topology
+    /// vanishes with the build.</summary>
+    internal CanvasPeerTopology Topology { get; }
+
+    /// <summary>The retained-key snapshot the topology was derived
+    /// from — the third authority's half of the install-time
+    /// revalidation.</summary>
+    internal System.Collections.Immutable.ImmutableHashSet<CanvasPeerKey> Retained { get; }
 
     /// <summary>The applied publication this state renders — the
     /// identity the commit revalidates at install (ID-1), and the one
