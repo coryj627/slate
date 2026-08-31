@@ -3,7 +3,9 @@
 
 using System.Collections.Immutable;
 using System.Reflection;
-using System.Text.RegularExpressions;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using SlateWindows.Canvas;
 
 namespace SlateWindows.Tests.Censuses;
@@ -16,23 +18,31 @@ namespace SlateWindows.Tests.Censuses;
 /// </summary>
 /// <remarks>
 /// <para>
-/// THE CLOSED WORLD is the model's nine files, named in one list this
-/// class owns: a file added to the model without joining the list is
-/// invisible to every source arm. The reflection arms walk the same
-/// world as TYPES, so the model has two independent enumerations of
-/// itself and a member can hide from neither.
+/// THE CLOSED WORLD is the model's nine files, and it is closed BOTH
+/// ways: every type the files declare is reflected over or censused as
+/// stateless, and every reflected type is declared — the cross-check
+/// below — so a member can hide from neither enumeration.
 /// </para>
 /// <para>
-/// WHAT THESE ARMS NARROW, said once: the writer arm censuses ORDINARY
+/// EVERY SOURCE ARM READS SYNTAX TREES, not strings — the house
+/// helper's own #741 doctrine, applied here after the T4 review found
+/// this census re-deriving the string matching that helper exists to
+/// retire: structurally, a comment or a string literal can neither
+/// trip a wall nor hide from one, an assignment is every compound kind
+/// at once, and the alias-through-a-local bypass is chased the way the
+/// helper chases it.
+/// </para>
+/// <para>
+/// WHAT THE ARMS NARROW, said once: the writer arm censuses ORDINARY
 /// SOURCE WRITES — reflection, unsafe accessors and serializer
 /// hydration are beyond a source census, prohibited by nothing but the
-/// closed world (no model type opts into serialization, which one arm
-/// asserts) and caught at runtime by the slot's own SlotBypassed
-/// detector. The purity arm walks each transform's OWN body, not its
-/// transitive call graph: a transform's callees are the model's pure
-/// surface, and the compiler-grade walk is the not-taken alternative
-/// recorded with obligation I4. The aliasing arm is a wall, not an
-/// owned row type, and obligation I7's note records that too.
+/// closed world (no model type or member opts into serialization,
+/// which one arm asserts) and caught at runtime by the slot's own
+/// bypass detector. The purity arm walks each transform's OWN body,
+/// not its transitive call graph; the compiler-grade walk is the
+/// not-taken alternative recorded with obligation I4. The aliasing arm
+/// is a wall, not an owned row type, and obligation I7's note records
+/// that narrowing too.
 /// </para>
 /// </remarks>
 public sealed class CanvasModelCensus
@@ -64,7 +74,9 @@ public sealed class CanvasModelCensus
         typeof(CanvasPublicationSlot),
         typeof(CanvasPublicationInstallObserver),
         typeof(CanvasPublicationOutcome),
+        typeof(CanvasPublicationRefusedException),
         typeof(CanvasHandleLease),
+        typeof(CanvasLeaseViolationException),
         typeof(CanvasLeaseTransfer),
         typeof(CanvasPopulation),
         typeof(CanvasProjectionUnit),
@@ -78,14 +90,77 @@ public sealed class CanvasModelCensus
         typeof(CanvasFilterProbeForTests),
     ];
 
-    private static string ModelRoot =>
-        Path.Combine(SourceText.ShellSourceRoot(), "Canvas");
+    /// <summary>Declarations in the model files with no reflectable
+    /// state, censused so the cross-check stays two-way.</summary>
+    private static readonly Dictionary<string, string> NonReflectedDeclarations =
+        new(StringComparer.Ordinal)
+        {
+            ["CanvasLoadDelivery"] = "enum — no storable state",
+            ["CanvasLeaseRelease"] = "enum — no storable state",
+            ["CanvasAnswerState"] = "enum — no storable state",
+            ["CanvasPublicationRefusal"] = "enum — no storable state",
+            ["CanvasLoadOutcome"] = "enum — no storable state",
+            ["CanvasLoadPoint"] = "enum — no storable state",
+            ["CanvasFilterPoint"] = "enum — no storable state",
+            ["ICanvasLoadSource"] = "interface — declares no fields",
+            ["ICanvasFilterSource"] = "interface — declares no fields",
+        };
 
-    private static string Read(string file) =>
-        File.ReadAllText(Path.Combine(ModelRoot, file));
+    /// <summary>Every live shell source, parsed ONCE per run on the
+    /// house syntax-tree helper, with obj/ and bin/ excluded the way
+    /// the sibling censuses exclude them — the T4 review's two
+    /// confirmed findings, both against this census's first
+    /// draft.</summary>
+    private static readonly Lazy<IReadOnlyList<CSharpSource>> ShellSources = new(() =>
+        [.. Directory
+            .EnumerateFiles(SourceText.ShellSourceRoot(), "*.cs", SearchOption.AllDirectories)
+            .Where(path =>
+                !path.Contains(
+                    $"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}",
+                    StringComparison.Ordinal)
+                && !path.Contains(
+                    $"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}",
+                    StringComparison.Ordinal))
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .Select(CSharpSource.LoadPath)]);
 
-    private static IEnumerable<(string File, string Text)> ModelSources() =>
-        ModelFiles.Select(file => (file, Read(file)));
+    private static IEnumerable<CSharpSource> ModelSources() =>
+        ShellSources.Value.Where(source =>
+            ModelFiles.Contains(Path.GetFileName(source.Path), StringComparer.Ordinal));
+
+    private static CSharpSource Model(string file) =>
+        ModelSources().Single(source => Path.GetFileName(source.Path) == file);
+
+    /// <summary>The closed world, closed both ways: a type the files
+    /// declare that no census walks fails, and so does a census entry
+    /// for a type the model no longer declares.</summary>
+    [Fact]
+    public void TheClosedWorldIsClosedBothWays()
+    {
+        var declared = new HashSet<string>(StringComparer.Ordinal);
+        foreach (CSharpSource source in ModelSources())
+        {
+            foreach (BaseTypeDeclarationSyntax declaration in
+                source.Root.DescendantNodes().OfType<BaseTypeDeclarationSyntax>())
+            {
+                _ = declared.Add(declaration.Identifier.ValueText);
+            }
+        }
+
+        var accounted = ModelTypes.Select(type => type.Name)
+            .Concat(NonReflectedDeclarations.Keys)
+            .ToHashSet(StringComparer.Ordinal);
+        List<string> hiding = [.. declared.Except(accounted)];
+        List<string> stale = [.. accounted.Except(declared)];
+        Assert.True(
+            hiding.Count == 0,
+            "types the model files declare and no census walks:\n  "
+            + string.Join("\n  ", hiding));
+        Assert.True(
+            stale.Count == 0,
+            "census entries for types the model no longer declares:\n  "
+            + string.Join("\n  ", stale));
+    }
 
     // ---------------------------------------------------------------
     // Obligation I8 — the publication-writer arm
@@ -93,11 +168,10 @@ public sealed class CanvasModelCensus
 
     /// <summary>One writable field holds a publication anywhere in the
     /// model, and one method writes it: the constructor's seed and the
-    /// single compare-and-swap. The token appears in no other model
-    /// file, so "no other write" is a claim about the closed world
-    /// rather than about the lines somebody remembered. This is the
-    /// census T1's bypass detector waited for — the branch is
-    /// structural now, not defensive.</summary>
+    /// single compare-and-swap, counted as SYNTAX — an assignment node
+    /// and an invocation node — so dead text can neither satisfy nor
+    /// trip the count. This is the census T1's bypass detector waited
+    /// for: the branch is structural now, not defensive.</summary>
     [Fact]
     public void OneFieldHoldsThePublicationAndOneMethodWritesIt()
     {
@@ -119,176 +193,258 @@ public sealed class CanvasModelCensus
             + "the slot's one private field is the whole of U1's mutable model "
             + "state.");
 
-        string slot = Read("CanvasPublicationSlot.cs");
+        CSharpSource slot = Model("CanvasPublicationSlot.cs");
+        int seeds = slot.Root.DescendantNodes()
+            .OfType<AssignmentExpressionSyntax>()
+            .Count(assignment => assignment.Left is IdentifierNameSyntax
+            {
+                Identifier.ValueText: "_current",
+            });
         Assert.True(
-            CountOf(slot, "_current = ") == 1,
-            "the seed assignment is no longer exactly one.");
+            seeds == 1,
+            $"{seeds} direct assignments to the slot's field; the constructor's "
+            + "seed is the only one.");
+
+        int swaps = slot.Root.DescendantNodes()
+            .OfType<InvocationExpressionSyntax>()
+            .Count(invocation =>
+                CSharpSource.Normalize(invocation.Expression) == "Interlocked.CompareExchange"
+                && invocation.ArgumentList.Arguments.Count > 0
+                && invocation.ArgumentList.Arguments[0].Expression is IdentifierNameSyntax
+                {
+                    Identifier.ValueText: "_current",
+                });
         Assert.True(
-            CountOf(slot, "Interlocked.CompareExchange(ref _current") == 1,
-            "the compare-and-swap is no longer exactly one.");
-        foreach ((string file, string text) in ModelSources())
+            swaps == 1,
+            $"{swaps} compare-and-swaps against the field; the install is exactly "
+            + "one.");
+
+        foreach (CSharpSource source in ModelSources())
         {
             Assert.True(
-                file == "CanvasPublicationSlot.cs"
-                    || !text.Contains("_current", StringComparison.Ordinal),
-                $"{file} mentions the slot's field.");
+                Path.GetFileName(source.Path) == "CanvasPublicationSlot.cs"
+                    || !CSharpSource.References(source.Root, "_current"),
+                $"{Path.GetFileName(source.Path)} references the slot's field — "
+                + "structurally, so a comment could not have tripped this and "
+                + "cannot hide it.");
         }
     }
 
-    /// <summary>No model type opts into serialization: hydration is one
-    /// of obligation I8's named bypasses, and the closed world's answer
-    /// is that nothing here invites it.</summary>
+    /// <summary>No model type OR MEMBER opts into serialization:
+    /// hydration is one of obligation I8's named bypasses, and the
+    /// opt-in happens at the member as often as at the type — the T4
+    /// review's point against the type-only first draft.</summary>
     [Fact]
-    public void NoModelTypeOptsIntoSerialization()
+    public void NoModelTypeOrMemberOptsIntoSerialization()
     {
         foreach (Type type in ModelTypes)
         {
-            foreach (object attribute in type.GetCustomAttributes(inherit: false))
+            foreach ((string where, object attribute) in TypeAndMemberAttributes(type))
             {
                 string name = attribute.GetType().FullName!;
                 Assert.True(
                     !name.Contains("Serial", StringComparison.Ordinal)
                         && !name.Contains("DataContract", StringComparison.Ordinal)
+                        && !name.Contains("DataMember", StringComparison.Ordinal)
                         && !name.Contains("Json", StringComparison.Ordinal),
-                    $"{type.Name} carries a serialization attribute: {name}.");
+                    $"{where} carries a serialization attribute: {name}.");
             }
         }
     }
 
-    /// <summary>The minting walls — the call-site half of "the writer
-    /// set is closed by construction": a lease is minted only by the
-    /// pipeline, a population only by the pipeline and its own Empty,
-    /// and the chain and terminal transforms are reached only by their
-    /// owners.</summary>
+    private static IEnumerable<(string Where, object Attribute)> TypeAndMemberAttributes(
+        Type type)
+    {
+        foreach (object attribute in type.GetCustomAttributes(inherit: false))
+        {
+            yield return (type.Name, attribute);
+        }
+
+        foreach (MemberInfo member in type.GetMembers(
+            BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public
+                | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
+        {
+            if (member.Name.StartsWith('<'))
+            {
+                // The compiler stamps [Serializable] on its own closure
+                // classes; synthesized members are not opt-ins.
+                continue;
+            }
+
+            foreach (object attribute in member.GetCustomAttributes(inherit: false))
+            {
+                yield return ($"{type.Name}.{member.Name}", attribute);
+            }
+        }
+    }
+
+    /// <summary>The minting walls, construction half: a lease is
+    /// created only by the pipeline, a population only by the pipeline
+    /// and its own Empty — counted as creation NODES, so a name in a
+    /// comment is nothing.</summary>
     [Theory]
-    [InlineData("new CanvasHandleLease(", "CanvasLoadPipeline.cs")]
-    [InlineData("new CanvasPopulation(", "CanvasLoadPipeline.cs|CanvasPopulation.cs")]
-    [InlineData(".WithLoaded(", "CanvasLeaseTransfer.cs")]
-    [InlineData(".WithUnit(", "CanvasPublication.cs|CanvasLeaseTransfer.cs|CanvasFilterMachine.cs")]
-    [InlineData(".WithTerminal(", "CanvasLeaseTransfer.cs")]
-    [InlineData(".WithUnloaded(", "CanvasLoadPipeline.cs")]
-    public void TheMintingWallsHold(string token, string allowedFiles)
+    [InlineData("CanvasHandleLease", "CanvasLoadPipeline.cs")]
+    [InlineData("CanvasPopulation", "CanvasLoadPipeline.cs|CanvasPopulation.cs")]
+    public void TheMintingWallsHold(string typeName, string allowedFiles)
     {
         string[] allowed = allowedFiles.Split('|');
         var offenders = new List<string>();
         var found = 0;
-        foreach (string path in Directory.EnumerateFiles(
-            SourceText.ShellSourceRoot(), "*.cs", SearchOption.AllDirectories))
+        foreach (CSharpSource source in ShellSources.Value)
         {
-            int count = CountOf(File.ReadAllText(path), token);
+            int count = source.Root.DescendantNodes()
+                .OfType<ObjectCreationExpressionSyntax>()
+                .Count(creation => creation.Type.ToString() == typeName);
             if (count == 0)
             {
                 continue;
             }
 
             found += count;
-            string file = Path.GetFileName(path);
+            string file = Path.GetFileName(source.Path);
             if (!allowed.Contains(file))
             {
                 offenders.Add($"{file} ({count})");
             }
         }
 
-        Assert.True(found > 0, $"the wall for {token} guards nothing — did the name move?");
+        Assert.True(found > 0, $"the wall for new {typeName} guards nothing — did the name move?");
         Assert.True(
             offenders.Count == 0,
-            $"{token} is reached from outside its wall: {string.Join(", ", offenders)}.");
+            $"new {typeName}(…) is reached from outside its wall: "
+            + string.Join(", ", offenders));
     }
+
+    /// <summary>The minting walls, transform half: the chain, terminal
+    /// and un-name transforms are INVOKED only by their owners —
+    /// invocation nodes, member-access and null-conditional forms
+    /// both.</summary>
+    [Theory]
+    [InlineData("WithLoaded", "CanvasLeaseTransfer.cs")]
+    [InlineData("WithUnit", "CanvasPublication.cs|CanvasFilterMachine.cs")]
+    [InlineData("WithTerminal", "CanvasLeaseTransfer.cs")]
+    [InlineData("WithUnloaded", "CanvasLoadPipeline.cs")]
+    public void TheTransformWallsHold(string memberName, string allowedFiles)
+    {
+        string[] allowed = allowedFiles.Split('|');
+        var offenders = new List<string>();
+        var found = 0;
+        foreach (CSharpSource source in ShellSources.Value)
+        {
+            int count = source.Root.DescendantNodes()
+                .OfType<InvocationExpressionSyntax>()
+                .Count(invocation => InvokedName(invocation) == memberName);
+            if (count == 0)
+            {
+                continue;
+            }
+
+            found += count;
+            string file = Path.GetFileName(source.Path);
+            if (!allowed.Contains(file))
+            {
+                offenders.Add($"{file} ({count})");
+            }
+        }
+
+        Assert.True(found > 0, $"the wall for .{memberName}( guards nothing — did the name move?");
+        Assert.True(
+            offenders.Count == 0,
+            $".{memberName}(…) is invoked from outside its wall: "
+            + string.Join(", ", offenders));
+    }
+
+    private static string? InvokedName(InvocationExpressionSyntax invocation) =>
+        invocation.Expression switch
+        {
+            MemberAccessExpressionSyntax access => access.Name.Identifier.ValueText,
+            MemberBindingExpressionSyntax binding => binding.Name.Identifier.ValueText,
+            _ => null,
+        };
 
     // ---------------------------------------------------------------
     // Obligation I4 — the transform-purity arm
     // ---------------------------------------------------------------
 
-    /// <summary>Every transform handed to the gate, walked: no session,
-    /// no FFI, no clock, no scheduler, no announcer, no lease close, no
-    /// live UI state — the executable purity predicate round 7 asked
-    /// for, at source level. The probes are the one sanctioned callout
-    /// and are stripped by name, because they are dispositioned
-    /// instruments production never constructs.</summary>
+    /// <summary>Every transform handed to the gate ANYWHERE in the
+    /// shell — the fixed file list was the T4 review's point — walked
+    /// structurally for the finding's own list: no session, no FFI, no
+    /// clock, no scheduler, no announcer, no lease close, no live UI
+    /// state, no locks or interlocked operations. Identifier and
+    /// member-name queries over the syntax tree, so a probe line, a
+    /// comment or a string can neither hide an impurity nor invent one;
+    /// the probes stay sanctioned simply because <c>Reached</c> is not
+    /// a forbidden name.</summary>
     /// <remarks>
     /// One level deep on purpose, and obligation I4's ledger note says
-    /// so: a transform's callees are the model's own pure surface —
-    /// transforms and resolvers over immutable values — and the
-    /// compiler-grade transitive walk is the not-taken alternative.
+    /// so: a transform's callees are the model's own pure surface, and
+    /// the compiler-grade transitive walk is the not-taken alternative.
     /// </remarks>
     [Fact]
     public void EveryPublishedTransformIsPureAtItsOwnLevel()
     {
-        string[] forbidden =
+        string[] forbiddenIdentifiers =
         [
-            "_session", "DateTime", "Stopwatch", "Environment.", "Task.",
-            "Thread", "StartWork", "Post(", "Speak(", "_announcer",
-            ".Close(", ".Invoke(", "Random", "File.", "Console.",
-            "_machine", "_pipeline", "Selection.", "_filterText",
-            "_applied", "_rows", "_outline", "Interlocked.", "Volatile.",
-            "lock (", "_source", ".Match(",
+            "_session", "_announcer", "_machine", "_pipeline", "_applied",
+            "_filterText", "_rows", "_outline", "_targets", "_subpaths",
+            "_neighbors", "Selection", "DateTime", "Stopwatch", "Environment",
+            "Task", "Thread", "Random", "File", "Directory", "Console",
+            "Interlocked", "Volatile",
         ];
-        string[] files = [.. ModelFiles, "CanvasDocumentViewModel.cs"];
+        string[] forbiddenMembers =
+        [
+            "Close", "Invoke", "Post", "Speak", "StartWork", "Match",
+            "Now", "UtcNow", "Sleep", "Wait", "Publish",
+        ];
         var sites = 0;
         var offences = new List<string>();
-        foreach (string file in files)
+        foreach (CSharpSource source in ShellSources.Value)
         {
-            string text = File.ReadAllText(Path.Combine(ModelRoot, file));
-            foreach ((int line, string body) in TransformBodies(text))
+            string file = Path.GetFileName(source.Path);
+            foreach (InvocationExpressionSyntax invocation in
+                source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>())
             {
-                sites++;
-                string cleaned = string.Join(
-                    "\n",
-                    body.Split('\n')
-                        .Where(bodyLine =>
-                            !bodyLine.Contains("?.Reached(", StringComparison.Ordinal))
-                        .Select(bodyLine =>
-                        {
-                            int comment = bodyLine.IndexOf("//", StringComparison.Ordinal);
-                            return comment < 0 ? bodyLine : bodyLine[..comment];
-                        }));
-                foreach (string token in forbidden)
+                if (InvokedName(invocation) != "Publish")
                 {
-                    if (cleaned.Contains(token, StringComparison.Ordinal))
+                    continue;
+                }
+
+                sites++;
+                int line = invocation.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
+                SyntaxNode region = invocation.ArgumentList;
+                foreach (string identifier in forbiddenIdentifiers)
+                {
+                    if (CSharpSource.References(region, identifier))
                     {
-                        offences.Add($"{file}:{line} uses '{token}'");
+                        offences.Add($"{file}:{line} reads '{identifier}'");
                     }
+                }
+
+                var members = CSharpSource.MemberNames(region)
+                    .ToHashSet(StringComparer.Ordinal);
+                foreach (string member in forbiddenMembers)
+                {
+                    if (members.Contains(member))
+                    {
+                        offences.Add($"{file}:{line} calls '{member}'");
+                    }
+                }
+
+                if (region.DescendantNodes().OfType<LockStatementSyntax>().Any())
+                {
+                    offences.Add($"{file}:{line} takes a lock");
                 }
             }
         }
 
         Assert.True(
             sites >= 10,
-            $"only {sites} transforms found; the arm would be scanning almost "
-            + "nothing — did the publish helper move?");
+            $"only {sites} transforms found across the shell; the arm would be "
+            + "scanning almost nothing — did the publish helper move?");
         Assert.True(
             offences.Count == 0,
             "a transform reaches outside its snapshot:\n  "
             + string.Join("\n  ", offences));
-    }
-
-    /// <summary>The argument region of every <c>.Publish(</c> call, by
-    /// balanced parentheses; the caller strips comments and the
-    /// sanctioned probe lines.</summary>
-    private static IEnumerable<(int Line, string Body)> TransformBodies(string text)
-    {
-        var index = 0;
-        while ((index = text.IndexOf(".Publish(", index, StringComparison.Ordinal)) >= 0)
-        {
-            int line = text[..index].Count(character => character == '\n') + 1;
-            int start = index + ".Publish".Length;
-            var depth = 0;
-            int end = start;
-            for (; end < text.Length; end++)
-            {
-                if (text[end] == '(')
-                {
-                    depth++;
-                }
-                else if (text[end] == ')' && --depth == 0)
-                {
-                    break;
-                }
-            }
-
-            yield return (line, text[start..end]);
-            index = end;
-        }
     }
 
     // ---------------------------------------------------------------
@@ -296,87 +452,142 @@ public sealed class CanvasModelCensus
     // ---------------------------------------------------------------
 
     /// <summary>Nothing in the shell writes INTO a row's group path —
-    /// the one mutable field a core row carries, and the alias T2's
-    /// re-materialisation closed from the construction side. This wall
-    /// is the consumer side; the owned-row alternative was not taken,
-    /// and obligation I7's note records the narrowing.</summary>
+    /// as SYNTAX: every assignment kind at once (compound included,
+    /// which the first draft's regex missed), increments, ref-argument
+    /// captures, and the alias-through-a-local bypass chased the way
+    /// the house helper chases it. The owned-row alternative was not
+    /// taken; obligation I7's note records the narrowing.</summary>
     [Fact]
     public void NothingWritesIntoARowsGroupPath()
     {
         var offenders = new List<string>();
         var reads = 0;
-        foreach (string path in Directory.EnumerateFiles(
-            SourceText.ShellSourceRoot(), "*.cs", SearchOption.AllDirectories))
+        foreach (CSharpSource source in ShellSources.Value)
         {
-            string text = File.ReadAllText(path);
-            reads += CountOf(text, "GroupPath[");
-            foreach (Match write in Regex.Matches(text, @"GroupPath\[[^\]]*\]\s*=(?!=)"))
+            foreach (ElementAccessExpressionSyntax element in
+                source.Root.DescendantNodes().OfType<ElementAccessExpressionSyntax>())
             {
-                offenders.Add($"{Path.GetFileName(path)}: {write.Value.Trim()}");
+                if (!TargetsGroupPath(element, source.Root))
+                {
+                    continue;
+                }
+
+                reads++;
+                if (IsWrittenThrough(element))
+                {
+                    offenders.Add(
+                        $"{Path.GetFileName(source.Path)}: {element.Parent}");
+                }
             }
         }
 
         Assert.True(
             reads >= 2,
-            $"the wall guards {reads} group-path indexings — did the member move?");
+            $"the wall guards {reads} group-path element accesses — did the "
+            + "member move?");
         Assert.True(
             offenders.Count == 0,
             "a group path is written through a retained row: "
             + string.Join("; ", offenders));
     }
 
+    private static bool TargetsGroupPath(
+        ElementAccessExpressionSyntax element, SyntaxNode scope)
+    {
+        ExpressionSyntax target = element.Expression;
+        if (target is IdentifierNameSyntax)
+        {
+            // The alias bypass: a local assigned the array satisfies any
+            // check made against the member as written — resolved the
+            // way the house helper resolves it.
+            target = CSharpSource.Resolve(target, scope);
+        }
+
+        return target switch
+        {
+            MemberAccessExpressionSyntax access =>
+                access.Name.Identifier.ValueText == "GroupPath",
+            MemberBindingExpressionSyntax binding =>
+                binding.Name.Identifier.ValueText == "GroupPath",
+            IdentifierNameSyntax identifier =>
+                identifier.Identifier.ValueText == "GroupPath",
+            _ => false,
+        };
+    }
+
+    private static bool IsWrittenThrough(ElementAccessExpressionSyntax element) =>
+        element.Parent switch
+        {
+            AssignmentExpressionSyntax assignment => assignment.Left == element,
+            PrefixUnaryExpressionSyntax prefix =>
+                prefix.IsKind(SyntaxKind.PreIncrementExpression)
+                || prefix.IsKind(SyntaxKind.PreDecrementExpression),
+            PostfixUnaryExpressionSyntax postfix =>
+                postfix.IsKind(SyntaxKind.PostIncrementExpression)
+                || postfix.IsKind(SyntaxKind.PostDecrementExpression),
+            ArgumentSyntax argument => argument.RefOrOutKeyword != default,
+            _ => false,
+        };
+
     /// <summary>Rows are re-materialised at ONE site: the group-path
-    /// copy exists only in the model-copy helper, so a reviewer greps
-    /// one file to know every place an array enters the model's
-    /// ownership.</summary>
+    /// `with` copy exists only in the model-copy helper — as WITH
+    /// EXPRESSIONS, so mentioning the idiom is nothing.</summary>
     [Fact]
     public void RowsAreRematerialisedAtOneSite()
     {
-        foreach (string path in Directory.EnumerateFiles(
-            SourceText.ShellSourceRoot(), "*.cs", SearchOption.AllDirectories))
+        foreach (CSharpSource source in ShellSources.Value)
         {
-            int count = CountOf(File.ReadAllText(path), "with { GroupPath");
-            if (Path.GetFileName(path) == "CanvasModelCopy.cs")
+            int count = source.Root.DescendantNodes()
+                .OfType<WithExpressionSyntax>()
+                .Count(with => with.Initializer.Expressions
+                    .OfType<AssignmentExpressionSyntax>()
+                    .Any(assignment => assignment.Left is IdentifierNameSyntax
+                    {
+                        Identifier.ValueText: "GroupPath",
+                    }));
+            if (Path.GetFileName(source.Path) == "CanvasModelCopy.cs")
             {
                 Assert.True(
                     count == 2,
-                    $"the helper re-materialises {count} row kinds; the model's two "
-                    + "are the outline's and the table's.");
+                    $"the helper re-materialises {count} row kinds; the model's "
+                    + "two are the outline's and the table's.");
             }
             else
             {
                 Assert.True(
                     count == 0,
-                    $"{Path.GetFileName(path)} re-materialises rows outside the one "
-                    + "construction site.");
+                    $"{Path.GetFileName(source.Path)} re-materialises rows outside "
+                    + "the one construction site.");
             }
         }
     }
 
-    /// <summary>Immutable collections are BUILT in two files only — the
-    /// copy helper and the population's own indexes — which keeps
-    /// "collections enter the model through the helper" a greppable
-    /// claim rather than a habit.</summary>
+    /// <summary>Immutable collections are BUILT at two files only — the
+    /// copy helper and the population's own indexes — measured as
+    /// invoked member names, not text.</summary>
     [Fact]
     public void CollectionsAreBuiltAtTheSanctionedSites()
     {
-        string[] tokens =
+        string[] builders =
         [
-            "ToImmutable", "CreateBuilder", "CreateRange",
-            "ImmutableArray.Create", "ImmutableHashSet.Create",
+            "ToImmutable", "ToImmutableDictionary", "CreateBuilder",
+            "CreateRange", "Create",
         ];
-        foreach ((string file, string text) in ModelSources())
+        foreach (CSharpSource source in ModelSources())
         {
+            string file = Path.GetFileName(source.Path);
             if (file is "CanvasModelCopy.cs" or "CanvasPopulation.cs")
             {
                 continue;
             }
 
-            foreach (string token in tokens)
+            var members = CSharpSource.MemberNames(source.Root)
+                .ToHashSet(StringComparer.Ordinal);
+            foreach (string builder in builders)
             {
                 Assert.True(
-                    !text.Contains(token, StringComparison.Ordinal),
-                    $"{file} builds a collection with {token} outside the "
+                    !members.Contains(builder),
+                    $"{file} builds a collection with {builder} outside the "
                     + "sanctioned sites.");
             }
         }
@@ -387,10 +598,11 @@ public sealed class CanvasModelCensus
     // ---------------------------------------------------------------
 
     /// <summary>Every publication member classified, as a TOTAL table
-    /// keyed by reflection: a new member fails here BY NAME until the
-    /// acceptance's carry-forward accounts for it — the derivation U4
-    /// demands instead of a list that can go short, which was round 5's
-    /// blocker 5 and is a gate now.</summary>
+    /// keyed by reflection — instance properties in the manifest,
+    /// statics and bare fields walled separately (the T4 review's
+    /// point: a cached static instance is the exact I5 shape, and
+    /// GetProperties alone would never see it). A new member fails BY
+    /// NAME until the rebase accounts for it.</summary>
     [Fact]
     public void TheCarryForwardManifestCoversEveryPublicationMember()
     {
@@ -428,6 +640,28 @@ public sealed class CanvasModelCensus
                 names.Contains(name),
                 $"the manifest names {name}, which the publication no longer has.");
         }
+
+        // The static and field walls, so the total table cannot be
+        // walked around: NO static properties — a cached instance is
+        // exactly the shape obligation I5 forbids, and Seed is a METHOD
+        // that allocates per call, which the sentinel facts pin — and
+        // the only fields are the compiler's own property backings.
+        string[] statics = [.. typeof(CanvasPublication)
+            .GetProperties(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
+            .Select(member => member.Name)];
+        Assert.True(
+            statics.Length == 0,
+            $"the publication grew static properties [{string.Join(", ", statics)}]; "
+            + "a cached instance is exactly the shape obligation I5 forbids.");
+        string[] bareFields = [.. typeof(CanvasPublication)
+            .GetFields(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public
+                | BindingFlags.NonPublic)
+            .Select(field => field.Name)
+            .Where(name => !name.StartsWith('<'))];
+        Assert.True(
+            bareFields.Length == 0,
+            $"the publication declares bare fields [{string.Join(", ", bareFields)}]; "
+            + "every member goes through the manifest's properties.");
     }
 
     // ---------------------------------------------------------------
@@ -589,19 +823,6 @@ public sealed class CanvasModelCensus
             || target == typeof(CanvasProjectionUnit)
             || target == typeof(CanvasLoadFailure)
             || target == typeof(CanvasPublicationOutcome);
-    }
-
-    private static int CountOf(string text, string token)
-    {
-        var count = 0;
-        var index = 0;
-        while ((index = text.IndexOf(token, index, StringComparison.Ordinal)) >= 0)
-        {
-            count++;
-            index += token.Length;
-        }
-
-        return count;
     }
 
     /// <summary>Round 5's five shapes, planted — the premise that keeps

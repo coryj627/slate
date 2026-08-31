@@ -108,7 +108,7 @@ public sealed class ContractsCitationCensus
                 // population of 59 — a fourth time.
                 //
                 // T4 bound the census and re-cited the walls it
-                // guards, taking the section to 74; 71 sits above
+                // guards, taking the section to 75; 71 sits above
                 // the pre-T4 population of 69 — a fifth time.
                 71),
         ];

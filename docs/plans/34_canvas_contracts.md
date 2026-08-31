@@ -5851,6 +5851,54 @@ which taught the lock predicate that the model names its locks two
 ways. A two-way census that catches its own author on day one is the
 census working.
 
+**T4's review, and what it moved.** The review's verification pass
+itself did NOT complete — of sixteen verifiers only two returned, the
+third stall in three rounds — so its output was two CONFIRMED findings,
+one refutation, and eight recall-biased candidates it marked
+unverified. Every one of the eight was then verified HERE, against the
+census at the commit, and held. All ten addressed, mostly by one move:
+
+* **The census was rebuilt on the house syntax-tree helper** — the
+  confirmed lead finding, and the sharpest kind of irony: the helper's
+  own doc comment records that #741 spent four review rounds proving a
+  regex cannot tell live code from dead text, and this census had
+  re-derived string matching anyway. Every source arm now reads
+  SYNTAX: the writer arm counts assignment and invocation NODES, the
+  walls count creation and invocation nodes, and a comment or a string
+  literal can neither trip an arm nor hide from one — proven both ways
+  by injection, with a planted comment naming the slot's field leaving
+  the walls green.
+* **The aliasing wall closes what the regex missed.** Assignment nodes
+  cover every compound kind at once, increments and ref-captures are
+  their own node shapes, and the alias-through-a-local bypass is chased
+  with the helper's own Resolve — both planted writes fail the wall.
+* **The purity arm walks the WHOLE shell** rather than a named file
+  list, so a publish site added anywhere is scanned the day it
+  appears; the probes stay sanctioned structurally, because Reached is
+  simply not a forbidden name, and the line-granular carve-out that
+  could hide an impurity beside a probe call is gone.
+* **The closed world is closed both ways.** Every type the nine files
+  declare is reflected over or censused as stateless, and every census
+  entry must still be declared — the cross-check found
+  `CanvasLeaseRelease` missing on its first run.
+* **The manifest gained its static and field walls** — no static
+  properties on the publication (a cached instance is I5's shape; Seed
+  is a METHOD that allocates per call), no bare fields — and the
+  serialization arm walks MEMBER attributes too, skipping the
+  compiler's own [Serializable] closure classes, which its first run
+  caught stamping the transfer's lambdas.
+* **One parse per run, obj/ and bin/ excluded** — the second confirmed
+  finding: three private copies of the shell walk, one of them re-run
+  per theory row over a tree that was 88% build artifacts, replaced by
+  one memoized parse the way the sibling censuses do it.
+
+**What the walls still narrow, recorded:** the creation walls count
+explicit `new T(…)` nodes — a target-typed `new(…)` behind a declared
+variable is invisible to a syntax-only census and waits on the
+compiler-grade walk I4's note already records as not taken; and the
+authority derivation's lock exemption is named fields of type object,
+which the five-shape premise cannot probe.
+
 **Frozen paragraphs the gate SUPERSEDES.** The freeze forbids revising
 them and that is right; this record is the sanctioned place to say which
 of them the implementation has overtaken, so a T2, T3 or T6 owner does
