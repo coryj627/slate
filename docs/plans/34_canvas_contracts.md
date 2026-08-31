@@ -6828,6 +6828,28 @@ the discard without re-request
 green pristine; ID-1 and ID-2 are discharged pending TD-1's review
 round.
 
+**TD-2 — the scene rides the population, landed.** `CanvasPopulation`
+gains the deep-copied scene: `CanvasSceneNode` cards and
+`CanvasSceneEdge` connections through the one construction site's
+collection copy — a full copy because the scene records' fields are
+scalars and strings — plus the load-class descriptor index of
+obligation ID-3, built once in the constructor and identity-retained
+with the population it serves. The pipeline hands the WHOLE scene to
+the acceptance now, and the pre-TD-2 sentence on the subpath index —
+geometry never enters the model — is superseded in place, D2's
+ruling performed. Facts:
+`ACallerRetainedSceneCannotMoveTheBuiltPopulation` (I7 reaching the
+scene, nodes and edges both) and
+`TheDescriptorIndexIsLoadClassAndKeyedByNode` (ID-3's structural
+half). Mutations, injected and restored byte-for-byte: the copy
+optimized away with the runtime's alias-preserving wrap (the fact
+red on the moved node), and the index rebuilt per read (the fact red
+on its reference premise). One mutation covers both scene
+collections, deliberately — the edges share the nodes' mechanism,
+and a second mutant would exercise the same wall twice. ID-3 is
+discharged pending TD-2's review round; D2's failure-pane and
+renderer-consumption halves land with TD-6.
+
 ---
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)

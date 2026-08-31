@@ -138,7 +138,11 @@ public sealed class ContractsCitationCensus
                 // taking the section to 28; 20 sits above the
                 // pre-task population of 18 — the §C-unit rule's
                 // first application in §D.
-                20),
+                //
+                // TD-2 bound the scene's copy, its index and their
+                // facts, taking the section to 33; 30 sits above the
+                // pre-task population of 28 — a second time.
+                30),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

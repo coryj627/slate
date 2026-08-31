@@ -327,7 +327,7 @@ internal sealed class CanvasLoadPipeline
                     tableRows,
                     info.Warnings,
                     lastActivatedNode: null,
-                    scene: scene!.Nodes);
+                    scene: scene);
                 _probe?.Reached(CanvasLoadPoint.Built);
 
                 CanvasLoadAcceptance acceptance = CanvasLeaseTransfer.TryAccept(

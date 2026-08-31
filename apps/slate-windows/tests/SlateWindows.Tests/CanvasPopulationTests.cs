@@ -382,4 +382,64 @@ public sealed class CanvasPopulationTests
             + "reference inside a publication and must stay that way.");
     }
 
+
+    // ---------------------------------------------------------------
+    // §D task TD-2: the scene rides the population (D2, ID-3)
+    // ---------------------------------------------------------------
+
+    /// <summary>I7 reaching the scene: the caller's arrays are copied
+    /// at construction, so mutating them afterwards moves nothing the
+    /// population holds — for nodes AND edges.</summary>
+    [Fact]
+    public void ACallerRetainedSceneCannotMoveTheBuiltPopulation()
+    {
+        var nodes = new CanvasSceneNode[]
+        {
+            new("a", "text", "A", "A", 0, 0, 100, 50, null, null, null),
+        };
+        var edges = new CanvasSceneEdge[]
+        {
+            new("e1", "a", null, "a", null, false, true, "loops", null),
+        };
+        var population = new CanvasPopulation(
+            null, null, null, null, new CanvasScene(nodes, edges));
+        Assert.True(
+            population.SceneNodes.Length == 1 && population.SceneEdges.Length == 1,
+            "premise: the population took the scene it was given.");
+
+        nodes[0] = new("moved", "text", "M", "M", 9, 9, 9, 9, null, null, null);
+        edges[0] = new("moved", "x", null, "y", null, true, true, null, null);
+
+        Assert.True(
+            population.SceneNodes[0].NodeId == "a"
+                && population.SceneEdges[0].EdgeId == "e1",
+            "the caller's array write reached the population: the scene "
+            + "copy must sever every alias at the one construction site "
+            + "(§D D2's deep-copy wall).");
+    }
+
+    /// <summary>Obligation ID-3's structural half: the descriptor
+    /// index is built once with the population, keyed for the
+    /// first-touch lookup, and the same reference on every read.</summary>
+    [Fact]
+    public void TheDescriptorIndexIsLoadClassAndKeyedByNode()
+    {
+        var scene = new CanvasScene(
+            [
+                new("a", "text", "A", "A", 0, 0, 100, 50, null, null, null),
+                new("b", "file", "B", "B", 10, 20, 30, 40, null, null, "#h"),
+            ],
+            []);
+        var population = new CanvasPopulation(null, null, null, null, scene);
+        Assert.True(
+            ReferenceEquals(population.SceneByNode, population.SceneByNode),
+            "premise: the index is one built object, not a per-read derivation.");
+        Assert.True(
+            population.SceneByNode.Count == 2
+                && population.SceneByNode["b"].Width == 30
+                && population.SceneByNode["b"].Y == 20,
+            "the index does not answer a first-touch geometry lookup — the "
+            + "unrealized peer cell (§D D3) reads THIS, and a presentation "
+            + "build reuses it by reference (ID-3).");
+    }
 }
