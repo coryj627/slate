@@ -2024,7 +2024,7 @@ surface switch.** The command's resolver drives
 `CanvasDocumentViewModel.ShowSurface`, the same one the header radio
 drives (A15/A18), so the shared state, the persisted `"table"` token and
 the spoken `CanvasSurfaceShown` cannot disagree. `showVisual` stays
-disabled with the registrar's canonical sentence until PR D; §A's fact
+disabled with the registrar’s canonical sentence until §D lands; §A’s fact
 was renamed accordingly (`ShowVisualRegistersAndStaysDisabledUntilItsProjectionShips`)
 and `ShowTableIsEnabledAndDrivesTheOneSurfaceSwitch` owns the other
 half. No chord: the row stays `ChordScope.None` for A18's reason.
@@ -2045,7 +2045,7 @@ in-process "absent" assertion would be testing the walker rather than
 the tree a client reads. The journey asserts the outline's element is
 gone from the LIVE tree after the switch, through the real UIA bridge,
 and that is the level at which the claim is true. `Visual` is not a
-projection until PR D, and PR A already round-trips a persisted
+projection until �D lands, and PR A already round-trips a persisted
 `"visual"` token, so that token falls back to the OUTLINE rather than to
 an empty pane — recorded here because it is a real state a restored
 workspace can be in today. Focus delivery routes to whichever arm is
@@ -2084,7 +2084,7 @@ the pattern set now is the one PRs C–G repeat:
   **The rule this sets for the rest of the series:** a
   surface command joins the delivered set in the PR that makes it
   EXECUTABLE, not the PR that registers it — so `showVisual` stays out
-  until PR D, and each PR flips its own row rather than leaving a
+  until �D makes it executable, and each PR flips its own row rather than leaving a
   batch for PR H.
 
 ### Tests that pin PR B
@@ -6072,6 +6072,286 @@ sibling: the writer runs until the churn floor and the reader's overlap
 proof both hold, inside the same liveness budget. The whitespace round
 before it was the format gate refusing the cleanup pass's scripted line
 endings — `dotnet format` is part of the push, not an afterthought.
+## PR D — the visual renderer, the viewport, text scaling, and the color contract
+
+**Goal (spec §PR D).** The visual projection: per-card UIA elements over
+a windowed drawing surface, the viewport command set, Windows
+text-scaling parity, and the canvas color contract. **Read-only** — no
+mutation reaches this PR; every verb it answers is a movement, a
+selection, or a view command. It is the third projection arm beside the
+outline and the table, and the first surface BORN under the C-unit
+model rather than rewired onto it.
+
+### Contracts
+
+**D1 — The renderer is a fourth CONSUMER of the one publication, not a
+second authority.** The visual projection reads the APPLIED snapshot
+through `CanvasDocumentViewModel` exactly as the outline and table do —
+never the live slot, which is the torn-pair rule the C-unit cleanup
+recorded for `ReadRefusalFor`'s sentence. One frame renders ONE
+snapshot: everything a draw pass needs — rows, scene geometry, edges,
+selection, marks, zoom — is staged as one immutable render-frame value
+built from the applied `CanvasPublication` and its `CanvasPopulation`,
+and installed in a single reference swap before any drawing or peer
+read consumes it. A reentrant UIA read during an apply therefore sees
+the previous frame whole or the next frame whole, never a mixture.
+This takes the periphery ledger's T1 remedy — the staged, complete,
+immutable presentation snapshot — for THIS surface at birth, where it
+costs a design decision, rather than as the retrofit the inherited
+surfaces still owe. The T1 row itself stays open: its scope is the
+surfaces that predate the model, and D1 narrows it rather than closing
+it.
+
+**D2 — The viewport owns geometry and nothing else.** The viewport is
+presentation state: zoom clamped to 0.1–4.0 in steps of 1.25,
+centre-preserving scale, fit padding 40 logical pixels (120 for
+zoom-to-selection), follow-selection default ON — the spec §2 I
+constants, pinned by fact rather than restated in prose. Its
+transforms are pure functions of (frame, viewport): no viewport write
+reaches the model, and no model read passes through the viewport. The
+zoom announcement and the container peer's Value derive from the same
+viewport read, so the spoken percentage and the reported one cannot
+disagree.
+
+**D3 — Per-card peers, and what each one says.** The container peer is
+a Group/Pane named "Canvas visual view" whose Value is "Zoom N
+percent". Each MATERIALIZED card contributes one child peer:
+ControlType Button (mac's `.button` twin), Name from core's speakable
+name (PR 0b's one algorithm — the renderer never composes a name),
+Invoke selects, SelectionItem with IsSelected/AddToSelection under a
+Selection pattern on the container, and ItemStatus carries "marked"
+when the card is marked — a read-only decoration here; its semantics
+are §G's. BoundingRectangle is reported in SCREEN coordinates and
+recomputed on every pan, zoom and resize; a stale rectangle after a
+zoom is the classic failure of this peer class, so the pinning fact
+zooms first and re-queries second. Labelled connections contribute one
+peer each — Name is the direction phrase plus the label, Invoke
+follows the edge, which is a selection move and therefore legal in a
+read-only PR. Unlabelled edges are not peers (DD-2).
+
+**D4 — Windowing, and navigation is never a dead end.** Cards are
+materialized for the viewport plus one viewport's margin on every
+side. UIA navigation or selection past the materialized edge is
+answered, not refused: selecting from the last materialized card moves
+`CanvasSelection` to the next card in READING ORDER, the selection
+change pans the viewport to contain it, and the pan materializes the
+next window. Two rules meet here and stay distinct: selection change
+always scrolls into view (2.4.11 — unconditional), while
+follow-selection governs only the pans that selection did NOT cause.
+The pinning fact runs the 2,000-node fixture and walks selection off
+the materialized edge.
+
+**D5 — Voice-friendly uniqueness.** No two peers in the visual tree
+share a Name. The source is core's speakable name, which owns
+disambiguation; the renderer asserts the property rather than
+implementing it, and the pinning fact enumerates every materialized
+peer on a fixture built to collide (two cards whose titles differ only
+by trimmed whitespace).
+
+**D6 — Selection sync is two one-way roads through the model.** A peer
+Invoke or SelectionItem call writes `CanvasSelection` — the same
+authority every other surface writes — and returns; it does not touch
+the ring, the pan or the AX selection state directly. Those follow the
+model change on the other road: selection moved, the frame's selection
+reading changed, the ring redraws, the auto-pan runs, the peers raise
+their selection events. The renderer caches no selection of its own,
+so the two roads cannot carry different answers. Outline or table
+selection moves the visual viewport the same way — the fact drives a
+selection from the OUTLINE and reads the visual pan.
+
+**D7 — Focus visibility is screen-space and measured.** The selection
+ring draws in a screen-space overlay with a minimum thickness of 2
+device-independent pixels at ANY zoom — never scaled into
+sub-pixelhood at 0.1×. Keyboard focus on the view and card selection
+are visually distinct states. The ring's contrast is APCA-measured
+against every preset fill and against the canvas background, in both
+appearances, as `ThemeTokenContrastTests` rows rather than a manual
+check.
+
+**D8 — Hit-testing and z-order are core's order, consumed.** Topmost
+wins by DOCUMENT order (t1's tiebreak); groups draw and hit-test
+behind their members (#960's insertion rule). The renderer derives z
+from the order core already emits and never re-sorts — a re-sort would
+be a §W-G re-derivation with a picture attached.
+
+**D9 — Reduce Motion is instant, and the zoom still speaks.** When the
+system reports client-area animation off, every viewport transform
+applies instantly — no eased pans, no zoom tweens. The announcement
+contract is unchanged either way: zoom and fit announce the percentage
+through the canvas vocabulary's zoom event and the container Value
+updates in the same pass, because a reader who cannot see the
+animation is exactly the reader the sentence is for.
+
+**D10 — Text scaling is one factor, read reactively.** Card titles
+(base 12), edge chips (base 10) and group labels multiply the Windows
+text-scale factor by the zoom — mac's scaled-label parity. WPF binds
+none of this, so the mechanism is explicit: read the accessibility
+text-scale value, subscribe to the user-preference change event
+mirroring the W1-1 reactive-theme plumbing, and re-render on change; a
+census walks every canvas text run and refuses one that ignores the
+factor. Labels truncate visually with the FULL text preserved in the
+peer Name and in a tooltip; per WCAG 1.4.13 the tooltip is
+keyboard-triggerable on focus and Esc-dismissible, and its dismissal
+is a pre-ladder answer exactly as the Where-am-I panel's is (CD-47's
+shape, DD-3). Chrome outside the canvas — switcher, filter field,
+panel, sheets — inherits system text scaling through the Fluent base;
+the check is no clipping at 225 %.
+
+**D11 — The color contract, and where meaning lives.** Slate-owned
+token keys — six fills, six borders, text, group fill, edge, selection
+ring — exist in ALL THREE dictionaries. Dark and light fills are tint
+0.18 composited over the opaque surface token (mac's palette method),
+which is what keeps text at Lc ≥ 75 on every preset; the
+`ThemeTokenContrastTests` rows cover fill×text, ring×fill and
+ring×background in both appearances. The Contrast theme maps fills to
+the window brush and borders, edges and text to the window-text brush,
+selection to the highlight pair — so MEANING never lives in color
+alone: the color's NAME travels in the outline, the table and
+Where-am-I, and the visual arm inherits those sentences rather than
+minting its own. Runtime theme switches re-render through
+`ThemeManager`'s resources-changed notification; user-customized
+Contrast colors are theirs, and are not APCA-gated.
+
+**D12 — The command rows, and who flips what.** Three new chord rows —
+zoom in Ctrl+=, zoom out Ctrl+-, actual size Ctrl+0 — scope Canvas,
+focus-routed as mac routes them: a canvas tab in front answers with
+the viewport; otherwise the editor's own handling stands, and since
+the note editor has no zoom on Windows today there is no router to
+build — recorded so the day one exists, this row is the one that
+changes. Fit canvas Shift+1 and zoom to selection Shift+2 are VISUAL
+SURFACE ONLY (rule R2 — a projection owns its keys), which is why they
+are bare chords: on the outline or table those keys belong to typing.
+`showVisual` becomes executable here and B12's rule fires: the parity
+row and `deliveryEvidence` flip in THIS PR, through the writer, with
+the round-trip test arbitrating. The follow-selection toggle goes
+live with the viewport, and the registrar's C9-citing disabled note
+retires with it — that sweep is named in this section so the
+implementation cannot forget what the prose promised.
+
+**D13 — Focus order: one stop, and arrows are the navigator's.** The
+renderer is a single focus stop after the surface switcher — cards are
+reached by arrows and by AT navigation, never by Tab. Outside a mode,
+arrow keys are navigator moves under C3's split: the visual projection
+owns Down/Up/Left/Right (unlike the outline, it has no tree control
+wanting them back) and answers every arm with a reading-order or
+spatial move; the defer-or-answer premise is asserted the way §C's
+facts assert it. Escape and Where-am-I remain the two ungated rows —
+nothing here re-litigates C1's table.
+
+**D14 — §K budgets are asserted, not aspirational.** The renderer
+benchmarks run the 2,000-node fixture and ASSERT the mac budgets in
+the test: first windowed rebuild under 500 ms, a pan's window hop
+under 100 ms, a navigator step under 50 ms — with the measured values
+recorded in `BENCHMARKS.md` beside mac's 3.9 / 2.8 / 0.18. A budget
+in a markdown table is a wish; the assertion is the contract.
+
+**D15 — What §D does NOT do, said now.** No mutation — every verb that
+writes canvas bytes is §E's funnel, and the renderer draws what the
+publication says or nothing. No modes — move/resize/connect draw over
+the frame in §F, and the frame value is deliberately the substrate a
+mode overlay can compose with. No mark SEMANTICS — the "marked"
+decoration renders (D3) but mark-then-act is §G's. The read gate is
+C4's, unchanged: outside `Ready` the visual arm shows the state
+message pane, not an empty canvas, and B11's exactly-one-projection
+rule now counts three arms —
+`ExactlyOneProjectionIsEverInTheTree` widens rather than gaining a
+sibling. And the ledger rows stay where they are: T2 (surface
+provenance) and T3 (the apply transaction) are §E's to meet, T6
+(focus delivery as an effect class) arrives with the funnel's
+consumers, T5 belongs to the controller and navigator — §D neither
+discharges nor worsens them, and D1 is the ONE ledger interaction
+this PR claims.
+
+### Decisions
+
+**DD-1 — DrawingVisual, not WebView and not SVG.** The renderer is a
+FrameworkElement drawing through DrawingContext with a DrawingVisual
+per card. A WebView would put the accessibility tree behind a browser
+boundary and every peer contract above out of reach; SVG would buy
+nothing WPF geometry does not already do. Pinned by the spec and
+recorded here because it is the kind of decision a future contributor
+re-opens innocently.
+
+**DD-2 — Unlabelled edges are not peers.** Mac parity: an edge with no
+label has no accessible handle, and its existence is readable from
+either endpoint's connection phrases. A peer per unlabelled edge on a
+dense board would bury the cards it connects.
+
+**DD-3 — The tooltip's Esc is a pre-ladder answer.** Dismissing a
+label tooltip consumes the Esc that summoned nothing else — the same
+pre-emption CD-47 records for the Where-am-I panel, extended to the
+one new transient §D introduces. The ladder below it is unchanged.
+
+**DD-4 — The text-scale mechanism is explicit and censused.** Registry
+read plus preference-change subscription, W1-1's reactive shape; no
+WPF binding exists, so the census is what keeps the next text run
+honest rather than convention.
+
+**DD-5 — The container Value carries the zoom.** Value, not Name: the
+name is the surface's identity and stable; the zoom is state a reader
+polls. Mac reports it the same way, and the Reduce Motion contract
+(D9) depends on the Value updating in the transform pass.
+
+### The sweep this section performed on arrival
+
+Writing this heading made every live "until PR D" claim stale by the
+census's own rule — the shipped set is derived from section headings,
+and the safe direction is to fire while the document is being edited.
+Swept in the same change, all reworded to name §D without the staged
+form: B10's disabled-row sentence and B11's projection note in this
+document, B12's delivered-set example, the `CanvasSurfaceView`
+projection doc, both `WorkspaceViewModel` command notes, and the two
+`SlateCommandRegistrar` comments. Their claims are unchanged — the
+rows stay disabled until the code in this section EXISTS — only the
+form that would read as stale after the section landed is gone.
+
+### Verification plan
+
+A renderer battery (the CanvasRendererTests file this PR creates)
+against a REAL `VaultSession` and real `.canvas` bytes, §C's pattern:
+selection sync in both directions; peer rectangle invalidation after
+zoom, pan and resize; windowing plus the next-beyond-the-edge walk;
+name uniqueness on the collision fixture; every node kind rendering on
+the sample canvas; Reduce Motion; ring metrics at 0.1× and 4×;
+scroll-into-view versus follow-selection; hit-test z; the text-scale
+factor reaching every run; each viewport command's transform; a
+selection from the outline panning the visual arm; and D1's
+reentrancy arrangement — a UIA-shaped read raced against an apply,
+asserting it observed one frame's values throughout.
+`ThemeTokenContrastTests` gains the fill, ring and background rows in
+both appearances. The text-scale census walks the canvas text runs.
+The FlaUI journey lands in `ShellAccessibilityTests` under its naming
+convention: container and child peers present, a rectangle that
+CHANGES after Ctrl+=, a SelectionItem select that moves selection and
+announces, Shift+1 fitting, and axe clean over peered elements only.
+The benchmarks assert D14's three budgets. The chord scrape and
+`SharedCommandChords` pick up the five new rows, and the parity flip
+rides the round-trip test per B12.
+
+### Hand-off rows
+
+- **To §E:** mutation renders by publishing — the funnel writes, the
+  slot swaps, the frame rebuilds; the renderer exposes no second door.
+  The card editor overlays this surface and D1's frame is what it
+  overlays.
+- **To §F:** a mode's transient geometry draws OVER the installed
+  frame and commits through §E's funnel; the frame value is immutable
+  precisely so a mode overlay can compose against it without racing
+  the apply.
+- **To §G:** ItemStatus "marked" exists from D3 on; §G gives it
+  semantics and bulk verbs.
+- **To W8-2:** the Contrast mappings and APCA rows recorded here are
+  the canvas half of the shared CI lock.
+
+### Round record
+
+**Revision 1** — drafted after PR C-unit merged, from the executable
+spec's §PR D and the C-unit model as shipped. The section is UNFROZEN:
+red-team rounds run against this text next, per the protocol, and
+nothing above is ratified until they do.
+
+---
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same

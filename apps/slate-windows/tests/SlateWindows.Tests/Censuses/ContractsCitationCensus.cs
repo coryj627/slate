@@ -71,7 +71,10 @@ public sealed class ContractsCitationCensus
             (
                 "C-unit",
                 "## PR C-unit — the coherent projection unit",
-                "## §W-G canonical-consumption audit",
+                // Terminated by §D for §B's reason, two sections later:
+                // the section inserted before the old terminator must
+                // not be read as part of §C-unit's extent.
+                "## PR D — the visual renderer",
                 6_000,
                 // The floor moved when the section did. It was 3 while
                 // §C-unit was a DESIGN whose own types were deliberately
@@ -115,6 +118,21 @@ public sealed class ContractsCitationCensus
                 // owners, taking the section to 95; 76 sits above
                 // the pre-pass population of 75 — a sixth time.
                 76),
+            (
+                "D",
+                "## PR D — the visual renderer",
+                "## §W-G canonical-consumption audit",
+                12_000,
+                // A DESIGN floor, §C-unit's convention: the section's
+                // own new types are deliberately plain text until tasks
+                // bind them, so the 14 occurrences at revision 1 are all
+                // EXISTING names. 10 sits above the empty pre-section
+                // population and below the current 14, so unbinding the
+                // section's citations fails while prose churn does not;
+                // each implementation task raises it above what the
+                // section carried before that task, as §C-unit's tasks
+                // did.
+                10),
         ];
 
     public static TheoryData<string, string, string> SectionRanges
@@ -765,6 +783,10 @@ public sealed class ContractsCitationCensus
         (
             "§C-unit",
             "## PR C-unit — the coherent projection unit",
+            "## PR D — the visual renderer"),
+        (
+            "§D",
+            "## PR D — the visual renderer",
             "## §W-G canonical-consumption audit"),
         (
             "divergences",

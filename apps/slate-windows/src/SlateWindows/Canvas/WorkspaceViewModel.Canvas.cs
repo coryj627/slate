@@ -284,7 +284,7 @@ internal sealed partial class WorkspaceViewModel
             _ => ActiveCanvasDocument?.ShowSurface(CanvasSurfaceKind.Table),
             _ => ActiveCanvasDocument is not null);
 
-    /// <summary>Registered now, disabled until PR D ships the
+    /// <summary>Registered now, disabled until §D ships the
     /// projection (contract A18).</summary>
     public System.Windows.Input.ICommand CanvasShowVisualCommand =>
         _canvasShowVisualCommand ??= new RelayCommand(_ => { }, _ => false);
@@ -381,7 +381,7 @@ internal sealed partial class WorkspaceViewModel
             _ => ActiveCanvasDocument?.Modes.CanCommitOrCancel == true);
 
     /// <summary>
-    /// Registered now, disabled until PR D ships the viewport (contract
+    /// Registered now, disabled until §D ships the viewport (contract
     /// C9). "State only until D" was the alternative and it is worse:
     /// the toggle's own announcement says the viewport follows the
     /// selection, and with no viewport that is a sentence about nothing â€”

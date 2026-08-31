@@ -1514,7 +1514,7 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
 
     /// <summary>
     /// Which projection the body shows. Only the table asks for itself:
-    /// <c>Visual</c> is not a projection until PR D, and a persisted
+    /// <c>Visual</c> is not a projection until §D lands, and a persisted
     /// <c>"visual"</c> token — which PR A already round-trips — must land
     /// on a real surface rather than an empty pane, so it falls back to
     /// the outline exactly as the absent token does.
