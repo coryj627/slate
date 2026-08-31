@@ -55,14 +55,14 @@ internal sealed class CanvasPopulation
         IEnumerable<CanvasOutlineRow>? outline,
         IEnumerable<CanvasTableRow>? table,
         IEnumerable<CanvasLoadWarning>? warnings,
-        uint preservedCount,
         string? lastActivatedNode,
         IEnumerable<CanvasSceneNode>? scene = null)
     {
         Outline = CanvasModelCopy.Rows(outline);
         Table = CanvasModelCopy.Rows(table);
         Warnings = CanvasModelCopy.Ordered(warnings);
-        PreservedCount = preservedCount;
+        PreservedCount = (uint)Warnings.Count(
+            warning => warning.Kind == CanvasLoadWarningKind.SkippedEntry);
         LastActivatedNode = lastActivatedNode;
         Subpaths = CanvasModelCopy.Subpaths(scene);
 
@@ -120,7 +120,7 @@ internal sealed class CanvasPopulation
     /// first load lands. Not a shared sentinel installed into the slot:
     /// every publication that names a population names one built for
     /// it, which is obligation I5's rule reaching this type.</summary>
-    internal static CanvasPopulation Empty() => new(null, null, null, 0, null);
+    internal static CanvasPopulation Empty() => new(null, null, null, null);
 
     internal ImmutableArray<CanvasOutlineRow> Outline { get; }
 
@@ -129,8 +129,11 @@ internal sealed class CanvasPopulation
     internal ImmutableArray<CanvasLoadWarning> Warnings { get; }
 
     /// <summary>How many unsupported items the load preserved — an A4
-    /// banner fact, and population-class because it counts THIS
-    /// load.</summary>
+    /// banner fact, population-class because it counts THIS load, and
+    /// DERIVED from this population's own warnings so the banner and
+    /// the list cannot disagree (the cleanup pass; a constructor could
+    /// previously pin a count that contradicted the warnings beside
+    /// it).</summary>
     internal uint PreservedCount { get; }
 
     /// <summary>Population class, per the five-class table: the row
@@ -143,9 +146,6 @@ internal sealed class CanvasPopulation
     /// of ONE load, and the only thing the scene contributes to the
     /// model: geometry is the renderer's and never enters here.</summary>
     internal ImmutableDictionary<string, string> Subpaths { get; }
-
-    internal string? Subpath(string nodeId) =>
-        Subpaths.TryGetValue(nodeId, out string? subpath) ? subpath : null;
 
     internal int Count => Outline.Length;
 

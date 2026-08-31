@@ -5987,6 +5987,81 @@ an effect that publishes makes a sequential second call rather than a
 reentrant one. The refusal's scope and U12's anticipation are disjoint.
 
 
+
+**The cleanup pass, run at last.** Four review angles — reuse,
+simplification, efficiency, altitude — over the whole branch diff, after
+the last task and before the push, applied where taking the finding did
+not move a ratified behaviour. What changed, by owner:
+
+- **The survivable-fault predicate has one home.** Four catch filters
+  said "not OOM, not stack overflow, not access violation, not the
+  lease's own tripwire" in four places; `CanvasFaults.Survivable` says
+  it once, beside `CanvasHandleLease` whose
+  `CanvasLeaseViolationException` it must never swallow. The censuses
+  admit the type; its wall is the existing statics discipline.
+- **The population derives what it was being told.**
+  `CanvasPopulation` counted its preserved rows in a constructor
+  parameter AND carried the warnings the count comes from;
+  `PreservedCount` is now derived from the skipped-entry warnings and
+  the parameter is gone, so the two can no longer disagree. The unused
+  `Subpath` accessor went with it — `Subpaths` the index stays, and
+  `CanvasDocumentViewModel` now ALIASES that immutable index instead of
+  copying it row by row on every publish, capturing
+  `PreservedItemCount` once per load rather than recounting per
+  binding read.
+- **The unit carries the fact the surfaces were reconstructing.**
+  `CanvasProjectionUnit` gains `Narrowed` — set by a landed answer,
+  carried through pending and failed successors, cleared by the
+  unfiltered projection — so the lingering-answer question is read,
+  not re-derived from set-size arithmetic that misread a
+  match-everything answer. `WithResolvedSelection` and the transitions
+  carry it; the transform-allocates rule (I5) is untouched.
+- **One verdict, one sentence.** `CanvasDocumentViewModel` computes a
+  single `CanvasFilterVerdict`; the view, the count boundary and the
+  summary consume it, and `FilterAnswerInFlight` is now a reading of it
+  rather than a fourth ladder. `CanvasNavigator` composes the filter's
+  status sentence once, in `FilterStatusSentence`, where the count
+  boundary announces what the summary renders. The derived
+  `CanvasFilterView` is memoized per applied publication and needle —
+  a VM-side cache of a pure function, not a publication cache.
+  `ReadRefusalFor` reads BOTH halves from the applied snapshot, so the
+  sentence cannot be a torn pair mid-reload.
+- **Work moved off the gate.** `CanvasFilterMachine.Typed` derives
+  activity from the needle instead of being told twice; the machine and
+  `CanvasLeaseTransfer` pre-build the widened and lingering projections
+  before entering the gate and reuse them when the decision snapshot
+  still matches. `CanvasPublication.WithMarkedIntent` gains the
+  already-copied overload so the marked-intent publisher copies outside
+  the gate too.
+- **The outline view asks the population.** `CanvasOutlineView`
+  carried a line-for-line copy of the TRUE-ancestry walk — with the
+  depth-gap fix only in the copy that documented it. It now reads
+  `AppliedPopulation` and asks `Parent`, the one derivation the
+  population owns.
+- **The batteries share their arrangements.** `CanvasModelFixtures`
+  owns the flat and depth-shaped populations three batteries built by
+  hand; `CanvasFakeLoadSource` is the one in-memory load source (the
+  pipeline battery's rich fake, promoted; the machine battery's
+  `ReloadSource` deleted); `CanvasWorker` lives under `Support/`; the
+  lease battery's hand-rolled yield loop is `SpinWait.SpinUntil`. The
+  model census folds its two wall theories into one `AssertWall` loop.
+
+**Findings taken as notes, not edits — each with its reason:**
+
+- The load and filter schedules' running/queued pairs look mergeable
+  into request objects; the pair layout is the frozen design's and the
+  swap-width argument lives there. Not a cleanup-pass call.
+- `CanvasHandleLease.Invoke` re-reads the slot for its admission
+  predicate; the re-read IS the contract (admission against the slot as
+  it is), not a redundancy.
+- The view model's `_rows` and `_targets` shadow indexes duplicate
+  population lookups; they are T5's surface and move with it.
+- The per-keystroke outline rebuild behind `OutlinePublished` is
+  periphery cost the obligations ledger already carries.
+- `DisplayedOrdinal` and the population members only the future
+  presentation reads are the ratified API surface, kept.
+- The slot battery's raw contender threads never assert, so
+  `CanvasWorker`'s fault capture buys nothing there; left as committed.
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same

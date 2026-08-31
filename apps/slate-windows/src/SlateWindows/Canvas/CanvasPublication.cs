@@ -340,6 +340,15 @@ internal sealed class CanvasPublication
     internal CanvasPublication WithMarkedIntent(IEnumerable<string>? nodeIds) =>
         Copy(markedIntent: CanvasModelCopy.Ids(nodeIds));
 
+    /// <summary>The already-copied form, for a caller that built the
+    /// set OUTSIDE the gate — the copy is O(marks) and a transform is
+    /// every publisher's cost (the cleanup pass).</summary>
+    internal CanvasPublication WithMarkedIntent(ImmutableHashSet<string> nodeIds)
+    {
+        ArgumentNullException.ThrowIfNull(nodeIds);
+        return Copy(markedIntent: nodeIds);
+    }
+
     /// <remarks>Guarded, because <c>Copy</c> reads null as "not
     /// supplied": without this, a null needle would silently produce an
     /// unchanged-valued copy rather than throwing, which is the second

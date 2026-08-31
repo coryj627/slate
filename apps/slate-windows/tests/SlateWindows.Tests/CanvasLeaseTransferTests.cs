@@ -1,9 +1,9 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-using System.Diagnostics;
 using SlateWindows.Canvas;
 using uniffi.slate_uniffi;
+using static SlateWindows.Tests.CanvasModelFixtures;
 
 namespace SlateWindows.Tests;
 
@@ -106,11 +106,7 @@ public sealed class CanvasLeaseTransferTests
         // Until the second caller is BLOCKED — on the lock the first
         // holds — or has finished, which only the mutant manages while
         // the first is still inside the handle close.
-        var stopwatch = Stopwatch.StartNew();
-        while (!second.IsBlockedOrFinished && stopwatch.Elapsed < LivenessBudget)
-        {
-            Thread.Yield();
-        }
+        _ = SpinWait.SpinUntil(() => second.IsBlockedOrFinished, LivenessBudget);
 
         Assert.True(
             second.IsBlockedOrFinished,
@@ -794,11 +790,4 @@ public sealed class CanvasLeaseTransferTests
         }
     }
 
-    private static CanvasPopulation Population(params string[] nodeIds) => new(
-        nodeIds.Select(id => new CanvasOutlineRow(
-            id, 0, "text", id, id, [], 1, (uint)nodeIds.Length, 0, null)),
-        null,
-        null,
-        0,
-        null);
 }

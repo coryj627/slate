@@ -171,6 +171,15 @@ internal static class CanvasLeaseTransfer
         // rebase, which is a dictionary probe and a few allocations.
         CanvasProjectionUnit unfiltered = CanvasProjectionUnit.Unfiltered(population);
 
+        // The lingering base too (the cleanup pass): Answered walks the
+        // outline, and both of its inputs are known before the gate —
+        // the previous answer, carried across the reload and resolved
+        // against the new graph so the pending unit lingers instead of
+        // widening (the T6 review's flash).
+        CanvasProjectionUnit lingeringBase = lingeringMatched is null
+            ? unfiltered
+            : unfiltered.Answered(population, lingeringMatched);
+
         CanvasPublicationOutcome outcome = slot.Publish(snapshot =>
         {
             probeForTests?.Reached(CanvasLoadPoint.SnapshotRead);
@@ -179,10 +188,10 @@ internal static class CanvasLeaseTransfer
                 return null;
             }
 
-            CanvasProjectionUnit unit = unfiltered.WithResolvedSelection(
-                population.Resolve(snapshot.SelectedIntent));
+            string? resolved = population.Resolve(snapshot.SelectedIntent);
             probeForTests?.Reached(CanvasLoadPoint.Rebase);
             CanvasRequestIdentity? reseed = null;
+            CanvasProjectionUnit unit;
             if (CanvasFilterMachine.IsActiveNeedle(snapshot.NeedleIntent))
             {
                 // The ACTIVE predicate, the same one the keystroke
@@ -190,18 +199,22 @@ internal static class CanvasLeaseTransfer
                 // the keystroke and active at the reseed, minting a
                 // phantom job on every reload (T6 review).
                 reseed = new CanvasRequestIdentity($"reseed of {request.Label}");
-                if (lingeringMatched is not null)
+                if (lingeringMatched is not null
+                    && resolved is not null
+                    && !lingeringBase.Matched.Contains(resolved))
                 {
-                    // The previous answer, carried across the reload
-                    // and resolved against the new graph: without it
-                    // the pending unit widens to every card until the
-                    // reseeded job lands — the flash the retired match
-                    // cache's comment always warned about, found again
-                    // by the T6 review.
-                    unit = unit.Answered(population, lingeringMatched);
+                    // The lingering answer filters the selection the
+                    // way a landed one would have.
+                    resolved = null;
                 }
 
-                unit = unit.Pending(reseed, snapshot.NeedleIntent);
+                unit = lingeringBase
+                    .WithResolvedSelection(resolved)
+                    .Pending(reseed, snapshot.NeedleIntent);
+            }
+            else
+            {
+                unit = unfiltered.WithResolvedSelection(resolved);
             }
 
             probeForTests?.Reached(CanvasLoadPoint.Reseed);

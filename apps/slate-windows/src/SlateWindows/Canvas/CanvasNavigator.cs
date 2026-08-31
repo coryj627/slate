@@ -658,39 +658,25 @@ internal sealed class CanvasNavigator
         {
             return;
         }
-        if (_document.FilterAnswerInFlight)
+        switch (_document.FilterVerdict)
         {
-            // BEFORE the view is even built — the early return was
-            // paying the row walk it discarded (T6 review). The async
-            // match has not landed: a count now would describe rows the
-            // needle did not choose, and the completion's projection
-            // announces the honest one. Saying nothing here is not a
-            // silent verb — the debounced count is the keystroke's
-            // echo, and it arrives with the answer.
-            return;
+            case CanvasFilterVerdict.InFlight:
+                // BEFORE the view is even built — the early return was
+                // paying the row walk it discarded (T6 review). A count
+                // now would describe rows the needle did not choose;
+                // the completion's projection announces the honest one,
+                // so saying nothing here is not a silent verb — the
+                // debounced count is the keystroke's echo, and it
+                // arrives with the answer.
+                return;
+            case CanvasFilterVerdict.Current:
+                Announce(new CanvasA11yEvent.CanvasFilterCount(
+                    (uint)_document.Filter.Rows.Count));
+                return;
+            default:
+                Announce(FilterStatusSentence());
+                return;
         }
-        if (_document.FilterAnswerFailed)
-        {
-            // The failed-answer bit's SENTENCE (T6 review): the match
-            // could not run, on a document that is otherwise healthy —
-            // "Reopening" would be a lie about the canvas. The
-            // vocabulary has no typed filter-failed reason, so it rides
-            // the generic failed-action arm with the needle as the
-            // dynamic detail — CD-38's recorded shape, and the same
-            // STOP: the typed reason is a core change this task may not
-            // make.
-            Announce(new CanvasA11yEvent.CanvasActionFailed(
-                CanvasFailedAction.CanvasAction, _document.FilterText));
-            return;
-        }
-        CanvasFilterView view = _document.Filter;
-        if (view.Current)
-        {
-            Announce(new CanvasA11yEvent.CanvasFilterCount((uint)view.Rows.Count));
-            return;
-        }
-        Announce(new CanvasA11yEvent.CanvasStatus(
-            _document.ReadRefusal ?? new CanvasStatusNote.Reopening()));
     }
 
     /// <summary>
@@ -718,7 +704,8 @@ internal sealed class CanvasNavigator
     public string FilterSummaryText()
     {
         CanvasFilterView view = _document.Filter;
-        if (view.Current || (_document.FilterAnswerInFlight && view.Narrowed))
+        CanvasFilterVerdict verdict = _document.FilterVerdict;
+        if (view.Current || (verdict == CanvasFilterVerdict.InFlight && view.Narrowed))
         {
             // Current, or the PREVIOUS answer still on screen while the
             // new match runs (task T6): either way the number counts
@@ -726,7 +713,7 @@ internal sealed class CanvasNavigator
             // invariant C10 has.
             return CanvasPhrase.FilterSummary(view.Rows.Count, _document.Outline.Count);
         }
-        if (_document.FilterAnswerInFlight)
+        if (verdict == CanvasFilterVerdict.InFlight)
         {
             // Nothing narrowed yet and the answer in flight: no number
             // is true of a match nobody made, and the state mapping has
@@ -734,16 +721,23 @@ internal sealed class CanvasNavigator
             // empty until the completion's projection lands.
             return string.Empty;
         }
-        if (_document.FilterAnswerFailed)
-        {
-            // The same sentence the count boundary speaks — one render,
-            // no second opinion (T6 review).
-            return CanvasAnnouncer.RenderLabel(new CanvasA11yEvent.CanvasActionFailed(
-                CanvasFailedAction.CanvasAction, _document.FilterText));
-        }
-        return CanvasAnnouncer.RenderLabel(new CanvasA11yEvent.CanvasStatus(
-            _document.ReadRefusal ?? new CanvasStatusNote.Reopening()));
+        return CanvasAnnouncer.RenderLabel(FilterStatusSentence());
     }
+
+    /// <summary>The ONE composition of the filter's status sentence —
+    /// the count boundary ANNOUNCES it, the summary RENDERS it, and the
+    /// two cannot drift (the cleanup pass; the invariant used to be
+    /// kept by hand across two ladders). The failed arm rides the
+    /// generic failed-action event with the needle as its dynamic
+    /// detail — CD-38's recorded shape and its STOP: a typed
+    /// filter-failed reason is a core change this task may not
+    /// make.</summary>
+    private CanvasA11yEvent FilterStatusSentence() =>
+        _document.FilterVerdict == CanvasFilterVerdict.Failed
+            ? new CanvasA11yEvent.CanvasActionFailed(
+                CanvasFailedAction.CanvasAction, _document.FilterText)
+            : new CanvasA11yEvent.CanvasStatus(
+                _document.ReadRefusal ?? new CanvasStatusNote.Reopening());
 
     // --- Modes (t0 §2) ---------------------------------------------------
 

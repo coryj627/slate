@@ -139,9 +139,21 @@ internal sealed class CanvasFilterMachine
     /// next revalidation. Either way the needle INTENT publishes, so a
     /// keystroke mid-load still reseeds at acceptance.
     /// </summary>
-    internal void Typed(string needle, bool active)
+    internal void Typed(string needle)
     {
         ArgumentNullException.ThrowIfNull(needle);
+        // The predicate is the machine's own — a caller-supplied bool
+        // reintroduced the two-owners drift centralizing it removed
+        // (the cleanup pass).
+        bool active = IsActiveNeedle(needle);
+        // Pre-built OUTSIDE the gate for the clear (I2's ledger note):
+        // the widened projection walks the outline. Revalidated by
+        // population reference inside; the rare reload race pays the
+        // walk in-gate rather than losing the clear.
+        CanvasLoaded? loadedBefore = _slot.Current.Loaded;
+        CanvasProjectionUnit? widened = !active && loadedBefore is not null
+            ? CanvasProjectionUnit.Unfiltered(loadedBefore.Population)
+            : null;
         CanvasPublicationOutcome outcome = _slot.Publish(snapshot =>
         {
             if (snapshot.Retired)
@@ -160,10 +172,14 @@ internal sealed class CanvasFilterMachine
 
             if (!active)
             {
+                CanvasProjectionUnit wide =
+                    widened is not null
+                        && ReferenceEquals(loaded.Population, loadedBefore!.Population)
+                    ? widened
+                    : CanvasProjectionUnit.Unfiltered(loaded.Population);
                 return next
                     .WithFilters(snapshot.Filters.Reseeded(null))
-                    .WithUnit(CanvasProjectionUnit.Unfiltered(
-                        loaded.Population,
+                    .WithUnit(wide.WithResolvedSelection(
                         loaded.Population.Resolve(snapshot.SelectedIntent)));
             }
 
@@ -252,11 +268,7 @@ internal sealed class CanvasFilterMachine
                 return;
             }
         }
-        catch (Exception exception) when (
-            exception is not OutOfMemoryException
-                and not StackOverflowException
-                and not AccessViolationException
-                and not CanvasLeaseViolationException)
+        catch (Exception exception) when (CanvasFaults.Survivable(exception))
         {
             // The failed-answer bit, §C's travelling row: panic-class
             // included, the fault becomes an ANSWER STATE rather than a

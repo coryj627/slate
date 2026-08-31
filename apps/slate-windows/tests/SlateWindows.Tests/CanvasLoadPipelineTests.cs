@@ -35,7 +35,7 @@ public sealed class CanvasLoadPipelineTests
     [Fact]
     public void TheOldLeaseStaysOwnedBetweenTheRequestAndItsWorker()
     {
-        var source = new FakeSource();
+        var source = new CanvasFakeLoadSource();
         var slot = new CanvasPublicationSlot(CanvasPublication.Seed());
         var pipeline = new CanvasLoadPipeline(slot, source);
         Assert.True(
@@ -75,7 +75,7 @@ public sealed class CanvasLoadPipelineTests
     [Fact]
     public void ADisplacedCloseThatThrowsPublishesTheFailure()
     {
-        var source = new FakeSource();
+        var source = new CanvasFakeLoadSource();
         var slot = new CanvasPublicationSlot(CanvasPublication.Seed());
         var pipeline = new CanvasLoadPipeline(slot, source);
         Assert.True(
@@ -102,7 +102,7 @@ public sealed class CanvasLoadPipelineTests
     [Fact]
     public void ARetiredDocumentRefusesTheRequest()
     {
-        var source = new FakeSource();
+        var source = new CanvasFakeLoadSource();
         var observer = new CanvasPublicationInstallObserver();
         var slot = new CanvasPublicationSlot(CanvasPublication.Seed(), observer);
         var pipeline = new CanvasLoadPipeline(slot, source);
@@ -123,7 +123,7 @@ public sealed class CanvasLoadPipelineTests
     [Fact]
     public void AFirstLoadInstallsTheLeaseThePopulationAndReady()
     {
-        var source = new FakeSource { Rows = ["a", "b", "c"] };
+        var source = new CanvasFakeLoadSource { Rows = ["a", "b", "c"] };
         source.Subpaths["b"] = "#Heading";
         var slot = new CanvasPublicationSlot(CanvasPublication.Seed());
         var pipeline = new CanvasLoadPipeline(slot, source);
@@ -135,7 +135,7 @@ public sealed class CanvasLoadPipelineTests
         Assert.True(
             published.Lease is { IsClosed: false }
                 && published.Population!.Count == 3
-                && published.Population.Subpath("b") == "#Heading"
+                && published.Population.Subpaths["b"] == "#Heading"
                 && published.Unit!.VisibleCount == 3,
             "the publication names an open lease, the population — subpaths "
             + "included — and its unfiltered unit.");
@@ -152,7 +152,7 @@ public sealed class CanvasLoadPipelineTests
     [Fact]
     public void AReloadClosesTheOldHandleBeforeItOpensTheNew()
     {
-        var source = new FakeSource();
+        var source = new CanvasFakeLoadSource();
         var slot = new CanvasPublicationSlot(CanvasPublication.Seed());
         var pipeline = new CanvasLoadPipeline(slot, source);
         Assert.True(
@@ -185,7 +185,7 @@ public sealed class CanvasLoadPipelineTests
     [Fact]
     public void ADegradedOpenPublishesParseErrorAndClosesAtOnce()
     {
-        var source = new FakeSource { Degraded = true };
+        var source = new CanvasFakeLoadSource { Degraded = true };
         var slot = new CanvasPublicationSlot(CanvasPublication.Seed());
         var pipeline = new CanvasLoadPipeline(slot, source);
         CanvasLoadRequest request = pipeline.Request()!;
@@ -195,7 +195,7 @@ public sealed class CanvasLoadPipelineTests
         Assert.True(outcome == CanvasLoadOutcome.ParseError, $"the delivery reported {outcome}.");
         Assert.True(
             slot.Current.LoadState == CanvasLoadState.ParseError
-                && slot.Current.LoadMessage == FakeSource.ParseErrorMessage
+                && slot.Current.LoadMessage == CanvasFakeLoadSource.ParseErrorMessage
                 && slot.Current.Loaded is null,
             "ParseError and its message are published with nothing loaded.");
         Assert.True(
@@ -213,7 +213,7 @@ public sealed class CanvasLoadPipelineTests
     [Fact]
     public void AnOpenThatThrowsPublishesTheMappedFailureWithNothingToClose()
     {
-        var source = new FakeSource { OpenFault = new InvalidOperationException("no such file") };
+        var source = new CanvasFakeLoadSource { OpenFault = new InvalidOperationException("no such file") };
         var slot = new CanvasPublicationSlot(CanvasPublication.Seed());
         var pipeline = new CanvasLoadPipeline(slot, source);
         CanvasLoadRequest request = pipeline.Request()!;
@@ -235,7 +235,7 @@ public sealed class CanvasLoadPipelineTests
     [Fact]
     public void AReadThatThrowsClosesTheHandleOnceAndPublishesFailure()
     {
-        var source = new FakeSource { ReadFault = new InvalidOperationException("torn") };
+        var source = new CanvasFakeLoadSource { ReadFault = new InvalidOperationException("torn") };
         var slot = new CanvasPublicationSlot(CanvasPublication.Seed());
         var pipeline = new CanvasLoadPipeline(slot, source);
 
@@ -255,7 +255,7 @@ public sealed class CanvasLoadPipelineTests
     [Fact]
     public void ADeliverySupersededBeforeItsSwapIsRefusedAndClosesOnlyItsOwnHandle()
     {
-        var source = new FakeSource();
+        var source = new CanvasFakeLoadSource();
         var slot = new CanvasPublicationSlot(CanvasPublication.Seed());
         var probe = new CanvasLoadProbeForTests();
         var pipeline = new CanvasLoadPipeline(slot, source, probeForTests: probe);
@@ -303,7 +303,7 @@ public sealed class CanvasLoadPipelineTests
     public void AFaultInsideTheWindowClosesTheHandleOnceAndPublishesFailure(string pointName)
     {
         CanvasLoadPoint point = Enum.Parse<CanvasLoadPoint>(pointName);
-        var source = new FakeSource();
+        var source = new CanvasFakeLoadSource();
         var slot = new CanvasPublicationSlot(CanvasPublication.Seed());
         var probe = new CanvasLoadProbeForTests
         {
@@ -343,7 +343,7 @@ public sealed class CanvasLoadPipelineTests
     [Fact]
     public void AFaultAfterTheSwapLeavesTheLeaseLiveAndPublished()
     {
-        var source = new FakeSource();
+        var source = new CanvasFakeLoadSource();
         var slot = new CanvasPublicationSlot(CanvasPublication.Seed());
         var probe = new CanvasLoadProbeForTests
         {
@@ -380,7 +380,7 @@ public sealed class CanvasLoadPipelineTests
     [Fact]
     public void TwoConcurrentDeliveriesLeaveOnePublicationAndOneClosedLease()
     {
-        var source = new FakeSource();
+        var source = new CanvasFakeLoadSource();
         var slot = new CanvasPublicationSlot(CanvasPublication.Seed());
         using var firstBuilt = new ManualResetEventSlim(false);
         using var secondBuilt = new ManualResetEventSlim(false);
@@ -443,7 +443,7 @@ public sealed class CanvasLoadPipelineTests
     public void ADeliveryRacingTeardownIsSafeInBothOrders()
     {
         // Teardown lands between the build and the swap.
-        var source = new FakeSource();
+        var source = new CanvasFakeLoadSource();
         var slot = new CanvasPublicationSlot(CanvasPublication.Seed());
         var probe = new CanvasLoadProbeForTests
         {
@@ -469,7 +469,7 @@ public sealed class CanvasLoadPipelineTests
             + "it opened; the terminal publication stands.");
 
         // The delivery lands first; teardown un-names, then closes.
-        var source2 = new FakeSource();
+        var source2 = new CanvasFakeLoadSource();
         var slot2 = new CanvasPublicationSlot(CanvasPublication.Seed());
         var pipeline2 = new CanvasLoadPipeline(slot2, source2);
         Assert.True(
@@ -499,7 +499,7 @@ public sealed class CanvasLoadPipelineTests
     [Fact]
     public void IntentsArrivingMidLoadSurviveAcceptance()
     {
-        var source = new FakeSource { Rows = ["a", "b"] };
+        var source = new CanvasFakeLoadSource { Rows = ["a", "b"] };
         var slot = new CanvasPublicationSlot(CanvasPublication.Seed());
         var probe = new CanvasLoadProbeForTests
         {
@@ -543,7 +543,7 @@ public sealed class CanvasLoadPipelineTests
     [Fact]
     public void ACloseFaultInTheReleaseDoesNotReplaceTheDeliveryOutcome()
     {
-        var source = new FakeSource { CloseFault = new ObjectDisposedException("session") };
+        var source = new CanvasFakeLoadSource { CloseFault = new ObjectDisposedException("session") };
         var slot = new CanvasPublicationSlot(CanvasPublication.Seed());
         var probe = new CanvasLoadProbeForTests();
         var pipeline = new CanvasLoadPipeline(slot, source, probeForTests: probe);
@@ -571,7 +571,7 @@ public sealed class CanvasLoadPipelineTests
     [Fact]
     public void MutationRetention_ALeaseDroppedWithoutReleaseIsCaughtByTheCloseObservation()
     {
-        var source = new FakeSource();
+        var source = new CanvasFakeLoadSource();
         var slot = new CanvasPublicationSlot(CanvasPublication.Seed());
         var pipeline = new CanvasLoadPipeline(slot, source);
         CanvasLoadRequest first = pipeline.Request()!;
@@ -580,7 +580,7 @@ public sealed class CanvasLoadPipelineTests
         // The mutant: open, build, try, and simply return on refusal.
         CanvasOpenInfo info = source.Open();
         var dropped = new CanvasHandleLease(info.Handle, source.Close);
-        var population = new CanvasPopulation(source.Outline(info.Handle), null, null, 0, null);
+        var population = new CanvasPopulation(source.Outline(info.Handle), null, null, null, null);
         Assert.False(
             CanvasLeaseTransfer.TryAccept(slot, first.Identity, dropped, population).Accepted,
             "premise: the mutant's request is superseded, so it is refused.");
@@ -590,125 +590,5 @@ public sealed class CanvasLoadPipelineTests
             "the named arrangement: an unpublished handle nobody closed. Visible to "
             + "the close observation and to nothing else — the wrapper is "
             + "collectable while the native handle is not.");
-    }
-
-    // ---------------------------------------------------------------
-    // The source
-    // ---------------------------------------------------------------
-
-    /// <summary>An in-memory source: handles are integers, the close
-    /// observation is a counter, and each FFI call can be told to throw.
-    /// The order of calls is logged so a fact can assert "closed before
-    /// opened" rather than only "closed".</summary>
-    private sealed class FakeSource : ICanvasLoadSource
-    {
-        internal const string ParseErrorMessage = "not a canvas";
-        private readonly object _gate = new();
-        private readonly List<string> _log = [];
-        private ulong _next;
-        private int _opens;
-        private int _closes;
-
-        internal string[] Rows { get; set; } = ["a", "b"];
-
-        internal Dictionary<string, string> Subpaths { get; } = new(StringComparer.Ordinal);
-
-        internal bool Degraded { get; init; }
-
-        internal Exception? OpenFault { get; init; }
-
-        internal Exception? ReadFault { get; init; }
-
-        internal Exception? CloseFault { get; set; }
-
-        internal int Opens => Volatile.Read(ref _opens);
-
-        internal int TotalCloses => Volatile.Read(ref _closes);
-
-        internal string Trace
-        {
-            get
-            {
-                lock (_gate)
-                {
-                    return string.Join(" ", _log);
-                }
-            }
-        }
-
-        internal int IndexOf(string op, int occurrence)
-        {
-            lock (_gate)
-            {
-                var seen = 0;
-                for (var i = 0; i < _log.Count; i++)
-                {
-                    if (_log[i].StartsWith(op, StringComparison.Ordinal) && seen++ == occurrence)
-                    {
-                        return i;
-                    }
-                }
-
-                return -1;
-            }
-        }
-
-        public CanvasOpenInfo Open()
-        {
-            if (OpenFault is { } fault)
-            {
-                throw fault;
-            }
-
-            ulong handle = Interlocked.Increment(ref _next);
-            _ = Interlocked.Increment(ref _opens);
-            Record($"open:{handle}");
-            return new CanvasOpenInfo(handle, (uint)Rows.Length, 0, Degraded, []);
-        }
-
-        public void Close(ulong handle)
-        {
-            _ = Interlocked.Increment(ref _closes);
-            Record($"close:{handle}");
-            if (CloseFault is { } fault)
-            {
-                throw fault;
-            }
-        }
-
-        public CanvasOutlineRow[] Outline(ulong handle)
-        {
-            if (ReadFault is { } fault)
-            {
-                throw fault;
-            }
-
-            Record($"outline:{handle}");
-            return [.. Rows.Select((id, i) => new CanvasOutlineRow(
-                id, 0, "text", id, id, [], (uint)(i + 1), (uint)Rows.Length, 0, null))];
-        }
-
-        public CanvasTableRow[] TableRows(ulong handle) =>
-            [.. Rows.Select(id => new CanvasTableRow(id, "text", id, id, [], string.Empty, 0, null))];
-
-        public CanvasScene Scene(ulong handle) =>
-            new(
-                [.. Subpaths.Select(pair => new CanvasSceneNode(
-                    pair.Key, "file", pair.Key, pair.Key, 0, 0, 0, 0, null, null, pair.Value))],
-                []);
-
-        public CanvasLoadFailure FailureFor(Exception exception) =>
-            new(CanvasLoadState.Failed, $"failed: {exception.Message}");
-
-        public CanvasLoadFailure ParseError(IReadOnlyList<CanvasLoadWarning> warnings) =>
-            new(CanvasLoadState.ParseError, ParseErrorMessage);
-
-        private void Record(string entry)
-        {
-            lock (_gate)
-            {
-                _log.Add(entry);
-            }
-        }
     }
 }

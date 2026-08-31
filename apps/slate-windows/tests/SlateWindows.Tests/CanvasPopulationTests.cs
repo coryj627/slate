@@ -4,6 +4,7 @@
 using System.Collections.Immutable;
 using SlateWindows.Canvas;
 using uniffi.slate_uniffi;
+using static SlateWindows.Tests.CanvasModelFixtures;
 
 namespace SlateWindows.Tests;
 
@@ -105,7 +106,7 @@ public sealed class CanvasPopulationTests
             new("root", 0, "text", "Root", "Root", groupPath, 1, 1, 0, null),
         };
 
-        var population = new CanvasPopulation(rows, null, null, 0, null);
+        var population = new CanvasPopulation(rows, null, null, null, null);
         Assert.True(
             population.Outline[0].GroupPath.SequenceEqual(["outer", "inner"]),
             "premise: the population took the group path it was given.");
@@ -381,11 +382,4 @@ public sealed class CanvasPopulationTests
             + "reference inside a publication and must stay that way.");
     }
 
-    private static CanvasPopulation Outline(params (string Id, uint Depth)[] rows) => new(
-        rows.Select(row => new CanvasOutlineRow(
-            row.Id, row.Depth, "text", row.Id, row.Id, [], 1, (uint)rows.Length, 0, null)),
-        null,
-        null,
-        0,
-        null);
 }

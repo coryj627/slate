@@ -326,8 +326,6 @@ internal sealed class CanvasLoadPipeline
                     outline,
                     tableRows,
                     info.Warnings,
-                    preservedCount: (uint)info.Warnings.Count(
-                        warning => warning.Kind == CanvasLoadWarningKind.SkippedEntry),
                     lastActivatedNode: null,
                     scene: scene!.Nodes);
                 _probe?.Reached(CanvasLoadPoint.Built);
@@ -343,11 +341,7 @@ internal sealed class CanvasLoadPipeline
                     ? CanvasLoadOutcome.Accepted
                     : CanvasLoadOutcome.Refused;
             }
-            catch (Exception exception) when (
-                exception is not OutOfMemoryException
-                    and not StackOverflowException
-                    and not AccessViolationException
-                    and not CanvasLeaseViolationException)
+            catch (Exception exception) when (CanvasFaults.Survivable(exception))
             {
                 failure = _source.FailureFor(exception);
                 return CanvasLoadOutcome.Faulted;
@@ -365,10 +359,7 @@ internal sealed class CanvasLoadPipeline
         {
             return CanvasLeaseTransfer.Release(_slot, identity, lease, failure);
         }
-        catch (Exception exception) when (
-            exception is not OutOfMemoryException
-                and not StackOverflowException
-                and not AccessViolationException)
+        catch (Exception exception) when (CanvasFaults.Survivable(exception))
         {
             // The close's fault, not the delivery's: a session that
             // died first, or a panic-class exception out of the FFI —

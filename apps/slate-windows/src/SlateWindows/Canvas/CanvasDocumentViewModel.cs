@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using SlateWindows.Panels;
@@ -111,6 +112,32 @@ internal sealed record CanvasFilterView(
     bool Current,
     IReadOnlySet<string>? MatchedIds);
 
+/// <summary>The four-branch answer classification (task T6), computed
+/// ONCE — the cleanup pass folded five hand-kept ladders into this,
+/// so the spoken count, the visible summary and the view cannot
+/// drift.</summary>
+internal enum CanvasFilterVerdict
+{
+    /// <summary>No active needle: the filter is off.</summary>
+    Inactive,
+
+    /// <summary>The answer on screen is the field's needle's, on rows
+    /// the surface renders.</summary>
+    Current,
+
+    /// <summary>An active needle whose answer has not landed — the
+    /// completion's projection speaks when it does.</summary>
+    InFlight,
+
+    /// <summary>The match for the field's needle ran and could not
+    /// answer, on a document that renders rows.</summary>
+    Failed,
+
+    /// <summary>Everything else: the state mapping owns the
+    /// sentence.</summary>
+    StateSentence,
+}
+
 /// <summary>
 /// W6-1 PR A (#745): the per-path canvas document — the mac
 /// <c>CanvasDocument</c> twin, built on the W4-6 <c>BaseDocument</c>
@@ -177,7 +204,8 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// subpaths, derived once at load from core's table rows and scene
     /// — activation never re-queries (the mac <c>targets</c> shape).</summary>
     private readonly Dictionary<string, string> _targets = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, string> _subpaths = new(StringComparer.Ordinal);
+    private IReadOnlyDictionary<string, string> _subpaths =
+        System.Collections.Immutable.ImmutableDictionary<string, string>.Empty;
 
     /// <summary>Per-node adjacency, fetched lazily on first selection
     /// and cached; dropped on every load (the mac
@@ -371,8 +399,9 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// <summary>Skipped-but-preserved entries (t0 §5). The mac
     /// <c>preservedItemCount</c>: the SkippedEntry warnings, NOT
     /// <c>CanvasOpenInfo.degraded</c> — CD-28.</summary>
-    public int PreservedItemCount =>
-        _warnings.Count(warning => warning.Kind == CanvasLoadWarningKind.SkippedEntry);
+    public int PreservedItemCount => _preservedCount;
+
+    private int _preservedCount;
 
     /// <summary>The t0 §5 banner, rendered from the SAME event the
     /// once-per-open announcement speaks (contract A4), so banner and
@@ -688,7 +717,11 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
 
     /// <summary>This document's refusal, or null when it can answer.</summary>
     internal CanvasStatusNote? ReadRefusal =>
-        ReadRefusalFor(State, _slot.Current.Lease is not null);
+        // Both halves from the APPLIED snapshot (the cleanup pass): a
+        // sentence derived from the applied state and the LIVE slot is
+        // a torn pair mid-reload — two currency authorities in one
+        // answer.
+        ReadRefusalFor(State, _applied?.Lease is not null);
 
     /// <summary>
     /// Admission for a read verb: true when the document can answer,
@@ -793,8 +826,8 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         detail = string.Empty;
         try
         {
-            CanvasWhereAmI? answer = null;
-            if (!Query(handle => answer = _session.CanvasWhereAmI(handle, nodeId)))
+            if (!Query(handle => _session.CanvasWhereAmI(handle, nodeId),
+                out CanvasWhereAmI? answer))
             {
                 context = null;
                 return false;
@@ -849,8 +882,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     {
         try
         {
-            T? answer = default;
-            if (!Query(handle => answer = read(handle)))
+            if (!Query(read, out T? answer))
             {
                 value = fallback;
                 return false;
@@ -883,19 +915,23 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// before the lock cannot see a reload that landed while this
     /// caller was waiting for it (task T3).
     /// </remarks>
-    private bool Query(Action<ulong> call)
+    private bool Query<T>(Func<ulong, T> read, out T? answer)
     {
+        T? result = default;
+        answer = default;
         if (_slot.Current.Lease is not { } lease)
         {
             return false;
         }
-        return lease.Invoke(
+        bool admitted = lease.Invoke(
             () =>
             {
                 CanvasPublication now = _slot.Current;
                 return !now.Retired && now.Names(lease);
             },
-            call);
+            handle => result = read(handle));
+        answer = result;
+        return admitted;
     }
 
     // --- Filter (contract C10) -------------------------------------------
@@ -922,7 +958,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             // runs off the dispatcher (task T6). Inline in synchronous
             // tests, so the answer is applied before this setter
             // returns.
-            _machine.Typed(next, IsFilterActive(next));
+            _machine.Typed(next);
             // Applied HERE, not only after a job: the clear's widen and
             // the keystroke's pending unit publish with no job to post
             // the projection, and an unapplied publication is how a
@@ -970,26 +1006,56 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// is the distinction only an async match creates (§C's travelling
     /// row, task T6).</summary>
     internal bool FilterAnswerInFlight =>
-        RendersRetainedSnapshot
-        && FilterActive
-        && (_applied?.Unit is not { } unit
-            || unit.Answer is CanvasAnswerState.Unfiltered or CanvasAnswerState.Pending
-            || !string.Equals(unit.Needle, _filterText, StringComparison.Ordinal));
+        FilterVerdict == CanvasFilterVerdict.InFlight;
+
+    /// <summary>The one classification (the cleanup pass): the view,
+    /// the count boundary and the summary all read THIS, so the spoken
+    /// count and the visible summary cannot drift — the invariant the
+    /// old hand-kept ladders maintained separately.</summary>
+    internal CanvasFilterVerdict FilterVerdict
+    {
+        get
+        {
+            if (!FilterActive)
+            {
+                return CanvasFilterVerdict.Inactive;
+            }
+
+            if (!RendersRetainedSnapshot)
+            {
+                return CanvasFilterVerdict.StateSentence;
+            }
+
+            if (_applied?.Unit is not { } unit
+                || unit.Answer is CanvasAnswerState.Unfiltered or CanvasAnswerState.Pending
+                || !string.Equals(unit.Needle, _filterText, StringComparison.Ordinal))
+            {
+                return CanvasFilterVerdict.InFlight;
+            }
+
+            return unit.Answer == CanvasAnswerState.Failed
+                ? CanvasFilterVerdict.Failed
+                : CanvasFilterVerdict.Current;
+        }
+    }
 
     /// <summary>The match for the needle in the field ran and could not
     /// answer, on a document that renders rows — the failed-answer bit,
     /// owed its own sentence rather than the state mapping's (T6
     /// review).</summary>
     internal bool FilterAnswerFailed =>
-        RendersRetainedSnapshot
-        && FilterActive
-        && _applied?.Unit is { Answer: CanvasAnswerState.Failed } unit
-        && string.Equals(unit.Needle, _filterText, StringComparison.Ordinal);
+        FilterVerdict == CanvasFilterVerdict.Failed;
 
     /// <summary>The applied unit's answer state — the projection
     /// bookkeeping the clear-then-retype fact pins, reachable no other
     /// way. Test seam by name.</summary>
     internal CanvasAnswerState? AppliedFilterAnswerForTests => _applied?.Unit?.Answer;
+
+    /// <summary>The applied population — the graph whose rows are on
+    /// screen. The outline view resolves TRUE ancestry through this
+    /// instead of re-deriving the depth walk the population already
+    /// owns (the cleanup pass).</summary>
+    internal CanvasPopulation? AppliedPopulation => _applied?.Population;
 
     /// <summary>
     /// What the surfaces show for the current needle, in reading order —
@@ -1011,6 +1077,27 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     {
         get
         {
+            // Memoized per (applied publication, needle) — a VM-derived
+            // view cache, not a publication cache: several consumers
+            // read the view per publish, and it is a pure function of
+            // the pair (the cleanup pass).
+            if (_filterViewMemo is { } memo
+                && ReferenceEquals(memo.Applied, _applied)
+                && string.Equals(memo.Needle, _filterText, StringComparison.Ordinal))
+            {
+                return memo.View;
+            }
+
+            CanvasFilterView view = DeriveFilterView();
+            _filterViewMemo = (_applied, _filterText, view);
+            return view;
+        }
+    }
+
+    private (CanvasPublication? Applied, string Needle, CanvasFilterView View)? _filterViewMemo;
+
+    private CanvasFilterView DeriveFilterView()
+    {
             if (!FilterActive)
             {
                 return new CanvasFilterView(_outline, Narrowed: false, Current: true, null);
@@ -1041,13 +1128,13 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             // widening silently back to the full outline would show
             // every card while the field still claims to be filtering,
             // and then speak that number as a match count.
-            bool lingering =
-                unit.Matched.Count > 0 || unit.VisibleCount != _outline.Count;
-            return lingering
+            // The unit CARRIES whether its rows came from a landed
+            // answer (the cleanup pass; the set-size arithmetic this
+            // replaces misread a match-everything answer).
+            return unit.Narrowed
                 ? new CanvasFilterView(
                     RowsOf(unit), Narrowed: true, Current: false, unit.Matched)
                 : new CanvasFilterView(_outline, Narrowed: false, Current: false, null);
-        }
     }
 
     /// <summary>The outline rows the surfaces display.</summary>
@@ -1360,6 +1447,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 {
                     PublishEmpty();
                     Warnings = [];
+                    _preservedCount = 0;
                     StateMessage = current.LoadMessage;
                     State = current.LoadState;
                     OutlinePublished?.Invoke(this, EventArgs.Empty);
@@ -1393,7 +1481,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 _ = _slot.Publish(s => s.Retired ? null : s.WithActiveSurface(surface));
                 break;
             case nameof(CanvasSelection.Marked):
-                string[] marked = [.. Selection.Marked];
+                ImmutableHashSet<string> marked = CanvasModelCopy.Ids(Selection.Marked);
                 _ = _slot.Publish(s => s.Retired ? null : s.WithMarkedIntent(marked));
                 break;
             default:
@@ -1405,7 +1493,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     {
         _rows.Clear();
         _targets.Clear();
-        _subpaths.Clear();
+        _subpaths = System.Collections.Immutable.ImmutableDictionary<string, string>.Empty;
         _neighbors.Clear();
         WhereAmIText = null;
         Outline = [];
@@ -1417,7 +1505,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     {
         _rows.Clear();
         _targets.Clear();
-        _subpaths.Clear();
+        _subpaths = System.Collections.Immutable.ImmutableDictionary<string, string>.Empty;
         _neighbors.Clear();
         WhereAmIText = null;
         foreach (CanvasOutlineRow row in population.Outline)
@@ -1428,11 +1516,14 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         {
             _targets[row.NodeId] = row.Target;
         }
-        foreach ((string nodeId, string subpath) in population.Subpaths)
-        {
-            _subpaths[nodeId] = subpath;
-        }
+        // Aliased, not copied: the population's index is immutable and
+        // already keyed the way this reads it (the cleanup pass).
+        _subpaths = population.Subpaths;
         Warnings = population.Warnings;
+        // The population derives this from its own warnings; the VM
+        // captures it once per load instead of recounting per binding
+        // read (the cleanup pass).
+        _preservedCount = (int)population.PreservedCount;
         Outline = population.Outline;
         TableRows = population.Table;
         StateMessage = null;
@@ -1495,8 +1586,8 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     {
         try
         {
-            string? text = null;
-            if (!Query(handle => text = _session.CanvasNodeText(handle, nodeId)))
+            if (!Query<string?>(handle => _session.CanvasNodeText(handle, nodeId),
+                out string? text))
             {
                 Speak(new CanvasA11yEvent.CanvasStatus(
                     new CanvasStatusNote.NotReadable()));

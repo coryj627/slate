@@ -108,9 +108,13 @@ public sealed class ContractsCitationCensus
                 // population of 59 — a fourth time.
                 //
                 // T4 bound the census and re-cited the walls it
-                // guards, taking the section to 75; 71 sits above
+                // guards, taking the section to 75; 71 sat above
                 // the pre-T4 population of 69 — a fifth time.
-                71),
+                //
+                // The cleanup pass recorded its changes and their
+                // owners, taking the section to 95; 76 sits above
+                // the pre-pass population of 75 — a sixth time.
+                76),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

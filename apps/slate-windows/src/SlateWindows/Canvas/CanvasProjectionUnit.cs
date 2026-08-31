@@ -64,7 +64,8 @@ internal sealed class CanvasProjectionUnit
         CanvasAnswerState answer,
         ImmutableHashSet<string> matched,
         ImmutableArray<string> filteredOrder,
-        string? resolvedSelection)
+        string? resolvedSelection,
+        bool narrowed)
     {
         Request = request;
         Needle = needle;
@@ -72,6 +73,7 @@ internal sealed class CanvasProjectionUnit
         Matched = matched;
         FilteredOrder = filteredOrder;
         ResolvedSelection = resolvedSelection;
+        Narrowed = narrowed;
     }
 
     /// <summary>The unfiltered projection of a population: every row
@@ -87,7 +89,8 @@ internal sealed class CanvasProjectionUnit
             matched: CanvasModelCopy.Ids(null),
             filteredOrder: CanvasModelCopy.Ordered(
                 population.Outline.Select(row => row.NodeId)),
-            resolvedSelection: resolvedSelection);
+            resolvedSelection: resolvedSelection,
+            narrowed: false);
     }
 
     /// <summary>A needle typed and its match not yet landed. The rows
@@ -100,7 +103,7 @@ internal sealed class CanvasProjectionUnit
         ArgumentNullException.ThrowIfNull(needle);
         return new(
             request, needle, CanvasAnswerState.Pending,
-            Matched, FilteredOrder, ResolvedSelection);
+            Matched, FilteredOrder, ResolvedSelection, Narrowed);
     }
 
     internal CanvasProjectionUnit Answered(
@@ -116,7 +119,8 @@ internal sealed class CanvasProjectionUnit
                     .Where(ids.Contains)),
             ResolvedSelection is not null && ids.Contains(ResolvedSelection)
                 ? ResolvedSelection
-                : null);
+                : null,
+            narrowed: true);
     }
 
     /// <summary>The failed answer KEEPS the rows it was showing — the
@@ -128,10 +132,10 @@ internal sealed class CanvasProjectionUnit
     /// T6.</summary>
     internal CanvasProjectionUnit Failed() => new(
         Request, Needle, CanvasAnswerState.Failed,
-        Matched, FilteredOrder, ResolvedSelection);
+        Matched, FilteredOrder, ResolvedSelection, Narrowed);
 
     internal CanvasProjectionUnit WithResolvedSelection(string? nodeId) => new(
-        Request, Needle, Answer, Matched, FilteredOrder, nodeId);
+        Request, Needle, Answer, Matched, FilteredOrder, nodeId, Narrowed);
 
     /// <summary>Which request this unit's answer state belongs to.
     /// Null while unfiltered.</summary>
@@ -151,6 +155,14 @@ internal sealed class CanvasProjectionUnit
     internal int VisibleCount => FilteredOrder.Length;
 
     internal string? ResolvedSelection { get; }
+
+    /// <summary>Whether this projection's rows came from a LANDED
+    /// answer — set by the answer, carried through pending and failed
+    /// successors, cleared by the unfiltered projection — so a surface
+    /// reads the fact instead of reconstructing it from set sizes (the
+    /// cleanup pass; the arithmetic misread a match-everything
+    /// answer).</summary>
+    internal bool Narrowed { get; }
 
     /// <summary>The DISPLAYED-unit ordinal: one-based, and zero when the
     /// node is not visible here. Distinct from core's sibling ordinal,

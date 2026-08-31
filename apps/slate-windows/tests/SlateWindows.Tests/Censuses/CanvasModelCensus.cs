@@ -77,6 +77,7 @@ public sealed class CanvasModelCensus
         typeof(CanvasPublicationRefusedException),
         typeof(CanvasHandleLease),
         typeof(CanvasLeaseViolationException),
+        typeof(CanvasFaults),
         typeof(CanvasLeaseTransfer),
         typeof(CanvasPopulation),
         typeof(CanvasProjectionUnit),
@@ -285,35 +286,13 @@ public sealed class CanvasModelCensus
     [Theory]
     [InlineData("CanvasHandleLease", "CanvasLoadPipeline.cs")]
     [InlineData("CanvasPopulation", "CanvasLoadPipeline.cs|CanvasPopulation.cs")]
-    public void TheMintingWallsHold(string typeName, string allowedFiles)
-    {
-        string[] allowed = allowedFiles.Split('|');
-        var offenders = new List<string>();
-        var found = 0;
-        foreach (CSharpSource source in ShellSources.Value)
-        {
-            int count = source.Root.DescendantNodes()
+    public void TheMintingWallsHold(string typeName, string allowedFiles) =>
+        AssertWall(
+            $"new {typeName}(…)",
+            allowedFiles,
+            source => source.Root.DescendantNodes()
                 .OfType<ObjectCreationExpressionSyntax>()
-                .Count(creation => creation.Type.ToString() == typeName);
-            if (count == 0)
-            {
-                continue;
-            }
-
-            found += count;
-            string file = Path.GetFileName(source.Path);
-            if (!allowed.Contains(file))
-            {
-                offenders.Add($"{file} ({count})");
-            }
-        }
-
-        Assert.True(found > 0, $"the wall for new {typeName} guards nothing — did the name move?");
-        Assert.True(
-            offenders.Count == 0,
-            $"new {typeName}(…) is reached from outside its wall: "
-            + string.Join(", ", offenders));
-    }
+                .Count(creation => creation.Type.ToString() == typeName));
 
     /// <summary>The minting walls, transform half: the chain, terminal
     /// and un-name transforms are INVOKED only by their owners —
@@ -324,16 +303,27 @@ public sealed class CanvasModelCensus
     [InlineData("WithUnit", "CanvasPublication.cs|CanvasFilterMachine.cs")]
     [InlineData("WithTerminal", "CanvasLeaseTransfer.cs")]
     [InlineData("WithUnloaded", "CanvasLoadPipeline.cs")]
-    public void TheTransformWallsHold(string memberName, string allowedFiles)
+    public void TheTransformWallsHold(string memberName, string allowedFiles) =>
+        AssertWall(
+            $".{memberName}(…)",
+            allowedFiles,
+            source => source.Root.DescendantNodes()
+                .OfType<InvocationExpressionSyntax>()
+                .Count(invocation => InvokedName(invocation) == memberName));
+
+    /// <summary>The one wall loop (the cleanup pass — the two theories
+    /// above differed only in which syntax node they count): count the
+    /// nodes, name the offenders, and refuse a wall that guards
+    /// nothing.</summary>
+    private static void AssertWall(
+        string subject, string allowedFiles, Func<CSharpSource, int> countIn)
     {
         string[] allowed = allowedFiles.Split('|');
         var offenders = new List<string>();
         var found = 0;
         foreach (CSharpSource source in ShellSources.Value)
         {
-            int count = source.Root.DescendantNodes()
-                .OfType<InvocationExpressionSyntax>()
-                .Count(invocation => InvokedName(invocation) == memberName);
+            int count = countIn(source);
             if (count == 0)
             {
                 continue;
@@ -347,10 +337,12 @@ public sealed class CanvasModelCensus
             }
         }
 
-        Assert.True(found > 0, $"the wall for .{memberName}( guards nothing — did the name move?");
+        Assert.True(
+            found > 0,
+            $"the wall for {subject} guards nothing — did the name move?");
         Assert.True(
             offenders.Count == 0,
-            $".{memberName}(…) is invoked from outside its wall: "
+            $"{subject} is reached from outside its wall: "
             + string.Join(", ", offenders));
     }
 

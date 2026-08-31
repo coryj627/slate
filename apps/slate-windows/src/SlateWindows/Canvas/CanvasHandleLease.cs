@@ -21,6 +21,22 @@ internal sealed class CanvasLeaseViolationException(string message)
     : InvalidOperationException(message);
 
 /// <summary>
+/// The model's ONE survivable-exception predicate. Every catch filter
+/// in the canvas model reads this, so the tripwire's exclusion cannot
+/// be forgotten at a single site — the T6 review caught exactly that
+/// omission once, and the cleanup pass folded the transcriptions
+/// here.
+/// </summary>
+internal static class CanvasFaults
+{
+    internal static bool Survivable(Exception exception) =>
+        exception is not OutOfMemoryException
+            and not StackOverflowException
+            and not AccessViolationException
+            and not CanvasLeaseViolationException;
+}
+
+/// <summary>
 /// W6-1 PR C-unit, task T2: THE LEASE — one open canvas handle's host
 /// identity, its FFI lock, and its close-once record.
 /// </summary>

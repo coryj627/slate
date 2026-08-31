@@ -3,6 +3,7 @@
 
 using SlateWindows.Canvas;
 using uniffi.slate_uniffi;
+using static SlateWindows.Tests.CanvasModelFixtures;
 
 namespace SlateWindows.Tests;
 
@@ -32,7 +33,7 @@ public sealed class CanvasFilterMachineTests
         (CanvasPublicationSlot slot, _) = LoadedSlot("root", "a");
         var machine = new CanvasFilterMachine(slot, matcher, runner.Enqueue);
 
-        machine.Typed("a", active: true);
+        machine.Typed("a");
 
         CanvasPublication pending = slot.Current;
         Assert.True(
@@ -69,9 +70,9 @@ public sealed class CanvasFilterMachineTests
         (CanvasPublicationSlot slot, _) = LoadedSlot("root");
         var machine = new CanvasFilterMachine(slot, matcher, runner.Enqueue);
 
-        machine.Typed("a", active: true);
+        machine.Typed("a");
         CanvasRequestIdentity first = slot.Current.Filters.Running!;
-        machine.Typed("ab", active: true);
+        machine.Typed("ab");
 
         Assert.True(
             ReferenceEquals(slot.Current.Filters.Running, first)
@@ -82,7 +83,7 @@ public sealed class CanvasFilterMachineTests
             + "pending unit where it was.");
         CanvasRequestIdentity queued = slot.Current.Filters.Queued!;
 
-        machine.Typed("abc", active: true);
+        machine.Typed("abc");
 
         Assert.True(
             ReferenceEquals(slot.Current.Filters.Running, first)
@@ -107,7 +108,7 @@ public sealed class CanvasFilterMachineTests
 
         for (var i = 1; i <= 10; i++)
         {
-            machine.Typed($"n{i}", active: true);
+            machine.Typed($"n{i}");
         }
 
         runner.RunAll();
@@ -135,13 +136,13 @@ public sealed class CanvasFilterMachineTests
         (CanvasPublicationSlot slot, _) = LoadedSlot("root", "a");
         _ = slot.Publish(s => s.WithSelectedIntent("a"));
         var machine = new CanvasFilterMachine(slot, matcher, runner.Enqueue);
-        machine.Typed("a", active: true);
+        machine.Typed("a");
         runner.RunAll();
         Assert.True(
             slot.Current.Unit!.Answer == CanvasAnswerState.Answered,
             "premise: an answer is on the books before the clear.");
 
-        machine.Typed(" ", active: false);
+        machine.Typed(" ");
 
         Assert.True(
             slot.Current.Filters.Running is null && slot.Current.Filters.Queued is null,
@@ -166,7 +167,7 @@ public sealed class CanvasFilterMachineTests
         var slot = new CanvasPublicationSlot(CanvasPublication.Seed());
         var machine = new CanvasFilterMachine(slot, matcher, runner.Enqueue);
 
-        machine.Typed("q", active: true);
+        machine.Typed("q");
 
         Assert.True(
             slot.Current.NeedleIntent == "q"
@@ -213,10 +214,10 @@ public sealed class CanvasFilterMachineTests
             },
             probe);
 
-        machine.Typed("a", active: true);
+        machine.Typed("a");
         Assert.True(parked.Wait(Budget), "premise: the job parked before its lock.");
 
-        machine.Typed(" ", active: false);
+        machine.Typed(" ");
         go.Set();
         Assert.True(workers.TrueForAll(worker => worker.Join(Budget)), "premise: the job finished.");
 
@@ -241,7 +242,7 @@ public sealed class CanvasFilterMachineTests
         (CanvasPublicationSlot slot, CanvasHandleLease lease) =
             LoadedSlot(observer, "root");
         var machine = new CanvasFilterMachine(slot, matcher, runner.Enqueue);
-        machine.Typed("a", active: true);
+        machine.Typed("a");
 
         _ = slot.Publish(s => s.WithRetired());
         Assert.True(
@@ -268,14 +269,14 @@ public sealed class CanvasFilterMachineTests
         var runner = new ManualRunner();
         (CanvasPublicationSlot slot, _) = LoadedSlot("root", "a");
         var machine = new CanvasFilterMachine(slot, matcher, runner.Enqueue);
-        machine.Typed("a", active: true);
+        machine.Typed("a");
         runner.RunAll();
         Assert.True(
             slot.Current.Unit!.VisibleCount == 1,
             "premise: a narrowed answer is on screen.");
 
         matcher.Fault = new InvalidOperationException("panic");
-        machine.Typed("ab", active: true);
+        machine.Typed("ab");
         runner.RunAll();
 
         CanvasProjectionUnit unit = slot.Current.Unit!;
@@ -312,14 +313,14 @@ public sealed class CanvasFilterMachineTests
                 if (point == CanvasFilterPoint.BeforeSwap && !typedInWindow)
                 {
                     typedInWindow = true;
-                    machine!.Typed("b", active: true);
+                    machine!.Typed("b");
                 }
             },
         };
         (CanvasPublicationSlot slot, _) = LoadedSlot("root");
         machine = new CanvasFilterMachine(slot, matcher, runner.Enqueue, probe);
 
-        machine.Typed("a", active: true);
+        machine.Typed("a");
         runner.RunAll();
 
         Assert.True(
@@ -334,7 +335,7 @@ public sealed class CanvasFilterMachineTests
             $"both jobs ran, in order ({string.Join(",", matcher.Needles)}).");
 
         // Completion first, keystroke after: the ordinary restart.
-        machine.Typed("c", active: true);
+        machine.Typed("c");
         runner.RunAll();
         Assert.True(
             slot.Current.Unit!.Answer == CanvasAnswerState.Answered
@@ -353,7 +354,7 @@ public sealed class CanvasFilterMachineTests
         var observer = new CanvasPublicationInstallObserver();
         (CanvasPublicationSlot slot, _) = LoadedSlot(observer, "root");
         var machine = new CanvasFilterMachine(slot, matcher, runner.Enqueue);
-        machine.Typed("a", active: true);
+        machine.Typed("a");
 
         // The reload worker's first publication, mid-flight.
         _ = slot.Publish(s => s.WithUnloaded());
@@ -385,10 +386,10 @@ public sealed class CanvasFilterMachineTests
         var machine = new CanvasFilterMachine(slot, matcher, runner.Enqueue);
         var pipeline = new CanvasLoadPipeline(
             slot,
-            new ReloadSource(),
+            new CanvasFakeLoadSource { Rows = ["kept", "other"] },
             onReseeded: machine.StartReseeded);
 
-        machine.Typed("keep", active: true);
+        machine.Typed("keep");
         Assert.True(
             pipeline.Deliver(pipeline.Request()!) == CanvasLoadOutcome.Accepted,
             "premise: the load lands.");
@@ -422,18 +423,18 @@ public sealed class CanvasFilterMachineTests
         var runner = new ManualRunner();
         var slot = new CanvasPublicationSlot(CanvasPublication.Seed());
         var machine = new CanvasFilterMachine(slot, matcher, runner.Enqueue);
-        var source = new ReloadSource();
+        var source = new CanvasFakeLoadSource { Rows = ["kept", "other"] };
         var pipeline = new CanvasLoadPipeline(slot, source, onReseeded: machine.StartReseeded);
         Assert.True(
             pipeline.Deliver(pipeline.Request()!) == CanvasLoadOutcome.Accepted,
             "premise: the first load lands.");
-        machine.Typed("keep", active: true);
+        machine.Typed("keep");
         runner.RunAll();
         Assert.True(
             slot.Current.Unit!.Answer == CanvasAnswerState.Answered,
             "premise: an answer is on the books.");
 
-        machine.Typed("kep", active: true);
+        machine.Typed("kep");
         source.OpenFault = new InvalidOperationException("gone");
         Assert.True(
             pipeline.Deliver(pipeline.Request()!) == CanvasLoadOutcome.Faulted,
@@ -471,11 +472,11 @@ public sealed class CanvasFilterMachineTests
         var slot = new CanvasPublicationSlot(CanvasPublication.Seed());
         var machine = new CanvasFilterMachine(slot, matcher, runner.Enqueue);
         var pipeline = new CanvasLoadPipeline(
-            slot, new ReloadSource(), onReseeded: machine.StartReseeded);
+            slot, new CanvasFakeLoadSource { Rows = ["kept", "other"] }, onReseeded: machine.StartReseeded);
         Assert.True(
             pipeline.Deliver(pipeline.Request()!) == CanvasLoadOutcome.Accepted,
             "premise: the first load lands.");
-        machine.Typed("keep", active: true);
+        machine.Typed("keep");
         runner.RunAll();
         Assert.True(
             slot.Current.Unit!.FilteredOrder.SequenceEqual(["kept"]),
@@ -511,9 +512,9 @@ public sealed class CanvasFilterMachineTests
         var slot = new CanvasPublicationSlot(CanvasPublication.Seed());
         var machine = new CanvasFilterMachine(slot, matcher, runner.Enqueue);
         var pipeline = new CanvasLoadPipeline(
-            slot, new ReloadSource(), onReseeded: machine.StartReseeded);
+            slot, new CanvasFakeLoadSource { Rows = ["kept", "other"] }, onReseeded: machine.StartReseeded);
 
-        machine.Typed(" ", active: false);
+        machine.Typed(" ");
         Assert.True(
             pipeline.Deliver(pipeline.Request()!) == CanvasLoadOutcome.Accepted,
             "premise: the load lands with whitespace intent.");
@@ -539,7 +540,7 @@ public sealed class CanvasFilterMachineTests
         var runner = new ManualRunner();
         (CanvasPublicationSlot slot, _) = LoadedSlot("root");
         var machine = new CanvasFilterMachine(slot, matcher, runner.Enqueue);
-        machine.Typed("a", active: true);
+        machine.Typed("a");
 
         _ = Assert.Throws<CanvasLeaseViolationException>(runner.RunAll);
 
@@ -563,8 +564,8 @@ public sealed class CanvasFilterMachineTests
         var runner = new ManualRunner();
         (CanvasPublicationSlot slot, _) = LoadedSlot("root", "b");
         var machine = new CanvasFilterMachine(slot, matcher, runner.Enqueue);
-        machine.Typed("a", active: true);
-        machine.Typed("bee", active: true);
+        machine.Typed("a");
+        machine.Typed("bee");
         CanvasRequestIdentity running = slot.Current.Filters.Running!;
 
         // The replica: match, then publish with no queue check.
@@ -595,8 +596,8 @@ public sealed class CanvasFilterMachineTests
         var matcher = new Matcher();
         (CanvasPublicationSlot slot, _) = LoadedSlot("root");
         var machine = new CanvasFilterMachine(slot, matcher, _ => { });
-        machine.Typed("a", active: true);
-        machine.Typed(" ", active: false);
+        machine.Typed("a");
+        machine.Typed(" ");
         CanvasHandleLease lease = slot.Current.Lease!;
 
         // The replica: admission answered without reading anything.
@@ -635,14 +636,6 @@ public sealed class CanvasFilterMachineTests
             "premise: the load lands.");
         return (slot, lease);
     }
-
-    private static CanvasPopulation Population(params string[] nodeIds) => new(
-        nodeIds.Select(id => new CanvasOutlineRow(
-            id, 0, "text", id, id, [], 1, (uint)nodeIds.Length, 0, null)),
-        null,
-        null,
-        0,
-        null);
 
     /// <summary>An in-memory matcher: records the needles it answered,
     /// faults on demand.</summary>
@@ -710,34 +703,5 @@ public sealed class CanvasFilterMachineTests
                 _jobs.Dequeue()();
             }
         }
-    }
-
-    /// <summary>The smallest load source the reseed facts need.</summary>
-    private sealed class ReloadSource : ICanvasLoadSource
-    {
-        internal Exception? OpenFault { get; set; }
-
-        public CanvasOpenInfo Open() =>
-            OpenFault is { } fault ? throw fault : new(1, 2, 0, false, []);
-
-        public void Close(ulong handle)
-        {
-        }
-
-        public CanvasOutlineRow[] Outline(ulong handle) =>
-        [
-            new("kept", 0, "text", "kept", "kept", [], 1, 2, 0, null),
-            new("other", 0, "text", "other", "other", [], 2, 2, 0, null),
-        ];
-
-        public CanvasTableRow[] TableRows(ulong handle) => [];
-
-        public CanvasScene Scene(ulong handle) => new([], []);
-
-        public CanvasLoadFailure FailureFor(Exception exception) =>
-            new(CanvasLoadState.Failed, exception.Message);
-
-        public CanvasLoadFailure ParseError(IReadOnlyList<CanvasLoadWarning> warnings) =>
-            new(CanvasLoadState.ParseError, null);
     }
 }
