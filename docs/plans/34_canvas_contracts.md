@@ -4886,6 +4886,19 @@ allocation do not prove purity. A closed command algebra or an
 executable purity predicate with capture and call-graph restrictions is
 required."*
 
+**STATUS after T4: the executable predicate exists, one level deep,
+and this note says which level.** Every transform handed to the gate —
+twelve sites, floored at ten so the arm cannot silently scan nothing —
+is walked for the finding's own list: session, FFI, clock, scheduler,
+announcer, lease close, live UI state, locks and interlocked
+operations, with the probes stripped by name as the dispositioned
+instruments they are. What the arm does NOT walk is the transitive call
+graph: a transform's callees are the model's pure surface, and the
+compiler-grade walk over every callee's closure is the not-taken
+alternative — recorded here so the claim is exactly as big as the
+census that enforces it. I2's liveness conditionality stands, resting
+on this arm's discipline.
+
 **I5 — Fresh allocation and ABA are not enforced by the stated writer
 census.** *"Root cause: 'one swap site,' 'no other field write,' and
 'the helper builds the successor' do not prohibit the helper from
@@ -4927,6 +4940,15 @@ constructor/factory stores an unsafe immutable alias. The construction
 predicate needs a closed whitelist of copying operations, transitive
 constructor/factory analysis, and a planted retained-array alias fact."*
 
+**STATUS after T4: the structural half is a WALL, not an owned row
+type, and the narrowing is recorded.** Three arms: nothing in the shell
+writes into a row's group path — the one mutable field a core row
+carries; rows are re-materialised at exactly one site; and immutable
+collections are built only at the two sanctioned files. The owned row
+type — model-owned immutable copies of core's records — was not taken:
+it would double every row allocation to close a write no consumer
+performs, and the wall fails by name on the day one does.
+
 **I8 — "No other write" is not yet a compile-time closed predicate.**
 *"Root cause: the publication-writer arm describes ordinary source
 assignments only. It does not forbid or discover reflective field-info
@@ -4937,6 +4959,16 @@ site while the direct-write census remains green. The design must either
 prohibit and census these mechanisms across the closed world and
 generated surfaces or explicitly narrow the claim and provide another
 enforcement boundary."*
+
+**STATUS after T4: DISCHARGED AS NARROWED, and the narrowing is the
+remedy's own second branch.** The census proves the source claim: one
+writable publication-typed field in the model, one seed assignment, one
+compare-and-swap, the token absent from every other model file, and no
+model type opting into serialization. Reflection, unsafe accessors and
+generated hydration remain beyond a source census — the finding's own
+list — and their enforcement boundary is the runtime one T1 shipped:
+the bypass detector, which the census now makes structural by proving
+there is no ordinary write for it to miss.
 
 **What round 7 ratified while finding these**, and what the
 implementation therefore starts from rather than re-litigates: the CAS
@@ -5768,6 +5800,56 @@ seam by name, over presentation state the clear-then-retype fact can
 reach no other way. And `CanvasLeaseViolationException` is no authority
 at all — it is the tripwire's TYPE, which is what makes "no catch may
 absorb it" a clause an exception filter can spell.
+
+**T4 — the censuses.** Landed `CanvasModelCensus`: U13's arms at this
+PR's scale — the task every "structural rather than defensive" note in
+this record has pointed at since T1.
+
+* **The writer arm (I8).** One writable `CanvasPublication`-typed
+  field in the model — `CanvasPublicationSlot`'s own — proven by
+  REFLECTION over the closed world's types; one seed
+  assignment and one compare-and-swap, proven at SOURCE; the field's
+  token absent from every other model file; no model type opting into
+  serialization. T1's bypass detector is structural now — the census
+  proves there is no ordinary write for it to miss — and the ledger
+  records the reflection-shaped remainder as the narrowed claim.
+* **The purity arm (I4).** Every `.Publish(` transform region in the
+  model and the document — twelve, floored at ten — walked for the
+  finding's own impurity list, the probes stripped by name as
+  dispositioned instruments. One level deep, and the ledger's status
+  note says exactly that.
+* **The aliasing wall (I7).** No group-path write anywhere in the
+  shell; one re-materialisation site; collections built only at the
+  two sanctioned files. The owned-row alternative is recorded as not
+  taken.
+* **The authority census, TWO-WAY.** The derivation walks every field
+  of every model type — auto-property backings, event delegates and
+  statics included — and its findings must match the record's
+  dispositions exactly in both directions: an undispositioned
+  authority fails, and so does a disposition whose authority is gone,
+  so this ledger cannot drift from the code either way. The premise
+  plants round 5's five shapes — the mutable static, the event, the
+  settable auto-property, the readonly-but-mutable contents, and the
+  read-only interface over a caller-retained list that beat the
+  four-shape battery — and the derivation finds all five. Its doctrine
+  is U5's: an authority is where mutable state LIVES, and a published
+  value reaches mutability only through the lease it NAMES, which is
+  the currency fact itself.
+* **The carry-forward manifest (U4), and the minting walls.** Every
+  publication member classified in a table keyed by reflection, so a
+  new member fails BY NAME until the rebase accounts for it — round
+  5's short list, made a gate. And the call-site half of "the writer
+  set is closed by construction": a `CanvasHandleLease` is minted only
+  by `CanvasLoadPipeline`, a population only by the pipeline and its
+  own Empty, and the chain and terminal transforms are reached only by
+  their owners.
+
+The derivation's first run earned its keep twice before it went green:
+it found the chain's lease reference before any disposition named it —
+now the U5 disposition above — and it found the lease's FFI lock,
+which taught the lock predicate that the model names its locks two
+ways. A two-way census that catches its own author on day one is the
+census working.
 
 **Frozen paragraphs the gate SUPERSEDES.** The freeze forbids revising
 them and that is right; this record is the sanctioned place to say which

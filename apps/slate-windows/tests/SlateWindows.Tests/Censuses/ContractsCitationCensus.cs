@@ -106,7 +106,11 @@ public sealed class ContractsCitationCensus
                 // T6 bound the machine and its types, taking the
                 // section to 69; 62 sits above the pre-T6
                 // population of 59 — a fourth time.
-                62),
+                //
+                // T4 bound the census and re-cited the walls it
+                // guards, taking the section to 74; 71 sits above
+                // the pre-T4 population of 69 — a fifth time.
+                71),
         ];
 
     public static TheoryData<string, string, string> SectionRanges
