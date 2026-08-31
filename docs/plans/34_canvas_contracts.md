@@ -6072,7 +6072,7 @@ sibling: the writer runs until the churn floor and the reader's overlap
 proof both hold, inside the same liveness budget. The whitespace round
 before it was the format gate refusing the cleanup pass's scripted line
 endings — `dotnet format` is part of the push, not an afterthought.
-## PR D — the visual renderer, the viewport, text scaling, and the color contract
+## PR D — the visual renderer, the viewport, text scaling, and the color contract (FROZEN as the ratified baseline by the owner’s ruling; the presentation commit’s remaining questions are the ID-ledger, discharged by code)
 
 **Goal (spec §PR D).** The visual projection: per-card UIA elements over
 a windowed drawing surface, the viewport command set, Windows
@@ -6082,6 +6082,43 @@ selection, or a view command. It is the third projection arm beside the
 outline and the table, and the first surface BORN under the C-unit
 model rather than rewired onto it.
 
+
+### THE FREEZE — read this first
+
+**This section is CLOSED to further prose revision**, frozen at
+revision 4 after four adversarial rounds, by the owner's ruling of
+2026-08-31. The trajectory — 6, 5, 5, 3 blockers, with the fourth
+round's blockers concentrated where the first round's were — is the
+C-unit signature: the remaining questions are ordering, lifetime and
+inventory questions that every prose answer re-opened, and the ruling
+is the same one that closed C-unit: **design by implementation.**
+Nothing below is to be re-argued on paper; the next thing that
+changes any of it is code, through the task loop, with facts and
+mutations arbitrating.
+
+**What is RATIFIED, and is therefore the architecture to build.**
+Everything this section states that round 4 did not name in a
+finding — including, ratified WHOLE by round 4 itself: D2's scene as
+a field of the population behind the deep-copy wall, with the
+failure pane and the load budgets; and D5's global namespace, core's
+rendered traversal phrase for edge names, the end-style table over
+the confirmed independent arrow booleans, and the skip-occupied
+ordinal loop. The read-only scope, the two-authority direction of
+D1, the three-cell peer table's shape, the origin-sensitive pan, the
+dimming filter, the doors of D6, the pattern matrix, the transient
+order, the literal color table, the derived inventories, the
+budgets, and every DD decision stand as the baseline.
+
+**What is RECLASSIFIED.** Round 4's nine findings stop being prose
+questions and become the §D IMPLEMENTATION OBLIGATIONS — ID-1
+through ID-9 below, each carrying the finding VERBATIM (backticks
+and links flattened, the periphery ledger's convention) as its
+acceptance criteria, discharged by code, facts and mutation
+batteries through the implementation gauntlet, not by another
+revision of this text. Where an obligation's remedy sets a
+DIRECTION, the direction binds unless the code proves it wrong, and
+the round record — not this section's contracts — is where such a
+proof lands.
 ### Contracts
 
 **D1 — TWO authorities, ONE dispatcher turn, and events follow the
@@ -6489,6 +6526,106 @@ there is no motion to reduce. Chosen over per-frame installed
 states, which would buy animation at the cost of making every
 frame a UIA event storm.
 
+
+### IMPLEMENTATION OBLIGATIONS — the §D ledger
+
+Nine obligations, round 4's findings verbatim as acceptance
+criteria. None is claimed resolved here.
+
+**ID-1 — The dispatcher proof made real.** *"The dispatcher-only
+proof is false against shipped scheduling: PanelWorkScheduler.Post
+runs inline when its captured context is null and may use a non-WPF
+context, while ApplyPublication has no dispatcher assertion. …
+Remedy: marshal every applied-presentation commit through an
+explicitly captured WPF Dispatcher, expose one post-apply
+notification, and assert dispatcher access in production and
+barrier facts."* Direction: the renderer's commit owns its
+dispatcher; the assertion is production code, not a test's hope.
+
+**ID-2 — The build has a progress bound.** *"The stale-build path
+has no progress bound: 'yield to the freshest queued build'
+specifies neither single-flight coalescing nor a maximum number of
+discarded derivations. … Remedy: specify one running build plus one
+replaceable latest pending build, deduplicate publications with the
+same effective render source, and assert a
+final-publication-to-install latency bound."*
+
+**ID-3 — The descriptor index is load-class.** *"The descriptor
+index is population-wide but its lifetime is not: D3 places it in
+every installed state, while only D2's scene is declared load-class
+and identity-retained. … Remedy: declare the descriptor index
+load-class, build it once with the population/scene, and require
+exact reference reuse across same-population presentation states."*
+
+**ID-4 — Edges window by their rendered bounds.** *"'Either endpoint
+is in the window' silently narrows the executable spec's 'visible
+labelled connection.' … Remedy: determine edge materialization from
+rendered path/label bounds intersecting the window, not endpoint
+membership."*
+
+**ID-5 — Visual selection derives from the publication, not the
+unit.** *"Full-scene selection cannot be derived from the frozen
+unit as claimed: CanvasProjectionUnit.Answered retains
+ResolvedSelection only when the node is matched, while D4
+deliberately keeps unmatched cards visible and selectable. …
+Remedy: derive visual selection from the applied publication's
+document-level SelectedIntent resolved against its population,
+leaving the unit's filtered-selection semantics unchanged."*
+Direction: this retires revision 4's machine-owned selection event —
+the pair the renderer needs already travels in the publication, and
+D6's doors publish intent exactly as every surface does today.
+
+**ID-6 — Selection's relationship to U9, settled by ID-5.** *"Calling
+selection a 'total event' adds an event class to U9 without adding
+its cells or defining the relaxed completion validation. … Remedy:
+either keep selection outside the filter machine or add a literal
+selection-event column with schedule preservation, terminal
+behavior, lineage validation, promotion, and matching/nonmatching
+carry-forward facts."* Direction: the FIRST branch — selection stays
+outside the machine (ID-5's derivation makes the event unnecessary);
+if implementation finds the machine event necessary after all, the
+literal column with every listed cell is the price of admission.
+
+**ID-7 — The no-pane refusal is a typed vocabulary arm.** *"C4
+cannot supply the promised no-pane refusal: it maps document load
+state × handle liveness, and Ready with a live handle returns
+'proceed'; the shipped canvas vocabulary also has no no-pane arm. …
+Remedy: add a separate presentation-address refusal and typed core
+vocabulary arm, routed through the document announcer and pinned by
+the five-place vocabulary rule."* Direction: a small preparatory
+CORE task inside this PR, the 0a pattern — the arm lands in the
+vocabulary with its four mirrors before the shell consumes it.
+
+**ID-8 — The binding record is the one authority.** *"Registrar rows
+are enumerable, but delivery members are not bound as D14 claims:
+ChordTableEntry names no delivery member, Resolvers is a private
+ID-to-lambda map, and ResolvableIds exposes only IDs. … Remedy:
+make an enumerable binding record containing row ID and named
+delivery member/resolver the authority from which registration,
+resolution, and the C4 disposition census all derive."*
+
+**ID-9 — The tooltip's trigger matrix covers every truncated
+label.** *"D11's keyboard fact covers only a truncated card, not an
+edge chip, and its persistence wording permits hover departure to
+close a tooltip while keyboard focus remains on the trigger. …
+Remedy: pin the card/group/edge × focus/hover trigger matrix and
+close only when all active triggers have departed, Esc dismisses,
+or the content becomes invalid."*
+
+### Implementation plan — the task loop
+
+Seven tasks, each closing with facts, defect-injection mutations and
+a record entry before its review round, the C-unit loop verbatim:
+
+| Task | Builds | Discharges |
+|---|---|---|
+| TD-1 | the presentation commit: two authorities, the dispatcher-owned install, single-flight coalescing, both barrier facts | ID-1, ID-2 |
+| TD-2 | the population's scene field behind the deep-copy wall; the load-class descriptor index | ID-3, D2 |
+| TD-3 | peers: three cells, discriminated identity, retirement, path-bounds edge windowing | ID-4, D3 |
+| TD-4 | selection: publication-derived visual selection, the doors, the pattern matrix | ID-5, ID-6, D6 |
+| TD-5 | the viewport verbs: pane addressing, the no-pane vocabulary arm (core first), the binding record, the enablement census, m9 | ID-7, ID-8, D7, D14 |
+| TD-6 | the drawing: ring, z, instant transforms, text scaling, the tooltip matrix, the color rows | ID-9, D8–D13 |
+| TD-7 | the §D censuses, the benchmarks, the FlaUI journey, the flip | D14–D16, the evidence |
 ### The sweep this section performed on arrival
 
 Writing this heading made every live "until PR D" claim stale by the
@@ -6633,8 +6770,14 @@ row-to-delivery-member binding record, and the tooltip's
 trigger-matrix over cards AND edge chips. Findings are HELD, not
 dispositioned: the condition recorded beside the owner's ruling —
 a blocker round against the same subsystem returns the ruling to
-the owner — has fired, and this record stops here until the ruling
-is made.
+the owner — has fired, and the ruling was made the same day.
+
+**The ruling, 2026-08-31: FREEZE + IMPLEMENT.** The section freezes
+at revision 4 as the ratified baseline; round 4's nine findings
+become the §D ID-ledger, verbatim, above; and the task loop begins
+at TD-1. Prose stops arbitrating what code arbitrates better — the
+C-unit sentence, arriving one PR later, at one third the round
+count.
 
 ---
 
