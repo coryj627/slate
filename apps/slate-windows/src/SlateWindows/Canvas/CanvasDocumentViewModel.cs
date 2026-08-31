@@ -1098,43 +1098,43 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
 
     private CanvasFilterView DeriveFilterView()
     {
-            if (!FilterActive)
-            {
-                return new CanvasFilterView(_outline, Narrowed: false, Current: true, null);
-            }
-            // Derived from the APPLIED unit — the same publication the
-            // rows on screen came from — never from a fresh query (task
-            // T6). The unit and the rows it filters are one immutable
-            // value, so the count and the rows cannot disagree, which
-            // is the one invariant C10 has.
-            if (_applied?.Unit is not { } unit)
-            {
-                // Nothing ever applied: the unfiltered outline IS the
-                // prior view, and `Narrowed: false` keeps the summary
-                // from claiming these rows matched anything.
-                return new CanvasFilterView(_outline, Narrowed: false, Current: false, null);
-            }
-            if (unit.Answer == CanvasAnswerState.Answered
-                && string.Equals(unit.Needle, _filterText, StringComparison.Ordinal))
-            {
-                return new CanvasFilterView(
-                    RowsOf(unit),
-                    Narrowed: true,
-                    Current: RendersRetainedSnapshot,
-                    unit.Matched);
-            }
-            // Pending, failed, or answered for an older needle: the
-            // previous answer stays on screen and `Current` is false —
-            // widening silently back to the full outline would show
-            // every card while the field still claims to be filtering,
-            // and then speak that number as a match count.
-            // The unit CARRIES whether its rows came from a landed
-            // answer (the cleanup pass; the set-size arithmetic this
-            // replaces misread a match-everything answer).
-            return unit.Narrowed
-                ? new CanvasFilterView(
-                    RowsOf(unit), Narrowed: true, Current: false, unit.Matched)
-                : new CanvasFilterView(_outline, Narrowed: false, Current: false, null);
+        if (!FilterActive)
+        {
+            return new CanvasFilterView(_outline, Narrowed: false, Current: true, null);
+        }
+        // Derived from the APPLIED unit — the same publication the
+        // rows on screen came from — never from a fresh query (task
+        // T6). The unit and the rows it filters are one immutable
+        // value, so the count and the rows cannot disagree, which
+        // is the one invariant C10 has.
+        if (_applied?.Unit is not { } unit)
+        {
+            // Nothing ever applied: the unfiltered outline IS the
+            // prior view, and `Narrowed: false` keeps the summary
+            // from claiming these rows matched anything.
+            return new CanvasFilterView(_outline, Narrowed: false, Current: false, null);
+        }
+        if (unit.Answer == CanvasAnswerState.Answered
+            && string.Equals(unit.Needle, _filterText, StringComparison.Ordinal))
+        {
+            return new CanvasFilterView(
+                RowsOf(unit),
+                Narrowed: true,
+                Current: RendersRetainedSnapshot,
+                unit.Matched);
+        }
+        // Pending, failed, or answered for an older needle: the
+        // previous answer stays on screen and `Current` is false —
+        // widening silently back to the full outline would show
+        // every card while the field still claims to be filtering,
+        // and then speak that number as a match count.
+        // The unit CARRIES whether its rows came from a landed
+        // answer (the cleanup pass; the set-size arithmetic this
+        // replaces misread a match-everything answer).
+        return unit.Narrowed
+            ? new CanvasFilterView(
+                RowsOf(unit), Narrowed: true, Current: false, unit.Matched)
+            : new CanvasFilterView(_outline, Narrowed: false, Current: false, null);
     }
 
     /// <summary>The outline rows the surfaces display.</summary>
