@@ -157,6 +157,7 @@ internal static class CanvasLeaseTransfer
         CanvasRequestIdentity request,
         CanvasHandleLease lease,
         CanvasPopulation population,
+        IReadOnlyCollection<string>? lingeringMatched = null,
         CanvasLoadProbeForTests? probeForTests = null)
     {
         ArgumentNullException.ThrowIfNull(slot);
@@ -182,9 +183,24 @@ internal static class CanvasLeaseTransfer
                 population.Resolve(snapshot.SelectedIntent));
             probeForTests?.Reached(CanvasLoadPoint.Rebase);
             CanvasRequestIdentity? reseed = null;
-            if (snapshot.NeedleIntent.Length > 0)
+            if (CanvasFilterMachine.IsActiveNeedle(snapshot.NeedleIntent))
             {
+                // The ACTIVE predicate, the same one the keystroke
+                // reads — a whitespace needle must not be inactive at
+                // the keystroke and active at the reseed, minting a
+                // phantom job on every reload (T6 review).
                 reseed = new CanvasRequestIdentity($"reseed of {request.Label}");
+                if (lingeringMatched is not null)
+                {
+                    // The previous answer, carried across the reload
+                    // and resolved against the new graph: without it
+                    // the pending unit widens to every card until the
+                    // reseeded job lands — the flash the retired match
+                    // cache's comment always warned about, found again
+                    // by the T6 review.
+                    unit = unit.Answered(population, lingeringMatched);
+                }
+
                 unit = unit.Pending(reseed, snapshot.NeedleIntent);
             }
 
@@ -320,7 +336,15 @@ internal static class CanvasLeaseTransfer
             return null;
         }
 
-        CanvasPublication released = snapshot.WithLoads(snapshot.Loads.ReleasedBy(request));
+        // The terminal state also retires BOTH filter entries (T6
+        // review): a failed load has no population to match against,
+        // and a running request left behind is U9's stranded machine —
+        // every later keystroke queueing behind a request whose job can
+        // never complete. The needle INTENT survives, so the next
+        // successful load reseeds from it.
+        CanvasPublication released = snapshot
+            .WithLoads(snapshot.Loads.ReleasedBy(request))
+            .WithFilters(snapshot.Filters.Reseeded(null));
         return failure is { } state
             ? released.WithLoadState(state.State, state.Message)
             : released;

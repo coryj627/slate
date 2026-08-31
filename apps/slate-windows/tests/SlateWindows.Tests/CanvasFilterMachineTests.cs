@@ -410,6 +410,145 @@ public sealed class CanvasFilterMachineTests
             "and the reseeded job answered against the new population.");
     }
 
+    /// <summary>A FAILED reload does not strand the machine: the
+    /// terminal state retires both entries, so the next keystroke — or
+    /// the next successful load's reseed — starts clean. Found by the
+    /// T6 review as U9's dead-running-request shape arriving through a
+    /// failed reload.</summary>
+    [Fact]
+    public void AFailedReloadDoesNotStrandTheFilterMachine()
+    {
+        var matcher = new Matcher { Answer = _ => ["kept"] };
+        var runner = new ManualRunner();
+        var slot = new CanvasPublicationSlot(CanvasPublication.Seed());
+        var machine = new CanvasFilterMachine(slot, matcher, runner.Enqueue);
+        var source = new ReloadSource();
+        var pipeline = new CanvasLoadPipeline(slot, source, onReseeded: machine.StartReseeded);
+        Assert.True(
+            pipeline.Deliver(pipeline.Request()!) == CanvasLoadOutcome.Accepted,
+            "premise: the first load lands.");
+        machine.Typed("keep", active: true);
+        runner.RunAll();
+        Assert.True(
+            slot.Current.Unit!.Answer == CanvasAnswerState.Answered,
+            "premise: an answer is on the books.");
+
+        machine.Typed("kep", active: true);
+        source.OpenFault = new InvalidOperationException("gone");
+        Assert.True(
+            pipeline.Deliver(pipeline.Request()!) == CanvasLoadOutcome.Faulted,
+            "premise: the reload fails.");
+
+        Assert.True(
+            slot.Current.Filters.Running is null && slot.Current.Filters.Queued is null,
+            "the failed load retired both entries; a running request left behind "
+            + "queues every later keystroke behind a job that can never complete.");
+        Assert.True(
+            slot.Current.NeedleIntent == "kep",
+            "and the needle INTENT survives for the next load's reseed.");
+
+        source.OpenFault = null;
+        Assert.True(
+            pipeline.Deliver(pipeline.Request()!) == CanvasLoadOutcome.Accepted,
+            "premise: the retry lands.");
+        runner.RunAll();
+        Assert.True(
+            slot.Current.Unit!.Answer == CanvasAnswerState.Answered
+                && slot.Current.Unit.Needle == "kep",
+            "and the reseed answered the surviving intent.");
+    }
+
+    /// <summary>A reload under an active filter LINGERS the rows it was
+    /// showing — resolved against the new graph — until the reseeded
+    /// answer lands, instead of widening to every card: the flash the
+    /// retired match cache's comment warned about, found again by the
+    /// T6 review.</summary>
+    [Fact]
+    public void AReloadUnderAnActiveFilterLingersTheRowsItWasShowing()
+    {
+        var matcher = new Matcher { Answer = _ => ["kept"] };
+        var runner = new ManualRunner();
+        var slot = new CanvasPublicationSlot(CanvasPublication.Seed());
+        var machine = new CanvasFilterMachine(slot, matcher, runner.Enqueue);
+        var pipeline = new CanvasLoadPipeline(
+            slot, new ReloadSource(), onReseeded: machine.StartReseeded);
+        Assert.True(
+            pipeline.Deliver(pipeline.Request()!) == CanvasLoadOutcome.Accepted,
+            "premise: the first load lands.");
+        machine.Typed("keep", active: true);
+        runner.RunAll();
+        Assert.True(
+            slot.Current.Unit!.FilteredOrder.SequenceEqual(["kept"]),
+            "premise: the filter narrowed to one row.");
+
+        Assert.True(
+            pipeline.Deliver(pipeline.Request()!) == CanvasLoadOutcome.Accepted,
+            "premise: the reload lands.");
+
+        CanvasProjectionUnit pending = slot.Current.Unit!;
+        Assert.True(
+            pending.Answer == CanvasAnswerState.Pending
+                && pending.FilteredOrder.SequenceEqual(["kept"])
+                && pending.Matched.Contains("kept"),
+            $"the reseed's pending unit shows {pending.VisibleCount} rows; the "
+            + "previous answer lingers, resolved against the new graph, rather "
+            + "than widening to every card until the reseeded job lands.");
+
+        runner.RunAll();
+        Assert.True(
+            slot.Current.Unit!.Answer == CanvasAnswerState.Answered,
+            "and the answer lands over it.");
+    }
+
+    /// <summary>A whitespace needle is inactive at the keystroke AND at
+    /// the reseed — one predicate, one owner — so a reload with a space
+    /// in the field mints no phantom job (T6 review).</summary>
+    [Fact]
+    public void AWhitespaceNeedleDoesNotReseedAtAcceptance()
+    {
+        var matcher = new Matcher();
+        var runner = new ManualRunner();
+        var slot = new CanvasPublicationSlot(CanvasPublication.Seed());
+        var machine = new CanvasFilterMachine(slot, matcher, runner.Enqueue);
+        var pipeline = new CanvasLoadPipeline(
+            slot, new ReloadSource(), onReseeded: machine.StartReseeded);
+
+        machine.Typed(" ", active: false);
+        Assert.True(
+            pipeline.Deliver(pipeline.Request()!) == CanvasLoadOutcome.Accepted,
+            "premise: the load lands with whitespace intent.");
+
+        Assert.True(
+            slot.Current.Filters.Running is null
+                && runner.Pending == 0
+                && slot.Current.Unit!.Answer == CanvasAnswerState.Unfiltered,
+            "an inactive needle reseeds nothing: no request, no job, the whole "
+            + "population shown — the keystroke column's own answer.");
+    }
+
+    /// <summary>The lease's tripwire is NOT a failed answer: an
+    /// invariant breach propagates loudly instead of publishing a quiet
+    /// Failed unit (T6 review).</summary>
+    [Fact]
+    public void ALeaseViolationIsNotAFailedAnswer()
+    {
+        var matcher = new Matcher
+        {
+            Fault = new CanvasLeaseViolationException("admitted through a closed lease"),
+        };
+        var runner = new ManualRunner();
+        (CanvasPublicationSlot slot, _) = LoadedSlot("root");
+        var machine = new CanvasFilterMachine(slot, matcher, runner.Enqueue);
+        machine.Typed("a", active: true);
+
+        _ = Assert.Throws<CanvasLeaseViolationException>(runner.RunAll);
+
+        Assert.True(
+            slot.Current.Unit!.Answer == CanvasAnswerState.Pending,
+            "the breach published nothing — least of all a Failed answer that "
+            + "would dress an invariant violation as a match that could not run.");
+    }
+
     // ---------------------------------------------------------------
     // The mutations
     // ---------------------------------------------------------------
@@ -573,10 +712,13 @@ public sealed class CanvasFilterMachineTests
         }
     }
 
-    /// <summary>The smallest load source the reseed fact needs.</summary>
+    /// <summary>The smallest load source the reseed facts need.</summary>
     private sealed class ReloadSource : ICanvasLoadSource
     {
-        public CanvasOpenInfo Open() => new(1, 2, 0, false, []);
+        internal Exception? OpenFault { get; set; }
+
+        public CanvasOpenInfo Open() =>
+            OpenFault is { } fault ? throw fault : new(1, 2, 0, false, []);
 
         public void Close(ulong handle)
         {

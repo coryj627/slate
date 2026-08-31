@@ -93,6 +93,18 @@ internal sealed class CanvasFilterProbeForTests
 /// </remarks>
 internal sealed class CanvasFilterMachine
 {
+    /// <summary>The one owner of "does this needle filter" (task T6,
+    /// after its review): the keystroke, the acceptance's reseed and
+    /// the surface's UI state all read this predicate, so a whitespace
+    /// needle cannot be inactive at the keystroke and active at the
+    /// reseed. The NEWLINE carve-out is deliberate — mac's
+    /// <c>.whitespaces</c> does not include newlines, so a needle of
+    /// nothing but a newline is ACTIVE and (core trimming it) matches
+    /// everything; the wider .NET whitespace classes stay inactive, a
+    /// ratified divergence pinned by its own fact.</summary>
+    internal static bool IsActiveNeedle(string needle) =>
+        needle.Any(character => !char.IsWhiteSpace(character) || character is '\n' or '\r');
+
     private readonly CanvasPublicationSlot _slot;
     private readonly ICanvasFilterSource _source;
     private readonly Action<Action> _run;
@@ -243,11 +255,14 @@ internal sealed class CanvasFilterMachine
         catch (Exception exception) when (
             exception is not OutOfMemoryException
                 and not StackOverflowException
-                and not AccessViolationException)
+                and not AccessViolationException
+                and not CanvasLeaseViolationException)
         {
             // The failed-answer bit, §C's travelling row: panic-class
             // included, the fault becomes an ANSWER STATE rather than a
-            // faulted task or a silent widen.
+            // faulted task or a silent widen. The lease's own tripwire
+            // is EXCLUDED by name — an invariant breach is not a failed
+            // match, and quieting it here was the T6 review's finding.
             failed = true;
         }
 
@@ -264,7 +279,11 @@ internal sealed class CanvasFilterMachine
         // projection walks the outline. One read suffices: while this
         // request is RUNNING, only acceptance replaces the population
         // or the unit, and acceptance retires the request — which the
-        // transform's own check reads inside the gate.
+        // transform's own check reads inside the gate. NOT built at all
+        // when a queued request already guarantees the discard: the
+        // queue can only be consumed by this completion, so a pre-read
+        // queue is a gate-time queue, and the walk would be thrown
+        // away (the T6 review's efficiency note).
         CanvasPublication before = _slot.Current;
         if (before.Loaded is not { } loaded
             || !ReferenceEquals(before.Filters.Running, request))
@@ -272,9 +291,11 @@ internal sealed class CanvasFilterMachine
             return;
         }
 
-        CanvasProjectionUnit answered = failed
-            ? loaded.Unit.Failed()
-            : loaded.Unit.Answered(loaded.Population, matched);
+        CanvasProjectionUnit? answered = before.Filters.Queued is not null
+            ? null
+            : failed
+                ? loaded.Unit.Failed()
+                : loaded.Unit.Answered(loaded.Population, matched);
 
         _probe?.Reached(CanvasFilterPoint.BeforeSwap);
         CanvasPublicationOutcome outcome = _slot.Publish(snapshot =>
@@ -302,6 +323,15 @@ internal sealed class CanvasFilterMachine
                 return snapshot
                     .WithFilters(snapshot.Filters.Finished())
                     .WithUnit(now.Unit.Pending(promoted, snapshot.NeedleIntent));
+            }
+
+            if (answered is null)
+            {
+                // The queue vanished between the pre-read and the gate,
+                // which nothing can do — only this completion consumes
+                // it. A detector arm: decline rather than install a
+                // projection that was never built.
+                return null;
             }
 
             return snapshot

@@ -923,6 +923,12 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             // tests, so the answer is applied before this setter
             // returns.
             _machine.Typed(next, IsFilterActive(next));
+            // Applied HERE, not only after a job: the clear's widen and
+            // the keystroke's pending unit publish with no job to post
+            // the projection, and an unapplied publication is how a
+            // cleared filter's rows resurfaced under the next needle —
+            // the T6 review's lead finding.
+            ApplyPublication();
             OnPropertyChanged(nameof(FilterText));
             OnPropertyChanged(nameof(FilterActive));
             OutlinePublished?.Invoke(this, EventArgs.Empty);
@@ -954,7 +960,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     public bool FilterActive => IsFilterActive(_filterText);
 
     internal static bool IsFilterActive(string needle) =>
-        needle.Any(character => !char.IsWhiteSpace(character) || character is '\n' or '\r');
+        CanvasFilterMachine.IsActiveNeedle(needle);
 
     /// <summary>Whether an active needle's answer has not landed yet:
     /// the document renders rows, a needle is in the field, and the
@@ -969,6 +975,21 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         && (_applied?.Unit is not { } unit
             || unit.Answer is CanvasAnswerState.Unfiltered or CanvasAnswerState.Pending
             || !string.Equals(unit.Needle, _filterText, StringComparison.Ordinal));
+
+    /// <summary>The match for the needle in the field ran and could not
+    /// answer, on a document that renders rows — the failed-answer bit,
+    /// owed its own sentence rather than the state mapping's (T6
+    /// review).</summary>
+    internal bool FilterAnswerFailed =>
+        RendersRetainedSnapshot
+        && FilterActive
+        && _applied?.Unit is { Answer: CanvasAnswerState.Failed } unit
+        && string.Equals(unit.Needle, _filterText, StringComparison.Ordinal);
+
+    /// <summary>The applied unit's answer state — the projection
+    /// bookkeeping the clear-then-retype fact pins, reachable no other
+    /// way. Test seam by name.</summary>
+    internal CanvasAnswerState? AppliedFilterAnswerForTests => _applied?.Unit?.Answer;
 
     /// <summary>
     /// What the surfaces show for the current needle, in reading order —
@@ -1010,7 +1031,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 && string.Equals(unit.Needle, _filterText, StringComparison.Ordinal))
             {
                 return new CanvasFilterView(
-                    RowsMatching(unit.Matched),
+                    RowsOf(unit),
                     Narrowed: true,
                     Current: RendersRetainedSnapshot,
                     unit.Matched);
@@ -1024,7 +1045,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 unit.Matched.Count > 0 || unit.VisibleCount != _outline.Count;
             return lingering
                 ? new CanvasFilterView(
-                    RowsMatching(unit.Matched), Narrowed: true, Current: false, unit.Matched)
+                    RowsOf(unit), Narrowed: true, Current: false, unit.Matched)
                 : new CanvasFilterView(_outline, Narrowed: false, Current: false, null);
         }
     }
@@ -1039,8 +1060,24 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             ? _tableRows.Where(row => ids.Contains(row.NodeId)).ToArray()
             : _tableRows;
 
-    private IReadOnlyList<CanvasOutlineRow> RowsMatching(IReadOnlySet<string> ids) =>
-        _outline.Where(row => ids.Contains(row.NodeId)).ToArray();
+    /// <summary>The unit's rows by its own ordered answer: FilteredOrder
+    /// is already the matched ids in population order, and the row index
+    /// makes this O(matched) per read — every publish consumer walks the
+    /// getter, and the O(outline) scan this replaced was the T6 review's
+    /// efficiency note.</summary>
+    private IReadOnlyList<CanvasOutlineRow> RowsOf(CanvasProjectionUnit unit)
+    {
+        var rows = new List<CanvasOutlineRow>(unit.FilteredOrder.Length);
+        foreach (string nodeId in unit.FilteredOrder)
+        {
+            if (_rows.TryGetValue(nodeId, out CanvasOutlineRow? row))
+            {
+                rows.Add(row);
+            }
+        }
+
+        return rows;
+    }
 
     /// <summary>
     /// The pending request to put the reader in the filter field, or
@@ -1302,19 +1339,19 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                     PublishReady(loaded.Population, loaded.Unit);
                     break;
                 }
-                if (!ReferenceEquals(loaded.Unit, was?.Unit))
+                if (!ReferenceEquals(loaded.Unit, was?.Unit)
+                    && loaded.Unit.Answer
+                        is CanvasAnswerState.Answered or CanvasAnswerState.Failed)
                 {
                     // A filter completion's successor unit (task T6):
-                    // same population, new projection. The surfaces
-                    // rebuild on the publish event, and a landed answer
-                    // — or its failure — is the debounced count's moment
-                    // to speak.
+                    // same population, new projection. PENDING
+                    // successors keep their rows verbatim — a promotion
+                    // rebuild would repaint identical rows (T6 review) —
+                    // so only a landed answer, or its failure, rebuilds
+                    // the surfaces; and that is the debounced count's
+                    // moment to speak.
                     OutlinePublished?.Invoke(this, EventArgs.Empty);
-                    if (loaded.Unit.Answer
-                        is CanvasAnswerState.Answered or CanvasAnswerState.Failed)
-                    {
-                        Navigator.AnnounceFilterCount();
-                    }
+                    Navigator.AnnounceFilterCount();
                 }
                 break;
             default:

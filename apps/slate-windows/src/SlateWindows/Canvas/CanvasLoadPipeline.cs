@@ -276,6 +276,17 @@ internal sealed class CanvasLoadPipeline
                 // open. INSIDE the try: a close that throws — even
                 // panic-class — maps to the failure state instead of
                 // faulting the tracked body.
+                // The old unit's matched set, carried to the acceptance
+                // so a reload under an active filter lingers the rows
+                // it was showing instead of widening (T6 review) — from
+                // the un-name outcome, the decision snapshot, never a
+                // second read.
+                string[]? lingering =
+                    unnamed.Predecessor.Unit is { } previous
+                        && previous.Answer != CanvasAnswerState.Unfiltered
+                        ? [.. previous.Matched]
+                        : null;
+
                 if (unnamed.Predecessor.Lease is { } displaced)
                 {
                     _ = displaced.Close();
@@ -321,8 +332,8 @@ internal sealed class CanvasLoadPipeline
                     scene: scene!.Nodes);
                 _probe?.Reached(CanvasLoadPoint.Built);
 
-                CanvasLoadAcceptance acceptance =
-                    CanvasLeaseTransfer.TryAccept(_slot, identity, lease, population, _probe);
+                CanvasLoadAcceptance acceptance = CanvasLeaseTransfer.TryAccept(
+                    _slot, identity, lease, population, lingering, _probe);
                 if (acceptance is { Accepted: true, Reseeded: { } reseeded })
                 {
                     _onReseeded?.Invoke(reseeded, acceptance.ReseededNeedle!);
@@ -335,7 +346,8 @@ internal sealed class CanvasLoadPipeline
             catch (Exception exception) when (
                 exception is not OutOfMemoryException
                     and not StackOverflowException
-                    and not AccessViolationException)
+                    and not AccessViolationException
+                    and not CanvasLeaseViolationException)
             {
                 failure = _source.FailureFor(exception);
                 return CanvasLoadOutcome.Faulted;

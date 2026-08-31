@@ -658,19 +658,35 @@ internal sealed class CanvasNavigator
         {
             return;
         }
+        if (_document.FilterAnswerInFlight)
+        {
+            // BEFORE the view is even built — the early return was
+            // paying the row walk it discarded (T6 review). The async
+            // match has not landed: a count now would describe rows the
+            // needle did not choose, and the completion's projection
+            // announces the honest one. Saying nothing here is not a
+            // silent verb — the debounced count is the keystroke's
+            // echo, and it arrives with the answer.
+            return;
+        }
+        if (_document.FilterAnswerFailed)
+        {
+            // The failed-answer bit's SENTENCE (T6 review): the match
+            // could not run, on a document that is otherwise healthy —
+            // "Reopening" would be a lie about the canvas. The
+            // vocabulary has no typed filter-failed reason, so it rides
+            // the generic failed-action arm with the needle as the
+            // dynamic detail — CD-38's recorded shape, and the same
+            // STOP: the typed reason is a core change this task may not
+            // make.
+            Announce(new CanvasA11yEvent.CanvasActionFailed(
+                CanvasFailedAction.CanvasAction, _document.FilterText));
+            return;
+        }
         CanvasFilterView view = _document.Filter;
         if (view.Current)
         {
             Announce(new CanvasA11yEvent.CanvasFilterCount((uint)view.Rows.Count));
-            return;
-        }
-        if (_document.FilterAnswerInFlight)
-        {
-            // The async match has not landed (task T6): a count now
-            // would describe rows the needle did not choose, and the
-            // completion's projection announces the honest one. Saying
-            // nothing here is not a silent verb — the debounced count
-            // is the keystroke's echo, and it arrives with the answer.
             return;
         }
         Announce(new CanvasA11yEvent.CanvasStatus(
@@ -717,6 +733,13 @@ internal sealed class CanvasNavigator
             // no sentence for a healthy document. The region renders
             // empty until the completion's projection lands.
             return string.Empty;
+        }
+        if (_document.FilterAnswerFailed)
+        {
+            // The same sentence the count boundary speaks — one render,
+            // no second opinion (T6 review).
+            return CanvasAnnouncer.RenderLabel(new CanvasA11yEvent.CanvasActionFailed(
+                CanvasFailedAction.CanvasAction, _document.FilterText));
         }
         return CanvasAnnouncer.RenderLabel(new CanvasA11yEvent.CanvasStatus(
             _document.ReadRefusal ?? new CanvasStatusNote.Reopening()));

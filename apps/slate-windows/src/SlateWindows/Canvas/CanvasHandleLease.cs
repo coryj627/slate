@@ -4,6 +4,23 @@
 namespace SlateWindows.Canvas;
 
 /// <summary>
+/// W6-1 PR C-unit: the lease's own tripwire — thrown when the model's
+/// invariants contradict each other, and NEVER to report an ordinary
+/// failure.
+/// </summary>
+/// <remarks>
+/// A type of its own because the T6 review found the alternative: the
+/// detector threw a plain InvalidOperationException, and the filter
+/// job's survivable catch quietly reclassified an invariant breach as
+/// "the match could not run". A detector that a broad catch can absorb
+/// is not loud; every survivable-exception filter in the canvas model
+/// excludes this type by name, so it reaches the test host — or the
+/// crash reporter — as the defect it is.
+/// </remarks>
+internal sealed class CanvasLeaseViolationException(string message)
+    : InvalidOperationException(message);
+
+/// <summary>
 /// W6-1 PR C-unit, task T2: THE LEASE — one open canvas handle's host
 /// identity, its FFI lock, and its close-once record.
 /// </summary>
@@ -163,7 +180,7 @@ internal sealed class CanvasHandleLease
             // freed handle.
             if (Volatile.Read(ref _closed) == 1)
             {
-                throw new InvalidOperationException(
+                throw new CanvasLeaseViolationException(
                     "a call was admitted through a CLOSED lease: admission is "
                     + "derived from the publication, and a lease is closed only "
                     + "when the publication does not name it, so these two "

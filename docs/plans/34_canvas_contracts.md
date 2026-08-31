@@ -5707,6 +5707,68 @@ and none of its points is inside the gate. The applied-unit derivation
 adds no authority: it reads the same `_applied` reference the load's
 projection owns, on the dispatcher only.
 
+**T6's review, and what it moved.** Six correctness findings and four
+efficiency notes, every one verified against the source; the
+cleanup-side pass NEVER REPORTED — the second review in a row — and is
+recorded as not run, so T6's reuse and simplification angles are
+unreviewed. All ten addressed:
+
+* **The keystroke's publication was never applied.** The clear's widen
+  and the pending unit had no job to post the projection, so the
+  APPLIED reference went stale and a cleared filter's rows — and their
+  count — resurfaced under the next needle's in-flight window: a
+  retired needle's answer under the new one, U9's arrangement arriving
+  through the view model's own bookkeeping. The keystroke applies its
+  publication itself now; the seam fact pins the applied answer state
+  across a clear, and the reverted apply, injected, fails it.
+* **The failed answer had no sentence.** A match fault on a healthy
+  Ready document announced and rendered "Reopening" — a lie about the
+  canvas. The failed-answer bit speaks through the generic
+  failed-action arm with the needle as its dynamic detail — one render
+  for the count boundary and the summary both. CD-38's STOP recurs
+  here and is recorded: a typed filter-failed reason is a core
+  vocabulary change this task may not make.
+* **The reload flash, again.** The reseed's pending unit was built over
+  the unfiltered new population, so a reload under an active filter
+  widened to every card until the reseeded answer landed — the flash
+  the retired match cache's comment always warned about. The un-name
+  outcome still holds the old unit, so the worker carries its matched
+  set to the acceptance, which resolves it against the new graph as
+  the pending unit's lingering rows. The fact pins the linger, and the
+  carry, reverted, fails it.
+* **The whitespace phantom.** Acceptance reseeded on a non-empty
+  intent while the keystroke read the ACTIVE predicate, so a space in
+  the field minted a request and a full-canvas FFI match on every
+  reload. The predicate has ONE owner now — the machine — and the
+  keystroke, the reseed and the surface all read it; the table below
+  records the frozen cell this supersedes.
+* **The strand.** A failed reload left the schedule as the request
+  found it: a running entry whose job can never complete, every later
+  keystroke queueing behind it — U9's dead-running-request shape
+  arriving through a FAILURE rather than a missing reseed. The
+  terminal transition retires both entries now, the needle INTENT
+  survives for the next load, and the fact fails with the retirement
+  reverted.
+* **The quieted tripwire.** The lease's admitted-while-closed detector
+  threw a plain invalid-operation exception, and the filter job's
+  survivable catch dressed an invariant breach as a failed match.
+  `CanvasLeaseViolationException` exists so every survivable filter in
+  the model can exclude it BY NAME, and the fact asserts the breach
+  propagates instead of publishing.
+* **Four efficiency notes, taken.** The filter view walks the unit's
+  own ordered answer through the row index — O(matched) per read; the
+  count boundary checks the in-flight bit before building a view it
+  would discard; the completion skips building an answer a queued
+  request guarantees it will throw away, with a detector arm where the
+  impossible would hide; and PENDING successors no longer rebuild the
+  surfaces over identical rows.
+
+**Two dispositions with it.** `AppliedFilterAnswerForTests` is a test
+seam by name, over presentation state the clear-then-retype fact can
+reach no other way. And `CanvasLeaseViolationException` is no authority
+at all — it is the tripwire's TYPE, which is what makes "no catch may
+absorb it" a clause an exception filter can spell.
+
 **Frozen paragraphs the gate SUPERSEDES.** The freeze forbids revising
 them and that is right; this record is the sanctioned place to say which
 of them the implementation has overtaken, so a T2, T3 or T6 owner does
@@ -5747,6 +5809,7 @@ where a T3 owner will go to build the delivery pipeline:
 |---|---|
 | U9's "Every cell is a compare-and-swap, decided from one snapshot and retried on failure, which is what makes the machine total across threads" | SAME TOTALITY, NO RETRIES — T1's reason reaching the machine. Every cell is a transform under the gate; a cell that loses does not exist, so totality across threads is the gate's property rather than a retry loop's |
 | §C's "contract C10 interim" — the synchronous match, "no in-flight frame to describe", the two-branch summary | RETIRED. The match runs off the dispatcher, the in-flight frame exists and renders the previous answer as a coherent past, and the summary has the four branches the travelling row said only an async match creates |
+| U9's load-acceptance cell — "publish *(K', none)* and start K' when the rebased needle is NON-EMPTY" | SUPERSEDED BY ITS OWN MACHINE'S PREDICATE (the T6 review): non-empty let a whitespace needle mint a phantom job the keystroke column calls inactive. The reseed reads the one ACTIVE predicate the keystroke reads |
 **The four mutable authorities T1 introduced, with their
 dispositions.** The frozen rule counts identity and contents
 separately and says every authority the derivation finds must appear in

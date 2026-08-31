@@ -104,7 +104,7 @@ public sealed class ContractsCitationCensus
                 // of 50 — the same rule, a third time.
                 //
                 // T6 bound the machine and its types, taking the
-                // section to 66; 62 sits above the pre-T6
+                // section to 69; 62 sits above the pre-T6
                 // population of 59 — a fourth time.
                 62),
         ];

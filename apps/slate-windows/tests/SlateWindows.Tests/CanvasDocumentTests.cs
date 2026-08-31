@@ -2438,6 +2438,33 @@ public sealed class CanvasDocumentTests : IDisposable
     }
 
     /// <summary>
+    /// The clear APPLIES its widen (task T6, after its review): with the
+    /// keystroke's publication left unapplied, the next needle's
+    /// in-flight window showed the cleared filter's rows and count — a
+    /// retired needle's answer under the new one.
+    /// </summary>
+    [Fact]
+    public void TheClearAppliesItsWidenSoTheNextKeystrokeCannotResurrectOldRows()
+    {
+        CanvasDocumentViewModel document = NewDocument("board.canvas");
+        document.Load();
+        document.FilterText = "question";
+        Assert.Equal(CanvasAnswerState.Answered, document.AppliedFilterAnswerForTests);
+        _ = Assert.Single(document.FilteredOutline);
+
+        document.FilterText = " ";
+
+        Assert.Equal(CanvasAnswerState.Unfiltered, document.AppliedFilterAnswerForTests);
+        Assert.False(document.Filter.Narrowed, "the widen is applied, not just published.");
+        Assert.Equal(document.Outline.Count, document.FilteredOutline.Count);
+
+        document.FilterText = "evidence";
+        Assert.Equal(CanvasAnswerState.Answered, document.AppliedFilterAnswerForTests);
+        _ = Assert.Single(document.FilteredOutline);
+        document.Shutdown();
+    }
+
+    /// <summary>
     /// SEAM 3's ordering, pinned at the source: the retired publication
     /// precedes the base shutdown in <c>Shutdown</c>, so a load issued
     /// between the two is refused by the model rather than silently
