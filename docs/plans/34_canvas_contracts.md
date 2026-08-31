@@ -6062,6 +6062,16 @@ not move a ratified behaviour. What changed, by owner:
   presentation reads are the ratified API surface, kept.
 - The slot battery's raw contender threads never assert, so
   `CanvasWorker`'s fault capture buys nothing there; left as committed.
+
+**The reader-coherence premise, established rather than hoped (CI
+round 1).** `ReadersUnderContentionNeverSeeAMixedPublication` fixed its
+writer at five thousand publishes and HOPED the reader overlapped; the
+runner's scheduler declined, and the premise failed with its own
+sentence. The fix is the victim fact's dual-leg rule applied to its
+sibling: the writer runs until the churn floor and the reader's overlap
+proof both hold, inside the same liveness budget. The whitespace round
+before it was the format gate refusing the cleanup pass's scripted line
+endings — `dotnet format` is part of the push, not an afterthought.
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same

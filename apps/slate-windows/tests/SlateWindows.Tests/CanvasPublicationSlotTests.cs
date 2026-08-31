@@ -885,11 +885,19 @@ public sealed class CanvasPublicationSlotTests
         var mixed = 0;
         var distinctNeedles = new HashSet<string>(StringComparer.Ordinal);
 
+        // The victim fact's dual-leg rule, applied to its sibling after
+        // the CI runner proved the hope wrong: the writer runs until
+        // the churn floor AND the reader's overlap proof both hold, so
+        // the premise below is established rather than hoped for.
+        var distinct = 0;
+        var stopwatch = Stopwatch.StartNew();
         var writer = new Thread(() =>
         {
-            for (var i = 0; i < 5_000; i++)
+            var i = 0;
+            while ((i < 5_000 || Volatile.Read(ref distinct) < 2)
+                && stopwatch.Elapsed < LivenessBudget)
             {
-                var tag = $"v{i}";
+                var tag = $"v{i++}";
                 _ = slot.Publish(s => s
                     .WithNeedleIntent(tag)
                     .WithSelectedIntent(tag)
@@ -911,7 +919,10 @@ public sealed class CanvasPublicationSlotTests
 
                 lock (distinctNeedles)
                 {
-                    _ = distinctNeedles.Add(snapshot.NeedleIntent);
+                    if (distinctNeedles.Add(snapshot.NeedleIntent))
+                    {
+                        _ = Interlocked.Increment(ref distinct);
+                    }
                 }
                 if (snapshot.SelectedIntent != snapshot.NeedleIntent
                     || !snapshot.MarkedIntent.Contains(snapshot.NeedleIntent))
@@ -937,10 +948,10 @@ public sealed class CanvasPublicationSlotTests
 
         Assert.True(
             seen > 1,
-            $"premise: the reader saw {seen} distinct publications, so it did not "
-            + "OVERLAP the writer — a read count alone can be satisfied entirely "
-            + "after the writer finished, which would make the coherence claim "
-            + "below about a slot nobody was writing.");
+            $"premise: the reader saw {seen} distinct publications inside the "
+            + "writer's window, so overlap did not establish within the "
+            + "liveness budget — the coherence claim below would be about a "
+            + "slot nobody was writing.");
         Assert.True(
             Volatile.Read(ref mixed) == 0,
             $"{Volatile.Read(ref mixed)} reads saw a publication whose three "
