@@ -144,9 +144,13 @@ public sealed class ContractsCitationCensus
                 // pre-task population of 28 — a second time.
                 //
                 // TD-3 bound the topology, the third authority and
-                // their sentinels, taking the section to 39; 35 sits
+                // their sentinels, taking the section to 39; 35 sat
                 // above the pre-task population of 33 — a third time.
-                35),
+                //
+                // TD-4 bound the selection accessor and its two
+                // sentinels, taking the section to 43; 40 sits above
+                // the pre-task population of 39 — a fourth time.
+                40),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

@@ -53,6 +53,19 @@ internal sealed class CanvasPresentationState
     /// <summary>The viewport value the state was built against.</summary>
     internal CanvasViewportState Viewport { get; }
 
+    /// <summary>The selection this state RENDERS (§D D6, obligation
+    /// ID-5): the publication's durable selected intent, resolved
+    /// against the population this state draws — never the unit's
+    /// filtered resolution, which keeps a selection only when the
+    /// filter matched it, while D4 keeps unmatched cards visible and
+    /// selectable. A pure function of <see cref="Source"/>, so the
+    /// mid-apply divergence the periphery's T5 row records cannot
+    /// reach a reader: two states answer with their own selections
+    /// and no live authority is consulted — obligation ID-6's settled
+    /// direction, the machine gaining no event.</summary>
+    internal string? Selection =>
+        Source.Loaded?.Population.Resolve(Source.SelectedIntent);
+
     /// <summary>The text-scale revision consumed from the owned
     /// service (D11); a bumped revision is a new state.</summary>
     internal int TextScaleRevision { get; }

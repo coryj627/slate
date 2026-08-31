@@ -4,6 +4,7 @@
 using System.Windows.Threading;
 using SlateWindows.Canvas;
 using uniffi.slate_uniffi;
+using static SlateWindows.Tests.CanvasModelFixtures;
 
 namespace SlateWindows.Tests;
 
@@ -288,5 +289,65 @@ public sealed class CanvasPresentationEngineTests
             installs == 1,
             "an equal retained set rebuilt anyway: set equality is the "
             + "deduplication, exactly as geometry is the viewport's.");
+    }
+
+    // ---------------------------------------------------------------
+    // §D task TD-4: the rendered selection derives from the
+    // publication (ID-5, ID-6's settled direction)
+    // ---------------------------------------------------------------
+
+    /// <summary>Obligation ID-5's arrangement: the filter matched only
+    /// A, the reader selected the dimmed B — the state's selection is
+    /// the PUBLICATION's answer, not the unit's filtered
+    /// resolution.</summary>
+    [Fact]
+    public void TheStateSelectionFollowsThePublicationNotTheUnit()
+    {
+        var slot = new CanvasPublicationSlot(CanvasPublication.Seed());
+        var request = new CanvasRequestIdentity("L1");
+        var lease = new CanvasHandleLease(1, _ => { });
+        _ = slot.Publish(s => s.WithLoads(s.Loads.Requested(request)));
+        CanvasPopulation population = Population("a", "b");
+        Assert.True(
+            CanvasLeaseTransfer.TryAccept(slot, request, lease, population).Accepted,
+            "premise: the load must land.");
+        _ = slot.Publish(s => s.WithSelectedIntent("b"));
+        _ = slot.Publish(s => s.WithUnit(CanvasProjectionUnit
+                .Unfiltered(population)
+                .Pending(new CanvasRequestIdentity("F1"), "x")
+                .Answered(population, ["a"])));
+        var engine = new CanvasPresentationEngine(synchronousForTests: true);
+        engine.OnPublicationApplied(slot.Current);
+        Assert.True(
+            engine.Current?.Selection == "b",
+            "the rendered selection lost the dimmed card: ID-5 derives it "
+            + "from the publication's intent resolved against the "
+            + "population, and the unit's filtered semantics stay the "
+            + "unit's.");
+    }
+
+    /// <summary>T5 cannot reach this surface: two installed states
+    /// answer with their own selections — a retained reference never
+    /// changes its answer.</summary>
+    [Fact]
+    public void TwoStatesAnswerWithTheirOwnSelections()
+    {
+        var slot = new CanvasPublicationSlot(CanvasPublication.Seed());
+        var request = new CanvasRequestIdentity("L1");
+        var lease = new CanvasHandleLease(1, _ => { });
+        _ = slot.Publish(s => s.WithLoads(s.Loads.Requested(request)));
+        _ = CanvasLeaseTransfer.TryAccept(slot, request, lease, Population("a", "b"));
+        var engine = new CanvasPresentationEngine(synchronousForTests: true);
+        _ = slot.Publish(s => s.WithSelectedIntent("a"));
+        engine.OnPublicationApplied(slot.Current);
+        CanvasPresentationState first = engine.Current!;
+        _ = slot.Publish(s => s.WithSelectedIntent("b"));
+        engine.OnPublicationApplied(slot.Current);
+        CanvasPresentationState second = engine.Current!;
+        Assert.True(
+            first.Selection == "a" && second.Selection == "b",
+            "a retained state changed its answer — the selection must be a "
+            + "pure function of the state's own publication, or the "
+            + "mid-apply reader is back to two authorities.");
     }
 }

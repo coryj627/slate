@@ -6880,6 +6880,25 @@ discharged pending TD-3's review round; the Ready-publication
 integration fact rides TD-6's renderer battery, where the full
 transfer path exists.
 
+**TD-4 — the rendered selection derives from the publication,
+landed.** `CanvasPresentationState` gains its selection accessor:
+the durable selected intent resolved against the population the
+state draws — obligation ID-5's remedy verbatim, and obligation
+ID-6's settled direction performed by ABSENCE: the filter machine
+gained no event, the doors stay the shipped pair (`SelectNode`
+announced, `SeatSelectionSilently` silent), and the unit's filtered
+semantics are untouched. Facts:
+`TheStateSelectionFollowsThePublicationNotTheUnit` — the dimmed-card
+arrangement, a filter matching only one card while the reader
+selects the other, the state answering with the publication's
+resolution while the unit's says nothing — and
+`TwoStatesAnswerWithTheirOwnSelections`, which is the T5-divergence
+door held shut by purity. Mutation, injected and restored
+byte-for-byte: the selection read from the unit's filtered
+resolution, the dimmed-card fact red on the lost selection. ID-5
+and ID-6 are discharged pending TD-4's review round; the pattern
+MATRIX's cells are peer behavior and land with TD-6's objects.
+
 ---
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
