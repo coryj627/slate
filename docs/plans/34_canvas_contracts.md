@@ -6607,9 +6607,34 @@ inventory derives from the registrar with bound delivery members
 (D14); (15) the enablement sweep is an executable census (D14);
 (16) the intra-surface transient order is literal (D12/DD-3).
 
-**Revision 4** — this text. UNFROZEN: round 4 runs against it next.
-The rule-4 trip stands in this record; a blocker round against the
-same subsystem returns the ruling to the owner.
+**Revision 4** — answered round 3 under the owner's ruling; round 4
+ran against it.
+
+**Round 4 — NOT SOUND, 3 blockers, 6 majors, 0 minors — and the
+recorded condition FIRED.** Codex at the protocol tier. The
+trajectory bent — 6, 5, 5, 3 blockers across the rounds, no minors
+left — and two rows were ratified WHOLE: D2 (the population's scene
+field, its wall, its budgets, the failure pane's reachability) and
+D5 (independent end-style booleans confirmed against the shipped
+algebra; the rendered traversal phrase host-reachable through the
+announcer's label rendering). But the reviewer's own classification
+puts blockers 1 and 5 in the PRESENTATION COMMIT — the fourth
+consecutive blocker round against that subsystem: the dispatcher
+proof is false against `PanelWorkScheduler`'s inline-post arm, and
+the unit's `ResolvedSelection` cannot carry a dimmed card's
+selection the filter never matched. Blocker 7 is the separate
+command/refusal subsystem: C4 maps load state and cannot speak a
+no-pane refusal, and the vocabulary has no arm for it — a typed
+core addition under the five-place rule. The majors are
+implementation-shaped: a single-flight build bound, the descriptor
+index's load-class lifetime, path-intersection edge windowing, the
+selection event's literal U9 column, an enumerable
+row-to-delivery-member binding record, and the tooltip's
+trigger-matrix over cards AND edge chips. Findings are HELD, not
+dispositioned: the condition recorded beside the owner's ruling —
+a blocker round against the same subsystem returns the ruling to
+the owner — has fired, and this record stops here until the ruling
+is made.
 
 ---
 
