@@ -613,24 +613,15 @@ internal sealed class CanvasOutlineView : UserControl
         // one ("Evidence, inside Quarter"), which is worse than the flat
         // list CD-45 chose over it.
         //
-        // So the parent chain is computed from the UNFILTERED outline
-        // once, and each survivor attaches to its nearest surviving TRUE
-        // ancestor — or becomes a root, which is CD-45's promotion said
-        // properly. mac's flat outline has no such case (CD-33).
-        var trueParent = new Dictionary<string, string>(StringComparer.Ordinal);
-        var ancestry = new Stack<CanvasOutlineRow>();
-        foreach (CanvasOutlineRow row in model.Outline)
-        {
-            while (ancestry.Count > 0 && ancestry.Peek().Depth >= row.Depth)
-            {
-                _ = ancestry.Pop();
-            }
-            if (ancestry.Count > 0)
-            {
-                trueParent[row.NodeId] = ancestry.Peek().NodeId;
-            }
-            ancestry.Push(row);
-        }
+        // So the parent chain is the UNFILTERED outline's, and each
+        // survivor attaches to its nearest surviving TRUE ancestor — or
+        // becomes a root, which is CD-45's promotion said properly.
+        // mac's flat outline has no such case (CD-33). The chain comes
+        // from the POPULATION, which owns the one depth-walk
+        // derivation — this view carried a line-for-line copy of it,
+        // with the depth-gap fix only in the copy that documented it,
+        // until the cleanup pass folded the two.
+        CanvasPopulation? population = model.AppliedPopulation;
 
         bool filtered = model.FilterActive;
         foreach (CanvasOutlineRow row in model.FilteredOutline)
@@ -642,7 +633,7 @@ internal sealed class CanvasOutlineView : UserControl
             // The rows arrive in reading order, so an ancestor that
             // survived has already been materialized.
             CanvasOutlineRowViewModel? parent = null;
-            string? ancestor = trueParent.GetValueOrDefault(row.NodeId);
+            string? ancestor = population?.Parent(row.NodeId);
             while (ancestor is not null)
             {
                 if (_byNode.TryGetValue(ancestor, out CanvasOutlineRowViewModel? found))
@@ -650,7 +641,7 @@ internal sealed class CanvasOutlineView : UserControl
                     parent = found;
                     break;
                 }
-                ancestor = trueParent.GetValueOrDefault(ancestor);
+                ancestor = population?.Parent(ancestor);
             }
             if (parent is null)
             {

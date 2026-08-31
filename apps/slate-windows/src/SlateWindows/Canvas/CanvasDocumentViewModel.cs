@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using SlateWindows.Panels;
@@ -111,6 +112,32 @@ internal sealed record CanvasFilterView(
     bool Current,
     IReadOnlySet<string>? MatchedIds);
 
+/// <summary>The four-branch answer classification (task T6), computed
+/// ONCE — the cleanup pass folded five hand-kept ladders into this,
+/// so the spoken count, the visible summary and the view cannot
+/// drift.</summary>
+internal enum CanvasFilterVerdict
+{
+    /// <summary>No active needle: the filter is off.</summary>
+    Inactive,
+
+    /// <summary>The answer on screen is the field's needle's, on rows
+    /// the surface renders.</summary>
+    Current,
+
+    /// <summary>An active needle whose answer has not landed — the
+    /// completion's projection speaks when it does.</summary>
+    InFlight,
+
+    /// <summary>The match for the field's needle ran and could not
+    /// answer, on a document that renders rows.</summary>
+    Failed,
+
+    /// <summary>Everything else: the state mapping owns the
+    /// sentence.</summary>
+    StateSentence,
+}
+
 /// <summary>
 /// W6-1 PR A (#745): the per-path canvas document — the mac
 /// <c>CanvasDocument</c> twin, built on the W4-6 <c>BaseDocument</c>
@@ -120,15 +147,18 @@ internal sealed record CanvasFilterView(
 /// on that path (contract A1); the workspace registry owns creation and
 /// shutdown.
 ///
-/// Threading (contract A17), stated as it is: the LOAD and the CLOSE run
-/// inside <see cref="PanelWorkScheduler.StartWork"/> bodies, marshal
-/// their publications through <c>Post</c> and re-check the generation;
-/// the per-node DETAIL reads (<see cref="NeighborsOf"/>,
-/// <see cref="NodeTextOf"/>) and the activation identity read are
-/// synchronous UI-thread calls. Every one of them — scheduled or not —
-/// holds <c>_ffiLock</c> for its FFI section, which is what makes a
-/// handle replacement unable to race a read. The handle is closed
-/// exactly once: on replacement inside the load body, or on shutdown.
+/// Threading (contract A17), stated as it is since task T3: the LOAD
+/// runs inside a <see cref="PanelWorkScheduler.StartWork"/> body and
+/// publishes to the one slot from whatever thread it is on — the slot's
+/// gate serializes it, and nothing marshals a publication. What is
+/// marshalled through <c>Post</c> is the PROJECTION of the publication
+/// onto this object's bindable properties, which reads the slot once at
+/// dispatch and applies whatever is current. The per-node DETAIL reads
+/// (<see cref="NeighborsOf"/>, <see cref="NodeTextOf"/>) go through the
+/// lease the publication names, admitted under that lease's own lock,
+/// which is what makes a handle replacement unable to race a read. The
+/// handle is closed exactly once, by whoever un-named its lease: the
+/// reload's worker, or the terminal publication's caller.
 ///
 /// Canvas tabs are never dirty: mutations write through on commit
 /// (PR E), so the U1 close gate is bypassed for canvas tabs
@@ -137,10 +167,21 @@ internal sealed record CanvasFilterView(
 internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
 {
     private readonly VaultSession _session;
-    private readonly object _ffiLock = new();
     private readonly string? _retargetedFrom;
-    private ulong? _handle;
-    private int _generation;
+
+    /// <summary>
+    /// The one mutable currency authority (U1), and the pipeline that
+    /// writes it. Task T3: the handle, the generation counter and the
+    /// FFI lock this class used to own are the LEASE's now — reached
+    /// only through the publication that names it — and the load state
+    /// below is a PROJECTION of the publication, applied on the
+    /// dispatcher by <see cref="ApplyPublication"/>.
+    /// </summary>
+    private readonly CanvasPublicationSlot _slot = new(CanvasPublication.Seed());
+    private readonly CanvasLoadPipeline _pipeline;
+    private readonly CanvasFilterMachine _machine;
+    private CanvasPublication? _applied;
+    private bool _applying;
     private CanvasLoadState _state = CanvasLoadState.Loading;
     private string? _stateMessage;
     private IReadOnlyList<CanvasOutlineRow> _outline = [];
@@ -153,7 +194,6 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     private string _filterText = string.Empty;
     private string? _whereAmIText;
     private CanvasFilterFocusRequest? _filterFocusRequest;
-    private (string Needle, IReadOnlySet<string> Ids)? _filterMatchCache;
 
     /// <summary>Row lookup by node id — the outline is walked by id from
     /// selection, activation and the tree's own callbacks.</summary>
@@ -164,7 +204,8 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// subpaths, derived once at load from core's table rows and scene
     /// — activation never re-queries (the mac <c>targets</c> shape).</summary>
     private readonly Dictionary<string, string> _targets = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, string> _subpaths = new(StringComparer.Ordinal);
+    private IReadOnlyDictionary<string, string> _subpaths =
+        System.Collections.Immutable.ImmutableDictionary<string, string>.Empty;
 
     /// <summary>Per-node adjacency, fetched lazily on first selection
     /// and cached; dropped on every load (the mac
@@ -187,6 +228,37 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         _announcer = announcer;
         _retargetedFrom = retargetedFrom;
         _verbosity = verbosity ?? (static () => CanvasVerbosity.Standard);
+        _machine = new CanvasFilterMachine(
+            _slot,
+            new FilterSource(this),
+            // The tracked worker, with the projection posted after every
+            // job — inline in synchronous tests, so a keystroke's answer
+            // is applied before the setter returns, exactly as the
+            // synchronous filter behaved (task T6).
+            run: body => StartWork(() =>
+            {
+                try
+                {
+                    body();
+                }
+                finally
+                {
+                    Post(ApplyPublication);
+                }
+            }));
+        _pipeline = new CanvasLoadPipeline(
+            _slot,
+            new SessionSource(this),
+            // U9's load column, second half: the reseeded request the
+            // acceptance minted goes to the machine for its job.
+            onReseeded: (request, needle) => _machine.StartReseeded(request, needle));
+        // The UI-originated intent publications — U11's fourth writer
+        // family. The shared selection stays the surfaces' authority
+        // for what they SHOW; what it publishes here is the INTENT the
+        // rebase resolves against the next population, so a selection
+        // made while a load is in flight survives that load's
+        // acceptance (task T3).
+        Selection.PropertyChanged += (_, changed) => PublishIntent(changed.PropertyName);
         Modes = new CanvasModeController(Speak);
         Navigator = new CanvasNavigator(this);
     }
@@ -327,8 +399,9 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// <summary>Skipped-but-preserved entries (t0 §5). The mac
     /// <c>preservedItemCount</c>: the SkippedEntry warnings, NOT
     /// <c>CanvasOpenInfo.degraded</c> — CD-28.</summary>
-    public int PreservedItemCount =>
-        _warnings.Count(warning => warning.Kind == CanvasLoadWarningKind.SkippedEntry);
+    public int PreservedItemCount => _preservedCount;
+
+    private int _preservedCount;
 
     /// <summary>The t0 §5 banner, rendered from the SAME event the
     /// once-per-open announcement speaks (contract A4), so banner and
@@ -644,7 +717,11 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
 
     /// <summary>This document's refusal, or null when it can answer.</summary>
     internal CanvasStatusNote? ReadRefusal =>
-        ReadRefusalFor(State, _handle is not null);
+        // Both halves from the APPLIED snapshot (the cleanup pass): a
+        // sentence derived from the applied state and the LIVE slot is
+        // a torn pair mid-reload — two currency authorities in one
+        // answer.
+        ReadRefusalFor(State, _applied?.Lease is not null);
 
     /// <summary>
     /// Admission for a read verb: true when the document can answer,
@@ -749,16 +826,14 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         detail = string.Empty;
         try
         {
-            lock (_ffiLock)
+            if (!Query(handle => _session.CanvasWhereAmI(handle, nodeId),
+                out CanvasWhereAmI? answer))
             {
-                if (_handle is not { } handle)
-                {
-                    context = null;
-                    return false;
-                }
-                context = _session.CanvasWhereAmI(handle, nodeId);
-                return true;
+                context = null;
+                return false;
             }
+            context = answer;
+            return true;
         }
         catch (VaultException exception)
         {
@@ -807,16 +882,13 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     {
         try
         {
-            lock (_ffiLock)
+            if (!Query(read, out T? answer))
             {
-                if (_handle is not { } handle)
-                {
-                    value = fallback;
-                    return false;
-                }
-                value = read(handle);
-                return true;
+                value = fallback;
+                return false;
             }
+            value = answer!;
+            return true;
         }
         catch (VaultException)
         {
@@ -825,6 +897,41 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             value = fallback;
             return false;
         }
+    }
+
+    /// <summary>
+    /// One FFI read through the lease the publication names, admitted
+    /// at LOCK time: the publication must still name that lease and the
+    /// document must not be retired. False means no answer — nothing
+    /// loaded, the lease replaced while the call waited, or the document
+    /// retired — and the caller decides which sentence that owes.
+    /// </summary>
+    /// <remarks>
+    /// U6's three validations in one predicate: a lease named by a live
+    /// publication is current, and so is the population beside it,
+    /// because the chain is one value. The predicate reads the slot and
+    /// takes no gate, so there is no lock order here to get wrong; and
+    /// it is evaluated INSIDE the lease's lock, because a check made
+    /// before the lock cannot see a reload that landed while this
+    /// caller was waiting for it (task T3).
+    /// </remarks>
+    private bool Query<T>(Func<ulong, T> read, out T? answer)
+    {
+        T? result = default;
+        answer = default;
+        if (_slot.Current.Lease is not { } lease)
+        {
+            return false;
+        }
+        bool admitted = lease.Invoke(
+            () =>
+            {
+                CanvasPublication now = _slot.Current;
+                return !now.Retired && now.Names(lease);
+            },
+            handle => result = read(handle));
+        answer = result;
+        return admitted;
     }
 
     // --- Filter (contract C10) -------------------------------------------
@@ -845,6 +952,19 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 return;
             }
             _filterText = next;
+            // The keystroke event, U9's first column: the needle INTENT,
+            // the schedule transition and — when the request starts at
+            // once — the pending unit, published together, and the job
+            // runs off the dispatcher (task T6). Inline in synchronous
+            // tests, so the answer is applied before this setter
+            // returns.
+            _machine.Typed(next);
+            // Applied HERE, not only after a job: the clear's widen and
+            // the keystroke's pending unit publish with no job to post
+            // the projection, and an unapplied publication is how a
+            // cleared filter's rows resurfaced under the next needle —
+            // the T6 review's lead finding.
+            ApplyPublication();
             OnPropertyChanged(nameof(FilterText));
             OnPropertyChanged(nameof(FilterActive));
             OutlinePublished?.Invoke(this, EventArgs.Empty);
@@ -876,7 +996,66 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     public bool FilterActive => IsFilterActive(_filterText);
 
     internal static bool IsFilterActive(string needle) =>
-        needle.Any(character => !char.IsWhiteSpace(character) || character is '\n' or '\r');
+        CanvasFilterMachine.IsActiveNeedle(needle);
+
+    /// <summary>Whether an active needle's answer has not landed yet:
+    /// the document renders rows, a needle is in the field, and the
+    /// applied unit's answer is neither the ANSWER nor the FAILURE for
+    /// that needle. The count boundary says nothing in this state — the
+    /// completion's projection announces when the answer lands — which
+    /// is the distinction only an async match creates (§C's travelling
+    /// row, task T6).</summary>
+    internal bool FilterAnswerInFlight =>
+        FilterVerdict == CanvasFilterVerdict.InFlight;
+
+    /// <summary>The one classification (the cleanup pass): the view,
+    /// the count boundary and the summary all read THIS, so the spoken
+    /// count and the visible summary cannot drift — the invariant the
+    /// old hand-kept ladders maintained separately.</summary>
+    internal CanvasFilterVerdict FilterVerdict
+    {
+        get
+        {
+            if (!FilterActive)
+            {
+                return CanvasFilterVerdict.Inactive;
+            }
+
+            if (!RendersRetainedSnapshot)
+            {
+                return CanvasFilterVerdict.StateSentence;
+            }
+
+            if (_applied?.Unit is not { } unit
+                || unit.Answer is CanvasAnswerState.Unfiltered or CanvasAnswerState.Pending
+                || !string.Equals(unit.Needle, _filterText, StringComparison.Ordinal))
+            {
+                return CanvasFilterVerdict.InFlight;
+            }
+
+            return unit.Answer == CanvasAnswerState.Failed
+                ? CanvasFilterVerdict.Failed
+                : CanvasFilterVerdict.Current;
+        }
+    }
+
+    /// <summary>The match for the needle in the field ran and could not
+    /// answer, on a document that renders rows — the failed-answer bit,
+    /// owed its own sentence rather than the state mapping's (T6
+    /// review).</summary>
+    internal bool FilterAnswerFailed =>
+        FilterVerdict == CanvasFilterVerdict.Failed;
+
+    /// <summary>The applied unit's answer state — the projection
+    /// bookkeeping the clear-then-retype fact pins, reachable no other
+    /// way. Test seam by name.</summary>
+    internal CanvasAnswerState? AppliedFilterAnswerForTests => _applied?.Unit?.Answer;
+
+    /// <summary>The applied population — the graph whose rows are on
+    /// screen. The outline view resolves TRUE ancestry through this
+    /// instead of re-deriving the depth walk the population already
+    /// owns (the cleanup pass).</summary>
+    internal CanvasPopulation? AppliedPopulation => _applied?.Population;
 
     /// <summary>
     /// What the surfaces show for the current needle, in reading order —
@@ -886,72 +1065,76 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// <remarks>
     /// The MATCH is core's <c>canvas_filter</c> (0b-13/0b-14): title, the
     /// kind type word, any one element of the group path, and the
-    /// activation target. The needle goes over UNTRIMMED — core trims it,
-    /// and an empty needle matches everything, so whitespace answers the
-    /// full outline exactly as <see cref="FilterActive"/> says it should.
-    /// The answer is memoized per needle and invalidated by every publish,
-    /// because the ids can move under an unchanged needle.
+    /// activation target, run off the dispatcher by the machine (task
+    /// T6). The needle goes over UNTRIMMED — core trims it, and an empty
+    /// needle matches everything, so whitespace answers the full outline
+    /// exactly as <see cref="FilterActive"/> says it should. The view
+    /// derives from the APPLIED unit, so it moves when the projection
+    /// applies — never mid-read — and the ids moving under an unchanged
+    /// needle is a reload, which reseeds.
     /// </remarks>
     internal CanvasFilterView Filter
     {
         get
         {
-            if (!FilterActive)
+            // Memoized per (applied publication, needle) — a VM-derived
+            // view cache, not a publication cache: several consumers
+            // read the view per publish, and it is a pure function of
+            // the pair (the cleanup pass).
+            if (_filterViewMemo is { } memo
+                && ReferenceEquals(memo.Applied, _applied)
+                && string.Equals(memo.Needle, _filterText, StringComparison.Ordinal))
             {
-                return new CanvasFilterView(_outline, Narrowed: false, Current: true, null);
+                return memo.View;
             }
-            // A COUNT IS A CLAIM ABOUT ROWS ON SCREEN, so it is only
-            // current while rows are on screen (contract C10, C4's
-            // mapping). During a reload the surface collapses both
-            // projections and the memoized answer stayed `Current`, so
-            // the summary read "2 of 5 cards match" over a pane showing
-            // nothing — the one invariant C10 has, broken by a state
-            // change rather than by a filter change. `Current: false`
-            // routes both the label and the announcement through the
-            // state mapping, which has the honest sentence for every
-            // state that is not showing rows. The ROWS are unchanged:
-            // the answer is still the last coherent one, and widening
-            // here would make the reload flash every card the moment it
-            // finished.
-            if (!RendersRetainedSnapshot)
-            {
-                return _filterMatchCache is { } held
-                    ? new CanvasFilterView(
-                        RowsMatching(held.Ids), Narrowed: true, Current: false, held.Ids)
-                    : new CanvasFilterView(
-                        _outline, Narrowed: false, Current: false, null);
-            }
-            if (_filterMatchCache is { } cached
-                && string.Equals(cached.Needle, _filterText, StringComparison.Ordinal))
-            {
-                return new CanvasFilterView(
-                    RowsMatching(cached.Ids), Narrowed: true, Current: true, cached.Ids);
-            }
-            if (TryQuery<IReadOnlyList<string>>(
-                handle => _session.CanvasFilter(handle, _filterText),
-                [],
-                out IReadOnlyList<string> matched))
-            {
-                var ids = matched.ToHashSet(StringComparer.Ordinal);
-                _filterMatchCache = (_filterText, ids);
-                return new CanvasFilterView(
-                    RowsMatching(ids), Narrowed: true, Current: true, ids);
-            }
-            if (_filterMatchCache is { } stale)
-            {
-                // The needle changed and nothing could answer it. The
-                // PREVIOUS rows stay on screen and `Current` is false:
-                // widening silently back to the full outline would show
-                // every card while the field still claims to be
-                // filtering, and then speak that number as a match count.
-                return new CanvasFilterView(
-                    RowsMatching(stale.Ids), Narrowed: true, Current: false, stale.Ids);
-            }
-            // Nothing was ever applied, so the unfiltered outline IS the
-            // prior view. `Narrowed: false` keeps the summary from
-            // claiming these rows matched anything.
+
+            CanvasFilterView view = DeriveFilterView();
+            _filterViewMemo = (_applied, _filterText, view);
+            return view;
+        }
+    }
+
+    private (CanvasPublication? Applied, string Needle, CanvasFilterView View)? _filterViewMemo;
+
+    private CanvasFilterView DeriveFilterView()
+    {
+        if (!FilterActive)
+        {
+            return new CanvasFilterView(_outline, Narrowed: false, Current: true, null);
+        }
+        // Derived from the APPLIED unit — the same publication the
+        // rows on screen came from — never from a fresh query (task
+        // T6). The unit and the rows it filters are one immutable
+        // value, so the count and the rows cannot disagree, which
+        // is the one invariant C10 has.
+        if (_applied?.Unit is not { } unit)
+        {
+            // Nothing ever applied: the unfiltered outline IS the
+            // prior view, and `Narrowed: false` keeps the summary
+            // from claiming these rows matched anything.
             return new CanvasFilterView(_outline, Narrowed: false, Current: false, null);
         }
+        if (unit.Answer == CanvasAnswerState.Answered
+            && string.Equals(unit.Needle, _filterText, StringComparison.Ordinal))
+        {
+            return new CanvasFilterView(
+                RowsOf(unit),
+                Narrowed: true,
+                Current: RendersRetainedSnapshot,
+                unit.Matched);
+        }
+        // Pending, failed, or answered for an older needle: the
+        // previous answer stays on screen and `Current` is false —
+        // widening silently back to the full outline would show
+        // every card while the field still claims to be filtering,
+        // and then speak that number as a match count.
+        // The unit CARRIES whether its rows came from a landed
+        // answer (the cleanup pass; the set-size arithmetic this
+        // replaces misread a match-everything answer).
+        return unit.Narrowed
+            ? new CanvasFilterView(
+                RowsOf(unit), Narrowed: true, Current: false, unit.Matched)
+            : new CanvasFilterView(_outline, Narrowed: false, Current: false, null);
     }
 
     /// <summary>The outline rows the surfaces display.</summary>
@@ -964,8 +1147,24 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             ? _tableRows.Where(row => ids.Contains(row.NodeId)).ToArray()
             : _tableRows;
 
-    private IReadOnlyList<CanvasOutlineRow> RowsMatching(IReadOnlySet<string> ids) =>
-        _outline.Where(row => ids.Contains(row.NodeId)).ToArray();
+    /// <summary>The unit's rows by its own ordered answer: FilteredOrder
+    /// is already the matched ids in population order, and the row index
+    /// makes this O(matched) per read — every publish consumer walks the
+    /// getter, and the O(outline) scan this replaced was the T6 review's
+    /// efficiency note.</summary>
+    private IReadOnlyList<CanvasOutlineRow> RowsOf(CanvasProjectionUnit unit)
+    {
+        var rows = new List<CanvasOutlineRow>(unit.FilteredOrder.Length);
+        foreach (string nodeId in unit.FilteredOrder)
+        {
+            if (_rows.TryGetValue(nodeId, out CanvasOutlineRow? row))
+            {
+                rows.Add(row);
+            }
+        }
+
+        return rows;
+    }
 
     /// <summary>
     /// The pending request to put the reader in the filter field, or
@@ -1131,165 +1330,218 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// table, scene — the mac <c>load</c> twin. A reload IS an open, so
     /// the once-per-open degraded announcement re-arms here
     /// (contract A4).</summary>
+    /// <remarks>
+    /// Task T3: U4's operation. The request publishes Loading and
+    /// un-names the old lease in one swap, on this thread; the worker
+    /// closes that lease, opens, builds and delivers on its own; and
+    /// the projection of whatever the slot then holds is posted back
+    /// here. A retired document requests nothing — the publication says
+    /// so, and the scheduler's own refusal is the second wall.
+    /// </remarks>
     public void Load()
     {
-        if (IsShutDown)
+        if (_pipeline.Request() is not { } request)
         {
-            // A shut-down document must not even MUTATE state: the
-            // scheduler would refuse the body, leaving a permanent
-            // "Loading" lie on whatever UI still observes this VM (the
-            // Bases lesson).
             return;
         }
-        int generation = Interlocked.Increment(ref _generation);
-        State = CanvasLoadState.Loading;
-        StateMessage = null;
         _announcedDegradedLoad = false;
         CloseDetail();
-        StartWork(() => LoadBody(generation));
+        ApplyPublication();
+        StartWork(() =>
+        {
+            try
+            {
+                _ = _pipeline.Deliver(request);
+            }
+            finally
+            {
+                // Whatever the delivery did, the surface reflects the
+                // publication that resulted — a failure's included.
+                Post(ApplyPublication);
+            }
+        });
     }
 
-    private void LoadBody(int generation)
+    /// <summary>
+    /// The projection: read the slot ONCE and apply what it holds to the
+    /// bindable surface — the load state and message, the rows, the
+    /// warnings, the indexes — on the dispatcher.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The effect obligation I3 names for the load path, with its
+    /// validation at DISPATCH: a posted projection reads the slot when
+    /// it runs, not when it was posted, so one queued behind a newer
+    /// load applies the newer load, and one arriving after retirement
+    /// applies nothing. Idempotent, because two deliveries post two of
+    /// them and the second finds its publication already applied.
+    /// </para>
+    /// <para>
+    /// The rows are this object's COHERENT PAST while a reload is in
+    /// flight: the publication has no population then, and the surface
+    /// collapses its projections under Loading anyway, so the rows stay
+    /// until the new ones land or a failure clears them — presentation
+    /// outside the chain, as the design says.
+    /// </para>
+    /// </remarks>
+    private void ApplyPublication()
     {
-        CanvasOpenInfo info;
-        CanvasOutlineRow[] outline;
-        CanvasTableRow[] tableRows;
-        CanvasScene scene;
-        try
+        CanvasPublication current = _slot.Current;
+        if (current.Retired || ReferenceEquals(current, _applied))
         {
-            lock (_ffiLock)
-            {
-                if (Volatile.Read(ref _generation) != generation)
-                {
-                    return;
-                }
-                CloseHandleLocked();
-                info = _session.OpenCanvas(Path);
-                if (info.Degraded)
-                {
-                    // Read-only by construction (contract A3): nothing
-                    // will use the handle, so release it now rather
-                    // than holding native state until teardown.
-                    _session.CloseCanvas(info.Handle);
-                    CanvasOpenInfo degraded = info;
-                    Post(() =>
-                    {
-                        if (Volatile.Read(ref _generation) != generation)
-                        {
-                            return;
-                        }
-                        PublishEmpty();
-                        Warnings = degraded.Warnings;
-                        StateMessage = ParseErrorDetail(degraded.Warnings);
-                        State = CanvasLoadState.ParseError;
-                        OutlinePublished?.Invoke(this, EventArgs.Empty);
-                    });
-                    return;
-                }
-                _handle = info.Handle;
-                outline = _session.CanvasOutline(info.Handle);
-                tableRows = _session.CanvasTableRows(info.Handle);
-                scene = _session.CanvasScene(info.Handle);
-            }
-        }
-        // Not just VaultException (m6): the scheduler's contract is that
-        // bodies catch their own failures, and a panic-class uniffi
-        // exception escaping here faults the tracked task silently and
-        // leaves the tab reading "Opening canvas…" forever. Anything the
-        // process cannot survive still propagates.
-        catch (Exception exception) when (
-            exception is not OutOfMemoryException
-                and not StackOverflowException
-                and not AccessViolationException)
-        {
-            Post(() =>
-            {
-                if (Volatile.Read(ref _generation) != generation)
-                {
-                    return;
-                }
-                PublishEmpty();
-                Warnings = [];
-                StateMessage = _retargetedFrom is { } from
-                    ? CanvasPhrase.RetargetAbsent(from, Path, exception)
-                    : CanvasPhrase.OpenFailed(Path, exception);
-                State = _retargetedFrom is null
-                    ? CanvasLoadState.Failed
-                    : CanvasLoadState.RetargetAbsent;
-                OutlinePublished?.Invoke(this, EventArgs.Empty);
-            });
             return;
         }
-        CanvasOpenInfo opened = info;
-        Post(() =>
+        CanvasPublication? was = _applied;
+        _applied = current;
+        _applying = true;
+        try
         {
-            if (Volatile.Read(ref _generation) != generation)
-            {
-                return;
-            }
-            PublishReady(opened, outline, tableRows, scene);
-        });
+            Apply(current, was);
+        }
+        finally
+        {
+            _applying = false;
+        }
+    }
+
+    private void Apply(CanvasPublication current, CanvasPublication? was)
+    {
+        switch (current.LoadState)
+        {
+            case CanvasLoadState.Loading:
+                StateMessage = null;
+                State = CanvasLoadState.Loading;
+                break;
+            case CanvasLoadState.Ready:
+                // Ready names a population by construction — the
+                // acceptance writes both in one swap — and the same
+                // population under a later publication (an intent moved)
+                // is already on screen.
+                if (current.Loaded is not { } loaded)
+                {
+                    break;
+                }
+                if (!ReferenceEquals(loaded.Population, was?.Population))
+                {
+                    PublishReady(loaded.Population, loaded.Unit);
+                    break;
+                }
+                if (!ReferenceEquals(loaded.Unit, was?.Unit)
+                    && loaded.Unit.Answer
+                        is CanvasAnswerState.Answered or CanvasAnswerState.Failed)
+                {
+                    // A filter completion's successor unit (task T6):
+                    // same population, new projection. PENDING
+                    // successors keep their rows verbatim — a promotion
+                    // rebuild would repaint identical rows (T6 review) —
+                    // so only a landed answer, or its failure, rebuilds
+                    // the surfaces; and that is the debounced count's
+                    // moment to speak.
+                    OutlinePublished?.Invoke(this, EventArgs.Empty);
+                    Navigator.AnnounceFilterCount();
+                }
+                break;
+            default:
+                if (was?.LoadState != current.LoadState
+                    || was.LoadMessage != current.LoadMessage)
+                {
+                    PublishEmpty();
+                    Warnings = [];
+                    _preservedCount = 0;
+                    StateMessage = current.LoadMessage;
+                    State = current.LoadState;
+                    OutlinePublished?.Invoke(this, EventArgs.Empty);
+                }
+                break;
+        }
+    }
+
+    /// <summary>The UI-originated intents, published as they change —
+    /// captured BEFORE the gate, because a transform that read the live
+    /// selection would be reading C-lite state inside it (I4).</summary>
+    private void PublishIntent(string? property)
+    {
+        if (_applying)
+        {
+            // The apply's own seats are not user intents: a failure
+            // clearing the selection must not erase the durable intent
+            // the NEXT load's rebase exists to resolve — "a node that
+            // comes back on the next load should come back selected"
+            // (the T3 review's fourth finding).
+            return;
+        }
+        switch (property)
+        {
+            case nameof(CanvasSelection.Selected):
+                string? selected = Selection.Selected;
+                _ = _slot.Publish(s => s.Retired ? null : s.WithSelectedIntent(selected));
+                break;
+            case nameof(CanvasSelection.ActiveSurface):
+                CanvasSurfaceKind surface = Selection.ActiveSurface;
+                _ = _slot.Publish(s => s.Retired ? null : s.WithActiveSurface(surface));
+                break;
+            case nameof(CanvasSelection.Marked):
+                ImmutableHashSet<string> marked = CanvasModelCopy.Ids(Selection.Marked);
+                _ = _slot.Publish(s => s.Retired ? null : s.WithMarkedIntent(marked));
+                break;
+            default:
+                break;
+        }
     }
 
     private void PublishEmpty()
     {
         _rows.Clear();
         _targets.Clear();
-        _subpaths.Clear();
+        _subpaths = System.Collections.Immutable.ImmutableDictionary<string, string>.Empty;
         _neighbors.Clear();
-        // A read cache never outlives the rows it describes (contract
-        // C10): the memoized match set names ids that are about to stop
-        // existing, and a stale answer that still LOOKS like an answer is
-        // the filter's own second failure mode.
-        _filterMatchCache = null;
         WhereAmIText = null;
         Outline = [];
         TableRows = [];
         Selection.Selected = null;
     }
 
-    private void PublishReady(
-        CanvasOpenInfo info,
-        IReadOnlyList<CanvasOutlineRow> outline,
-        IReadOnlyList<CanvasTableRow> tableRows,
-        CanvasScene scene)
+    private void PublishReady(CanvasPopulation population, CanvasProjectionUnit unit)
     {
         _rows.Clear();
         _targets.Clear();
-        _subpaths.Clear();
+        _subpaths = System.Collections.Immutable.ImmutableDictionary<string, string>.Empty;
         _neighbors.Clear();
-        _filterMatchCache = null;
         WhereAmIText = null;
-        foreach (CanvasOutlineRow row in outline)
+        foreach (CanvasOutlineRow row in population.Outline)
         {
             _rows[row.NodeId] = row;
         }
-        foreach (CanvasTableRow row in tableRows)
+        foreach (CanvasTableRow row in population.Table)
         {
             _targets[row.NodeId] = row.Target;
         }
-        foreach (CanvasSceneNode node in scene.Nodes)
-        {
-            if (node.Subpath is { Length: > 0 } subpath)
-            {
-                _subpaths[node.NodeId] = subpath;
-            }
-        }
-        Warnings = info.Warnings;
-        Outline = outline;
-        TableRows = tableRows;
+        // Aliased, not copied: the population's index is immutable and
+        // already keyed the way this reads it (the cleanup pass).
+        _subpaths = population.Subpaths;
+        Warnings = population.Warnings;
+        // The population derives this from its own warnings; the VM
+        // captures it once per load instead of recounting per binding
+        // read (the cleanup pass).
+        _preservedCount = (int)population.PreservedCount;
+        Outline = population.Outline;
+        TableRows = population.Table;
         StateMessage = null;
         State = CanvasLoadState.Ready;
         // A reload keeps the selection when the node survived; a
         // selection pointing at a node that is gone would leave every
         // selection-scoped verb acting on nothing (contract A12).
-        if (Selection.Selected is not { } selected || !_rows.ContainsKey(selected))
+        // Checked against the selection AS IT IS NOW, at apply time —
+        // the user may have moved between the swap and this apply, and
+        // the T3 review caught the rebase's answer clobbering that
+        // move. The rebase's resolution is the FALLBACK: when the
+        // current seat did not survive, the resolved intent is what
+        // comes back, else the first row. Silent seat either way (A12):
+        // the focus lands on the row and the screen reader reads it.
+        if (Selection.Selected is not { } kept || !_rows.ContainsKey(kept))
         {
-            // Silent seat (contract A12): the focus lands on the row
-            // and the screen reader reads it; a CanvasMovedTo on top of
-            // that is the t0 §1.5 doubling rule broken at the first
-            // keystroke of the surface's life.
-            Selection.Selected = outline.Count > 0 ? outline[0].NodeId : null;
+            Selection.Selected = unit.ResolvedSelection
+                ?? (population.Count > 0 ? population.Outline[0].NodeId : null);
         }
         OutlinePublished?.Invoke(this, EventArgs.Empty);
         AnnounceDegradedLoadIfNeeded();
@@ -1334,22 +1586,19 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     {
         try
         {
-            lock (_ffiLock)
+            if (!Query<string?>(handle => _session.CanvasNodeText(handle, nodeId),
+                out string? text))
             {
-                if (_handle is not { } handle)
-                {
-                    Speak(new CanvasA11yEvent.CanvasStatus(
-                        new CanvasStatusNote.NotReadable()));
-                    return null;
-                }
-                string? text = _session.CanvasNodeText(handle, nodeId);
-                if (text is null)
-                {
-                    Speak(new CanvasA11yEvent.CanvasStatus(
-                        new CanvasStatusNote.NotATextCard()));
-                }
-                return text;
+                Speak(new CanvasA11yEvent.CanvasStatus(
+                    new CanvasStatusNote.NotReadable()));
+                return null;
             }
+            if (text is null)
+            {
+                Speak(new CanvasA11yEvent.CanvasStatus(
+                    new CanvasStatusNote.NotATextCard()));
+            }
+            return text;
         }
         catch (VaultException)
         {
@@ -1604,19 +1853,16 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
 
     /// <summary>
     /// Whether the vault knows this target. A session-level identity
-    /// read — it touches no handle — but it runs under <c>_ffiLock</c>
-    /// anyway (contract A17): "every FFI section holds the lock" is a
-    /// rule worth being able to state without an exception, and the cost
-    /// is one uncontended acquire on an activation.
+    /// read that touches no handle, so it has no lease to hold: A17's
+    /// lock is the LEASE's since task T3, and it guards handle
+    /// replacement against handle reads — a rule with nothing to say
+    /// about a call that names no handle.
     /// </summary>
     private bool TargetExistsInVault(string target)
     {
         try
         {
-            lock (_ffiLock)
-            {
-                return _session.CanonicalPath(target) is not null;
-            }
+            return _session.CanonicalPath(target) is not null;
         }
         catch (VaultException)
         {
@@ -1655,77 +1901,139 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// "cleared when the last tab closes".</summary>
     internal override void Shutdown()
     {
-        base.Shutdown();
-        _ = Interlocked.Increment(ref _generation);
-        // M4's last case, the deferred-departure drain with it, and the
-        // stack's own retirement. All of it BEFORE the announcer is
-        // silenced or the restorations would never be spoken — closing
-        // the tab a mode is running in is exactly the departure M4 names,
-        // and a departure still held from a failed commit owes a sentence
-        // too (contract C7).
-        //
-        // FALLIBLE, and retirement is not allowed to depend on it: a
-        // restoration effect is host code and can fault. Without this
-        // guard the announcer below was never silenced, so a coalesced
-        // line stayed queued on a document that no longer exists and
-        // spoke ~200 ms later — the A5 defect reached from the mode side
-        // — and the handle below was never closed either.
+        // U12's sequence (task T3). Step 1: the PRETERMINAL retired
+        // publication — the marker set, everything else retained — so
+        // the retired interval is a published model state and every
+        // model boundary refuses from here. Step 2: before the base
+        // shutdown (SEAM 3), so the scheduler's refusal can never
+        // precede the model's. Step 3: the T4 seam — the mode stack's
+        // last sentence, the announcer, the durable requests — which
+        // the model neither authorizes nor describes. Step 4, in the
+        // finally: the TERMINAL publication, unconditionally, and the
+        // close of whatever lease it un-named, under that lease's own
+        // lock and off the dispatcher in production.
+        _ = _slot.Publish(s => s.WithRetired());
         try
         {
-            Modes.Shutdown();
+            base.Shutdown();
+            // M4's last case, the deferred-departure drain with it, and
+            // the stack's own retirement. All of it BEFORE the announcer
+            // is silenced or the restorations would never be spoken —
+            // closing the tab a mode is running in is exactly the
+            // departure M4 names, and a departure still held from a
+            // failed commit owes a sentence too (contract C7).
+            //
+            // FALLIBLE, and retirement is not allowed to depend on it: a
+            // restoration effect is host code and can fault. Without
+            // this guard the announcer below was never silenced, so a
+            // coalesced line stayed queued on a document that no longer
+            // exists and spoke ~200 ms later — the A5 defect reached
+            // from the mode side — and the handle below was never
+            // closed either.
+            try
+            {
+                Modes.Shutdown();
+            }
+            catch (Exception exception) when (
+                exception is not OutOfMemoryException
+                    and not StackOverflowException
+                    and not AccessViolationException)
+            {
+                HostLog.Write(HostDiagnosticEvent.CanvasModeTeardownFailed, exception);
+            }
+            WhereAmIText = null;
+            // Every retirement route reaches here — the release sweep,
+            // the retarget, the vault-close drain — so this is the one
+            // place the announcer has to be silenced (contract A5): a
+            // coalesced line queued on a dying document would otherwise
+            // fire ~200 ms later and speak about a surface that no
+            // longer exists.
+            _announcer.Shutdown();
+            // BOTH durable requests, because they are twins and a
+            // retirement that dropped one of them was the shape this
+            // review found.
+            FocusRequest = null;
+            FilterFocusRequest = null;
+        }
+        finally
+        {
+            if (CanvasLeaseTransfer.Terminalize(_slot) is { } unnamed)
+            {
+                if (IsSynchronousForTests)
+                {
+                    CloseGuarded(unnamed);
+                }
+                else
+                {
+                    _asyncClose = Task.Run(() => CloseGuarded(unnamed));
+                }
+            }
+        }
+    }
+
+    private static void CloseGuarded(CanvasHandleLease lease)
+    {
+        try
+        {
+            _ = lease.Close();
         }
         catch (Exception exception) when (
             exception is not OutOfMemoryException
                 and not StackOverflowException
                 and not AccessViolationException)
         {
-            HostLog.Write(HostDiagnosticEvent.CanvasModeTeardownFailed, exception);
-        }
-        WhereAmIText = null;
-        // Every retirement route reaches here — the release sweep, the
-        // retarget, the vault-close drain — so this is the one place the
-        // announcer has to be silenced (contract A5): a coalesced line
-        // queued on a dying document would otherwise fire ~200 ms later
-        // and speak about a surface that no longer exists.
-        _announcer.Shutdown();
-        // BOTH durable requests, because they are twins and a retirement
-        // that dropped one of them was the shape this review found.
-        FocusRequest = null;
-        FilterFocusRequest = null;
-        if (IsSynchronousForTests)
-        {
-            CloseHandleGuarded();
-            return;
-        }
-        _asyncClose = Task.Run(CloseHandleGuarded);
-    }
-
-    private void CloseHandleGuarded()
-    {
-        try
-        {
-            lock (_ffiLock)
-            {
-                CloseHandleLocked();
-            }
-        }
-        catch (Exception exception) when (
-            exception is VaultException or ObjectDisposedException)
-        {
-            // Teardown race: the session died first — the handle died
-            // with it.
+            // Teardown race, or a panic out of the FFI — either way the
+            // attempt is on the record, and a faulted close task here
+            // would fault the vault-close drain over a handle that is
+            // already unusable. PanicException is a UniffiException,
+            // not a VaultException, which is why the filter is the
+            // survivable set rather than the narrow pair (T3 review).
         }
     }
 
-    internal Task WhenHandleClosed() => _asyncClose ?? Task.CompletedTask;
+    /// <summary>Every native handle this document could still hold is
+    /// closed: the terminal close, and any tracked delivery whose finally
+    /// closes a handle it opened mid-flight — the drain the workspace
+    /// awaits before the session disposes (INV-2).</summary>
+    internal Task WhenHandleClosed() =>
+        Task.WhenAll(_asyncClose ?? Task.CompletedTask, WhenWorkDrained());
 
-    private void CloseHandleLocked()
+    /// <summary>The pipeline's view of this document's session: the five
+    /// FFI calls, and the two pieces of host prose the pipeline
+    /// publishes on the document's behalf (contract A3's states and
+    /// messages).</summary>
+    private sealed class SessionSource(CanvasDocumentViewModel document) : ICanvasLoadSource
     {
-        if (_handle is { } handle)
-        {
-            _handle = null;
-            _session.CloseCanvas(handle);
-        }
+        public CanvasOpenInfo Open() => document._session.OpenCanvas(document.Path);
+
+        public void Close(ulong handle) => document._session.CloseCanvas(handle);
+
+        public CanvasOutlineRow[] Outline(ulong handle) => document._session.CanvasOutline(handle);
+
+        public CanvasTableRow[] TableRows(ulong handle) =>
+            document._session.CanvasTableRows(handle);
+
+        public CanvasScene Scene(ulong handle) => document._session.CanvasScene(handle);
+
+        public CanvasLoadFailure FailureFor(Exception exception) =>
+            document._retargetedFrom is { } from
+                ? new(
+                    CanvasLoadState.RetargetAbsent,
+                    CanvasPhrase.RetargetAbsent(from, document.Path, exception))
+                : new(CanvasLoadState.Failed, CanvasPhrase.OpenFailed(document.Path, exception));
+
+        public CanvasLoadFailure ParseError(IReadOnlyList<CanvasLoadWarning> warnings) =>
+            new(CanvasLoadState.ParseError, ParseErrorDetail(warnings));
+    }
+
+    /// <summary>The machine's one FFI call, through this document's
+    /// session — core's <c>canvas_filter</c> (0b-13/0b-14): title, the
+    /// kind type word, any one element of the group path, and the
+    /// activation target, the needle passed untrimmed.</summary>
+    private sealed class FilterSource(CanvasDocumentViewModel document) : ICanvasFilterSource
+    {
+        public string[] Match(ulong handle, string needle) =>
+            document._session.CanvasFilter(handle, needle);
     }
 }
 

@@ -2402,6 +2402,98 @@ public sealed class CanvasDocumentTests : IDisposable
         ready.Shutdown();
     });
 
+    /// <summary>
+    /// A failure does not erase the durable selection intent: the
+    /// failed load clears the SEAT — there are no rows — but the next
+    /// successful load's rebase resolves the intent and the selection
+    /// comes back (task T3; the design's "a node that comes back on the
+    /// next load should come back selected").
+    /// </summary>
+    [Fact]
+    public void AFailedLoadKeepsTheSelectionIntentForTheNextOne()
+    {
+        string board = Path.Combine(_fixture.Root, "board.canvas");
+        string moved = Path.Combine(_fixture.Root, "board.canvas.away");
+        CanvasDocumentViewModel document = NewDocument("board.canvas");
+        document.Load();
+        document.SelectNode("evidence", announce: false);
+        Assert.Equal("evidence", document.Selection.Selected);
+
+        File.Move(board, moved);
+        try
+        {
+            document.Load();
+            Assert.Equal(CanvasLoadState.Failed, document.State);
+            Assert.Null(document.Selection.Selected);
+        }
+        finally
+        {
+            File.Move(moved, board);
+        }
+
+        document.Load();
+        Assert.Equal(CanvasLoadState.Ready, document.State);
+        Assert.Equal("evidence", document.Selection.Selected);
+        document.Shutdown();
+    }
+
+    /// <summary>
+    /// The clear APPLIES its widen (task T6, after its review): with the
+    /// keystroke's publication left unapplied, the next needle's
+    /// in-flight window showed the cleared filter's rows and count — a
+    /// retired needle's answer under the new one.
+    /// </summary>
+    [Fact]
+    public void TheClearAppliesItsWidenSoTheNextKeystrokeCannotResurrectOldRows()
+    {
+        CanvasDocumentViewModel document = NewDocument("board.canvas");
+        document.Load();
+        document.FilterText = "question";
+        Assert.Equal(CanvasAnswerState.Answered, document.AppliedFilterAnswerForTests);
+        _ = Assert.Single(document.FilteredOutline);
+
+        document.FilterText = " ";
+
+        Assert.Equal(CanvasAnswerState.Unfiltered, document.AppliedFilterAnswerForTests);
+        Assert.False(document.Filter.Narrowed, "the widen is applied, not just published.");
+        Assert.Equal(document.Outline.Count, document.FilteredOutline.Count);
+
+        document.FilterText = "evidence";
+        Assert.Equal(CanvasAnswerState.Answered, document.AppliedFilterAnswerForTests);
+        _ = Assert.Single(document.FilteredOutline);
+        document.Shutdown();
+    }
+
+    /// <summary>
+    /// SEAM 3's ordering, pinned at the source: the retired publication
+    /// precedes the base shutdown in <c>Shutdown</c>, so a load issued
+    /// between the two is refused by the model rather than silently
+    /// dropped by the scheduler (task T3). Reversing the writes returns
+    /// the silent drop — a request published onto a document whose
+    /// worker will never run — and the window between two adjacent
+    /// writes is not one a barrier can be put into, so the order is
+    /// asserted where it lives, the way the render predicate is.
+    /// </summary>
+    [Fact]
+    public void TheRetiredPublicationPrecedesTheBaseShutdown()
+    {
+        string source = File.ReadAllText(Path.Combine(
+            SourceText.RepoRoot(), "apps", "slate-windows", "src", "SlateWindows",
+            "Canvas", "CanvasDocumentViewModel.cs"));
+        int shutdown = source.IndexOf(
+            "internal override void Shutdown()", StringComparison.Ordinal);
+        Assert.True(shutdown >= 0, "premise: the teardown method moved.");
+        int retired = source.IndexOf(
+            "_slot.Publish(s => s.WithRetired())", shutdown, StringComparison.Ordinal);
+        int baseShutdown = source.IndexOf("base.Shutdown();", shutdown, StringComparison.Ordinal);
+        Assert.True(retired >= 0 && baseShutdown >= 0, "premise: a write moved out of the teardown.");
+        Assert.True(
+            retired < baseShutdown,
+            "the base shutdown precedes the retired publication: a load issued in "
+            + "between is accepted by the model and dropped by the scheduler — the "
+            + "silent drop SEAM 3 exists to make impossible.");
+    }
+
     // --- M3: the production scheduling mode's own interleavings -------------
 
     /// <summary>

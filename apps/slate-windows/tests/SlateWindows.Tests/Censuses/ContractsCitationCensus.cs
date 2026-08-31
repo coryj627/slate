@@ -60,9 +60,61 @@ public sealed class ContractsCitationCensus
             (
                 "C",
                 "## PR C — the navigator, the mode stack",
-                "## §W-G canonical-consumption audit",
+                // Terminated by §C-unit for §B's reason, one section
+                // later: a section inserted between §C and its old
+                // terminator would otherwise be read as part of §C, and
+                // the retired-vocabulary scan would silently widen with
+                // it.
+                "## PR C-unit — the coherent projection unit",
                 8_000,
                 30),
+            (
+                "C-unit",
+                "## PR C-unit — the coherent projection unit",
+                "## §W-G canonical-consumption audit",
+                6_000,
+                // The floor moved when the section did. It was 3 while
+                // §C-unit was a DESIGN whose own types were deliberately
+                // in plain text; task T1 built eight of them and bound
+                // the names, and a floor below the population is a
+                // decorative floor.
+                //
+                // The number needs one caveat, because getting it wrong
+                // is easy in a way that looks right: this arm counts
+                // OCCURRENCES, not distinct names. §C-unit cited 21
+                // occurrences before T1 bound anything, so any floor at
+                // or below 21 — including one chosen by counting the
+                // eight new NAMES — would be satisfied with every T1
+                // citation removed, which is the decorative floor with
+                // extra steps. 30 sat above the pre-T1 population and
+                // below the then-current 37, so un-binding T1's names
+                // failed while ordinary prose churn did not.
+                //
+                // T2 bound the lease, the population, the unit and the
+                // ownership transfer, taking the section to 50. Same
+                // rule one task later: 40 sits above the pre-T2
+                // population of 37, so un-binding T2's four names fails
+                // too. Each task raises this above what the section
+                // carried BEFORE it — the only reading under which the
+                // floor guards that task's work rather than its
+                // predecessors'.
+                //
+                // T3 bound the pipeline and its types, taking the
+                // section to 59. 55 sits above the pre-T3 population
+                // of 50 — the same rule, a third time.
+                //
+                // T6 bound the machine and its types, taking the
+                // section to 69; 62 sits above the pre-T6
+                // population of 59 — a fourth time.
+                //
+                // T4 bound the census and re-cited the walls it
+                // guards, taking the section to 75; 71 sat above
+                // the pre-T4 population of 69 — a fifth time.
+                //
+                // The cleanup pass recorded its changes and their
+                // owners, taking the section to 95; 76 sits above
+                // the pre-pass population of 75 — a sixth time.
+                76),
         ];
 
     public static TheoryData<string, string, string> SectionRanges
@@ -709,6 +761,10 @@ public sealed class ContractsCitationCensus
         (
             "§C",
             "## PR C — the navigator, the mode stack",
+            "## PR C-unit — the coherent projection unit"),
+        (
+            "§C-unit",
+            "## PR C-unit — the coherent projection unit",
             "## §W-G canonical-consumption audit"),
         (
             "divergences",
