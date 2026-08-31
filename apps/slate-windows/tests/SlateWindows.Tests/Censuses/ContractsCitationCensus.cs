@@ -132,7 +132,13 @@ public sealed class ContractsCitationCensus
                 // each implementation task raises it above what the
                 // section carried before that task, as §C-unit's tasks
                 // did.
-                10),
+                //
+                // TD-1 bound the engine, the viewport value, the
+                // presentation state and the battery's sentinels,
+                // taking the section to 28; 20 sits above the
+                // pre-task population of 18 — the §C-unit rule's
+                // first application in §D.
+                20),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

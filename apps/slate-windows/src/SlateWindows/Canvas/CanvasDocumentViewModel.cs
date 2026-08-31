@@ -474,6 +474,13 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// this, never on property-change granularity.</summary>
     public event EventHandler? OutlinePublished;
 
+    /// <summary>The post-apply notification (§D ID-1): raised after
+    /// EVERY apply, from whatever thread the apply ran on, carrying
+    /// the publication that is now applied. The presentation engine
+    /// subscribes and marshals itself — the document does not promise
+    /// a thread here, and saying so is the contract.</summary>
+    internal event Action<CanvasPublication>? PublicationApplied;
+
     /// <summary>The surface switch landed — the workspace writes the
     /// persisted token for every tab on this path (contract A15).</summary>
     internal event EventHandler<CanvasSurfaceKind>? SurfaceChanged;
@@ -1402,6 +1409,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         {
             _applying = false;
         }
+        PublicationApplied?.Invoke(current);
     }
 
     private void Apply(CanvasPublication current, CanvasPublication? was)

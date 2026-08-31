@@ -6779,6 +6779,55 @@ at TD-1. Prose stops arbitrating what code arbitrates better — the
 C-unit sentence, arriving one PR later, at one third the round
 count.
 
+### Implementation record
+
+**TD-1 — the presentation commit, landed.** Three types:
+`CanvasViewportState` (the viewport authority — the pinned constants,
+the one zoom arithmetic every verb routes through, centre
+preservation as a fact, `SameGeometry` as the deduplication
+predicate), `CanvasPresentationState` (the installed value: source,
+viewport, the two service revisions — TD-3 extends it with the peer
+topology), and `CanvasPresentationEngine` (both authorities, the
+dispatcher captured at construction, the production assertion, the
+marshalling intake `OnPublicationApplied`, single-flight builds with
+install-time revalidation, `DiscardedBuildsForTests` as the
+dispositioned instrument). The document gained its post-apply
+notification — `PublicationApplied`, raised after every apply from
+whatever thread ran it, with the thread promise deliberately NOT
+made: the engine marshals itself, which is ID-1's answer to the
+scheduler's recorded inline arm.
+
+**One simplification the facts forced.** The first cut carried a
+pending-request flag beside the running-build flag; the analysis
+that tightened the mid-build fact showed the flag was dead — the
+AUTHORITIES are the pending request, because any arrival that
+matters moves an authority, which makes the running build stale at
+install, and the stale path re-requests from the current pair. ID-2's
+"one replaceable pending build" is structural, not tracked.
+
+**The model census refused the engine, and the refusal was
+correct.** Admitting the three types to the model roster tripped
+three arms at once — the closed world, the authority dispositions,
+and the writer arm, which named the engine's publication field
+beside the slot's as a second U1 violation. The engine is PERIPHERY:
+it consumes the applied publication exactly as
+`CanvasDocumentViewModel` does, and its walls belong to TD-7's
+presentation census, not to the model's. Recorded because the
+failure is the design speaking: a §D type that wants into the model
+roster is claiming currency authority, and nothing presentation-side
+may.
+
+**Mutations, each injected into production, the fact failing on its
+own sentence, the restore byte-for-byte:** the neutered thread
+assertion (`ACommitFromAWorkerThreadThrowsTheThreadRule` red); the
+install without revalidation
+(`APublicationLandingMidBuildIsNeverOvertaken` red — the tightened
+assertion, after the first cut's OR would have let the mutant pass);
+the discard without re-request
+(`AViewportCommitDuringAPublicationBuildIsNotLost` red). Eight facts
+green pristine; ID-1 and ID-2 are discharged pending TD-1's review
+round.
+
 ---
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
