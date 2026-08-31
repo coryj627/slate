@@ -6552,8 +6552,26 @@ pane-addressed viewport verbs in the derived C4 inventory (D7/D14);
 (18) the sweep derived from consumers, and §C's m9 repair landed by
 name (D14); (19) lifecycle facts (verification plan).
 
-**Revision 3** — this text. UNFROZEN: round 3 runs against it next,
-with rule 4 armed.
+**Revision 3** — answered round 2; round 3 ran against it.
+
+**Round 3 — NOT SOUND, 5 blockers, 10 majors, 1 minor — AND THE
+RULE-4 STOP TRIPPED.** Codex at the protocol tier, against revision
+3; the reviewer's own first sentence names the trajectory. Three
+consecutive rounds of blockers against one subsystem — the
+presentation commit (D1/D2/D3/D6) — with round 2 counting double
+under rule 5. The round's shape is the C-unit freeze's signature
+arriving one PR later: the blockers are ordering and lifetime
+questions — a TOCTOU window between the revalidation and the swap; a
+discarded build swallowing an independent viewport command; an
+envelope that duplicates the chain it mirrors without proving the
+pair; a selection publication racing the filter machine's
+completion; tombstone retirement — each prose answer generating the
+next prose question about the answer. Findings are HELD, not
+dispositioned: rule 4 makes the response the owner's ruling, and
+this record stops here until it is made. The round also confirmed as
+holding: C6's interim-detail arm, CD-47's open-state pre-emption,
+D7's agreement with C2's four attachment cases, and the retained
+pins of rounds 1 and 2.
 
 ---
 
