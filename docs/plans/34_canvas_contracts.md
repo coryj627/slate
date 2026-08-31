@@ -6084,201 +6084,227 @@ model rather than rewired onto it.
 
 ### Contracts
 
-**D1 — ONE installed presentation state per renderer, and events
-follow the commit.** Each renderer VIEW (one per pane) owns one
-immutable presentation state: the applied render source (D2), the
-committed selection (D6), the filter's match state, the viewport
-(zoom, pan, view size), the DPI, text-scale and theme revisions, and
-the peer topology — materialized descriptors AND the tombstone
-descriptors D3 requires for retained peers. Installed in a single
-reference swap; UIA property and structure events raise AFTER the
-install, each computed from the old-state/new-state pair, never from
-live fields; peers read the installed state and nothing else. A
-viewport command produces a next state exactly as an apply does.
-Builds serialize on the dispatcher LATEST-WINS, and — round 2's
-blocker 1 — winning is decided at the INSTALL, not the enqueue: the
-build carries the identity of the source publication it was built
-from, and immediately before installing it revalidates that identity
-against the document's applied publication; a build whose source has
-been superseded discards itself and the newer build installs. The
-barrier fact publishes C while B's build is in flight and asserts B
-never installs after C lands. The viewport half carries the pinned
-constants: zoom clamped 0.1–4.0 in steps of 1.25, centre-preserving
-scale, fit padding 40 logical pixels (120 for zoom-to-selection),
-follow-selection default ON. The zoom announcement and the container
-Value derive from the same commit, so the spoken percentage and the
-reported one cannot disagree. This is the periphery ledger's T1
-remedy taken for THIS surface at birth; the T1 row stays open for the
+**D1 — TWO authorities, ONE dispatcher turn, and events follow the
+commit.** Round 3 dissolved revision 3's race by naming what the
+renderer actually reads: two dispatcher-committed authorities — the
+document's APPLIED publication (committed by the apply, on the
+dispatcher, never by the slot's worker-thread swap) and the
+renderer's VIEWPORT value (zoom, pan, view size — a small immutable
+value each viewport command commits on the dispatcher BEFORE any
+build is queued, so no build ever owns a viewport delta and a
+discarded build cannot swallow a zoom; round 3, blocker 2). A
+presentation BUILD derives pure over a snapshot of the pair — the
+expensive derivation may run off-thread — and its COMMIT is one
+dispatcher turn: re-read both current authorities, install only if
+the snapshot is still current, else yield to the freshest queued
+build; and because applies, viewport commits and presentation
+commits all mutate their authorities ON the dispatcher, the
+check-and-swap is same-thread-linearized and the TOCTOU window of
+round 3's blocker 1 does not exist — there is no thread on which an
+authority can move between the final check and the swap. The
+installed state carries the render source (D2), the peer topology
+(D3's descriptor index, materialized set and tombstones), and the
+DPI, text-scale and theme revisions; selection and filter state are
+DERIVED accessors over the render source's unit (round 3, blocker
+3 — not carried twice). UIA property and structure events raise
+after the install, from the old/new pair; peers read the installed
+state and nothing else. The barrier facts cover BOTH orders:
+publication C landing during B's build, and a viewport commit
+landing during a publication build. The viewport constants: zoom
+clamped 0.1–4.0 in steps of 1.25, centre-preserving, fit padding 40
+logical pixels (120 for zoom-to-selection), follow-selection default
+ON. The zoom announcement and the container Value ride the commit
+that first carries the new viewport revision, so the spoken and
+reported percentages cannot disagree. This is the periphery T1
+remedy taken for this surface at birth; the row stays open for the
 surfaces that predate the model.
 
-**D2 — ONE applied render source, sealed, and its algebra said
-exactly.** Round 2 sharpened round 1's seam into an envelope: the
-model deliberately keeps no render geometry (`CanvasPopulation`
-consumes scene nodes for its subpath index and discards rectangles
-and edges), the renderer may not re-query the live handle, so the
-load pipeline — while it holds the open handle — DEEP-COPIES the FFI
-scene into a sealed, host-owned, immutable scene value (I7's
-copy-not-alias wall extended: no FFI collection is stored or exposed,
-and the construction census gains the scene's wall exactly as it
-guards the population's). Population, applied unit and scene reach
-the renderer as ONE applied render-source object, so a torn pair is
-unrepresentable rather than refused-at-runtime; a defensive rejection
-(a malformed successor) RETAINS the last complete state and raises no
-UIA events — the visual arm never goes blank on a document that
-reports Ready. The algebra, precisely (round 2, major 7): every
-publication TRANSFORM allocates a fresh publication — I5 unchanged —
-while the scene is population-CLASS state: allocated once per load,
-deliberately retained BY IDENTITY across the same-population
-successors that filter, intent and unit publications produce, and
-replaced only when the population is. This extends C-unit CODE
-through the implementation loop with its own facts and census rows —
-the sanctioned direction; the freeze closed the prose, not the
-model's growth.
+**D2 — The scene rides the population, and the pair is
+unrepresentable apart.** Round 3's blocker 3 refused revision 3's
+envelope for duplicating the chain the model already binds, and the
+refusal is adopted: there is no third carrier. The load pipeline —
+while it holds the open handle — DEEP-COPIES the FFI scene into a
+sealed, host-owned, immutable scene value (I7's copy-not-alias wall
+extended; no FFI collection is stored or exposed; the construction
+census gains the scene's wall) and the scene is a FIELD OF
+`CanvasPopulation`, constructed with it, immutable ever after — so
+population and scene cannot disagree because they are one object,
+and population, unit and their binding stay exactly where the
+ratified chain put them: `CanvasLoaded`. The renderer's render
+source IS the applied publication's chain; no §D type re-carries
+it. The scene's algebra: every publication transform allocates a
+fresh publication (I5 unchanged) while the population — scene
+included — is load-class state, allocated once per load and
+deliberately retained by identity across same-population
+successors. A malformed successor is a RENDERER FAILURE STATE: the
+visual arm shows its failure pane — message, not stale rows; a
+reader is never left interacting with a canvas the document no
+longer reports (round 3, blocker 3's tail). This extends C-unit
+CODE through the implementation loop with its own facts and census
+rows — the sanctioned direction.
 
-**D3 — Peers: identity, lifetime, and the placeholder's state table.**
-The container peer is a Group/Pane named "Canvas visual view",
-exposing THREE patterns: Selection, the item-container pattern for
-find-by-property over unrealized cards, and a READ-ONLY value
-provider whose Value is "Zoom N percent" — declared as a pattern with
-its property-change event raised from D1's old/new pair, because a
-custom peer exposes no value read automatically (round 2, major 14;
-DD-5). Peer IDENTITY is scoped to (renderer instance, document,
-node) — round 2's blocker 3: two panes showing one document hold two
-peers for one card, each with its own parent, rectangle and
-addressing, and closing one pane invalidates only its own. Within one
-renderer the identity is stable across materialization round trips: a
-card's peer is the SAME object before and after a window pass, which
-is what makes a client's retained reference survive. The LIFETIME
-rule is a state table (round 2, blocker 2 and major 9), and the
-installed state carries it: a MATERIALIZED descriptor backs the full
-peer — Button control type, Name per D5, Invoke, SelectionItem,
-bounding rectangle in screen coordinates recomputed on every pan,
-zoom and resize; a TOMBSTONE descriptor backs a retained peer whose
-card left the window — present in every successor state so the peer
-still reads the CURRENT installed state (D1's single-readable-state
-rule holds; nothing answers from history), exposing the
-virtualized-item pattern ALWAYS, its identifying properties from the
-tombstone, and its action patterns unavailable until realization;
-REALIZATION atomically promotes that same peer — the realize call
-pans the viewport, the next installed state carries the materialized
-descriptor, and the promoted peer answers in full. A peer whose card
-left the DOCUMENT, or whose pane closed, refuses with the platform's
-element-not-available error. Structure changes raise the container's
-children-invalidated event once per installed state. The external
-peer registry holds identity only — no descriptor, no state — so
-nothing outside the installed state can answer a read. Labelled
-connections contribute one peer each (Name and Invoke per D5);
-unlabelled edges are not peers (DD-2).
+**D3 — Peers: a THREE-cell state table, discriminated identity, and
+retirement said out loud.** The container peer is a Group/Pane named
+"Canvas visual view", exposing Selection, the item-container pattern,
+and a READ-ONLY value provider whose Value is "Zoom N percent"
+(DD-5), its property-change event raised from D1's old/new pair.
+Peer IDENTITY is scoped and DISCRIMINATED: (renderer instance,
+document, CARD node id) for cards, (renderer instance, document,
+EDGE id) for labelled edges — round 3, major 8: a node-only key
+cannot tell twin parallel edges apart. Two panes hold two peers for
+one card; closing a pane invalidates only its own. The state table
+has THREE cells (round 3, major 4), and the installed state backs
+every one: UNREALIZED — no peer object exists yet; the installed
+state carries a population-wide immutable DESCRIPTOR INDEX (id,
+name, kind, geometry from the population's scene), so a first-touch
+find-by-property answers from the index and mints the placeholder
+without mutating outside the state; PLACEHOLDER — a peer whose card
+or edge is outside the window, or was retained across
+dematerialization: virtualized-item pattern ALWAYS, identifying
+properties from its descriptor, action patterns unavailable until
+realization; MATERIALIZED — the full peer: Button control type for
+cards, Name per D5, Invoke, SelectionItem, screen-coordinate
+rectangle recomputed on every pan, zoom and resize. REALIZATION
+atomically promotes the same peer object; a peer whose card left
+the document or whose pane closed refuses with the platform's
+element-not-available answer. RETIREMENT is a rule, not a leak
+(round 3, major 7): peer identities commit only with a WINNING
+install — a discarded build's topology work is discarded whole; the
+registry holds weak identity only; a tombstone is carried forward
+only while its peer is materialized-adjacent or externally live,
+and is pruned otherwise, so state size tracks the window and the
+live client references, not every card ever seen. EDGES window like
+cards (round 3, major 8's tail — the spec's "visible" qualifier
+restored): a labelled edge materializes when either endpoint is in
+the window, is a placeholder when retained off-window, and follows
+the same three cells. Structure changes raise the container's
+children-invalidated event once per installed state.
 
 **D4 — Windowing, the never-dead-end rule, whose pan it is, and the
 filter DIMS.** Cards are materialized for the viewport plus one
 viewport's margin. Keyboard navigation, selection calls and
-virtualized realization past the materialized edge are answered, not
-refused: the target card's peer realizes, the viewport pans to
+virtualized realization past the materialized edge are answered,
+not refused: the target's peer realizes, the viewport pans to
 contain it, the pan materializes the next window. The pan rule is
 ORIGIN-SENSITIVE (mac's rule, pinned): a selection made ON this
 surface — keyboard, Invoke, SelectionItem, realization — always
-scrolls into view, toggle or no toggle (2.4.11); a selection arriving
-from ANOTHER surface pans only while follow-selection is ON, so the
-toggle's sentence is true exactly when it speaks. And the filter
-NARROWS NOTHING HERE (round 2, major 11 — the §C pin this section
-briefly lost): the visual arm renders the FULL scene and keeps every
-card's peer; the applied unit supplies match state, and a
-filtered-out card draws DIMMED, hit-tests, and reports its unmatched
-state through the peer — the row inventory never shrinks. The
-pinning facts run the 2,000-node fixture, walk selection off the
-materialized edge, assert both toggle states against both origins,
-and drive the filter fixture through drawing, hit-testing and UIA.
+scrolls into view, toggle or no toggle (2.4.11); a selection
+arriving from ANOTHER surface pans only while follow-selection is
+ON, so the toggle's sentence is true exactly when it speaks. And
+the filter NARROWS NOTHING HERE: the visual arm renders the FULL
+scene and keeps every card's peer; the applied unit supplies match
+state, and a filtered-out card draws DIMMED, hit-tests, and reports
+its unmatched state through the peer — the row inventory never
+shrinks. The pinning facts run the 2,000-node fixture, walk
+selection off the materialized edge, assert both toggle states
+against both origins, and drive the filter fixture through drawing,
+hit-testing and UIA.
 
-**D5 — One name namespace, every peer class, and the edge said
-completely.** Name uniqueness is GLOBAL across the container, every
-card and every labelled edge — round 2, major 12: intra-class rules
-let a card titled "Canvas visual view" collide with the container.
-Final names are allocated in one pass over the installed state:
-cards take core's speakable name; the container's name is reserved;
-edges compose deterministically and SELECTION-INDEPENDENTLY (round
-2, major 13) — source endpoint's speakable name, the direction
-phrase, the label — so the name never depends on what is selected;
-and any residual collision in any class appends the core-ordered
-ordinal. Core exposes ordered scene edges and no name-composition
-API; the composition is therefore HOST work, authorized here
-explicitly with core's ordering as its only input — presentation
-assembled from canonical parts, which is §W-G-clean because no core
-RULE is re-derived. The edge peer's Invoke has one deterministic
-meaning: select the edge's TARGET endpoint (the direction's head),
-whatever is selected — "follow" reads the arrow forward, and the
-announced-selection door narrates the landing. The uniqueness fact
-enumerates every peer on a fixture built to collide three ways:
-twin card titles, twin parallel edges, and a card named after the
-container.
+**D5 — One name namespace, core's phrase for edges, and the end-style
+table.** Name uniqueness is GLOBAL across the container, every card
+and every labelled edge. Cards take core's speakable name; the
+container's name is reserved. An EDGE'S name is core's rendered
+traversal phrase — the same sentence the connection-walk announces,
+INCLUDING the other endpoint (round 3, major 9: a host-composed
+"source, connects-to, label" both dropped the destination and
+re-derived core grammar; the rendered phrase is core's own, so
+§W-G stays clean and two same-label edges from one card to two
+destinations differ by name before any ordinal). Residual
+collisions in any class — including a card whose given title is a
+pre-suffixed spelling of another name (round 3, major 10) — are
+resolved by the SKIP-OCCUPIED loop core's own naming uses: try the
+next ordinal until the spelling is free, so an occupied "…2" never
+double-allocates. The edge peer's INVOKE target is total over the
+shipped edge algebra (round 3, blocker 5), as a literal table over
+the end-style pair, selection-independent, every cell pinned:
 
-**D6 — Selection: one committed value, its doors, and the whole
-pattern matrix.** The surface display authority is `CanvasSelection`;
-the publication carries selection INTENT; the applied unit carries
-the REBASED resolution — and round 2's blocker 4 showed the shipped
-seam updates the first two while the applied resolution lags until
-the next load or filter publication. §D therefore adds, as a code
-extension beside D2's, an atomic SELECTION PUBLICATION: one
-transform that carries the selected intent AND the current
-resolution in the same swap, scheduled by the announced-selection
-door, so the applied state the renderer consumes says what the
-sentence says. The doors: an ANNOUNCED selection — Invoke,
-SelectionItem.Select, a keyboard move, an edge follow — routes
-through the document's one announced entry point, which writes the
-surface authority, publishes the atomic selection, and narrates; a
-SILENT seating — automation focus arriving without a user act —
-routes through the silent twin and narrates nothing. Both commit
-before the next presentation state installs. The PATTERN MATRIX is
-explicit (round 2, major 10): the canvas selection is single —
-CanSelectMultiple false, IsSelectionRequired false (an empty canvas
-has nothing to require); Select replaces; AddToSelection on an
-unselected card while another is selected THROWS the platform's
-invalid-operation answer (single-selection contract — marks are
-§G's vocabulary, not this pattern's); AddToSelection on the already
-selected card and RemoveFromSelection on an unselected one are
+| fromArrow | toArrow | Invoke selects |
+|---|---|---|
+| false | true | the to-node (the arrow's head) |
+| true | false | the from-node (the arrow's head) |
+| false | false | the to-node (undirected: document order) |
+| true | true | the to-node (bidirectional: document order) |
+
+The uniqueness fact enumerates every peer on a fixture built to
+collide four ways: twin card titles, twin parallel same-label
+edges, a card named after the container, and a card pre-named with
+another card's ordinal suffix.
+
+**D6 — Selection: one committed value, its doors, and the machine
+owns the transition.** The surface display authority is
+`CanvasSelection`; the publication carries selection INTENT; the
+applied unit carries the REBASED resolution. Round 3's blocker 6
+caught revision 3's freestanding selection publication racing the
+filter machine's completion, so the transition moves WHERE THE
+MODEL PUTS TRANSITIONS: selection publication is a total event of
+`CanvasFilterMachine`'s state machine — one transform carrying the
+selected intent and the current resolution together — and the
+running match's completion, which already revalidates inside the
+gate, CARRIES FORWARD the current unit's resolved selection instead
+of the one it captured at start, the same carry-forward shape
+`CanvasLeaseTransfer` already ratified for reseeds. A completion
+therefore neither strands the schedule nor overwrites a selection
+that landed mid-match; the fact publishes a selection between a
+match's start and its landing and asserts both survivals. The
+doors are unchanged from revision 3: ANNOUNCED selection — Invoke,
+SelectionItem.Select, a keyboard move, an edge follow — through the
+document's one announced entry point (write the surface authority,
+publish the machine's selection event, narrate); SILENT seating —
+automation focus without a user act — through the silent twin,
+narrating nothing; both commit before the next presentation state
+installs. The PATTERN MATRIX stands as ratified in round 2's answer:
+single selection — CanSelectMultiple false, IsSelectionRequired
+false; Select replaces; AddToSelection on an unselected card while
+another is selected THROWS the platform's invalid-operation answer
+(marks are §G's vocabulary, not this pattern's); AddToSelection on
+the selected card and RemoveFromSelection on an unselected one are
 no-ops; RemoveFromSelection on the selected card clears it,
-announced; realization does not select — it realizes, and selecting
-is the client's next call; automation focus without selection is
-the silent door. Every cell is a fact.
+announced; realization does not select; automation focus without
+selection is the silent door. Every cell is a fact.
 
-**D7 — Every operation is addressed to ITS surface, viewport
-commands included.** Two panes can show one canvas, and the
-navigator's attached presenter is a cache, not the initiating pane.
-A peer belongs to a concrete renderer view in a concrete pane, so a
-peer operation's address is STRUCTURAL: Invoke, Select, realization
-and edge-follow carry their own view's presenter identity from
-construction, and the focus or pan they cause is delivered to THAT
-pane. Viewport COMMANDS need the same address (round 2, major 17):
-zoom, fit and the follow toggle act on one pane's viewport while two
-panes hold two, and a palette invocation leaves keyboard focus in
-the palette — so the viewport verbs resolve their pane as the
-INITIATING renderer when the canvas surface has the keys, else the
-LAST-OWNING renderer for the addressed document, the same
-two-clause rule the chord router already applies, made explicit for
-the pane rather than the document. A retained peer whose pane
-closed refuses with element-not-available (D3). This is the
-periphery T2/T6 SHAPE — initiating surface validated immediately
-before delivery — applied to the read-only slice; the rows close in
-§E/§F.
+**D7 — Every operation is addressed to ITS surface, and the no-pane
+answer is spoken.** A peer belongs to a concrete renderer view in a
+concrete pane; Invoke, Select, realization and edge-follow carry
+their view's presenter identity from construction, and the focus or
+pan they cause is delivered to THAT pane. Viewport COMMANDS resolve
+their pane in two clauses — the INITIATING renderer when the canvas
+surface has the keys, else the LAST-OWNING renderer for the
+addressed document — and round 3's major 11 named the third case
+this rule owed: C2 permits the last owner to be ABSENT (a restored,
+never-focused tab), and a palette invocation initiates from no
+renderer. The verb then answers with the canonical refusal through
+C4's mapping — the no-pane sentence — rather than acting nowhere or
+silently. And the honesty that finding demanded: the last-owner
+clause CONSUMES the inherited presenter authority, so §D's
+read-only slice DOES depend on the periphery's T5 row — recorded in
+D17, not waved away. A retained peer whose pane closed refuses with
+element-not-available (D3).
 
 **D8 — Focus visibility is screen-space and measured.** The
 selection ring draws in a screen-space overlay at minimum 2
 device-independent pixels at ANY zoom. Keyboard focus on the view
 and card selection are visually distinct. Ring contrast is
-APCA-measured against every preset fill and the canvas background,
-in both appearances, as `ThemeTokenContrastTests` rows.
+APCA-measured against every preset fill, the group fill and the
+canvas background, in both appearances, as
+`ThemeTokenContrastTests` rows.
 
 **D9 — Hit-testing and z-order are core's order, consumed.** Topmost
 by DOCUMENT order (t1's tiebreak); groups behind their members
 (#960's insertion rule). The renderer derives z from core's order
 and never re-sorts.
 
-**D10 — Reduce Motion is instant, and the zoom still speaks.** With
-client-area animation off, every viewport transform applies
-instantly. The announcement contract is unchanged either way — the
-percentage speaks and the container Value updates in the same
-commit (D1), because a reader who cannot see the animation is the
-reader the sentence is for.
+**D10 — Transforms are INSTANT in every mode, and the zoom still
+speaks.** Round 3's major 13 found the animated case unowned, and
+the answer is the simple ruling (DD-7): viewport transforms are
+state-jumps in ALL modes — the next installed presentation state
+carries the final geometry, peers, hit-testing and the ring agree
+with it in the same commit, and no intermediate frame is ever an
+installed state. Reduce Motion therefore changes nothing
+structural — there is no tween to suppress — and any visual easing
+is forbidden rather than specified. The announcement contract:
+the percentage speaks and the container Value updates in the
+commit, because a reader who cannot see the motion is the reader
+the sentence is for.
 
 **D11 — Text scaling: one factor, one owner, every run censused, and
 the tooltip's full contract.** Card titles (base 12), edge chips
@@ -6288,45 +6314,48 @@ names the owner: ONE app-level text-scale service reads the
 accessibility registry value, subscribes to the system
 preference-change event, marshals to the dispatcher, and is
 disposable — subscribers detach when a pane closes, the W1-1
-reactive shape including its unsubscribe half. The renderer consumes
-the service through the presentation state's text-scale revision. A
-census walks every canvas text run and refuses one that ignores the
-factor. Chrome outside the canvas has NO scaling source today: the
-canvas surface's own chrome consumes the same service in this PR,
-the checklist verifies no clipping at 225 % across every element the
-canvas tab shows, and shell-wide chrome beyond the canvas tab is
-recorded as out of §D's scope rather than claimed. Labels truncate
-visually with the FULL text in the peer Name and a tooltip whose
-contract is complete (round 2, major 15 restored the spec's pin):
-keyboard FOCUS on the truncated card SUMMONS it — a keyboard user
-can open it, not merely dismiss it — and it meets all three 1.4.13
-conditions: DISMISSIBLE (Esc, through D12's rung), HOVERABLE (the
-pointer travels from label to tooltip without it vanishing),
-PERSISTENT (it stays until dismissed, hover leaves, or the content
-stops being valid). Focus-open, Esc-dismiss, pointer traversal and
-persistence are four separate facts.
+reactive shape including its unsubscribe half. The renderer
+consumes the service through the presentation state's text-scale
+revision. A census walks every canvas text run and refuses one that
+ignores the factor. Chrome outside the canvas has NO scaling source
+today: the canvas surface's own chrome consumes the same service in
+this PR, the checklist verifies no clipping at 225 % across every
+element the canvas tab shows, and shell-wide chrome beyond the
+canvas tab is recorded as out of §D's scope rather than claimed.
+Labels truncate visually with the FULL text in the peer Name and a
+tooltip whose contract is complete: keyboard FOCUS on the truncated
+card SUMMONS it, and it meets all three 1.4.13 conditions —
+DISMISSIBLE (Esc, through D12's rung), HOVERABLE (the pointer
+travels from label to tooltip without it vanishing), PERSISTENT (it
+stays until dismissed, hover leaves, or the content stops being
+valid). Focus-open, Esc-dismiss, pointer traversal and persistence
+are four separate facts.
 
-**D12 — The tooltip's Esc is the SURFACE's, and CD-47 stays the one
-special case.** Round 2's blocker 5 caught revision 2 rebuilding a
-ratified ladder: C6 and t0 M5 order Escape as mode, then filter,
-then the surface's own transients — and CD-47's panel pre-emption is
-the ONE recorded exception, not the first member of a new stack. So
-the tooltip takes no pre-ladder slot: its dismissal lives in C6's
-SURFACE rung, after mode and filter, beside the interim card detail
-that already lives there; with a mode or filter active, Esc answers
-the mode or the filter first, exactly as ratified. Within the
-surface rung, one transient is topmost and one Esc dismisses it.
-CD-47 is untouched.
+**D12 — The tooltip is the surface's, CD-47 stays the one special
+case, and the intra-surface order is executable.** C6 and t0 M5
+order Escape as mode, then filter, then the surface's own
+transients; CD-47's open-panel pre-emption is the ONE recorded
+exception. The tooltip takes no pre-ladder slot: it lives in C6's
+surface rung beside the interim card detail. Round 3's minor 16
+asked for the order INSIDE the rung, and it is literal (DD-3): the
+tooltip is dismissed first, then the interim card detail, then the
+filter seating — most-transient first, one dismissal per press —
+and the arrangement where the tooltip is open on the Where-am-I
+panel's own trigger card is pinned: the OPEN PANEL pre-empts
+(CD-47, open-state not focus-state), the tooltip goes with the
+panel's dismissal turn only if Esc reaches the surface rung with
+both open, tooltip first.
 
-**D13 — The color contract, as a literal table.** Slate-owned token
-keys in ALL THREE dictionaries; dark and light fills are tint 0.18
-composited over the opaque surface token (mac's palette method),
-keeping text at Lc ≥ 75 on every preset AND on a hostile raw-hex
-sample in both appearances. `ThemeTokenContrastTests` rows: fill×text
-for the six fills and the hex sample, ring×fill, ring×background,
-both appearances. The CONTRAST mapping is literal, one row per token,
-GroupFill included (round 2, major 16), and the Contrast census
-derives from this table:
+**D13 — The color contract, as a literal table, measured everywhere
+it draws.** Slate-owned token keys in ALL THREE dictionaries; dark
+and light fills are tint 0.18 composited over the opaque surface
+token (mac's palette method), keeping text at Lc ≥ 75 on every
+preset AND on a hostile raw-hex sample in both appearances.
+`ThemeTokenContrastTests` rows: fill×text for the six fills, the
+GROUP fill and the hex sample; ring×fill for the six fills AND the
+group fill (round 3, major 12 — a selected group is an ordinary
+arrangement, not an exotic one); ring×background; both appearances;
+and the Contrast census derives from the literal table:
 
 | Token | Contrast maps to |
 |---|---|
@@ -6339,41 +6368,47 @@ derives from this table:
 
 Meaning never lives in color alone — the color NAME travels in the
 outline, table and Where-am-I sentences. Runtime switches re-render
-through `ThemeManager`'s resources-changed notification, via the same
-disposable-subscriber shape as D11's service. Evidence: the automated
-rows plus the recorded manual Contrast check across the four built-in
-schemes and one customized scheme — the W8-2 hand-off requires the
-manual half, and user-customized colors are not APCA-gated.
+through `ThemeManager`'s resources-changed notification, via the
+same disposable-subscriber shape as D11's service. Evidence: the
+automated rows plus the recorded manual Contrast check across the
+four built-in schemes and one customized scheme; user-customized
+colors are not APCA-gated.
 
-**D14 — The command rows, the read gate, and the sweep DERIVED, not
-listed.** Three chord rows — zoom in Ctrl+=, zoom out Ctrl+-, actual
-size Ctrl+0 — scope Canvas, focus-routed as mac routes them; fit
-canvas Shift+1 and zoom to selection Shift+2 are VISUAL SURFACE ONLY
-(R2); all five resolve their PANE per D7. Every new verb joins C4's
-never-silent mapping, and the mapping's membership stays DERIVED
-from the command surface — the addressed viewport verbs appear in
-the same source-derived inventory the C4 fact already reads, so a
-verb cannot exist without a row (round 2, major 17's second half).
-The data-dependent arms are enumerated: zoom to selection with NO
-selection answers the canonical no-selection sentence; fit on an
-empty canvas answers; a retained-peer operation on a closed pane
-refuses per D3. The enablement sweep is DERIVED the same way (round
-2, major 18): the flip inventory is every consumer of `showVisual`,
-`VisualShipsLater` and the visual-disabled assertions that a grep of
-the shell and its tests returns at flip time — enumerated today as
-the surface radio's disabled wiring and help text, both workspace
-commands, the registrar comments, the §A registration fact
+**D14 — The command rows, the read gate DERIVED FROM THE REGISTRAR,
+and the enablement census EXECUTABLE.** Three chord rows — zoom in
+Ctrl+=, zoom out Ctrl+-, actual size Ctrl+0 — scope Canvas,
+focus-routed as mac routes them; fit canvas Shift+1 and zoom to
+selection Shift+2 are VISUAL SURFACE ONLY (R2); all five resolve
+their PANE per D7, including D7's spoken no-pane refusal. Round 3's
+major 14 caught the inventory gap: the shipped C4 fact reads public
+`CanvasNavigator` members, and pane-owned viewport verbs could live
+elsewhere and never appear. So the C4 mapping's membership derives
+from the REGISTERED canvas command surface — the registrar's canvas
+rows — with each row bound to its production delivery member, so a
+verb cannot register without a row and cannot deliver except
+through the member its row names. The data-dependent arms are
+enumerated: zoom to selection with NO selection answers the
+canonical no-selection sentence; fit on an empty canvas answers; a
+retained-peer operation on a closed pane refuses per D3; the
+no-pane palette invocation refuses per D7. The enablement sweep is
+an EXECUTABLE CENSUS, not a grep this section performs once (round
+3, major 15): a census class derives the visual-disabled consumer
+set on the house syntax-tree helper — every consumer of
+`showVisual`, `VisualShipsLater` and the visual-disabled
+assertions — requires one disposition row per consumer, and fails
+on both a consumer without a disposition and a disposition without
+a consumer; the flip is complete when the census says so, not when
+this list does. Enumerated today for the reader: the surface
+radio's disabled wiring and help text, both workspace commands, the
+registrar comments, the §A registration fact
 (`ShowVisualRegistersAndStaysDisabledUntilItsProjectionShips`
 becomes the enabled-and-drives fact), the §B switcher facts and
 journeys that assert Visual is disabled, `toggleFollowSelection`
 parity and `chords.json` evidence per B12, and the Canvas VISUAL
-row in `w_c_matrix.md` — with the grep, not this list, arbitrating
-completeness at the flip. And one §C debt lands here by name: §C's
-m9 assigned PR D the silent Ctrl+F-from-the-table-header repair —
-the filter chord answering from the header cell the table's grid
-owns — and it ships in this PR with its fact, not in the section
-after it. C9's headline survives untouched: Commit Mode and Cancel
-Mode remain the two disabled rows until §F.
+row in `w_c_matrix.md`. One §C debt lands here by name: §C's m9
+assigned PR D the silent Ctrl+F-from-the-table-header repair, and
+it ships in this PR with its fact. C9's headline survives: Commit
+Mode and Cancel Mode remain the two disabled rows until §F.
 
 **D15 — Focus order: one stop, and the arrows C1 grants.** The
 renderer is a single focus stop after the surface switcher; cards
@@ -6391,20 +6426,24 @@ first windowed rebuild under 500 ms, a pan's window hop under 100
 ms, a navigator step under 50 ms, measured values recorded in
 `BENCHMARKS.md` beside mac's 3.9 / 2.8 / 0.18.
 
-**D17 — What §D does NOT do, said now.** No mutation (§E's funnel);
-no modes (§F draws over D1's installed state and commits through
-§E); no mark SEMANTICS (the "marked" ItemStatus renders; §G gives it
-meaning); no shell-wide text scaling beyond the canvas tab (D11's
-recorded scope). The ledger, honestly: D1 takes T1's remedy for this
-surface; D2 and D6 extend the model by CODE (the scene envelope, the
-atomic selection publication) through the implementation loop; D7
-applies T2/T6's validation shape to the read-only slice without
-closing either row; T5's divergence stays off this surface because
-the renderer reads only its own committed state; T3 stays §E's.
-B11's exactly-one-projection rule now counts three arms —
+**D17 — What §D does NOT do, and what it DEPENDS ON, said now.** No
+mutation (§E's funnel); no modes (§F draws over D1's installed
+state and commits through §E); no mark SEMANTICS (the "marked"
+ItemStatus renders; §G gives it meaning); no shell-wide text
+scaling beyond the canvas tab (D11's recorded scope). The ledger,
+honestly: D1 takes T1's remedy for this surface; D2 and D6 extend
+the model by CODE (the population's scene field, the machine's
+selection event) through the implementation loop; D7 applies
+T2/T6's validation shape to the read-only slice without closing
+either row — and its last-owner clause CONSUMES the inherited
+presenter authority, so §D DEPENDS on the periphery's T5 row
+rather than staying clear of it (round 3, major 11's correction:
+the dependency is recorded, not denied); T3 stays §E's. B11's
+exactly-one-projection rule now counts three arms —
 `ExactlyOneProjectionIsEverInTheTree` widens rather than gaining a
-sibling — and outside `Ready` the visual arm shows the state message
-pane, never an empty canvas.
+sibling — and outside `Ready` the visual arm shows the state
+message pane (or D2's renderer failure pane), never an empty
+canvas.
 
 ### Decisions
 
@@ -6419,11 +6458,11 @@ no label has no accessible handle, and its existence is readable
 from either endpoint's connection phrases. A peer per unlabelled
 edge on a dense board would bury the cards it connects.
 
-**DD-3 — The tooltip is a SURFACE transient, not a ladder change.**
-Round 2 rejected revision 2's pre-ladder stack as an unratified
-rewrite of C6/M5, and the rejection is adopted: tooltip dismissal
-lives in the surface rung after mode and filter (D12), CD-47 stays
-the one recorded pre-emption, and no new Escape arbiter exists.
+**DD-3 — The tooltip is a SURFACE transient with a literal order.**
+Tooltip, then interim card detail, then filter seating —
+most-transient first, one dismissal per press, in C6's surface rung
+after mode and filter. CD-47 stays the one recorded pre-emption
+(open-state, not focus-state), and no new Escape arbiter exists.
 
 **DD-4 — The text-scale mechanism is an owned service.** Registry
 read plus preference-change subscription, dispatcher-marshalled,
@@ -6432,17 +6471,23 @@ No WPF binding exists, so the census keeps the next text run honest.
 
 **DD-5 — The container's zoom is a declared VALUE PATTERN.** A
 read-only value provider on the container peer, its Value "Zoom N
-percent", its property-change event raised from D1's old/new pair —
-declared because a custom peer surfaces no value read by itself, and
-a journey asserts the pattern is retrievable. Value, not Name: the
-name is the surface's stable identity; the zoom is state a reader
-polls, and mac reports it the same way.
+percent", its property-change event raised from D1's old/new pair,
+and a journey asserts the pattern is retrievable. Value, not Name:
+the name is the surface's stable identity; the zoom is state a
+reader polls, and mac reports it the same way.
 
 **DD-6 — The selection ring maps to the highlight brush in
 Contrast.** The ring is a stroke on the WINDOW surface; the
 highlight-text brush is calibrated for text ON the highlight
 surface, which the ring never sits on. The literal table (D13) is
 where an implementer reads this.
+
+**DD-7 — Viewport transforms are instant in EVERY mode.** No tween
+is ever an installed state, so peers, hit-testing, the ring and the
+pixels agree in one commit; Reduce Motion changes nothing because
+there is no motion to reduce. Chosen over per-frame installed
+states, which would buy animation at the cost of making every
+frame a UIA event storm.
 
 ### The sweep this section performed on arrival
 
@@ -6455,47 +6500,56 @@ document, B12's delivered-set example, the `CanvasSurfaceView`
 projection doc, both `WorkspaceViewModel` command notes, and the two
 `SlateCommandRegistrar` comments. Their claims are unchanged — the
 rows stay disabled until the code in this section EXISTS. The FULL
-flip inventory those claims belong to is D14's, and D14 derives it
-rather than trusting this list.
+flip inventory is D14's executable census, which arbitrates
+completeness instead of any list.
 
 ### Verification plan
 
 A renderer battery against a REAL `VaultSession` and real `.canvas`
-bytes, §C's pattern: D1's barrier fact (B never installs after C
-lands) and the reentrancy arrangement (a UIA-shaped read raced
-against an apply observes one installed state throughout); the
-two-pane cycle (round 2, blocker 3 — one document in two panes,
-independent peers, one pane closed, the other's peer surviving a
-dematerialize/rematerialize round trip); the placeholder state
-table cell by cell (virtualized-item always present, action
-patterns refused until realization, atomic promotion, the same
-peer object across the trip); the D6 pattern matrix cell by cell
-including the AddToSelection throw; selection sync in both
-directions through both doors; the origin-sensitive pan rule in
-both toggle states from both origins; the filter fixture through
-drawing, hit-testing and UIA (dimmed, never hidden); peer
-rectangle invalidation after zoom, pan and resize; the
-three-way name-collision fixture (twin titles, twin parallel
-edges, a card named after the container); every node kind on the
-sample canvas; Reduce Motion; ring metrics at 0.1× and 4×; hit-test
-z; the text-scale factor reaching every run; the tooltip's four
-facts (focus-open, Esc-dismiss in the surface rung, pointer
-traversal, persistence); each viewport command's transform,
-pane-addressed; the m9 header-cell Ctrl+F fact; the C4 mapping
-fact growing by exactly the new verbs with their no-selection and
-empty-canvas arms; and the LIFECYCLE facts (round 2, minor 19) — a
-pane closed and reopened returns the preference and theme handler
-counts and the retained renderer references to baseline.
-`ThemeTokenContrastTests` gains the fill, ring, background and HEX
-rows in both appearances, and the Contrast census derives from
-D13's table. The text-scale census walks the canvas runs. The FlaUI
-journey lands in `ShellAccessibilityTests`: container and child
-peers, the container's value pattern retrieved, a rectangle that
-CHANGES after Ctrl+=, a select that moves selection and announces,
-virtualized realization from a property search, Shift+1 fitting,
-axe clean over peered elements only. The benchmarks assert D16's
-budgets. The chord scrape and `SharedCommandChords` pick up the new
-rows; the parity flip rides the round-trip test per B12.
+bytes, §C's pattern: D1's barrier facts in BOTH orders (a
+publication landing during a build; a viewport commit landing
+during a publication build — neither install is lost, neither
+installs stale) and the reentrancy arrangement (a UIA-shaped read
+raced against an apply observes one installed state throughout);
+the two-pane cycle (one document in two panes, independent peers,
+one pane closed, the other's peer surviving a
+dematerialize/rematerialize round trip); the THREE-cell state table
+including first-touch find-by-property on a never-materialized card
+answering from the descriptor index; the retirement facts (a
+discarded build commits no identities; tombstones prune to the
+window plus live references across a long pan sequence); the D6
+pattern matrix cell by cell including the AddToSelection throw; the
+mid-match selection fact (a selection published between a match's
+start and landing: the schedule is not stranded and the selection
+survives the completion); the end-style table cell by cell; the
+origin-sensitive pan rule in both toggle states from both origins;
+the filter fixture through drawing, hit-testing and UIA (dimmed,
+never hidden); peer rectangle invalidation after zoom, pan and
+resize; the four-way name-collision fixture (twin titles, twin
+parallel edges, a card named after the container, a pre-suffixed
+spelling); every node kind on the sample canvas; instant transforms
+in both animation settings (DD-7); ring metrics at 0.1× and 4×;
+hit-test z; the text-scale factor reaching every run; the tooltip's
+four facts (focus-open, Esc-dismiss in DD-3's order including the
+trigger-card arrangement, pointer traversal, persistence); each
+viewport command's transform, pane-addressed, with the no-pane
+refusal fact; the m9 header-cell Ctrl+F fact; the registrar-derived
+C4 mapping fact with the new verbs' no-selection and empty-canvas
+arms; the LIFECYCLE facts (a pane closed and reopened returns the
+preference and theme handler counts and the retained renderer
+references to baseline); and the ENABLEMENT CENSUS (D14) failing on
+both a consumer without a disposition and a disposition without a
+consumer. `ThemeTokenContrastTests` gains the fill, group-fill,
+ring, background and HEX rows in both appearances, and the Contrast
+census derives from D13's table. The text-scale census walks the
+canvas runs. The FlaUI journey lands in `ShellAccessibilityTests`:
+container and child peers, the container's value pattern retrieved,
+a rectangle that CHANGES after Ctrl+=, a select that moves
+selection and announces, virtualized realization from a property
+search, Shift+1 fitting, axe clean over peered elements only. The
+benchmarks assert D16's budgets. The chord scrape and
+`SharedCommandChords` pick up the new rows; the parity flip rides
+the round-trip test per B12.
 
 ### Hand-off rows
 
@@ -6518,60 +6572,44 @@ rows; the parity flip rides the round-trip test per B12.
 spec's §PR D and the C-unit model as shipped.
 
 **Round 1 — NOT SOUND, 6 blockers, 9 majors, 1 minor; all sixteen
-accepted, answered by revision 2.** Codex at the protocol tier
-(xhigh, session 01a0599e-8670-73f0-a1b5-9bfdb6a59417). The counts
-and dispositions are preserved in round 2's entry where each was
-re-tested.
+accepted, answered by revision 2** (codex at the protocol tier,
+xhigh, session 01a0599e-8670-73f0-a1b5-9bfdb6a59417).
 
 **Round 2 — NOT SOUND, 5 blockers, 13 majors, 1 minor; all nineteen
-accepted, answered by revision 3 (this text). THE RULE-5 SIGNAL IS
-ON.** Codex at the protocol tier, against revision 2. All five
-blockers attacked mechanisms revision 2 INTRODUCED — latest-wins
-(D1), the peer-lifetime/single-state contradiction (D1/D3),
-document-scoped peer identity against two panes (D3/D7), the
-selection door consuming a seam the code does not provide (D6), and
-the transient stack rewriting ratified C6/M5 (D12) — which is the
-protocol's rule 5: a round whose blockers were created by the
-previous round's fix counts double. One more blocker round against
-this subsystem trips rule 4's stop, and the stop is the owner's
-ruling to make, not this record's. Dispositions: (1) install-time
-source revalidation with a barrier fact (D1); (2) tombstones in
-every successor state, registry identity-only (D1/D3); (3) identity
-scoped to renderer instance (D3); (4) the atomic selection
-publication, a code extension (D6); (5) the tooltip returns to C6's
-surface rung, CD-47 sole pre-emption (D12/DD-3); (6) one sealed
-render-source envelope, rejection retains (D2); (7) the scene's
-algebra said exactly (D2); (8) the deep-copy wall and its census
-(D2); (9) the placeholder state table (D3); (10) the full pattern
-matrix (D6); (11) the filter dims, never hides (D4); (12) one
-global name namespace (D5); (13) edge name and Invoke made
-deterministic, host composition authorized (D5); (14) the declared
-value pattern (D3/DD-5); (15) focus SUMMONS the tooltip (D11); (16)
-the literal Contrast table with GroupFill (D13); (17)
-pane-addressed viewport verbs in the derived C4 inventory (D7/D14);
-(18) the sweep derived from consumers, and §C's m9 repair landed by
-name (D14); (19) lifecycle facts (verification plan).
+accepted, answered by revision 3.** All five blockers attacked
+mechanisms revision 2 introduced — the rule-5 signal, recorded with
+rule 4 armed.
 
-**Revision 3** — answered round 2; round 3 ran against it.
+**Round 3 — NOT SOUND, 5 blockers, 10 majors, 1 minor — the rule-4
+stop TRIPPED, and the owner ruled.** Three consecutive blocker
+rounds against the presentation commit, round 2 counting double.
+The findings were held for the owner's ruling per the protocol;
+**the owner ruled: another prose round — revision 4 answers round 3
+in full, with the stop's trip standing in the record.**
+Dispositions: (1) the TOCTOU dissolves — both authorities commit on
+the dispatcher and the check-and-swap shares that thread (D1); (2)
+viewport commands commit their value BEFORE any build, so no build
+owns a delta (D1); (3) the envelope is withdrawn — the scene
+becomes a field of the population, the chain stays the one carrier,
+selection and filter are derived accessors, and rejection shows a
+failure pane (D2); (4) the three-cell state table with the
+descriptor index (D3); (5) the end-style table makes edge Invoke
+total (D5); (6) selection publication becomes a filter-machine
+event with completion carry-forward (D6); (7) retirement: identities
+commit only with a winning install, weak registry, pruned
+tombstones (D3); (8) discriminated edge identity and edge windowing
+(D3); (9) edge names are core's rendered traversal phrase (D5);
+(10) the skip-occupied ordinal loop and the pre-suffixed fixture
+(D5); (11) the no-pane refusal, and the T5 dependency recorded
+honestly (D7/D17); (12) the GroupFill APCA pairs (D8/D13); (13)
+transforms are instant in every mode (D10/DD-7); (14) the C4
+inventory derives from the registrar with bound delivery members
+(D14); (15) the enablement sweep is an executable census (D14);
+(16) the intra-surface transient order is literal (D12/DD-3).
 
-**Round 3 — NOT SOUND, 5 blockers, 10 majors, 1 minor — AND THE
-RULE-4 STOP TRIPPED.** Codex at the protocol tier, against revision
-3; the reviewer's own first sentence names the trajectory. Three
-consecutive rounds of blockers against one subsystem — the
-presentation commit (D1/D2/D3/D6) — with round 2 counting double
-under rule 5. The round's shape is the C-unit freeze's signature
-arriving one PR later: the blockers are ordering and lifetime
-questions — a TOCTOU window between the revalidation and the swap; a
-discarded build swallowing an independent viewport command; an
-envelope that duplicates the chain it mirrors without proving the
-pair; a selection publication racing the filter machine's
-completion; tombstone retirement — each prose answer generating the
-next prose question about the answer. Findings are HELD, not
-dispositioned: rule 4 makes the response the owner's ruling, and
-this record stops here until it is made. The round also confirmed as
-holding: C6's interim-detail arm, CD-47's open-state pre-emption,
-D7's agreement with C2's four attachment cases, and the retained
-pins of rounds 1 and 2.
+**Revision 4** — this text. UNFROZEN: round 4 runs against it next.
+The rule-4 trip stands in this record; a blocker round against the
+same subsystem returns the ruling to the owner.
 
 ---
 
