@@ -9399,6 +9399,35 @@ construction with its hook removed (TF-9), IF-29 discharged at Esc
 naming (TF-6). The task loop is complete; the close-out record
 follows.
 
+### §F close-out — the modes shipped, the record closed
+
+Twelve tasks, twelve commits, the ledger swept. What §F leaves
+behind: the mode-completion architecture whole — commit as a
+COMPLETION with the Pending arm, the early-resolution memory for
+synchronous completions, suspension as a first-class column with its
+published matrix — move, resize and connect modes end to end on the
+real vault; the placement and align verbs under
+prepare-under-the-gate; the picker and prompt sheets with their full
+modal membership; the renderer drawing the transient through one
+identity-checked derivation and one aggregate observable; the
+announcer retiring stale navigation on every transition; and the
+journeys driving it all with a real keyboard.
+
+The section's discoveries, honestly counted: the synchronous
+completion racing the pending mark (TF-3, the controller's early
+memory); the CanvasModeRejected High-priority interplay with t0's
+assertive rule (TF-6); the connect completion closure reading its
+operation before assignment (TF-9, the same lesson one seam over);
+the suspended-identity leak on cancel (TF-10); the worker-thread
+completion killed by the renderer's commit assert (TF-11, the
+journey's catch — invisible to every synchronous unit suite). Owed
+to the mac lane, restated from the freeze: the conflict-loses-mode
+repair, the try?-swallowed step reads, the prompt's live-selection
+re-read. Owed here, recorded: the resolution-continuation reinstall
+arm awaits a recovery flow that writes through
+`ConflictResolutionToken`; the F1a watcher and the completion remain
+the two arbiters until then.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same
