@@ -222,7 +222,11 @@ public sealed class ContractsCitationCensus
                 // TE-5c bound the remaining commit paths and their
                 // grammar, taking the section to 45; 43 sits above
                 // the pre-task population of 42 — an eighth time.
-                43),
+                //
+                // TE-6 bound the picker models and their factories,
+                // taking the section to 49; 46 sits above the
+                // pre-task population of 45 — a ninth time.
+                46),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

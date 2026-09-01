@@ -2666,6 +2666,52 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 TitleOf(nodeId), newPath));
     }
 
+    /// <summary>§E TE-6: the card picker's rows — CORE's proximity
+    /// order over the lease (anchor = the selection; reading-order
+    /// ties; groups included), labelled the palette way. The model
+    /// only filters; a picker with no handle answers empty.</summary>
+    internal CanvasCardPickerModel BuildCardPickerModel(params string[] exclude)
+    {
+        string[] ordered = [];
+        if (_slot.Current.Lease is { } lease)
+        {
+            _ = lease.Invoke(
+                () =>
+                {
+                    CanvasPublication now = _slot.Current;
+                    return !now.Retired && now.Names(lease);
+                },
+                handle => ordered = _session.CanvasProximityOrder(
+                    handle, Selection.Selected, exclude));
+        }
+        return new CanvasCardPickerModel(
+            ordered
+                .Where(_rows.ContainsKey)
+                .Select(id =>
+                {
+                    CanvasOutlineRow row = _rows[id];
+                    string type = row.Kind == "group"
+                        ? "Group"
+                        : $"{char.ToUpperInvariant(row.Kind[0])}{row.Kind[1..]} card";
+                    string container = row.GroupPath.Length > 0
+                        ? row.GroupPath[^1]
+                        : "canvas";
+                    return new CanvasCardPickerRow(
+                        id, $"{type} \"{row.Title}\", in {container}");
+                }));
+    }
+
+    /// <summary>§E TE-6: the vault-file picker's generation — paged to
+    /// completion, classified BEFORE the cap (notes = markdown; media
+    /// = core's classification over the FFI).</summary>
+    internal CanvasVaultFilePickerModel BuildVaultFilePickerModel(bool mediaOnly) =>
+        CanvasVaultFilePickerModel.LoadAll(
+            cursor => _session.ListFiles(
+                FileFilter.All, new Paging(cursor, 128)),
+            file => mediaOnly
+                ? SlateUniffiMethods.CanvasMediaClass(file.Path) is not null
+                : file.IsMarkdown);
+
     private string PublishedTitleOf(string? nodeId) =>
         PublishedRowOf(nodeId)?.Title ?? nodeId ?? string.Empty;
 

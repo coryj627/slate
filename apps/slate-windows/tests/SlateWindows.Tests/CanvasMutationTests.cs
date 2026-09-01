@@ -341,4 +341,22 @@ public sealed class CanvasMutationTests : IDisposable
         Undo(document);
         Assert.Equal(before, DiskBytes());
     }
+
+    /// <summary>TE-6: the card picker factory hands back CORE's
+    /// proximity order verbatim — no host comparator — with the
+    /// excluded id absent and the labels palette-shaped.</summary>
+    [Fact]
+    public void TheCardPickerFactorySpeaksCoresOrderVerbatim()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SelectNode("a");
+        CanvasCardPickerModel model = document.BuildCardPickerModel("blocker");
+
+        ulong handle = HandleOf(document);
+        string[] expected = _session.CanvasProximityOrder(handle, "a", ["blocker"]);
+        Assert.Equal(expected, model.Rows.Select(r => r.NodeId));
+        Assert.DoesNotContain(model.Rows, r => r.NodeId == "blocker");
+        Assert.Contains(
+            model.Rows, r => r.Label.StartsWith("Group \"Ideas\", in canvas"));
+    }
 }

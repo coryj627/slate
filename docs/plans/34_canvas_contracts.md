@@ -8026,6 +8026,44 @@ preservation fact failed); the missing-edge refusal silenced (the
 audible-refusal fact failed); the URL gate dropped (the link fact
 failed on bytes that should not exist); each restored byte-for-byte.
 
+**TE-6 — the picker models.** Discharges IE-37 and IE-38 and
+consumes TE-0's proximity export; the sheets, their XAML, the
+`ModalSurface` membership and the modal-by-chord table are TE-7's,
+which owns the modal stack whole.
+
+- **The card model** (`CanvasCardPickerModel` over
+  `CanvasCardPickerRow`): CORE owns the order — the factory reads
+  `canvas_proximity_order` through the lease (anchor = the
+  selection, reading-order ties, groups included) and the model only
+  renders and text-filters, order preserved, no comparator anywhere
+  (R-D's second-algorithm ban, pinned by the real-vault fact that
+  compares the factory's rows against the FFI answer VERBATIM).
+- **The file model** (`CanvasVaultFilePickerModel`): ONE GENERATION
+  per open — the paged listing walks to completion into the
+  generation cache; classification applies BEFORE the display cap
+  (ED-2 — the fact drives a media file arriving beyond two hundred
+  markdown rows and finds it admitted); a filter keystroke refilters
+  the CACHE locally and the page seam's call count stays flat
+  (IE-38's never-restart rule); and a pick admits only against the
+  generation it was shown from — the model reference IS the
+  generation, so supersession is one reference compare (IE-38's
+  discard rule). Snapshot honesty stands in the type's own record:
+  the set is the walk's, revalidated by the verb it feeds.
+- **The factories** on the document build both: proximity through
+  the lease with the palette-shaped labels, and the vault walk with
+  notes-vs-media admission (markdown for Add Note; core's
+  classification over the FFI for Add Media).
+
+Facts: four in `CanvasPickerTests` over scripted page seams plus the
+real-vault factory fact. Mutations: the model given a host
+comparator (the no-reordering fact failed); the generation wire cut
+(the stale-pick fact failed); and the cap-order mutation earned a
+correction — capping the CLASSIFIED count did not bite, because one
+admitted media file never reaches any cap; the hazard ED-2 names is
+capping the RAW walk, and injecting exactly that stopped the paging
+two pages early and failed the beyond-cap media fact. Each restored
+byte-for-byte.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same
