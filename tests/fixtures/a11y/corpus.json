@@ -1925,6 +1925,26 @@
     "text": "Redo blocked: the canvas changed on disk. Reload it and try again."
   },
   {
+    "event": "Canvas { event: CanvasBlocked { reason: UndoQuarantined } }",
+    "priority": "high",
+    "text": "Undo unavailable: the canvas changed on disk, and this entry applies to an earlier revision."
+  },
+  {
+    "event": "Canvas { event: CanvasBlocked { reason: RedoQuarantined } }",
+    "priority": "high",
+    "text": "Redo unavailable: the canvas changed on disk, and this entry applies to an earlier revision."
+  },
+  {
+    "event": "Canvas { event: CanvasHistoryQuarantinedTitle { verb: Undo } }",
+    "priority": "medium",
+    "text": "Undo unavailable — canvas changed on disk"
+  },
+  {
+    "event": "Canvas { event: CanvasHistoryQuarantinedTitle { verb: Redo } }",
+    "priority": "medium",
+    "text": "Redo unavailable — canvas changed on disk"
+  },
+  {
     "event": "Canvas { event: CanvasBlocked { reason: LinkOpenFailed } }",
     "priority": "high",
     "text": "The link could not be opened."

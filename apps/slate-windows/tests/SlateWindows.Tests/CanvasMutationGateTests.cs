@@ -108,6 +108,26 @@ public sealed class CanvasMutationGateTests
         Assert.False(operation.IsCurrentAgainst(slot.Current));
     }
 
+    /// <summary>IE-10: the committed-but-unpresented state is a
+    /// spellable publication state — set by the funnel when a commit's
+    /// refresh fails, cleared only by the refresh-only recovery, and
+    /// carried untouched across unrelated publications.</summary>
+    [Fact]
+    public void TheCommittedUnpresentedStateSpellsAndClears()
+    {
+        var operation = new CanvasOperationId("landed");
+        CanvasPublication marked =
+            CanvasPublication.Seed().WithCommittedUnpresented(operation);
+        Assert.Same(operation, marked.CommittedUnpresented);
+
+        CanvasPublication carried = marked.WithSelectedIntent("a");
+        Assert.Same(
+            operation,
+            carried.CommittedUnpresented);
+
+        Assert.Null(carried.WithPresented().CommittedUnpresented);
+    }
+
     /// <summary>IE-1: equal inputs mint DISTINCT invocations — the id
     /// is a reference, so a retry is never the original.</summary>
     [Fact]

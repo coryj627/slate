@@ -7732,6 +7732,8 @@ pub enum CanvasBlockedReason {
     ModeBusy,
     UndoBlocked,
     RedoBlocked,
+    UndoQuarantined,
+    RedoQuarantined,
     LinkOpenFailed,
     AlignWouldOverlap,
     NotAUrl,
@@ -7754,6 +7756,8 @@ impl From<CanvasBlockedReason> for core::a11y::CanvasBlockedReason {
             F::ModeBusy => C::ModeBusy,
             F::UndoBlocked => C::UndoBlocked,
             F::RedoBlocked => C::RedoBlocked,
+            F::UndoQuarantined => C::UndoQuarantined,
+            F::RedoQuarantined => C::RedoQuarantined,
             F::LinkOpenFailed => C::LinkOpenFailed,
             F::AlignWouldOverlap => C::AlignWouldOverlap,
             F::NotAUrl => C::NotAUrl,
@@ -7935,6 +7939,9 @@ pub enum CanvasA11yEvent {
     CanvasUndoMenuTitle {
         verb: CanvasHistoryVerb,
         name: String,
+    },
+    CanvasHistoryQuarantinedTitle {
+        verb: CanvasHistoryVerb,
     },
     CanvasStatus {
         note: CanvasStatusNote,
@@ -8157,6 +8164,9 @@ impl From<CanvasA11yEvent> for core::a11y::CanvasA11yEvent {
                 verb: verb.into(),
                 name,
             },
+            F::CanvasHistoryQuarantinedTitle { verb } => {
+                C::CanvasHistoryQuarantinedTitle { verb: verb.into() }
+            }
             F::CanvasStatus { note } => C::CanvasStatus { note: note.into() },
             F::CanvasBlocked { reason } => C::CanvasBlocked {
                 reason: reason.into(),

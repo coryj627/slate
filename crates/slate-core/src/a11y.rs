@@ -486,6 +486,13 @@ pub enum CanvasBlockedReason {
     ModeBusy,
     UndoBlocked,
     RedoBlocked,
+    /// W6-1 §E TE-2 (IE-13): the QUARANTINE — entries exist but the
+    /// top applies to an earlier revision than the attached document,
+    /// so it is disabled rather than offered. Truthful copy: nothing
+    /// re-enables it except that exact revision returning; "try
+    /// again" would be a lie here, unlike the Blocked pair above.
+    UndoQuarantined,
+    RedoQuarantined,
     LinkOpenFailed,
     AlignWouldOverlap,
     NotAUrl,
@@ -1515,6 +1522,13 @@ pub enum CanvasA11yEvent {
     CanvasUndoMenuTitle {
         verb: CanvasHistoryVerb,
         name: String,
+    },
+    /// LABEL class: the menu title while the top entry is QUARANTINED
+    /// (W6-1 §E TE-2, IE-13) — entries exist, none is offered, and
+    /// the title says why instead of naming an entry a click cannot
+    /// take back.
+    CanvasHistoryQuarantinedTitle {
+        verb: CanvasHistoryVerb,
     },
 
     // --- Canvas: polite notes and assertive refusals ---
@@ -2566,6 +2580,9 @@ impl CanvasA11yEvent {
                     format!("{} {}", verb.base(), capitalize_first(name))
                 }
             }
+            CanvasHistoryQuarantinedTitle { verb } => {
+                format!("{} unavailable — canvas changed on disk", verb.base())
+            }
 
             CanvasStatus { note } => match note {
                 CanvasStatusNote::NothingSelected => "Nothing selected.".to_owned(),
@@ -2638,6 +2655,16 @@ impl CanvasA11yEvent {
                 }
                 CanvasBlockedReason::RedoBlocked => {
                     "Redo blocked: the canvas changed on disk. Reload it and try again.".to_owned()
+                }
+                CanvasBlockedReason::UndoQuarantined => {
+                    "Undo unavailable: the canvas changed on disk, and this entry \
+                     applies to an earlier revision."
+                        .to_owned()
+                }
+                CanvasBlockedReason::RedoQuarantined => {
+                    "Redo unavailable: the canvas changed on disk, and this entry \
+                     applies to an earlier revision."
+                        .to_owned()
                 }
                 CanvasBlockedReason::LinkOpenFailed => "The link could not be opened.".to_owned(),
                 CanvasBlockedReason::AlignWouldOverlap => {
@@ -4160,6 +4187,18 @@ fn canvas_corpus() -> Vec<CanvasA11yEvent> {
             reason: CanvasBlockedReason::RedoBlocked,
         },
         CanvasBlocked {
+            reason: CanvasBlockedReason::UndoQuarantined,
+        },
+        CanvasBlocked {
+            reason: CanvasBlockedReason::RedoQuarantined,
+        },
+        CanvasHistoryQuarantinedTitle {
+            verb: CanvasHistoryVerb::Undo,
+        },
+        CanvasHistoryQuarantinedTitle {
+            verb: CanvasHistoryVerb::Redo,
+        },
+        CanvasBlocked {
             reason: CanvasBlockedReason::LinkOpenFailed,
         },
         CanvasBlocked {
@@ -4957,6 +4996,16 @@ mod tests {
                 High,
                 "Redo blocked: the canvas changed on disk. Reload it and try again.",
             ),
+            (
+                High,
+                "Undo unavailable: the canvas changed on disk, and this entry applies to an earlier revision.",
+            ),
+            (
+                High,
+                "Redo unavailable: the canvas changed on disk, and this entry applies to an earlier revision.",
+            ),
+            (Medium, "Undo unavailable — canvas changed on disk"),
+            (Medium, "Redo unavailable — canvas changed on disk"),
             (High, "The link could not be opened."),
             (High, "Aligning would overlap another card — not moved."),
             (High, "That doesn't look like a URL."),
@@ -5321,6 +5370,7 @@ mod tests {
             &[
                 ("CanvasHistoryApplied", "verb"),
                 ("CanvasUndoMenuTitle", "verb"),
+                ("CanvasHistoryQuarantinedTitle", "verb"),
             ],
         ),
         ("CanvasStatusNote", &[("CanvasStatus", "note")]),
@@ -5668,6 +5718,8 @@ mod tests {
                 CanvasBlockedReason::ModeBusy
                 | CanvasBlockedReason::UndoBlocked
                 | CanvasBlockedReason::RedoBlocked
+                | CanvasBlockedReason::UndoQuarantined
+                | CanvasBlockedReason::RedoQuarantined
                 | CanvasBlockedReason::LinkOpenFailed
                 | CanvasBlockedReason::AlignWouldOverlap
                 | CanvasBlockedReason::NotAUrl
@@ -5721,6 +5773,7 @@ mod tests {
             | CanvasViewportNoPane
             | CanvasSaveConflict
             | CanvasFileNotFound { .. }
+            | CanvasHistoryQuarantinedTitle { .. }
             | CanvasEmptyOnboarding { .. } => None,
         }
     }

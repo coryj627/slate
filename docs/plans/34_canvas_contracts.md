@@ -7746,6 +7746,55 @@ acquisition rewritten check-then-enter (the admit-exactly-one fact
 failed); currency reduced to liveness alone (the basis-reference fact
 failed); both restored byte-for-byte.
 
+**TE-2 — the history domain.** Discharges IE-9's structural rule,
+IE-10 (both halves), IE-13 and IE-20.
+
+- **The stack** (`CanvasUndoStack`, entries as `CanvasHistoryEntry` —
+  name, inverse, BASIS): the two-phase checkout makes "transfer only
+  on success, restore on every non-commit outcome" structural — a
+  checkout must end in exactly one commit or restore, phase-two
+  without phase-one is the unsurvivable tripwire, and structural
+  motion while one is open is too. The QUARANTINE is one comparison:
+  an entry is offered only while its basis equals the attached one;
+  a reload that attaches a foreign revision disables rather than
+  offers (the old inverse must never pass the new CAS by
+  coincidence), and the exact basis returning re-offers. The EPOCH
+  plus the entry reference make IE-20's menu snapshot
+  (`CanvasHistorySnapshot`) one integer and one reference compare at
+  execution — a moved stack refuses the stale title instead of
+  undoing whatever is on top now.
+- **The publication state (IE-10):** `CanvasPublication` gained the
+  committed-but-unpresented operation id — a spellable document
+  state set when a commit's refresh fails, carried untouched across
+  unrelated publications, cleared only by the refresh-only recovery;
+  the funnel's admission (TE-5) reads it, the model census admitted
+  the field.
+- **The vocabulary (IE-13):** two blocked-reason arms with TRUTHFUL
+  copy — "Undo unavailable: the canvas changed on disk, and this
+  entry applies to an earlier revision." (nothing re-enables it but
+  that revision returning; the shipped Blocked pair's "try again"
+  stays for the pre-quarantine refusal it correctly describes) — and
+  the label arm CanvasHistoryQuarantinedTitle for the menu while
+  nothing is offered. Five places: the core enum and renderings, the
+  cardinality and roster censuses, the regenerated corpus artifact
+  (four entries), the FFI mirrors, and BOTH host corpus censuses in
+  corpus order. The Windows SPEAKER of these arms arrives with the
+  funnel's menu-title wiring (TE-5/TE-7); the arms, renderings and
+  censuses are pinned now.
+
+Facts: five in `CanvasUndoStackTests`, the publication-state fact in
+the gate battery, and the corpus lockstep across three languages.
+Mutations: the quarantine comparison forced true (the foreign-basis
+fact failed); the publication state dropped by the carrying copy (the
+spell-and-clear fact failed); and the snapshot epoch check dropped —
+which the stale-menu fact SURVIVED on the first run, because the
+reference compare already covers a pushed-over top. The fact was
+strengthened with the scenario only the epoch can refuse — a
+checkout/restore cycle putting the SAME entry back on top, where a
+pre-cycle snapshot would execute it twice — and the re-run mutation
+failed exactly that arm. Each restored byte-for-byte; the epoch is
+load-bearing and now provably so.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same

@@ -191,7 +191,13 @@ public sealed class ContractsCitationCensus
                 // currency and the gate, taking the section to 25;
                 // 19 sits above the pre-task population of 18 — a
                 // second time.
-                19),
+                //
+                // TE-2 bound the history domain, the publication's
+                // committed-unpresented state and the quarantine
+                // vocabulary, taking the section to 30; 26 sits
+                // above the pre-task population of 25 — a third
+                // time.
+                26),
         ];
 
     public static TheoryData<string, string, string> SectionRanges
