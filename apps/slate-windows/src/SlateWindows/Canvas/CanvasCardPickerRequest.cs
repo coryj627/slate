@@ -14,7 +14,24 @@ internal enum CanvasCardPickerPurpose
     PlaceAbove,
     PlaceLeftOf,
     AlignWith,
+    ConnectTo,
 }
+
+/// <summary>
+/// §F TF-8 (F7): the staged connect request — immutable at stage
+/// time, NEVER re-reading live selection (the mac prompt's re-read is
+/// the recorded divergence, assigned to the mac lane). The identity
+/// is the entry publication's loaded reference: the eventual apply
+/// uses it as the operation basis, so a reload makes the operation
+/// Stale and frozen §E's silent-Stale lifecycle governs (IF-24/IF-25
+/// dispositions, recorded).
+/// </summary>
+internal sealed record CanvasConnectStage(
+    string OriginId,
+    string OriginTitle,
+    string TargetId,
+    string TargetTitle,
+    CanvasLoaded Identity);
 
 /// <summary>
 /// §F TF-7 (IF-19): the picker's IMMUTABLE operation context,

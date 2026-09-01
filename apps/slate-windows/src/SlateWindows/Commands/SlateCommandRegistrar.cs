@@ -502,6 +502,8 @@ internal static class SlateCommandRegistrar
             [ChordTable.Ids.CanvasNewCard] =
                 host => host.Workspace?.CanvasNewCardCommand,
             [ChordTable.Ids.CanvasWhereAmI] = host => host.Workspace?.CanvasWhereAmICommand,
+            [ChordTable.Ids.CanvasConnectTo] =
+                host => host.Workspace?.CanvasConnectToCommand,
             [ChordTable.Ids.CanvasPlaceBelow] =
                 host => host.Workspace?.CanvasPlaceBelowCommand,
             [ChordTable.Ids.CanvasPlaceRightOf] =

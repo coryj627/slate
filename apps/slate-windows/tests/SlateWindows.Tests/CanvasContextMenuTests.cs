@@ -29,9 +29,10 @@ public sealed class CanvasContextMenuTests
             text.Select(row => row.Name));
         Assert.True(text.Single(r => r.Name == CanvasPhrase.DeleteRowAction).Enabled);
         Assert.False(text.Single(r => r.Name == CanvasPhrase.ToggleMarkRowAction).Enabled);
-        Assert.Equal(
-            CanvasPhrase.PromptArrivesLater,
-            text.Single(r => r.Name == CanvasPhrase.SetColorRowAction).DisabledReason);
+        // §F TF-8 (FD-4): the prompt machinery landed — the row is
+        // LIVE on the §E commit path.
+        Assert.True(
+            text.Single(r => r.Name == CanvasPhrase.SetColorRowAction).Enabled);
 
         var group = CanvasContextMenuPlan.RowsFor("group");
         Assert.Equal(

@@ -287,6 +287,197 @@ public sealed class CanvasMutationTests : IDisposable
         document.Shutdown();
     }
 
+    /// <summary>§F TF-8 (F7): the staged connect applies ONCE with
+    /// every generated parameter spelled — core's sides, None/Arrow
+    /// ends, the label — one action, one undo, the connected
+    /// sentence.</summary>
+    [Fact]
+    public void StagedConnectAppliesOnceWithEveryParameterSpelled()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        CanvasConnectStage? staged = null;
+        document.ConnectPromptRequested += stage => staged = stage;
+        document.OpenCardPicker(CanvasCardPickerPurpose.ConnectTo);
+        CanvasCardPickerRequest request = document.LastCardPickerRequestForTests!;
+
+        Assert.True(document.HandleCardPick(request, "grp"));
+        Assert.NotNull(staged);
+        Assert.Equal("a", staged!.OriginId);
+        Assert.Equal("grp", staged.TargetId);
+
+        document.CanvasConnect(staged, "feeds2");
+
+        // The fragments are UNIQUE to the new edge (the fixture's e1
+        // carries the same side values toward blocker), so a swapped
+        // pair cannot hide behind existing bytes.
+        string disk = DiskBytes().Replace(" ", "").Replace("\t", "");
+        Assert.Contains("\"label\":\"feeds2\"", disk);
+        Assert.Contains("\"fromSide\":\"right\",\"toNode\":\"grp\"", disk);
+        Assert.Contains("\"toNode\":\"grp\",\"toSide\":\"left\"", disk);
+        Assert.NotNull(document.UndoStack.OfferedUndo);
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            a => a.Text.Contains("onnected", StringComparison.Ordinal));
+        document.Shutdown();
+    }
+
+    /// <summary>§F TF-8 (IF-27): an empty submitted label normalizes
+    /// to NULL — Enter-skips and click-with-empty-field serialize
+    /// identically, and no empty "labelled" clause can render.</summary>
+    [Fact]
+    public void AnEmptyLabelNormalizesToNull()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        CanvasConnectStage? staged = null;
+        document.ConnectPromptRequested += stage => staged = stage;
+        document.OpenCardPicker(CanvasCardPickerPurpose.ConnectTo);
+        Assert.True(document.HandleCardPick(
+            document.LastCardPickerRequestForTests!, "grp"));
+
+        document.CanvasConnect(staged!, string.Empty);
+
+        string disk = DiskBytes().Replace(" ", "").Replace("\t", "");
+        Assert.DoesNotContain("\"label\":\"\"", disk);
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            a => a.Text.Contains("onnected", StringComparison.Ordinal)
+                && !a.Text.Contains("label", StringComparison.OrdinalIgnoreCase));
+        document.Shutdown();
+    }
+
+    /// <summary>§F TF-8 (IF-26): connecting a card to itself refuses
+    /// with mac's sentence — a TARGET problem, not a moving-set one —
+    /// and stages nothing.</summary>
+    [Fact]
+    public void ASelfPickRefusesDifferentTarget()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        bool prompted = false;
+        document.ConnectPromptRequested += _ => prompted = true;
+        string before = DiskBytes();
+        document.OpenCardPicker(CanvasCardPickerPurpose.ConnectTo);
+
+        Assert.False(document.HandleCardPick(
+            document.LastCardPickerRequestForTests!, "a"));
+
+        Assert.False(prompted);
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            a => a.Text.Contains("different", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(before, DiskBytes());
+        document.Shutdown();
+    }
+
+    /// <summary>§F TF-8 (IF-24/IF-25 dispositions): a target deleted
+    /// after staging makes the eventual operation STALE — frozen §E
+    /// deliberately drops it silently; nothing writes, no success
+    /// speaks, and the immutable stage still names what was staged.</summary>
+    [Fact]
+    public void AVanishedTargetGoesSilentlyStale()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        CanvasConnectStage? staged = null;
+        document.ConnectPromptRequested += stage => staged = stage;
+        document.OpenCardPicker(CanvasCardPickerPurpose.ConnectTo);
+        Assert.True(document.HandleCardPick(
+            document.LastCardPickerRequestForTests!, "blocker"));
+
+        document.SeatSelectionSilently("blocker");
+        document.CanvasDeleteSelection();
+        string afterDelete = DiskBytes();
+        _announced.Clear();
+
+        document.CanvasConnect(staged!, "late");
+
+        Assert.Equal(afterDelete, DiskBytes());
+        document.AnnouncerForTests.FlushForTests();
+        Assert.DoesNotContain(
+            _announced,
+            a => a.Text.Contains("onnected", StringComparison.Ordinal));
+        Assert.Equal("blocker", staged!.TargetId);
+        document.Shutdown();
+    }
+
+    /// <summary>§F TF-8 (FD-4): the carried Rename Group front door —
+    /// the request seeds the draft with the CURRENT title, and the
+    /// submit rides §E's shipped verb onto disk.</summary>
+    [Fact]
+    public void RenameGroupPromptSeedsAndCommitsThroughTheShippedVerb()
+    {
+        CanvasDocumentViewModel document = Open();
+        (string GroupId, string Current)? asked = null;
+        document.GroupRenameRequested += (groupId, current) =>
+            asked = (groupId, current);
+
+        document.RequestGroupRename("grp");
+        Assert.Equal(("grp", "Ideas"), asked);
+
+        document.CanvasRenameGroup("grp", "Ideas 2");
+        Assert.Contains("Ideas 2", DiskBytes());
+        document.Shutdown();
+    }
+
+    /// <summary>§F TF-8 (FD-4): the Set Color prompt's choices are
+    /// CORE's names verbatim (never a host copy of the table), and a
+    /// chosen preset colors the selection on disk.</summary>
+    [Fact]
+    public void SetColorPromptChoicesAreCoresNamesAndColorTheCard()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        CanvasPromptViewModel prompt = CanvasPromptViewModel.SetColor(document);
+
+        Assert.False(prompt.HasTextField);
+        for (byte preset = 1; preset <= 6; preset++)
+        {
+            Assert.Equal(
+                SlateUniffiMethods.CanvasColorName(new CanvasColor.Preset(preset)),
+                prompt.Choices[preset - 1].Name);
+        }
+        Assert.Null(prompt.Choices[^1].Value);
+
+        prompt.SelectedChoice = prompt.Choices[2];
+        prompt.Submit();
+
+        Assert.Contains(
+            "\"color\":\"3\"",
+            DiskBytes().Replace(" ", "").Replace("\t", ""));
+        document.Shutdown();
+    }
+
+    /// <summary>§F TF-8 (F5): the picker sheet refilters WITHOUT
+    /// reordering — the rows stay core's proximity order, narrowed;
+    /// clearing the filter restores the whole set.</summary>
+    [Fact]
+    public void ThePickerSheetRefiltersWithoutReordering()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        CanvasCardPickerModel? model = null;
+        document.CardPickerRequested += (_, m) => model = m;
+        document.OpenCardPicker(CanvasCardPickerPurpose.PlaceBelow);
+        var sheet = new CanvasCardPickerViewModel(
+            document, document.LastCardPickerRequestForTests!, model!);
+        string[] all = [.. sheet.Rows.Select(r => r.NodeId)];
+
+        sheet.Filter = "Blo";
+        Assert.Equal(
+            all.Where(id => id == "blocker"),
+            sheet.Rows.Select(r => r.NodeId));
+
+        sheet.Filter = string.Empty;
+        Assert.Equal(all, sheet.Rows.Select(r => r.NodeId).ToArray());
+        Assert.NotNull(sheet.SelectedRow);
+        document.Shutdown();
+    }
+
     /// <summary>§F TF-7 (F5): picker-anchored engine placement, one
     /// action end to end — the pick routes through the request, the
     /// engine computes the slot inside prepare-under-the-gate, disk

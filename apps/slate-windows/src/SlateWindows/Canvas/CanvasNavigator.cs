@@ -198,6 +198,7 @@ internal sealed class CanvasNavigator
         // quick loop — during resize it COMMITS, otherwise it enters.
         AddChord(Key.G, ModifierKeys.Control | ModifierKeys.Alt, MoveModeFromKey);
         AddChord(Key.R, ModifierKeys.Control | ModifierKeys.Alt, CommitOrEnterResizeFromKey);
+        AddChord(Key.C, ModifierKeys.Control | ModifierKeys.Alt, ConnectToFromKey);
         AddChord(Key.Z, ModifierKeys.Control, UndoFromKey);
         AddChord(Key.Y, ModifierKeys.Control, RedoFromKey);
         // The viewport chords (§D D14). Zoom rides Ctrl and answers
@@ -239,6 +240,12 @@ internal sealed class CanvasNavigator
     private bool MoveModeFromKey()
     {
         _ = EnterMoveMode();
+        return true;
+    }
+
+    private bool ConnectToFromKey()
+    {
+        _document.OpenCardPicker(CanvasCardPickerPurpose.ConnectTo);
         return true;
     }
 

@@ -63,6 +63,23 @@ internal sealed partial class WorkspaceViewModel
             // one sheet property the modal machinery watches.
             document.CardEditorRequested +=
                 nodeId => CanvasCardEditorSheet = document.OpenCardEditor(nodeId);
+            // §F TF-8: the picker and prompt sheets — workspace
+            // properties, because the modal machinery watches exactly
+            // one place.
+            document.CardPickerRequested += (request, model) =>
+                CanvasCardPickerSheet =
+                    new CanvasCardPickerViewModel(document, request, model);
+            document.ConnectPromptRequested += stage =>
+            {
+                CanvasCardPickerSheet = null;
+                CanvasPromptSheet =
+                    CanvasPromptViewModel.ConnectLabel(document, stage);
+            };
+            document.GroupRenameRequested += (groupId, current) =>
+                CanvasPromptSheet =
+                    CanvasPromptViewModel.RenameGroup(document, groupId, current);
+            document.SetColorRequested += () =>
+                CanvasPromptSheet = CanvasPromptViewModel.SetColor(document);
             _canvasDocuments[key] = document;
             InstallCanvasDocumentSeams(document);
             document.Load();
@@ -333,6 +350,48 @@ internal sealed partial class WorkspaceViewModel
     /// standing.</summary>
     public void CloseCanvasCardEditor() => CanvasCardEditorSheet = null;
 
+    private CanvasCardPickerViewModel? _canvasCardPickerSheet;
+
+    public CanvasCardPickerViewModel? CanvasCardPickerSheet
+    {
+        get => _canvasCardPickerSheet;
+        private set => SetField(ref _canvasCardPickerSheet, value);
+    }
+
+    public void CloseCanvasCardPicker() => CanvasCardPickerSheet = null;
+
+    /// <summary>Enter's arm on the picker sheet: a routed pick closes
+    /// it; a refusal keeps it, filter and highlight intact.</summary>
+    public void ConfirmCanvasCardPick()
+    {
+        if (CanvasCardPickerSheet is { } sheet && sheet.Confirm())
+        {
+            CanvasCardPickerSheet = null;
+        }
+    }
+
+    private CanvasPromptViewModel? _canvasPromptSheet;
+
+    public CanvasPromptViewModel? CanvasPromptSheet
+    {
+        get => _canvasPromptSheet;
+        private set => SetField(ref _canvasPromptSheet, value);
+    }
+
+    public void CloseCanvasPrompt() => CanvasPromptSheet = null;
+
+    /// <summary>Enter's arm on the prompt sheet: submit through the
+    /// shipped verb, then close — the verbs own every refusal and the
+    /// stage is immutable either way.</summary>
+    public void SubmitCanvasPrompt()
+    {
+        if (CanvasPromptSheet is { } sheet)
+        {
+            sheet.Submit();
+            CanvasPromptSheet = null;
+        }
+    }
+
     public System.Windows.Input.ICommand CanvasZoomInCommand =>
         _canvasZoomInCommand ??= new RelayCommand(
             _ => ActiveCanvasDocument?.Navigator.ZoomIn(),
@@ -379,6 +438,8 @@ internal sealed partial class WorkspaceViewModel
     private RelayCommand? _canvasMoveModeCommand;
 
     private RelayCommand? _canvasPlaceBelowCommand;
+
+    private RelayCommand? _canvasConnectToCommand;
 
     private RelayCommand? _canvasPlaceRightOfCommand;
 
@@ -461,6 +522,10 @@ internal sealed partial class WorkspaceViewModel
 
     /// <summary>§F TF-7 (F5/F6): the picker-opening verbs — the
     /// document owns every refusal and the request.</summary>
+    public System.Windows.Input.ICommand CanvasConnectToCommand =>
+        _canvasConnectToCommand ??= DocumentCommand(
+            document => document.OpenCardPicker(CanvasCardPickerPurpose.ConnectTo));
+
     public System.Windows.Input.ICommand CanvasPlaceBelowCommand =>
         _canvasPlaceBelowCommand ??= DocumentCommand(
             document => document.OpenCardPicker(CanvasCardPickerPurpose.PlaceBelow));

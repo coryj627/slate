@@ -934,6 +934,13 @@ internal sealed class CanvasOutlineView : UserControl
                 case CanvasContextVerb.EditCard:
                     model.RequestCardEditor(nodeId);
                     break;
+                case CanvasContextVerb.RenameGroup:
+                    model.RequestGroupRename(nodeId);
+                    break;
+                case CanvasContextVerb.SetColor:
+                    model.SeatSelectionSilently(nodeId);
+                    model.RequestSetColor();
+                    break;
                 default:
                     break;
             }

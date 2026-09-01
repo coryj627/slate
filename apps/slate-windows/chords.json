@@ -1005,6 +1005,18 @@
       "registered": true
     },
     {
+      "id": "slate.canvas.connectTo",
+      "label": "Canvas: Connect To…",
+      "section": "Canvas",
+      "hint": "Draw a connection from the selected card to a card you pick, with an optional label.",
+      "macChord": "⌃⌘C",
+      "mac": "Control Command C",
+      "windows": "Ctrl+Alt+C",
+      "windowsSpoken": "Control Alt C",
+      "scope": "Canvas",
+      "registered": true
+    },
+    {
       "id": "slate.canvas.placeBelow",
       "label": "Canvas: Place Below…",
       "section": "Canvas",

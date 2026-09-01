@@ -112,7 +112,9 @@ public partial class MainWindow
                 TemplatePicker: workspace?.TemplatePickerSheet is not null,
                 TemplateFlow: workspace?.TemplateFlowSheet is not null,
                 MoveTo: _viewModel.FileSidebar?.MoveToSheet is not null,
-                CanvasCardEditor: workspace?.CanvasCardEditorSheet is not null);
+                CanvasCardEditor: workspace?.CanvasCardEditorSheet is not null,
+                CanvasCardPicker: workspace?.CanvasCardPickerSheet is not null,
+                CanvasPrompt: workspace?.CanvasPromptSheet is not null);
         }
     }
 

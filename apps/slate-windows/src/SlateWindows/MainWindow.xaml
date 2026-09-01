@@ -119,6 +119,12 @@
                         <DataTrigger Binding="{Binding Workspace.CanvasCardEditorSheet, Converter={StaticResource IsNotNullConverter}}" Value="True">
                             <Setter Property="IsEnabled" Value="False" />
                         </DataTrigger>
+                        <DataTrigger Binding="{Binding Workspace.CanvasCardPickerSheet, Converter={StaticResource IsNotNullConverter}}" Value="True">
+                            <Setter Property="IsEnabled" Value="False" />
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding Workspace.CanvasPromptSheet, Converter={StaticResource IsNotNullConverter}}" Value="True">
+                            <Setter Property="IsEnabled" Value="False" />
+                        </DataTrigger>
                     </Style.Triggers>
                 </Style>
             </Menu.Style>
@@ -3747,6 +3753,71 @@
                              AutomationProperties.AutomationId="CanvasCardEditorText"
                              AutomationProperties.Name="Card text. Escape saves and returns to the canvas."
                              AutomationProperties.HelpText="Escape commits; discard with the editor's own undo first." />
+                </StackPanel>
+            </local:AutomationLandmarkBorder>
+            <local:AutomationLandmarkBorder x:Name="CanvasCardPickerOverlay"
+                    Padding="16"
+                    MinWidth="420"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Background="{DynamicResource Slate.SurfaceBrush}"
+                    BorderBrush="{DynamicResource Slate.BorderBrush}"
+                    BorderThickness="1"
+                    Visibility="{Binding DataContext.Workspace.CanvasCardPickerSheet, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}"
+                    DataContext="{Binding Workspace.CanvasCardPickerSheet}"
+                    FocusManager.IsFocusScope="True"
+                    KeyboardNavigation.TabNavigation="Cycle"
+                    KeyboardNavigation.ControlTabNavigation="Cycle"
+                    AutomationProperties.AutomationId="CanvasCardPickerSheet"
+                    AutomationProperties.Name="Card picker"
+                    AutomationProperties.IsDialog="True">
+                <StackPanel>
+                    <TextBlock Text="{Binding Title}"
+                               FontWeight="SemiBold"
+                               Margin="0,0,0,8" />
+                    <TextBox Text="{Binding Filter, UpdateSourceTrigger=PropertyChanged}"
+                             AutomationProperties.AutomationId="CanvasCardPickerFilter"
+                             AutomationProperties.Name="Filter cards"
+                             Margin="0,0,0,8" />
+                    <ListBox ItemsSource="{Binding Rows}"
+                             SelectedItem="{Binding SelectedRow}"
+                             DisplayMemberPath="Label"
+                             MaxHeight="240"
+                             AutomationProperties.AutomationId="CanvasCardPickerRows"
+                             AutomationProperties.Name="Cards, nearest first. Enter picks." />
+                </StackPanel>
+            </local:AutomationLandmarkBorder>
+
+            <local:AutomationLandmarkBorder x:Name="CanvasPromptOverlay"
+                    Padding="16"
+                    MinWidth="420"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Background="{DynamicResource Slate.SurfaceBrush}"
+                    BorderBrush="{DynamicResource Slate.BorderBrush}"
+                    BorderThickness="1"
+                    Visibility="{Binding DataContext.Workspace.CanvasPromptSheet, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}"
+                    DataContext="{Binding Workspace.CanvasPromptSheet}"
+                    FocusManager.IsFocusScope="True"
+                    KeyboardNavigation.TabNavigation="Cycle"
+                    KeyboardNavigation.ControlTabNavigation="Cycle"
+                    AutomationProperties.AutomationId="CanvasPromptSheet"
+                    AutomationProperties.Name="Canvas prompt"
+                    AutomationProperties.IsDialog="True">
+                <StackPanel>
+                    <TextBlock Text="{Binding Title}"
+                               FontWeight="SemiBold"
+                               Margin="0,0,0,8" />
+                    <TextBox Text="{Binding Draft, UpdateSourceTrigger=PropertyChanged}"
+                             Visibility="{Binding HasTextField, Converter={StaticResource BooleanToVisibilityConverter}}"
+                             AutomationProperties.AutomationId="CanvasPromptDraft"
+                             AutomationProperties.Name="Answer. Enter submits, Escape cancels." />
+                    <ListBox ItemsSource="{Binding Choices}"
+                             SelectedItem="{Binding SelectedChoice}"
+                             DisplayMemberPath="Name"
+                             Visibility="{Binding HasTextField, Converter={StaticResource InverseBooleanToVisibilityConverter}}"
+                             AutomationProperties.AutomationId="CanvasPromptChoices"
+                             AutomationProperties.Name="Choices. Enter submits." />
                 </StackPanel>
             </local:AutomationLandmarkBorder>
         </Grid>

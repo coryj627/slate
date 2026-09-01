@@ -9222,6 +9222,59 @@ ordered the field identically), so the fact moved to a divergent
 pair where the nearest-from-one is farthest-from-the-other. All
 bitten.
 
+### TF-8 — the prompt machinery, the picker sheet, and staged Connect To…
+
+The one modal-clone pass TF-7 promised: TWO surfaces —
+`CanvasCardPicker`, then `CanvasPrompt` declared after it (the
+prompt FOLLOWS the picker in the connect flow, so between the two it
+wins the tie, the TemplatePicker/Flow precedent) — each with the
+FULL membership the TE-7 censuses enumerate: enum member,
+state-record field, topmost arm, palette flat read, menu-disable
+trigger, XAML overlay, lifecycle observer arm, and the six
+ModalSurfaceTests row sites. The window key gate gains both sheets'
+arms ahead of the chord ladder: Escape dismisses committing nothing;
+Enter submits — on the picker a ROUTED pick closes it while a
+refusal keeps it, filter and highlight intact (F5's state-keeping);
+on the prompt the answer rides the shipped verb and an empty connect
+label SKIPS (FD-4's Enter-skips).
+
+Connect To… is F7 whole: the pick STAGES `CanvasConnectStage` —
+origin, target, titles and the entry publication's loaded reference,
+immutable, never re-reading live selection (mac's re-read is the
+recorded divergence, assigned there). The label step answers into
+`CanvasConnect`: IF-27's empty-to-null normalization; the apply runs
+ONCE inside prepare-under-the-gate with both endpoints re-resolved,
+the self gate belt-and-braces under the pick's own (IF-26 — the
+pick's self-refusal speaks PickDifferentTarget for connect, a TARGET
+problem, where placement's speaks the moving-set sentence), sides
+from `CanvasAutoSides` over the rects, and every `AddEdge` parameter
+spelled — None/Arrow ends, the cleaned label, null color. IF-24 and
+IF-25 land as DISPOSITIONS: the apply is a funnel operation on the
+STAGE's identity, so a reload makes it Stale and frozen §E's
+silent-Stale lifecycle governs — the fact deletes the staged target
+and finds nothing written and no success spoken. The carried sheets
+(FD-4): Rename Group seeds its draft with the CURRENT title and
+submits through §E's shipped verb; Set Color's choices are core's
+`CanvasColorName` verbatim — never a host copy — plus the No-color
+row; both context-menu rows flip LIVE. The connectTo chord lands
+(Ctrl+Alt+C, mac's ⌃⌘C). IF-29 (Esc's focus restoration) is the
+connect MODE's surface and rides TF-9, recorded.
+
+Facts: seven — the spelled staged apply (its side fragments UNIQUE
+to the new edge, because the fixture's own e1 masked the first cut),
+empty-label normalization, the self-pick, the silently-Stale
+vanished target (first aimed at a GROUP, which §E's delete guard
+refuses to delete — re-aimed at a text card), the seeded rename, the
+core-named color choices, and the reorder-free refilter. Mutations,
+each byte-restored: M1 the normalization dropped, M2 the self-arm
+collapsed, M3 the sides swapped (bitten only after the fact's
+fragments went unique — the mask was real bytes, not a weak fact),
+M4 the draft seed dropped, M5 the names copied. All bitten. Process
+note: a heredoc-python patch failed its anchor assert and the
+runner's set -e did not trip — caught by the mutation gauntlet
+running against an unchanged fact; the patch moved to a file payload
+and the gauntlet reran.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same

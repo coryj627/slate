@@ -67,6 +67,17 @@ internal enum ModalSurface
     /// carve-out rides ITS Esc handling; the admission tables refuse
     /// the palette beneath it like every sheet.</summary>
     CanvasCardEditor,
+
+    /// <summary>W6-1 §F TF-8: the canvas card-picker sheet (F5/F7's
+    /// reference-card pick). Declared after the editor — newest
+    /// paint.</summary>
+    CanvasCardPicker,
+
+    /// <summary>W6-1 §F TF-8: the canvas prompt sheet (the label
+    /// step, Rename Group, Set Color). Declared after the picker — it
+    /// FOLLOWS the picker in the connect flow, so between the two it
+    /// must win the tie.</summary>
+    CanvasPrompt,
 }
 
 /// <summary>
@@ -140,7 +151,9 @@ internal readonly record struct ModalSurfaceState(
     bool TemplatePicker,
     bool TemplateFlow,
     bool MoveTo,
-    bool CanvasCardEditor);
+    bool CanvasCardEditor,
+    bool CanvasCardPicker = false,
+    bool CanvasPrompt = false);
 
 /// <summary>
 /// The modal-surface precedence rules, as pure functions.
@@ -247,6 +260,8 @@ internal static class ModalSurfaces
             ModalSurface.TemplateFlow => state.TemplateFlow,
             ModalSurface.MoveTo => state.MoveTo,
             ModalSurface.CanvasCardEditor => state.CanvasCardEditor,
+            ModalSurface.CanvasCardPicker => state.CanvasCardPicker,
+            ModalSurface.CanvasPrompt => state.CanvasPrompt,
         };
 
     /// <summary>

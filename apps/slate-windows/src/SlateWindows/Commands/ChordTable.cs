@@ -278,6 +278,8 @@ internal static class ChordTable
         public const string CanvasFollowConnectionBack =
             "slate.canvas.followConnectionBack";
         public const string CanvasTracePath = "slate.canvas.tracePath";
+        public const string CanvasConnectTo = "slate.canvas.connectTo";
+
         public const string CanvasPlaceBelow = "slate.canvas.placeBelow";
 
         public const string CanvasPlaceRightOf = "slate.canvas.placeRightOf";
@@ -985,6 +987,11 @@ internal static class ChordTable
             // names a reference card, the ENGINE computes the slot.
             // Labels and hints byte-identical to mac (P3); no chords,
             // as mac allocates none.
+            // §F TF-8 (F7): the staged connect flow's front door.
+            Reg(Ids.CanvasConnectTo, "Canvas: Connect To…", CommandSection.Canvas,
+                "Draw a connection from the selected card to a card you pick, "
+                + "with an optional label.",
+                "⌃⌘C", "Ctrl+Alt+C", ChordScope.Canvas),
             Reg(Ids.CanvasPlaceBelow, "Canvas: Place Below…", CommandSection.Canvas,
                 "Move the selected card (or the marked set) just below a card you pick."),
             Reg(Ids.CanvasPlaceRightOf, "Canvas: Place Right Of…", CommandSection.Canvas,

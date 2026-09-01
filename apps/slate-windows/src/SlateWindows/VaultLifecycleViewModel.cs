@@ -1327,6 +1327,10 @@ internal sealed class VaultLifecycleViewModel
                 workspace.TemplateFlowSheet is not null,
             nameof(WorkspaceViewModel.CanvasCardEditorSheet) =>
                 workspace.CanvasCardEditorSheet is not null,
+            nameof(WorkspaceViewModel.CanvasCardPickerSheet) =>
+                workspace.CanvasCardPickerSheet is not null,
+            nameof(WorkspaceViewModel.CanvasPromptSheet) =>
+                workspace.CanvasPromptSheet is not null,
             _ => false,
         };
         if (!presented)

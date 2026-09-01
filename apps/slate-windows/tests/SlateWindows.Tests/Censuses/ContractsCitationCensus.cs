@@ -331,7 +331,12 @@ public sealed class ContractsCitationCensus
                 // verbs, taking the section to 71; 69 sits
                 // above the pre-task population of 67 — an eighth
                 // time.
-                69),
+                //
+                // TF-8 bound the prompt machinery and the staged
+                // connect flow, taking the section to 75; 73
+                // sits above the pre-task population of 71 — a
+                // ninth time.
+                73),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

@@ -40,6 +40,8 @@ public sealed class SheetChordAdmissionTests
     [InlineData(ModalSurface.CanvasCardEditor, PaletteOpenDecision.Refuse)]
     [InlineData(ModalSurface.TemplateFlow, PaletteOpenDecision.Refuse)]
     [InlineData(ModalSurface.MoveTo, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.CanvasCardPicker, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.CanvasPrompt, PaletteOpenDecision.Refuse)]
     public void BulkRenameSupersedesTheOverlaysAndDefersToEverySheet(
         object? topmost, object expected)
     {
@@ -68,6 +70,8 @@ public sealed class SheetChordAdmissionTests
     [InlineData(ModalSurface.CanvasCardEditor, PaletteOpenDecision.Refuse)]
     [InlineData(ModalSurface.TemplateFlow, PaletteOpenDecision.Refuse)]
     [InlineData(ModalSurface.MoveTo, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.CanvasCardPicker, PaletteOpenDecision.Refuse)]
+    [InlineData(ModalSurface.CanvasPrompt, PaletteOpenDecision.Refuse)]
     public void CitationSummarySupersedesTheOverlaysStacksOnDetailsAndDefersToOtherSheets(
         object? topmost, object expected)
     {

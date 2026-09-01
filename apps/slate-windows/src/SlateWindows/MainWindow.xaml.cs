@@ -640,6 +640,44 @@ public partial class MainWindow : Window
         // passes through to the draft TextBox untouched. The authoring
         // journey was the first real keyboard on this path: the seam
         // existed since TE-7, but nothing wired the key.
+        // §F TF-8: the prompt sheet's two keys. Escape dismisses
+        // committing nothing; Enter submits through the shipped verb
+        // (an empty connect label SKIPS — the verb normalizes).
+        if (_viewModel.Workspace?.CanvasPromptSheet is not null)
+        {
+            if (e.Key == Key.Escape && modifiers == ModifierKeys.None)
+            {
+                _viewModel.Workspace.CloseCanvasPrompt();
+                e.Handled = true;
+            }
+            else if (e.Key == Key.Enter && modifiers == ModifierKeys.None)
+            {
+                _viewModel.Workspace.SubmitCanvasPrompt();
+                e.Handled = true;
+            }
+
+            return;
+        }
+
+        // §F TF-8: the picker sheet — Enter routes the pick (a
+        // refusal keeps the sheet, filter and highlight intact),
+        // Escape closes choosing nothing.
+        if (_viewModel.Workspace?.CanvasCardPickerSheet is not null)
+        {
+            if (e.Key == Key.Escape && modifiers == ModifierKeys.None)
+            {
+                _viewModel.Workspace.CloseCanvasCardPicker();
+                e.Handled = true;
+            }
+            else if (e.Key == Key.Enter && modifiers == ModifierKeys.None)
+            {
+                _viewModel.Workspace.ConfirmCanvasCardPick();
+                e.Handled = true;
+            }
+
+            return;
+        }
+
         if (_viewModel.Workspace?.CanvasCardEditorSheet is { } cardEditor)
         {
             if (e.Key == Key.Escape && modifiers == ModifierKeys.None)

@@ -2913,7 +2913,10 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             SpeakNotReady();
             return;
         }
-        var members = Selection.Marked.Count > 0
+        // §F TF-8 (F7): connect stages from the SELECTED card only —
+        // the marked set is placement's rigid unit, never an edge's.
+        var members = purpose != CanvasCardPickerPurpose.ConnectTo
+            && Selection.Marked.Count > 0
             ? new List<string>(Selection.Marked)
             : Selection.Selected is { } one ? [one] : [];
         if (members.Count == 0)
@@ -2952,7 +2955,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// the context a guess, and a guess refuses PickDifferentTarget
     /// (IF-19); a target inside the moving set refuses
     /// PickOutsideMovingSet with the picker's state kept.</summary>
-    internal void HandleCardPick(CanvasCardPickerRequest request, string target)
+    internal bool HandleCardPick(CanvasCardPickerRequest request, string target)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(target);
@@ -2961,13 +2964,31 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         {
             Speak(new CanvasA11yEvent.CanvasStatus(
                 new CanvasStatusNote.PickDifferentTarget()));
-            return;
+            return false;
         }
         if (request.Moving.Contains(target))
         {
+            // §F TF-8 (IF-26): connect's self-pick is a TARGET
+            // problem, mac's sentence; placement's is a moving-set
+            // problem, F5's.
             Speak(new CanvasA11yEvent.CanvasStatus(
-                new CanvasStatusNote.PickOutsideMovingSet()));
-            return;
+                request.Purpose == CanvasCardPickerPurpose.ConnectTo
+                    ? new CanvasStatusNote.PickDifferentTarget()
+                    : new CanvasStatusNote.PickOutsideMovingSet()));
+            return false;
+        }
+        if (request.Purpose == CanvasCardPickerPurpose.ConnectTo)
+        {
+            // §F TF-8 (F7): confirm STAGES; the label step runs before
+            // any apply exists.
+            var stage = new CanvasConnectStage(
+                request.Moving[0],
+                RowFor(request.Moving[0])?.Title ?? "card",
+                target,
+                RowFor(target)?.Title ?? "card",
+                request.Identity);
+            ConnectPromptRequested?.Invoke(stage);
+            return true;
         }
         switch (request.Purpose)
         {
@@ -2987,7 +3008,98 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 CanvasAlignWith(request, target);
                 break;
         }
+
+        return true;
     }
+
+    /// <summary>§F TF-8 (F7): the staged apply — ONCE, inside
+    /// prepare-under-the-gate. Both endpoints re-resolve against the
+    /// held handle (either vanished refuses PickDifferentTarget, the
+    /// STAGE kept — it is immutable and the operation wrote nothing);
+    /// the self gate stands belt-and-braces under the pick's; sides
+    /// come from core's CanvasAutoSides over the RECTS; every
+    /// generated AddEdge parameter is spelled. An empty submitted
+    /// label normalizes to null (IF-27) — Enter-skips and
+    /// click-with-empty-field serialize identically.</summary>
+    internal void CanvasConnect(CanvasConnectStage stage, string? label)
+    {
+        ArgumentNullException.ThrowIfNull(stage);
+        string? clean = string.IsNullOrEmpty(label) ? null : label;
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId("connect"),
+            this,
+            Selection.Selected,
+            stage.Identity,
+            CanvasMutationEffect.KeepSelection);
+        _ = Funnel.Apply(
+            operation,
+            handle =>
+            {
+                try
+                {
+                    CanvasPopulation? population = _slot.Current.Population;
+                    CanvasSceneNode? origin =
+                        population?.SceneByNode.GetValueOrDefault(stage.OriginId);
+                    CanvasSceneNode? target =
+                        population?.SceneByNode.GetValueOrDefault(stage.TargetId);
+                    if (origin is null || target is null
+                        || stage.OriginId == stage.TargetId)
+                    {
+                        Speak(new CanvasA11yEvent.CanvasStatus(
+                            new CanvasStatusNote.PickDifferentTarget()));
+                        return null;
+                    }
+                    CanvasSidePair sides = SlateUniffiMethods.CanvasAutoSides(
+                        new CanvasRect(
+                            origin.X, origin.Y, origin.Width, origin.Height),
+                        new CanvasRect(
+                            target.X, target.Y, target.Width, target.Height));
+                    return new CanvasAction(
+                        $"connect \"{stage.OriginTitle}\" to \"{stage.TargetTitle}\"",
+                        [
+                            new CanvasOp.AddEdge(
+                                SlateUniffiMethods.CanvasNewId(),
+                                stage.OriginId,
+                                sides.From,
+                                stage.TargetId,
+                                sides.To,
+                                CanvasEndStyle.None,
+                                CanvasEndStyle.Arrow,
+                                clean,
+                                null),
+                        ]);
+                }
+                catch (VaultException)
+                {
+                    Speak(new CanvasA11yEvent.CanvasActionFailed(
+                        CanvasFailedAction.CanvasAction, "connect"));
+                    return null;
+                }
+            },
+            "connect",
+            confirm: () => new CanvasA11yEvent.CanvasConnected(
+                stage.OriginTitle, stage.TargetTitle, clean));
+    }
+
+    /// <summary>§F TF-8 (F7): the staged-prompt seam — the workspace
+    /// presents the label step; tests tap it directly.</summary>
+    internal event Action<CanvasConnectStage>? ConnectPromptRequested;
+
+    /// <summary>§F TF-8 (FD-4): the carried Rename Group prompt — the
+    /// COMMIT verb shipped in §E; this is its front door.</summary>
+    internal event Action<string, string>? GroupRenameRequested;
+
+    internal void RequestGroupRename(string groupId)
+    {
+        ArgumentNullException.ThrowIfNull(groupId);
+        GroupRenameRequested?.Invoke(groupId, RowFor(groupId)?.Title ?? "group");
+    }
+
+    /// <summary>§F TF-8 (FD-4): the carried Set Color prompt — acts
+    /// on the selection, mac's shape.</summary>
+    internal event Action? SetColorRequested;
+
+    internal void RequestSetColor() => SetColorRequested?.Invoke();
 
     /// <summary>§F TF-7 (F5): picker-anchored engine placement, one
     /// action end to end. EVERYTHING against the handle runs inside
