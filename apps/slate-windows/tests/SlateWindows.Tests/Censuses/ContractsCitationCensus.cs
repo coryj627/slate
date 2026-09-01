@@ -213,7 +213,12 @@ public sealed class ContractsCitationCensus
                 // receipt push — taking the section to 38; 36 sits
                 // above the pre-task population of 35 — a sixth
                 // time.
-                36),
+                //
+                // TE-5b bound the document integration, the verbs
+                // and the seat rule, taking the section to 42; 41
+                // sits above the pre-task population of 40 — a
+                // seventh time.
+                41),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

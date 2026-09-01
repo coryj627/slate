@@ -60,12 +60,20 @@ internal sealed class CanvasMutationFunnel(
 
     /// <summary>E2's admission table, in order, then E3's transaction
     /// scheduled on the run seam. The answer is the ADMISSION;
-    /// completion reaches the world through the collaborators.</summary>
+    /// completion reaches the world through the collaborators.
+    /// PREPARATION runs inside the transaction, under the gate and the
+    /// SAME lease hold as the apply (round 1's #5: a placement or
+    /// lookup outside the write boundary goes stale between query and
+    /// write) — `prepare` receives the handle and answers the action,
+    /// or null to refuse after its own typed announcement.</summary>
     internal CanvasMutationAdmission Apply(
-        CanvasMutationOperation operation, CanvasAction action, string name)
+        CanvasMutationOperation operation,
+        Func<ulong, CanvasAction?> prepare,
+        string name,
+        Func<CanvasA11yEvent>? confirm = null)
     {
         ArgumentNullException.ThrowIfNull(operation);
-        ArgumentNullException.ThrowIfNull(action);
+        ArgumentNullException.ThrowIfNull(prepare);
         ArgumentNullException.ThrowIfNull(name);
 
         CanvasPublication now = slot.Current;
@@ -98,21 +106,33 @@ internal sealed class CanvasMutationFunnel(
                 : CanvasMutationAdmission.BusyAlreadyAnnounced;
         }
 
-        run(() => Transact(operation, action, name));
+        run(() => Transact(operation, prepare, name, confirm));
         return CanvasMutationAdmission.Admitted;
     }
 
     private void Transact(
-        CanvasMutationOperation operation, CanvasAction action, string name)
+        CanvasMutationOperation operation,
+        Func<ulong, CanvasAction?> prepare,
+        string name,
+        Func<CanvasA11yEvent>? confirm)
     {
         try
         {
             CanvasApplyResult? result = null;
+            CanvasAction? action = null;
             VaultException? refusal = null;
             bool ran = operation.Basis.Lease.Invoke(
                 () => operation.IsCurrentAgainst(slot.Current),
                 handle =>
                 {
+                    // Preparation under the SAME hold as the apply:
+                    // nothing can move between the placement's answer
+                    // and the write it feeds.
+                    action = prepare(handle);
+                    if (action is null)
+                    {
+                        return;
+                    }
                     try
                     {
                         result = writes.Apply(handle, action);
@@ -133,9 +153,9 @@ internal sealed class CanvasMutationFunnel(
                         }
                     }
                 });
-            if (!ran)
+            if (!ran || action is null)
             {
-                return; // displaced before the call: nothing happened.
+                return; // displaced, or preparation refused: no write.
             }
             if (refusal is VaultException.WriteConflict)
             {
@@ -180,7 +200,14 @@ internal sealed class CanvasMutationFunnel(
                 MarkUnpresented(operation);
                 return;
             }
-            RefreshAndPublish(operation);
+            if (RefreshAndPublish(operation) == CanvasRefreshOutcome.Installed
+                && confirm is not null)
+            {
+                // The verb's confirmation (t0 §1.3), spoken only for
+                // a commit whose presentation INSTALLED — a refused
+                // or displaced publish has nothing true to confirm.
+                announce(confirm());
+            }
         }
         finally
         {
@@ -192,7 +219,7 @@ internal sealed class CanvasMutationFunnel(
         _ = slot.Publish(s =>
             s.Retired ? null : s.WithCommittedUnpresented(operation.Id));
 
-    private void RefreshAndPublish(CanvasMutationOperation operation)
+    private CanvasRefreshOutcome RefreshAndPublish(CanvasMutationOperation operation)
     {
         // Through the WALLED machinery (the model census's catch): the
         // pipeline mints the population and the transfer republishes,
@@ -206,11 +233,12 @@ internal sealed class CanvasMutationFunnel(
                 operation.Effect,
                 population,
                 slot.Current.SelectedIntent,
-                createdId: null));
+                operation.CreatedId));
         if (outcome == CanvasRefreshOutcome.RequiredTargetMissing)
         {
             MarkUnpresented(operation);
         }
+        return outcome;
     }
 }
 

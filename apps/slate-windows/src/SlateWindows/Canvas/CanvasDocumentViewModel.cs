@@ -179,6 +179,18 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// </summary>
     private readonly CanvasPublicationSlot _slot = new(CanvasPublication.Seed());
     private readonly CanvasLoadPipeline _pipeline;
+
+    /// <summary>W6-1 §E TE-5b: the history domain (per-document,
+    /// session-scoped), rebased by every ready publish and cleared
+    /// with the document.</summary>
+    internal CanvasUndoStack UndoStack { get; } = new();
+
+    private readonly CanvasMutationGate _mutationGate = new();
+    private readonly CanvasBusyGate _busyGate = new();
+
+    /// <summary>W6-1 §E TE-5b: THE FUNNEL — every mutation verb on
+    /// this document enters here (R-A).</summary>
+    internal CanvasMutationFunnel Funnel { get; }
     private readonly CanvasFilterMachine _machine;
     private CanvasPublication? _applied;
     private bool _applying;
@@ -258,6 +270,29 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         // rebase resolves against the next population, so a selection
         // made while a load is in flight survives that load's
         // acceptance (task T3).
+        Funnel = new CanvasMutationFunnel(
+            _slot,
+            _mutationGate,
+            UndoStack,
+            _busyGate,
+            new MutationSource(this),
+            _pipeline,
+            // The same tracked worker the filter rides, with the
+            // projection posted after every job — inline in synchronous
+            // tests, so a verb's whole transaction lands before the
+            // caller returns (§E TE-5b).
+            run: body => StartWork(() =>
+            {
+                try
+                {
+                    body();
+                }
+                finally
+                {
+                    Post(ApplyPublication);
+                }
+            }),
+            announce: Speak);
         Selection.PropertyChanged += (_, changed) => PublishIntent(changed.PropertyName);
         Modes = new CanvasModeController(Speak);
         Navigator = new CanvasNavigator(this);
@@ -1463,7 +1498,13 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 }
                 if (!ReferenceEquals(loaded.Population, was?.Population))
                 {
-                    PublishReady(loaded.Population, loaded.Unit);
+                    PublishReady(
+                        loaded.Population,
+                        loaded.Unit,
+                        intentRepublished: !string.Equals(
+                            current.SelectedIntent,
+                            was?.SelectedIntent,
+                            StringComparison.Ordinal));
                     break;
                 }
                 if (!ReferenceEquals(loaded.Unit, was?.Unit)
@@ -1548,8 +1589,15 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         Selection.Selected = null;
     }
 
-    private void PublishReady(CanvasPopulation population, CanvasProjectionUnit unit)
+    private void PublishReady(
+        CanvasPopulation population,
+        CanvasProjectionUnit unit,
+        bool intentRepublished = false)
     {
+        // §E TE-5b: every ready publish rebases the history domain to
+        // the population's basis — a reload quarantines what no longer
+        // applies, a mutation's own refresh re-affirms what does.
+        UndoStack.Rebase(population.ContentHash);
         _rows.Clear();
         _targets.Clear();
         _subpaths = System.Collections.Immutable.ImmutableDictionary<string, string>.Empty;
@@ -1585,7 +1633,18 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         // current seat did not survive, the resolved intent is what
         // comes back, else the first row. Silent seat either way (A12):
         // the focus lands on the row and the screen reader reads it.
-        if (Selection.Selected is not { } kept || !_rows.ContainsKey(kept))
+        if (intentRepublished)
+        {
+            // §E TE-5b (E4): the publication CARRIES a new intent —
+            // only deliberate publishes change it, and a user's own
+            // move publishes an intent equal to the seat it came
+            // from, so this arm fires exactly for the funnel's
+            // declared effects (select-created seats the new card,
+            // clear-selection seats nothing) and never for the T3
+            // mid-flight move the survivor rule protects.
+            Selection.Selected = unit.ResolvedSelection;
+        }
+        else if (Selection.Selected is not { } kept || !_rows.ContainsKey(kept))
         {
             Selection.Selected = unit.ResolvedSelection
                 ?? (population.Count > 0 ? population.Outline[0].NodeId : null);
@@ -1960,6 +2019,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         // close of whatever lease it un-named, under that lease's own
         // lock and off the dispatcher in production.
         _ = _slot.Publish(s => s.WithRetired());
+        UndoStack.Clear();
         try
         {
             base.Shutdown();
@@ -2073,6 +2133,130 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             new(CanvasLoadState.ParseError, ParseErrorDetail(warnings));
     }
 
+    /// <summary>§E TE-5b, the first funnel verb: a text card at
+    /// core's placement (anchor = the selection, defaults from
+    /// `canvas_constants`, no hint), landing selected. Preparation
+    /// runs under the gate and the lease; the confirmation speaks
+    /// core's relative phrase.</summary>
+    public void CanvasNewCard()
+    {
+        if (_slot.Current.Loaded is not { } basis)
+        {
+            return;
+        }
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId("new card"),
+            this,
+            Selection.Selected,
+            basis,
+            CanvasMutationEffect.SelectCreated);
+        CanvasRelativeDesc? relative = null;
+        _ = Funnel.Apply(
+            operation,
+            handle =>
+            {
+                CanvasConstants constants = SlateUniffiMethods.CanvasConstants();
+                CanvasPlacement placement = _session.CanvasPlaceNew(
+                    handle,
+                    operation.Anchor,
+                    constants.DefaultCardW,
+                    constants.DefaultCardH,
+                    null,
+                    []);
+                relative = placement.Relative;
+                string id = SlateUniffiMethods.CanvasNewId();
+                operation.CreatedId = id;
+                return new CanvasAction(
+                    "create card",
+                    [
+                        new CanvasOp.CreateNode(
+                            id,
+                            new CanvasNodeContent.Text(string.Empty),
+                            placement.X,
+                            placement.Y,
+                            constants.DefaultCardW,
+                            constants.DefaultCardH,
+                            null),
+                    ]);
+            },
+            "create card",
+            confirm: () => new CanvasA11yEvent.CanvasCreated(
+                "text", "Untitled", relative!));
+    }
+
+    /// <summary>§E TE-5b: the editor's commit — one SetNodeContent
+    /// when the text changed; the no-change arm is the editor task's
+    /// (TE-7), which owns the seed comparison.</summary>
+    public void CanvasCommitCardEdit(string nodeId, string newText)
+    {
+        ArgumentNullException.ThrowIfNull(nodeId);
+        ArgumentNullException.ThrowIfNull(newText);
+        if (_slot.Current.Loaded is not { } basis)
+        {
+            return;
+        }
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId("edit card"),
+            this,
+            nodeId,
+            basis,
+            CanvasMutationEffect.KeepSelection);
+        _ = Funnel.Apply(
+            operation,
+            _ => new CanvasAction(
+                $"edit \"{TitleOf(nodeId)}\"",
+                [new CanvasOp.SetNodeContent(nodeId, new CanvasNodeContent.Text(newText))]),
+            $"edit \"{TitleOf(nodeId)}\"",
+            confirm: () => new CanvasA11yEvent.CanvasCardUpdated(TitleOf(nodeId)));
+    }
+
+    /// <summary>§E TE-5b: the delete verb's CARD arm — mac's
+    /// clear-selection behavior typed in the effect (IE-26); the
+    /// group's Ungroup/Cancel confirmation and the connection arm
+    /// ride the next slice with their tables.</summary>
+    public void CanvasDeleteSelection()
+    {
+        if (_slot.Current.Loaded is not { } basis
+            || Selection.Selected is not { } selected
+            || !_rows.TryGetValue(selected, out CanvasOutlineRow? row)
+            || row.Kind == "group")
+        {
+            return;
+        }
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId("delete card"),
+            this,
+            selected,
+            basis,
+            CanvasMutationEffect.ClearSelection);
+        _ = Funnel.Apply(
+            operation,
+            _ => new CanvasAction(
+                $"delete \"{row.Title}\"",
+                [new CanvasOp.DeleteNode(selected)]),
+            $"delete \"{row.Title}\"",
+            confirm: () => new CanvasA11yEvent.CanvasDeleted(
+                new CanvasDeleteTarget.Card(row.Kind, row.Title),
+                _verbosity(),
+                CanvasPhrase.UndoChord));
+    }
+
+    private string TitleOf(string nodeId) =>
+        _rows.TryGetValue(nodeId, out CanvasOutlineRow? row) ? row.Title : nodeId;
+
+    /// <summary>The funnel's two writes-and-reads beyond the load
+    /// trio (§E TE-5b) — the one place `canvas_apply` crosses this
+    /// document's session.</summary>
+    private sealed class MutationSource(CanvasDocumentViewModel document)
+        : ICanvasMutationSource
+    {
+        public CanvasApplyResult Apply(ulong handle, CanvasAction action) =>
+            document._session.CanvasApply(handle, action);
+
+        public CanvasEditorSeed CurrentText(ulong handle) =>
+            document._session.CanvasCurrentText(handle);
+    }
+
     /// <summary>The machine's one FFI call, through this document's
     /// session — core's <c>canvas_filter</c> (0b-13/0b-14): title, the
     /// kind type word, any one element of the group path, and the
@@ -2093,6 +2277,10 @@ internal static class CanvasPhrase
 {
     /// <summary>The tree's own accessible name.</summary>
     public const string OutlineName = "Canvas outline";
+
+    /// <summary>The Windows display chord for undo, carried in the
+    /// destructive confirmations' hint (t0 §1.3; mac's ⌘Z twin).</summary>
+    public const string UndoChord = "Ctrl+Z";
 
     /// <summary>The surface switcher's accessible name (spec §PR A
     /// Builds, verbatim).</summary>

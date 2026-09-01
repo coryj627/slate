@@ -104,6 +104,12 @@ internal sealed class CanvasMutationOperation
 
     internal CanvasMutationEffect Effect { get; }
 
+    /// <summary>The id the operation CREATES, set by preparation
+    /// (under the gate) before the apply — the SelectCreated effect
+    /// resolves it against the refreshed population (IE-35's required
+    /// target). Null for every non-creating verb.</summary>
+    internal string? CreatedId { get; set; }
+
     /// <summary>Non-null only for a mode's own commit: the funnel's
     /// transient guard admits exactly the operation carrying the live
     /// mode's token, so a refused commit leaves the mode and its

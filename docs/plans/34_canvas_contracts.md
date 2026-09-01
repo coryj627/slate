@@ -7921,6 +7921,60 @@ model's closed world stays closed, and its authority walk showed
 why an enum does not belong in it. One suite run was pushed red
 before this landed; the fix commit follows it directly.
 
+**TE-5b — the funnel enters the document, and the first three verbs
+run on a real vault.** The prepare seam, the confirmation seam and
+the intent-provenance seat rule; E4's declared effects observable
+end-to-end.
+
+- **Prepare under the gate:** the funnel's Apply now takes the
+  preparation as a function of the handle, run inside the SAME lease
+  hold as the apply — round 1's #5 closed structurally (a placement
+  answered and a write fed in one hold; nothing moves between). The
+  confirmation seam speaks the verb's typed event only for a commit
+  whose presentation INSTALLED, with the operation carrying the
+  created id the SelectCreated effect resolves (IE-35's required
+  target, threaded).
+- **The document integration:** the history domain, the gate, the
+  busy gate and the funnel live on `CanvasDocumentViewModel`, built
+  over a two-method mutation source beside the load source, riding
+  the SAME tracked worker the filter rides (the projection posted
+  after every job, inline in synchronous tests). Every ready publish
+  rebases the history domain to the population's basis; retirement
+  clears it.
+- **The intent-provenance seat rule** — the slice's design catch:
+  A12's survivor rule kept the OLD seat over a created card, because
+  the created id survived nothing (it was born) while the anchor
+  survived everything. The distinguisher is provenance: the slot's
+  selected INTENT changes only through deliberate publishes, and a
+  user's own move publishes an intent equal to the seat it came
+  from — so "the publication carries a new intent" fires exactly
+  for the funnel's declared effects and never for the T3-protected
+  mid-flight move. PublishReady seats the unit's resolution on that
+  arm and keeps the survivor rule on every other.
+- **The verbs:** New Card (core placement at the selection anchor,
+  defaults from the constants, landing selected in one publish),
+  the editor's commit (SetNodeContent; the no-change arm is the
+  editor task's), and Delete's card arm (mac's clear-selection
+  behavior, typed; the group's Ungroup/Cancel confirmation and the
+  connection arm ride the next slice with their tables). Each fact
+  drives disk bytes, the rendered confirmation, the seat, and the
+  inverse restoring the EXACT prior bytes through the two-phase
+  checkout.
+
+Facts: three in `CanvasMutationTests` over a real `VaultSession`.
+Mutations: the provenance arm dropped (the New Card fact failed on
+the unseated card); the created id untreaded into the effect plan
+(the same fact failed through the required-target path); and a
+finding worth its line — Delete's effect flipped to KeepSelection
+did NOT bite, because a verb that deletes its own seat makes the
+two arms indistinguishable: the drop rule truthfully resolves the
+dead intent to null either way. The ClearSelection arm stays as the
+type-level record of mac's behavior, the non-biting flip is
+recorded rather than laundered, and the third mutation became the
+undo-hint wire instead (the hint constant cut at the verb site —
+the delete fact failed on the sentence). Each restored
+byte-for-byte.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same

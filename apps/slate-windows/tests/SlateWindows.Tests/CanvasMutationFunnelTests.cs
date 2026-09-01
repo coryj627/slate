@@ -47,7 +47,7 @@ public sealed class CanvasMutationFunnelTests
             Slot.Current.Loaded!, CanvasMutationEffect.KeepSelection);
 
         internal CanvasMutationAdmission Apply(string label) =>
-            Funnel.Apply(Operation(label), new CanvasAction(label, []), label);
+            Funnel.Apply(Operation(label), _ => new CanvasAction(label, []), label);
     }
 
     /// <summary>The happy transaction: entry recorded with the apply's
