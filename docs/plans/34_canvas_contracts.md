@@ -7795,6 +7795,41 @@ pre-cycle snapshot would execute it twice — and the re-run mutation
 failed exactly that arm. Each restored byte-for-byte; the epoch is
 load-bearing and now provably so.
 
+**TE-3 — the conflict machine's record and its one door.** Types and
+pins IE-12, IE-14 and IE-17, and the state-machine halves of IE-15;
+the FFI-driven resolution arms, the tab's conflict value publish and
+the owner-transfer rule (IE-16, IE-18, IE-36) are consumed by the
+funnel task, which owns the seams they publish through.
+
+- **The record** (`CanvasConflictRecord`): one WriteConflict's WHOLE
+  context, retained until a terminal transition — the full operation
+  (owner, effects, mode token: IE-12's "retain the complete
+  operation", satisfied by carrying TE-1's value), the attempted
+  action and name, the failed basis, the typed HISTORY POLICY
+  (push-and-clear, undo-transfer, redo-transfer, no-history — the
+  round-2 finding that an Overwrite after a conflicted undo must
+  transfer, not re-push), and the PRE-CONFLICT SNAPSHOT.
+- **The snapshot (IE-17)** closes over a new core read:
+  canvas_current_text — the handle's in-memory document serialized
+  under the registry lock, paired with its basis. At conflict time
+  that IS the pre-conflict revision (the refused apply moved
+  nothing), so Save a Copy's detached apply has its text even after
+  a document reload destroyed every other route to it. The rust fact
+  pins capture-at-open, canonical round-trip, and the successor
+  after an apply; the FFI mirrors it.
+- **The door (IE-14):** TryBeginResolving admits exactly one
+  resolution; a second while one runs refuses, a terminal record
+  admits none, and every terminal transition — resolved, failed-back
+  -to-pending (the record whole, recovery intact: IE-15's no-outcome
+  -discards-recovery), replaced-by-a-fresh-conflict — requires the
+  OWNING resolution, with the unsurvivable tripwire for anything
+  else.
+
+Facts: three in `CanvasConflictRecordTests`, one in the rust canvas
+battery. Mutations: the door's guard removed (the opens-once fact
+failed); a failure made terminal (the record-whole fact failed);
+both restored byte-for-byte.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same

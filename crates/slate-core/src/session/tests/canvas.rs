@@ -1058,3 +1058,50 @@ fn canvas_apply_reports_a_landed_write_whose_index_failed() {
             .contains("Second")
     );
 }
+
+#[test]
+fn canvas_current_text_is_the_handles_revision_with_its_basis() {
+    use crate::canvas::apply::{CanvasAction, CanvasNodeContent, CanvasOp};
+
+    let (_tmp, session) = canvas_vault();
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let info = session.open_canvas("board.canvas").unwrap();
+
+    // At open: the serialization of the parsed document, paired with
+    // the open basis (IE-17's capture, provable).
+    let snapshot = session.canvas_current_text(info.handle).unwrap();
+    assert_eq!(snapshot.content_hash, info.content_hash);
+    // Round-trip honesty: parsing the snapshot yields the same
+    // serialization (canonical form), warning-free.
+    let (reparsed, warnings) = crate::canvas::parse(&snapshot.text);
+    assert!(warnings.is_empty());
+    assert_eq!(
+        crate::canvas::serialize::serialize(&reparsed),
+        snapshot.text
+    );
+
+    // After an apply the snapshot is the successor revision.
+    let result = session
+        .canvas_apply(
+            info.handle,
+            CanvasAction {
+                name: "create card".into(),
+                ops: vec![CanvasOp::CreateNode {
+                    id: "snap-1".into(),
+                    content: CanvasNodeContent::Text {
+                        text: "Snapshot probe".into(),
+                    },
+                    x: 0.0,
+                    y: 990.0,
+                    width: 260.0,
+                    height: 140.0,
+                    color: None,
+                }],
+            },
+        )
+        .unwrap();
+    let successor = session.canvas_current_text(info.handle).unwrap();
+    assert_eq!(successor.content_hash, result.new_content_hash);
+    assert!(successor.text.contains("Snapshot probe"));
+    assert_eq!(successor.text, session.read_text("board.canvas").unwrap());
+}

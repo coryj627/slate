@@ -10705,6 +10705,12 @@ impl VaultSession {
         Ok(self.inner.canvas_proximity_order(handle, anchor, exclude)?)
     }
 
+    /// The handle's current document text + basis (§E TE-3): the
+    /// pre-conflict snapshot Save a Copy closes over.
+    pub fn canvas_current_text(&self, handle: u64) -> Result<CanvasEditorSeed, VaultError> {
+        Ok(self.inner.canvas_current_text(handle)?.into())
+    }
+
     /// One locked read of text + basis — the editor's seed (§E TE-0).
     pub fn canvas_editor_seed(
         &self,

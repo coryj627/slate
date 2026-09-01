@@ -19710,6 +19710,21 @@ impl VaultSession {
         )
     }
 
+    /// The handle's CURRENT document serialized (W6-1 §E TE-3,
+    /// IE-17): at conflict time the in-memory canvas is still the
+    /// pre-conflict revision — the apply refused, the state did not
+    /// move — and Save a Copy applies the retained action to THIS
+    /// text detachedly. Locked, and paired with the basis so the
+    /// caller can prove which revision it captured.
+    pub fn canvas_current_text(&self, handle: u64) -> Result<CanvasEditorSeed, VaultError> {
+        let canvases = self.canvases.lock().expect("canvas registry mutex");
+        let state = canvases.get(&handle).ok_or_else(|| bad_handle(handle))?;
+        Ok(CanvasEditorSeed {
+            text: crate::canvas::serialize::serialize(&state.canvas),
+            content_hash: state.content_hash.clone(),
+        })
+    }
+
     /// One LOCKED read of a text card's content together with the
     /// basis it was read at (W6-1 §E TE-0, IE-4). Reading text and
     /// basis in two calls can seed old text under a new hash — or the

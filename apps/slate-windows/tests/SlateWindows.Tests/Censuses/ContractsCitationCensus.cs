@@ -197,7 +197,12 @@ public sealed class ContractsCitationCensus
                 // vocabulary, taking the section to 30; 26 sits
                 // above the pre-task population of 25 — a third
                 // time.
-                26),
+                //
+                // TE-3 bound the conflict record, its door and the
+                // snapshot read, taking the section to 32; 31 sits
+                // above the pre-task population of 30 — a fourth
+                // time.
+                31),
         ];
 
     public static TheoryData<string, string, string> SectionRanges
