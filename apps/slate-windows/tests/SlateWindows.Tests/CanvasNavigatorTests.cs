@@ -4280,4 +4280,42 @@ public sealed class CanvasNavigatorTests : IDisposable
 
         public object? Owner => null;
     }
+
+    /// <summary>The review round's R2 half: a bare Shift chord on the
+    /// VISUAL surface is consumed only when the projection owns the
+    /// keys — with the caret in the filter field, Shift+1 is the
+    /// reader's '!' and must fall through.</summary>
+    [Fact]
+    public void AShiftChordWithoutProjectionFocusFallsThrough()
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        var unfocused = new UnfocusedVisualPresenter();
+        document.Navigator.AttachPresenter(unfocused);
+        Assert.False(
+            document.Navigator.HandleKey(Key.D1, ModifierKeys.Shift, unfocused),
+            "Shift+1 was consumed while the visual projection did not own "
+            + "the keys: the reader's '!' never reached the field (the "
+            + "review round's arrangement, verbatim).");
+    }
+
+    /// <summary>The review fake: the visual is SHOWING and the
+    /// projection does NOT own the keys.</summary>
+    private sealed class UnfocusedVisualPresenter : ICanvasSurfacePresenter
+    {
+        public CanvasSurfaceKind Projection => CanvasSurfaceKind.Visual;
+
+        public bool ProjectionHasFocus => false;
+
+        public bool CanMoveWithinProjection(bool forward) => false;
+
+        public bool ViewportCommand(CanvasViewportVerb verb) => true;
+
+        public bool FocusRow(string nodeId) => false;
+
+        public bool FocusProjection() => false;
+
+        public bool DismissTransientRegion() => false;
+
+        public object? Owner => null;
+    }
 }

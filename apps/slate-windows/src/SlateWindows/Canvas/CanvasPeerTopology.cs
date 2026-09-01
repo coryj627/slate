@@ -170,7 +170,10 @@ internal sealed class CanvasPeerTopology
         }
         return new(placements.ToImmutable());
 
+        // Edge-INCLUSIVE (the review round): a card exactly touching
+        // the window's edge materializes, matching the platform
+        // rectangle semantics a reader of Rect.IntersectsWith expects.
         bool Intersects(double x, double y, double w, double h) =>
-            x < right && x + w > left && y < bottom && y + h > top;
+            x <= right && x + w >= left && y <= bottom && y + h >= top;
     }
 }

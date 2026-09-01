@@ -1413,8 +1413,13 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         finally
         {
             _applying = false;
+            // In the FINALLY (the review round): a throwing Apply must
+            // not suppress the notification — the doc contract is
+            // "after EVERY apply", and a skipped raise left the
+            // presentation engine on the previous population for the
+            // life of the publication.
+            PublicationApplied?.Invoke(current);
         }
-        PublicationApplied?.Invoke(current);
     }
 
     private void Apply(CanvasPublication current, CanvasPublication? was)

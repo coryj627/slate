@@ -53,7 +53,10 @@ internal static class CanvasPalette
         if (body.Length != 6
             || !uint.TryParse(
                 body,
-                System.Globalization.NumberStyles.HexNumber,
+                // AllowHexSpecifier ALONE (the review round): the
+                // HexNumber composite admits leading and trailing
+                // whitespace, so "# FF00 " parsed as a colour.
+                System.Globalization.NumberStyles.AllowHexSpecifier,
                 System.Globalization.CultureInfo.InvariantCulture,
                 out uint value))
         {

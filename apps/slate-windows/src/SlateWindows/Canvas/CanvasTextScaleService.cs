@@ -97,8 +97,11 @@ internal sealed class CanvasTextScaleService : IDisposable
         try
         {
             using RegistryKey? key = Registry.CurrentUser.OpenSubKey(KeyPath);
+            // Clamped BOTH ways (the review round): a policy or a
+            // future slider can write past 225, and the documented
+            // range is the contract consumers size text by.
             return key?.GetValue(ValueName) is int percent && percent >= 100
-                ? percent / 100.0
+                ? Math.Clamp(percent / 100.0, 1.0, 2.25)
                 : 1.0;
         }
         catch (Exception exception) when (CanvasFaults.Survivable(exception))

@@ -6986,6 +6986,45 @@ FlaUI battery with TD-7, where a real pane closes; the w_c_matrix
 visual row and the token-drift census are TD-7's, and this entry is
 the note that keeps them owed.
 
+**The implementation review round — TD-1 through TD-6, one pass, ten
+findings, all accepted.** The house reviewer over the whole
+implementation span: eight CONFIRMED, two PLAUSIBLE, every one a
+real defect or a real gap. Fixed: (1) a faulted off-thread build
+held the single-flight flag forever — the continuation now runs on
+every completion, resets the flag and rethrows LOUDLY on the
+captured dispatcher (a pure derivation that throws is a defect to
+surface, not a frame to skip); (2) the marshalled publication
+intake could commit a stale publication over a newer one — each
+notification takes an interlocked ticket and a stale messenger
+drops itself; (3) a throwing apply suppressed the post-apply
+notification — it moves into the finally, honoring "after EVERY
+apply"; (4) the bare Shift chords checked only what was SHOWING —
+both halves of R2 now gate them, pinned by
+`AShiftChordWithoutProjectionFocusFallsThrough` (Shift+1 with the
+caret in the filter field is the reader's '!'); (5) the engine
+gained its teardown contract — `Shutdown` on the engine, called by
+the renderer's, guarded in intake and install, pinned by
+`AShutDownEngineInstallsNothing`; (6) the hex parser admitted
+whitespace-padded bodies through the framework's composite flags —
+AllowHexSpecifier alone now, pinned by
+`WhitespacePaddedHexIsRefused` in `CanvasPaletteTests`; (7) the
+text-scale read clamps BOTH ways to the documented range; (8) the
+topology's window test is edge-inclusive, matching platform
+rectangle semantics. One finding was fixed in flight before the
+report landed — the ambient-context scheduler, replaced by the
+captured-dispatcher post — and the reviewer's PLAUSIBLE sibling
+confirms why. The remaining PLAUSIBLE (a reentrant apply raising
+newer-then-older) is MITIGATED by the same ticket that fixes (2),
+and recorded rather than claimed closed: no in-tree subscriber
+re-enters today, and the ordering guard is the ticket, not a hope.
+Mutations, injected and restored byte-for-byte: the focus half of
+the Shift gate reverted (its fact red) and the whitespace tolerance
+reverted (its fact red). Two fixes carry no direct fact and say so:
+the faulted-derive reset has no seam to a throwing derivation (the
+derive is pure and private), and the stale-ticket race has no
+deterministic arrangement in-process — both are covered by the
+review's own verification and stated here instead of implied.
+
 ---
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)

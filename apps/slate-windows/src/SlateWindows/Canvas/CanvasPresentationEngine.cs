@@ -40,6 +40,9 @@ internal sealed class CanvasPresentationEngine
     private System.Collections.Immutable.ImmutableHashSet<CanvasPeerKey> _retained =
         [];
     private bool _building;
+    private bool _shutDown;
+    private long _applyTicket;
+    private long _committedTicket;
     private int _discarded;
 
     internal CanvasPresentationEngine(bool synchronousForTests = false)
@@ -67,12 +70,19 @@ internal sealed class CanvasPresentationEngine
     internal void OnPublicationApplied(CanvasPublication applied)
     {
         ArgumentNullException.ThrowIfNull(applied);
+        // The intake is SEQUENCED (the review round): a worker-thread
+        // apply queues its commit behind the dispatcher, and a newer
+        // apply can land inline first — a reference-only dedupe then
+        // let the queued OLDER publication regress the source. Each
+        // notification takes a ticket; a commit whose ticket is not
+        // the latest is a stale messenger and drops itself.
+        long ticket = System.Threading.Interlocked.Increment(ref _applyTicket);
         if (_dispatcher.CheckAccess())
         {
-            CommitSource(applied);
+            CommitSource(applied, ticket);
             return;
         }
-        _ = _dispatcher.BeginInvoke(() => CommitSource(applied));
+        _ = _dispatcher.BeginInvoke(() => CommitSource(applied, ticket));
     }
 
     /// <summary>A viewport command: commit the successor value FIRST,
@@ -133,13 +143,14 @@ internal sealed class CanvasPresentationEngine
         RequestBuild();
     }
 
-    private void CommitSource(CanvasPublication applied)
+    private void CommitSource(CanvasPublication applied, long ticket)
     {
         AssertCommitThread();
-        if (ReferenceEquals(_source, applied))
+        if (_shutDown || ticket <= _committedTicket || ReferenceEquals(_source, applied))
         {
             return;
         }
+        _committedTicket = ticket;
         _source = applied;
         RequestBuild();
     }
@@ -188,13 +199,29 @@ internal sealed class CanvasPresentationEngine
         // ambient context: under a test host the ambient context is
         // the pool's, and an install landing there would throw the
         // thread assertion into an unobserved task — the engine owns
-        // its dispatcher (ID-1), so the continuation names it.
+        // its dispatcher (ID-1), so the continuation names it. The
+        // continuation runs on EVERY completion (the review round: an
+        // OnlyOnRanToCompletion gate left a faulted derive holding
+        // _building forever — a silent, unrecoverable freeze), and a
+        // fault resets the flag then rethrows LOUDLY on the
+        // dispatcher: a pure derivation that throws is a defect to
+        // surface, never a frame to skip.
         _ = System.Threading.Tasks.Task.Run(
                 () => Derive(source, viewport, retained, textScale, theme))
             .ContinueWith(
-                done => _dispatcher.BeginInvoke(() => Install(done.Result)),
+                done => _dispatcher.BeginInvoke(() =>
+                {
+                    if (done.Exception is { } fault)
+                    {
+                        _building = false;
+                        System.Runtime.ExceptionServices.ExceptionDispatchInfo
+                            .Capture(fault.InnerException ?? fault)
+                            .Throw();
+                    }
+                    Install(done.Result);
+                }),
                 System.Threading.CancellationToken.None,
-                System.Threading.Tasks.TaskContinuationOptions.OnlyOnRanToCompletion,
+                System.Threading.Tasks.TaskContinuationOptions.None,
                 System.Threading.Tasks.TaskScheduler.Default);
     }
 
@@ -218,10 +245,24 @@ internal sealed class CanvasPresentationEngine
             textScaleRevision,
             themeRevision);
 
+    /// <summary>Teardown (the review round): a build in flight at
+    /// teardown must not install into a dying view, and a queued
+    /// intake must not resurrect one — the dying-UI publish race the
+    /// panel scheduler was extracted to close, closed here too.</summary>
+    internal void Shutdown()
+    {
+        AssertCommitThread();
+        _shutDown = true;
+    }
+
     private void Install(CanvasPresentationState built)
     {
         AssertCommitThread();
         _building = false;
+        if (_shutDown)
+        {
+            return;
+        }
         // The install-time revalidation (ID-1): the pair is re-read on
         // the SAME thread every commit runs on, so a stale build is
         // detected here and never installed.

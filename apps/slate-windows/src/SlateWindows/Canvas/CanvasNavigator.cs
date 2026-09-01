@@ -986,7 +986,12 @@ internal sealed class CanvasNavigator
     /// on the outline or table, Shift+1 is a typed character.</summary>
     private bool VisualOnlyFromKey(CanvasViewportVerb verb)
     {
-        if (_presenter is not { Projection: CanvasSurfaceKind.Visual })
+        // BOTH halves of R2 (the review round): the visual must be
+        // showing AND own the keys — a bare Shift chord consumed while
+        // the caret sits in the filter field would eat the '!' the
+        // reader typed.
+        if (_presenter is not { Projection: CanvasSurfaceKind.Visual } pane
+            || !pane.ProjectionHasFocus)
         {
             return false;
         }
