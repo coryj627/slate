@@ -304,8 +304,17 @@ internal sealed class CanvasOutlineView : UserControl
             ItemsSource = _roots,
             ItemTemplate = RowTemplate(),
             ItemContainerStyle = RowContainerStyle(),
+            // §E TE-8: the context menu builds lazily, per row, from
+            // the ONE plan — assigned during ContextMenuOpening so the
+            // Menu key, Shift+F10 and the pointer all take the same
+            // derived rows (IE-31; the census asserts equality).
             BorderThickness = new Thickness(0),
         };
+        _tree.AddHandler(
+            System.Windows.FrameworkElement.ContextMenuOpeningEvent,
+            new System.Windows.Controls.ContextMenuEventHandler(
+                OnRowContextMenuOpening),
+            handledEventsToo: false);
         ScrollViewer.SetCanContentScroll(_tree, true);
         VirtualizingStackPanel.SetIsVirtualizing(_tree, true);
         // Standard, NOT Recycling (contract A8): a recycled container
@@ -840,6 +849,98 @@ internal sealed class CanvasOutlineView : UserControl
             default:
                 break;
         }
+    }
+
+    /// <summary>§E TE-8: the row's menu from the plan — headers,
+    /// enabled flags and staged reasons verbatim; verbs map onto the
+    /// document. A connection row (no node Row) gets no menu.</summary>
+    internal System.Windows.Controls.ContextMenu? BuildContextMenu(
+        CanvasOutlineRowViewModel rowModel)
+    {
+        ArgumentNullException.ThrowIfNull(rowModel);
+        if (rowModel.Row is not { } row || Model is not { } model)
+        {
+            return null;
+        }
+        return BuildMenuFromPlan(row.Kind, (verb, nodeId) =>
+        {
+            switch (verb)
+            {
+                case CanvasContextVerb.Open:
+                    rowModel.RaiseActivate();
+                    break;
+                case CanvasContextVerb.Delete:
+                    model.SeatSelectionSilently(nodeId);
+                    model.CanvasDeleteSelection();
+                    break;
+                case CanvasContextVerb.Ungroup:
+                    model.CanvasUngroup(nodeId);
+                    break;
+                case CanvasContextVerb.EditCard:
+                    model.RequestCardEditor(nodeId);
+                    break;
+                default:
+                    break;
+            }
+        }, row.NodeId);
+    }
+
+    /// <summary>The ONE plan-to-menu mapping — the opening handler and
+    /// the census fact share it, so the built rows cannot drift from
+    /// the plan (IE-31).</summary>
+    internal static System.Windows.Controls.ContextMenu BuildMenuFromPlan(
+        string kind, Action<CanvasContextVerb, string> execute, string nodeId)
+    {
+        ArgumentNullException.ThrowIfNull(kind);
+        ArgumentNullException.ThrowIfNull(execute);
+        ArgumentNullException.ThrowIfNull(nodeId);
+        var menu = new System.Windows.Controls.ContextMenu();
+        foreach (CanvasContextMenuRow planned in CanvasContextMenuPlan.RowsFor(kind))
+        {
+            var item = new System.Windows.Controls.MenuItem
+            {
+                Header = planned.Name,
+                IsEnabled = planned.Enabled,
+                ToolTip = planned.DisabledReason,
+            };
+            if (planned.DisabledReason is { } reason)
+            {
+                System.Windows.Automation.AutomationProperties.SetHelpText(item, reason);
+                System.Windows.Controls.ToolTipService.SetShowOnDisabled(item, true);
+            }
+            CanvasContextVerb verb = planned.Verb;
+            item.Click += (_, _) => execute(verb, nodeId);
+            menu.Items.Add(item);
+        }
+        return menu;
+    }
+
+    private void OnRowContextMenuOpening(
+        object sender, System.Windows.Controls.ContextMenuEventArgs e)
+    {
+        if (e.OriginalSource is System.Windows.DependencyObject source
+            && ItemFromSource(source) is { } item
+            && item.DataContext is CanvasOutlineRowViewModel rowModel)
+        {
+            System.Windows.Controls.ContextMenu? menu = BuildContextMenu(rowModel);
+            if (menu is null)
+            {
+                e.Handled = true;
+                return;
+            }
+            item.ContextMenu = menu;
+        }
+    }
+
+    private static CanvasOutlineItem? ItemFromSource(
+        System.Windows.DependencyObject source)
+    {
+        System.Windows.DependencyObject? walk = source;
+        while (walk is not null and not CanvasOutlineItem)
+        {
+            walk = System.Windows.Media.VisualTreeHelper.GetParent(walk);
+        }
+        return walk as CanvasOutlineItem;
     }
 
     private static Style RowContainerStyle()

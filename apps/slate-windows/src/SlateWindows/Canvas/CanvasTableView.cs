@@ -395,10 +395,24 @@ internal sealed class CanvasTableView : UserControl
         },
         new()
         {
+            // §E TE-8: Delete goes LIVE for card kinds — the row is
+            // seated first (the mac RowAction contract: the action
+            // acts on ITS row), then the funnel verb runs. A GROUP
+            // row's removal is the outline menu's Ungroup (ED-3);
+            // here the row stays visible and disabled with the
+            // algebra's reason, mac's temporarily-unavailable shape.
             Name = CanvasPhrase.DeleteRowAction,
-            Execute = static _ => { },
-            IsEnabled = static _ => false,
-            DisabledReason = CanvasPhrase.DeletingArrivesLater,
+            Execute = row =>
+            {
+                if (Model is { } model && row is CanvasTableRow bound)
+                {
+                    model.SeatSelectionSilently(bound.NodeId);
+                    model.CanvasDeleteSelection();
+                }
+            },
+            IsEnabled = static row =>
+                row is CanvasTableRow bound && bound.Kind != "group",
+            DisabledReason = CanvasPhrase.GroupRemovalIsUngroup,
         },
     ];
 

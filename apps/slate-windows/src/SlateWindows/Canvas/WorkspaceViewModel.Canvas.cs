@@ -58,6 +58,11 @@ internal sealed partial class WorkspaceViewModel
             {
                 document.Selection.SeedFrom(seedSelection);
             }
+            // §E TE-8: a row surface's Edit Card reaches the sheet
+            // through the document's request — the workspace owns the
+            // one sheet property the modal machinery watches.
+            document.CardEditorRequested +=
+                nodeId => CanvasCardEditorSheet = document.OpenCardEditor(nodeId);
             _canvasDocuments[key] = document;
             InstallCanvasDocumentSeams(document);
             document.Load();

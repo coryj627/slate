@@ -231,7 +231,12 @@ public sealed class ContractsCitationCensus
                 // modal membership, taking the section to 51; 50
                 // sits above the pre-task population of 49 — a
                 // tenth time.
-                50),
+                //
+                // TE-8 bound the plan, its two consumers and the
+                // popup fact, taking the section to 55; 52 sits
+                // above the pre-task population of 51 — an
+                // eleventh time.
+                52),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

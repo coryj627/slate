@@ -8101,6 +8101,41 @@ no-change arm cut (the writes-nothing fact failed on the history
 entry); the conflict made to close over the draft (the keeps-draft
 fact failed); each restored byte-for-byte.
 
+**TE-8 — the context menus from the one plan.** Discharges IE-31 and
+lands m11's popup fact beside the classification it exercises.
+
+- **The plan** (`CanvasContextMenuPlan` over `CanvasContextMenuRow`):
+  rows derived from the row's KIND with explicit exclusions — mac's
+  leading pair, then the kind's own verbs; a group's removal is
+  Ungroup and Delete is ABSENT there (ED-3's algebra, in the table
+  rather than a button's fine print); Delete is LIVE on card kinds;
+  Toggle Mark stays staged for PR G with its why. Two honesty calls
+  recorded as decisions: Rename Group and Set Color ship their
+  COMMIT paths but not yet their prompt sheets, so their rows stand
+  visible-and-staged with "Its prompt arrives with a later slice." —
+  the mac contract's temporarily-unavailable shape, never a dead
+  click — and the grid's group-row Delete stays disabled with "A
+  group is removed by Ungroup — its cards stay." replacing the
+  retired staging reason.
+- **Two consumers, one derivation:** the grid's row actions flip
+  Delete live (seat the row, then the funnel verb — the
+  acts-on-its-row rule) and the outline's context menu builds
+  lazily during ContextMenuOpening from `BuildMenuFromPlan` — the
+  SAME mapping the census fact drives, so the built rows cannot
+  drift from the plan. Edit Card routes through a document-raised
+  request the workspace answers (the sheet lives on the workspace;
+  the modal censuses' convention from TE-7, reused rather than
+  bypassed). The §B-era fact that guarded the STAGED Delete flipped
+  to guard the live truth from the other side.
+
+Facts: three in `CanvasContextMenuTests` (the plan's tables, the
+no-silent-staging rule, the derived equality), the flipped table
+fact, and m11's popup-chain fact in the navigator battery.
+Mutations: the plan's Delete arm dropped (the tables fact failed);
+a staged reason nulled (the no-silent-staging fact failed); the
+builder hand-listed a kind (the equality fact failed); each
+restored byte-for-byte.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same

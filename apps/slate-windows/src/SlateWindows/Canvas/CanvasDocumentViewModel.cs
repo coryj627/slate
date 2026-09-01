@@ -2702,6 +2702,19 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         return new CanvasCardEditorViewModel(this, nodeId, row.Title, seed);
     }
 
+    /// <summary>§E TE-8: a row surface asks for the editor. The sheet
+    /// lives on the WORKSPACE (the modal censuses' convention), so the
+    /// document raises and the workspace opens — the row is seated
+    /// first, the mac RowAction contract's acts-on-its-row rule.</summary>
+    internal event Action<string>? CardEditorRequested;
+
+    internal void RequestCardEditor(string nodeId)
+    {
+        ArgumentNullException.ThrowIfNull(nodeId);
+        SeatSelectionSilently(nodeId);
+        CardEditorRequested?.Invoke(nodeId);
+    }
+
     /// <summary>The editor model's announce door — the same relay the
     /// verbs use, named so the editor's arms read as the M8 carve-out
     /// they are.</summary>
@@ -2936,6 +2949,26 @@ internal static class CanvasPhrase
 
     public const string DeleteRowAction = "Delete";
 
+    /// <summary>§E TE-8: the plan's kind-scoped rows (mac's labels).</summary>
+    public const string EditCardRowAction = "Edit Card Text…";
+
+    public const string RenameGroupRowAction = "Rename Group…";
+
+    public const string UngroupRowAction = "Ungroup";
+
+    public const string SetColorRowAction = "Set Color…";
+
+    /// <summary>The group row's Delete stays disabled with the
+    /// algebra's why: removal of a group IS Ungroup (ED-3).</summary>
+    public const string GroupRemovalIsUngroup =
+        "A group is removed by Ungroup — its cards stay.";
+
+    /// <summary>§E TE-8: verbs whose COMMIT path shipped but whose
+    /// prompt sheet has not — visible with the why, mac's
+    /// temporarily-unavailable shape, never a dead click.</summary>
+    public const string PromptArrivesLater =
+        "Its prompt arrives with a later slice.";
+
     /// <summary>The reason the Toggle Mark row action is listed but
     /// disabled: the marking verbs are PR G's. Carried as the action's
     /// <c>DisabledReason</c>, which the substrate exposes as HelpText —
@@ -2944,7 +2977,6 @@ internal static class CanvasPhrase
     public const string MarkingArrivesLater = "Marking cards arrives in a later slice.";
 
     /// <summary>The same, for Delete: the mutation funnel is PR E's.</summary>
-    public const string DeletingArrivesLater = "Deleting cards arrives in a later slice.";
 
     /// <summary>
     /// The table's summary line — mac's sentence verbatim, including its
