@@ -2244,6 +2244,448 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     private string TitleOf(string nodeId) =>
         _rows.TryGetValue(nodeId, out CanvasOutlineRow? row) ? row.Title : nodeId;
 
+    /// <summary>§E TE-5c: New Group — the label arrives as a
+    /// parameter (the prompt sheet is TE-7's); geometry from core's
+    /// group defaults at the selection anchor.</summary>
+    public void CanvasNewGroup(string label)
+    {
+        ArgumentNullException.ThrowIfNull(label);
+        if (_slot.Current.Loaded is not { } basis)
+        {
+            return;
+        }
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId("new group"), this, Selection.Selected,
+            basis, CanvasMutationEffect.SelectCreated);
+        CanvasRelativeDesc? relative = null;
+        _ = Funnel.Apply(
+            operation,
+            handle =>
+            {
+                CanvasConstants constants = SlateUniffiMethods.CanvasConstants();
+                CanvasPlacement placement = _session.CanvasPlaceNew(
+                    handle, operation.Anchor,
+                    constants.DefaultGroupW, constants.DefaultGroupH, null, []);
+                relative = placement.Relative;
+                string id = SlateUniffiMethods.CanvasNewId();
+                operation.CreatedId = id;
+                return new CanvasAction(
+                    $"create group \"{label}\"",
+                    [
+                        new CanvasOp.CreateGroup(
+                            id, label, placement.X, placement.Y,
+                            constants.DefaultGroupW, constants.DefaultGroupH, null),
+                    ]);
+            },
+            $"create group \"{label}\"",
+            confirm: () => new CanvasA11yEvent.CanvasCreated("group", label, relative!));
+    }
+
+    /// <summary>§E TE-5c: Rename Group — the real op (IE-23's round-1
+    /// catch: never SetNodeContent on a group).</summary>
+    public void CanvasRenameGroup(string groupId, string label)
+    {
+        ArgumentNullException.ThrowIfNull(groupId);
+        ArgumentNullException.ThrowIfNull(label);
+        if (_slot.Current.Loaded is not { } basis)
+        {
+            return;
+        }
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId("rename group"), this, groupId,
+            basis, CanvasMutationEffect.KeepSelection);
+        _ = Funnel.Apply(
+            operation,
+            _ => new CanvasAction(
+                $"rename group to \"{label}\"",
+                [new CanvasOp.RenameGroup(groupId, label)]),
+            $"rename group to \"{label}\"",
+            confirm: () => new CanvasA11yEvent.CanvasRenamedGroup(label));
+    }
+
+    /// <summary>§E TE-5c: the delete verb's GROUP arm — the algebra's
+    /// one group removal (Ungroup: frame and incident edges go, cards
+    /// stay; ED-3's confirmation sheet is TE-7's, this is its commit
+    /// path).</summary>
+    public void CanvasUngroup(string groupId)
+    {
+        ArgumentNullException.ThrowIfNull(groupId);
+        if (_slot.Current.Loaded is not { } basis
+            || !_rows.TryGetValue(groupId, out CanvasOutlineRow? row))
+        {
+            return;
+        }
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId("ungroup"), this, groupId,
+            basis, CanvasMutationEffect.ClearSelection);
+        _ = Funnel.Apply(
+            operation,
+            _ => new CanvasAction(
+                $"ungroup \"{row.Title}\"",
+                [new CanvasOp.Ungroup(groupId)]),
+            $"ungroup \"{row.Title}\"",
+            confirm: () => new CanvasA11yEvent.CanvasDeleted(
+                new CanvasDeleteTarget.Group(row.Title),
+                _verbosity(),
+                CanvasPhrase.UndoChord));
+    }
+
+    /// <summary>§E TE-5c: Move into Group — the typed three-outcome
+    /// preparation (the placement table): Placed commits; TooSmall
+    /// commits only when core's overlap check clears its inset; Full
+    /// — and an occupied inset — refuse audibly with the group's
+    /// label, from PREPARATION, inside the gate; nothing
+    /// half-happens (the mac twin, verb for verb).</summary>
+    public void CanvasMoveIntoGroup(string groupId)
+    {
+        ArgumentNullException.ThrowIfNull(groupId);
+        if (_slot.Current.Loaded is not { } basis
+            || Selection.Selected is not { } selected
+            || basis.Population.SceneByNode.GetValueOrDefault(selected)
+                is not { } node
+            || !_rows.TryGetValue(groupId, out CanvasOutlineRow? group))
+        {
+            return;
+        }
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId("move into group"), this, selected,
+            basis, CanvasMutationEffect.KeepSelection);
+        _ = Funnel.Apply(
+            operation,
+            handle =>
+            {
+                CanvasInsideGroupPlacement placement = _session.CanvasPlaceInsideGroup(
+                    handle, groupId, node.Width, node.Height, [selected]);
+                double x;
+                double y;
+                switch (placement)
+                {
+                    case CanvasInsideGroupPlacement.Placed placed:
+                        (x, y) = (placed.X, placed.Y);
+                        break;
+                    case CanvasInsideGroupPlacement.TooSmall inset
+                        when _session.CanvasCheckOverlap(
+                            handle,
+                            new CanvasRect(inset.X, inset.Y, node.Width, node.Height),
+                            [selected]).Length == 0:
+                        (x, y) = (inset.X, inset.Y);
+                        break;
+                    default:
+                        Speak(new CanvasA11yEvent.CanvasBlocked(
+                            new CanvasBlockedReason.NoFreeSpaceInGroup(group.Title)));
+                        return null;
+                }
+                return new CanvasAction(
+                    $"move \"{TitleOf(selected)}\" into \"{group.Title}\"",
+                    [
+                        new CanvasOp.UpdateNodeGeometry(
+                            selected, x, y, node.Width, node.Height),
+                    ]);
+            },
+            "move into group",
+            confirm: () => new CanvasA11yEvent.CanvasMovedIntoGroup(group.Title));
+    }
+
+    /// <summary>§E TE-5c: Set Color — a preset "1".."6", a validated
+    /// hex, or null to clear (the picker's field owns the invalid-hex
+    /// error surface; an invalid value never reaches the funnel).</summary>
+    public void CanvasSetColor(string? color)
+    {
+        if (_slot.Current.Loaded is not { } basis
+            || Selection.Selected is not { } selected)
+        {
+            return;
+        }
+        if (color is not null && !IsCanvasColor(color))
+        {
+            return;
+        }
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId("set color"), this, selected,
+            basis, CanvasMutationEffect.KeepSelection);
+        _ = Funnel.Apply(
+            operation,
+            _ => new CanvasAction(
+                color is null
+                    ? $"clear color of \"{TitleOf(selected)}\""
+                    : $"color \"{TitleOf(selected)}\"",
+                [new CanvasOp.SetNodeColor(selected, color)]),
+            "set color",
+            confirm: () =>
+            {
+                CanvasSceneNode? colored =
+                    _slot.Current.Population?.SceneByNode.GetValueOrDefault(selected);
+                return new CanvasA11yEvent.CanvasColorSet(
+                    TitleOf(selected),
+                    colored?.Color is { } value
+                        ? value.Length == 1
+                            ? new CanvasColor.Preset(byte.Parse(value))
+                            : new CanvasColor.Hex(value)
+                        : null);
+            });
+    }
+
+    /// <summary>§E TE-5c: Connect — one edge from the picker's
+    /// answer, sides defaulted by core over the two rects (0b-3),
+    /// mac's end styles (plain source, arrow target).</summary>
+    public void CanvasConnect(string fromId, string toId, string? label)
+    {
+        ArgumentNullException.ThrowIfNull(fromId);
+        ArgumentNullException.ThrowIfNull(toId);
+        if (_slot.Current.Loaded is not { } basis
+            || basis.Population.SceneByNode.GetValueOrDefault(fromId) is not { } from
+            || basis.Population.SceneByNode.GetValueOrDefault(toId) is not { } to)
+        {
+            return;
+        }
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId("connect"), this, fromId,
+            basis, CanvasMutationEffect.KeepSelection);
+        _ = Funnel.Apply(
+            operation,
+            _ =>
+            {
+                CanvasSidePair sides = SlateUniffiMethods.CanvasAutoSides(
+                    new CanvasRect(from.X, from.Y, from.Width, from.Height),
+                    new CanvasRect(to.X, to.Y, to.Width, to.Height));
+                return new CanvasAction(
+                    $"connect \"{TitleOf(fromId)}\" to \"{TitleOf(toId)}\"",
+                    [
+                        new CanvasOp.AddEdge(
+                            SlateUniffiMethods.CanvasNewId(),
+                            fromId, sides.From, toId, sides.To,
+                            CanvasEndStyle.None, CanvasEndStyle.Arrow,
+                            label, null),
+                    ]);
+            },
+            "connect",
+            confirm: () => new CanvasA11yEvent.CanvasConnected(
+                TitleOf(fromId), TitleOf(toId), label));
+    }
+
+    /// <summary>§E TE-5c: Edit Connection — label and the four
+    /// end-style mappings ONLY; sides and color PRESERVED from the
+    /// scene edge (the mac twin's rule: never recompute what the
+    /// author placed).</summary>
+    public void CanvasEditConnection(
+        string edgeId, string? label, CanvasConnectionDirection direction)
+    {
+        ArgumentNullException.ThrowIfNull(edgeId);
+        if (_slot.Current.Loaded is not { } basis)
+        {
+            return;
+        }
+        CanvasSceneEdge? edge =
+            basis.Population.SceneEdges.FirstOrDefault(e => e.EdgeId == edgeId);
+        if (edge is null)
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoConnections()));
+            return;
+        }
+        (CanvasEndStyle fromEnd, CanvasEndStyle toEnd) = direction switch
+        {
+            CanvasConnectionDirection.ToTarget =>
+                (CanvasEndStyle.None, CanvasEndStyle.Arrow),
+            CanvasConnectionDirection.Both =>
+                (CanvasEndStyle.Arrow, CanvasEndStyle.Arrow),
+            CanvasConnectionDirection.None =>
+                (CanvasEndStyle.None, CanvasEndStyle.None),
+            _ => (CanvasEndStyle.Arrow, CanvasEndStyle.None),
+        };
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId("edit connection"), this, edgeId,
+            basis, CanvasMutationEffect.KeepSelection);
+        _ = Funnel.Apply(
+            operation,
+            _ => new CanvasAction(
+                "edit connection",
+                [
+                    new CanvasOp.UpdateEdge(
+                        edgeId, edge.FromSide, edge.ToSide,
+                        fromEnd, toEnd, label, edge.Color),
+                ]),
+            "edit connection",
+            confirm: () => new CanvasA11yEvent.CanvasConnectionUpdated(label));
+    }
+
+    /// <summary>§E TE-5c: Delete Connection — the lookup runs BEFORE
+    /// the apply and a miss refuses AUDIBLY (0a-2's rule: the mac
+    /// trailing-space sentence is unreachable by construction).</summary>
+    public void CanvasDeleteConnection(string edgeId)
+    {
+        ArgumentNullException.ThrowIfNull(edgeId);
+        if (_slot.Current.Loaded is not { } basis)
+        {
+            return;
+        }
+        if (basis.Population.SceneEdges.All(e => e.EdgeId != edgeId))
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoConnections()));
+            return;
+        }
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId("delete connection"), this, edgeId,
+            basis, CanvasMutationEffect.KeepSelection);
+        _ = Funnel.Apply(
+            operation,
+            _ => new CanvasAction(
+                "delete connection",
+                [new CanvasOp.DeleteEdge(edgeId)]),
+            "delete connection",
+            confirm: () =>
+            {
+                CanvasSceneEdge gone = basis.Population.SceneEdges
+                    .First(e => e.EdgeId == edgeId);
+                return new CanvasA11yEvent.CanvasDeleted(
+                    new CanvasDeleteTarget.Connection(
+                        (gone.FromArrow, gone.ToArrow) switch
+                        {
+                            (true, true) => CanvasEdgeDirection.Bidirectional,
+                            (false, false) => CanvasEdgeDirection.Undirected,
+                            (false, true) => CanvasEdgeDirection.Outgoing,
+                            (true, false) => CanvasEdgeDirection.Incoming,
+                        },
+                        TitleOf(gone.ToNode),
+                        gone.Label),
+                    _verbosity(),
+                    CanvasPhrase.UndoChord);
+            });
+    }
+
+    /// <summary>§E TE-5c: Add Note / Add Media — a file card at
+    /// core's placement; the vault picker (TE-6) supplies the path,
+    /// kinds and labels are core's (`media_class` via the row).</summary>
+    public void CanvasAddFileCard(string path, string? subpath)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        if (_slot.Current.Loaded is not { } basis)
+        {
+            return;
+        }
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId("add file card"), this, Selection.Selected,
+            basis, CanvasMutationEffect.SelectCreated);
+        CanvasRelativeDesc? relative = null;
+        _ = Funnel.Apply(
+            operation,
+            handle =>
+            {
+                CanvasConstants constants = SlateUniffiMethods.CanvasConstants();
+                CanvasPlacement placement = _session.CanvasPlaceNew(
+                    handle, operation.Anchor,
+                    constants.DefaultCardW, constants.DefaultCardH, null, []);
+                relative = placement.Relative;
+                string id = SlateUniffiMethods.CanvasNewId();
+                operation.CreatedId = id;
+                return new CanvasAction(
+                    $"add \"{path}\"",
+                    [
+                        new CanvasOp.CreateNode(
+                            id, new CanvasNodeContent.File(path, subpath),
+                            placement.X, placement.Y,
+                            constants.DefaultCardW, constants.DefaultCardH, null),
+                    ]);
+            },
+            $"add \"{path}\"",
+            confirm: () => new CanvasA11yEvent.CanvasCreated(
+                RowKindOf(operation.CreatedId),
+                PublishedTitleOf(operation.CreatedId),
+                relative!));
+    }
+
+    /// <summary>§E TE-5c: Add Link Card — the URL prompt's commit;
+    /// an unparseable URL refuses audibly and never reaches the
+    /// funnel (the NotAUrl arm).</summary>
+    public void CanvasAddLinkCard(string url)
+    {
+        ArgumentNullException.ThrowIfNull(url);
+        if (_slot.Current.Loaded is not { } basis)
+        {
+            return;
+        }
+        if (!Uri.TryCreate(url, UriKind.Absolute, out Uri? parsed)
+            || parsed.Scheme is not ("http" or "https"))
+        {
+            Speak(new CanvasA11yEvent.CanvasBlocked(new CanvasBlockedReason.NotAUrl()));
+            return;
+        }
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId("add link card"), this, Selection.Selected,
+            basis, CanvasMutationEffect.SelectCreated);
+        CanvasRelativeDesc? relative = null;
+        _ = Funnel.Apply(
+            operation,
+            handle =>
+            {
+                CanvasConstants constants = SlateUniffiMethods.CanvasConstants();
+                CanvasPlacement placement = _session.CanvasPlaceNew(
+                    handle, operation.Anchor,
+                    constants.DefaultCardW, constants.DefaultCardH, null, []);
+                relative = placement.Relative;
+                string id = SlateUniffiMethods.CanvasNewId();
+                operation.CreatedId = id;
+                return new CanvasAction(
+                    "add link card",
+                    [
+                        new CanvasOp.CreateNode(
+                            id, new CanvasNodeContent.Link(url),
+                            placement.X, placement.Y,
+                            constants.DefaultCardW, constants.DefaultCardH, null),
+                    ]);
+            },
+            "add link card",
+            confirm: () => new CanvasA11yEvent.CanvasCreated(
+                "link", PublishedTitleOf(operation.CreatedId), relative!));
+    }
+
+    /// <summary>§E TE-5c: Locate File — repoint a missing-target file
+    /// card (the card stayed navigable throughout, t0 §5); the vault
+    /// picker (TE-6) supplies the replacement path.</summary>
+    public void CanvasLocateFile(string nodeId, string newPath)
+    {
+        ArgumentNullException.ThrowIfNull(nodeId);
+        ArgumentNullException.ThrowIfNull(newPath);
+        if (_slot.Current.Loaded is not { } basis
+            || !_rows.ContainsKey(nodeId))
+        {
+            return;
+        }
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId("locate file"), this, nodeId,
+            basis, CanvasMutationEffect.KeepSelection);
+        _ = Funnel.Apply(
+            operation,
+            _ => new CanvasAction(
+                $"repoint \"{TitleOf(nodeId)}\"",
+                [
+                    new CanvasOp.SetNodeContent(
+                        nodeId, new CanvasNodeContent.File(newPath, null)),
+                ]),
+            $"repoint \"{TitleOf(nodeId)}\"",
+            confirm: () => new CanvasA11yEvent.CanvasCardRetargeted(
+                TitleOf(nodeId), newPath));
+    }
+
+    private string PublishedTitleOf(string? nodeId) =>
+        PublishedRowOf(nodeId)?.Title ?? nodeId ?? string.Empty;
+
+    private CanvasOutlineRow? PublishedRowOf(string? nodeId) =>
+        nodeId is null
+            ? null
+            : _slot.Current.Population?.Outline
+                .FirstOrDefault(row => row.NodeId == nodeId);
+
+    private string RowKindOf(string? nodeId) =>
+        PublishedRowOf(nodeId)?.Kind ?? "file";
+
+    /// <summary>Core's color grammar: one preset digit or 3/6-digit
+    /// hex with the leading hash.</summary>
+    internal static bool IsCanvasColor(string color) =>
+        color.Length == 1 && color[0] is >= '1' and <= '6'
+        || (color.Length is 4 or 7
+            && color[0] == '#'
+            && color.Skip(1).All(Uri.IsHexDigit));
+
     /// <summary>The funnel's two writes-and-reads beyond the load
     /// trio (§E TE-5b) — the one place `canvas_apply` crosses this
     /// document's session.</summary>
@@ -2541,4 +2983,14 @@ internal static class CanvasPhrase
 
     public static string RetargetAbsent(string from, string to, Exception exception) =>
         $"{from} moved to {to}, which could not be reopened: {exception.Message}";
+}
+
+/// <summary>§E TE-5c: the connection editor's direction radio, mapped
+/// onto the four end-style combinations (the mac twin's table).</summary>
+internal enum CanvasConnectionDirection
+{
+    ToTarget,
+    Both,
+    None,
+    FromTarget,
 }

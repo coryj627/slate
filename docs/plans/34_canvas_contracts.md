@@ -7975,6 +7975,57 @@ undo-hint wire instead (the hint constant cut at the verb site —
 the delete fact failed on the sentence). Each restored
 byte-for-byte.
 
+**TE-5c — the remaining single-shot verb commit paths.** Eleven
+verbs now run the funnel end-to-end on a real vault; labels, targets
+and picks arrive as parameters, exactly as the editor's commit takes
+its text — the sheets and pickers that gather them are the next two
+tasks' (IE-8's owner/anchor split carries the surface when it
+exists). Discharges IE-23, IE-24, IE-25's direction and the
+placement half of IE-15; E8a's tables remain the wiring slice's.
+
+- **Group verbs:** New Group at core's group defaults; Rename
+  through the REAL op (IE-23 — never SetNodeContent on a group);
+  Ungroup as the delete verb's group arm (the algebra's one group
+  removal: frame and incident edges go, cards stay — pinned by the
+  keeps-cards fact; ED-3's two-button sheet is TE-7's, this is its
+  commit path). Move into Group is the typed three-outcome
+  preparation, mac verb for verb: Placed commits; TooSmall commits
+  only when core's overlap check clears the inset; Full — and an
+  occupied inset, driven by the fixture's Cramped group and its
+  blocker card — refuses audibly with the label, from PREPARATION,
+  inside the gate, writing nothing and recording nothing.
+- **Color:** preset or validated hex through one grammar
+  (IsCanvasColor); the confirmation speaks core's NAME, pinned
+  against the digit never appearing in the sentence; an invalid hex
+  never reaches the funnel.
+- **Connections:** Connect defaults sides by core over the two rects
+  (0b-3) with mac's end styles; Edit Connection changes label and
+  the four end-style mappings ONLY, the author's sides and color
+  PRESERVED from the `CanvasSceneEdge` (IE-24, pinned byte-level); Delete
+  Connection looks up BEFORE the apply and a miss refuses AUDIBLY
+  (0a-2 — the mac trailing-space sentence unreachable), with the
+  `CanvasConnectionDirection` mapping and the edge-direction table
+  made total over the arrow pair.
+- **Add and locate:** file cards with subpaths, link cards behind
+  the NotAUrl gate, and Locate repointing a missing target with the
+  typed retarget confirmation. The slice's wart worth its line: the
+  first cut's confirmations read the VM's row mirror, which
+  refreshes only when the posted projection applies — AFTER the
+  transaction — so a created card's sentence spoke its raw id. The
+  confirmations now read the PUBLISHED population (an Outline scan;
+  the model's surface stays closed), and the add-file fact pins the
+  humanized title in the sentence.
+
+Facts: eleven more in `CanvasMutationTests` (fourteen total), the
+fixture grown to two groups, a blocker card and a sided, colored,
+labelled edge — written as a canonical-form raw literal after the
+foreign-format attempt failed exactly as E18 predicts (undo restores
+canonical bytes, so a non-canonical fixture cannot round-trip).
+Mutations: the preserved sides and color recomputed to null (the
+preservation fact failed); the missing-edge refusal silenced (the
+audible-refusal fact failed); the URL gate dropped (the link fact
+failed on bytes that should not exist); each restored byte-for-byte.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same

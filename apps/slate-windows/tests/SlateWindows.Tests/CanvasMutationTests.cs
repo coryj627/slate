@@ -23,8 +23,20 @@ public sealed class CanvasMutationTests : IDisposable
         _fixture = FixtureVault.Create(2, "canvas-mutation");
         File.WriteAllText(
             Path.Combine(_fixture.Root, "board.canvas"),
-            "{\n\t\"nodes\":[\n\t\t{\"id\":\"a\",\"type\":\"text\",\"text\":\"Alpha\","
-            + "\"x\":0,\"y\":0,\"width\":260,\"height\":140}\n\t],\n\t\"edges\":[]\n}\n");
+            """
+            {
+            	"nodes":[
+            		{"id":"a","type":"text","text":"Alpha","x":0,"y":0,"width":260,"height":140},
+            		{"id":"grp","type":"group","label":"Ideas","x":600,"y":0,"width":400,"height":300},
+            		{"id":"cramped","type":"group","label":"Cramped","x":1200,"y":0,"width":50,"height":40},
+            		{"id":"blocker","type":"text","text":"Blocker","x":1220,"y":40,"width":260,"height":140}
+            	],
+            	"edges":[
+            		{"id":"e1","fromNode":"a","fromSide":"right","toNode":"blocker","toSide":"left","color":"2","label":"feeds"}
+            	]
+            }
+
+            """);
         _session = VaultSession.OpenFilesystem(_fixture.Root);
         using var cancel = new CancelToken();
         _session.ScanInitial(cancel);
@@ -134,6 +146,198 @@ public sealed class CanvasMutationTests : IDisposable
             _announced,
             spoken => spoken.Text.StartsWith("Deleted ")
                 && spoken.Text.Contains(CanvasPhrase.UndoChord));
+        Undo(document);
+        Assert.Equal(before, DiskBytes());
+    }
+
+    /// <summary>New Group: core's group defaults at the anchor, the
+    /// created group selected, exact-bytes undo.</summary>
+    [Fact]
+    public void NewGroupCreatesSelectsAndUndoes()
+    {
+        CanvasDocumentViewModel document = Open();
+        string before = DiskBytes();
+        document.CanvasNewGroup("Q3");
+        Assert.Contains("\"label\":\"Q3\"", DiskBytes());
+        Assert.Contains(_announced, s => s.Text.StartsWith("Created group"));
+        Assert.NotNull(document.Selection.Selected);
+        Undo(document);
+        Assert.Equal(before, DiskBytes());
+    }
+
+    /// <summary>Rename Group rides the REAL op (IE-23) and undoes.</summary>
+    [Fact]
+    public void RenameGroupWritesAnnouncesAndUndoes()
+    {
+        CanvasDocumentViewModel document = Open();
+        string before = DiskBytes();
+        document.CanvasRenameGroup("grp", "Sparks");
+        Assert.Contains("\"label\":\"Sparks\"", DiskBytes());
+        Assert.Contains(_announced, s => s.Text.StartsWith("Renamed group"));
+        Undo(document);
+        Assert.Equal(before, DiskBytes());
+    }
+
+    /// <summary>Ungroup — the algebra's one group removal: the frame
+    /// goes, the CARDS stay, and the positioned restore undoes it.</summary>
+    [Fact]
+    public void UngroupRemovesTheFrameKeepsCardsAndUndoes()
+    {
+        CanvasDocumentViewModel document = Open();
+        string before = DiskBytes();
+        document.CanvasUngroup("grp");
+        string after = DiskBytes();
+        Assert.DoesNotContain("Ideas", after);
+        Assert.Contains("Alpha", after);
+        Assert.Contains(
+            _announced,
+            s => s.Text.Contains("Ungrouped") || s.Text.StartsWith("Deleted"));
+        Undo(document);
+        Assert.Equal(before, DiskBytes());
+    }
+
+    /// <summary>Move into Group, the Placed arm: core's slot inside
+    /// the roomy group commits and speaks the group's label.</summary>
+    [Fact]
+    public void MoveIntoRoomyGroupCommitsAndAnnounces()
+    {
+        CanvasDocumentViewModel document = Open();
+        string before = DiskBytes();
+        document.SelectNode("a");
+        document.CanvasMoveIntoGroup("grp");
+        Assert.NotEqual(before, DiskBytes());
+        Assert.Contains(_announced, s => s.Text.Contains("Moved into group"));
+        Undo(document);
+        Assert.Equal(before, DiskBytes());
+    }
+
+    /// <summary>The refusal arm: a group too small for one slot whose
+    /// inset is OCCUPIED refuses audibly with the label, and nothing
+    /// half-happens — no write, no history entry.</summary>
+    [Fact]
+    public void MoveIntoCrampedGroupRefusesAudiblyAndWritesNothing()
+    {
+        CanvasDocumentViewModel document = Open();
+        string before = DiskBytes();
+        document.SelectNode("a");
+        document.CanvasMoveIntoGroup("cramped");
+        Assert.Equal(before, DiskBytes());
+        Assert.Null(document.UndoStack.OfferedUndo);
+        Assert.Contains(
+            _announced,
+            s => s.Text.Contains("No free space") && s.Text.Contains("Cramped"));
+    }
+
+    /// <summary>Set Color: a preset writes and speaks the NAME (t1 —
+    /// never the number); an invalid hex never reaches the funnel.</summary>
+    [Fact]
+    public void SetColorWritesTheNameAndRefusesInvalidHex()
+    {
+        CanvasDocumentViewModel document = Open();
+        string before = DiskBytes();
+        document.SelectNode("a");
+        document.CanvasSetColor("1");
+        Assert.Contains("\"color\":\"1\"", DiskBytes());
+        Assert.Contains(
+            _announced,
+            s => s.Text.Contains("red") && !s.Text.Contains("\"1\""));
+        Undo(document);
+        Assert.Equal(before, DiskBytes());
+
+        document.CanvasSetColor("#zz");
+        Assert.Equal(before, DiskBytes());
+    }
+
+    /// <summary>Connect: one edge, sides from core over the two
+    /// rects, the typed confirmation, exact-bytes undo.</summary>
+    [Fact]
+    public void ConnectAddsASidedEdgeAndUndoes()
+    {
+        CanvasDocumentViewModel document = Open();
+        string before = DiskBytes();
+        document.CanvasConnect("a", "blocker", "supports");
+        Assert.Contains("\"label\":\"supports\"", DiskBytes());
+        Assert.Contains(_announced, s => s.Text.StartsWith("Connected"));
+        Undo(document);
+        Assert.Equal(before, DiskBytes());
+    }
+
+    /// <summary>Edit Connection: label and end styles change; the
+    /// author's SIDES and COLOR survive untouched (IE-24).</summary>
+    [Fact]
+    public void EditConnectionPreservesSidesAndColor()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.CanvasEditConnection(
+            "e1", "renamed", CanvasConnectionDirection.Both);
+        string after = DiskBytes();
+        Assert.Contains("\"label\":\"renamed\"", after);
+        Assert.Contains("\"fromSide\":\"right\"", after);
+        Assert.Contains("\"toSide\":\"left\"", after);
+        Assert.Contains("\"color\":\"2\"", after);
+        Assert.Contains(_announced, s => s.Text.StartsWith("Connection"));
+    }
+
+    /// <summary>Delete Connection, both arms: a live edge deletes and
+    /// undoes; a MISSING edge refuses AUDIBLY before any apply (the
+    /// 0a-2 rule) with bytes untouched.</summary>
+    [Fact]
+    public void DeleteConnectionRemovesOrRefusesAudibly()
+    {
+        CanvasDocumentViewModel document = Open();
+        string before = DiskBytes();
+        document.CanvasDeleteConnection("e1");
+        Assert.DoesNotContain("\"id\":\"e1\"", DiskBytes());
+        Undo(document);
+        Assert.Equal(before, DiskBytes());
+
+        int spoken = _announced.Count;
+        document.CanvasDeleteConnection("ghost-edge");
+        Assert.Equal(before, DiskBytes());
+        Assert.True(
+            _announced.Count > spoken,
+            "a missing connection was refused in silence: the lookup must "
+            + "answer audibly before any apply.");
+    }
+
+    /// <summary>Add Link: a valid URL lands selected; an unparseable
+    /// one refuses audibly and never reaches the funnel.</summary>
+    [Fact]
+    public void AddLinkCardValidatesTheUrl()
+    {
+        CanvasDocumentViewModel document = Open();
+        string before = DiskBytes();
+        document.CanvasAddLinkCard("https://example.org/spec");
+        Assert.Contains("example.org", DiskBytes());
+        Undo(document);
+        Assert.Equal(before, DiskBytes());
+
+        document.CanvasAddLinkCard("not a url");
+        Assert.Equal(before, DiskBytes());
+        Assert.Contains(_announced, s => s.Text.Contains("link"));
+    }
+
+    /// <summary>Add Note + Locate: a file card lands; repointing a
+    /// missing target retargets with the typed confirmation.</summary>
+    [Fact]
+    public void AddFileCardAndLocateRetarget()
+    {
+        CanvasDocumentViewModel document = Open();
+        string before = DiskBytes();
+        document.CanvasAddFileCard("missing-note.md", null);
+        string? created = document.Selection.Selected;
+        Assert.NotNull(created);
+        Assert.Contains("missing-note.md", DiskBytes());
+        Assert.Contains(
+            _announced,
+            s => s.Text.StartsWith("Created file card \"missing-note\""));
+
+        document.CanvasLocateFile(created!, "note-0.md");
+        Assert.Contains("note-0.md", DiskBytes());
+        Assert.DoesNotContain("missing-note.md", DiskBytes());
+        Assert.Contains(_announced, s => s.Text.Contains("now points at"));
+
+        Undo(document);
         Undo(document);
         Assert.Equal(before, DiskBytes());
     }
