@@ -56,8 +56,10 @@ internal sealed class CanvasPopulation
         IEnumerable<CanvasTableRow>? table,
         IEnumerable<CanvasLoadWarning>? warnings,
         string? lastActivatedNode,
-        CanvasScene? scene = null)
+        CanvasScene? scene = null,
+        string contentHash = "")
     {
+        ContentHash = contentHash;
         Outline = CanvasModelCopy.Rows(outline);
         Table = CanvasModelCopy.Rows(table);
         Warnings = CanvasModelCopy.Ordered(warnings);
@@ -150,6 +152,13 @@ internal sealed class CanvasPopulation
     /// whose activation opened a card belongs to the graph it was found
     /// in, so a reload does not carry it forward.</summary>
     internal string? LastActivatedNode { get; }
+
+    /// <summary>The revision this load parsed — core's CAS basis from
+    /// <c>CanvasOpenInfo.contentHash</c> (W6-1 §E TE-0). One load, one
+    /// basis: history entries, drafts and conflict records bind to it,
+    /// and a successor population carries the successor hash. Empty
+    /// only for test seeds that never touched a file.</summary>
+    internal string ContentHash { get; }
 
     /// <summary>The JSON Canvas subpath per file card that names one,
     /// from core's scene — population-class because it is a function

@@ -62,6 +62,11 @@ internal enum ModalSurface
     /// paint declared last, so a violated exclusivity degrades to
     /// it.</summary>
     MoveTo,
+
+    /// <summary>W6-1 §E TE-7: the canvas card editor sheet — M8's
+    /// carve-out rides ITS Esc handling; the admission tables refuse
+    /// the palette beneath it like every sheet.</summary>
+    CanvasCardEditor,
 }
 
 /// <summary>
@@ -134,7 +139,8 @@ internal readonly record struct ModalSurfaceState(
     bool BaseQueryBuilder,
     bool TemplatePicker,
     bool TemplateFlow,
-    bool MoveTo);
+    bool MoveTo,
+    bool CanvasCardEditor);
 
 /// <summary>
 /// The modal-surface precedence rules, as pure functions.
@@ -240,6 +246,7 @@ internal static class ModalSurfaces
             ModalSurface.TemplatePicker => state.TemplatePicker,
             ModalSurface.TemplateFlow => state.TemplateFlow,
             ModalSurface.MoveTo => state.MoveTo,
+            ModalSurface.CanvasCardEditor => state.CanvasCardEditor,
         };
 
     /// <summary>

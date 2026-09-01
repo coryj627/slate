@@ -121,7 +121,9 @@ public sealed class ContractsCitationCensus
             (
                 "D",
                 "## PR D — the visual renderer",
-                "## §W-G canonical-consumption audit",
+                // Terminated by §E since its section landed — §B's
+                // rule, three sections later.
+                "## PR E — the mutation funnel",
                 12_000,
                 // A DESIGN floor, §C-unit's convention: the section's
                 // own new types are deliberately plain text until tasks
@@ -163,6 +165,110 @@ public sealed class ContractsCitationCensus
                 // post-sweep 48, and 50 sits above it — a sixth
                 // time.
                 50),
+            (
+                "E",
+                "## PR E — the mutation funnel",
+                "## §W-G canonical-consumption audit",
+                12_000,
+                // A DESIGN floor, §C-unit's convention: the section's
+                // own new types (the funnel, the stacks, the pickers,
+                // the sheets) are deliberately plain text until tasks
+                // bind them, so revision 1's 12 occurrences are all
+                // EXISTING names. 9 sits above the empty pre-section
+                // population and below the current 12, so unbinding
+                // the section's citations fails while prose churn
+                // does not; each implementation task raises it above
+                // what the section carried before that task.
+                //
+                // TE-0 bound the core surface — the basis, the seed,
+                // the receipt, the canonical text, the proximity
+                // order, the media export and the detached apply —
+                // taking the section to 18; 16 sits above the
+                // pre-task population of 14, the §C-unit rule's
+                // first application in §E.
+                //
+                // TE-1 bound the operation value, its identity, its
+                // currency and the gate, taking the section to 25;
+                // 19 sits above the pre-task population of 18 — a
+                // second time.
+                //
+                // TE-2 bound the history domain, the publication's
+                // committed-unpresented state and the quarantine
+                // vocabulary, taking the section to 30; 26 sits
+                // above the pre-task population of 25 — a third
+                // time.
+                //
+                // TE-3 bound the conflict record, its door and the
+                // snapshot read, taking the section to 32; 31 sits
+                // above the pre-task population of 30 — a fourth
+                // time.
+                //
+                // TE-4 bound the effects split — the plan, the
+                // completion marks and the busy gate — taking the
+                // section to 35; 33 sits above the pre-task
+                // population of 32 — a fifth time.
+                //
+                // TE-5a bound the funnel's spine — the admission
+                // table, the transaction, the two seams and the
+                // receipt push — taking the section to 38; 36 sits
+                // above the pre-task population of 35 — a sixth
+                // time.
+                //
+                // TE-5b bound the document integration, the verbs
+                // and the seat rule, taking the section to 42; 41
+                // sits above the pre-task population of 40 — a
+                // seventh time.
+                //
+                // TE-5c bound the remaining commit paths and their
+                // grammar, taking the section to 45; 43 sits above
+                // the pre-task population of 42 — an eighth time.
+                //
+                // TE-6 bound the picker models and their factories,
+                // taking the section to 49; 46 sits above the
+                // pre-task population of 45 — a ninth time.
+                //
+                // TE-7 bound the editor, its seed token and the
+                // modal membership, taking the section to 51; 50
+                // sits above the pre-task population of 49 — a
+                // tenth time.
+                //
+                // TE-8 bound the plan, its two consumers and the
+                // popup fact, taking the section to 55; 52 sits
+                // above the pre-task population of 51 — an
+                // eleventh time.
+                //
+                // TE-9 bound the expansion memory and the aimed
+                // supersession, taking the section to 57; 56 sits
+                // above the pre-task population of 55 — a twelfth
+                // time.
+                //
+                // TE-10 bound the vault-scoped create and its
+                // terminal outcome table, taking the section to 64;
+                // 58 sits above the pre-task population of 57 — a
+                // thirteenth time.
+                //
+                // TE-11a bound the wiring slice and the onboarding
+                // swap, taking the section to 67; 65 sits above the
+                // pre-task population of 64 — a fourteenth time.
+                //
+                // TE-11b bound the activation swap and the interim's
+                // whole retirement, taking the section to 69; 68 sits
+                // above the pre-task population of 67 — a fifteenth
+                // time.
+                //
+                // TE-11c bound the never-silent tables and the one
+                // core sentence, taking the section to 73; 70 sits
+                // above the pre-task population of 69 — a sixteenth
+                // time.
+                //
+                // TE-11d bound the scenario driver and its census,
+                // taking the section to 75; 74 sits above the
+                // pre-task population of 73 — a seventeenth time.
+                //
+                // TE-11e bound the journey and its three found bugs,
+                // taking the section to 76; 75 sits above the
+                // pre-task population of 74 — an eighteenth time.
+                75),
         ];
 
     public static TheoryData<string, string, string> SectionRanges
@@ -817,6 +923,10 @@ public sealed class ContractsCitationCensus
         (
             "§D",
             "## PR D — the visual renderer",
+            "## PR E — the mutation funnel"),
+        (
+            "§E",
+            "## PR E — the mutation funnel",
             "## §W-G canonical-consumption audit"),
         (
             "divergences",

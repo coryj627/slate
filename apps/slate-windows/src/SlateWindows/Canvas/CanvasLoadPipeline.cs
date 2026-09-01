@@ -171,6 +171,66 @@ internal sealed class CanvasLoadPipeline
     private readonly CanvasPublicationSlot _slot;
     private readonly ICanvasLoadSource _source;
     private readonly Action<CanvasRequestIdentity, string>? _onReseeded;
+
+    /// <summary>W6-1 §E TE-5a: the funnel's refresh, hosted here so
+    /// the population mint stays inside its wall and the reseed
+    /// callback fires exactly as the acceptance path's does. Reads the
+    /// trio under the lease (currency re-checked inside the FFI lock),
+    /// mints the successor population, asks the caller for the seat
+    /// against it, and republishes through the transfer's wall.</summary>
+    internal CanvasRefreshOutcome RefreshAfterMutation(
+        CanvasHandleLease lease,
+        string basis,
+        Func<CanvasPopulation, CanvasEffectResolution> resolveSeat)
+    {
+        ArgumentNullException.ThrowIfNull(lease);
+        ArgumentNullException.ThrowIfNull(basis);
+        ArgumentNullException.ThrowIfNull(resolveSeat);
+
+        CanvasOutlineRow[]? outline = null;
+        CanvasTableRow[]? tableRows = null;
+        CanvasScene? scene = null;
+        bool read = lease.Invoke(
+            () =>
+            {
+                CanvasPublication now = _slot.Current;
+                return !now.Retired && now.Names(lease);
+            },
+            handle =>
+            {
+                outline = _source.Outline(handle);
+                tableRows = _source.TableRows(handle);
+                scene = _source.Scene(handle);
+            });
+        if (!read)
+        {
+            return CanvasRefreshOutcome.Refused;
+        }
+        CanvasPublication current = _slot.Current;
+        var population = new CanvasPopulation(
+            outline,
+            tableRows,
+            current.Population?.Warnings,
+            current.Population?.LastActivatedNode,
+            scene,
+            contentHash: basis);
+        CanvasEffectResolution seat = resolveSeat(population);
+        if (seat.IsRequiredTargetMissing)
+        {
+            return CanvasRefreshOutcome.RequiredTargetMissing;
+        }
+        CanvasRepublishOutcome outcome = CanvasLeaseTransfer.Republish(
+            _slot, lease, population, seat.SeatValue);
+        if (!outcome.Installed)
+        {
+            return CanvasRefreshOutcome.Refused;
+        }
+        if (outcome.Reseeded is { } reseeded)
+        {
+            _onReseeded?.Invoke(reseeded, outcome.Needle!);
+        }
+        return CanvasRefreshOutcome.Installed;
+    }
     private readonly CanvasLoadProbeForTests? _probe;
 
     /// <param name="onReseeded">Where the reseeded filter request goes —
@@ -327,7 +387,8 @@ internal sealed class CanvasLoadPipeline
                     tableRows,
                     info.Warnings,
                     lastActivatedNode: null,
-                    scene: scene);
+                    scene: scene,
+                    contentHash: info.ContentHash);
                 _probe?.Reached(CanvasLoadPoint.Built);
 
                 CanvasLoadAcceptance acceptance = CanvasLeaseTransfer.TryAccept(

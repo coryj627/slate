@@ -116,6 +116,9 @@
                         <DataTrigger Binding="{Binding FileSidebar.MoveToSheet, Converter={StaticResource IsNotNullConverter}}" Value="True">
                             <Setter Property="IsEnabled" Value="False" />
                         </DataTrigger>
+                        <DataTrigger Binding="{Binding Workspace.CanvasCardEditorSheet, Converter={StaticResource IsNotNullConverter}}" Value="True">
+                            <Setter Property="IsEnabled" Value="False" />
+                        </DataTrigger>
                     </Style.Triggers>
                 </Style>
             </Menu.Style>
@@ -141,6 +144,11 @@
                           AutomationProperties.AutomationId="NewFromTemplateMenuItem"
                           InputGestureText="{cmd:ChordText slate.file.newFromTemplate}"
                           Command="{Binding Workspace.NewFromTemplateCommand}" />
+                <!-- §E TE-10 (IE-21): the vault-scoped create — mac's
+                     File-menu New Canvas, chordless on both hosts. -->
+                <MenuItem Header="New _Canvas"
+                          AutomationProperties.AutomationId="NewCanvasMenuItem"
+                          Command="{Binding FileSidebar.CreateCanvasCommand}" />
                 <Separator />
                 <MenuItem Header="_Close Vault"
                           AutomationProperties.AutomationId="CloseVaultMenuItem"
@@ -426,6 +434,13 @@
                           AutomationProperties.AutomationId="CanvasWhereAmIMenuItem"
                           InputGestureText="{cmd:ChordText slate.canvas.whereAmI}"
                           Command="{Binding Workspace.CanvasWhereAmICommand}" />
+                <Separator />
+                <!-- §E TE-11 (E19): mac's Canvas menu ownership - the one
+                     verb with a chord. -->
+                <MenuItem Header="New Car_d"
+                          AutomationProperties.AutomationId="CanvasNewCardMenuItem"
+                          InputGestureText="{cmd:ChordText slate.canvas.newCard}"
+                          Command="{Binding Workspace.CanvasNewCardCommand}" />
                 <Separator />
                 <MenuItem Header="_Next Card"
                           AutomationProperties.AutomationId="CanvasNextCardMenuItem"
@@ -3702,6 +3717,37 @@
                         </ListBox.ItemTemplate>
                     </ListBox>
                 </DockPanel>
+            </local:AutomationLandmarkBorder>
+
+            <local:AutomationLandmarkBorder x:Name="CanvasCardEditorOverlay"
+                    Padding="16"
+                    MinWidth="420"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Background="{DynamicResource Slate.SurfaceBrush}"
+                    BorderBrush="{DynamicResource Slate.BorderBrush}"
+                    BorderThickness="1"
+                    Visibility="{Binding DataContext.Workspace.CanvasCardEditorSheet, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}"
+                    DataContext="{Binding Workspace.CanvasCardEditorSheet}"
+                    FocusManager.IsFocusScope="True"
+                    KeyboardNavigation.TabNavigation="Cycle"
+                    KeyboardNavigation.ControlTabNavigation="Cycle"
+                    AutomationProperties.AutomationId="CanvasCardEditorSheet"
+                    AutomationProperties.Name="Card editor"
+                    AutomationProperties.IsDialog="True">
+                <StackPanel>
+                    <TextBlock Text="{Binding Title}"
+                               FontWeight="SemiBold"
+                               Margin="0,0,0,8" />
+                    <TextBox Text="{Binding Draft, UpdateSourceTrigger=PropertyChanged}"
+                             AcceptsReturn="True"
+                             MinHeight="120"
+                             TextWrapping="Wrap"
+                             VerticalScrollBarVisibility="Auto"
+                             AutomationProperties.AutomationId="CanvasCardEditorText"
+                             AutomationProperties.Name="Card text. Escape saves and returns to the canvas."
+                             AutomationProperties.HelpText="Escape commits; discard with the editor's own undo first." />
+                </StackPanel>
             </local:AutomationLandmarkBorder>
         </Grid>
     </DockPanel>

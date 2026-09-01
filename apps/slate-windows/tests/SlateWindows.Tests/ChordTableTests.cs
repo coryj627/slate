@@ -196,6 +196,10 @@ public sealed class ChordTableTests
                 "slate.workspace.moveTabRight",
                 // W5-4 (F6/FD-4): mac's ⌘⌫ predicts Ctrl+Backspace, but
                 // the bare Delete key is the platform deletion convention.
+                // §E TE-11 (ED-1): mac's ⇧⌘Z predicts Ctrl+Shift+Z;
+                // Windows keeps Ctrl+Y, the structural pair's convention,
+                // and registers no alias.
+                "windows.canvas.redoHistory",
                 "windows.sidebar.deleteSelected",
                 // W5-4 (F10): mac's ⇧⌘Z predicts Ctrl+Shift+Z, but
                 // Ctrl+Y is the platform redo convention — decision 12.
@@ -503,6 +507,24 @@ public sealed class ChordTableTests
         Assert.Equal(
             32,
             ChordTable.Entries.Count(row => row.Scope == ChordScope.Reading));
+    }
+
+    /// <summary>§E TE-10 (IE-21): New Canvas is a FILE-section row on
+    /// both hosts (mac registers slate.file.newCanvas in section .file,
+    /// chordless) - registered, so the palette and the File menu both
+    /// resolve it; deliberately NOT in the sidebar's pinned order,
+    /// which is Sidebar-section only.</summary>
+    [Fact]
+    public void NewCanvasIsARegisteredChordlessFileRow()
+    {
+        ChordTableEntry row = RequireRow(ChordTable.Ids.NewCanvas);
+        Assert.Equal("New Canvas", row.Label);
+        Assert.Equal(uniffi.slate_uniffi.CommandSection.File, row.Section);
+        Assert.True(row.IsRegistered);
+        Assert.Null(row.MacChord);
+        Assert.Null(row.WindowsChord);
+        Assert.DoesNotContain(
+            ChordTable.Ids.NewCanvas, ChordTable.SidebarPinnedOrder);
     }
 
     [Fact]

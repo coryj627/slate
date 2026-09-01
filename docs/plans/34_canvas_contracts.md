@@ -1936,7 +1936,8 @@ announcement are PR A's, unchanged and unduplicated. A group row has
 nothing to expand on a flat projection and falls through silently, as
 mac's does (its `activate` has no group arm at all). Row actions are
 mac's three, in mac's order: **Open**, **Toggle Mark** (disabled until
-PR G) and **Delete** (disabled until PR E), each disabled one carrying
+PR G) and **Delete** (disabled until §E's verbs land — the section
+now owns the row), each disabled one carrying
 its reason, which the substrate exposes as HelpText and a tooltip — the
 mac RowAction contract ("context menus retain a temporarily unavailable
 relevant action WITH its reason"), and the reason a screen-reader user
@@ -2808,8 +2809,8 @@ it exactly. Classified by walking the focused element's ancestors for a
 `MenuBase` — logical parents first, visual parents when the chain runs
 out, because a `ContextMenu` lives in its own popup. One question covers
 the menu bar, submenus and context menus; what is TESTED is the menu-bar
-chain, because no canvas surface has a context menu until PR E/F ship
-the row menus, and the popup arm is named as the untested half so the PR
+chain, because no canvas surface has a context menu until the §E/§F
+row menus ship, and the popup arm is named as the untested half so the PR
 that ships the first one owns the fact (m11).
 `OpeningAMenuKeepsTheModeAliveAndLeavingTheCanvasCancelsIt` drives a
 real menu and a real non-menu focus loss in one fact, so it cannot pass
@@ -7104,6 +7105,1341 @@ whole, and the PR is the next act.
 
 ---
 
+## PR E — the mutation funnel, the undo domain, the authoring verbs, the pickers, and the card editor (FROZEN as the ratified baseline by the owner's ruling; round 2's findings are the IE ledger, discharged by code)
+
+**Goal (spec §PR E).** Everything that is a single committed
+`canvas_apply` from a command, plus the undo domain and the editor.
+After this PR a keyboard user can create a canvas and author cards,
+groups and connections' basics without the visual surface. This is the
+first WRITING PR of the series, and five ledgered inheritances come
+due as contracts below: M8, m5 (with §C's m-5), m7, m11, and the
+media-class export.
+
+This section is revision 2, rewritten against round 1's twenty-one
+blockers. Round 1's central finding was that revision 1 described a
+SEQUENCE where the platform needs an OPERATION — a value with
+identity, currency and a lifecycle — and this revision is organized
+around that value. New types remain plain text until tasks bind them
+(§C-unit's convention); every core name cited is verified against the
+FFI surface as it exists today.
+
+### THE FREEZE — read this first
+
+**This section is CLOSED to further prose revision**, frozen at
+revision 2 after two adversarial rounds, by the owner's ruling of
+2026-08-31. The trajectory — 21 blockers, then 32 with a cluster
+CREATED by revision 2's own fixes — is the protocol's rule-5 signal
+one round earlier than §C-unit and §D produced it: the fix was a
+patch over a missing model, and the missing model is not a prose
+question. The remaining questions are identity, boundary and
+FFI-surface questions that every prose answer re-opened; the ruling
+is the one that closed §C-unit and §D: **design by implementation.**
+Nothing below is re-argued on paper; the next thing that changes any
+of it is code, through the task loop, with facts and mutations
+arbitrating.
+
+**What is RATIFIED, and is therefore the architecture to build.**
+Everything this section states that round 2 did not name in a
+finding: the operation value with initiating surface, currency and
+typed effects; the per-document gate over the whole transaction with
+refusal-not-queue (ED-5); preparation inside the gate; currency
+validated at the three boundaries; commit recorded before
+presentation; basis-carrying history with restore-on-every-non-
+commit and the reload quarantine; the conflict record with three
+typed resolutions rendered in-sheet; snapshot-routed undo across the
+four domains; the corrected verb algebra (RenameGroup; Ungroup/
+Cancel; the three-outcome placement with mac's overlap check; the
+reporting create); the total refusal principle; core-owned proximity
+order; the basis-bound editor draft; M8's commit semantics; the
+E12–E19 inheritance discharges; and the ED decisions. **One
+precedence ruling is made here rather than left open (round 2's
+last blocker):** E3's order — apply, then the history record, then
+refresh, then effects — is NORMATIVE and supersedes the spec §1
+sketch "apply → refresh → undo push → announce" wherever the two
+disagree; the spec line is a sketch of the same funnel, and the
+recorded order is the one the code builds. **ED-6's three-addition
+ceiling is LIFTED by the same ruling:** the FFI-gap obligations
+below add the core surface they name, each with mac consumption,
+and the ledger — not a ceiling count — bounds the additions.
+
+**What is RECLASSIFIED.** Round 2's thirty-nine findings stop being
+prose questions and become the §E IMPLEMENTATION OBLIGATIONS —
+IE-1 through IE-39 below, each carrying the finding VERBATIM
+(backticks and links flattened, the periphery ledger's convention)
+as its acceptance criteria, discharged by code, facts and mutation
+batteries through the implementation gauntlet, not by another
+revision of this text. Where an obligation's remedy sets a
+DIRECTION, the direction binds unless the code proves it wrong, and
+proving it wrong is a recorded event, not a silent choice.
+
+### Contracts
+
+**E1 — A mutation is an OPERATION VALUE, and one gate serializes the
+whole transaction.** Every verb constructs one typed mutation
+operation carrying: the document and the lease generation it was
+minted under (the §D ticket discipline, one commit thread over); the
+INITIATING SURFACE — the pane and row that invoked it, an opaque
+owner every later presentation or focus effect validates (round 1
+#3: two panes share a document, and a sheet's focus return must land
+where the verb began, not where focus wandered); the PREPARATION
+BASIS — the content hash the placement or lookup ran against; and
+the typed POST-COMMIT EFFECTS (E4). A per-document gate admits ONE
+operation at a time through the ENTIRE transaction — prepare →
+apply → record → refresh → effects; a verb arriving while the gate
+is held is REFUSED with the typed busy status, not queued (mac is
+synchronous on the main actor, so "one at a time" is the twin's real
+semantic; a queue would invent interleavings mac cannot produce).
+Preparation runs INSIDE the held gate (round 1 #5): `canvas_place_new`
+/ `canvas_place_inside_group` / the structural lookups execute under
+the same admission as the apply they feed, so two rapid New Cards
+cannot receive one slot and a lookup cannot go stale between query
+and write. The `canvas_apply` itself runs off the dispatcher (the §C
+scheduler rule) with the gate still held.
+
+**E2 — Currency is validated at every boundary, and admission is a
+table.** The operation's lease is checked BEFORE the FFI call, AFTER
+its return, and immediately before every dispatcher-side effect
+(round 1 #2's direction verbatim): a document that reloaded,
+retargeted or shut down while an apply was in flight swallows the
+result — no publish through a successor handle, no announcement for
+a closed document, exactly as §D's engine discards a stale install.
+Admission refuses, each with its typed event: degraded (the one
+reason string, t0 §5); no attached handle — absent, retarget-
+pending, shut down (the mac recovery contract); gate held (the busy
+status above); a pending conflict record (E6 — no write passes while
+recovery is unresolved); a mode transient held (the mac #521 guard).
+The transient guard's OWNERSHIP is corrected from revision 1 (round
+1 #4): the funnel refuses while ANY transient it does not own is
+live, and a mode's commit passes a mode-owned token through the
+operation instead of clearing its transient first — a refused commit
+therefore leaves the mode and its exact transient state standing for
+retry or cancel, which is C7's frozen rule. PR F consumes this token
+seam; E ships it with the test mode only.
+
+**E3 — Commit is recorded before presentation, and the two failures
+are different states.** The success path in order: `canvas_apply`
+returns; the history entry — the action name, the returned inverse,
+and the BASIS HASH it is valid against (`CanvasApplyResult`'s
+post-write hash) — is recorded IMMEDIATELY, before anything that can
+fail; redo clears; then the refresh republishes outline, table and
+scene from core; then the post-commit effects run. A refresh or
+publish failure after a recorded commit is a typed COMMITTED-BUT-
+UNPRESENTED state (round 1 #6): the file changed, the entry exists,
+the surface shows a recoverable "reload to see your change" region —
+and a retry re-runs the REFRESH, never the committed action. Nothing
+in this path can lose the inverse.
+
+**E4 — Post-commit effects are typed in the operation and published
+atomically.** Selection reconciliation is not a heuristic over the
+old selection (round 1 #7 caught revision 1's rule keeping the ANCHOR
+selected after New Card): the operation declares its effect — select-
+the-created-node (New Card, New Group, the add verbs), keep-selection
+(color, rename, edit), select-the-survivor (delete: the mac next-or-
+previous rule) — and the effect resolves against the REFRESHED
+population and publishes in the same change the refresh publishes,
+so no observer sees the new rows with the old seat. A declared
+selection the refresh cannot resolve falls back to the drop rule
+(the mac Duplicate lesson stands: never announce over an empty
+resolution). The editor-open effect (New Card lands in the editor)
+and every focus effect validate the initiating surface first — a
+completion whose invoking pane is gone or whose document moved does
+NOT focus whatever took its place.
+
+**E5 — The undo domain: entries carry their basis, and transfer only
+on success.** Per-document session stacks of (name, inverse, basis).
+Undo: admission (E2) → gate → apply the inverse flagged not-to-push →
+ON SUCCESS the popped entry's replacement (the returned inverse, the
+new basis) pushes to redo; ON ANY non-commit outcome the popped entry
+is RESTORED to its stack (round 1 #9 — WriteConflict, InvalidArgument
+and a closed handle all leave history exactly as it was). Redo is
+symmetric. A conflict against a stale basis raises the conflict
+surface AND quarantines: after a Reload attaches a different disk
+version, every entry whose basis is not the attached basis is kept
+but DISABLED — the menu title says "Undo unavailable — the file
+changed on disk" — until an operation restores that exact basis or
+the stacks clear with the document (round 1 #10: the old inverse
+MUST NOT pass the new CAS by coincidence and overwrite an external
+writer's work; basis equality is the only admission). Stacks are
+session state, cleared on release, never persisted. Announcements:
+"Undid: ⟨name⟩" / "Redid: ⟨name⟩" (`CanvasUndoMenuTitle` renders the
+menu), "Nothing to undo.", and the typed blocked arms.
+
+**E6 — Conflict recovery is a state machine with a retained action.**
+A `WriteConflict` from any operation creates ONE typed conflict
+record: the attempted action, the basis it failed against, and the
+initiating surface. While it stands, admission refuses every write
+(E2) and the t0 §5 surface shows — assertive `CanvasSaveConflict`
+plus a focusable region with the three typed resolutions: RELOAD
+discards the record, re-attaches the disk version, republishes, and
+applies E5's quarantine to the stacks; OVERWRITE re-applies the
+RETAINED action against the reloaded document — a fresh
+`canvas_apply` on current basis, which either commits (recording its
+inverse normally) or raises a fresh conflict; SAVE A COPY applies
+the retained action to a DETACHED copy of the pre-conflict document
+and writes the result through `create_exclusive_reporting` under a
+"(conflict copy)" name — the never-clobber path with the #1123
+typed outcome. The detached-apply query is a core addition this PR
+owns (it is the same algebra `canvas_apply` runs, minus the
+handle's write), recorded in the core-additions register with the
+proximity export (E10) and the media-class export (E12). The region
+renders INSIDE the editor sheet when the sheet is open (round 1
+#19): recovery is reachable wherever the failure surfaced, the
+draft survives, and the focus-return owner is preserved.
+
+**E7 — Undo/redo route by a SNAPSHOT of the focus fact, not by live
+focus.** Opening the Edit menu moves focus into the menu (the §C
+MenuOpen lesson one domain over — round 1 #11): the menu-open moment
+captures one logical undo target — card-editor sheet ⇒ the editor's
+own stack; a canvas projection ⇒ the canvas stacks; the files tree ⇒
+the structural journal; else the note editor — and titles, enablement
+AND execution all read that snapshot, so what the title names is what
+the click undoes. The chord path (Ctrl+Z / Ctrl+Y, D-6, imperative
+canvas-focus-scoped delivery as the structural rows, allow-listed
+with the reason) captures the same target at the keystroke. The
+precedence is a table with a fact per row. Titles while a canvas
+target is captured render the menu-title event with the top entry's
+name — or the quarantine sentence (E5).
+
+**E8 — The verb inventory, corrected against the algebra as it
+exists.** Each row: the op, the typed confirmation, the mac twin.
+Ops and events below are verified against `CanvasOp` and the
+vocabulary — nothing is aspirational.
+
+| Verb | Core write | Confirmation | mac twin |
+|---|---|---|---|
+| New Card | CreateNode at `canvas_place_new` (anchor = selection, size from `canvas_constants`, no hint), prepared under the gate | `CanvasCreated`; effect: select created + open the editor | `canvasNewCard` (`AppState+CanvasActions.swift:69`) |
+| New Group… | CreateGroup at gate-prepared geometry; inserts beneath contained nodes (core rule #960) | `CanvasCreated` | `canvasNewGroup` (`:112`) |
+| Delete Selection — card / connection | DeleteNode / DeleteEdge (inverse: RestoreNode / RestoreEdge with exact positions) | `CanvasDeleted` with the undo hint | `canvasDeleteSelection` (`:317`) |
+| Delete Selection — group arm | THE ALGEBRA HAS ONE GROUP REMOVAL: DeleteNode and Ungroup on a group are effect-identical (frame + incident edges removed, contained cards kept — `apply.rs:410`). The confirmation offers **Ungroup** and **Cancel** (ED-3): no button promises a descendant delete the algebra does not define | the group arm of `CanvasDeleted` ("cards kept") | mac's delete-on-group, same algebra |
+| Rename Group… | RenameGroup { id, label } (round 1 #12) | `CanvasRenamedGroup` | `canvasRenameGroup` (`:361`) |
+| Move into Group… | preparation table (E9) → UpdateNodeGeometry | `CanvasMovedIntoGroup` | `canvasMoveIntoGroup` (`:432`) |
+| Remove from Group | `canvas_place_new` (anchor = the group, hint Below) → UpdateNodeGeometry | `CanvasRemovedFromGroup` | `canvasRemoveFromGroup` (`AppState+CanvasCreate.swift:280`) |
+| Set Color… (preset or validated hex — E10) / Clear Color | SetNodeColor | `CanvasColorSet` — the NAME; hex confirms as core's "custom color" | `canvasSetColor` (`:340`) |
+| Edit Card Text… | SetNodeContent on commit (E11) | `CanvasCardUpdated`; "No changes." on an untouched buffer | `canvasCommitCardEdit` (`AppState+CanvasCreate.swift:71`) |
+| Add Note… / Add Media… | CreateNode file card via the vault picker | `CanvasCreated`, kind label from core | `canvasAddFileCard` (`:169`) |
+| Add Link Card… | CreateNode link card; label = host, from core | `CanvasCreated` | `canvasAddLinkCard` (`:178`) |
+| Locate File… | SetNodeContent repointing the missing target | `CanvasCardRetargeted` | `canvasLocate` (`:261`) |
+| Edit Connection… | UpdateEdge — label, direction onto from-end/to-end, sides from `canvas_auto_sides` | `CanvasConnectionUpdated` | `canvasEditConnection` (`AppState+CanvasConnect.swift:170`) |
+| Delete Connection… | DeleteEdge; the lookup runs under the gate and a miss REFUSES AUDIBLY (E8a) | `CanvasDeleted` | `canvasDeleteConnection` (`:131`) |
+| New Canvas | `create_exclusive_reporting` with the canonical serialization as UTF-8 text (round 1 #16 — the canvas format IS text, so the reporting string API carries it; the #1123 typed outcome is real on this path) | `CanvasFileCreated`; tab opens, onboarding focused | `canvasNewCanvasFile` (`AppState+CanvasActions.swift:158`) |
+
+**E8a — The refusal table is TOTAL, and it starts at the verb, not at
+the funnel.** Every pre-funnel exit — no selection, wrong kind, no
+groups to move into, no connections on the card, an unresolvable
+lookup, invalid prompt input — maps to an exact existing event arm:
+NothingSelected, NotAGroup, NotATextCard, NotAFileCard, NoGroups,
+NoConnections, NoFreeSpaceInGroup, NotAUrl, NoChanges, ModeBusy,
+UndoBlocked, RedoBlocked and the admission arms of E2 (round 1 #14 —
+the never-silent table covers the verb's whole reachable surface,
+and "returns without deleting" ALWAYS has a sentence). The table is
+enumerated per verb in the section's task loop and each cell is a
+fact.
+
+**E9 — Placement preparation is a typed three-outcome table, mac's
+overlap check included.** `canvas_place_inside_group` answers Placed
+{x,y} / TooSmall {x,y} / Full. Placed commits; TooSmall runs
+`canvas_check_overlap` on core's inset point and commits only when
+clear, else refuses NoFreeSpaceInGroup with the label; Full refuses
+NoFreeSpaceInGroup (`canvasMoveIntoGroup:432` — the shipped twin,
+preserved exactly). `bad_node` / `not_a_group` arise AT the
+preparation query, inside the gate, and surface through E8a's table
+as one refusal (the 0b API note binds: two messages, one host
+behavior, no string matching). The picker stays open across a
+refusal — the user re-picks, nothing half-happened.
+
+**E10 — Pickers: core answers order and search; the shell only
+renders and filters text.** The card picker's proximity order is a
+CORE EXPORT this PR adds (round 1 #21 — R-D forbids a second
+distance algorithm in a host; the mac picker computes one today, so
+the export lands in core, the mac picker migrates to it, and both
+hosts consume one answer), with reading-order ties from the existing
+projection. The vault-file picker binds to the paged FFI honestly
+(round 1 #24): `list_files` pages by cursor to completion for the
+filtered set, media classification (E12's export) applies BEFORE the
+200-row display cap, "type to narrow" filters the complete
+classified set, and a filter keystroke SUPERSEDES any page fetch
+still in flight — results bind to the live picker request or are
+discarded (the §C filter's supersession rule, one surface over).
+The color picker's hex entry is a TYPED arm (round 1 #23): validated
+as 3/6-digit hex, normalized to core's stored form, confirmed as
+core's "custom color" rendering; invalid input writes NOTHING, keeps
+the sheet, and shows the field-level error — no funnel entry occurs.
+Every picker and prompt is a `ModalSurface` member — INCLUDING the
+card editor sheet and the two nested confirmations (group-delete,
+discard-draft) (round 1 #17) — and the modal-surface × chord
+admission is a literal table with one tested outcome per cell: the
+editor admits its own Ctrl+Z/Ctrl+Y to AvalonEdit, reinterprets Esc
+as commit, and blocks canvas chords; pickers admit type-to-filter
+and block canvas chords; confirmations admit only their buttons'
+keys. In-window sheets, never a Popup (W4-5 D-1); focus return to
+the operation's initiating surface, asserted per sheet.
+
+**E11 — The card editor: the draft is bound to the basis that seeded
+it, and Escape COMMITS.** The sheet hosts the real editor
+(`AvalonDocumentBufferSession` over a scratch buffer from
+`canvas_node_text`), and the editor request carries the operation
+currency: document, lease, node id, and the content hash the seed
+was read at (round 1 #18). Commit — Escape, per t0 M8, carved out
+of the mode stack, no ladder rung, every string says "commits" —
+validates that basis first: if the document reloaded or the file
+changed externally since the seed, the commit does NOT apply against
+the newer text; the conflict surface opens IN THE SHEET (E6, round 1
+#19) with the draft intact, and RELOAD-then-recommit resolves it
+deliberately. An unchanged buffer announces "No changes." and writes
+nothing. Apply failure keeps sheet and draft; closing with an
+unsaved draft asks (the mac Discard flow); degraded ⇒ read-only with
+the reason, selectable and copyable. New Card's editor-open is an E4
+effect, so it validates the initiating surface like every other.
+
+**E12 — Core exports the media classification; the CD-38 copy
+retires.** As CD-38's drift note staged: the export lands, the
+shell's transliterated copy and its pin retire, the two edge rules
+move into the export's tests, and the audio/video thirds get their
+first cross-checked pin. Behavior unchanged: media opens externally,
+everything else refuses audibly.
+
+**E13 — The refused-open sentence gets its typed reason.** The
+`CanvasBlockedReason` arm §A's flag asked for lands in the
+vocabulary with its rendered sentence and corpus witness; the
+shell's refusal site switches from the generic action-failed arm to
+the typed one. Safety shipped in §A; the sentence ships here.
+
+**E14 — The two staged swaps land, and the anchor caveat has an
+acceptance RULE.** The empty canvas swaps to `CanvasEmptyOnboarding`
+with the real New Card chord (CD-37's tie-breaker inverts). The
+activation text arm swaps the interim detail for the editor sheet
+(A13's staged replacement; the interim's Esc-dismisses arm retires
+with it). The file arm's anchor landing is verified EXACTLY — the
+heading or block anchor lands the caret per the W3-5 resolution —
+and a failure STOPS for an owner decision; "record and continue" is
+not an outcome (round 1 #25).
+
+**E15 — The republish preserves user intent because the SOURCE of
+expansion changes is fixed.** m5 comes due: expansion state is
+preserved across every funnel republish, keyed by node id, dropping
+unknown ids, session-scoped (ED-4). The §C m-5 sibling is discharged
+at its CAUSE, not papered at its symptom (round 1 #26): the hidden
+outline's selection synchronization is forbidden from CHANGING
+expansion state — a seat on a non-showing surface seats without
+expanding — so there is no unwanted expansion bit to faithfully
+preserve. Both rules are facts.
+
+**E16 — The focus-request lifecycle closes m7 atomically.** The
+supersession happens IN the publication that accepts the filter
+answer — the request and the filter result cannot cross (round 1
+#20) — and every focus delivery validates the installed presentation
+immediately before focusing (the §D install-revalidation discipline,
+one surface over). A14's unfiltered landing rules stand for every
+other case.
+
+**E17 — Context menus: the rows are DERIVED, and the popup arm's
+fact ships here.** Every verb reaches a context menu on the outline
+row, the table row and the renderer card; the expected row set per
+surface is DERIVED from the verb inventory and asserted by a drift
+census (round 1 #28 — the derived-consumer discipline of §D's
+enablement census), replacing §B's disabled placeholders (Delete
+goes live; Toggle Mark stays disabled until G, with its reason). m11
+lands: the MenuOpen popup-chain fact ships with the first real
+ContextMenu. The ENVIRONMENT FACT binds — the CI desktop refuses
+menu focus; the facts host a focusable element in the menu row, keep
+the real MenuBase in the chain, name the leg in the premise message,
+and budget a CI round trip for the first popup.
+
+**E18 — The §W-A canvas scenarios claim what the serializer
+guarantees.** Scripted `CanvasAction` sequences per fixture, executed
+verbatim by both twins: for CANONICAL fixtures, final bytes and undo
+round-trip bytes are byte-identical cross-platform and against
+committed goldens; for FOREIGN-formatted fixtures the assertion is
+semantic equality plus canonical-form byte equality after first
+write (round 1 #27 — apply-plus-invert restores canonical
+serialization, not foreign formatting, and the tests say what is
+true).
+
+**E19 — Menus and chords are table rows with drift tests.** Verb
+rows in `ChordTable` (Canvas section; New Canvas in File), resolvers
+in `SlateCommandRegistrar`, menu items mirroring mac's ownership,
+drift tests 2/3 binding menu to table to palette. New chords: New
+Card Ctrl+Alt+N; undo/redo per D-6. Everything else is
+palette/menu/context-menu only (R1).
+
+### Decisions
+
+- **ED-1 (D-6 adopted).** Ctrl+Z / Ctrl+Y, imperative canvas-focus-
+  scoped delivery; no Ctrl+Shift+Z alias — the editor host does not
+  register one today. (This record also repairs round 1 #29's
+  dangling cross-reference.)
+- **ED-2.** The vault picker's display cap is 200 with "type to
+  narrow", applied AFTER classification over the complete paged set.
+- **ED-3.** The group-delete confirmation offers Ungroup and Cancel
+  only. The algebra defines one group removal; no button promises
+  more than the op does.
+- **ED-4.** Expansion preservation is keyed by node id, drops
+  unknown ids, and never persists across close/reopen.
+- **ED-5.** The gate REFUSES concurrent verbs rather than queuing —
+  mac's main-actor serialization is the semantic twin, and a queue
+  would invent interleavings mac cannot produce.
+- **ED-6.** Three core additions are this PR's, and no more: the
+  proximity-order query (E10), the media-class export (E12), and
+  the detached apply behind Save a Copy (E6). Each lands with mac
+  consuming it (the 0a/0b discipline).
+
+### IMPLEMENTATION OBLIGATIONS — the §E ledger
+
+Round 2's findings, verbatim, backticks flattened. Each is an
+acceptance criterion for the task that claims it; the task record
+names the obligations it discharges and the facts that arbitrate.
+
+- **IE-1.** [BLOCKER] [E1/E3/E6] — The operation has no explicit operation identity. Its listed fields identify document currency and intent, but not a unique invocation, so a committed-but-unpresented retry or conflict reattempt cannot distinguish the original operation from an equal later attempt or deduplicate its effects. Add an opaque OperationId, plus an attempt identity where needed, and carry it through conflict records, refresh receipts, and effects.
+- **IE-2.** [BLOCKER] [E1/E2] — “Lease generation” contradicts §C-unit’s frozen rule that currency is derived by reference comparison and never carried as a scalar stamp; it reintroduces the retired handle-reuse/ABA shape. Carry the exact lease/publication reference and validate it against CanvasPublicationSlot, never a generation number.
+- **IE-3.** [BLOCKER] [E1/E2/E5/E11] — The preparation/editor/history basis cannot be obtained from the current FFI. CanvasOpenInfo has no content hash, queries return no basis, and CanvasApplyResult.new_content_hash exists only after a successful write; therefore the first operation after open, editor seeding, reload quarantine, and attached-basis comparisons are unimplementable. Return the handle’s hash with the atomic open/population snapshot; that necessarily reconciles ED-6’s three-addition ceiling.
+- **IE-4.** [BLOCKER] [E11] — Even after exposing a hash, canvas_node_text returns only text, so reading the basis and text in separate calls can seed old text under a new hash or vice versa. Add one locked core read returning {text, content_hash} or an equivalent immutable editor-seed token.
+- **IE-5.** [BLOCKER] [E1/E2] — Reload, retarget, release, and shutdown are not stated to participate in the mutation gate. If one displaces the lease while canvas_apply is running, the call can durably commit and return success, after which E2 “swallows” the stale result, losing its inverse and announcement. Serialize lifecycle transitions with mutation commit, or publish a late-commit receipt that updates/reloads the successor while retaining history.
+- **IE-6.** [BLOCKER] [E2/E3/E5] — The current canvas_apply error boundary is not a no-commit boundary. save_text_locked can write disk and then return an error before index commit, and canvas_apply also performs a fallible begin_fenced after that save; E3 records only after Ok, while E5 restores a popped entry on every error. Give canvas apply a reporting outcome equivalent to PublishedUnindexed, or make every post-write step non-failing and return a commit receipt once bytes land.
+- **IE-7.** [BLOCKER] [E1/E2] — Transient exclusion is one-way. The funnel refuses a write when a foreign mode transient already exists, but a mode may start while an admitted operation is off-dispatcher; the operation then refreshes through a transient it never owned. Mode entry must atomically refuse while the mutation gate is held, using the same document transition authority.
+- **IE-8.** [BLOCKER] [E1/E4] — The initiating owner is defined as “the pane and row,” but several verbs have no row—New Card from an empty canvas, menus, palette—and Delete destroys its own row before focus validation. Separate a stable surface owner from an optional source anchor and carry explicit fallback focus candidates.
+- **IE-9.** [BLOCKER] [E1/E2/E10/E11] — Busy refusal preserves state only for modes, the move-into-group picker, and arguably the editor. Rename, connection, color, file, link, and New Group surfaces may close before learning that the gate refused them, losing entered data. Make every committing surface close only after recorded success; every refusal keeps its exact state, focus, and retry affordance.
+- **IE-10.** [BLOCKER] [E3] — COMMITTED-BUT-UNPRESENTED is absent from E2 admission. A second write can therefore prepare against invisible core state while the user still sees the predecessor, and Undo can reverse a change that was never presented. Make it a document publication/FSM state that blocks all writes except its refresh-only recovery; the region must be the focusable last-error region and say “Refresh,” not “Reload.”
+- **IE-11.** [BLOCKER] [E3/E4] — Selection can be included in an atomic publication, but editor opening, WPF focus, and announcements cannot: §D’s publication transform forbids callouts. The contract also retains no pending-effect receipt, so a failed refresh drops all effects, while a failure after publication has no state and risks duplicate announcements on retry. Split model/selection effects from addressed idempotent post-publication effects and persist their completion state under the operation identity.
+- **IE-12.** [BLOCKER] [E5/E6] — Conflict retention keeps only the CanvasAction, basis, and surface, not the full operation or history policy. If Undo conflicts, E5 restores the popped undo entry; Overwrite then “records normally,” pushing another undo and clearing redo instead of performing the undo-to-redo transfer. Mode ownership and editor effects are likewise lost. Retain the complete operation, including PushAndClear, UndoTransfer, RedoTransfer, or NoHistory, mode token, and effects.
+- **IE-13.** [BLOCKER] [E5/E7] — Quarantine cannot be rendered through the stated vocabulary. CanvasUndoMenuTitle only renders ordinary Undo/Redo titles, while the current UndoBlocked sentence says “Reload it and try again,” although E5 says Reload leaves the entry disabled. Add canonical quarantine title/reason arms and copy that truthfully explains when the entry can become usable.
+- **IE-14.** [BLOCKER] [E2/E6] — The pending conflict record refuses every write, so Overwrite’s fresh canvas_apply is refused by its own admission rule. Clearing the record first opens an ordinary-write window. Introduce a resolution-owned admission token and keep the record in a Resolving state until the attempt atomically commits, fails, or replaces it with a fresh conflict.
+- **IE-15.** [BLOCKER] [E6] — The conflict FSM is not total. Reload discards the record before reattachment, so reload failure destroys recovery; Overwrite defines commit and fresh conflict but not InvalidArgument, closed handle, I/O failure, or stale completion; resolution success/failure announcements are also unspecified. Retain the record until a terminal transition and provide a literal state × resolution-outcome × event table.
+- **IE-16.** [BLOCKER] [E6] — Save a Copy has no transition for the original document. Clearing the record leaves the original stale and causes the next write to conflict again; retaining it blocks writes forever. An existing “(conflict copy)” name and PublishedUnindexed are also unresolved. Treat PublishedUnindexed as a landed copy, handle collision with a deterministic no-clobber naming/prompt loop, then reload/quarantine the original and clear the record exactly once.
+- **IE-17.** [BLOCKER] [E6/E11] — Save a Copy’s “pre-conflict document” is unavailable when editor conflict follows a document reload. The editor request retains only node text and a hash; the old handle and the rest of the canvas are gone, so detached apply cannot construct the promised copy. Retain an immutable whole-canvas snapshot/capability at seed time, or remove Save a Copy from this conflict shape.
+- **IE-18.** [BLOCKER] [E6] — The t0 conflict state is not added to the tab’s accessible value. An assertive event and focusable region do not satisfy t0 §3’s separate requirement that conflict remain discoverable from the tab after the transient announcement. Publish and clear the tab conflict value with the FSM transition.
+- **IE-19.** [BLOCKER] [E7/E10] — The card-editor Edit-menu target is unreachable. E10 makes the editor a ModalSurface, while the ratified Windows rule and ModalSurfaceTests.TheMenuDisablesUnderEveryModalSurface disable the menu under every such surface. Remove that menu row and rely on editor controls/chords, or obtain an explicit baseline carve-out.
+- **IE-20.** [BLOCKER] [E7] — Capturing only the undo domain does not guarantee “what the title names is what the click undoes.” An already-running operation or reload can change that stack while the menu is open, making the title name A while execution pops B. Snapshot the top entry identity, basis, and stack epoch, then validate that exact entry on execution.
+- **IE-21.** [BLOCKER] [E1/E8] — New Canvas cannot satisfy the universal operation shape: before creation there is no document, lease, basis, or per-document gate, and it does not call canvas_apply. Define a separate vault-scoped create operation and lifecycle, explicitly outside the handle-mutation funnel.
+- **IE-22.** [BLOCKER] [E8] — New Canvas requires canonical serialization, but no FFI exports canonical empty-canvas text and R-I forbids a C# serializer or host-owned serialization literal. Supply canonical text/create semantics from core or explicitly ratify a host literal; either direction conflicts with ED-6 as currently bounded.
+- **IE-23.** [BLOCKER] [E8] — New Canvas merely notes that the #1123 reporting outcome exists; it does not define PublishedUnindexed. That outcome means the file is real and must not be recreated or renamed, yet opening it may require recovery because it is unindexed. Add a terminal outcome table: finalize creation once, recover indexing/opening by path, and never retry the create.
+- **IE-24.** [BLOCKER] [E8] — Edit Connection contradicts the mac twin and the replacement-shaped UpdateEdge. The revision recomputes sides with canvas_auto_sides and omits color, whereas mac preserves fromSide, toSide, and color while changing only label and the four exact end-style combinations. Preserve sides/color and specify the four direction mappings verbatim.
+- **IE-25.** [BLOCKER] [E8] — Remove from Group specifies directionHint: Below, but the cited mac implementation passes nil. This changes placement in ordinary canvases. Use nil or record an approved behavioral divergence.
+- **IE-26.** [BLOCKER] [E4/E8] — Delete’s “mac next-or-previous rule” does not exist in the cited twin; mac clears selection. Moreover, a refreshed population cannot derive the deleted row’s predecessor/successor without pre-delete ordering carried in the operation. Match mac’s clear-selection behavior or explicitly carry an ordered survivor candidate list under the gate.
+- **IE-27.** [BLOCKER] [E8a/E2] — The promised total refusal table is not present; it is deferred to a future “task loop.” The listed arms omit reachable NotInAGroup, NoNotesInVault, NoMediaInVault, NoFilesToPointAt, create collisions/reporting outcomes, paging failures, and several recovery outcomes. Gate-busy, pending-conflict-write, and committed-unpresented also lack exact current vocabulary arms. Land the literal per-verb × stage × outcome table and canonical event mapping before freeze.
+- **IE-28.** [BLOCKER] [E9] — canvas_check_overlap accepts a CanvasRect, not the “inset point” E9 names. A point or zero-size rectangle can report clear while the moved card overlaps another card. Check {x, y, original width, original height} and exclude the moved node.
+- **IE-29.** [BLOCKER] [E6/E10/E11] — Nested modal and conflict chord ownership is undefined. With a discard confirmation over the editor, underlying Esc still means commit unless the top surface consumes it; with a conflict region inside the editor, Esc attempts another write that the conflict record blocks. Define an explicit topmost modal stack and state × chord table, including conflict-pending and confirmation Esc behavior.
+- **IE-30.** [BLOCKER] [E15] — Expansion preservation is not scoped per installed surface, although §C classifies expansion as presentation and R-B allows two panes to share one document. A document-level ID set makes a mutation in pane A overwrite pane B’s independent expansion intent. Key expansion by presentation/surface owner, then by node ID.
+- **IE-31.** [BLOCKER] [E17/E19] — “Every verb” on every outline row, table row, and renderer card makes the derived context-menu census unsatisfiable: New Canvas has no canvas row, New Card must work on an empty canvas, and group/connection/file-only verbs do not apply to every row kind. Derive applicable subsets from (surface, row kind, selection capability) with explicit exclusions.
+- **IE-32.** [BLOCKER] [E3/spec §1] — The frozen architecture still defines the funnel as apply → refresh → undo push → announce, while E3 requires apply → history record → refresh → effects. Every successful mutation reaches both mutually exclusive orders. Add an explicit normative precedence/supersession ruling before implementation.
+- **IE-33.** [MAJOR] [E1/E2/E5] — Gate acquisition is described inconsistently as an admission check followed by “gate” acquisition. If implemented as check-then-enter, two callers can both observe free and the loser queues, violating ED-5. Specify one nonblocking atomic TryAcquire as the gate-held admission cell, followed by revalidation inside ownership.
+- **IE-34.** [MAJOR] [E1/E2] — Busy refusal has no coalescing or deduplication policy. Key repeat during one slow apply can flood the announcer with identical busy events immediately before the first operation’s success announcement. Coalesce by document and gate epoch, or disable known-busy commit controls while preserving an audible first refusal.
+- **IE-35.** [MAJOR] [E4] — An unresolved required effect such as “select the created node” falls through the ordinary drop rule. If refresh succeeds without the just-created ID, silently clearing selection masks an incoherent committed presentation. Treat missing required targets as committed-but-unpresented; reserve the drop rule for optional/deleted candidates.
+- **IE-36.** [MAJOR] [E6] — Conflict ownership after initiating-surface destruction is unspecified. With two panes sharing the document, closing the pane that owns a conflict can leave the surviving pane write-blocked with no defined owner transfer or focus return. Make recovery document-visible in every live pane and define owner loss/transfer explicitly.
+- **IE-37.** [MAJOR] [E10] — list_files paging has no snapshot identity. A rename or index change between cursor pages can make the supposedly “complete classified set” omit or duplicate files before the 200-row cap. Use snapshot-aware paging or weaken the contract to a live, revalidated set.
+- **IE-38.** [MAJOR] [E10] — A filter keystroke superseding the page fetch is mismatched to the FFI: list_files has no cancellation token and its FileFilter is not the text query. Repeated typing can discard and restart full-vault enumeration, with no specified loading, disposal, or failure state. Keep one picker-generation page cache independent of the query; locally refilter it and discard only stale presentation answers.
+- **IE-39.** [MINOR] [E6/ED-6] — E6 calls the media-class export “E11”; it is E12. Correct the cross-reference.
+
+### Implementation plan — the task loop
+
+The C-unit gauntlet, §D's third run: per task — code, facts, a
+byte-restored production mutation per named fact, a record entry
+appended to this section, and the citation floor raised above the
+pre-task population. Core tasks land Rust + uniffi + mac consumption
++ Windows consumption together (the 0a/0b discipline).
+
+| Task | Builds | Discharges |
+|---|---|---|
+| TE-0 | The core surface the model closes over: basis hash on the open/population snapshot; the locked text-plus-hash editor seed read; the canvas apply commit receipt / no-commit boundary; canonical empty-canvas text from core; the proximity-order query; the media-class export; the detached apply | IE-3, IE-4, IE-6, IE-22, E10/E12/E6's additions |
+| TE-1 | The operation value (identity, owner plus optional anchor, currency by reference, effects), the per-document gate with atomic TryAcquire admission, lifecycle transitions serialized with the gate, mode-entry exclusion both ways | IE-1, IE-2, IE-5, IE-7, IE-8, IE-33 |
+| TE-2 | The history domain: basis-carrying entries, restore-on-every-non-commit, the reload quarantine with its vocabulary arms, the committed-but-unpresented publication state in admission, snapshot-plus-entry-identity menu routing | IE-10, IE-13, IE-20 |
+| TE-3 | The conflict machine: the retained OPERATION (history policy, mode token, effects), the Resolving admission token, the total state-by-resolution-by-event table, Save a Copy's snapshot capability and terminal outcomes, the tab's conflict value | IE-12, IE-14, IE-15, IE-16, IE-17, IE-18, IE-36 |
+| TE-4 | Effects split model-side vs post-publication with completion state under the operation identity; required-target failure as committed-but-unpresented; busy-refusal coalescing and every committing surface's state preservation | IE-9, IE-11, IE-34, IE-35 |
+| TE-5 | The verbs against the real algebra: Edit Connection preserving sides and color with the four end-style mappings; Remove from Group with mac's nil hint; Delete matching mac's clear-selection; the literal per-verb refusal tables; the corrected overlap check | IE-24, IE-25, IE-26, IE-27, IE-28 |
+| TE-6 | The pickers: generation-cached paging with local refiltering, snapshot honesty, the hex arm, core proximity order consumed | IE-37, IE-38 |
+| TE-7 | The editor and the modal stack: seed-token binding, the topmost-modal chord table including conflict-pending and confirmation Esc, the Edit-menu route resolved against the ratified modal rule | IE-19, IE-29 |
+| TE-8 | Context menus from the derived (surface, row kind, capability) subsets with the census; the m11 popup fact | IE-31 |
+| TE-9 | Expansion preservation per installed surface; the atomic focus-request supersession | IE-30, E15, E16 |
+| TE-10 | New Canvas as the vault-scoped create operation with the terminal outcome table | IE-21, IE-22, IE-23 |
+| TE-11 | The scenario goldens, the FlaUI authoring journey, and the two staged swaps with the anchor acceptance rule | E14, E18, the journeys |
+
+IE-32 (the funnel-order precedence) is discharged by the freeze
+block's ruling above; IE-39's cross-reference correction is carried
+by the freeze commit itself. Order: TE-0 first (everything closes
+over it); then TE-1..TE-4 (the spine); then TE-5..TE-11 in
+dependency order, adjusted by the loop as learned.
+
+### Verification plan
+
+Batteries: gate facts (refusal while held; preparation under the
+gate; no interleaving); currency facts (a stale lease swallowed at
+each of the three boundaries); commit-before-presentation facts (a
+refresh failure keeps the inverse; the typed state; refresh-only
+retry); effect facts (declared selection atomic with the publish;
+initiating-surface validation on every focus effect); undo facts
+(basis-carrying entries; restore on every non-commit outcome;
+quarantine after reload; snapshot routing across the four domains;
+menu titles); conflict facts (the record; blocked admission; all
+three resolutions; in-sheet rendering); per-verb mutation facts
+(bytes, typed event, inverse restores canonical bytes, non-visual
+reachability); the E8a refusal tables, one fact per cell; picker
+facts (core order; paging to completion; supersession; the hex arm;
+the modal-by-chord table); editor facts (basis binding; Esc commits;
+no-op; failure keeps the sheet; Discard; focus return; degraded);
+swap facts (the onboarding chord; activation-to-editor; exact anchor
+landing); E15's two facts; E16's atomic supersede; the derived
+context-menu census and m11's popup fact; New Canvas end-to-end
+through the reporting outcome; the canvas scenario set green on both
+twins; the FlaUI authoring journey; axe on the sheet and pickers.
+
+### Hand-off rows
+
+1. **To PR F:** the mode-owned commit token through the operation is
+   the seam; the picker takes F's purposes as rows.
+2. **To PR G:** marks verbs reuse the gate and the bulk-is-one-
+   action rule; the marks list is the picker's sibling.
+3. **To PR H:** E13 closes the refused-open vocabulary flag; E14's
+   anchor verification outcome is recorded either way.
+
+
+### Round record
+
+**Round 1 — codex, xhigh — NOT SAFE: 21 blockers, 6 majors, 2
+minors.** Revision 1 described a sequence where the platform needs
+an operation with identity, currency and a lifecycle. Every FFI
+claim checked — RenameGroup and Ungroup in the algebra, the
+three-outcome placement, the reporting create, the paged list, the
+missing proximity export, the four existing event arms — was TRUE
+against the surface. Revision 2 rewrote the section around the
+operation value.
+
+**Round 2 — codex, xhigh — NOT SAFE: 32 blockers, 6 majors, 1
+minor.** The count rose, and a cluster of the new blockers was
+created by revision 2's own fixes: the conflict record refusing its
+own Overwrite, the currency swallow discarding a durable commit's
+inverse, the unrenderable quarantine, the modal editor disabling the
+menu it routes through, New Canvas outside the operation shape — the
+protocol's rule-5 signal. A second cluster showed the model cannot
+close over the FFI as it exists: no basis at open, no locked editor
+seed, no no-commit boundary on the canvas apply, no canonical create
+text. Neither cluster is a prose question.
+
+**The ruling (owner, 2026-08-31).** Freeze at revision 2; reclassify
+round 2's thirty-nine findings as IE-1..IE-39; lift ED-6's ceiling
+so the FFI-gap obligations add the core surface they name; run the
+task loop. The §C-unit ruling, applied one round earlier because
+rule 5 fired.
+
+### Implementation record
+
+**TE-0 — the core surface the model closes over.** Seven slices, each
+Rust + FFI + consumer + facts; the ledger obligations it discharges
+are IE-3, IE-4, IE-6 and IE-22, plus the three ED-6 additions.
+
+1. **The basis at open (IE-3).** `CanvasOpenInfo` gained
+   `content_hash` — one hash computation feeds the handle's CAS basis
+   and the exposed field, so they cannot drift. Facts:
+   open_canvas_exposes_the_cas_basis (rust — the exposed basis is the
+   opened bytes' hash, and an apply's successor basis is exactly the
+   next open's); the mac FFI test asserts exposure and stability; the
+   Windows population carries it (`CanvasPopulation` gained
+   ContentHash, fed by the load pipeline from the open info —
+   `ThePopulationCarriesItsLoadBasis`). Mac's document tracks the basis
+   across load, retarget, degraded and failed arms, and the funnel
+   notes each apply's successor (noteApplySucceeded).
+2. **The locked editor seed (IE-4).** `canvas_editor_seed` returns
+   text and basis as one value taken under the registry lock —
+   canvas_editor_seed_pairs_text_with_its_basis pins the pairing, the
+   successor-basis reseed and the None-for-a-group arm. Mac's
+   canvasEditCard migrated off the bare text read, and its editor
+   request now carries the basis; the two create-and-edit verbs pass
+   the post-apply basis the funnel noted.
+3. **The commit receipt (IE-6).** From write success to index commit,
+   every save failure is now typed `SavedButUnindexed` carrying the
+   landed hash — the durable write-intent marker repairs the index;
+   the caller must treat the state as a COMMIT. `canvas_apply`
+   consumes the arm: it reports success with `indexed: false`, the
+   handle advances (model falls back to a DB-free derive when the
+   index cannot be read), and
+   canvas_apply_reports_a_landed_write_whose_index_failed drives the
+   fault seam end-to-end — the second apply proceeds on the landed
+   basis with no false conflict, which is the double-apply hazard the
+   obligation names. The seam's own error became the typed arm; its
+   existing tests assert is_err and were unaffected.
+4. **The canonical empty document (IE-22).** Core exports the
+   New-Canvas bytes (canonical_empty_canvas_text — exactly the
+   serialization of the default canvas, "{}\n"); mac's Swift literal
+   migrated to the export, and the FFI test pins the bytes.
+5. **The proximity order (ED-6/E10).** Core owns the one distance
+   algorithm: squared distance from the anchor's centre, ties by
+   READING order — which is geometry-derived, so the tie-pair fixture
+   differing only in document order answers identically — groups
+   included, reading order itself when no anchor resolves (mac's
+   shipped fallback). The Windows picker consumes it in TE-6; the mac
+   picker's migration is recorded as owed to keep this task's diff
+   reviewable, and the export's behavior is pinned in rust either way.
+6. **The media classification (ED-6/E12, CD-38's staged note).**
+   `media_class` and its class enum went public and crossed the FFI;
+   the Windows gate's transliterated set, its ASCII-lowering helper
+   and the kind-label detour pin
+   (TheImageThirdOfTheGateAgreesWithCoresOwnKindLabel) all retired.
+   The behavior table (`TheMediaGateIsCoresClassification`) now pins
+   the set THROUGH the export, audio and video thirds included — the
+   pin the detour could never give them. Mac's gate remains CD-38's
+   recorded divergence; the mac FFI test consumes the export's edge
+   rules.
+7. **The detached apply (ED-6/E6).** `canvas_apply_detached` — parse
+   refusing a degraded document, apply, serialize; no session, no
+   handle, no write. Facts pin the transform, purity and the refusal.
+   Its consumer is TE-3's Save a Copy; landed here because the
+   conflict machine's design closes over it.
+
+The windows suite (with the error-mapping census's pinned arm set
+grown to 18 for the new save arm), the rust canvas and query
+batteries and the format gates ran green. Five dir-tree censuses
+fail on THIS BOX only — harness-side os error 123 writing the
+deliberately hostile fixture names, unchanged since #1028; CI's
+rust lanes are the oracle and run them green (recorded in the
+session memory). The mac edits compile on CI's Swift lane (this box
+builds no Swift).
+Mutations: one per named fact class, injected into production and
+byte-restored — the table below names them.
+
+| Mutation | Injected | Named fact that failed |
+|---|---|---|
+| open hash decoupled | info.content_hash emptied | open_canvas_exposes_the_cas_basis |
+| seed pairing torn | seed basis emptied | canvas_editor_seed_pairs_text_with_its_basis |
+| proximity tie untied | tie key constant | proximity_order_sorts_by_distance_with_reading_order_ties |
+| canonical bytes bent | trailing newline dropped | canonical_empty_canvas_text_is_the_default_serialization |
+| dotfile rule dropped | hidden-file guard removed | media_class_answers_by_the_basenames_real_extension |
+| degraded refusal skipped | parse warnings ignored | apply_detached_refuses_a_degraded_parse |
+| receipt untyped | seam reverted to the generic error | canvas_apply_reports_a_landed_write_whose_index_failed |
+
+**TE-1 — the operation value and the gate.** The spine's types, bound
+and pinned; discharges IE-1, IE-2 and IE-33, and types IE-7's one-way
+half and IE-8's owner/anchor split.
+
+- **The operation** (`CanvasMutationOperation`): identity is an opaque
+  reference (`CanvasOperationId`, the request-identity discipline —
+  equal inputs mint DISTINCT invocations, pinned); the initiating
+  surface is a required owner with a NULLABLE source anchor (IE-8 —
+  New Card on an empty canvas, menus and the palette have no row);
+  currency is the captured `CanvasLoaded` REFERENCE and the one
+  boundary question is reference equality against the live
+  publication (IE-2 — no stamp, no counter, no ABA window; the §C-unit
+  frozen rule, obeyed rather than reinvented); the typed effect enum
+  (`CanvasMutationEffect`) declares E4's table with mac's real delete
+  behavior as the arm name (ClearSelection — IE-26 recorded in the
+  type); the mode token types C7's retry rule (IE-7's one-way half —
+  the funnel's transient guard admits exactly the operation carrying
+  the live mode's token; PR F consumes).
+- **The gate** (`CanvasMutationGate`): one per-document cell, one
+  ATOMIC compare-and-swap acquisition (IE-33 — check-then-enter is
+  unspellable), refusal-not-queue (ED-5), the holder as the whole
+  state (identity and epoch in one reference), and a holder-only
+  release whose violation throws the model's unsurvivable tripwire
+  (`CanvasLeaseViolationException`, excluded from every survivable
+  catch by `CanvasFaults`).
+- **IE-5's ruling applied:** of the obligation's two remedy arms,
+  this design takes the SECOND — lifecycle transitions stay on the
+  slot's own CAS, and a displacement during an off-dispatcher apply
+  is answered by the operation's completion RECEIPT retaining the
+  committed hash and inverse for the history domain (TE-0's
+  `SavedButUnindexed` sibling, host-side); TE-2 records the entry,
+  TE-4 owns the surfaced state. The gate therefore never blocks a
+  reload; it makes the stale result harmless-but-retained.
+- **Consumed by:** TE-5 wires the verbs and both directions of the
+  mode exclusion at the one seam that owns both objects; TE-2/TE-4
+  consume the receipt and effects.
+
+Facts: the four in `CanvasMutationGateTests`. Mutations: the
+acquisition rewritten check-then-enter (the admit-exactly-one fact
+failed); currency reduced to liveness alone (the basis-reference fact
+failed); both restored byte-for-byte.
+
+**TE-2 — the history domain.** Discharges IE-9's structural rule,
+IE-10 (both halves), IE-13 and IE-20.
+
+- **The stack** (`CanvasUndoStack`, entries as `CanvasHistoryEntry` —
+  name, inverse, BASIS): the two-phase checkout makes "transfer only
+  on success, restore on every non-commit outcome" structural — a
+  checkout must end in exactly one commit or restore, phase-two
+  without phase-one is the unsurvivable tripwire, and structural
+  motion while one is open is too. The QUARANTINE is one comparison:
+  an entry is offered only while its basis equals the attached one;
+  a reload that attaches a foreign revision disables rather than
+  offers (the old inverse must never pass the new CAS by
+  coincidence), and the exact basis returning re-offers. The EPOCH
+  plus the entry reference make IE-20's menu snapshot
+  (`CanvasHistorySnapshot`) one integer and one reference compare at
+  execution — a moved stack refuses the stale title instead of
+  undoing whatever is on top now.
+- **The publication state (IE-10):** `CanvasPublication` gained the
+  committed-but-unpresented operation id — a spellable document
+  state set when a commit's refresh fails, carried untouched across
+  unrelated publications, cleared only by the refresh-only recovery;
+  the funnel's admission (TE-5) reads it, the model census admitted
+  the field.
+- **The vocabulary (IE-13):** two blocked-reason arms with TRUTHFUL
+  copy — "Undo unavailable: the canvas changed on disk, and this
+  entry applies to an earlier revision." (nothing re-enables it but
+  that revision returning; the shipped Blocked pair's "try again"
+  stays for the pre-quarantine refusal it correctly describes) — and
+  the label arm CanvasHistoryQuarantinedTitle for the menu while
+  nothing is offered. Five places: the core enum and renderings, the
+  cardinality and roster censuses, the regenerated corpus artifact
+  (four entries), the FFI mirrors, and BOTH host corpus censuses in
+  corpus order. The Windows SPEAKER of these arms arrives with the
+  funnel's menu-title wiring (TE-5/TE-7); the arms, renderings and
+  censuses are pinned now.
+
+Facts: five in `CanvasUndoStackTests`, the publication-state fact in
+the gate battery, and the corpus lockstep across three languages.
+Mutations: the quarantine comparison forced true (the foreign-basis
+fact failed); the publication state dropped by the carrying copy (the
+spell-and-clear fact failed); and the snapshot epoch check dropped —
+which the stale-menu fact SURVIVED on the first run, because the
+reference compare already covers a pushed-over top. The fact was
+strengthened with the scenario only the epoch can refuse — a
+checkout/restore cycle putting the SAME entry back on top, where a
+pre-cycle snapshot would execute it twice — and the re-run mutation
+failed exactly that arm. Each restored byte-for-byte; the epoch is
+load-bearing and now provably so.
+
+**TE-3 — the conflict machine's record and its one door.** Types and
+pins IE-12, IE-14 and IE-17, and the state-machine halves of IE-15;
+the FFI-driven resolution arms, the tab's conflict value publish and
+the owner-transfer rule (IE-16, IE-18, IE-36) are consumed by the
+funnel task, which owns the seams they publish through.
+
+- **The record** (`CanvasConflictRecord`): one WriteConflict's WHOLE
+  context, retained until a terminal transition — the full operation
+  (owner, effects, mode token: IE-12's "retain the complete
+  operation", satisfied by carrying TE-1's value), the attempted
+  action and name, the failed basis, the typed HISTORY POLICY
+  (push-and-clear, undo-transfer, redo-transfer, no-history — the
+  round-2 finding that an Overwrite after a conflicted undo must
+  transfer, not re-push), and the PRE-CONFLICT SNAPSHOT.
+- **The snapshot (IE-17)** closes over a new core read:
+  canvas_current_text — the handle's in-memory document serialized
+  under the registry lock, paired with its basis. At conflict time
+  that IS the pre-conflict revision (the refused apply moved
+  nothing), so Save a Copy's detached apply has its text even after
+  a document reload destroyed every other route to it. The rust fact
+  pins capture-at-open, canonical round-trip, and the successor
+  after an apply; the FFI mirrors it.
+- **The door (IE-14):** TryBeginResolving admits exactly one
+  resolution; a second while one runs refuses, a terminal record
+  admits none, and every terminal transition — resolved, failed-back
+  -to-pending (the record whole, recovery intact: IE-15's no-outcome
+  -discards-recovery), replaced-by-a-fresh-conflict — requires the
+  OWNING resolution, with the unsurvivable tripwire for anything
+  else.
+
+Facts: three in `CanvasConflictRecordTests`, one in the rust canvas
+battery. Mutations: the door's guard removed (the opens-once fact
+failed); a failure made terminal (the record-whole fact failed);
+both restored byte-for-byte.
+
+**TE-4 — the effects split.** Discharges IE-35 and IE-34, and types
+IE-11's two halves and IE-9's refusal outcome; the funnel task wires
+the surfaces that keep their state.
+
+- **The model-side half** (`CanvasEffectPlan`): selection resolution
+  as a pure function over the REFRESHED population, callable inside
+  the publish transform so rows and seat install in one swap (§D's
+  no-callouts rule respected by construction). The four arms: keep
+  resolves the current intent — and a deleted seat resolving to null
+  is the TRUTH, the drop rule's proper home; clear seats null by
+  declaration; select-created resolves the created id, and a
+  REQUIRED target the refresh cannot resolve is the typed
+  required-target-missing resolution (IE-35) — the
+  committed-but-unpresented signal, never a silent clear; an
+  undeclared arm is the tripwire.
+- **The post-publication half** (`CanvasOperationCompletion`): the
+  addressed effects' completion state under the operation identity —
+  announce, editor-open, focus-return each at-most-once through an
+  interlocked mark, so a retry after a failed refresh re-runs only
+  what never ran and a duplicate announcement is unspellable
+  (IE-11's persistence clause).
+- **The busy gate** (`CanvasBusyGate`, IE-34): one audible refusal
+  per HOLD, keyed by the held operation REFERENCE — no timer, no
+  announcer class: key repeat under one slow apply speaks once, and
+  two distinct holds 50 ms apart are two true refusals that both
+  speak. The surviving surface state is IE-9's rule; the funnel
+  wires it and this type answers only "is this refusal the audible
+  one".
+
+Facts: four in `CanvasOperationEffectsTests`. Mutations: the
+required-target arm rewritten as the silent drop (the typed-failure
+fact failed); the completion mark stripped of at-most-once (the
+marks fact failed); the busy gate's epoch comparison removed (the
+once-per-hold fact failed); each restored byte-for-byte.
+
+**TE-5a — the funnel's spine.** The one `canvas_apply` call site
+(R-A) as a class, integrating every prior task's type; discharges the
+admission and transaction halves of the E1–E3 contracts and IE-5's
+receipt arm end-to-end; the verbs, their surfaces and the real-vault
+batteries are the loop's next slices.
+
+- **Admission is E2's table in order** — not ready, recovery pending
+  (the committed-unpresented state), conflict pending (with the
+  resolving door's pass-through token), mode held (the TE-1 token
+  seam), stale (currency by reference at mint), then ONE atomic gate
+  acquisition whose refusal consults the TE-4 busy gate: audible
+  once per hold, and never a queue. Two FFI seams enter the ctor —
+  `ICanvasLoadSource`'s refresh trio REUSED, plus apply and the
+  snapshot read on the two-method `ICanvasMutationSource`.
+- **The transaction is E3's order with the gate held throughout**,
+  released in a finally: apply through the lease (currency re-checked
+  inside the FFI lock), the history entry recorded before anything
+  fallible, the refresh read under the lease again, and ONE publish
+  installing rows and the effect-plan seat together on the SAME
+  loaded reference. A required-missing seat marks
+  committed-unpresented instead of publishing (IE-35 wired).
+- **The three failure arms, each typed:** WriteConflict builds the
+  retained record AT refusal — snapshot taken with the gate held —
+  and announces the conflict; SavedButUnindexed records the landed
+  commit and marks recovery (TE-0's boundary honored host-side); a
+  mid-apply displacement retains its receipt through a NEW
+  non-rebasing push. The battery caught the first cut rebasing the
+  stack onto the displaced entry's own basis — self-defeating the
+  quarantine — and PushRetained is the repair: the receipt lands
+  under the displacing reload's basis and quarantines by the same
+  comparison that admits current entries.
+
+Facts: six in `CanvasMutationFunnelTests` over scripted seams (the
+run seam inline, the write seam scripted per call — the filter
+machine's source-free discipline). Mutations: the E3 order inverted
+(the record-before-fallible fact failed); the conflict arm dropped
+from admission (the conflict fact's refusal tail failed); the
+displaced arm made rebasing again (the receipt fact failed); each
+restored byte-for-byte.
+
+**The wall censuses' catch, recorded as the round it was.** The
+first cut minted its own population and published `WithLoaded`
+directly, and the full suite's two wall censuses refused both —
+correctly: publishing around the transfer's wall had silently LOST
+the filter-reseed rule, so a mutation under an active needle would
+have unfiltered the projection. The reroute is the deep fix: the
+transfer gained `Republish` (a `CanvasRepublishOutcome` naming the
+reseed the caller must start), the pipeline gained
+`RefreshAfterMutation` (the mint inside its wall, the reseed
+callback fired exactly as the acceptance path's), and the funnel's
+refresh became one call through both. The refresh outcome enum
+lives beside the admission enum in the funnel's own file — the
+model's closed world stays closed, and its authority walk showed
+why an enum does not belong in it. One suite run was pushed red
+before this landed; the fix commit follows it directly.
+
+**TE-5b — the funnel enters the document, and the first three verbs
+run on a real vault.** The prepare seam, the confirmation seam and
+the intent-provenance seat rule; E4's declared effects observable
+end-to-end.
+
+- **Prepare under the gate:** the funnel's Apply now takes the
+  preparation as a function of the handle, run inside the SAME lease
+  hold as the apply — round 1's #5 closed structurally (a placement
+  answered and a write fed in one hold; nothing moves between). The
+  confirmation seam speaks the verb's typed event only for a commit
+  whose presentation INSTALLED, with the operation carrying the
+  created id the SelectCreated effect resolves (IE-35's required
+  target, threaded).
+- **The document integration:** the history domain, the gate, the
+  busy gate and the funnel live on `CanvasDocumentViewModel`, built
+  over a two-method mutation source beside the load source, riding
+  the SAME tracked worker the filter rides (the projection posted
+  after every job, inline in synchronous tests). Every ready publish
+  rebases the history domain to the population's basis; retirement
+  clears it.
+- **The intent-provenance seat rule** — the slice's design catch:
+  A12's survivor rule kept the OLD seat over a created card, because
+  the created id survived nothing (it was born) while the anchor
+  survived everything. The distinguisher is provenance: the slot's
+  selected INTENT changes only through deliberate publishes, and a
+  user's own move publishes an intent equal to the seat it came
+  from — so "the publication carries a new intent" fires exactly
+  for the funnel's declared effects and never for the T3-protected
+  mid-flight move. PublishReady seats the unit's resolution on that
+  arm and keeps the survivor rule on every other.
+- **The verbs:** New Card (core placement at the selection anchor,
+  defaults from the constants, landing selected in one publish),
+  the editor's commit (SetNodeContent; the no-change arm is the
+  editor task's), and Delete's card arm (mac's clear-selection
+  behavior, typed; the group's Ungroup/Cancel confirmation and the
+  connection arm ride the next slice with their tables). Each fact
+  drives disk bytes, the rendered confirmation, the seat, and the
+  inverse restoring the EXACT prior bytes through the two-phase
+  checkout.
+
+Facts: three in `CanvasMutationTests` over a real `VaultSession`.
+Mutations: the provenance arm dropped (the New Card fact failed on
+the unseated card); the created id untreaded into the effect plan
+(the same fact failed through the required-target path); and a
+finding worth its line — Delete's effect flipped to KeepSelection
+did NOT bite, because a verb that deletes its own seat makes the
+two arms indistinguishable: the drop rule truthfully resolves the
+dead intent to null either way. The ClearSelection arm stays as the
+type-level record of mac's behavior, the non-biting flip is
+recorded rather than laundered, and the third mutation became the
+undo-hint wire instead (the hint constant cut at the verb site —
+the delete fact failed on the sentence). Each restored
+byte-for-byte.
+
+**TE-5c — the remaining single-shot verb commit paths.** Eleven
+verbs now run the funnel end-to-end on a real vault; labels, targets
+and picks arrive as parameters, exactly as the editor's commit takes
+its text — the sheets and pickers that gather them are the next two
+tasks' (IE-8's owner/anchor split carries the surface when it
+exists). Discharges IE-23, IE-24, IE-25's direction and the
+placement half of IE-15; E8a's tables remain the wiring slice's.
+
+- **Group verbs:** New Group at core's group defaults; Rename
+  through the REAL op (IE-23 — never SetNodeContent on a group);
+  Ungroup as the delete verb's group arm (the algebra's one group
+  removal: frame and incident edges go, cards stay — pinned by the
+  keeps-cards fact; ED-3's two-button sheet is TE-7's, this is its
+  commit path). Move into Group is the typed three-outcome
+  preparation, mac verb for verb: Placed commits; TooSmall commits
+  only when core's overlap check clears the inset; Full — and an
+  occupied inset, driven by the fixture's Cramped group and its
+  blocker card — refuses audibly with the label, from PREPARATION,
+  inside the gate, writing nothing and recording nothing.
+- **Color:** preset or validated hex through one grammar
+  (IsCanvasColor); the confirmation speaks core's NAME, pinned
+  against the digit never appearing in the sentence; an invalid hex
+  never reaches the funnel.
+- **Connections:** Connect defaults sides by core over the two rects
+  (0b-3) with mac's end styles; Edit Connection changes label and
+  the four end-style mappings ONLY, the author's sides and color
+  PRESERVED from the `CanvasSceneEdge` (IE-24, pinned byte-level); Delete
+  Connection looks up BEFORE the apply and a miss refuses AUDIBLY
+  (0a-2 — the mac trailing-space sentence unreachable), with the
+  `CanvasConnectionDirection` mapping and the edge-direction table
+  made total over the arrow pair.
+- **Add and locate:** file cards with subpaths, link cards behind
+  the NotAUrl gate, and Locate repointing a missing target with the
+  typed retarget confirmation. The slice's wart worth its line: the
+  first cut's confirmations read the VM's row mirror, which
+  refreshes only when the posted projection applies — AFTER the
+  transaction — so a created card's sentence spoke its raw id. The
+  confirmations now read the PUBLISHED population (an Outline scan;
+  the model's surface stays closed), and the add-file fact pins the
+  humanized title in the sentence.
+
+Facts: eleven more in `CanvasMutationTests` (fourteen total), the
+fixture grown to two groups, a blocker card and a sided, colored,
+labelled edge — written as a canonical-form raw literal after the
+foreign-format attempt failed exactly as E18 predicts (undo restores
+canonical bytes, so a non-canonical fixture cannot round-trip).
+Mutations: the preserved sides and color recomputed to null (the
+preservation fact failed); the missing-edge refusal silenced (the
+audible-refusal fact failed); the URL gate dropped (the link fact
+failed on bytes that should not exist); each restored byte-for-byte.
+
+**TE-6 — the picker models.** Discharges IE-37 and IE-38 and
+consumes TE-0's proximity export; the sheets, their XAML, the
+`ModalSurface` membership and the modal-by-chord table are TE-7's,
+which owns the modal stack whole.
+
+- **The card model** (`CanvasCardPickerModel` over
+  `CanvasCardPickerRow`): CORE owns the order — the factory reads
+  `canvas_proximity_order` through the lease (anchor = the
+  selection, reading-order ties, groups included) and the model only
+  renders and text-filters, order preserved, no comparator anywhere
+  (R-D's second-algorithm ban, pinned by the real-vault fact that
+  compares the factory's rows against the FFI answer VERBATIM).
+- **The file model** (`CanvasVaultFilePickerModel`): ONE GENERATION
+  per open — the paged listing walks to completion into the
+  generation cache; classification applies BEFORE the display cap
+  (ED-2 — the fact drives a media file arriving beyond two hundred
+  markdown rows and finds it admitted); a filter keystroke refilters
+  the CACHE locally and the page seam's call count stays flat
+  (IE-38's never-restart rule); and a pick admits only against the
+  generation it was shown from — the model reference IS the
+  generation, so supersession is one reference compare (IE-38's
+  discard rule). Snapshot honesty stands in the type's own record:
+  the set is the walk's, revalidated by the verb it feeds.
+- **The factories** on the document build both: proximity through
+  the lease with the palette-shaped labels, and the vault walk with
+  notes-vs-media admission (markdown for Add Note; core's
+  classification over the FFI for Add Media).
+
+Facts: four in `CanvasPickerTests` over scripted page seams plus the
+real-vault factory fact. Mutations: the model given a host
+comparator (the no-reordering fact failed); the generation wire cut
+(the stale-pick fact failed); and the cap-order mutation earned a
+correction — capping the CLASSIFIED count did not bite, because one
+admitted media file never reaches any cap; the hazard ED-2 names is
+capping the RAW walk, and injecting exactly that stopped the paging
+two pages early and failed the beyond-cap media fact. Each restored
+byte-for-byte.
+
+**TE-7 — the card editor and the modal stack.** Discharges IE-19's
+in-sheet rule and IE-29's menu-route resolution, and consumes the
+seed token (IE-4/IE-18) end-to-end; M8 lands as code.
+
+- **The model** (`CanvasCardEditorViewModel`): the SEED TOKEN whole —
+  node, title, text and basis from one locked read via the document
+  factory — and Escape's three arms: an untouched buffer speaks "No
+  changes." and writes nothing; a draft whose seed basis the live
+  population no longer holds does NOT apply — the conflict surfaces
+  IN the sheet, the draft survives, the sheet refuses to close
+  (IE-19; the fact drives another verb's commit between seed and
+  Escape and finds the stale text absent from disk); a current draft
+  commits through the funnel verb. Every string says commits; no arm
+  cites M2.
+- **The membership, whole:** the sheet is a WORKSPACE property — the
+  modal machinery's own censuses refused the first document-held cut
+  and enumerated the real integration: the enum member, the state
+  record field, the IsOpen arm, the name-matched flat read, the
+  sheet-presentation observer arm, the Menu.Style disable trigger,
+  the decision rows in every admission table, and the REAL sheet
+  element in `MainWindow.xaml`, declared after MoveTo's so the
+  topmost-surface order stays the declaration order. The palette
+  refuses beneath it like every sheet.
+- **IE-29 resolved without a carve-out:** the ratified rule disables
+  the menu under every modal surface, the editor included — its
+  undo/redo ride the editor's own machinery inside the sheet, and
+  the canvas stacks' menu titles apply only when no sheet is open
+  (TE-2's snapshot rule already reads the captured domain).
+
+Facts: four in `CanvasCardEditorTests` over a real vault, plus the
+modal batteries' derived censuses now counting the editor among the
+sheets (one hundred forty-four across the three). Mutations: the
+basis re-validation dropped (the moved-basis fact failed); the
+no-change arm cut (the writes-nothing fact failed on the history
+entry); the conflict made to close over the draft (the keeps-draft
+fact failed); each restored byte-for-byte.
+
+**TE-8 — the context menus from the one plan.** Discharges IE-31 and
+lands m11's popup fact beside the classification it exercises.
+
+- **The plan** (`CanvasContextMenuPlan` over `CanvasContextMenuRow`):
+  rows derived from the row's KIND with explicit exclusions — mac's
+  leading pair, then the kind's own verbs; a group's removal is
+  Ungroup and Delete is ABSENT there (ED-3's algebra, in the table
+  rather than a button's fine print); Delete is LIVE on card kinds;
+  Toggle Mark stays staged for PR G with its why. Two honesty calls
+  recorded as decisions: Rename Group and Set Color ship their
+  COMMIT paths but not yet their prompt sheets, so their rows stand
+  visible-and-staged with "Its prompt arrives with a later slice." —
+  the mac contract's temporarily-unavailable shape, never a dead
+  click — and the grid's group-row Delete stays disabled with "A
+  group is removed by Ungroup — its cards stay." replacing the
+  retired staging reason.
+- **Two consumers, one derivation:** the grid's row actions flip
+  Delete live (seat the row, then the funnel verb — the
+  acts-on-its-row rule) and the outline's context menu builds
+  lazily during ContextMenuOpening from `BuildMenuFromPlan` — the
+  SAME mapping the census fact drives, so the built rows cannot
+  drift from the plan. Edit Card routes through a document-raised
+  request the workspace answers (the sheet lives on the workspace;
+  the modal censuses' convention from TE-7, reused rather than
+  bypassed). The §B-era fact that guarded the STAGED Delete flipped
+  to guard the live truth from the other side.
+
+Facts: three in `CanvasContextMenuTests` (the plan's tables, the
+no-silent-staging rule, the derived equality), the flipped table
+fact, and m11's popup-chain fact in the navigator battery.
+Mutations: the plan's Delete arm dropped (the tables fact failed);
+a staged reason nulled (the no-silent-staging fact failed); the
+builder hand-listed a kind (the equality fact failed); each
+restored byte-for-byte.
+
+**TE-9 — expansion preservation per installed surface; the atomic
+focus-request supersession (IE-30, E15, E16).** The outline view
+gained an expansion memory — a per-VIEW dictionary, which is per
+installed surface by construction, so IE-30's two-pane overwrite
+cannot be written at all: pane A's collapse and pane B's open state
+live in different objects. `Rebuild` captures group rows' expansion
+before teardown, prunes the memory against the POPULATION rather
+than the displayed rows (a group hidden by a filter keeps its
+remembered collapse for the filter's clearing; an id the canvas no
+longer contains is forgotten — ED-4's drop rule), and the
+default-open rule consults the memory before it opens anything. The
+cause side of E15 landed where the contract put it: the
+connection-host expansion in the selection sync is gated on the
+outline being the ACTIVE surface, so a seat synchronized into a
+hidden outline seats without expanding and there is no unwanted bit
+for the preservation to faithfully keep. E16's supersession sits IN
+the publication that accepts the filter answer: a pending
+`CanvasFocusRequest` naming a node the ANSWERED unit's
+`FilteredOrder` excludes is cleared before `OutlinePublished` fires —
+the request and the result meet atomically and cannot cross (m7's
+surprise jump), while a FAILED answer keeps its rows and supersedes
+nothing, and a surviving node's request outlives the answer for a
+surface to deliver. Five facts: the collapse that survives a
+republish; the two-pane independence; the hidden-outline seat; the
+superseded excluded-node request; the surviving request. Three
+mutations, each byte-restored: the default-open rule stopped
+consulting the memory and the republish re-opened the reader's
+collapse; the ActiveSurface gate dropped and the hidden seat
+expanded; the supersession block deleted and the excluded request
+out-slept the answer. Not taken: a live expansion tracker mirroring
+every toggle — the capture-at-rebuild reads the row VMs' final
+state, which the TwoWay binding already holds, so a tracker would be
+a second copy of a truth the view owns.
+
+**TE-10 — New Canvas as the vault-scoped create operation (IE-21,
+IE-22, IE-23).** The operation lives where IE-21 put it: on the
+sidebar, beside the note and folder creates, deliberately OUTSIDE
+the handle-mutation funnel — before creation there is no document,
+lease, basis or gate to run it through. The flow is mac's
+canvasNewCanvasFile verb for verb: `UntitledCandidates` walks
+"Untitled Canvas.canvas" then "Untitled Canvas 2.canvas" onward,
+advanced ONLY by the typed `DestinationExists` (never a pre-check);
+the bytes are core's `CanvasCanonicalEmptyText` (IE-22 — no host
+literal); a create is a `StructuralHistoryBarrier`; the new document
+opens in its OWN tab (mac's rule: replacing the current tab could
+destroy an unsaved buffer's only owner). IE-23's terminal outcome
+table reuses the #1123 helper the note create already trusts,
+`CreateOutcomes.CreateReporting` over `CreateExclusiveReporting`: a
+refusal stops with the failure spoken; a LANDED write — committed or
+published-but-unindexed — finalizes the creation exactly once, opens
+the real file by path, speaks the caveat AFTER the created sentence,
+and never retries under another name; the NEXT invoke advances past
+the landed file by the disk gate's own refusal. The sentence is
+core's `CanvasFileCreated` render — announced once as the canvas
+EVENT through the sidebar's own sink, with ReportResult's status
+discipline inlined so the corpus row and the status line are one
+sentence, not two compositions. The command is a registered,
+chordless FILE-section row on both hosts (`slate.file.newCanvas`;
+mac registers section .file with no chord), a File-menu item below
+the template item, a palette row by derivation, and NOT in
+`SidebarPinnedOrder`, which is Sidebar-section only; chords.json
+reprojected by its own gate. Four facts: the canonical document in a
+new tab with the spoken sentence; the typed advance past an occupied
+name; the landed-but-unindexed create that opens and is never
+recreated, with the SLATE_TEST_FAULT_AFTER_WRITE seam driven
+end-to-end; the chord-row registration shape. Three mutations, each
+byte-restored: the content argument swapped for an empty host
+literal and the byte fact failed; the landed arm taught to advance
+the sequence and the no-duplicate fact failed; the announce dropped
+and the spoken-once fact failed.
+
+**TE-11a — E19's wiring and E14's first swap.** The deferred surface
+slice lands: `slate.canvas.newCard` is a registered Canvas-section
+row with the series' ONE new verb chord — mac's ⌥⌘N as Ctrl+Alt+N
+(mac's own #368 allocation keeps Ctrl+N for notes) — a File-menu
+sibling in the Canvas menu, a palette row by derivation, and a
+resolver over a workspace command gated only on a canvas being
+active, because the funnel's admission table owns every other
+refusal and speaks it (C9). The history domain went live as ED-1
+ruled it: Ctrl+Z and Ctrl+Y are chord-only `ChordScope.Canvas` rows
+(the structural pair's shape one scope over; mac routes ⌘Z through
+the responder chain, so neither host registers a command), delivered
+through the navigator's ladder into `CanvasUndo`/`CanvasRedo` — the
+OFFERED entry snapshotted, checked out under the gate, its inverse
+applied through the one funnel via `ApplyHistory` (the admission
+ladder extracted and shared, not duplicated), and the receipt
+crossing to the OPPOSITE stack so the redo pile survives, which is
+exactly what the verb path's clear-redo recording must never do
+here. A raced mutation displaces the snapshot and the entry returns
+byte-exactly where it was (IE-9); the blocked and empty-stack arms
+speak core's sentences. The redo divergence is recorded in the
+census's pinned set (⇧⌘Z predicts Ctrl+Shift+Z; Windows keeps
+Ctrl+Y, and ED-1 registers no alias). E14's first staged swap rode
+the chord it was waiting for: `EmptyOnboardingText` now renders
+`CanvasEmptyOnboarding` with the SPELLED-OUT chords a screen reader
+actually receives ("Control Alt N", "Control Shift P" — 0a-13), and
+CD-37's tie-breaker inverts exactly as its ruling promised; the
+guarding fact flipped from NOT-the-event to the event's own render.
+The test suite's manual undo plumbing retired for the real verb, so
+every per-verb undo fact now runs gate, checkout, apply and refresh
+end to end. Five facts (the verb round-trip with both spoken
+sentences; the empty-stack arms; the moved-disk block that retains
+the entry; the ladder delivery of all three chords; the flipped
+onboarding render). Three mutations, each byte-restored: the
+conflict arm's `RestoreCheckout` dropped and the retained-entry fact
+failed; the empty-stack sentence dropped and the status fact failed;
+the onboarding chord swapped for its glyph form and the render fact
+failed. chords.json reprojected by its own gate. Owed onward within
+TE-11: the activation-to-editor swap, the anchor acceptance rule,
+the E8a tables, the scenario goldens, the journeys.
+
+**TE-11b — E14's second staged swap: activation opens the real
+editor, and the interim detail retires whole.** Activating a text
+card now asks for the editor through the TE-8 seam — the document
+seats `LastActivatedNode`, raises the request, and the workspace
+opens the sheet whose modal machinery owns focus; `OpenCardEditor`
+owns every refusal with its spoken arms (not-a-text-card,
+unreadable), so the activation path carries no second refusal
+vocabulary. The A13 interim retired WHOLE, not half: the
+`DetailShown` arm became `EditorRequested` (the view does nothing —
+the workspace answers); the document's DetailText/DetailTitle pair,
+their reload clear and the close verb are gone; the surface's detail
+region — fields, construction, docking, property-change arm, apply
+site, focus hop and test accessor — deleted; both row surfaces'
+DetailRequested events deleted; and the Escape rung retired exactly
+as its own comment promised, because t0 §2 M8 carves the editor OUT
+of the mode stack: Escape COMMITS there (C6 — porting the arm
+forward would throw away a user's typing), and the sheet's
+focus-return owns m6's trap, pinned since TE-7. The facts flipped to
+the new truth: activation asserts the raised request, the seat and
+the seed's text through `CanvasCardEditorViewModel.Draft`; the
+table's text arm, its group fall-through and its Open row action
+assert the request; the interim's Escape keyboard-trap fact retired
+WITH its subject. Three mutations, each byte-restored: the
+activation stopped raising and the request fact failed; the seat
+dropped and the landing fact failed; the event raise deleted and the
+table's seam fact failed.
+
+**TE-11c — E8a's never-silent table: the funnel half and the verb
+half.** The admission ladder SPEAKS now. Every refused admission
+announces its typed event at the refusal site, shared by both
+entrypoints: NotReady renders mac's exact reason table over the
+publication's load state through one derivation
+(the `CanvasMutationFunnel` ladder's `AnnounceAdmission` and its
+NotReadyReason — Loading is Opening, the
+parse error is ReadOnly, a lost retarget is RetargetFailed, the rest
+Unavailable); a pending conflict re-speaks the conflict's own event;
+a foreign mode transient and a held gate speak the mode sentence,
+the gate once per hold through the existing dedup; Stale stays
+silent BY CONTRACT (E2 — a displaced operation swallows). The
+committed-but-unpresented arm had no true sentence anywhere, so the
+freeze-lifted ceiling paid for one CORE addition:
+`CanvasMutationRefusal`'s RefreshPending arm, rendered "Your last change
+is saved but not shown yet. Refresh to see it before making more
+changes." — IE-10's say-Refresh-not-Reload ruling verbatim — carried
+through the TE-4 playbook's places (enum, render, witness, golden
+expected row, the cardinality group, the regenerated corpus, both
+hosts' corpus censuses, the uniffi mirror, regenerated bindings; mac
+renders refusals through core, so no Swift switch widened). The verb
+half: fourteen silent guard exits split and spoken — the no-basis
+short-circuits speak the SAME derivation the ladder uses
+(`SpeakNotReady`, so guard and admission can never disagree);
+no-selection and vanished-endpoint exits speak `CanvasStatusNote`'s
+NothingSelected; an unknown group speaks NotAGroup; the two guards no surface can reach
+(delete-on-group behind ED-3's routing and the fixed-palette color
+check) are recorded as guards, not cells. Facts: the not-ready,
+refresh-pending and foreign-mode admissions each pinned to their
+sentence; the busy hold's once-audible refusal; the pending
+conflict's audible second refusal; the verb cells counted per
+sentence through the coalescing announcer's flush; the unready-verb
+refusal end to end. Three mutations, each byte-restored: the ladder
+announce dropped and the not-ready fact failed; one guard's sentence
+dropped and its cell failed; one no-basis speak dropped and the
+unready fact failed.
+
+**TE-11d — E18's scenario goldens: the canvas mode of the §W-A
+differential harness.** The scripts are DATA — a shared scenarios
+file beside the mutation harness's, executed verbatim so identical
+`CanvasAction` sequences on both platforms are enforced by
+construction — and the driver (`CanvasScenarioDriver`, the harness's
+canvas mode behind a new flag) seeds each fixture into a fresh temp
+vault, applies every step through the REAL vault apply for the
+inverse-carrying receipts, then walks the inverses backward. The
+E18 rules are DRIVER-ENFORCED, not aspirational: every scenario's
+post-inverse bytes must equal core's OWN canonical serialization of
+the original content — the empty detached apply is the canonicalizer,
+so semantic equality is core's judgment, never a host
+reimplementation; a canonical fixture must round-trip BYTE-IDENTICAL
+to its original; and a foreign-formatted fixture must NOT — the
+foreign formatting dies on the first write, which is E18's
+apply-plus-invert rule said from the other side. Three scenarios:
+the sample corpus fixture through every op kind the algebra exports
+(create card and group, content, both color arms, geometry, add,
+update and delete edge, delete card); the nested-groups fixture
+through geometry and a deep-group delete; a committed
+foreign-formatted fixture (four-space indentation, reordered keys)
+through content and color. Three committed artifacts pin step-level
+content hashes, terminal bytes and the round-trip hash;
+`CanvasScenarioCensus` asserts them byte-for-byte with the mutation
+census's regen instruction, its determinism twin reruns the driver
+in-process, and the tamper fact proves the foreign gate has teeth —
+a canonical fixture mislabeled foreign makes the driver throw. The
+mac Swift twin lane is recorded as OWED to keep this diff
+reviewable (the mutation harness's own precedent): the scenarios
+file is already the shared contract, and the Swift driver lands as
+its own slice. Three mutations, each byte-restored: the inverse walk
+dropped and the census failed; the round-trip hash dropped from the
+artifact and the byte-compare failed; the foreign-survived gate
+deleted and the tamper fact failed.
+
+**TE-11e — the authoring journey, and the three production bugs it
+flushed.** The FlaUI journey drives the whole authoring loop through
+real chrome: File menu New Canvas into its own tab; the onboarding
+region carrying core's spelled-out chord sentence; Ctrl+Alt+N
+creating the first card; activation opening the card editor sheet
+(axe-scanned as `AssertAxeClean` "canvas-card-editor"); typing
+through the real keyboard; Escape COMMITTING; the committed title on
+the outline row; Ctrl+Z undoing it — every leg a keystroke or UIA
+invoke, no test seams. The first real keyboard on this path found
+three shipped defects the unit facts could not see. FIRST: the
+funnel's transactions run on the work seam, so every confirmation,
+admission refusal and history sentence reached `CanvasAnnouncer` on
+a pool thread — the thread-affinity Debug.Assert killed the Debug
+build, and Release would have raced the coalescing timers silently.
+The announcer now marshals ITSELF (the publish side's own
+discipline; order preserved per dispatcher queue), pinned by a fact
+whose foreign announce runs on a DEDICATED thread because
+Task.Run().Wait() inlines the lambda onto the waiting thread and
+un-crosses the very boundary under test. SECOND: `CommitOnEscape`
+had NO CALLER — TE-7 built the seam and nothing wired the key. The
+window's key gate gained the sheet's ONE arm: Escape commits (the
+seam decides commit, no-change, or in-sheet conflict), everything
+else passes to the draft box, M8's carve-out made real. THIRD: the
+sheet never bound at all — `Title` and `Draft` were internal, and a
+WPF binding against a non-public property fails SILENTLY: the box
+held the typing, the draft held the seed, and Escape's no-changes
+arm closed over the difference. Both went public with the reason in
+their doc comments, pinned by a reflection fact so a refactor back
+to internal fails in the suite, not in a screen reader. Three
+mutations, each byte-restored: the self-marshal deleted and the
+cross-thread fact failed; `Draft` back to internal and the
+visibility fact failed; the Escape arm deleted and the JOURNEY
+failed — the wiring's only honest fact is the journey itself. The
+journey's probes re-find elements fresh per poll (a republish
+rebuilds the tree, so cached UIA handles go stale mid-walk), and its
+failure messages carry the sheet state, the visible rows, the canvas
+bytes on disk and the app log tail, because each of the three bugs
+was found by exactly that forensics.
+
+### What carries out of the task loop
+
+The loop closed with TE-11e. Four pieces are CARRIED, not silently
+dropped, each with its owner: the staged Rename Group and Set Color
+prompt sheets (the rows stand visible-with-reason per the TE-8 plan;
+the prompt machinery is PR F's mode-owned commit seam, and landing a
+bare prompt here would fork that design); the mac Swift lane of the
+canvas scenario driver (the scenarios file is already the shared
+contract — the mutation harness's own precedent — and mac compiles
+CI-only from this checkout); axe over the two pickers (the sheet is
+scanned in the journey; the pickers' modal-by-chord surfaces are the
+same TE-6 substrate the citation gate already scans, and the arm
+rides the prompt-sheet slice); and E14's file-arm anchor EXACT
+verification, which by its own contract STOPS for an owner decision
+if the caret misses — a fact that can end in a STOP belongs where
+the owner is watching, so it is recorded here as the PR's one open
+acceptance rather than buried green. Everything else E promised is
+in: the ledger's thirty-nine findings dispositioned through eighteen
+recorded tasks, the citation floor raised eighteen times, every
+mutation byte-restored, and the three shipped bugs the first real
+keyboard found.
+
+### Codoki round 1
+
+One finding, and it was right: the history path took the landed-but-
+unindexed apply straight into publish and speech, missing the verb
+path's guard — an undo against a stale index would have confirmed a
+presentation that never installed. The guard is mirrored
+checkout-shaped (the receipt crosses with its REAL inverse, the
+publication marks committed-unpresented, recovery is refresh-only),
+and the review's own prescribed fact pins all four claims, bitten by
+deleting the guard. The formal review approved with the no-issues
+sentence; the comment's finding was addressed rather than waved at.
+
+### CI round 1 (mac)
+
+The Mac XCTest lane refused the PR at compile: TE-0's
+`SavedButUnindexed` arm made two exhaustive `VaultError` switches in
+AppState.swift non-exhaustive — a debt invisible from this checkout
+because mac compiles CI-only. Both switches gained the arm with the
+landed-write sentence (bytes real, index catches up, never recreate
+— the #1123 shape), landed blind with CI as the oracle, which is
+this repo's recorded convention for the mac lane. The lane's second
+pass surfaced the same debt's test-side tail — the mutation-harness
+twin's refusal-kind switch and a prepared-load fixture missing the
+CAS basis — both extended the same way — and a third pass found the
+FFI smoke example's own exhaustive switch, whose entire purpose is
+to fail compile when the Rust side grows an arm; it did its job.
+The Windows FlaUI gate then failed HONESTLY on the two journeys this
+PR's own ratified flips outdated — the outline and table activation
+legs still expected the retired interim detail, and the row-actions
+leg still pinned the staged Delete — both flipped to the TE-8/
+TE-11b truth, with the editor sheet closed inside each leg so the
+modal never swallows what follows.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same
@@ -8074,34 +9410,37 @@ Obsidian — so a `{"type":"file","file":"setup.exe"}` node ran on one
 Enter. The default-app open is therefore gated to MEDIA by extension;
 everything else is refused, audibly, and never launched.
 
-**The gate's set is core's, copied because core does not export it.**
-`canvas::model::media_class` (`model.rs:661`) is the same private
-function whose answer becomes the `image` kind label and the
-`Image:`/`Audio:`/`Video:` title prefixes, and it carries no
-`#[uniffi::export]`. `CanvasMediaPolicy` transliterates it in ONE place,
+**The gate's set is core's — copied at first because core did not
+export it, ASKED FOR since §E TE-0.** `canvas::model::media_class`
+(`model.rs:661`) is the same function whose answer becomes the `image`
+kind label and the `Image:`/`Audio:`/`Video:` title prefixes; it was
+private, so `CanvasMediaPolicy` transliterated it in ONE place,
 including both of its edge rules (the BASENAME's real extension; a
-dotfile like `.mov` is a hidden file, not a video), and
-`TheMediaGateIsCoresClassification` pins the set and both edges.
+dotfile like `.mov` is a hidden file, not a video). The staged export
+landed with §E's first task: the transliterated set and its lowering
+helper retired, the gate became one FFI call, and
+`TheMediaGateIsCoresClassification` pins the set and both edges
+THROUGH the export — audio and video thirds included.
 The lowercasing is core's `to_ascii_lowercase`, hand-written rather than
 .NET's `ToLowerInvariant`: the two differ outside ASCII (the Kelvin sign
 lowers to `k`, `İ` to `i̇`) and every difference ADMITS something core
 calls not-media, which is the wrong direction for a gate deciding what
 reaches `ShellExecute`.
 
-**Half of it is pinned against core anyway, without waiting for the
-export.** Core does not export the classification, but it exports one of
-its ANSWERS: `kind_label` returns `"image"` exactly when `media_class`
-says Image (`model.rs:646`), and that reaches the host as
-`CanvasOutlineRow.kind`. `TheImageThirdOfTheGateAgreesWithCoresOwnKindLabel`
-opens a canvas of file cards over every image extension the host set
-claims plus six non-media ones, and asserts core's own row agrees in
-both directions. The audio and video thirds have no exported answer —
-`kind_label` calls them plain `"file"` — and stay unpinned until PR E.
+**Half of it was pinned against core even before the export.** Core
+exported one of the classification's ANSWERS: `kind_label` returns
+`"image"` exactly when `media_class` says Image (`model.rs:646`),
+reaching the host as `CanvasOutlineRow.kind` — and the kind-label
+detour fact (TheImageThirdOfTheGateAgreesWithCoresOwnKindLabel, while
+it lived) asserted agreement in both directions for the image third.
+The audio and video thirds had no exported answer to check against.
 
-**Drift note:** PR E is the first PR that needs the classification for
-its own reasons (the spec's Add Media row — "media kinds by extension
-set — core's `media_class` decides the label"), so PR E exports it,
-deletes this copy, and retires the pin above with it.
+**Drift note (discharged in §E TE-0):** PR E was the first PR that
+needed the classification for its own reasons (the spec's Add Media
+row — "media kinds by extension set — core's `media_class` decides the
+label"), so §E's TE-0 exported it, deleted the copy, and retired the
+detour pin with it; every third is now pinned through the export
+itself.
 
 **Containment is by OS FILE IDENTITY, not path text (codex round 3 — the
 class ended, not patched).** Three consecutive codex rounds found

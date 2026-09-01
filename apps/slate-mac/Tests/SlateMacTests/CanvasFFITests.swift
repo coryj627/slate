@@ -38,6 +38,26 @@ final class CanvasFFITests: XCTestCase {
         XCTAssertFalse(info.degraded)
         XCTAssertEqual(info.nodeCount, 3)
         XCTAssertEqual(info.edgeCount, 1)
+        // W6-1 §E TE-0 (IE-3): the open exposes the CAS basis, and a
+        // second open of unchanged bytes exposes the same one.
+        XCTAssertFalse(info.contentHash.isEmpty)
+        XCTAssertEqual(
+            try session.openCanvas(path: "t.canvas").contentHash, info.contentHash)
+        // TE-0 (IE-4): the editor seed pairs the text with that basis
+        // under one core lock; a group answers nil, not a seed.
+        let seed = try session.canvasEditorSeed(handle: info.handle, nodeId: "a")
+        XCTAssertEqual(seed?.text, "# Hello")
+        XCTAssertEqual(seed?.contentHash, info.contentHash)
+        XCTAssertNil(try session.canvasEditorSeed(handle: info.handle, nodeId: "grp"))
+        // TE-0 (IE-22): the canonical empty document is core's export —
+        // the exact bytes New Canvas writes on every host.
+        XCTAssertEqual(canvasCanonicalEmptyText(), "{}\n")
+        // TE-0 (CD-38's staged export): the media classification
+        // crosses the FFI with both edge rules intact.
+        XCTAssertEqual(canvasMediaClass(path: "art.webp"), .image)
+        XCTAssertEqual(canvasMediaClass(path: "clip.MOV"), .video)
+        XCTAssertNil(canvasMediaClass(path: ".mov"))
+        XCTAssertNil(canvasMediaClass(path: "mov"))
         XCTAssertTrue(info.warnings.isEmpty)
 
         // Outline: reading order (group precedes children), titles per

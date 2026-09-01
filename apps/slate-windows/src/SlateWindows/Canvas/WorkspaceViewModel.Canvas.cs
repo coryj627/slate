@@ -58,6 +58,11 @@ internal sealed partial class WorkspaceViewModel
             {
                 document.Selection.SeedFrom(seedSelection);
             }
+            // §E TE-8: a row surface's Edit Card reaches the sheet
+            // through the document's request — the workspace owns the
+            // one sheet property the modal machinery watches.
+            document.CardEditorRequested +=
+                nodeId => CanvasCardEditorSheet = document.OpenCardEditor(nodeId);
             _canvasDocuments[key] = document;
             InstallCanvasDocumentSeams(document);
             document.Load();
@@ -297,6 +302,37 @@ internal sealed partial class WorkspaceViewModel
     // load gate, the pane resolution and the no-pane refusal (§D D7),
     // so the palette and the chord speak identically.
 
+    private CanvasCardEditorViewModel? _canvasCardEditorSheet;
+
+    /// <summary>W6-1 §E TE-7: the open card editor sheet — the modal
+    /// flat read, the sheet-presentation observer and the menu's
+    /// disable trigger all watch THIS one workspace property (the
+    /// sheet convention every census enforces).</summary>
+    public CanvasCardEditorViewModel? CanvasCardEditorSheet
+    {
+        get => _canvasCardEditorSheet;
+        private set => SetField(ref _canvasCardEditorSheet, value);
+    }
+
+    /// <summary>Open the editor for the active canvas selection (M8's
+    /// carve-out rides the sheet's own Esc). Refusals — no document,
+    /// no selection, not a text card — announce through the
+    /// document's arms and open nothing.</summary>
+    public void OpenCanvasCardEditor()
+    {
+        if (ActiveCanvasDocument is not { } document
+            || document.Selection.Selected is not { } selected)
+        {
+            return;
+        }
+        CanvasCardEditorSheet = document.OpenCardEditor(selected);
+    }
+
+    /// <summary>The sheet closed — a commit, a no-op, or a deliberate
+    /// discard; never a refusal, whose whole point is the sheet
+    /// standing.</summary>
+    public void CloseCanvasCardEditor() => CanvasCardEditorSheet = null;
+
     public System.Windows.Input.ICommand CanvasZoomInCommand =>
         _canvasZoomInCommand ??= new RelayCommand(
             _ => ActiveCanvasDocument?.Navigator.ZoomIn(),
@@ -337,6 +373,7 @@ internal sealed partial class WorkspaceViewModel
     private RelayCommand? _canvasFollowForwardCommand;
     private RelayCommand? _canvasFollowBackCommand;
     private RelayCommand? _canvasTracePathCommand;
+    private RelayCommand? _canvasNewCardCommand;
     private RelayCommand? _canvasWhereAmICommand;
     private RelayCommand? _canvasFilterCardsCommand;
     private RelayCommand? _canvasClearFilterCommand;
@@ -390,6 +427,15 @@ internal sealed partial class WorkspaceViewModel
     public System.Windows.Input.ICommand CanvasTracePathCommand =>
         _canvasTracePathCommand ??= NavigatorCommand(
             navigator => navigator.TracePath());
+
+    /// <summary>§E TE-11 (E19): the New Card verb for the palette,
+    /// the menu and the chord resolver. Gated only on a canvas being
+    /// active - the funnel's admission table owns every other refusal
+    /// and speaks it (contract C9).</summary>
+    public System.Windows.Input.ICommand CanvasNewCardCommand =>
+        _canvasNewCardCommand ??= new RelayCommand(
+            _ => ActiveCanvasDocument?.CanvasNewCard(),
+            _ => ActiveCanvasDocument is not null);
 
     public System.Windows.Input.ICommand CanvasWhereAmICommand =>
         _canvasWhereAmICommand ??= NavigatorCommand(

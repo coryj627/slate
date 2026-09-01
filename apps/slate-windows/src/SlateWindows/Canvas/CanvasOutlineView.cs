@@ -297,6 +297,15 @@ internal sealed class CanvasOutlineView : UserControl
     private int _connectionCount;
     private bool _syncingSelection;
 
+    /// <summary>This VIEW's expansion memory (contract E15, IE-30):
+    /// keyed by node id, session-scoped, pruned to the ids the current
+    /// population knows (ED-4). Per-VIEW because per-surface — two
+    /// panes share one document, and pane A's mutation must not
+    /// overwrite pane B's independent expansion intent, which a
+    /// document-level set would do.</summary>
+    private readonly Dictionary<string, bool> _expansion =
+        new(StringComparer.Ordinal);
+
     public CanvasOutlineView()
     {
         _tree = new CanvasOutlineTree
@@ -304,8 +313,17 @@ internal sealed class CanvasOutlineView : UserControl
             ItemsSource = _roots,
             ItemTemplate = RowTemplate(),
             ItemContainerStyle = RowContainerStyle(),
+            // §E TE-8: the context menu builds lazily, per row, from
+            // the ONE plan — assigned during ContextMenuOpening so the
+            // Menu key, Shift+F10 and the pointer all take the same
+            // derived rows (IE-31; the census asserts equality).
             BorderThickness = new Thickness(0),
         };
+        _tree.AddHandler(
+            System.Windows.FrameworkElement.ContextMenuOpeningEvent,
+            new System.Windows.Controls.ContextMenuEventHandler(
+                OnRowContextMenuOpening),
+            handledEventsToo: false);
         ScrollViewer.SetCanContentScroll(_tree, true);
         VirtualizingStackPanel.SetIsVirtualizing(_tree, true);
         // Standard, NOT Recycling (contract A8): a recycled container
@@ -346,7 +364,6 @@ internal sealed class CanvasOutlineView : UserControl
 
     /// <summary>Raised when a text card's read-only detail was
     /// published — the surface moves focus there (contract A13).</summary>
-    internal event Action? DetailRequested;
 
     /// <summary>The tree realized containers — a pending focus request
     /// that could not reach its row may be deliverable now.</summary>
@@ -591,6 +608,18 @@ internal sealed class CanvasOutlineView : UserControl
     /// which is the same shape rather than a special case.</summary>
     private void Rebuild()
     {
+        // E15: remember what the reader expanded BEFORE the rows are
+        // torn down — a funnel republish rebuilds every row, and the
+        // default-open rule below would otherwise undo every collapse.
+        // Group rows only: connection-host expansion is the selection's,
+        // re-derived on every sync.
+        foreach ((string id, CanvasOutlineRowViewModel row) in _byNode)
+        {
+            if (row.IsGroup)
+            {
+                _expansion[id] = row.IsExpanded;
+            }
+        }
         _roots.Clear();
         _byNode.Clear();
         _parentOf.Clear();
@@ -623,6 +652,32 @@ internal sealed class CanvasOutlineView : UserControl
         // until the cleanup pass folded the two.
         CanvasPopulation? population = model.AppliedPopulation;
 
+        // ED-4's drop rule, against the POPULATION rather than the
+        // displayed rows: a group hidden by a filter keeps its remembered
+        // collapse for the filter's clearing, but an id this canvas no
+        // longer contains — or never did, after a model swap — is
+        // forgotten here, before the memory is consulted.
+        if (population is not null)
+        {
+            var known = new HashSet<string>(StringComparer.Ordinal);
+            foreach (CanvasOutlineRow row in population.Outline)
+            {
+                known.Add(row.NodeId);
+            }
+            var stale = new List<string>();
+            foreach (string id in _expansion.Keys)
+            {
+                if (!known.Contains(id))
+                {
+                    stale.Add(id);
+                }
+            }
+            foreach (string id in stale)
+            {
+                _ = _expansion.Remove(id);
+            }
+        }
+
         bool filtered = model.FilterActive;
         foreach (CanvasOutlineRow row in model.FilteredOutline)
         {
@@ -652,8 +707,10 @@ internal sealed class CanvasOutlineView : UserControl
                 parent.Children.Add(line);
                 _parentOf[line] = parent;
                 // A group with members is expandable; it opens by
-                // default so a first read is the whole structure.
-                parent.IsExpanded = true;
+                // default so a first read is the whole structure —
+                // unless THIS view's reader already chose (E15).
+                parent.IsExpanded =
+                    !_expansion.TryGetValue(parent.Id, out bool kept) || kept;
             }
             _byNode[row.NodeId] = line;
         }
@@ -736,10 +793,16 @@ internal sealed class CanvasOutlineView : UserControl
             }
             _connectionHost = selected;
             _connectionCount = neighbors.Count;
-            if (neighbors.Count > 0)
+            if (neighbors.Count > 0
+                && model.Selection.ActiveSurface == CanvasSurfaceKind.Outline)
             {
                 // Never hidden behind a collapse the user did not ask
-                // for (CD-33).
+                // for (CD-33) — while the outline IS the showing
+                // surface. A seat synchronized into a hidden outline
+                // seats WITHOUT expanding (E15's cause rule): the §C
+                // m-5 sibling is discharged here, at the source of the
+                // unwanted expansion bit, not papered over in the
+                // preservation above.
                 line.IsExpanded = true;
             }
         }
@@ -834,12 +897,105 @@ internal sealed class CanvasOutlineView : UserControl
             case CanvasActivation.ExpandGroup:
                 line.IsExpanded = !line.IsExpanded;
                 break;
-            case CanvasActivation.DetailShown:
-                DetailRequested?.Invoke();
+            case CanvasActivation.EditorRequested:
+                // The workspace opens the sheet; the modal machinery
+                // owns focus (TE-11b).
                 break;
             default:
                 break;
         }
+    }
+
+    /// <summary>§E TE-8: the row's menu from the plan — headers,
+    /// enabled flags and staged reasons verbatim; verbs map onto the
+    /// document. A connection row (no node Row) gets no menu.</summary>
+    internal System.Windows.Controls.ContextMenu? BuildContextMenu(
+        CanvasOutlineRowViewModel rowModel)
+    {
+        ArgumentNullException.ThrowIfNull(rowModel);
+        if (rowModel.Row is not { } row || Model is not { } model)
+        {
+            return null;
+        }
+        return BuildMenuFromPlan(row.Kind, (verb, nodeId) =>
+        {
+            switch (verb)
+            {
+                case CanvasContextVerb.Open:
+                    rowModel.RaiseActivate();
+                    break;
+                case CanvasContextVerb.Delete:
+                    model.SeatSelectionSilently(nodeId);
+                    model.CanvasDeleteSelection();
+                    break;
+                case CanvasContextVerb.Ungroup:
+                    model.CanvasUngroup(nodeId);
+                    break;
+                case CanvasContextVerb.EditCard:
+                    model.RequestCardEditor(nodeId);
+                    break;
+                default:
+                    break;
+            }
+        }, row.NodeId);
+    }
+
+    /// <summary>The ONE plan-to-menu mapping — the opening handler and
+    /// the census fact share it, so the built rows cannot drift from
+    /// the plan (IE-31).</summary>
+    internal static System.Windows.Controls.ContextMenu BuildMenuFromPlan(
+        string kind, Action<CanvasContextVerb, string> execute, string nodeId)
+    {
+        ArgumentNullException.ThrowIfNull(kind);
+        ArgumentNullException.ThrowIfNull(execute);
+        ArgumentNullException.ThrowIfNull(nodeId);
+        var menu = new System.Windows.Controls.ContextMenu();
+        foreach (CanvasContextMenuRow planned in CanvasContextMenuPlan.RowsFor(kind))
+        {
+            var item = new System.Windows.Controls.MenuItem
+            {
+                Header = planned.Name,
+                IsEnabled = planned.Enabled,
+                ToolTip = planned.DisabledReason,
+            };
+            if (planned.DisabledReason is { } reason)
+            {
+                System.Windows.Automation.AutomationProperties.SetHelpText(item, reason);
+                System.Windows.Controls.ToolTipService.SetShowOnDisabled(item, true);
+            }
+            CanvasContextVerb verb = planned.Verb;
+            item.Click += (_, _) => execute(verb, nodeId);
+            menu.Items.Add(item);
+        }
+        return menu;
+    }
+
+    private void OnRowContextMenuOpening(
+        object sender, System.Windows.Controls.ContextMenuEventArgs e)
+    {
+        if (e.OriginalSource is System.Windows.DependencyObject source
+            && ItemFromSource(source) is { } item
+            && item.DataContext is CanvasOutlineRowViewModel rowModel)
+        {
+            System.Windows.Controls.ContextMenu? menu = BuildContextMenu(rowModel);
+            if (menu is null)
+            {
+                e.Handled = true;
+                return;
+            }
+            item.ContextMenu = menu;
+        }
+    }
+
+    private static CanvasOutlineItem? ItemFromSource(
+        System.Windows.DependencyObject source)
+    {
+        System.Windows.DependencyObject? walk = source;
+        while (walk is not null and not CanvasOutlineItem)
+        {
+            walk = System.Windows.Media.VisualTreeHelper.GetParent(walk);
+        }
+        return walk as CanvasOutlineItem;
     }
 
     private static Style RowContainerStyle()

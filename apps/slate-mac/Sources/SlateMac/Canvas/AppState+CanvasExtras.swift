@@ -96,7 +96,8 @@ extension AppState {
                     relative: placement.relative, originTitle: originRow.title))
             // Lands in edit mode (the mind-mapping loop: create → type).
             canvasCardEditor = CanvasCardEditorRequest(
-                nodeId: id, title: "Untitled", initialText: "")
+                nodeId: id, title: "Untitled", initialText: "",
+                basis: doc.contentHash ?? "")
         } catch {
             canvasAnnouncer.announce(
                 .canvasActionFailed(

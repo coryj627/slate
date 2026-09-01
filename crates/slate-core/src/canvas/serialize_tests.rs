@@ -193,3 +193,22 @@ fn empty_document_stays_minimal() {
     let (canvas, _) = parse("");
     assert_eq!(serialize(&canvas), "{}\n");
 }
+
+// ---------------------------------------------------------------------------
+// The canonical empty document (W6-1 §E TE-0, IE-22)
+
+#[test]
+fn canonical_empty_canvas_text_is_the_default_serialization() {
+    // The exact bytes every host's New Canvas writes — mac shipped
+    // this as a literal "{}\n"; the export pins it in one place.
+    assert_eq!(canonical_empty_canvas_text(), "{}\n");
+    assert_eq!(
+        canonical_empty_canvas_text(),
+        serialize(&crate::canvas::Canvas::default())
+    );
+    // Round trip: parsing the canonical empty text yields a canvas
+    // that serializes back to itself, warning-free.
+    let (parsed, warnings) = crate::canvas::parse(&canonical_empty_canvas_text());
+    assert!(warnings.is_empty());
+    assert_eq!(serialize(&parsed), canonical_empty_canvas_text());
+}

@@ -485,19 +485,16 @@ public sealed class CanvasDocumentTests : IDisposable
 
         Assert.Equal(CanvasLoadState.Ready, document.State);
         Assert.Empty(document.Outline);
-        // 0a-13 LABEL class, core-rendered. NOT CanvasEmptyOnboarding:
-        // its template says "Press ⟨chord⟩ to create your first card"
-        // unconditionally, and PR A has no create command — so any chord
-        // in that slot tells a screen-reader user to press a key that
-        // creates nothing. The t2 rule the spec cites in the same
-        // sentence forbids exactly that; PR E swaps the event in with
-        // the real chord (CD-37).
+        // §E TE-11 (E14's first staged swap): CD-37's tie-breaker
+        // INVERTED - the New Card chord is real, so the onboarding
+        // event ships with it. 0a-13 LABEL class, core-rendered, with
+        // the SPELLED-OUT chords a screen reader actually receives.
         Assert.Equal(
             SlateUniffiMethods.A11yRender(new A11yEvent.Canvas(
-                new CanvasA11yEvent.CanvasStatus(
-                    new CanvasStatusNote.Empty()))).Text,
+                new CanvasA11yEvent.CanvasEmptyOnboarding(
+                    "Control Alt N", "Control Shift P"))).Text,
             document.EmptyOnboardingText);
-        Assert.DoesNotContain(
+        Assert.Contains(
             "create your first card",
             document.EmptyOnboardingText,
             StringComparison.Ordinal);
@@ -621,14 +618,19 @@ public sealed class CanvasDocumentTests : IDisposable
         CanvasDocumentViewModel document = NewDocument("board.canvas");
         document.Load();
 
+        // §E TE-11b (E14's second swap, A13): activation asks for
+        // the REAL editor through the TE-8 seam - the interim detail
+        // retired, and the fact that once pinned it pins the request.
+        string? requested = null;
+        document.CardEditorRequested += nodeId => requested = nodeId;
         Assert.Equal(
-            CanvasActivation.DetailShown, document.Activate(Row(document, "question")));
-        Assert.Equal("# Core question\nCan it be accessible?", document.DetailText);
-        Assert.Equal(Row(document, "question").Title, document.DetailTitle);
+            CanvasActivation.EditorRequested,
+            document.Activate(Row(document, "question")));
+        Assert.Equal("question", requested);
         Assert.Equal("question", document.LastActivatedNode);
-
-        document.CloseDetail();
-        Assert.Null(document.DetailText);
+        CanvasCardEditorViewModel editor =
+            Assert.IsType<CanvasCardEditorViewModel>(document.OpenCardEditor("question"));
+        Assert.Equal("# Core question\nCan it be accessible?", editor.Draft);
         document.Shutdown();
     }
 
@@ -1375,30 +1377,6 @@ public sealed class CanvasDocumentTests : IDisposable
         document.Shutdown();
     });
 
-    [Fact]
-    public void EscapeClosesTheInterimDetailSoItIsNeverAKeyboardTrap() => RunSta(() =>
-    {
-        CanvasDocumentViewModel document = NewDocument("board.canvas");
-        document.Load();
-        var surface = new CanvasSurfaceView { Model = document };
-        using var host = Host(surface);
-        _ = document.Activate(Row(document, "question"));
-        Assert.Equal(document.DetailText, surface.DetailForTests.Text);
-
-        PresentationSource source = Assert.IsAssignableFrom<PresentationSource>(
-            PresentationSource.FromVisual(surface.DetailForTests));
-        surface.DetailForTests.RaiseEvent(new System.Windows.Input.KeyEventArgs(
-            System.Windows.Input.Keyboard.PrimaryDevice,
-            source,
-            0,
-            System.Windows.Input.Key.Escape)
-        {
-            RoutedEvent = System.Windows.Input.Keyboard.PreviewKeyDownEvent,
-        });
-        Assert.Null(document.DetailText);
-        document.Shutdown();
-    });
-
     // --- A15: persistence ---------------------------------------------------
 
     [Fact]
@@ -2018,69 +1996,6 @@ public sealed class CanvasDocumentTests : IDisposable
     [InlineData("", false)]
     public void TheMediaGateIsCoresClassification(string target, bool expected) =>
         Assert.Equal(expected, CanvasMediaPolicy.IsOpenableMedia(target));
-
-    /// <summary>
-    /// Half the transliteration, pinned against CORE — for free, and
-    /// without waiting for PR E to export `media_class`.
-    /// </summary>
-    /// <remarks>
-    /// Core does not export the classification, but it does export one
-    /// of its ANSWERS: `kind_label` returns `"image"` exactly when
-    /// `media_class` says Image (`model.rs:646`), and that reaches the
-    /// host as `CanvasOutlineRow.Kind`. So for every image extension the
-    /// host set claims, core's own row must agree — and for a
-    /// non-media extension core must say `"file"`, which catches the
-    /// gate widening in either direction. The audio and video thirds
-    /// have no exported answer and stay unpinned until PR E; CD-38
-    /// records that.
-    /// </remarks>
-    [Fact]
-    public void TheImageThirdOfTheGateAgreesWithCoresOwnKindLabel()
-    {
-        string[] imageExtensions =
-        [
-            "png", "jpg", "jpeg", "gif", "svg", "webp", "bmp", "heic", "avif", "tiff",
-        ];
-        string[] nonMediaExtensions = ["exe", "bat", "ps1", "zip", "pdf", "txt"];
-
-        var nodes = new List<string>();
-        foreach (string extension in imageExtensions.Concat(nonMediaExtensions))
-        {
-            File.WriteAllBytes(
-                Path.Combine(_fixture.Root, $"asset.{extension}"), [0x00]);
-            nodes.Add(
-                $"{{\"id\":\"{extension}\",\"type\":\"file\",\"file\":\"asset.{extension}\","
-                + "\"x\":0,\"y\":0,\"width\":10,\"height\":10}");
-        }
-        File.WriteAllText(
-            Path.Combine(_fixture.Root, "kinds.canvas"),
-            "{\"nodes\":[" + string.Join(",", nodes) + "],\"edges\":[]}");
-        using var cancel = new CancelToken();
-        _session.ScanInitial(cancel);
-
-        CanvasDocumentViewModel document = NewDocument("kinds.canvas");
-        document.Load();
-
-        foreach (string extension in imageExtensions)
-        {
-            // Core says image ⇒ the host gate must admit it.
-            Assert.Equal("image", Row(document, extension).Kind);
-            Assert.True(
-                CanvasMediaPolicy.IsOpenableMedia($"asset.{extension}"),
-                $"core classifies .{extension} as an image; the gate refuses it");
-        }
-        foreach (string extension in nonMediaExtensions)
-        {
-            // Core says plain file ⇒ the host gate must not admit it as
-            // an IMAGE. (Audio and video are also "file" to kind_label,
-            // which is why this direction only pins the image third.)
-            Assert.Equal("file", Row(document, extension).Kind);
-            Assert.False(
-                CanvasMediaPolicy.IsOpenableMedia($"asset.{extension}"),
-                $"the gate admits .{extension}, which core does not classify as media");
-        }
-        document.Shutdown();
-    }
 
     /// <summary>
     /// M2's last hole: one document serves every pane on the path, so an
@@ -3619,6 +3534,148 @@ public sealed class CanvasDocumentTests : IDisposable
 
     private static int CountLines(IEnumerable<CanvasOutlineRowViewModel> rows) =>
         rows.Sum(row => 1 + CountLines(row.Children));
+
+    /// <summary>
+    /// §E TE-9 (E15, ED-4): a collapse the reader chose survives a
+    /// republish. The rebuild tears every row down and the default-open
+    /// rule would re-open the group; the view's expansion memory is the
+    /// difference between a collapse and a suggestion.
+    /// </summary>
+    [Fact]
+    public void ACollapsedGroupStaysCollapsedAcrossARepublish() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = NewDocument("board.canvas");
+        document.Load();
+        var view = new CanvasOutlineView { Model = document };
+        CanvasOutlineRowViewModel grp =
+            Assert.Single(view.RootsForTests, row => row.Id == "grp");
+        Assert.True(grp.IsExpanded, "a group with members opens by default.");
+        grp.IsExpanded = false;
+
+        document.Load();
+
+        CanvasOutlineRowViewModel republished =
+            Assert.Single(view.RootsForTests, row => row.Id == "grp");
+        Assert.NotSame(grp, republished);
+        Assert.False(
+            republished.IsExpanded,
+            "the republish re-opened a group the reader collapsed (E15).");
+        document.Shutdown();
+    });
+
+    /// <summary>
+    /// §E TE-9 (IE-30): expansion is keyed per INSTALLED SURFACE, not
+    /// per document. Two panes share one document; pane A's collapse
+    /// must not overwrite pane B's independent expansion intent when a
+    /// republish rebuilds both.
+    /// </summary>
+    [Fact]
+    public void TwoPanesKeepIndependentExpansionAcrossOneRepublish() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = NewDocument("board.canvas");
+        document.Load();
+        var paneA = new CanvasOutlineView { Model = document };
+        var paneB = new CanvasOutlineView { Model = document };
+        Assert.Single(paneA.RootsForTests, row => row.Id == "grp").IsExpanded = false;
+
+        document.Load();
+
+        Assert.False(
+            Assert.Single(paneA.RootsForTests, row => row.Id == "grp").IsExpanded,
+            "pane A's collapse did not survive its own republish.");
+        Assert.True(
+            Assert.Single(paneB.RootsForTests, row => row.Id == "grp").IsExpanded,
+            "pane A's collapse leaked into pane B — a document-level "
+            + "expansion set, which IE-30 forbids.");
+        document.Shutdown();
+    });
+
+
+    /// <summary>
+    /// §E TE-9 (E15's cause rule, the §C m-5 sibling): a seat
+    /// synchronized into a NON-showing outline seats without expanding.
+    /// The connection rows still materialize under the selected card —
+    /// what is forbidden is CHANGING the expansion bit while another
+    /// surface holds the reader, so there is no unwanted bit for the
+    /// preservation to faithfully keep.
+    /// </summary>
+    [Fact]
+    public void ASeatSyncedIntoAHiddenOutlineSeatsWithoutExpanding() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = NewDocument("board.canvas");
+        document.Load();
+        var view = new CanvasOutlineView { Model = document };
+        document.Selection.ActiveSurface = CanvasSurfaceKind.Table;
+
+        document.SelectNode("question", announce: false);
+
+        CanvasOutlineRowViewModel grp =
+            Assert.Single(view.RootsForTests, row => row.Id == "grp");
+        CanvasOutlineRowViewModel question =
+            Assert.Single(grp.Children, row => row.Id == "question");
+        Assert.NotEmpty(question.Children);
+        Assert.False(
+            question.IsExpanded,
+            "a seat on a hidden outline expanded the connection host "
+            + "(E15's cause rule).");
+
+        document.Selection.ActiveSurface = CanvasSurfaceKind.Outline;
+        document.SelectNode("evidence", announce: false);
+        document.SelectNode("question", announce: false);
+        Assert.True(
+            question.IsExpanded,
+            "the SHOWING outline must still open the connection host "
+            + "(CD-33).");
+        document.Shutdown();
+    });
+
+    /// <summary>
+    /// §E TE-9 (E16, m7): the supersession happens IN the publication
+    /// that accepts the filter answer. A pending focus request naming a
+    /// node the answer excludes would otherwise sleep through the
+    /// narrowing and land a surprise jump when the filter later cleared.
+    /// </summary>
+    [Fact]
+    public void AFocusRequestForAFilteredOutNodeIsSupersededByTheAnswer()
+    {
+        CanvasDocumentViewModel document = NewDocument("board.canvas");
+        document.Load();
+        var owner = new object();
+        document.RequestFocusLanding(owner, "loose");
+        Assert.NotNull(document.FocusRequest);
+
+        document.FilterText = "question";
+
+        Assert.Equal(CanvasAnswerState.Answered, document.AppliedFilterAnswerForTests);
+        Assert.True(
+            document.FocusRequest is null,
+            "the answer excluded the request's node and the request "
+            + "out-slept it (m7).");
+        document.Shutdown();
+    }
+
+    /// <summary>
+    /// §E TE-9 (E16): the supersession is aimed. A request whose node
+    /// SURVIVES the answer keeps waiting for a surface to deliver it —
+    /// superseding every pending request on any answer would re-open
+    /// A14's lost-delivery hole from the other side.
+    /// </summary>
+    [Fact]
+    public void AFocusRequestForASurvivingNodeOutlivesTheAnswer()
+    {
+        CanvasDocumentViewModel document = NewDocument("board.canvas");
+        document.Load();
+        document.RequestFocusLanding(new object(), "question");
+
+        document.FilterText = "question";
+
+        Assert.Equal(CanvasAnswerState.Answered, document.AppliedFilterAnswerForTests);
+        Assert.True(
+            document.FocusRequest is not null,
+            "a surviving node's request must outlive the answer.");
+        document.Shutdown();
+    }
+
 
     /// <summary>A shown, laid-out window: containers exist, focus is
     /// real, and a raised key event has a live PresentationSource.</summary>

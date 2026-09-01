@@ -6117,6 +6117,230 @@ public sealed class ShellAccessibilityTests
     }
 
     /// <summary>
+    /// W6-1 §E TE-11e (E14/E19, the journeys): the AUTHORING journey,
+    /// end to end through the real chrome — File menu New Canvas into
+    /// its own tab, the onboarding region carrying core's chord
+    /// sentence, Ctrl+Alt+N creating the first card, activation opening
+    /// the card editor sheet (axe-scanned), Escape COMMITTING the
+    /// draft (t0 §2 M8), and Ctrl+Z undoing through the history domain
+    /// — every leg a real keystroke or UIA invoke, no test seams.
+    /// </summary>
+    [Fact]
+    public void CanvasAuthoring_NewCanvasCardEditorAndUndo_AreReachable()
+    {
+        string testRoot = Path.Combine(
+            Path.GetTempPath(), $"slate-canvas-authoring-{Guid.NewGuid():N}");
+        string vaultRoot = Path.Combine(testRoot, "Authoring Vault");
+        string logDirectory = Path.Combine(testRoot, "logs");
+        Directory.CreateDirectory(vaultRoot);
+        // Deliberately NO canvas: the journey CREATES one.
+        File.WriteAllText(
+            Path.Combine(vaultRoot, "note.md"), "# Note\n\nBody.\n");
+
+        Process? process = null;
+        try
+        {
+            var startInfo = new ProcessStartInfo(SlateWindowsExe())
+            {
+                UseShellExecute = false,
+            };
+            startInfo.ArgumentList.Add(vaultRoot);
+            startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
+                $"slate-canvas-authoring-{Guid.NewGuid():N}";
+            startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            process = Process.Start(startInfo)
+                ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+
+            if (!HasInteractiveDesktop(process, "Canvas authoring"))
+            {
+                return;
+            }
+
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(
+                process,
+                automation,
+                Path.Combine(logDirectory, "slate-windows.log"),
+                TimeSpan.FromSeconds(30));
+            window.SetForeground();
+            window.Focus();
+
+            // ---- New Canvas from the File menu (TE-10) --------------
+            AutomationElement newCanvas = WaitForMenuItem(
+                window, "FileMenu", "NewCanvasMenuItem", TimeSpan.FromSeconds(10));
+            Assert.True(newCanvas.Patterns.Invoke.IsSupported);
+            newCanvas.Patterns.Invoke.Pattern.Invoke();
+
+            // The new document opened in its OWN tab and the onboarding
+            // region leads with the REAL chord (E14's first swap).
+            AutomationElement onboarding = WaitForElement(
+                window, "CanvasEmptyOnboarding", TimeSpan.FromSeconds(20));
+            Assert.Contains(
+                "Control Alt N",
+                onboarding.Properties.Name.Value,
+                StringComparison.Ordinal);
+
+            // ---- The first card, by chord (E19) ---------------------
+            // Every republish rebuilds the tree's items, so a cached
+            // element handle goes stale mid-walk (COM E_UNEXPECTED).
+            // Probe FRESH each time and treat staleness as "not yet".
+            AutomationElement[] Rows()
+            {
+                try
+                {
+                    AutomationElement? liveTree = window.FindFirstDescendant(
+                        automation.ConditionFactory.ByAutomationId(
+                            "CanvasOutlineTree"));
+                    return liveTree is null
+                        ? []
+                        : liveTree.FindAllDescendants(
+                            automation.ConditionFactory.ByControlType(
+                                ControlType.TreeItem));
+                }
+                catch (System.Runtime.InteropServices.COMException)
+                {
+                    return [];
+                }
+            }
+
+            AutomationElement tree = WaitForElement(
+                window, "CanvasOutlineTree", TimeSpan.FromSeconds(10));
+            tree.Focus();
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+            Keyboard.TypeSimultaneously(
+                VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.KEY_N);
+            AutomationElement? card = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        card = Rows().FirstOrDefault(item =>
+                            item.Properties.Name.ValueOrDefault?.StartsWith(
+                                "Text card ", StringComparison.Ordinal) == true);
+                        return card is not null;
+                    },
+                    TimeSpan.FromSeconds(15)),
+                "Ctrl+Alt+N never produced a text card row; exited="
+                + process.HasExited
+                + "; app log tail: "
+                + ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log")));
+
+            // ---- Activation opens the editor sheet (TE-11b) ---------
+            card!.Patterns.SelectionItem.Pattern.Select();
+            card.Focus();
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+            Keyboard.Press(VirtualKeyShort.ENTER);
+            AutomationElement sheet = WaitForElement(
+                window, "CanvasCardEditorSheet", TimeSpan.FromSeconds(10));
+            AssertAxeClean(process, "canvas-card-editor");
+
+            AutomationElement draft = sheet
+                .FindAllDescendants(
+                    automation.ConditionFactory.ByControlType(ControlType.Edit))
+                .FirstOrDefault(edit => edit.Patterns.Value.IsSupported)
+                ?? throw new Xunit.Sdk.XunitException(
+                    "the card editor sheet exposes no editable draft");
+            // REAL keystrokes, not the automation pattern: WPF's peer
+            // SetValue writes Text without composing through the input
+            // stack, and the journey's premise is the keyboard.
+            draft.Focus();
+            AssertEventuallyFocused(draft, "the draft box could not take focus.");
+            Keyboard.Type("Hello from the journey");
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => draft.Patterns.Value.Pattern.Value.ValueOrDefault
+                        == "Hello from the journey",
+                    TimeSpan.FromSeconds(5)),
+                "SetValue never landed in the draft box; value now: '"
+                + draft.Patterns.Value.Pattern.Value.ValueOrDefault
+                + "'; box id: "
+                + draft.Properties.AutomationId.ValueOrDefault);
+
+            // Escape COMMITS (t0 §2 M8) — the sheet closes and the row
+            // carries the new title.
+            draft.Focus();
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+            Keyboard.Press(VirtualKeyShort.ESCAPE);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => Rows().Any(item =>
+                        item.Properties.Name.ValueOrDefault?.Contains(
+                            "Hello from the journey", StringComparison.Ordinal) == true),
+                    TimeSpan.FromSeconds(15)),
+                "the committed draft never reached the outline row; sheetOpen="
+                + (window.FindFirstDescendant(
+                    automation.ConditionFactory.ByAutomationId(
+                        "CanvasCardEditorSheet")) is not null)
+                + "; rows=["
+                + string.Join(
+                    " | ",
+                    Rows().Select(r => r.Properties.Name.ValueOrDefault ?? "?"))
+                + "]; disk: "
+                + string.Join(
+                    " / ",
+                    Directory.EnumerateFiles(vaultRoot, "*.canvas")
+                        .Select(f => Path.GetFileName(f) + "=" + File.ReadAllText(f)))
+                + "; log: "
+                + ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log")));
+
+            // ---- Ctrl+Z drives the history domain (ED-1) ------------
+            // The republish rebuilt the tree; focus the ROW (the
+            // pre-commit leg's own idiom - a bare tree SetFocus is
+            // refused while the container is mid-layout).
+            AutomationElement? committedRow = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        committedRow = Rows().FirstOrDefault();
+                        return committedRow is not null;
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "no outline row to focus for the undo leg");
+            committedRow!.Patterns.SelectionItem.Pattern.Select();
+            committedRow.Focus();
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+            Keyboard.TypeSimultaneously(
+                VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_Z);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        AutomationElement[] rows = Rows();
+                        return rows.Length > 0 && rows.All(item =>
+                            item.Properties.Name.ValueOrDefault?.Contains(
+                                "Hello from the journey",
+                                StringComparison.Ordinal) != true);
+                    },
+                    TimeSpan.FromSeconds(15)),
+                "Ctrl+Z did not undo the committed edit");
+        }
+        finally
+        {
+            if (process is not null && !process.HasExited)
+            {
+                process.CloseMainWindow();
+                if (!process.WaitForExit(5_000))
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            try
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+
+    /// <summary>
     /// W6-1 PR A (#745): the canvas outline journey. Opening a
     /// <c>.canvas</c> from the files tree gives a real UIA Tree whose
     /// items carry core-composed names and the t0 §3 positional status,
@@ -6258,7 +6482,9 @@ public sealed class ShellAccessibilityTests
 
             AssertAxeClean(process, "canvas-outline");
 
-            // Invoke on a text card opens the interim read-only detail.
+            // Invoke on a text card opens the CARD EDITOR SHEET
+            // (§E TE-11b: the interim read-only detail retired; the
+            // activation seam asks the workspace for the real editor).
             // The pattern lives on the ITEM's own peer — no nested
             // element, which is the peered-elements-only trap.
             AutomationElement textCardToOpen = tree
@@ -6271,19 +6497,29 @@ public sealed class ShellAccessibilityTests
                 "a card row must expose Invoke");
             textCardToOpen.Patterns.Invoke.Pattern.Invoke();
             // Invoke is asynchronous by contract: settle before reading.
-            AutomationElement detail = WaitForElement(
-                window, "CanvasCardDetail", TimeSpan.FromSeconds(10));
+            AutomationElement sheet = WaitForElement(
+                window, "CanvasCardEditorSheet", TimeSpan.FromSeconds(10));
+            Assert.Equal("Card editor", sheet.Properties.Name.Value);
+            AutomationElement draft = WaitForElement(
+                window, "CanvasCardEditorText", TimeSpan.FromSeconds(10));
             Assert.True(
                 SpinWait.SpinUntil(
-                    () => detail.Patterns.Value.IsSupported
+                    () => draft.Patterns.Value.IsSupported
                         && !string.IsNullOrEmpty(
-                            detail.Patterns.Value.Pattern.Value.Value),
+                            draft.Patterns.Value.Pattern.Value.Value),
                     TimeSpan.FromSeconds(10)),
-                "the interim card detail never carried the card's text");
-            Assert.StartsWith(
-                "Card text:",
-                detail.Properties.Name.Value,
-                StringComparison.Ordinal);
+                "the editor sheet never carried the card's text");
+            // Escape COMMITS (no changes here) and closes — the modal
+            // must not swallow the legs below.
+            draft.Focus();
+            Keyboard.Press(VirtualKeyShort.ESCAPE);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => window.FindFirstDescendant(
+                        automation.ConditionFactory.ByAutomationId(
+                            "CanvasCardEditorSheet")) is null,
+                    TimeSpan.FromSeconds(10)),
+                "the editor sheet never closed on Escape");
 
             // Keyboard-only reachability: focus the tree and press Enter
             // on a row. Foreground is re-asserted first — another app can
@@ -6297,6 +6533,18 @@ public sealed class ShellAccessibilityTests
                 textCardToOpen, "the outline row never took keyboard focus");
             PressKey(VirtualKeyShort.RETURN);
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(500));
+            // Enter opens the editor sheet now (TE-11b): close it so
+            // the legs below are not under a modal.
+            _ = WaitForElement(
+                window, "CanvasCardEditorSheet", TimeSpan.FromSeconds(10));
+            Keyboard.Press(VirtualKeyShort.ESCAPE);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => window.FindFirstDescendant(
+                        automation.ConditionFactory.ByAutomationId(
+                            "CanvasCardEditorSheet")) is null,
+                    TimeSpan.FromSeconds(10)),
+                "the keyboard leg's editor sheet never closed");
 
             // The surface switcher is one named group (A18). All three
             // arms have shipped — the table in PR B, the visual in PR D
@@ -6502,7 +6750,15 @@ public sealed class ShellAccessibilityTests
             // and the one a screen-reader user gets. The menu is a
             // separate popup HWND, so it is looked up from the desktop
             // rather than under the window.
+            // §E TE-8 flipped Delete LIVE on card rows; the menu is
+            // asserted from a TEXT row so the expectation is
+            // deterministic whatever the sort put first.
+            AutomationElement menuAnchorCell =
+                WaitForCellStartingWith(grid, "Type: Text");
             ReassertForegroundForAChord(window);
+            menuAnchorCell.Focus();
+            AssertEventuallyFocused(
+                menuAnchorCell, "the text row never took focus for the menu");
             PressKey(VirtualKeyShort.APPS);
             AutomationElement[] rowActions = WaitForRowActionItems(automation, process.Id);
             Assert.Equal(
@@ -6511,17 +6767,17 @@ public sealed class ShellAccessibilityTests
             Assert.True(
                 rowActions[0].Properties.IsEnabled.Value,
                 "Open must be live — it is the shipped verb");
-            foreach (AutomationElement unshipped in rowActions.Skip(1))
-            {
-                Assert.False(
-                    unshipped.Properties.IsEnabled.Value,
-                    $"{unshipped.Properties.Name.Value} ships in a later slice and "
-                    + "must be listed disabled, not enabled");
-                Assert.Contains(
-                    "arrives in a later slice",
-                    unshipped.Properties.HelpText.Value,
-                    StringComparison.Ordinal);
-            }
+            Assert.False(
+                rowActions[1].Properties.IsEnabled.Value,
+                "Toggle Mark stays staged until PR G");
+            Assert.Contains(
+                "arrives in a later slice",
+                rowActions[1].Properties.HelpText.Value,
+                StringComparison.Ordinal);
+            Assert.True(
+                rowActions[2].Properties.IsEnabled.Value,
+                "Delete went live on card rows in TE-8; a disabled Delete "
+                + "on a text row is the stale staging");
             // Close it before the activation leg: a live popup owns the
             // keyboard, and Enter would pick a menu item instead.
             PressKey(VirtualKeyShort.ESCAPE);
@@ -6531,9 +6787,9 @@ public sealed class ShellAccessibilityTests
                     TimeSpan.FromSeconds(10)),
                 "the row-actions menu never closed on Escape");
 
-            // Contract B6: Enter opens the card, through the same
-            // activation seam the outline uses — a text card publishes
-            // the interim read-only detail.
+            // Contract B6: Enter opens the card through the same
+            // activation seam the outline uses — a text card opens the
+            // CARD EDITOR SHEET (§E TE-11b).
             AutomationElement textCell = WaitForCellStartingWith(grid, "Type: Text");
             ReassertForegroundForAChord(window);
             textCell.Focus();
@@ -6541,15 +6797,17 @@ public sealed class ShellAccessibilityTests
                 textCell, "the canvas table's text-card row never took focus");
             PressKey(VirtualKeyShort.RETURN);
 
-            AutomationElement detail = WaitForElement(
-                window, "CanvasCardDetail", TimeSpan.FromSeconds(10));
+            _ = WaitForElement(
+                window, "CanvasCardEditorSheet", TimeSpan.FromSeconds(10));
+            AutomationElement tableDraft = WaitForElement(
+                window, "CanvasCardEditorText", TimeSpan.FromSeconds(10));
             Assert.True(
                 SpinWait.SpinUntil(
-                    () => detail.Patterns.Value.IsSupported
+                    () => tableDraft.Patterns.Value.IsSupported
                         && !string.IsNullOrEmpty(
-                            detail.Patterns.Value.Pattern.Value.Value),
+                            tableDraft.Patterns.Value.Pattern.Value.Value),
                     TimeSpan.FromSeconds(10)),
-                "activating a table row never opened the card's text");
+                "activating a table row never opened the editor's text");
         }
         finally
         {

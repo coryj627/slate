@@ -650,7 +650,8 @@ fn kind_label(node: &Node) -> &'static str {
     }
 }
 
-enum MediaClass {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaClass {
     Image,
     Audio,
     Video,
@@ -658,7 +659,10 @@ enum MediaClass {
 
 /// Media class from the basename's real extension: a file with no `.`
 /// in its basename (even one literally named `mov`) is not media.
-fn media_class(path: &str) -> Option<MediaClass> {
+/// PUBLIC since W6-1 §E TE-0 (the CD-38 drift note's staged export):
+/// the Windows media gate consumed a transliterated copy of this set,
+/// and the copy retires the moment this answer crosses the FFI.
+pub fn media_class(path: &str) -> Option<MediaClass> {
     let base = path.rsplit(['/', '\\']).next().unwrap_or(path);
     let (stem, ext) = base.rsplit_once('.')?;
     if stem.is_empty() {

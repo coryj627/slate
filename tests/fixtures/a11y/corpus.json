@@ -1925,6 +1925,26 @@
     "text": "Redo blocked: the canvas changed on disk. Reload it and try again."
   },
   {
+    "event": "Canvas { event: CanvasBlocked { reason: UndoQuarantined } }",
+    "priority": "high",
+    "text": "Undo unavailable: the canvas changed on disk, and this entry applies to an earlier revision."
+  },
+  {
+    "event": "Canvas { event: CanvasBlocked { reason: RedoQuarantined } }",
+    "priority": "high",
+    "text": "Redo unavailable: the canvas changed on disk, and this entry applies to an earlier revision."
+  },
+  {
+    "event": "Canvas { event: CanvasHistoryQuarantinedTitle { verb: Undo } }",
+    "priority": "medium",
+    "text": "Undo unavailable — canvas changed on disk"
+  },
+  {
+    "event": "Canvas { event: CanvasHistoryQuarantinedTitle { verb: Redo } }",
+    "priority": "medium",
+    "text": "Redo unavailable — canvas changed on disk"
+  },
+  {
     "event": "Canvas { event: CanvasBlocked { reason: LinkOpenFailed } }",
     "priority": "high",
     "text": "The link could not be opened."
@@ -2098,6 +2118,11 @@
     "event": "Canvas { event: CanvasMutationRefused { reason: CardEditorUnavailable } }",
     "priority": "medium",
     "text": "This canvas is no longer available. Copy your draft before closing the editor."
+  },
+  {
+    "event": "Canvas { event: CanvasMutationRefused { reason: RefreshPending } }",
+    "priority": "medium",
+    "text": "Your last change is saved but not shown yet. Refresh to see it before making more changes."
   },
   {
     "event": "Canvas { event: CanvasLoadedDegraded { skipped: 3 } }",

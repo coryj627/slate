@@ -598,12 +598,12 @@ public sealed class CanvasTableTests : IDisposable
                 return true;
             };
 
-            // Text ⇒ the interim read-only detail, and the surface is
-            // told to move focus there (the outline's contract, one
-            // projection over).
+            // Text => the editor sheet is REQUESTED through the
+            // TE-8 seam (§E TE-11b); the workspace answers.
+            string? requested = null;
+            document.CardEditorRequested += nodeId => requested = nodeId;
             PressEnterOn(grid, "zeta");
-            Assert.Equal("Zeta", document.DetailText);
-            Assert.Equal(document.DetailText, surface.DetailForTests.Text);
+            Assert.Equal("zeta", requested);
 
             // Markdown file ⇒ the note tab; image ⇒ the default app.
             PressEnterOn(grid, "note");
@@ -632,9 +632,9 @@ public sealed class CanvasTableTests : IDisposable
             // falls through the same way: no crash, no announcement, no
             // move.
             _announced.Clear();
-            document.CloseDetail();
+            requested = null;
             PressEnterOn(grid, "grp");
-            Assert.Null(document.DetailText);
+            Assert.Null(requested);
             document.AnnouncerForTests.FlushForTests();
             Assert.DoesNotContain(
                 _announced,
@@ -662,26 +662,30 @@ public sealed class CanvasTableTests : IDisposable
             menu.Items.Cast<MenuItem>().Select(item => (string)item.Header).ToArray());
         var open = Assert.IsType<MenuItem>(menu.Items[0]);
         Assert.True(open.IsEnabled);
-        foreach ((int index, string reason) in new[]
-        {
-            (1, CanvasPhrase.MarkingArrivesLater),
-            (2, CanvasPhrase.DeletingArrivesLater),
-        })
-        {
-            var item = Assert.IsType<MenuItem>(menu.Items[index]);
-            Assert.False(item.IsEnabled);
-            Assert.Equal(reason, AutomationProperties.GetHelpText(item));
-            Assert.Equal(reason, item.ToolTip);
-            // …and the tooltip actually SHOWS: WPF suppresses tooltips
-            // on disabled elements by default, so without this the
-            // reason reached AT and nobody else — on exactly the items
-            // that have one (red team m-6).
-            Assert.True(ToolTipService.GetShowOnDisabled(item));
-        }
 
-        // Open runs the same activation Enter runs.
+        // Toggle Mark stays STAGED with its why (PR G); Delete went
+        // LIVE on card rows in §E TE-8 — the flip this fact once
+        // guarded from the other side.
+        var mark = Assert.IsType<MenuItem>(menu.Items[1]);
+        Assert.False(mark.IsEnabled);
+        Assert.Equal(CanvasPhrase.MarkingArrivesLater, mark.ToolTip);
+        Assert.Equal(
+            CanvasPhrase.MarkingArrivesLater, AutomationProperties.GetHelpText(mark));
+        // …and the tooltip actually SHOWS on the disabled item
+        // (red team m-6).
+        Assert.True(ToolTipService.GetShowOnDisabled(mark));
+
+        var delete = Assert.IsType<MenuItem>(menu.Items[2]);
+        Assert.True(
+            delete.IsEnabled,
+            "Delete stayed staged on a card row after the TE-8 flip.");
+
+        // Open runs the same activation Enter runs - the editor
+        // request is the observable now (§E TE-11b).
+        string? requested = null;
+        document.CardEditorRequested += nodeId => requested = nodeId;
         open.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
-        Assert.Equal("Zeta", document.DetailText);
+        Assert.Equal("zeta", requested);
         document.Shutdown();
     });
 

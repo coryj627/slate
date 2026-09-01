@@ -4046,6 +4046,58 @@ public sealed class CanvasNavigatorTests : IDisposable
         public void Dispose() => window.Close();
     }
 
+    /// <summary>m11 (§E TE-8): the MenuOpen classification's
+    /// VISUAL-parent fallback — a ContextMenu lives in its own popup,
+    /// so the logical walk runs out and only the visual chain reaches
+    /// the MenuBase. This is the popup arm the §C record named as the
+    /// untested half; the first real context menu owns the fact. The
+    /// ENVIRONMENT FACT's discipline: the keys go to a focusable row
+    /// the desktop will take, the premise message names the leg, and
+    /// a refusal asserts the invariant instead of skipping.</summary>
+    [Fact]
+    public void AContextMenuPopupStillReadsAsAMenuToTheClassifier() => RunSta(() =>
+    {
+        MenuItem row = MenuRow("Context");
+        var popup = new System.Windows.Controls.ContextMenu();
+        popup.Items.Add(row);
+        var host = new Button { Content = "the row the menu opened on" };
+        var root = new StackPanel();
+        root.Children.Add(host);
+        using ProbeWindow probe = HostProbe(root);
+        host.ContextMenu = popup;
+        popup.PlacementTarget = host;
+        popup.IsOpen = true;
+        Pump();
+
+        var target = (TextBox)row.Header;
+        bool took = target.Focus();
+        Pump();
+        IInputElement? landed = System.Windows.Input.Keyboard.FocusedElement;
+        if (!took || landed is not TextBox)
+        {
+            // The desktop refused popup focus — the refusal invariant:
+            // nothing moved, the arrangement did not half-happen.
+            _output.WriteLine(
+                "DESKTOP REFUSED THE MENU — the ContextMenu popup: Focus() "
+                + $"returned {took}, the keys landed on "
+                + (landed?.GetType().Name ?? "null"));
+            Assert.False(
+                CanvasSurfaceView.FocusIsInAMenu(landed)
+                    && landed is not TextBox,
+                "the refusal half-happened: focus is in a menu that never took the keys.");
+            popup.IsOpen = false;
+            return;
+        }
+
+        Assert.True(
+            CanvasSurfaceView.FocusIsInAMenu(landed),
+            "the keys are in a ContextMenu popup and the classifier did not "
+            + "see a menu: the visual-parent fallback (m11) is broken, so "
+            + "opening a row menu would cancel the mode it serves.");
+        popup.IsOpen = false;
+        Pump();
+    });
+
     /// <summary>
     /// A real `Menu`, whose rows hold the keys through the ONE focus
     /// mechanism every desktop this ships on supports.
@@ -4280,6 +4332,36 @@ public sealed class CanvasNavigatorTests : IDisposable
 
         public object? Owner => null;
     }
+
+    /// <summary>§E TE-11 (ED-1/E19): the canvas-scoped history
+    /// chords DELIVER - Ctrl+Z reaches the undo verb through the
+    /// ladder (the empty stack's spoken arm is the observable), and
+    /// Ctrl+Alt+N reaches New Card (the outline grows).</summary>
+    [Fact]
+    public void HistoryAndNewCardChordsDeliverThroughTheLadder()
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        var presenter = new UnfocusedVisualPresenter();
+        document.Navigator.AttachPresenter(presenter);
+
+        Assert.True(
+            document.Navigator.HandleKey(Key.Z, ModifierKeys.Control, presenter));
+        Assert.Contains(
+            _announced,
+            a => a.Text.Contains("Nothing to undo.", StringComparison.Ordinal));
+        Assert.True(
+            document.Navigator.HandleKey(Key.Y, ModifierKeys.Control, presenter));
+        Assert.Contains(
+            _announced,
+            a => a.Text.Contains("Nothing to redo.", StringComparison.Ordinal));
+
+        int before = document.Outline.Count;
+        Assert.True(document.Navigator.HandleKey(
+            Key.N, ModifierKeys.Control | ModifierKeys.Alt, presenter));
+        Assert.Equal(before + 1, document.Outline.Count);
+        document.Shutdown();
+    }
+
 
     /// <summary>The review round's R2 half: a bare Shift chord on the
     /// VISUAL surface is consumed only when the projection owns the

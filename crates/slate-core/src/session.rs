@@ -3816,29 +3816,48 @@ impl VaultSession {
         // sets it. Returning here rolls the transaction back,
         // leaving disk newer than the index — the exact state the
         // hosts' post-write reconciliation must repair.
+        // From here to the index commit the bytes are DURABLE while
+        // the cache is not (the write-intent marker repairs it), so
+        // every failure below is typed `SavedButUnindexed` carrying
+        // the landed hash — a caller must treat it as a COMMIT (W6-1
+        // §E TE-0, IE-6). Computed from `contents`, not from a stat:
+        // the hash exists even when `stat` is the step that failed.
+        let new_hash = crate::vault::content_hash(contents.as_bytes());
+
         if let Some(trigger) = std::env::var_os("SLATE_TEST_FAULT_AFTER_WRITE")
             && path.contains(trigger.to_string_lossy().as_ref())
         {
-            return Err(VaultError::InvalidArgument {
-                message: "test fault: injected failure after write, before index commit".into(),
+            return Err(VaultError::SavedButUnindexed {
+                new_content_hash: new_hash,
+                detail: "test fault: injected failure after write, before index commit".into(),
             });
         }
 
-        let new_stat = self.provider.stat(path)?;
-        let new_hash = crate::vault::content_hash(contents.as_bytes());
+        let new_stat = self
+            .provider
+            .stat(path)
+            .map_err(|e| VaultError::SavedButUnindexed {
+                new_content_hash: new_hash.clone(),
+                detail: e.to_string(),
+            })?;
 
         let now = now_ms();
         let mut graph_sink = self.graph_sink();
-        let file_id = self.index_saved_file(
-            &tx,
-            path,
-            contents,
-            &new_stat,
-            &new_hash,
-            now,
-            existed,
-            &mut graph_sink,
-        )?;
+        let file_id = self
+            .index_saved_file(
+                &tx,
+                path,
+                contents,
+                &new_stat,
+                &new_hash,
+                now,
+                existed,
+                &mut graph_sink,
+            )
+            .map_err(|e| VaultError::SavedButUnindexed {
+                new_content_hash: new_hash.clone(),
+                detail: e.to_string(),
+            })?;
         // Resolve (allocating on first save) the file's op-log name
         // inside the index transaction, so the binding column commits
         // atomically with the save it serves (O-1 #539). Best-effort:
@@ -3854,8 +3873,15 @@ impl VaultSession {
         tx.execute(
             "DELETE FROM text_write_intents WHERE path = ?1 AND token = ?2",
             rusqlite::params![path, intent_token],
-        )?;
-        tx.commit()?;
+        )
+        .map_err(|e| VaultError::SavedButUnindexed {
+            new_content_hash: new_hash.clone(),
+            detail: e.to_string(),
+        })?;
+        tx.commit().map_err(|e| VaultError::SavedButUnindexed {
+            new_content_hash: new_hash.clone(),
+            detail: e.to_string(),
+        })?;
         self.graph_apply(graph_sink);
         self.bump_bases_generation();
 
@@ -18705,6 +18731,20 @@ pub struct CanvasOpenInfo {
     /// document must be treated as read-only (t0 §5 error state).
     pub degraded: bool,
     pub warnings: Vec<CanvasLoadWarning>,
+    /// The content hash of the bytes this open parsed — the handle's
+    /// CAS basis, exposed so a host can bind history entries, editor
+    /// drafts and conflict records to the exact revision they were
+    /// minted against (W6-1 §E TE-0, IE-3). Every `canvas_apply`
+    /// returns the successor basis in `CanvasApplyResult`.
+    pub content_hash: String,
+}
+
+/// A text card's content paired with the basis it was read at, taken
+/// under one lock (W6-1 §E TE-0, IE-4) — the editor's seed token.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CanvasEditorSeed {
+    pub text: String,
+    pub content_hash: String,
 }
 
 /// Geometry argument for placement / overlap queries.
@@ -18748,6 +18788,13 @@ pub struct CanvasTraceHop {
 pub struct CanvasApplyResult {
     pub new_content_hash: String,
     pub inverse: crate::canvas::apply::CanvasAction,
+    /// False when the bytes landed but the index commit failed (the
+    /// save's `SavedButUnindexed` arm, W6-1 §E TE-0/IE-6): the write
+    /// IS committed, the inverse IS valid, and derived reads (the
+    /// outline, the table) may lag until the intent-marker repair
+    /// runs. A host records the entry and surfaces a refresh, never
+    /// a retry of the action.
+    pub indexed: bool,
 }
 
 /// `FileTitleSource` over the live index: a file card referencing a
@@ -18987,6 +19034,9 @@ impl VaultSession {
 
         let degraded = crate::canvas::is_load_degraded(&warnings);
         let info_warnings = warnings.iter().map(load_warning).collect();
+        // One hash computation feeds the state's CAS basis AND the
+        // info's exposed basis — they cannot drift (IE-3).
+        let opened_hash = content_hash(text.as_bytes());
         let info = CanvasOpenInfo {
             handle: self
                 .next_canvas_handle
@@ -18995,6 +19045,7 @@ impl VaultSession {
             edge_count: parsed.edges.len() as u32,
             degraded,
             warnings: info_warnings,
+            content_hash: opened_hash.clone(),
         };
         self.canvases.lock().expect("canvas registry mutex").insert(
             info.handle,
@@ -19003,7 +19054,7 @@ impl VaultSession {
                 file_id,
                 canvas: parsed,
                 model,
-                content_hash: content_hash(text.as_bytes()),
+                content_hash: opened_hash,
                 degraded,
             },
         );
@@ -19438,18 +19489,45 @@ impl VaultSession {
         // since open/last apply → typed WriteConflict for t0 §5.
         let new_text = crate::canvas::serialize::serialize(&working);
         let mut conn = self.conn.lock().expect("session connection mutex");
-        let report = self.save_text_locked(
+        // A `SavedButUnindexed` return is a COMMIT whose index step
+        // failed (IE-6): the bytes and the inverse are real, so the
+        // apply reports success with `indexed: false` and the handle
+        // advances — refusing here would invite a retry that applies
+        // the action twice, and the write-intent marker repairs the
+        // index behind us.
+        let (committed_hash, indexed) = match self.save_text_locked(
             &mut conn,
             &state.path,
             &new_text,
             Some(&state.content_hash),
             &[],
-        )?;
+        ) {
+            Ok(report) => (report.new_content_hash, true),
+            Err(VaultError::SavedButUnindexed {
+                new_content_hash,
+                detail,
+            }) => {
+                log::warn!("canvas apply committed but unindexed: {detail}");
+                (new_content_hash, false)
+            }
+            Err(e) => return Err(e),
+        };
 
-        // Refresh the handle: new parse-equivalent state + model.
-        let tx = db::begin_fenced(&conn)?;
-        let model = crate::canvas::model::derive_with(&working, &DbTitleSource { conn: &tx });
-        drop(tx);
+        // Refresh the handle: new parse-equivalent state + model. On
+        // the unindexed arm the titles table may be behind or the
+        // fenced open may itself fail; the fallback derives without
+        // the DB (filename titles), which is exactly as stale as the
+        // index it could not read.
+        let model = match db::begin_fenced(&conn) {
+            Ok(tx) => {
+                let model =
+                    crate::canvas::model::derive_with(&working, &DbTitleSource { conn: &tx });
+                drop(tx);
+                model
+            }
+            Err(_) if !indexed => crate::canvas::model::derive(&working),
+            Err(e) => return Err(e.into()),
+        };
         // The save above allocated/resolved the binding; read it before
         // releasing the connection so the semantic entry lands in the
         // same log (O-1: names come from the column, never `files.id`).
@@ -19466,7 +19544,7 @@ impl VaultSession {
         state.canvas = working;
         state.model = model;
         let hash_before = state.content_hash.clone();
-        state.content_hash = report.new_content_hash.clone();
+        state.content_hash = committed_hash.clone();
 
         // Semantic journal entry (#372): named action + inverse beside
         // the byte-level text entry the save just wrote. Best-effort,
@@ -19490,7 +19568,7 @@ impl VaultSession {
             user_actor_id: self.config.user_actor_id.clone(),
             op_kind: crate::oplog::OpKind::CanvasApply,
             content_hash_before: hash_before,
-            content_hash_after: report.new_content_hash.clone(),
+            content_hash_after: committed_hash.clone(),
             payload_bytes: payload.to_string().into_bytes(),
         };
         let append_result = match log_name.as_deref() {
@@ -19525,8 +19603,9 @@ impl VaultSession {
         // above — the canvas serialization commits through the same
         // seam as every text write, so no extra emission here.
         Ok(CanvasApplyResult {
-            new_content_hash: report.new_content_hash,
+            new_content_hash: committed_hash,
             inverse,
+            indexed,
         })
     }
 
@@ -19606,6 +19685,70 @@ impl VaultSession {
             .ok_or_else(|| bad_node(node_id))?;
         Ok(match &node.kind {
             crate::canvas::NodeKind::Text { text } => Some(text.clone()),
+            _ => None,
+        })
+    }
+
+    /// The picker's proximity order (W6-1 §E TE-0, IE-21) — core owns
+    /// the one distance algorithm; a host renders and text-filters.
+    pub fn canvas_proximity_order(
+        &self,
+        handle: u64,
+        anchor: Option<String>,
+        exclude: Vec<String>,
+    ) -> Result<Vec<String>, VaultError> {
+        let canvases = self.canvases.lock().expect("canvas registry mutex");
+        let state = canvases.get(&handle).ok_or_else(|| bad_handle(handle))?;
+        let anchor_id = anchor.map(crate::canvas::NodeId);
+        let exclude_ids: Vec<crate::canvas::NodeId> =
+            exclude.into_iter().map(crate::canvas::NodeId).collect();
+        Ok(
+            crate::canvas::queries::proximity_order(&state.model, anchor_id.as_ref(), &exclude_ids)
+                .into_iter()
+                .map(|n| n.0)
+                .collect(),
+        )
+    }
+
+    /// The handle's CURRENT document serialized (W6-1 §E TE-3,
+    /// IE-17): at conflict time the in-memory canvas is still the
+    /// pre-conflict revision — the apply refused, the state did not
+    /// move — and Save a Copy applies the retained action to THIS
+    /// text detachedly. Locked, and paired with the basis so the
+    /// caller can prove which revision it captured.
+    pub fn canvas_current_text(&self, handle: u64) -> Result<CanvasEditorSeed, VaultError> {
+        let canvases = self.canvases.lock().expect("canvas registry mutex");
+        let state = canvases.get(&handle).ok_or_else(|| bad_handle(handle))?;
+        Ok(CanvasEditorSeed {
+            text: crate::canvas::serialize::serialize(&state.canvas),
+            content_hash: state.content_hash.clone(),
+        })
+    }
+
+    /// One LOCKED read of a text card's content together with the
+    /// basis it was read at (W6-1 §E TE-0, IE-4). Reading text and
+    /// basis in two calls can seed old text under a new hash — or the
+    /// reverse — when an apply lands between them; this pairing is
+    /// taken under the registry lock and cannot tear. `None` for a
+    /// non-text card, `bad_node` for an id the canvas does not hold.
+    pub fn canvas_editor_seed(
+        &self,
+        handle: u64,
+        node_id: &str,
+    ) -> Result<Option<CanvasEditorSeed>, VaultError> {
+        let canvases = self.canvases.lock().expect("canvas registry mutex");
+        let state = canvases.get(&handle).ok_or_else(|| bad_handle(handle))?;
+        let node = state
+            .canvas
+            .nodes
+            .iter()
+            .find(|n| n.id.0 == node_id)
+            .ok_or_else(|| bad_node(node_id))?;
+        Ok(match &node.kind {
+            crate::canvas::NodeKind::Text { text } => Some(CanvasEditorSeed {
+                text: text.clone(),
+                content_hash: state.content_hash.clone(),
+            }),
             _ => None,
         })
     }

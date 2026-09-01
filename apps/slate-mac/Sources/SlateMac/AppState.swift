@@ -12564,6 +12564,10 @@ final class AppState: ObservableObject {
             return "\(feature) is not implemented yet."
         case .WriteConflict:
             return "File changed externally."
+        case .SavedButUnindexed(_, let detail):
+            // W6-1 SE TE-0's typed post-write arm (#1123's shape): the
+            // bytes are on disk; only the index step failed.
+            return "Saved, but not indexed yet: \(detail) It will appear after the next scan."
         case .MalformedFrontmatter(let path, let reason):
             return "Frontmatter at \(path) is malformed: \(reason)."
         case .BibSourceUnreadable(let path, let reason):
@@ -23690,6 +23694,11 @@ final class AppState: ObservableObject {
             // surfacing it through the generic humanReadable path is
             // a last-resort fallback for non-editor callers.
             return "This file was modified by another writer since you opened it. Reload to see the latest version."
+        case .SavedButUnindexed(_, let detail):
+            // The landed-but-unindexed arm (W6-1 SE TE-0): a CREATE or
+            // save whose bytes are real while the index catches up on
+            // the next scan - never a reason to retry or recreate.
+            return "This change was saved but not indexed yet: \(detail) It will appear in listings after the next scan; do not recreate it."
         case .MalformedFrontmatter(let path, let reason):
             return
                 "Frontmatter at \(path) is malformed: \(reason). Fix the YAML in this note before editing properties."

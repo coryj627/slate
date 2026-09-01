@@ -628,6 +628,7 @@ extension AppState {
             let result = try session.canvasApply(handle: handle, action: action)
             doc.undoStack.append((name: action.name, inverse: result.inverse))
             doc.redoStack = []
+            doc.noteApplySucceeded(newContentHash: result.newContentHash)
             doc.reloadAfterMutation(session: session)
             // #867: the stacks are plain vars (never @Published — views
             // don't render them), so the Undo/Redo menu titles need an

@@ -1005,6 +1005,18 @@
       "registered": true
     },
     {
+      "id": "slate.canvas.newCard",
+      "label": "Canvas: New Card",
+      "section": "Canvas",
+      "hint": "Create a text card next to the selection - placement is automatic and announced.",
+      "macChord": "⌥⌘N",
+      "mac": "Option Command N",
+      "windows": "Ctrl+Alt+N",
+      "windowsSpoken": "Control Alt N",
+      "scope": "Canvas",
+      "registered": true
+    },
+    {
       "id": "slate.canvas.filterCards",
       "label": "Canvas: Filter Cards…",
       "section": "Canvas",
@@ -1111,6 +1123,18 @@
       "windows": "Ctrl+Shift+N",
       "windowsSpoken": "Control Shift N",
       "scope": "Global",
+      "registered": true
+    },
+    {
+      "id": "slate.file.newCanvas",
+      "label": "New Canvas",
+      "section": "File",
+      "hint": "Create an empty canvas file in the vault and open it.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
       "registered": true
     },
     {
@@ -2849,6 +2873,33 @@
       "scope": "QuickOpen",
       "registered": false,
       "reason": "PR-4: overlay-scoped interaction of an already-open surface (the arrow-keys-in-a-list rule), not an app command. Delivered by the Quick Open overlay's key handler (MainWindow.xaml.cs:543-555). PR-2 records its place in the Escape chain."
+    },
+    {
+      "id": "windows.canvas.undoHistory",
+      "label": "Canvas: undo the last canvas action",
+      "section": "View",
+      "hint": null,
+      "macChord": "⌘Z",
+      "mac": "Command Z",
+      "windows": "Ctrl+Z",
+      "windowsSpoken": "Control Z",
+      "scope": "Canvas",
+      "registered": false,
+      "reason": "§E ED-1: canvas-focus-scoped delivery through the navigator ladder; the two-phase checkout keeps a raced mutation from losing or doubling the entry."
+    },
+    {
+      "id": "windows.canvas.redoHistory",
+      "label": "Canvas: redo the last undone canvas action",
+      "section": "View",
+      "hint": null,
+      "macChord": "⇧⌘Z",
+      "mac": "Shift Command Z",
+      "windows": "Ctrl+Y",
+      "windowsSpoken": "Control Y",
+      "scope": "Canvas",
+      "registered": false,
+      "divergence": "mac uses ⇧⌘Z; Windows keeps the structural pair's Ctrl+Y convention, and ED-1 registers no Ctrl+Shift+Z alias because the editor host has none.",
+      "reason": "§E ED-1: the redo twin. mac uses shift-cmd-Z; Windows keeps the structural pair's Ctrl+Y convention."
     },
     {
       "id": "windows.sidebar.undoStructural",

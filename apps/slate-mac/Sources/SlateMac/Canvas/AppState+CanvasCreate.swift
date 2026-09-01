@@ -18,6 +18,10 @@ struct CanvasCardEditorRequest: Identifiable, Equatable {
     let nodeId: String
     let title: String
     let initialText: String
+    /// The basis the text was read at — one locked core read pairs
+    /// them (W6-1 §E TE-0: `canvas_editor_seed`), so a commit can know
+    /// the exact revision this draft grew from.
+    let basis: String
     var id: String { nodeId }
 }
 
@@ -47,13 +51,14 @@ extension AppState {
             return
         }
         guard let session = currentSession, let handle = doc.handle,
-            let fetched = try? session.canvasNodeText(handle: handle, nodeId: nodeId)
+            let seed = try? session.canvasEditorSeed(handle: handle, nodeId: nodeId)
         else {
             canvasAnnouncer.announce(.canvasBlocked(reason: .cardTextUnreadable))
             return
         }
         canvasCardEditor = CanvasCardEditorRequest(
-            nodeId: nodeId, title: row.title, initialText: fetched)
+            nodeId: nodeId, title: row.title,
+            initialText: seed.text, basis: seed.contentHash)
     }
 
     /// Commit path (Esc / Done / ⌘S): one `canvas_apply` when the text

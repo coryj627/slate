@@ -75,6 +75,8 @@ func describe(_ error: VaultError) -> String {
     case .WriteConflict(let current, let expected, _):
         return
             "write conflict: file has been modified since it was read (expected \(expected), current \(current))"
+    case .SavedButUnindexed:
+        return "saved but unindexed"
     case .MalformedFrontmatter(let path, let reason):
         return "frontmatter at \(path) is malformed: \(reason)"
     case .BibSourceUnreadable(let path, let reason):

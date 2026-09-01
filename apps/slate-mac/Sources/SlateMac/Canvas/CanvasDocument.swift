@@ -35,13 +35,14 @@ enum CanvasPreparedLoad: @unchecked Sendable {
         warnings: [CanvasLoadWarning],
         outline: [CanvasOutlineRow],
         tableRows: [CanvasTableRow],
-        scene: CanvasScene
+        scene: CanvasScene,
+        contentHash: String
     )
     case degraded(warnings: [CanvasLoadWarning], message: String)
     case failed(String)
 
     var retainedHandle: UInt64? {
-        guard case .ready(let handle, _, _, _, _) = self else { return nil }
+        guard case .ready(let handle, _, _, _, _, _) = self else { return nil }
         return handle
     }
 }
@@ -104,7 +105,8 @@ enum CanvasPreparedLoader {
                 warnings: info.warnings,
                 outline: outline,
                 tableRows: tableRows,
-                scene: scene)
+                scene: scene,
+                contentHash: info.contentHash)
         } catch {
             return .failed(CanvasDocument.friendlyMessage(path: path, for: error))
         }
@@ -369,6 +371,12 @@ final class CanvasDocument: ObservableObject {
     /// so every canvas call routes through this.
     private(set) var handle: UInt64?
 
+    /// The revision this document's handle is based on — core's CAS
+    /// basis, from `CanvasOpenInfo.contentHash` at load and
+    /// `CanvasApplyResult.newContentHash` after every apply (W6-1 §E
+    /// TE-0: the basis a host binds drafts and history to).
+    private(set) var contentHash: String?
+
     /// New Canvas can reserve an existing missing-file document while its tree
     /// refresh suspends. Activation must not fall back to synchronous native
     /// loading during that interval or immediately after a prepared failure.
@@ -458,12 +466,13 @@ final class CanvasDocument: ObservableObject {
 
         switch prepared {
         case .ready(let preparedHandle, let preparedWarnings, let preparedOutline,
-            let preparedTableRows, let preparedScene):
+            let preparedTableRows, let preparedScene, let preparedHash):
             handle = preparedHandle
             warnings = preparedWarnings
             outline = preparedOutline
             tableRows = preparedTableRows
             scene = preparedScene
+            contentHash = preparedHash
             targets = Dictionary(
                 uniqueKeysWithValues: preparedTableRows.map { ($0.nodeId, $0.target) })
             neighborsCache = [:]
@@ -570,17 +579,19 @@ final class CanvasDocument: ObservableObject {
 
         switch prepared {
         case .ready(let preparedHandle, let preparedWarnings, let preparedOutline,
-            let preparedTableRows, let preparedScene):
+            let preparedTableRows, let preparedScene, let preparedHash):
             handle = preparedHandle
             warnings = preparedWarnings
             outline = preparedOutline
             tableRows = preparedTableRows
             scene = preparedScene
+            contentHash = preparedHash
             targets = Dictionary(
                 uniqueKeysWithValues: preparedTableRows.map { ($0.nodeId, $0.target) })
             state = .ready
         case .degraded(let preparedWarnings, let message):
             handle = nil
+            contentHash = nil
             warnings = preparedWarnings
             outline = []
             tableRows = []
@@ -589,6 +600,7 @@ final class CanvasDocument: ObservableObject {
             state = .degraded(message)
         case .failed(let message):
             handle = nil
+            contentHash = nil
             warnings = []
             outline = []
             tableRows = []
@@ -644,6 +656,14 @@ final class CanvasDocument: ObservableObject {
 
     /// Refresh outline/table/targets after a committed mutation —
     /// same fetches as load, but the handle (and stacks) survive.
+    /// The funnel's success note: the apply's post-write hash becomes
+    /// this document's basis (W6-1 §E TE-0 — the same value core keeps
+    /// as the handle's CAS basis, tracked so drafts and history can
+    /// bind to the exact revision).
+    func noteApplySucceeded(newContentHash: String) {
+        contentHash = newContentHash
+    }
+
     func reloadAfterMutation(session: VaultSession) {
         guard let handle else { return }
         outline = (try? session.canvasOutline(handle: handle)) ?? outline

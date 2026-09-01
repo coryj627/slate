@@ -25,6 +25,7 @@ string? fixtures = null;
 string? outDir = null;
 string? scenarios = null;
 string? canvasFixtures = null;
+string? canvasScenarios = null;
 bool mutations = args.Contains("--mutations");
 for (int i = 0; i < args.Length - 1; i++)
 {
@@ -44,6 +45,38 @@ for (int i = 0; i < args.Length - 1; i++)
     {
         canvasFixtures = args[i + 1];
     }
+    if (args[i] == "--canvas-scenarios")
+    {
+        canvasScenarios = args[i + 1];
+    }
+}
+
+// W6-1 §E TE-11d (E18): the canvas scenario mode — scripts are data
+// (shared verbatim with the Swift twin); one artifact per scenario;
+// the driver enforces E18's round-trip rules itself.
+//
+//   dotnet run --project apps/slate-windows/tools/ParityHarness -- //     --canvas-scenarios crates/slate-core/tests/fixtures/canvas_scenario_golden/scenarios.json //     --out crates/slate-core/tests/fixtures/canvas_scenario_golden
+if (canvasScenarios != null)
+{
+    if (outDir == null)
+    {
+        Console.Error.WriteLine(
+            "usage: ParityHarness --canvas-scenarios <scenarios.json> --out <dir>");
+        return 2;
+    }
+
+    Directory.CreateDirectory(outDir);
+    var canvasProduced = CanvasScenarioDriver.RunAll(canvasScenarios);
+    foreach ((string name, string artifact) in canvasProduced)
+    {
+        File.WriteAllBytes(
+            Path.Combine(outDir, name + ".json"),
+            System.Text.Encoding.UTF8.GetBytes(artifact));
+    }
+
+    Console.WriteLine(
+        $"canvas-scenario-harness: {canvasProduced.Count} artifacts -> {outDir}");
+    return 0;
 }
 
 // W5-4 (#744) H1: the mutation mode — scenario scripts are data

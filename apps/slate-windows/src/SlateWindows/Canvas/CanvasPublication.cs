@@ -249,7 +249,8 @@ internal sealed class CanvasPublication
         string needleIntent,
         CanvasLoadSchedule loads,
         CanvasFilterSchedule filters,
-        CanvasLoaded? loaded)
+        CanvasLoaded? loaded,
+        CanvasOperationId? committedUnpresented)
     {
         Retired = retired;
         LoadState = loadState;
@@ -261,6 +262,7 @@ internal sealed class CanvasPublication
         Loads = loads;
         Filters = filters;
         Loaded = loaded;
+        CommittedUnpresented = committedUnpresented;
     }
 
     /// <summary>The first publication for a document: nothing loaded,
@@ -275,7 +277,8 @@ internal sealed class CanvasPublication
         needleIntent: string.Empty,
         loads: CanvasLoadSchedule.Idle,
         filters: CanvasFilterSchedule.Idle,
-        loaded: null);
+        loaded: null,
+        committedUnpresented: null);
 
     /// <summary>DOCUMENT class, and the coarsest currency: every model
     /// boundary validates this first.</summary>
@@ -310,6 +313,15 @@ internal sealed class CanvasPublication
     /// Naming a lease here is what makes it live - the lease itself
     /// carries no liveness flag and cannot answer the question.</summary>
     internal CanvasLoaded? Loaded { get; }
+
+    /// <summary>W6-1 §E TE-2 (IE-10): the operation whose COMMIT is on
+    /// disk while its refresh never presented — a real document state,
+    /// not an error in flight. While non-null, admission refuses every
+    /// write except the refresh-only recovery that clears it: a second
+    /// write would prepare against invisible core state, and an undo
+    /// would reverse a change the user never saw. The funnel (TE-5)
+    /// enforces; this value only makes the state spellable.</summary>
+    internal CanvasOperationId? CommittedUnpresented { get; }
 
     /// <summary>LEASE class, read through <see cref="Loaded"/>.</summary>
     internal CanvasHandleLease? Lease => Loaded?.Lease;
@@ -412,6 +424,18 @@ internal sealed class CanvasPublication
         return Copy(loaded: Loaded.WithUnit(unit), loadedSet: true);
     }
 
+    /// <summary>A commit landed but its refresh failed (IE-10): the
+    /// state that blocks further writes until recovery.</summary>
+    internal CanvasPublication WithCommittedUnpresented(CanvasOperationId operation)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        return Copy(committedUnpresented: operation, committedUnpresentedSet: true);
+    }
+
+    /// <summary>The refresh-only recovery presented the commit.</summary>
+    internal CanvasPublication WithPresented() =>
+        Copy(committedUnpresented: null, committedUnpresentedSet: true);
+
     /// <summary>The terminal publication: every model currency cleared
     /// at once. Physical close follows, under the lease's own lock,
     /// after the last in-flight call returns - it is not part of
@@ -442,7 +466,9 @@ internal sealed class CanvasPublication
         CanvasLoadSchedule? loads = null,
         CanvasFilterSchedule? filters = null,
         CanvasLoaded? loaded = null,
-        bool loadedSet = false) => new(
+        bool loadedSet = false,
+        CanvasOperationId? committedUnpresented = null,
+        bool committedUnpresentedSet = false) => new(
             retired ?? Retired,
             loadState ?? LoadState,
             loadMessageSet ? loadMessage : LoadMessage,
@@ -452,5 +478,6 @@ internal sealed class CanvasPublication
             needleIntent ?? NeedleIntent,
             loads ?? Loads,
             filters ?? Filters,
-            loadedSet ? loaded : Loaded);
+            loadedSet ? loaded : Loaded,
+            committedUnpresentedSet ? committedUnpresented : CommittedUnpresented);
 }

@@ -604,3 +604,44 @@ fn group_with_no_members_is_appended() {
     assert_eq!(canvas.nodes.len(), before + 1);
     assert_invertible(SAMPLE, &act);
 }
+
+// ---------------------------------------------------------------------------
+// Detached apply (W6-1 §E TE-0, IE-17)
+
+#[test]
+fn apply_detached_transforms_text_without_a_session() {
+    let text = "{\n\t\"nodes\":[\n\t\t{\"id\":\"a\",\"type\":\"text\",\"text\":\"Alpha\",\"x\":0,\"y\":0,\"width\":10,\"height\":10}\n\t],\n\t\"edges\":[]\n}\n";
+    let action = CanvasAction {
+        name: "create card".into(),
+        ops: vec![CanvasOp::CreateNode {
+            id: "b".into(),
+            content: CanvasNodeContent::Text {
+                text: "Beta".into(),
+            },
+            x: 0.0,
+            y: 100.0,
+            width: 10.0,
+            height: 10.0,
+            color: None,
+        }],
+    };
+    let out = apply_detached(text, &action).unwrap();
+    assert!(out.contains("Beta"));
+    assert!(out.contains("Alpha"));
+    // Pure: the input text is untouched, and re-running answers the
+    // same bytes (no hidden state).
+    assert_eq!(apply_detached(text, &action).unwrap(), out);
+}
+
+#[test]
+fn apply_detached_refuses_a_degraded_parse() {
+    let err = apply_detached(
+        "not json at all",
+        &CanvasAction {
+            name: "noop".into(),
+            ops: vec![],
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(err, ApplyError::NotACanvas(_)));
+}
