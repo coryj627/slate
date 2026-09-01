@@ -179,7 +179,14 @@ public sealed class ContractsCitationCensus
                 // the section's citations fails while prose churn
                 // does not; each implementation task raises it above
                 // what the section carried before that task.
-                9),
+                //
+                // TE-0 bound the core surface — the basis, the seed,
+                // the receipt, the canonical text, the proximity
+                // order, the media export and the detached apply —
+                // taking the section to 18; 16 sits above the
+                // pre-task population of 14, the §C-unit rule's
+                // first application in §E.
+                16),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

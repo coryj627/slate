@@ -149,18 +149,19 @@ pub use text_buffer::TextBuffer;
 
 pub use session::{
     BaseFileSummary, BaseViewStatus, BaseViewSummary, BasesColumn, BasesGroup, BasesResultSet,
-    BasesRow, BasesSummaryCell, BasesValue, CancelToken, CanvasApplyResult, CanvasLoadWarning,
-    CanvasLoadWarningKind, CanvasNeighbor, CanvasOpenInfo, CanvasOutlineRow, CanvasPlacement,
-    CanvasRectArg, CanvasSceneEdge, CanvasSceneNode, CanvasSetPlacement, CanvasTableRow,
-    CanvasTraceHop, CanvasWhereAmI, ChangesSinceOpen, ColumnRole, CreateExclusiveOutcome,
-    CslStyleInfo, Dashboard, DashboardSection, DashboardSectionStatus, DashboardSummary,
-    DeletedFileEntry, DirListing, DirListingPage, DirNodeSummary, EventErrorCode, ExportFormat,
-    FileChangeEvent, FileChangeKind, FileFilter, FileMetadata, FileSummary, IndexPhase,
-    NoteLinkPanels, NoteLoadBundle, NotePartsBundle, NoteTasksPage, OpAnnotationSummary,
-    OutlinePage, Page, Paging, RemnantLog, RenameAffected, RenameFailed, RenameFailureKind,
-    RenameReport, RenameSkipReason, RenameSkipped, SaveReport, SavedQuery, SavedQuerySourceSyntax,
-    SavedQuerySummary, ScanProgress, ScanProgressListener, ScanReport, SessionConfig,
-    TaskIndexRepairOutcome, VaultEventListener, VaultRootIdentity, VaultSession, VersionSummary,
+    BasesRow, BasesSummaryCell, BasesValue, CancelToken, CanvasApplyResult, CanvasEditorSeed,
+    CanvasLoadWarning, CanvasLoadWarningKind, CanvasNeighbor, CanvasOpenInfo, CanvasOutlineRow,
+    CanvasPlacement, CanvasRectArg, CanvasSceneEdge, CanvasSceneNode, CanvasSetPlacement,
+    CanvasTableRow, CanvasTraceHop, CanvasWhereAmI, ChangesSinceOpen, ColumnRole,
+    CreateExclusiveOutcome, CslStyleInfo, Dashboard, DashboardSection, DashboardSectionStatus,
+    DashboardSummary, DeletedFileEntry, DirListing, DirListingPage, DirNodeSummary, EventErrorCode,
+    ExportFormat, FileChangeEvent, FileChangeKind, FileFilter, FileMetadata, FileSummary,
+    IndexPhase, NoteLinkPanels, NoteLoadBundle, NotePartsBundle, NoteTasksPage,
+    OpAnnotationSummary, OutlinePage, Page, Paging, RemnantLog, RenameAffected, RenameFailed,
+    RenameFailureKind, RenameReport, RenameSkipReason, RenameSkipped, SaveReport, SavedQuery,
+    SavedQuerySourceSyntax, SavedQuerySummary, ScanProgress, ScanProgressListener, ScanReport,
+    SessionConfig, TaskIndexRepairOutcome, VaultEventListener, VaultRootIdentity, VaultSession,
+    VersionSummary,
 };
 pub use session::{SkippedFile, TagCount, TagEditReport};
 pub use sidebar_filter::{
@@ -239,6 +240,19 @@ pub enum VaultError {
         current_content_hash: String,
         expected_content_hash: String,
         current_mtime_ms: i64,
+    },
+
+    /// The bytes LANDED on disk but a post-write step (stat, index
+    /// row, intent clear, index commit) failed before the index
+    /// committed (W6-1 §E TE-0, IE-6). The write is DURABLE — the
+    /// durable write-intent marker repairs the index later — so a
+    /// caller must treat this as a commit: retrying the write would
+    /// apply the action twice, and recording nothing would lose a
+    /// real change. `new_content_hash` is the landed bytes' hash.
+    #[error("saved but not indexed: {detail} (new hash {new_content_hash:?})")]
+    SavedButUnindexed {
+        new_content_hash: String,
+        detail: String,
     },
 
     /// A version operation refused to serve bytes whose hash doesn't

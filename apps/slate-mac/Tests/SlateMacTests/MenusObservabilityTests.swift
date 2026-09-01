@@ -100,7 +100,7 @@ final class MenusObservabilityTests: XCTestCase {
         XCTAssertTrue(state.undoTargetsCanvas, "canvas surface owns ⌘Z by default")
 
         state.canvasCardEditor = CanvasCardEditorRequest(
-            nodeId: "a", title: "Alpha", initialText: "Alpha")
+            nodeId: "a", title: "Alpha", initialText: "Alpha", basis: "")
         XCTAssertFalse(state.undoTargetsCanvas, "card-editor sheet owns undo")
         state.canvasCardEditor = nil
 

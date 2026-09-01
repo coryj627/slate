@@ -110,6 +110,15 @@ pub enum VaultError {
         current_mtime_ms: i64,
     },
 
+    /// The bytes LANDED but a post-write step failed before the index
+    /// committed (W6-1 §E TE-0): the write is durable and must be
+    /// treated as a commit — never retried.
+    #[error("saved but not indexed: {detail} (new hash {new_content_hash:?})")]
+    SavedButUnindexed {
+        new_content_hash: String,
+        detail: String,
+    },
+
     /// A version operation refused to serve bytes whose hash doesn't
     /// match the requested version (O-3 #541) — history is corrupt or
     /// inconsistent and the operation failed closed.
@@ -172,6 +181,13 @@ impl From<core::VaultError> for VaultError {
                 current_content_hash,
                 expected_content_hash,
                 current_mtime_ms,
+            },
+            core::VaultError::SavedButUnindexed {
+                new_content_hash,
+                detail,
+            } => VaultError::SavedButUnindexed {
+                new_content_hash,
+                detail,
             },
             core::VaultError::HistoryUnavailable { path, reason } => {
                 VaultError::HistoryUnavailable { path, reason }
@@ -363,6 +379,10 @@ pub fn census_synthesize_vault_error(arm: String) -> Result<(), VaultError> {
             current_content_hash: "census-current".into(),
             expected_content_hash: "census-expected".into(),
             current_mtime_ms: 42,
+        },
+        "SavedButUnindexed" => VaultError::SavedButUnindexed {
+            new_content_hash: "census-new".into(),
+            detail: "census detail".into(),
         },
         "HistoryUnavailable" => VaultError::HistoryUnavailable {
             path: "census/history.md".into(),
@@ -9684,6 +9704,8 @@ pub struct CanvasOpenInfo {
     pub edge_count: u32,
     pub degraded: bool,
     pub warnings: Vec<CanvasLoadWarning>,
+    /// The opened bytes' hash — the handle's CAS basis (W6-1 §E TE-0).
+    pub content_hash: String,
 }
 
 impl From<core::CanvasOpenInfo> for CanvasOpenInfo {
@@ -9694,6 +9716,7 @@ impl From<core::CanvasOpenInfo> for CanvasOpenInfo {
             edge_count: i.edge_count,
             degraded: i.degraded,
             warnings: i.warnings.into_iter().map(Into::into).collect(),
+            content_hash: i.content_hash,
         }
     }
 }
@@ -10244,12 +10267,34 @@ impl From<core::canvas::apply::CanvasAction> for CanvasAction {
     }
 }
 
+/// A text card's content paired with the basis it was read at, taken
+/// under one core lock (W6-1 §E TE-0) — the editor's seed token: two
+/// separate reads could pair old text with a new hash.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct CanvasEditorSeed {
+    pub text: String,
+    pub content_hash: String,
+}
+
+impl From<core::CanvasEditorSeed> for CanvasEditorSeed {
+    fn from(s: core::CanvasEditorSeed) -> Self {
+        CanvasEditorSeed {
+            text: s.text,
+            content_hash: s.content_hash,
+        }
+    }
+}
+
 /// Result of `canvas_apply`: post-write hash + the inverse action for
 /// the session-scoped undo stack (#372).
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct CanvasApplyResult {
     pub new_content_hash: String,
     pub inverse: CanvasAction,
+    /// False when the bytes landed but the index commit failed (W6-1
+    /// §E TE-0): the write IS committed and the inverse valid; derived
+    /// reads may lag until the intent-marker repair runs.
+    pub indexed: bool,
 }
 
 impl From<core::CanvasApplyResult> for CanvasApplyResult {
@@ -10257,6 +10302,7 @@ impl From<core::CanvasApplyResult> for CanvasApplyResult {
         CanvasApplyResult {
             new_content_hash: r.new_content_hash,
             inverse: r.inverse.into(),
+            indexed: r.indexed,
         }
     }
 }
@@ -10417,6 +10463,56 @@ impl From<core::canvas::placement::Constants> for CanvasConstants {
             min_card_size: c.min_card_size,
         }
     }
+}
+
+/// Core's media classification (W6-1 §E TE-0 — the CD-38 staged
+/// export): the class whose answer becomes kind labels and title
+/// prefixes, now crossing the FFI so no host transliterates the set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasMediaClass {
+    Image,
+    Audio,
+    Video,
+}
+
+impl From<core::canvas::model::MediaClass> for CanvasMediaClass {
+    fn from(m: core::canvas::model::MediaClass) -> Self {
+        use core::canvas::model::MediaClass as M;
+        match m {
+            M::Image => CanvasMediaClass::Image,
+            M::Audio => CanvasMediaClass::Audio,
+            M::Video => CanvasMediaClass::Video,
+        }
+    }
+}
+
+/// Media class from the basename's REAL extension — `None` for
+/// non-media, a file with no dot in its basename, and a dotfile like
+/// `.mov` (hidden, not a video). Handle-free: the gate asks about
+/// paths, not open canvases.
+#[uniffi::export]
+pub fn canvas_media_class(path: String) -> Option<CanvasMediaClass> {
+    core::canvas::model::media_class(&path).map(Into::into)
+}
+
+/// Apply an action to canvas TEXT with no session, handle or write —
+/// the detached algebra behind Save a Copy (W6-1 §E TE-0): parse
+/// (refusing an unusable canvas), apply, serialize. Handle-free.
+#[uniffi::export]
+pub fn canvas_apply_detached(text: String, action: CanvasAction) -> Result<String, VaultError> {
+    core::canvas::apply::apply_detached(&text, &action.into()).map_err(|e| {
+        VaultError::InvalidArgument {
+            message: format!("detached canvas apply rejected: {e}"),
+        }
+    })
+}
+
+/// The canonical empty `.canvas` document — what New Canvas writes on
+/// every host (W6-1 §E TE-0): core's serialization of the default
+/// canvas, exported so no host owns a serialization literal.
+#[uniffi::export]
+pub fn canvas_canonical_empty_text() -> String {
+    core::canvas::serialize::canonical_empty_canvas_text()
 }
 
 /// The canvas grid/sizing constants. Handle-free by ruling R-0b-2
@@ -10585,6 +10681,30 @@ impl VaultSession {
         node_id: String,
     ) -> Result<Option<String>, VaultError> {
         Ok(self.inner.canvas_node_text(handle, &node_id)?)
+    }
+
+    /// Proximity order for the card picker (§E TE-0): nodes by
+    /// distance from the anchor's centre, reading-order ties, groups
+    /// included; no anchor answers reading order.
+    pub fn canvas_proximity_order(
+        &self,
+        handle: u64,
+        anchor: Option<String>,
+        exclude: Vec<String>,
+    ) -> Result<Vec<String>, VaultError> {
+        Ok(self.inner.canvas_proximity_order(handle, anchor, exclude)?)
+    }
+
+    /// One locked read of text + basis — the editor's seed (§E TE-0).
+    pub fn canvas_editor_seed(
+        &self,
+        handle: u64,
+        node_id: String,
+    ) -> Result<Option<CanvasEditorSeed>, VaultError> {
+        Ok(self
+            .inner
+            .canvas_editor_seed(handle, &node_id)?
+            .map(Into::into))
     }
 
     /// Node ids overlapping `rect` (cards only) — #521 overlap warnings.

@@ -159,6 +159,27 @@ pub enum CanvasOp {
     },
 }
 
+/// Apply an action to canvas TEXT with no session, handle or write —
+/// the detached algebra (W6-1 §E TE-0, IE-17: Save a Copy applies the
+/// retained action to a snapshot the conflict record kept). Parse
+/// (refusing a degraded parse: a copy grown from an unusable document
+/// would silently drop what the parse dropped), apply, serialize.
+pub fn apply_detached(text: &str, action: &CanvasAction) -> Result<String, ApplyError> {
+    let (mut canvas, warnings) = crate::canvas::parse(text);
+    if crate::canvas::is_load_degraded(&warnings) {
+        let reason = warnings
+            .iter()
+            .find_map(|w| match w {
+                crate::canvas::CanvasWarning::ParseFailed { reason } => Some(reason.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| "unusable canvas".to_string());
+        return Err(ApplyError::NotACanvas(reason));
+    }
+    apply(&mut canvas, action)?;
+    Ok(crate::canvas::serialize::serialize(&canvas))
+}
+
 /// Why an action was rejected (whole-action, no partial application).
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum ApplyError {
@@ -176,6 +197,8 @@ pub enum ApplyError {
     MissingEndpoint(String),
     #[error("restore payload is not valid: {0}")]
     BadRestorePayload(String),
+    #[error("the text is not a usable canvas: {0}")]
+    NotACanvas(String),
 }
 
 /// Apply `action` to `canvas` in place. On success returns the inverse

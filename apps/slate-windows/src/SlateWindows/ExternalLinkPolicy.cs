@@ -70,67 +70,29 @@ internal static class ExternalLinkPolicy
 /// upstream note.
 /// </para>
 /// <para>
-/// <b>The set is core's, copied because it is not exported.</b> Core
-/// owns this classification in <c>canvas::model::media_class</c>
-/// (<c>crates/slate-core/src/canvas/model.rs:661</c>) — the same
-/// function whose answer becomes the <c>image</c> kind label and the
-/// "Image:"/"Audio:"/"Video:" title prefixes — but it is a private
-/// Rust fn with no <c>#[uniffi::export]</c>, so no host can ask for it.
-/// This is a transliteration, including both of its edge rules
-/// (basename only; a dotfile like <c>.mov</c> is a hidden file, not
-/// media). <b>Drift note for PR E:</b> PR E is the first PR that needs
-/// core's classification for its own reasons (the spec's Add Media
-/// note — "media kinds by extension set — core's <c>media_class</c>
-/// decides the label"), so PR E should export it and delete this copy.
-/// Until then this is the one place the set lives host-side.
+/// <b>The set is core's, and since §E TE-0 it is ASKED FOR, not
+/// copied.</b> Core owns the classification in
+/// <c>canvas::model::media_class</c> — the same function whose answer
+/// becomes the <c>image</c> kind label and the "Image:"/"Audio:"/
+/// "Video:" title prefixes — and the CD-38 drift note's staged export
+/// landed with §E's first task: the transliterated set, its two edge
+/// rules and the kind-label detour pin all retired with it. The gate
+/// below is one FFI call; the behavior table in
+/// <c>CanvasDocumentTests</c> pins the set through the export.
 /// </para>
 /// </remarks>
 internal static class CanvasMediaPolicy
 {
-    /// <summary>Core's <c>MediaClass::Image</c> extensions.</summary>
-    private static readonly HashSet<string> ImageExtensions = new(StringComparer.Ordinal)
-    {
-        "png", "jpg", "jpeg", "gif", "svg", "webp", "bmp", "heic", "avif", "tiff",
-    };
-
-    /// <summary>Core's <c>MediaClass::Audio</c> extensions.</summary>
-    private static readonly HashSet<string> AudioExtensions = new(StringComparer.Ordinal)
-    {
-        "mp3", "wav", "m4a", "flac", "ogg", "aac",
-    };
-
-    /// <summary>Core's <c>MediaClass::Video</c> extensions.</summary>
-    private static readonly HashSet<string> VideoExtensions = new(StringComparer.Ordinal)
-    {
-        "mp4", "mov", "mkv", "webm", "m4v",
-    };
-
     /// <summary>
     /// Whether this vault-relative target is media the canvas may hand
-    /// to the shell. Core's <c>media_class(path).is_some()</c>.
+    /// to the shell — CORE'S answer over the FFI (§E TE-0: the CD-38
+    /// staged export landed and the transliterated set retired with
+    /// it; the empty-target guard is the one host-side arm, because
+    /// the question "is nothing media" never needs a canvas).
     /// </summary>
-    internal static bool IsOpenableMedia(string? target)
-    {
-        if (target is not { Length: > 0 })
-        {
-            return false;
-        }
-        // Core: the basename's REAL extension — a file with no `.` in
-        // its basename (even one literally named `mov`) is not media.
-        int slash = target.LastIndexOfAny(['/', '\\']);
-        string basename = slash >= 0 ? target[(slash + 1)..] : target;
-        int dot = basename.LastIndexOf('.');
-        if (dot <= 0)
-        {
-            // No dot at all, or an empty stem — core's dotfile rule:
-            // `.mov` is a hidden file, not a video.
-            return false;
-        }
-        string extension = AsciiLowered(basename[(dot + 1)..]);
-        return ImageExtensions.Contains(extension)
-            || AudioExtensions.Contains(extension)
-            || VideoExtensions.Contains(extension);
-    }
+    internal static bool IsOpenableMedia(string? target) =>
+        target is { Length: > 0 }
+        && uniffi.slate_uniffi.SlateUniffiMethods.CanvasMediaClass(target) is not null;
 
     /// <summary>
     /// Open a media file card in its default app, or refuse — the whole
@@ -611,33 +573,5 @@ internal static class CanvasMediaPolicy
     {
         using SafeFileHandle handle = OpenForQuery(path);
         return handle.IsInvalid ? null : FinalPath(handle, NativeIo.VolumeNameGuid);
-    }
-
-    /// <summary>
-    /// Core's <c>to_ascii_lowercase</c>, not .NET's
-    /// <c>ToLowerInvariant</c>.
-    /// </summary>
-    /// <remarks>
-    /// The two differ outside ASCII — <c>ToLowerInvariant</c> lowers the
-    /// Kelvin sign to <c>k</c> and İ to <c>i̇</c>, Rust's leaves both
-    /// alone — and this set is compared against ASCII literals, so the
-    /// difference can only ever ADMIT something core would classify as
-    /// not-media. That is the wrong direction for a gate that decides
-    /// what reaches <c>ShellExecute</c>, so it matches core exactly
-    /// rather than approximately.
-    /// </remarks>
-    private static string AsciiLowered(string value)
-    {
-        Span<char> lowered = value.Length <= 32
-            ? stackalloc char[value.Length]
-            : new char[value.Length];
-        for (int index = 0; index < value.Length; index++)
-        {
-            char character = value[index];
-            lowered[index] = character is >= 'A' and <= 'Z'
-                ? (char)(character + 32)
-                : character;
-        }
-        return new string(lowered);
     }
 }

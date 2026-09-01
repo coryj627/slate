@@ -442,4 +442,19 @@ public sealed class CanvasPopulationTests
             + "unrealized peer cell (§D D3) reads THIS, and a presentation "
             + "build reuses it by reference (ID-3).");
     }
+
+    /// <summary>TE-0 (§E, IE-3): one load, one basis. The population
+    /// carries the CAS basis the pipeline read from
+    /// <c>CanvasOpenInfo.contentHash</c>, and a seed that never touched
+    /// a file carries the empty basis rather than an invented one.</summary>
+    [Fact]
+    public void ThePopulationCarriesItsLoadBasis()
+    {
+        var seeded = new CanvasPopulation(null, null, null, null);
+        Assert.Equal(string.Empty, seeded.ContentHash);
+
+        var loaded = new CanvasPopulation(
+            null, null, null, null, scene: null, contentHash: "abc123");
+        Assert.Equal("abc123", loaded.ContentHash);
+    }
 }

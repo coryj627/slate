@@ -97,9 +97,11 @@ extension AppState {
                 .canvasCreated(
                     kindLabel: "text", title: "Untitled",
                     relative: placement.relative))
-            // G22: a new text card lands in edit mode.
+            // G22: a new text card lands in edit mode. Its basis is
+            // the apply's successor revision the funnel just noted.
             canvasCardEditor = CanvasCardEditorRequest(
-                nodeId: id, title: "Untitled", initialText: "")
+                nodeId: id, title: "Untitled", initialText: "",
+                basis: doc.contentHash ?? "")
         } catch {
             canvasAnnouncer.announce(
                 .canvasActionFailed(
@@ -203,7 +205,10 @@ extension AppState {
                             CanvasNewFileNativeExecutionEvent(
                                 phase: .create,
                                 ranOnMainThread: CanvasNewFileThreadProbe.isMainThread()))
-                        _ = try session.createExclusive(path: name, content: "{}\n")
+                        // The canonical empty document is core's, not
+                        // a Swift literal (W6-1 §E TE-0, IE-22).
+                        _ = try session.createExclusive(
+                            path: name, content: canvasCanonicalEmptyText())
                         return .success(())
                     } catch let error as VaultError {
                         return .failure(error)

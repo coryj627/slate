@@ -903,3 +903,158 @@ fn place_inside_group_refuses_a_node_that_is_not_a_group() {
         crate::canvas::placement::InsideGroupPlacement::Placed { .. }
     ));
 }
+
+#[test]
+fn open_canvas_exposes_the_cas_basis() {
+    use crate::canvas::apply::{CanvasAction, CanvasNodeContent, CanvasOp};
+
+    let (_tmp, session) = canvas_vault();
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let info = session.open_canvas("board.canvas").unwrap();
+
+    // The exposed basis IS the opened bytes' hash (W6-1 §E TE-0/IE-3):
+    // a host binds history entries, drafts and conflict records to it.
+    assert_eq!(
+        info.content_hash,
+        crate::vault::content_hash(SAMPLE.as_bytes())
+    );
+
+    // An apply's successor basis is exactly the next open's basis —
+    // the two expressions of "the current revision" cannot drift.
+    let result = session
+        .canvas_apply(
+            info.handle,
+            CanvasAction {
+                name: "create card".into(),
+                ops: vec![CanvasOp::CreateNode {
+                    id: "basis-1".into(),
+                    content: CanvasNodeContent::Text {
+                        text: "Basis probe".into(),
+                    },
+                    x: 0.0,
+                    y: 900.0,
+                    width: 260.0,
+                    height: 140.0,
+                    color: None,
+                }],
+            },
+        )
+        .unwrap();
+    let reopened = session.open_canvas("board.canvas").unwrap();
+    assert_eq!(reopened.content_hash, result.new_content_hash);
+}
+
+#[test]
+fn canvas_editor_seed_pairs_text_with_its_basis() {
+    use crate::canvas::apply::{CanvasAction, CanvasNodeContent, CanvasOp};
+
+    let (_tmp, session) = canvas_vault();
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let info = session.open_canvas("board.canvas").unwrap();
+
+    // The seed is the node's text AND the open basis, one lock apart
+    // from nothing (IE-4's pairing).
+    let seed = session
+        .canvas_editor_seed(info.handle, "card-loose")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        seed.text,
+        session
+            .canvas_node_text(info.handle, "card-loose")
+            .unwrap()
+            .unwrap()
+    );
+    assert_eq!(seed.content_hash, info.content_hash);
+
+    // After an apply, a fresh seed carries the SUCCESSOR basis and the
+    // successor text together.
+    let result = session
+        .canvas_apply(
+            info.handle,
+            CanvasAction {
+                name: "edit card".into(),
+                ops: vec![CanvasOp::SetNodeContent {
+                    id: "card-loose".into(),
+                    content: CanvasNodeContent::Text {
+                        text: "Reseeded".into(),
+                    },
+                }],
+            },
+        )
+        .unwrap();
+    let reseeded = session
+        .canvas_editor_seed(info.handle, "card-loose")
+        .unwrap()
+        .unwrap();
+    assert_eq!(reseeded.text, "Reseeded");
+    assert_eq!(reseeded.content_hash, result.new_content_hash);
+
+    // A group is not a text card: None, not an invented seed.
+    assert!(
+        session
+            .canvas_editor_seed(info.handle, "grp-research")
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn canvas_apply_reports_a_landed_write_whose_index_failed() {
+    use crate::canvas::apply::{CanvasAction, CanvasNodeContent, CanvasOp};
+
+    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("faulted-c6.canvas", SAMPLE.as_bytes())
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let info = session.open_canvas("faulted-c6.canvas").unwrap();
+
+    let action = |text: &str| CanvasAction {
+        name: "create card".into(),
+        ops: vec![CanvasOp::CreateNode {
+            id: format!("f-{}", text.len()),
+            content: CanvasNodeContent::Text { text: text.into() },
+            x: 0.0,
+            y: 900.0,
+            width: 260.0,
+            height: 140.0,
+            color: None,
+        }],
+    };
+
+    // The index step fails AFTER the bytes land: the apply reports a
+    // COMMIT with `indexed: false` (IE-6) — never an error inviting a
+    // double apply.
+    unsafe { std::env::set_var("SLATE_TEST_FAULT_AFTER_WRITE", "faulted-c6") };
+    let unindexed = session.canvas_apply(info.handle, action("First"));
+    unsafe { std::env::remove_var("SLATE_TEST_FAULT_AFTER_WRITE") };
+    let unindexed = unindexed.unwrap();
+    assert!(!unindexed.indexed, "the index commit was made to fail");
+
+    // The bytes are real, and the reported hash IS the disk's.
+    let disk = session.read_text("faulted-c6.canvas").unwrap();
+    assert!(disk.contains("First"));
+    assert_eq!(
+        unindexed.new_content_hash,
+        crate::vault::content_hash(disk.as_bytes())
+    );
+
+    // The handle advanced with the commit: the editor seed carries
+    // the landed basis, and a SECOND apply proceeds without a false
+    // conflict — the exact double-apply hazard IE-6 names.
+    let seed = session
+        .canvas_editor_seed(info.handle, "card-loose")
+        .unwrap()
+        .unwrap();
+    assert_eq!(seed.content_hash, unindexed.new_content_hash);
+    let repaired = session.canvas_apply(info.handle, action("Second")).unwrap();
+    assert!(repaired.indexed);
+    assert!(
+        session
+            .read_text("faulted-c6.canvas")
+            .unwrap()
+            .contains("Second")
+    );
+}

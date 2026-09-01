@@ -73,7 +73,8 @@ internal sealed class CanvasFakeLoadSource : ICanvasLoadSource
         ulong handle = Interlocked.Increment(ref _next);
         _ = Interlocked.Increment(ref _opens);
         Record($"open:{handle}");
-        return new CanvasOpenInfo(handle, (uint)Rows.Length, 0, Degraded, []);
+        return new CanvasOpenInfo(
+            handle, (uint)Rows.Length, 0, Degraded, [], $"fake-basis-{handle}");
     }
 
     public void Close(ulong handle)

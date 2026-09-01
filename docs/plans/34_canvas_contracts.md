@@ -7619,6 +7619,91 @@ so the FFI-gap obligations add the core surface they name; run the
 task loop. The §C-unit ruling, applied one round earlier because
 rule 5 fired.
 
+### Implementation record
+
+**TE-0 — the core surface the model closes over.** Seven slices, each
+Rust + FFI + consumer + facts; the ledger obligations it discharges
+are IE-3, IE-4, IE-6 and IE-22, plus the three ED-6 additions.
+
+1. **The basis at open (IE-3).** `CanvasOpenInfo` gained
+   `content_hash` — one hash computation feeds the handle's CAS basis
+   and the exposed field, so they cannot drift. Facts:
+   open_canvas_exposes_the_cas_basis (rust — the exposed basis is the
+   opened bytes' hash, and an apply's successor basis is exactly the
+   next open's); the mac FFI test asserts exposure and stability; the
+   Windows population carries it (`CanvasPopulation` gained
+   ContentHash, fed by the load pipeline from the open info —
+   `ThePopulationCarriesItsLoadBasis`). Mac's document tracks the basis
+   across load, retarget, degraded and failed arms, and the funnel
+   notes each apply's successor (noteApplySucceeded).
+2. **The locked editor seed (IE-4).** `canvas_editor_seed` returns
+   text and basis as one value taken under the registry lock —
+   canvas_editor_seed_pairs_text_with_its_basis pins the pairing, the
+   successor-basis reseed and the None-for-a-group arm. Mac's
+   canvasEditCard migrated off the bare text read, and its editor
+   request now carries the basis; the two create-and-edit verbs pass
+   the post-apply basis the funnel noted.
+3. **The commit receipt (IE-6).** From write success to index commit,
+   every save failure is now typed `SavedButUnindexed` carrying the
+   landed hash — the durable write-intent marker repairs the index;
+   the caller must treat the state as a COMMIT. `canvas_apply`
+   consumes the arm: it reports success with `indexed: false`, the
+   handle advances (model falls back to a DB-free derive when the
+   index cannot be read), and
+   canvas_apply_reports_a_landed_write_whose_index_failed drives the
+   fault seam end-to-end — the second apply proceeds on the landed
+   basis with no false conflict, which is the double-apply hazard the
+   obligation names. The seam's own error became the typed arm; its
+   existing tests assert is_err and were unaffected.
+4. **The canonical empty document (IE-22).** Core exports the
+   New-Canvas bytes (canonical_empty_canvas_text — exactly the
+   serialization of the default canvas, "{}\n"); mac's Swift literal
+   migrated to the export, and the FFI test pins the bytes.
+5. **The proximity order (ED-6/E10).** Core owns the one distance
+   algorithm: squared distance from the anchor's centre, ties by
+   READING order — which is geometry-derived, so the tie-pair fixture
+   differing only in document order answers identically — groups
+   included, reading order itself when no anchor resolves (mac's
+   shipped fallback). The Windows picker consumes it in TE-6; the mac
+   picker's migration is recorded as owed to keep this task's diff
+   reviewable, and the export's behavior is pinned in rust either way.
+6. **The media classification (ED-6/E12, CD-38's staged note).**
+   `media_class` and its class enum went public and crossed the FFI;
+   the Windows gate's transliterated set, its ASCII-lowering helper
+   and the kind-label detour pin
+   (TheImageThirdOfTheGateAgreesWithCoresOwnKindLabel) all retired.
+   The behavior table (`TheMediaGateIsCoresClassification`) now pins
+   the set THROUGH the export, audio and video thirds included — the
+   pin the detour could never give them. Mac's gate remains CD-38's
+   recorded divergence; the mac FFI test consumes the export's edge
+   rules.
+7. **The detached apply (ED-6/E6).** `canvas_apply_detached` — parse
+   refusing a degraded document, apply, serialize; no session, no
+   handle, no write. Facts pin the transform, purity and the refusal.
+   Its consumer is TE-3's Save a Copy; landed here because the
+   conflict machine's design closes over it.
+
+The windows suite (with the error-mapping census's pinned arm set
+grown to 18 for the new save arm), the rust canvas and query
+batteries and the format gates ran green. Five dir-tree censuses
+fail on THIS BOX only — harness-side os error 123 writing the
+deliberately hostile fixture names, unchanged since #1028; CI's
+rust lanes are the oracle and run them green (recorded in the
+session memory). The mac edits compile on CI's Swift lane (this box
+builds no Swift).
+Mutations: one per named fact class, injected into production and
+byte-restored — the table below names them.
+
+| Mutation | Injected | Named fact that failed |
+|---|---|---|
+| open hash decoupled | info.content_hash emptied | open_canvas_exposes_the_cas_basis |
+| seed pairing torn | seed basis emptied | canvas_editor_seed_pairs_text_with_its_basis |
+| proximity tie untied | tie key constant | proximity_order_sorts_by_distance_with_reading_order_ties |
+| canonical bytes bent | trailing newline dropped | canonical_empty_canvas_text_is_the_default_serialization |
+| dotfile rule dropped | hidden-file guard removed | media_class_answers_by_the_basenames_real_extension |
+| degraded refusal skipped | parse warnings ignored | apply_detached_refuses_a_degraded_parse |
+| receipt untyped | seam reverted to the generic error | canvas_apply_reports_a_landed_write_whose_index_failed |
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same
@@ -8589,35 +8674,37 @@ Obsidian — so a `{"type":"file","file":"setup.exe"}` node ran on one
 Enter. The default-app open is therefore gated to MEDIA by extension;
 everything else is refused, audibly, and never launched.
 
-**The gate's set is core's, copied because core does not export it.**
-`canvas::model::media_class` (`model.rs:661`) is the same private
-function whose answer becomes the `image` kind label and the
-`Image:`/`Audio:`/`Video:` title prefixes, and it carries no
-`#[uniffi::export]`. `CanvasMediaPolicy` transliterates it in ONE place,
+**The gate's set is core's — copied at first because core did not
+export it, ASKED FOR since §E TE-0.** `canvas::model::media_class`
+(`model.rs:661`) is the same function whose answer becomes the `image`
+kind label and the `Image:`/`Audio:`/`Video:` title prefixes; it was
+private, so `CanvasMediaPolicy` transliterated it in ONE place,
 including both of its edge rules (the BASENAME's real extension; a
-dotfile like `.mov` is a hidden file, not a video), and
-`TheMediaGateIsCoresClassification` pins the set and both edges.
+dotfile like `.mov` is a hidden file, not a video). The staged export
+landed with §E's first task: the transliterated set and its lowering
+helper retired, the gate became one FFI call, and
+`TheMediaGateIsCoresClassification` pins the set and both edges
+THROUGH the export — audio and video thirds included.
 The lowercasing is core's `to_ascii_lowercase`, hand-written rather than
 .NET's `ToLowerInvariant`: the two differ outside ASCII (the Kelvin sign
 lowers to `k`, `İ` to `i̇`) and every difference ADMITS something core
 calls not-media, which is the wrong direction for a gate deciding what
 reaches `ShellExecute`.
 
-**Half of it is pinned against core anyway, without waiting for the
-export.** Core does not export the classification, but it exports one of
-its ANSWERS: `kind_label` returns `"image"` exactly when `media_class`
-says Image (`model.rs:646`), and that reaches the host as
-`CanvasOutlineRow.kind`. `TheImageThirdOfTheGateAgreesWithCoresOwnKindLabel`
-opens a canvas of file cards over every image extension the host set
-claims plus six non-media ones, and asserts core's own row agrees in
-both directions. The audio and video thirds have no exported answer —
-`kind_label` calls them plain `"file"` — and stay unpinned until §E's
-export (E9) lands.
+**Half of it was pinned against core even before the export.** Core
+exported one of the classification's ANSWERS: `kind_label` returns
+`"image"` exactly when `media_class` says Image (`model.rs:646`),
+reaching the host as `CanvasOutlineRow.kind` — and the kind-label
+detour fact (TheImageThirdOfTheGateAgreesWithCoresOwnKindLabel, while
+it lived) asserted agreement in both directions for the image third.
+The audio and video thirds had no exported answer to check against.
 
-**Drift note:** PR E is the first PR that needs the classification for
-its own reasons (the spec's Add Media row — "media kinds by extension
-set — core's `media_class` decides the label"), so PR E exports it,
-deletes this copy, and retires the pin above with it.
+**Drift note (discharged in §E TE-0):** PR E was the first PR that
+needed the classification for its own reasons (the spec's Add Media
+row — "media kinds by extension set — core's `media_class` decides the
+label"), so §E's TE-0 exported it, deleted the copy, and retired the
+detour pin with it; every third is now pinned through the export
+itself.
 
 **Containment is by OS FILE IDENTITY, not path text (codex round 3 — the
 class ended, not patched).** Three consecutive codex rounds found

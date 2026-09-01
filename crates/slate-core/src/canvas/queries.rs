@@ -315,6 +315,59 @@ pub fn group_rect_around(model: &CanvasModel, members: &[NodeId]) -> Option<Rect
 /// corpus; `filter_folds_case_the_unicode_way_not_the_turkish_way`
 /// pins the cases where they do not. Trimming is Rust's, which unlike
 /// Swift's `.whitespaces` also removes newlines. (CD-22.)
+/// Proximity order for the card picker (W6-1 §E TE-0, IE-21): every
+/// node except the anchor and the excluded, by squared distance from
+/// the anchor's centre, ties by READING order (the picker's ratified
+/// pin — not document order), groups included (the picker lists them).
+/// No anchor — or an anchor the model does not place — answers the
+/// reading order itself, which is mac's shipped fallback. Non-finite
+/// distances rank last and still tie-break (the CD-19 discipline), so
+/// the order is total on hostile geometry.
+pub fn proximity_order(
+    model: &CanvasModel,
+    anchor: Option<&NodeId>,
+    exclude: &[NodeId],
+) -> Vec<NodeId> {
+    let excluded: std::collections::HashSet<&NodeId> = exclude.iter().collect();
+    let reading_pos: std::collections::HashMap<&NodeId, usize> = model
+        .reading_order
+        .iter()
+        .enumerate()
+        .map(|(i, id)| (id, i))
+        .collect();
+    let anchor_center = anchor.and_then(|a| {
+        model
+            .spatial
+            .nodes()
+            .find(|(id, _, _)| *id == a)
+            .map(|(_, r, _)| r.center())
+    });
+    let mut candidates: Vec<(&NodeId, f64, usize)> = model
+        .spatial
+        .nodes()
+        .filter(|(id, _, _)| Some(*id) != anchor && !excluded.contains(id))
+        .map(|(id, r, _)| {
+            let pos = reading_pos.get(id).copied().unwrap_or(usize::MAX);
+            let d = match anchor_center {
+                Some((ax, ay)) => {
+                    let (nx, ny) = r.center();
+                    let dx = nx - ax;
+                    let dy = ny - ay;
+                    let d = dx * dx + dy * dy;
+                    if d.is_finite() { d } else { f64::INFINITY }
+                }
+                None => pos as f64,
+            };
+            (id, d, pos)
+        })
+        .collect();
+    candidates.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.2.cmp(&b.2)));
+    candidates
+        .into_iter()
+        .map(|(id, _, _)| id.clone())
+        .collect()
+}
+
 pub fn filter(model: &CanvasModel, query: &str) -> Vec<NodeId> {
     let needle = query.trim();
     if needle.is_empty() {

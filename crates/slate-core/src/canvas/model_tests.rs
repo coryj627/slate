@@ -862,3 +862,24 @@ fn census_random_canvases() {
         assert_invariants(&canvas, &model);
     }
 }
+
+// ---------------------------------------------------------------------------
+// The media classification, exported (W6-1 §E TE-0 — CD-38's note)
+
+#[test]
+fn media_class_answers_by_the_basenames_real_extension() {
+    use super::{MediaClass, media_class};
+    assert_eq!(media_class("diagram.png"), Some(MediaClass::Image));
+    assert_eq!(media_class("deep/path/photo.JPEG"), Some(MediaClass::Image));
+    assert_eq!(media_class("song.flac"), Some(MediaClass::Audio));
+    assert_eq!(media_class("clip.MOV"), Some(MediaClass::Video));
+    // The two edge rules the Windows copy carried, now pinned at the
+    // one home: no dot in the basename is not media, and a dotfile is
+    // hidden, not a video.
+    assert_eq!(media_class("mov"), None);
+    assert_eq!(media_class("deep.dir/plainfile"), None);
+    assert_eq!(media_class(".mov"), None);
+    assert_eq!(media_class("deep/.png"), None);
+    assert_eq!(media_class("setup.exe"), None);
+    assert_eq!(media_class(""), None);
+}
