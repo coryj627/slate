@@ -186,7 +186,12 @@ public sealed class ContractsCitationCensus
                 // taking the section to 18; 16 sits above the
                 // pre-task population of 14, the §C-unit rule's
                 // first application in §E.
-                16),
+                //
+                // TE-1 bound the operation value, its identity, its
+                // currency and the gate, taking the section to 25;
+                // 19 sits above the pre-task population of 18 — a
+                // second time.
+                19),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

@@ -7704,6 +7704,48 @@ byte-restored — the table below names them.
 | degraded refusal skipped | parse warnings ignored | apply_detached_refuses_a_degraded_parse |
 | receipt untyped | seam reverted to the generic error | canvas_apply_reports_a_landed_write_whose_index_failed |
 
+**TE-1 — the operation value and the gate.** The spine's types, bound
+and pinned; discharges IE-1, IE-2 and IE-33, and types IE-7's one-way
+half and IE-8's owner/anchor split.
+
+- **The operation** (`CanvasMutationOperation`): identity is an opaque
+  reference (`CanvasOperationId`, the request-identity discipline —
+  equal inputs mint DISTINCT invocations, pinned); the initiating
+  surface is a required owner with a NULLABLE source anchor (IE-8 —
+  New Card on an empty canvas, menus and the palette have no row);
+  currency is the captured `CanvasLoaded` REFERENCE and the one
+  boundary question is reference equality against the live
+  publication (IE-2 — no stamp, no counter, no ABA window; the §C-unit
+  frozen rule, obeyed rather than reinvented); the typed effect enum
+  (`CanvasMutationEffect`) declares E4's table with mac's real delete
+  behavior as the arm name (ClearSelection — IE-26 recorded in the
+  type); the mode token types C7's retry rule (IE-7's one-way half —
+  the funnel's transient guard admits exactly the operation carrying
+  the live mode's token; PR F consumes).
+- **The gate** (`CanvasMutationGate`): one per-document cell, one
+  ATOMIC compare-and-swap acquisition (IE-33 — check-then-enter is
+  unspellable), refusal-not-queue (ED-5), the holder as the whole
+  state (identity and epoch in one reference), and a holder-only
+  release whose violation throws the model's unsurvivable tripwire
+  (`CanvasLeaseViolationException`, excluded from every survivable
+  catch by `CanvasFaults`).
+- **IE-5's ruling applied:** of the obligation's two remedy arms,
+  this design takes the SECOND — lifecycle transitions stay on the
+  slot's own CAS, and a displacement during an off-dispatcher apply
+  is answered by the operation's completion RECEIPT retaining the
+  committed hash and inverse for the history domain (TE-0's
+  `SavedButUnindexed` sibling, host-side); TE-2 records the entry,
+  TE-4 owns the surfaced state. The gate therefore never blocks a
+  reload; it makes the stale result harmless-but-retained.
+- **Consumed by:** TE-5 wires the verbs and both directions of the
+  mode exclusion at the one seam that owns both objects; TE-2/TE-4
+  consume the receipt and effects.
+
+Facts: the four in `CanvasMutationGateTests`. Mutations: the
+acquisition rewritten check-then-enter (the admit-exactly-one fact
+failed); currency reduced to liveness alone (the basis-reference fact
+failed); both restored byte-for-byte.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same
