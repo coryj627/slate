@@ -8207,6 +8207,46 @@ literal and the byte fact failed; the landed arm taught to advance
 the sequence and the no-duplicate fact failed; the announce dropped
 and the spoken-once fact failed.
 
+**TE-11a — E19's wiring and E14's first swap.** The deferred surface
+slice lands: `slate.canvas.newCard` is a registered Canvas-section
+row with the series' ONE new verb chord — mac's ⌥⌘N as Ctrl+Alt+N
+(mac's own #368 allocation keeps Ctrl+N for notes) — a File-menu
+sibling in the Canvas menu, a palette row by derivation, and a
+resolver over a workspace command gated only on a canvas being
+active, because the funnel's admission table owns every other
+refusal and speaks it (C9). The history domain went live as ED-1
+ruled it: Ctrl+Z and Ctrl+Y are chord-only `ChordScope.Canvas` rows
+(the structural pair's shape one scope over; mac routes ⌘Z through
+the responder chain, so neither host registers a command), delivered
+through the navigator's ladder into `CanvasUndo`/`CanvasRedo` — the
+OFFERED entry snapshotted, checked out under the gate, its inverse
+applied through the one funnel via `ApplyHistory` (the admission
+ladder extracted and shared, not duplicated), and the receipt
+crossing to the OPPOSITE stack so the redo pile survives, which is
+exactly what the verb path's clear-redo recording must never do
+here. A raced mutation displaces the snapshot and the entry returns
+byte-exactly where it was (IE-9); the blocked and empty-stack arms
+speak core's sentences. The redo divergence is recorded in the
+census's pinned set (⇧⌘Z predicts Ctrl+Shift+Z; Windows keeps
+Ctrl+Y, and ED-1 registers no alias). E14's first staged swap rode
+the chord it was waiting for: `EmptyOnboardingText` now renders
+`CanvasEmptyOnboarding` with the SPELLED-OUT chords a screen reader
+actually receives ("Control Alt N", "Control Shift P" — 0a-13), and
+CD-37's tie-breaker inverts exactly as its ruling promised; the
+guarding fact flipped from NOT-the-event to the event's own render.
+The test suite's manual undo plumbing retired for the real verb, so
+every per-verb undo fact now runs gate, checkout, apply and refresh
+end to end. Five facts (the verb round-trip with both spoken
+sentences; the empty-stack arms; the moved-disk block that retains
+the entry; the ladder delivery of all three chords; the flipped
+onboarding render). Three mutations, each byte-restored: the
+conflict arm's `RestoreCheckout` dropped and the retained-entry fact
+failed; the empty-stack sentence dropped and the status fact failed;
+the onboarding chord swapped for its glyph form and the render fact
+failed. chords.json reprojected by its own gate. Owed onward within
+TE-11: the activation-to-editor swap, the anchor acceptance rule,
+the E8a tables, the scenario goldens, the journeys.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same

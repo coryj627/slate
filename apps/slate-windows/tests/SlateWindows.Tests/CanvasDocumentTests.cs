@@ -485,19 +485,16 @@ public sealed class CanvasDocumentTests : IDisposable
 
         Assert.Equal(CanvasLoadState.Ready, document.State);
         Assert.Empty(document.Outline);
-        // 0a-13 LABEL class, core-rendered. NOT CanvasEmptyOnboarding:
-        // its template says "Press ⟨chord⟩ to create your first card"
-        // unconditionally, and PR A has no create command — so any chord
-        // in that slot tells a screen-reader user to press a key that
-        // creates nothing. The t2 rule the spec cites in the same
-        // sentence forbids exactly that; PR E swaps the event in with
-        // the real chord (CD-37).
+        // §E TE-11 (E14's first staged swap): CD-37's tie-breaker
+        // INVERTED - the New Card chord is real, so the onboarding
+        // event ships with it. 0a-13 LABEL class, core-rendered, with
+        // the SPELLED-OUT chords a screen reader actually receives.
         Assert.Equal(
             SlateUniffiMethods.A11yRender(new A11yEvent.Canvas(
-                new CanvasA11yEvent.CanvasStatus(
-                    new CanvasStatusNote.Empty()))).Text,
+                new CanvasA11yEvent.CanvasEmptyOnboarding(
+                    "Control Alt N", "Control Shift P"))).Text,
             document.EmptyOnboardingText);
-        Assert.DoesNotContain(
+        Assert.Contains(
             "create your first card",
             document.EmptyOnboardingText,
             StringComparison.Ordinal);

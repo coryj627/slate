@@ -181,6 +181,12 @@ internal sealed class CanvasNavigator
         AddChord(Key.Enter, ModifierKeys.None, CommitModeFromKey);
         AddChord(Key.Escape, ModifierKeys.None, EscapeFromKey);
         AddChord(Key.F, ModifierKeys.Control, FilterCardsFromKey);
+        // §E TE-11 (E19/ED-1): the verb chord and the history
+        // pair - canvas-scoped delivery, live exactly while a canvas
+        // surface holds the keys (rule R2).
+        AddChord(Key.N, ModifierKeys.Control | ModifierKeys.Alt, NewCardFromKey);
+        AddChord(Key.Z, ModifierKeys.Control, UndoFromKey);
+        AddChord(Key.Y, ModifierKeys.Control, RedoFromKey);
         // The viewport chords (§D D14). Zoom rides Ctrl and answers
         // from anywhere on the canvas tab; fit and zoom-to-selection
         // are bare Shift chords and therefore VISUAL SURFACE ONLY
@@ -195,6 +201,26 @@ internal sealed class CanvasNavigator
             Key.I,
             ModifierKeys.Control | ModifierKeys.Alt | ModifierKeys.Shift,
             WhereAmIFromKey);
+    }
+
+    /// <summary>§E TE-11: Ctrl+Alt+N - the funnel owns every
+    /// refusal, so the key only relays the verb.</summary>
+    private bool NewCardFromKey()
+    {
+        _document.CanvasNewCard();
+        return true;
+    }
+
+    private bool UndoFromKey()
+    {
+        _document.CanvasUndo();
+        return true;
+    }
+
+    private bool RedoFromKey()
+    {
+        _document.CanvasRedo();
+        return true;
     }
 
     private void AddChord(Key key, ModifierKeys modifiers, Func<bool> action) =>

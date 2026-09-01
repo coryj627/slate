@@ -246,7 +246,11 @@ public sealed class ContractsCitationCensus
                 // terminal outcome table, taking the section to 64;
                 // 58 sits above the pre-task population of 57 — a
                 // thirteenth time.
-                58),
+                //
+                // TE-11a bound the wiring slice and the onboarding
+                // swap, taking the section to 67; 65 sits above the
+                // pre-task population of 64 — a fourteenth time.
+                65),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

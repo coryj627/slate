@@ -76,6 +76,21 @@ internal sealed class CanvasMutationFunnel(
         ArgumentNullException.ThrowIfNull(prepare);
         ArgumentNullException.ThrowIfNull(name);
 
+        CanvasMutationAdmission admission = AdmitAndAcquire(operation);
+        if (admission != CanvasMutationAdmission.Admitted)
+        {
+            return admission;
+        }
+
+        run(() => Transact(operation, prepare, name, confirm));
+        return CanvasMutationAdmission.Admitted;
+    }
+
+    /// <summary>E2's ladder, shared by the verb and history
+    /// entrypoints: Admitted means the GATE IS HELD and the caller
+    /// must schedule a transaction that releases it.</summary>
+    private CanvasMutationAdmission AdmitAndAcquire(CanvasMutationOperation operation)
+    {
         CanvasPublication now = slot.Current;
         if (now.Retired || now.LoadState != CanvasLoadState.Ready)
         {
@@ -105,10 +120,113 @@ internal sealed class CanvasMutationFunnel(
                 ? CanvasMutationAdmission.Busy
                 : CanvasMutationAdmission.BusyAlreadyAnnounced;
         }
-
-        run(() => Transact(operation, prepare, name, confirm));
         return CanvasMutationAdmission.Admitted;
     }
+
+    /// <summary>§E TE-11 (ED-1): the history entrypoint — the same
+    /// admission ladder, then the checked-out inverse through the same
+    /// transaction seam. The RECORD step is the checkout's commit
+    /// (E3's order intact): the receipt crosses to the OPPOSITE stack
+    /// and the redo pile survives, which is what the verb path's
+    /// clear-redo recording must never do here.</summary>
+    internal CanvasMutationAdmission ApplyHistory(
+        CanvasMutationOperation operation,
+        CanvasHistorySnapshot snapshot,
+        bool redo)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        ArgumentNullException.ThrowIfNull(snapshot);
+        CanvasMutationAdmission admission = AdmitAndAcquire(operation);
+        if (admission != CanvasMutationAdmission.Admitted)
+        {
+            return admission;
+        }
+        run(() => TransactHistory(operation, snapshot, redo));
+        return CanvasMutationAdmission.Admitted;
+    }
+
+    private void TransactHistory(
+        CanvasMutationOperation operation,
+        CanvasHistorySnapshot snapshot,
+        bool redo)
+    {
+        try
+        {
+            if (!history.TryCheckOut(snapshot))
+            {
+                // The stack moved since the snapshot (a raced
+                // mutation, a rebase): nothing left its pile, and
+                // the blocked arm is mac's own answer.
+                AnnounceHistoryBlocked(redo);
+                return;
+            }
+            CanvasApplyResult? result = null;
+            VaultException? refusal = null;
+            bool ran = operation.Basis.Lease.Invoke(
+                () => operation.IsCurrentAgainst(slot.Current),
+                handle =>
+                {
+                    try
+                    {
+                        result = writes.Apply(handle, snapshot.Entry.Inverse);
+                    }
+                    catch (VaultException e)
+                    {
+                        refusal = e;
+                    }
+                });
+            if (!ran || refusal is VaultException.WriteConflict)
+            {
+                // Displaced, or the disk moved under the entry: the
+                // entry returns EXACTLY where it was (IE-9) and stays
+                // poppable after the reload rebases or quarantines it
+                // — mac's t3 rule through the stricter machinery.
+                history.RestoreCheckout();
+                AnnounceHistoryBlocked(redo);
+                return;
+            }
+            if (refusal is VaultException.SavedButUnindexed unindexed)
+            {
+                // A landed write IS a commit (TE-0's boundary); the
+                // successor's inverse is unknown on this arm, so the
+                // empty action self-quarantines the moment anything
+                // moves — the verb path's arm, checkout-shaped.
+                history.CommitCheckout(
+                    new CanvasHistoryEntry(
+                        snapshot.Entry.Name,
+                        new CanvasAction(snapshot.Entry.Name, []),
+                        unindexed.newContentHash),
+                    unindexed.newContentHash);
+                MarkUnpresented(operation);
+                return;
+            }
+            if (refusal is not null)
+            {
+                history.RestoreCheckout();
+                return;
+            }
+            history.CommitCheckout(
+                new CanvasHistoryEntry(
+                    snapshot.Entry.Name, result!.Inverse, result.NewContentHash),
+                result.NewContentHash);
+            if (RefreshAndPublish(operation) == CanvasRefreshOutcome.Installed)
+            {
+                announce(new CanvasA11yEvent.CanvasHistoryApplied(
+                    redo ? CanvasHistoryVerb.Redo : CanvasHistoryVerb.Undo,
+                    snapshot.Entry.Name));
+            }
+        }
+        finally
+        {
+            gate.Release(operation);
+        }
+    }
+
+    private void AnnounceHistoryBlocked(bool redo) =>
+        announce(new CanvasA11yEvent.CanvasBlocked(
+            redo
+                ? new CanvasBlockedReason.RedoBlocked()
+                : new CanvasBlockedReason.UndoBlocked()));
 
     private void Transact(
         CanvasMutationOperation operation,

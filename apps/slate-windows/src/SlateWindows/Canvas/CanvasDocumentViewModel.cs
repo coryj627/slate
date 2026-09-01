@@ -451,21 +451,18 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// The empty-state region's text (0a-13 LABEL class, core-rendered).
     /// </summary>
     /// <remarks>
-    /// `CanvasEmptyOnboarding` is the event this region is FOR, and PR E
-    /// installs it with the real New Card chord. It cannot ship here:
-    /// its template renders "Press ⟨chord⟩ to create your first card"
-    /// unconditionally, and PR A has no create command, so any chord in
-    /// that slot — including the palette's — tells a screen-reader user
-    /// to press a key that will not create anything. That is exactly the
-    /// t2 rule the spec cites in the same sentence ("don't advertise a
-    /// command that doesn't exist yet"), so until the command exists the
-    /// region renders the true statement the vocabulary already has.
-    /// CD-37.
+    /// CD-37's tie-breaker INVERTED (§E TE-11, E14's first staged
+    /// swap): the New Card chord is real now, so the onboarding event
+    /// ships with it — core's render, host-supplied SPELLED-OUT chords
+    /// (0a-13: a screen reader receives words, not glyphs; the glyph
+    /// forms stay table labels). The interim palette sentence retires
+    /// with the rule that demanded it.
     /// </remarks>
     public string? EmptyOnboardingText =>
         State == CanvasLoadState.Ready && _outline.Count == 0
             ? CanvasAnnouncer.RenderLabel(
-                new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.Empty()))
+                new CanvasA11yEvent.CanvasEmptyOnboarding(
+                    "Control Alt N", "Control Shift P"))
             : null;
 
     /// <summary>The host-owned display chord the vocabulary takes as a
@@ -2148,6 +2145,46 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
 
         public CanvasLoadFailure ParseError(IReadOnlyList<CanvasLoadWarning> warnings) =>
             new(CanvasLoadState.ParseError, ParseErrorDetail(warnings));
+    }
+
+    /// <summary>§E TE-11 (ED-1, D-6 adopted): the history verbs.
+    /// Ctrl+Z / Ctrl+Y through the navigator ladder, the palette's
+    /// siblings by the same two-phase checkout: the OFFERED entry is
+    /// snapshotted, checked out under the gate, its inverse applied
+    /// through the one funnel, and the receipt crosses to the opposite
+    /// stack - a raced mutation displaces the snapshot and the entry
+    /// returns exactly where it was (IE-9).</summary>
+    public void CanvasUndo() => RunHistory(redo: false);
+
+    /// <summary>The redo twin - §E ED-1's Ctrl+Y, no alias.</summary>
+    public void CanvasRedo() => RunHistory(redo: true);
+
+    private void RunHistory(bool redo)
+    {
+        if (_slot.Current.Loaded is not { } basis)
+        {
+            return;
+        }
+        CanvasHistorySnapshot? snapshot =
+            redo ? UndoStack.SnapshotRedo() : UndoStack.SnapshotUndo();
+        if (snapshot is null)
+        {
+            // Quarantined or empty: the OFFERED read is the gate
+            // (basis quarantine, TE-4), and an unoffered stack has
+            // nothing true to run - the status arm says so.
+            Speak(new CanvasA11yEvent.CanvasStatus(
+                redo
+                    ? new CanvasStatusNote.NothingToRedo()
+                    : new CanvasStatusNote.NothingToUndo()));
+            return;
+        }
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId(redo ? "redo" : "undo"),
+            this,
+            Selection.Selected,
+            basis,
+            CanvasMutationEffect.KeepSelection);
+        _ = Funnel.ApplyHistory(operation, snapshot, redo);
     }
 
     /// <summary>§E TE-5b, the first funnel verb: a text card at

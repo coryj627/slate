@@ -435,6 +435,13 @@
                           InputGestureText="{cmd:ChordText slate.canvas.whereAmI}"
                           Command="{Binding Workspace.CanvasWhereAmICommand}" />
                 <Separator />
+                <!-- §E TE-11 (E19): mac's Canvas menu ownership - the one
+                     verb with a chord. -->
+                <MenuItem Header="New Car_d"
+                          AutomationProperties.AutomationId="CanvasNewCardMenuItem"
+                          InputGestureText="{cmd:ChordText slate.canvas.newCard}"
+                          Command="{Binding Workspace.CanvasNewCardCommand}" />
+                <Separator />
                 <MenuItem Header="_Next Card"
                           AutomationProperties.AutomationId="CanvasNextCardMenuItem"
                           InputGestureText="{cmd:ChordText slate.canvas.nextCard}"

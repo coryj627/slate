@@ -499,6 +499,8 @@ internal static class SlateCommandRegistrar
             // contract C1). Every movement row stays enabled on a canvas
             // in ANY load state: the navigator's state mapping is what
             // answers, and a disabled row cannot say why (contract C4).
+            [ChordTable.Ids.CanvasNewCard] =
+                host => host.Workspace?.CanvasNewCardCommand,
             [ChordTable.Ids.CanvasWhereAmI] = host => host.Workspace?.CanvasWhereAmICommand,
             [ChordTable.Ids.CanvasNextCard] = host => host.Workspace?.CanvasNextCardCommand,
             [ChordTable.Ids.CanvasPreviousCard] =

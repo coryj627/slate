@@ -196,6 +196,10 @@ public sealed class ChordTableTests
                 "slate.workspace.moveTabRight",
                 // W5-4 (F6/FD-4): mac's ⌘⌫ predicts Ctrl+Backspace, but
                 // the bare Delete key is the platform deletion convention.
+                // §E TE-11 (ED-1): mac's ⇧⌘Z predicts Ctrl+Shift+Z;
+                // Windows keeps Ctrl+Y, the structural pair's convention,
+                // and registers no alias.
+                "windows.canvas.redoHistory",
                 "windows.sidebar.deleteSelected",
                 // W5-4 (F10): mac's ⇧⌘Z predicts Ctrl+Shift+Z, but
                 // Ctrl+Y is the platform redo convention — decision 12.

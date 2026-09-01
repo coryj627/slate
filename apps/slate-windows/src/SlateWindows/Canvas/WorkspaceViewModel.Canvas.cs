@@ -373,6 +373,7 @@ internal sealed partial class WorkspaceViewModel
     private RelayCommand? _canvasFollowForwardCommand;
     private RelayCommand? _canvasFollowBackCommand;
     private RelayCommand? _canvasTracePathCommand;
+    private RelayCommand? _canvasNewCardCommand;
     private RelayCommand? _canvasWhereAmICommand;
     private RelayCommand? _canvasFilterCardsCommand;
     private RelayCommand? _canvasClearFilterCommand;
@@ -426,6 +427,15 @@ internal sealed partial class WorkspaceViewModel
     public System.Windows.Input.ICommand CanvasTracePathCommand =>
         _canvasTracePathCommand ??= NavigatorCommand(
             navigator => navigator.TracePath());
+
+    /// <summary>§E TE-11 (E19): the New Card verb for the palette,
+    /// the menu and the chord resolver. Gated only on a canvas being
+    /// active - the funnel's admission table owns every other refusal
+    /// and speaks it (contract C9).</summary>
+    public System.Windows.Input.ICommand CanvasNewCardCommand =>
+        _canvasNewCardCommand ??= new RelayCommand(
+            _ => ActiveCanvasDocument?.CanvasNewCard(),
+            _ => ActiveCanvasDocument is not null);
 
     public System.Windows.Input.ICommand CanvasWhereAmICommand =>
         _canvasWhereAmICommand ??= NavigatorCommand(

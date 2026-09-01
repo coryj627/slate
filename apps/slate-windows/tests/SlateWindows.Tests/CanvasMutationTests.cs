@@ -62,19 +62,12 @@ public sealed class CanvasMutationTests : IDisposable
     private string DiskBytes() =>
         File.ReadAllText(Path.Combine(_fixture.Root, "board.canvas"));
 
-    private void Undo(CanvasDocumentViewModel document)
-    {
-        CanvasHistorySnapshot snapshot = document.UndoStack.SnapshotUndo()!;
-        Assert.True(document.UndoStack.TryCheckOut(snapshot));
-        CanvasApplyResult result = _session.CanvasApply(
-            document.AppliedPublication!.Loaded!.Lease
-                is { } _ ? HandleOf(document) : 0,
-            snapshot.Entry.Inverse);
-        document.UndoStack.CommitCheckout(
-            new CanvasHistoryEntry(
-                snapshot.Entry.Name, result.Inverse, result.NewContentHash),
-            result.NewContentHash);
-    }
+    /// <summary>§E TE-11: the REAL verb - every per-verb undo fact
+    /// now runs the funnel's checkout path end to end, so a regression
+    /// anywhere in gate, checkout, apply or refresh fails the verb's
+    /// own fact rather than slipping past test plumbing.</summary>
+    private static void Undo(CanvasDocumentViewModel document) =>
+        document.CanvasUndo();
 
     private static ulong HandleOf(CanvasDocumentViewModel document)
     {
@@ -82,6 +75,75 @@ public sealed class CanvasMutationTests : IDisposable
         CanvasHandleLease lease = document.AppliedPublication!.Loaded!.Lease;
         Assert.True(lease.Invoke(() => true, h => handle = h));
         return handle;
+    }
+
+    /// <summary>§E TE-11 (ED-1): undo and redo as VERBS - Ctrl+Z's
+    /// target. The receipt crosses stacks: undo restores the prior
+    /// bytes and speaks core's Undid sentence; redo re-lands the write
+    /// and speaks Redid; the redo pile survives the undo (the verb
+    /// path's clear-redo rule must not fire here).</summary>
+    [Fact]
+    public void UndoAndRedoVerbsRestoreBytesAndSpeakTheHistorySentence()
+    {
+        CanvasDocumentViewModel document = Open();
+        string before = DiskBytes();
+        document.CanvasNewCard();
+        string after = DiskBytes();
+        Assert.NotEqual(before, after);
+
+        document.CanvasUndo();
+        Assert.Equal(before, DiskBytes());
+        Assert.Contains(
+            _announced, a => a.Text.Contains("Undid", StringComparison.Ordinal));
+
+        document.CanvasRedo();
+        Assert.Equal(after, DiskBytes());
+        Assert.Contains(
+            _announced, a => a.Text.Contains("Redid", StringComparison.Ordinal));
+        document.Shutdown();
+    }
+
+    /// <summary>§E TE-11: the empty-stack arms speak the status
+    /// sentence - never silence (E8a's never-silent table).</summary>
+    [Fact]
+    public void HistoryVerbsOnEmptyStacksSpeakTheStatusArms()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.CanvasUndo();
+        Assert.Contains(
+            _announced,
+            a => a.Text.Contains("Nothing to undo.", StringComparison.Ordinal));
+        document.CanvasRedo();
+        Assert.Contains(
+            _announced,
+            a => a.Text.Contains("Nothing to redo.", StringComparison.Ordinal));
+        document.Shutdown();
+    }
+
+    /// <summary>§E TE-11 (ED-1/IE-9): an undo against a disk that
+    /// moved WITHOUT a reload hits the write conflict, the entry
+    /// returns exactly where it was, and the blocked arm speaks -
+    /// never silence, never a lost entry.</summary>
+    [Fact]
+    public void UndoAgainstAMovedDiskBlocksAndRetainsTheEntry()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.CanvasNewCard();
+        Assert.NotNull(document.UndoStack.SnapshotUndo());
+
+        // The disk moves under the entry - an external editor, no
+        // reload observed yet.
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "board.canvas"),
+            DiskBytes().Replace("\"nodes\"", "\"nodes\" ", StringComparison.Ordinal));
+
+        document.CanvasUndo();
+
+        Assert.Contains(
+            _announced,
+            a => a.Text.Contains("blocked", StringComparison.OrdinalIgnoreCase));
+        Assert.NotNull(document.UndoStack.SnapshotUndo());
+        document.Shutdown();
     }
 
     /// <summary>New Card: a text card lands on disk at core's

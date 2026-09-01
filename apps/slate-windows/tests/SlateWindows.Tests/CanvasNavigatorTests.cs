@@ -4333,6 +4333,36 @@ public sealed class CanvasNavigatorTests : IDisposable
         public object? Owner => null;
     }
 
+    /// <summary>§E TE-11 (ED-1/E19): the canvas-scoped history
+    /// chords DELIVER - Ctrl+Z reaches the undo verb through the
+    /// ladder (the empty stack's spoken arm is the observable), and
+    /// Ctrl+Alt+N reaches New Card (the outline grows).</summary>
+    [Fact]
+    public void HistoryAndNewCardChordsDeliverThroughTheLadder()
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        var presenter = new UnfocusedVisualPresenter();
+        document.Navigator.AttachPresenter(presenter);
+
+        Assert.True(
+            document.Navigator.HandleKey(Key.Z, ModifierKeys.Control, presenter));
+        Assert.Contains(
+            _announced,
+            a => a.Text.Contains("Nothing to undo.", StringComparison.Ordinal));
+        Assert.True(
+            document.Navigator.HandleKey(Key.Y, ModifierKeys.Control, presenter));
+        Assert.Contains(
+            _announced,
+            a => a.Text.Contains("Nothing to redo.", StringComparison.Ordinal));
+
+        int before = document.Outline.Count;
+        Assert.True(document.Navigator.HandleKey(
+            Key.N, ModifierKeys.Control | ModifierKeys.Alt, presenter));
+        Assert.Equal(before + 1, document.Outline.Count);
+        document.Shutdown();
+    }
+
+
     /// <summary>The review round's R2 half: a bare Shift chord on the
     /// VISUAL surface is consumed only when the projection owns the
     /// keys — with the caret in the filter field, Shift+1 is the

@@ -278,6 +278,7 @@ internal static class ChordTable
         public const string CanvasFollowConnectionBack =
             "slate.canvas.followConnectionBack";
         public const string CanvasTracePath = "slate.canvas.tracePath";
+        public const string CanvasNewCard = "slate.canvas.newCard";
         public const string CanvasFilterCards = "slate.canvas.filterCards";
         public const string CanvasClearFilter = "slate.canvas.clearFilter";
         public const string CanvasCommitMode = "slate.canvas.commitMode";
@@ -926,6 +927,14 @@ internal static class ChordTable
             "Fill the visual board's view with the selected cards.",
             "⇧2", "Shift+2", ChordScope.Canvas),
 
+            // §E TE-11 (E19): the ONE new verb chord - mac's opt-cmd-N
+            // maps to Ctrl+Alt+N (Ctrl+N stays free for notes, mac's own
+            // allocation rule #368). Every other mutation verb is
+            // palette/menu/context-menu only (R1).
+            Reg(Ids.CanvasNewCard, "Canvas: New Card", CommandSection.Canvas,
+                "Create a text card next to the selection - placement is "
+                + "automatic and announced.",
+                "⌥⌘N", "Ctrl+Alt+N", ChordScope.Canvas),
         Reg(Ids.CanvasFilterCards, "Canvas: Filter Cards…", CommandSection.Canvas,
             "Focus the filter field (Ctrl+F on a canvas): narrows by title, type, "
             + "group, or target.",
@@ -1258,6 +1267,29 @@ internal static class ChordTable
             Chord("windows.quickOpen.dismiss", "Quick Open: dismiss",
                 "Escape", ChordScope.QuickOpen,
                 quickOpenReason + " PR-2 records its place in the Escape chain."),
+
+            // §E TE-11 (E19/ED-1, D-6 adopted): the canvas history
+            // domain. Chord-only rows like the structural pair below: mac
+            // routes cmd-Z through the responder chain and the
+            // undoTargetsCanvas gate, not the registry, so on both
+            // platforms these are surface interactions, not commands. No
+            // Ctrl+Shift+Z alias - the editor host registers none (ED-1).
+            Chord("windows.canvas.undoHistory",
+                "Canvas: undo the last canvas action",
+                "Ctrl+Z", ChordScope.Canvas,
+                "§E ED-1: canvas-focus-scoped delivery through the "
+                + "navigator ladder; the two-phase checkout keeps a raced "
+                + "mutation from losing or doubling the entry.",
+                mac: "⌘Z"),
+            Chord("windows.canvas.redoHistory",
+                "Canvas: redo the last undone canvas action",
+                "Ctrl+Y", ChordScope.Canvas,
+                "§E ED-1: the redo twin. mac uses shift-cmd-Z; Windows "
+                + "keeps the structural pair's Ctrl+Y convention.",
+                mac: "⇧⌘Z",
+                divergence: "mac uses ⇧⌘Z; Windows keeps the structural "
+                + "pair's Ctrl+Y convention, and ED-1 registers no "
+                + "Ctrl+Shift+Z alias because the editor host has none."),
 
             // W5-4 (F10/FD-1): the structural undo domain. Delivered
             // imperatively from Window_PreviewKeyDown, TREE-SCOPED —
