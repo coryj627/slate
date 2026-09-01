@@ -8427,7 +8427,10 @@ AppState.swift non-exhaustive — a debt invisible from this checkout
 because mac compiles CI-only. Both switches gained the arm with the
 landed-write sentence (bytes real, index catches up, never recreate
 — the #1123 shape), landed blind with CI as the oracle, which is
-this repo's recorded convention for the mac lane.
+this repo's recorded convention for the mac lane. The lane's second
+pass surfaced the same debt's test-side tail — the mutation-harness
+twin's refusal-kind switch and a prepared-load fixture missing the
+CAS basis — both extended the same way.
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 

@@ -103,4 +103,31 @@ public sealed class CanvasPickerTests
         Assert.Equal(["d", "a", "c"], model.Rows.Select(r => r.NodeId));
         Assert.Equal(["a", "c"], model.Visible("al").Select(r => r.NodeId));
     }
+    /// <summary>Codoki round 3 (§E): the picker's narrowing is
+    /// ORDINAL - a filename match must not bend under the ambient
+    /// culture (the Turkish-I trap), matching the sidebar's own
+    /// comparer convention for file names.</summary>
+    [Fact]
+    public void VisibleMatchesOrdinallyRegardlessOfAmbientCulture()
+    {
+        System.Globalization.CultureInfo before =
+            System.Globalization.CultureInfo.CurrentCulture;
+        try
+        {
+            System.Globalization.CultureInfo.CurrentCulture =
+                new System.Globalization.CultureInfo("tr-TR");
+            static FileSummaryPage Page(string? cursor) =>
+                new([File("file.md", true)], null, 1);
+            CanvasVaultFilePickerModel model =
+                CanvasVaultFilePickerModel.LoadAll(Page, f => f.IsMarkdown);
+            Assert.Contains(
+                model.Visible("FILE"),
+                f => f.Name.Contains("file", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            System.Globalization.CultureInfo.CurrentCulture = before;
+        }
+    }
+
 }

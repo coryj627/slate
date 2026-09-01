@@ -336,6 +336,7 @@ final class MutationHarnessTests: XCTestCase {
         case .InvalidArgument: return ("InvalidArgument", nil)
         case let .DestinationExists(path): return ("DestinationExists", path)
         case .WriteConflict: return ("WriteConflict", nil)
+        case .SavedButUnindexed: return ("SavedButUnindexed", nil)
         case .HistoryUnavailable: return ("HistoryUnavailable", nil)
         case .MalformedFrontmatter: return ("MalformedFrontmatter", nil)
         case .BibSourceUnreadable: return ("BibSourceUnreadable", nil)

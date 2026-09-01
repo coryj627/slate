@@ -73,8 +73,8 @@ internal sealed class CanvasVaultFilePickerModel
             ? _classified
             : _classified.Where(file =>
                 (file.DisplayName ?? file.Name).Contains(
-                    query, StringComparison.CurrentCultureIgnoreCase)
-                || file.Path.Contains(query, StringComparison.CurrentCultureIgnoreCase));
+                    query, StringComparison.OrdinalIgnoreCase)
+                || file.Path.Contains(query, StringComparison.OrdinalIgnoreCase));
         return [.. matched.Take(DisplayCap)];
     }
 

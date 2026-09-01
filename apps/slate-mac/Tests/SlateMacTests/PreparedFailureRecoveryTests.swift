@@ -282,7 +282,9 @@ final class PreparedFailureRecoveryTests: XCTestCase {
                     connectionCount: 0,
                     colorName: nil)
             ],
-            scene: CanvasScene(nodes: [], edges: []))
+            scene: CanvasScene(nodes: [], edges: []),
+            // W6-1 SE TE-0: the CAS basis every ready load carries.
+            contentHash: "prepared-basis")
     }
 
     private func makeDashboardSection() -> DashboardSectionDocument {
