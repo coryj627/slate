@@ -347,6 +347,72 @@ public sealed class CanvasModeControllerTests
 
     private readonly List<RenderedAnnouncement> _announced = [];
 
+    /// <summary>§F TF-3: a SYNCHRONOUS funnel resolves while
+    /// OnCommit is still on the stack. The early resolution is
+    /// remembered and lands the moment the pending mark exists — the
+    /// mode ends committed, clear before speech, and Commit answers
+    /// applied.</summary>
+    [Fact]
+    public void AnEarlyResolutionLandsWhenThePendingMarkArrives()
+    {
+        List<CanvasA11yEvent> spoken = [];
+        var controller = new CanvasModeController(spoken.Add);
+        var id = new object();
+        CanvasModeController? captured = null;
+        var spec = new CanvasModeSpec(
+            CanvasMode.Move,
+            new CanvasModeObject.Card("Research"),
+            () =>
+            {
+                captured!.ResolveCommit(
+                    id,
+                    CanvasModeCommitResult.Committed(
+                        new CanvasA11yEvent.CanvasModeCommitted(
+                            CanvasTransientVerb.Move,
+                            new CanvasModeObject.Card("Research"))));
+                return CanvasModeCommitResult.Pending(id);
+            },
+            () => new CanvasModeRestoration.BackAt("Research"));
+        captured = controller;
+        Assert.True(controller.Enter(spec, _modePane));
+
+        Assert.True(controller.Commit());
+        Assert.False(controller.IsActive);
+        Assert.False(controller.HasPendingCommitForTests);
+        Assert.Contains(
+            spoken, e => e is CanvasA11yEvent.CanvasModeCommitted);
+    }
+
+    /// <summary>§F TF-3: a synchronous CONFLICT abandons while
+    /// OnCommit is still on the stack. The early abandon unmarks the
+    /// pending commit the moment it would exist — the mode stands
+    /// suspended, not wedged: Escape and a second Return stay
+    /// available.</summary>
+    [Fact]
+    public void AnEarlyAbandonUnmarksThePendingCommit()
+    {
+        var controller = new CanvasModeController(_ => { });
+        var id = new object();
+        CanvasModeController? captured = null;
+        var spec = new CanvasModeSpec(
+            CanvasMode.Move,
+            new CanvasModeObject.Card("Research"),
+            () =>
+            {
+                captured!.AbandonPendingCommit();
+                return CanvasModeCommitResult.Pending(id);
+            },
+            () => new CanvasModeRestoration.BackAt("Research"));
+        captured = controller;
+        Assert.True(controller.Enter(spec, _modePane));
+
+        Assert.False(controller.Commit());
+        Assert.True(controller.IsActive);
+        Assert.False(controller.HasPendingCommitForTests);
+        Assert.True(controller.CanCommitOrCancel);
+        Assert.True(controller.Cancel());
+    }
+
     /// <summary>
     /// The test mode. It records what its commit and cancel did, which is
     /// the whole of what M1–M7 needs from a mode — the real ones arrive

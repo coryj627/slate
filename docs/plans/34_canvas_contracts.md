@@ -8995,6 +8995,61 @@ a living mode; the exemption dropped and the mode's own refresh
 killed it; the ordering-length gate dropped and the ghost built a
 holder.
 
+### TF-3 — move mode end to end
+
+Move mode is the first REAL mode over the whole §F machine: entry
+through TF-1's admitted preflight, TF-2's holder as the hypothetical,
+steps that never touch the engine, and a commit that is a completion.
+`CanvasNavigator` gained `EnterMoveMode` (the moving set is the marked
+set reading-ordered, else the selection; every refusal speaks —
+NothingSelected, the not-ready sentence, or FD-6's failed-action arm
+when the capture refuses), `ModeStep` (one grid step over the whole
+rigid set — core's `CanvasConstants` supplies the step and its large
+variant; overlap is an OR over every moved rect via
+`CanvasCheckOverlap` excluding the set itself; the spoken position
+comes from `CanvasDescribeRelative` over the primary; the two-state
+machine speaks Onset and Cleared only; a throwing read leaves the
+transient untouched and speaks FD-6), the arrow router `ModeStepOr`
+(a held transient owns the arrows AHEAD of ArrowMove/ArrowFollow;
+Shift rows are mode-only with a null fallback — four
+`windows.canvas.modeStepLarge*` chord rows land under FD-3), and
+`SubmitTransientCommit` (geometry ops for CHANGED rects only; none →
+Applied with the ended-without-effect sentence; otherwise one
+`UpdateNodeGeometry`-batch action named per F9a, submitted with the
+mode token and a completion mapping every F4b row — Installed resolves
+Committed with core's sentence, Conflict suspends the token and
+abandons the mark leaving the transient frozen, RefusedPrepare
+resolves Refused, Displaced defers to the F1a watcher, and the
+indexing failures resolve Committed with no spoken success).
+
+The task's discovery is an ORDERING HOLE the contracts never named:
+under a synchronous funnel the completion runs while `OnCommit` is
+still on the stack, so `ResolveCommit` and `AbandonPendingCommit`
+arrived BEFORE the pending mark existed — the resolution died at the
+identity check and the mode wedged pending forever, Escape and Return
+refusing honestly at a door nobody could ever open again. The fix is
+the controller's EARLY-RESOLUTION MEMORY: a resolution or abandon
+arriving during `_committing` with no mark is remembered rather than
+dropped, and consumed the moment the Pending arm sets the mark — a
+foreign identity still dies at the same check, one commit later. Two
+controller facts pin both arms; the end-to-end fact walked the wedge
+first. Core's committed sentence for a move renders as `Placed "…"` —
+the fact pins the render, not a guess.
+
+Facts: the six mutation-suite facts (enter/nudge/commit-one-action,
+Esc restores exact bytes, transitions-only overlap, arrows route and
+Shift is large, no-effect Return says so, a conflicted Return suspends
+without a wedged mark) plus the two controller facts. Mutations, each
+byte-restored: M1 the x-axis dropped from the step math (the commit
+fact bit), M2 the transition machine inverted to per-step speech (the
+overlap fact bit), M3 the arrow branch dropped (the routing fact bit),
+M4 the no-effect arm dropped (the empty-commit fact bit), M5 the early
+memory dropped (the controller fact bit). Process note, honestly held:
+the first gauntlet round restored mutations with `git checkout`, which
+also discarded the task's own uncommitted production code — the round
+was rebuilt from the payloads and rerun with scratchpad-copy restores;
+the discipline is copies, never checkout, while work is uncommitted.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same

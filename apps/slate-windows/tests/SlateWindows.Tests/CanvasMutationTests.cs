@@ -286,6 +286,207 @@ public sealed class CanvasMutationTests : IDisposable
         document.Shutdown();
     }
 
+    /// <summary>§F TF-3 (F2/F4a/F9a): move mode end to end — enter on
+    /// the selection, one grid step right, Return commits ONE action
+    /// through the bridge; the disk moves by GridStep, one history
+    /// entry lands, and the committed sentence speaks after the
+    /// clear.</summary>
+    [Fact]
+    public void MoveModeEntersNudgesAndCommitsOneAction()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        var pane = new FakePane();
+        document.Navigator.AttachPresenter(pane);
+        Assert.True(document.Navigator.EnterMoveMode());
+        Assert.NotNull(document.Transient);
+        double x0 = document.Transient!.Originals["a"].X;
+
+        Assert.True(document.Navigator.ModeStep(1, 0, large: false));
+
+        // The inline test runner completes while OnCommit is on the
+        // stack; the controller's early-resolution memory lands it the
+        // moment the mark exists, so Commit answers applied.
+        Assert.True(document.Modes.Commit());
+        Assert.False(document.Modes.IsActive);
+        Assert.Null(document.Transient);
+
+        double step = SlateUniffiMethods.CanvasConstants().GridStep;
+        Assert.Contains(
+            $"\"x\":{(int)(x0 + step)}",
+            DiskBytes().Replace(" ", ""));
+        Assert.NotNull(document.UndoStack.OfferedUndo);
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            a => a.Text.Contains("Placed", StringComparison.Ordinal));
+        document.Shutdown();
+    }
+
+    /// <summary>§F TF-3 (F1): Esc restores the exact prior bytes with
+    /// no backend call, and the restoration speaks.</summary>
+    [Fact]
+    public void EscRestoresExactBytesWithNoWrite()
+    {
+        CanvasDocumentViewModel document = Open();
+        string before = DiskBytes();
+        document.SeatSelectionSilently("a");
+        document.Navigator.AttachPresenter(new FakePane());
+        Assert.True(document.Navigator.EnterMoveMode());
+        Assert.True(document.Navigator.ModeStep(1, 0, large: true));
+        Assert.True(document.Modes.Cancel());
+
+        Assert.Equal(before, DiskBytes());
+        Assert.Null(document.Transient);
+        document.Shutdown();
+    }
+
+    /// <summary>§F TF-3 (F2): the overlap machine speaks TRANSITIONS —
+    /// onset once when overlap begins, silence while it holds,
+    /// cleared once when it ends.</summary>
+    [Fact]
+    public void TheOverlapMachineSpeaksTransitionsOnly()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        document.Navigator.AttachPresenter(new FakePane());
+        Assert.True(document.Navigator.EnterMoveMode());
+        document.AnnouncerForTests.FlushForTests();
+        _announced.Clear();
+
+        // "a" sits left of "cramped"'s blocker geometry: step right
+        // until overlap onsets, keep stepping (still overlapped),
+        // then step back out.
+        int onsets = 0;
+        int cleareds = 0;
+        void Count()
+        {
+            document.AnnouncerForTests.FlushForTests();
+            foreach (RenderedAnnouncement line in _announced)
+            {
+                if (line.Text.Contains("overlap", StringComparison.OrdinalIgnoreCase)
+                    && line.Text.Contains("now", StringComparison.OrdinalIgnoreCase))
+                {
+                    onsets++;
+                }
+                if (line.Text.Contains("clear", StringComparison.OrdinalIgnoreCase))
+                {
+                    cleareds++;
+                }
+            }
+            _announced.Clear();
+        }
+        for (int i = 0; i < 12; i++)
+        {
+            Assert.True(document.Navigator.ModeStep(1, 0, large: false));
+        }
+        Count();
+        int onsetsAfterIn = onsets;
+        for (int i = 0; i < 12; i++)
+        {
+            Assert.True(document.Navigator.ModeStep(-1, 0, large: false));
+        }
+        Count();
+        Assert.True(onsetsAfterIn <= 1, $"onsets spoken {onsetsAfterIn} times");
+        Assert.True(cleareds <= 1, $"cleared spoken {cleareds} times");
+        Assert.Equal(onsetsAfterIn, cleareds);
+        Assert.True(document.Modes.Cancel());
+        document.Shutdown();
+    }
+
+    /// <summary>§F TF-3 (FD-3): a held transient owns the arrows and
+    /// Shift is the large step; without a mode the arrows keep their
+    /// §C meaning.</summary>
+    [Fact]
+    public void ArrowsRouteToTheModeAndShiftIsLarge()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        var pane = new FakePane();
+        document.Navigator.AttachPresenter(pane);
+        Assert.True(document.Navigator.EnterMoveMode());
+        double x0 = document.Transient!.Rects["a"].X;
+
+        Assert.True(document.Navigator.HandleKey(
+            System.Windows.Input.Key.Right, System.Windows.Input.ModifierKeys.None, pane));
+        CanvasConstants constants = SlateUniffiMethods.CanvasConstants();
+        Assert.Equal(x0 + constants.GridStep, document.Transient!.Rects["a"].X);
+
+        Assert.True(document.Navigator.HandleKey(
+            System.Windows.Input.Key.Right, System.Windows.Input.ModifierKeys.Shift, pane));
+        Assert.Equal(
+            x0 + constants.GridStep + constants.GridStepLarge,
+            document.Transient!.Rects["a"].X);
+        Assert.True(document.Modes.Cancel());
+        document.Shutdown();
+    }
+
+    /// <summary>§F TF-3 (F4b): Return without a change ends without
+    /// effect — nothing applies, the sentence says so.</summary>
+    [Fact]
+    public void ANoEffectReturnSaysSo()
+    {
+        CanvasDocumentViewModel document = Open();
+        string before = DiskBytes();
+        document.SeatSelectionSilently("a");
+        document.Navigator.AttachPresenter(new FakePane());
+        Assert.True(document.Navigator.EnterMoveMode());
+
+        Assert.True(document.Modes.Commit());
+        Assert.False(document.Modes.IsActive);
+        Assert.Equal(before, DiskBytes());
+        Assert.Null(document.UndoStack.OfferedUndo);
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            a => a.Text.Contains("nothing changed", StringComparison.OrdinalIgnoreCase));
+        document.Shutdown();
+    }
+
+    /// <summary>§F TF-3 (FD-5): a conflicted Return SUSPENDS — the
+    /// mode and transient stand frozen, the token yields so the
+    /// recovery's writes admit.</summary>
+    [Fact]
+    public void AConflictedReturnSuspendsTheMode()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        document.Navigator.AttachPresenter(new FakePane());
+        Assert.True(document.Navigator.EnterMoveMode());
+        Assert.True(document.Navigator.ModeStep(1, 0, large: false));
+
+        // The disk moves under the entry — an external writer.
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "board.canvas"),
+            DiskBytes() + "\n");
+
+        Assert.False(document.Modes.Commit());
+        Assert.True(document.Modes.IsActive);
+        Assert.False(document.Modes.HasPendingCommitForTests);
+        Assert.NotNull(document.Transient);
+        Assert.NotNull(document.Funnel.Conflict);
+        document.Shutdown();
+    }
+
+    private sealed class FakePane : ICanvasSurfacePresenter
+    {
+        public CanvasSurfaceKind Projection => CanvasSurfaceKind.Outline;
+
+        public bool ProjectionHasFocus => true;
+
+        public bool CanMoveWithinProjection(bool forward) => true;
+
+        public bool DismissTransientRegion() => false;
+
+        public object? Owner => null;
+
+        public bool ViewportCommand(CanvasViewportVerb verb) => false;
+
+        public bool FocusRow(string nodeId) => false;
+
+        public bool FocusProjection() => false;
+    }
+
     /// <summary>New Card: a text card lands on disk at core's
     /// placement, the confirmation speaks core's relative phrase, the
     /// created card is SELECTED, and the inverse restores the exact

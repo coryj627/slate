@@ -888,9 +888,23 @@ internal static class ChordTable
         Reg(Ids.CanvasNextCard, "Canvas: Next Card", CommandSection.Canvas,
             "Select the next card in reading order.",
             "↓", "Down", ChordScope.Canvas),
+        Chord("windows.canvas.modeStepLargeDown",
+            "Canvas mode: large step down",
+            "Shift+Down", ChordScope.Canvas,
+            "§F TF-3 (FD-3): the large grid step while a move or "
+            + "resize transient holds the arrows; without a mode the "
+            + "chord is unbound and typing keeps Shift+arrows.",
+            mac: "⇧↓"),
         Reg(Ids.CanvasPreviousCard, "Canvas: Previous Card", CommandSection.Canvas,
             "Select the previous card in reading order.",
             "↑", "Up", ChordScope.Canvas),
+        Chord("windows.canvas.modeStepLargeUp",
+            "Canvas mode: large step up",
+            "Shift+Up", ChordScope.Canvas,
+            "§F TF-3 (FD-3): the large grid step while a move or "
+            + "resize transient holds the arrows; without a mode the "
+            + "chord is unbound and typing keeps Shift+arrows.",
+            mac: "⇧↑"),
         Reg(Ids.CanvasEnterGroup, "Canvas: Enter Group", CommandSection.Canvas,
             "Move into the selected group's first card."),
         Reg(Ids.CanvasExitGroup, "Canvas: Exit Group", CommandSection.Canvas,
@@ -899,10 +913,24 @@ internal static class ChordTable
             CommandSection.Canvas,
             "Jump along the selected card's first outgoing connection.",
             "→", "Right", ChordScope.Canvas),
+        Chord("windows.canvas.modeStepLargeRight",
+            "Canvas mode: large step right",
+            "Shift+Right", ChordScope.Canvas,
+            "§F TF-3 (FD-3): the large grid step while a move or "
+            + "resize transient holds the arrows; without a mode the "
+            + "chord is unbound and typing keeps Shift+arrows.",
+            mac: "⇧→"),
         Reg(Ids.CanvasFollowConnectionBack, "Canvas: Follow Connection Back",
             CommandSection.Canvas,
             "Jump along the selected card's first incoming connection.",
             "←", "Left", ChordScope.Canvas),
+        Chord("windows.canvas.modeStepLargeLeft",
+            "Canvas mode: large step left",
+            "Shift+Left", ChordScope.Canvas,
+            "§F TF-3 (FD-3): the large grid step while a move or "
+            + "resize transient holds the arrows; without a mode the "
+            + "chord is unbound and typing keeps Shift+arrows.",
+            mac: "⇧←"),
         Reg(Ids.CanvasTracePath, "Canvas: Trace Path from Selected Card",
             CommandSection.Canvas,
             "Walk the outgoing chain, announcing each hop and the visited count."),

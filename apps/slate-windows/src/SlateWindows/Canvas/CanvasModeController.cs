@@ -215,6 +215,15 @@ internal sealed class CanvasModeController : BindableBase
     /// (IF-9) — a late or foreign completion drops itself.</summary>
     private object? _pendingCommit;
 
+    /// <summary>§F TF-3: a SYNCHRONOUS funnel completes while
+    /// `OnCommit` is still on the stack — the resolution or abandon
+    /// arrives EARLY rather than wrong. It is remembered here and
+    /// consumed the moment the pending mark exists; a truly foreign
+    /// identity still dies at the identity check.</summary>
+    private (object OperationId, CanvasModeCommitResult Outcome)? _earlyResolution;
+
+    private bool _earlyAbandon;
+
     /// <summary>Set by <see cref="Shutdown"/>. The stack is TERMINAL from
     /// then on: no mode may be entered, committed or cancelled, and
     /// nothing is announced about it.</summary>
@@ -436,6 +445,20 @@ internal sealed class CanvasModeController : BindableBase
                     _pendingCommit = result.OperationId
                         ?? throw new CanvasLeaseViolationException(
                             "a Pending commit carried no operation identity");
+                    if (_earlyAbandon)
+                    {
+                        _earlyAbandon = false;
+                        _earlyResolution = null;
+                        _pendingCommit = null;
+                        return false;
+                    }
+                    if (_earlyResolution is { } early)
+                    {
+                        _earlyResolution = null;
+                        ResolveCommit(early.OperationId, early.Outcome);
+                        return _active is null;
+                    }
+
                     return false;
                 default:
                     return false;
@@ -444,6 +467,8 @@ internal sealed class CanvasModeController : BindableBase
         finally
         {
             _committing = false;
+            _earlyResolution = null;
+            _earlyAbandon = false;
             DrainDeferredDeparture();
         }
     }
@@ -463,8 +488,17 @@ internal sealed class CanvasModeController : BindableBase
             _ = _dispatcher.BeginInvoke(() => ResolveCommit(operationId, outcome));
             return;
         }
-        if (_retired || !ReferenceEquals(_pendingCommit, operationId))
+        if (_retired)
         {
+            return;
+        }
+        if (!ReferenceEquals(_pendingCommit, operationId))
+        {
+            if (_committing && _pendingCommit is null)
+            {
+                _earlyResolution = (operationId, outcome);
+            }
+
             return;
         }
         _pendingCommit = null;
@@ -489,7 +523,16 @@ internal sealed class CanvasModeController : BindableBase
     /// <summary>§F TF-0: a cancellation (F1a displacement, Esc-led
     /// teardown) clears any in-flight mark so a late completion finds
     /// nothing to resolve.</summary>
-    internal void AbandonPendingCommit() => _pendingCommit = null;
+    internal void AbandonPendingCommit()
+    {
+        if (_committing && _pendingCommit is null)
+        {
+            _earlyAbandon = true;
+            return;
+        }
+
+        _pendingCommit = null;
+    }
 
     /// <summary>
     /// The ONE place this controller speaks (contract C7).

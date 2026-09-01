@@ -2329,6 +2329,58 @@
       "reason": "PR-4: the four static RoutedCommands (export CSV, export Markdown, toggle sort, filter) are the grid substrate's, scoped to a focused grid. The app-level capabilities are the registered slate.bases.* ids."
     },
     {
+      "id": "windows.canvas.modeStepLargeDown",
+      "label": "Canvas mode: large step down",
+      "section": "View",
+      "hint": null,
+      "macChord": "⇧↓",
+      "mac": "Shift Down Arrow",
+      "windows": "Shift+Down",
+      "windowsSpoken": "Shift Down Arrow",
+      "scope": "Canvas",
+      "registered": false,
+      "reason": "§F TF-3 (FD-3): the large grid step while a move or resize transient holds the arrows; without a mode the chord is unbound and typing keeps Shift+arrows."
+    },
+    {
+      "id": "windows.canvas.modeStepLargeUp",
+      "label": "Canvas mode: large step up",
+      "section": "View",
+      "hint": null,
+      "macChord": "⇧↑",
+      "mac": "Shift Up Arrow",
+      "windows": "Shift+Up",
+      "windowsSpoken": "Shift Up Arrow",
+      "scope": "Canvas",
+      "registered": false,
+      "reason": "§F TF-3 (FD-3): the large grid step while a move or resize transient holds the arrows; without a mode the chord is unbound and typing keeps Shift+arrows."
+    },
+    {
+      "id": "windows.canvas.modeStepLargeRight",
+      "label": "Canvas mode: large step right",
+      "section": "View",
+      "hint": null,
+      "macChord": "⇧→",
+      "mac": "Shift Right Arrow",
+      "windows": "Shift+Right",
+      "windowsSpoken": "Shift Right Arrow",
+      "scope": "Canvas",
+      "registered": false,
+      "reason": "§F TF-3 (FD-3): the large grid step while a move or resize transient holds the arrows; without a mode the chord is unbound and typing keeps Shift+arrows."
+    },
+    {
+      "id": "windows.canvas.modeStepLargeLeft",
+      "label": "Canvas mode: large step left",
+      "section": "View",
+      "hint": null,
+      "macChord": "⇧←",
+      "mac": "Shift Left Arrow",
+      "windows": "Shift+Left",
+      "windowsSpoken": "Shift Left Arrow",
+      "scope": "Canvas",
+      "registered": false,
+      "reason": "§F TF-3 (FD-3): the large grid step while a move or resize transient holds the arrows; without a mode the chord is unbound and typing keeps Shift+arrows."
+    },
+    {
       "id": "windows.canvas.setVerbosityTerse",
       "label": "Canvas Verbosity: Terse",
       "section": "Canvas",

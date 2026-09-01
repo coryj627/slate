@@ -277,8 +277,9 @@ public sealed class ContractsCitationCensus
                 "## §W-G canonical-consumption audit",
                 // The length pin guards marker movement; a young
                 // section pins below its honest size and rises with
-                // its records, as §E's did.
-                6_000,
+                // its records, as §E's did. TF-3's record took
+                // the section well past its youth; the pin follows.
+                40_000,
                 // A DESIGN floor, the §C-unit/§E convention: the
                 // section's own new types stay plain text until
                 // tasks bind them, so today's citations are
@@ -303,7 +304,13 @@ public sealed class ContractsCitationCensus
                 // displacement watcher, taking the section to 52;
                 // 51 sits above the pre-task population of 50 — a
                 // third time.
-                51),
+                //
+                // TF-3 bound the move machine — the overlap and
+                // describe reads, the geometry commit and the
+                // controller's early-resolution memory — taking
+                // the section to 59; 56 sits above the pre-task
+                // population of 52 — a fourth time.
+                56),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

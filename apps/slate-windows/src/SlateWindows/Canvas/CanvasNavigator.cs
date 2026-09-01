@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Collections.Immutable;
 using System.Windows.Input;
 using uniffi.slate_uniffi;
 
@@ -174,10 +175,18 @@ internal sealed class CanvasNavigator
     /// </summary>
     private void Bind()
     {
-        AddChord(Key.Down, ModifierKeys.None, () => ArrowMove(forward: true));
-        AddChord(Key.Up, ModifierKeys.None, () => ArrowMove(forward: false));
-        AddChord(Key.Right, ModifierKeys.None, () => ArrowFollow(forward: true));
-        AddChord(Key.Left, ModifierKeys.None, () => ArrowFollow(forward: false));
+        // §F TF-3 (FD-3): a held transient owns the arrows — the
+        // step runs ahead of selection movement, and Shift is the
+        // large grid step. Without a transient the arrows keep their
+        // §C meaning untouched.
+        AddChord(Key.Down, ModifierKeys.None, () => ModeStepOr(() => ArrowMove(forward: true), 0, 1, large: false));
+        AddChord(Key.Up, ModifierKeys.None, () => ModeStepOr(() => ArrowMove(forward: false), 0, -1, large: false));
+        AddChord(Key.Right, ModifierKeys.None, () => ModeStepOr(() => ArrowFollow(forward: true), 1, 0, large: false));
+        AddChord(Key.Left, ModifierKeys.None, () => ModeStepOr(() => ArrowFollow(forward: false), -1, 0, large: false));
+        AddChord(Key.Down, ModifierKeys.Shift, () => ModeStepOr(null, 0, 1, large: true));
+        AddChord(Key.Up, ModifierKeys.Shift, () => ModeStepOr(null, 0, -1, large: true));
+        AddChord(Key.Right, ModifierKeys.Shift, () => ModeStepOr(null, 1, 0, large: true));
+        AddChord(Key.Left, ModifierKeys.Shift, () => ModeStepOr(null, -1, 0, large: true));
         AddChord(Key.Enter, ModifierKeys.None, CommitModeFromKey);
         AddChord(Key.Escape, ModifierKeys.None, EscapeFromKey);
         AddChord(Key.F, ModifierKeys.Control, FilterCardsFromKey);
@@ -220,6 +229,237 @@ internal sealed class CanvasNavigator
     private bool RedoFromKey()
     {
         _document.CanvasRedo();
+        return true;
+    }
+
+    /// <summary>§F TF-3 (F2): move mode — entry on the moving set
+    /// (the marked set reading-ordered, else the selection), through
+    /// TF-1's admitted preflight, with TF-2's holder installed on
+    /// success. Every refusal speaks; the capture is one never-silent
+    /// read and a failed capture speaks the FD-6 arm.</summary>
+    internal bool EnterMoveMode()
+    {
+        if (_presenter is not { } presenter)
+        {
+            return false;
+        }
+        if (_document.CurrentLoadedForModeEntry is not { } loaded)
+        {
+            _document.SpeakModeEntryNotReady();
+            return false;
+        }
+        var members = _document.Selection.Marked.Count > 0
+            ? new List<string>(_document.Selection.Marked)
+            : _document.Selection.Selected is { } one ? [one] : [];
+        if (members.Count == 0)
+        {
+            Announce(new CanvasA11yEvent.CanvasStatus(
+                new CanvasStatusNote.NothingSelected()));
+            return false;
+        }
+        CanvasTransientHolder? holder = CanvasTransientHolder.TryCapture(
+            _document.SessionForModeEntry, loaded, members, isResize: false);
+        if (holder is null)
+        {
+            Announce(new CanvasA11yEvent.CanvasActionFailed(
+                CanvasFailedAction.CanvasAction, "move"));
+            return false;
+        }
+        string primaryTitle = _document.RowFor(holder.Ids[0])?.Title ?? "card";
+        CanvasModeObject obj = holder.Ids.Length == 1
+            ? new CanvasModeObject.Card(primaryTitle)
+            : new CanvasModeObject.Cards((uint)holder.Ids.Length);
+        var token = new object();
+        var spec = new CanvasModeSpec(
+            CanvasMode.Move,
+            obj,
+            () => SubmitTransientCommit(
+                token, CanvasTransientVerb.Move, obj, "move", primaryTitle),
+            () =>
+            {
+                _document.DiscardTransient();
+                return holder.Ids.Length == 1
+                    ? new CanvasModeRestoration.BackAt(primaryTitle)
+                    : new CanvasModeRestoration.CardsReturned(
+                        (uint)holder.Ids.Length);
+            },
+            Token: token);
+        bool entered = EnterMode(spec, presenter);
+        if (entered)
+        {
+            _document.InstallTransient(holder);
+        }
+
+        return entered;
+    }
+
+    /// <summary>§F TF-3 (F4a/F4b): the commit closure — no change ends
+    /// without effect; otherwise ONE UpdateNodeGeometry action submits
+    /// through the funnel with the mode token, the completion mapping
+    /// each terminal row, and the machine holds Pending until it
+    /// lands.</summary>
+    private CanvasModeCommitResult SubmitTransientCommit(
+        object token,
+        CanvasTransientVerb verb,
+        CanvasModeObject obj,
+        string verbWord,
+        string primaryTitle)
+    {
+        if (_document.Transient is not { } transient
+            || _document.CurrentLoadedForModeEntry is not { } loaded)
+        {
+            return CanvasModeCommitResult.Refused();
+        }
+        var ops = new List<CanvasOp>();
+        foreach (string id in transient.Ids)
+        {
+            CanvasRect now = transient.Rects[id];
+            if (!now.Equals(transient.Originals[id]))
+            {
+                ops.Add(new CanvasOp.UpdateNodeGeometry(
+                    id, now.X, now.Y, now.Width, now.Height));
+            }
+        }
+        if (ops.Count == 0)
+        {
+            _document.DiscardTransient();
+            _document.Funnel.ClearModeToken(token);
+            return CanvasModeCommitResult.Committed(
+                new CanvasA11yEvent.CanvasModeEndedWithoutEffect(
+                    verb == CanvasTransientVerb.Move
+                        ? CanvasMode.Move
+                        : CanvasMode.Resize));
+        }
+        string name = transient.Ids.Length == 1
+            ? $"{verbWord} \"{primaryTitle}\""
+            : $"{verbWord} {SlateUniffiMethods.CountNoun((ulong)transient.Ids.Length, "card", "cards")}";
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId(name),
+            this,
+            _document.Selection.Selected,
+            loaded,
+            CanvasMutationEffect.KeepSelection,
+            modeToken: token);
+        operation.Completion = outcome =>
+        {
+            switch (outcome)
+            {
+                case CanvasOperationOutcome.Installed:
+                    _document.DiscardTransient();
+                    _document.Funnel.ClearModeToken(token);
+                    _document.Modes.ResolveCommit(
+                        operation.Id,
+                        CanvasModeCommitResult.Committed(
+                            new CanvasA11yEvent.CanvasModeCommitted(verb, obj)));
+                    break;
+                case CanvasOperationOutcome.Conflict:
+                    // FD-5: the mode SUSPENDS — transient frozen, the
+                    // token yields to the resolution, the pending mark
+                    // clears so Esc/commit refuse honestly while the
+                    // record stands.
+                    _document.Funnel.SuspendModeToken(token);
+                    _document.Modes.AbandonPendingCommit();
+                    break;
+                case CanvasOperationOutcome.RefusedPrepare:
+                    _document.Modes.ResolveCommit(
+                        operation.Id, CanvasModeCommitResult.Refused());
+                    break;
+                case CanvasOperationOutcome.Displaced:
+                    // The F1a watcher already cancelled; nothing to do.
+                    break;
+                default:
+                    // Unindexed / RefreshRefused: the write landed; the
+                    // mode ends with no spoken success — the refresh-only
+                    // region is the surface (F4b).
+                    _document.DiscardTransient();
+                    _document.Funnel.ClearModeToken(token);
+                    _document.Modes.ResolveCommit(
+                        operation.Id, CanvasModeCommitResult.Committed());
+                    break;
+            }
+        };
+        CanvasMutationAdmission admission = _document.Funnel.Apply(
+            operation, _ => new CanvasAction(name, [.. ops]), name);
+        return admission == CanvasMutationAdmission.Admitted
+            ? CanvasModeCommitResult.Pending(operation.Id)
+            : CanvasModeCommitResult.Refused();
+    }
+
+    /// <summary>§F TF-3 (FD-3): the arrow router — a held transient
+    /// takes the step; otherwise the §C handler (null for Shift rows,
+    /// which exist only for the mode).</summary>
+    private bool ModeStepOr(Func<bool>? fallback, int dx, int dy, bool large)
+    {
+        if (_document.Transient is not null && _document.Modes.IsActive)
+        {
+            return ModeStep(dx, dy, large);
+        }
+
+        return fallback?.Invoke() ?? false;
+    }
+
+    /// <summary>§F TF-3 (F2/F2a): one grid step over the whole rigid
+    /// set — the overlap two-state machine speaks transitions only,
+    /// and a throwing read leaves the transient untouched with the
+    /// FD-6 arm spoken.</summary>
+    internal bool ModeStep(int dx, int dy, bool large)
+    {
+        if (_document.Transient is not { } transient
+            || _document.CurrentLoadedForModeEntry is not { } loaded)
+        {
+            return false;
+        }
+        CanvasConstants constants = SlateUniffiMethods.CanvasConstants();
+        double step = large ? constants.GridStepLarge : constants.GridStep;
+        var moved = new Dictionary<string, CanvasRect>(StringComparer.Ordinal);
+        foreach (string id in transient.Ids)
+        {
+            CanvasRect r = transient.Rects[id];
+            moved[id] = new CanvasRect(
+                r.X + (dx * step), r.Y + (dy * step), r.Width, r.Height);
+        }
+        bool overlapping = false;
+        CanvasRelativeDesc[]? descs = null;
+        try
+        {
+            bool ran = loaded.Lease.Invoke(
+                () => true,
+                handle =>
+                {
+                    foreach (string id in transient.Ids)
+                    {
+                        if (_document.SessionForModeEntry.CanvasCheckOverlap(
+                            handle, moved[id], [.. transient.Ids]).Length > 0)
+                        {
+                            overlapping = true;
+                            break;
+                        }
+                    }
+                    descs = _document.SessionForModeEntry.CanvasDescribeRelative(
+                        handle, moved[transient.Ids[0]], [.. transient.Ids]);
+                });
+            if (!ran || descs is null)
+            {
+                Announce(new CanvasA11yEvent.CanvasActionFailed(
+                    CanvasFailedAction.CanvasAction, "move"));
+                return true;
+            }
+        }
+        catch (VaultException)
+        {
+            Announce(new CanvasA11yEvent.CanvasActionFailed(
+                CanvasFailedAction.CanvasAction, "move"));
+            return true;
+        }
+        CanvasOverlapTransition? transition =
+            overlapping && !transient.WasOverlapping
+                ? CanvasOverlapTransition.Onset
+                : !overlapping && transient.WasOverlapping
+                    ? CanvasOverlapTransition.Cleared
+                    : null;
+        transient.Rects = moved.ToImmutableDictionary(StringComparer.Ordinal);
+        transient.WasOverlapping = overlapping;
+        Announce(new CanvasA11yEvent.CanvasMoveRelative(descs, transition));
         return true;
     }
 

@@ -2178,6 +2178,11 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// refuses with the not-ready sentence.</summary>
     internal CanvasLoaded? CurrentLoadedForModeEntry => _slot.Current.Loaded;
 
+    /// <summary>§F TF-3: the session the mode's reads run
+    /// against - the navigator's steps query overlap and the
+    /// relative description under the lease.</summary>
+    internal VaultSession SessionForModeEntry => _session;
+
     /// <summary>§F TF-1: the navigator's no-basis entry refusal
     /// speaks the same shared derivation the guards use.</summary>
     internal void SpeakModeEntryNotReady() => SpeakNotReady();
