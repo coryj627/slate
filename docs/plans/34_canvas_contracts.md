@@ -7905,6 +7905,22 @@ from admission (the conflict fact's refusal tail failed); the
 displaced arm made rebasing again (the receipt fact failed); each
 restored byte-for-byte.
 
+**The wall censuses' catch, recorded as the round it was.** The
+first cut minted its own population and published `WithLoaded`
+directly, and the full suite's two wall censuses refused both —
+correctly: publishing around the transfer's wall had silently LOST
+the filter-reseed rule, so a mutation under an active needle would
+have unfiltered the projection. The reroute is the deep fix: the
+transfer gained `Republish` (a `CanvasRepublishOutcome` naming the
+reseed the caller must start), the pipeline gained
+`RefreshAfterMutation` (the mint inside its wall, the reseed
+callback fired exactly as the acceptance path's), and the funnel's
+refresh became one call through both. The refresh outcome enum
+lives beside the admission enum in the funnel's own file — the
+model's closed world stays closed, and its authority walk showed
+why an enum does not belong in it. One suite run was pushed red
+before this landed; the fix commit follows it directly.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same

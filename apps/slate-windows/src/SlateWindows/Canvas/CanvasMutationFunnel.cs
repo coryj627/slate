@@ -39,7 +39,7 @@ internal sealed class CanvasMutationFunnel(
     CanvasUndoStack history,
     CanvasBusyGate busy,
     ICanvasMutationSource writes,
-    ICanvasLoadSource reads,
+    CanvasLoadPipeline pipeline,
     Action<Action> run,
     Action<CanvasA11yEvent> announce)
 {
@@ -194,47 +194,30 @@ internal sealed class CanvasMutationFunnel(
 
     private void RefreshAndPublish(CanvasMutationOperation operation)
     {
-        CanvasOutlineRow[]? outline = null;
-        CanvasTableRow[]? tableRows = null;
-        CanvasScene? scene = null;
-        bool read = operation.Basis.Lease.Invoke(
-            () => operation.IsCurrentAgainst(slot.Current),
-            handle =>
-            {
-                outline = reads.Outline(handle);
-                tableRows = reads.TableRows(handle);
-                scene = reads.Scene(handle);
-            });
-        if (!read)
-        {
-            return;
-        }
-        var population = new CanvasPopulation(
-            outline,
-            tableRows,
-            slot.Current.Population?.Warnings,
-            slot.Current.Population?.LastActivatedNode,
-            scene,
-            contentHash: history.AttachedBasis ?? string.Empty);
-        CanvasEffectResolution seat = CanvasEffectPlan.ResolveSelection(
-            operation.Effect,
-            population,
-            slot.Current.SelectedIntent,
-            createdId: null);
-        if (seat.IsRequiredTargetMissing)
+        // Through the WALLED machinery (the model census's catch): the
+        // pipeline mints the population and the transfer republishes,
+        // which is also where an active filter needle reseeds instead
+        // of silently unfiltering — the logic the first cut lost by
+        // publishing around the wall.
+        CanvasRefreshOutcome outcome = pipeline.RefreshAfterMutation(
+            operation.Basis.Lease,
+            history.AttachedBasis ?? string.Empty,
+            population => CanvasEffectPlan.ResolveSelection(
+                operation.Effect,
+                population,
+                slot.Current.SelectedIntent,
+                createdId: null));
+        if (outcome == CanvasRefreshOutcome.RequiredTargetMissing)
         {
             MarkUnpresented(operation);
-            return;
         }
-        _ = slot.Publish(s =>
-            !s.Retired && ReferenceEquals(s.Loaded, operation.Basis)
-                ? s.WithLoaded(
-                        operation.Basis.Lease,
-                        population,
-                        CanvasProjectionUnit
-                            .Unfiltered(population)
-                            .WithResolvedSelection(seat.SeatValue))
-                    .WithSelectedIntent(seat.SeatValue)
-                : null);
     }
+}
+
+/// <summary>The mutation refresh's typed answer (§E TE-5a).</summary>
+internal enum CanvasRefreshOutcome
+{
+    Installed,
+    RequiredTargetMissing,
+    Refused,
 }

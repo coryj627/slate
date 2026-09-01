@@ -72,6 +72,7 @@ public sealed class CanvasModelCensus
         typeof(CanvasFilterSchedule),
         typeof(CanvasRequestIdentity),
         typeof(CanvasPublicationSlot),
+        typeof(CanvasRepublishOutcome),
         typeof(CanvasPublicationInstallObserver),
         typeof(CanvasPublicationOutcome),
         typeof(CanvasPublicationRefusedException),

@@ -249,6 +249,51 @@ internal static class CanvasLeaseTransfer
                 : outcome.Successor.Unit!.Needle);
     }
 
+    /// <summary>W6-1 §E TE-5a (the wall censuses' catch): the funnel's
+    /// post-mutation republish, INSIDE the `WithLoaded` wall. Admits on
+    /// the LEASE — a unit swapped by a filter answer mid-apply still
+    /// takes the refresh, which replaces population and unit wholesale
+    /// — and reuses the acceptance's reseed rule: an active needle
+    /// leaves the unit pending a fresh filter request rather than
+    /// silently unfiltering, which is exactly the logic the funnel's
+    /// first cut lost by publishing around this wall.</summary>
+    internal static CanvasRepublishOutcome Republish(
+        CanvasPublicationSlot slot,
+        CanvasHandleLease lease,
+        CanvasPopulation population,
+        string? seat)
+    {
+        ArgumentNullException.ThrowIfNull(slot);
+        ArgumentNullException.ThrowIfNull(lease);
+        ArgumentNullException.ThrowIfNull(population);
+
+        CanvasRequestIdentity? reseed = null;
+        string? needle = null;
+        CanvasPublicationOutcome outcome = slot.Publish(snapshot =>
+        {
+            if (snapshot.Retired || !snapshot.Names(lease))
+            {
+                return null;
+            }
+            reseed = null;
+            needle = null;
+            CanvasProjectionUnit unit = CanvasProjectionUnit
+                .Unfiltered(population)
+                .WithResolvedSelection(seat);
+            if (CanvasFilterMachine.IsActiveNeedle(snapshot.NeedleIntent))
+            {
+                reseed = new CanvasRequestIdentity("reseed of mutation refresh");
+                needle = snapshot.NeedleIntent;
+                unit = unit.Pending(reseed, snapshot.NeedleIntent);
+            }
+            return snapshot
+                .WithLoaded(lease, population, unit)
+                .WithFilters(snapshot.Filters.Reseeded(reseed))
+                .WithSelectedIntent(seat);
+        });
+        return new CanvasRepublishOutcome(outcome.Installed, reseed, needle);
+    }
+
     /// <summary>
     /// Release a lease this caller opened and no publication took —
     /// the refusal and the fault path, which are the same path.
@@ -363,3 +408,11 @@ internal static class CanvasLeaseTransfer
             : released;
     }
 }
+
+/// <summary>The republish's answer: whether it installed, and the
+/// reseeded filter request the caller must start (the pipeline fires
+/// its onReseeded exactly as the acceptance path does).</summary>
+internal readonly record struct CanvasRepublishOutcome(
+    bool Installed,
+    CanvasRequestIdentity? Reseeded,
+    string? Needle);

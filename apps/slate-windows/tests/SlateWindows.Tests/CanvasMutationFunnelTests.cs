@@ -37,7 +37,8 @@ public sealed class CanvasMutationFunnelTests
                 .WithLoadState(CanvasLoadState.Ready, null));
             History.Rebase("rev-1");
             Funnel = new CanvasMutationFunnel(
-                Slot, Gate, History, Busy, Writes, Reads,
+                Slot, Gate, History, Busy, Writes,
+                new CanvasLoadPipeline(Slot, Reads, onReseeded: null),
                 run: job => job(), announce: Announced.Add);
         }
 
