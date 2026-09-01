@@ -287,6 +287,81 @@ public sealed class CanvasMutationTests : IDisposable
         document.Shutdown();
     }
 
+    /// <summary>§F review round 1 (F4b/IF-2, codoki's prescription):
+    /// a DISPLACED outcome while the watcher stands down must not
+    /// wedge the mode — the displaced resolution cancels it, the
+    /// transient discards through the cancel's own closure, and a
+    /// fresh mode entry admits afterward.</summary>
+    [Fact]
+    public void ADisplacedCommitCancelsTheModeAndFreesTheDocument()
+    {
+        CanvasDocumentViewModel document = Open();
+        CanvasLoaded loaded = document.CurrentLoadedForModeEntry!;
+        var id = new object();
+        var spec = new CanvasModeSpec(
+            CanvasMode.Move,
+            new CanvasModeObject.Card("A"),
+            () => CanvasModeCommitResult.Pending(id),
+            () =>
+            {
+                document.DiscardTransient();
+                return new CanvasModeRestoration.CardsReturned(1);
+            });
+        Assert.True(document.Modes.Enter(spec, new object()));
+        document.InstallTransient(
+            CanvasTransientHolder.TryCapture(
+                _session, loaded, ["a"], isResize: false)!);
+        Assert.False(document.Modes.Commit());
+        Assert.True(document.Modes.HasPendingCommitForTests);
+
+        document.Modes.ResolveCommitDisplaced(id);
+
+        Assert.False(document.Modes.IsActive);
+        Assert.False(document.Modes.HasPendingCommitForTests);
+        Assert.Null(document.Transient);
+
+        // The document is FREE: a real mode enters and a verb admits.
+        document.SeatSelectionSilently("a");
+        document.Navigator.AttachPresenter(new FakePane());
+        Assert.True(document.Navigator.EnterMoveMode());
+        Assert.True(document.Modes.Cancel());
+        document.Shutdown();
+    }
+
+    /// <summary>§F review round 1: the connect half — the displaced
+    /// resolution clears the origin memory through the cancel and the
+    /// document stays free.</summary>
+    [Fact]
+    public void ADisplacedConnectCommitCancelsAndClearsTheOrigin()
+    {
+        CanvasDocumentViewModel document = Open();
+        CanvasLoaded loaded = document.CurrentLoadedForModeEntry!;
+        var id = new object();
+        var spec = new CanvasModeSpec(
+            CanvasMode.Connect,
+            new CanvasModeObject.Card("A"),
+            () => CanvasModeCommitResult.Pending(id),
+            () =>
+            {
+                document.ClearConnectOrigin();
+                return new CanvasModeRestoration.Unstated();
+            });
+        Assert.True(document.Modes.Enter(spec, new object()));
+        document.InstallConnectOrigin(
+            new CanvasConnectOrigin("a", "Alpha", loaded));
+        Assert.False(document.Modes.Commit());
+
+        document.Modes.ResolveCommitDisplaced(id);
+
+        Assert.False(document.Modes.IsActive);
+        Assert.Null(document.ConnectOrigin);
+        document.SeatSelectionSilently("a");
+        document.Navigator.AttachPresenter(new FakePane());
+        Assert.True(document.Navigator.EnterConnectMode());
+        Assert.True(document.Modes.Cancel());
+        document.Shutdown();
+    }
+
     /// <summary>§F TF-10 (IF-30): the suspended column — a conflicted
     /// Return freezes the transient, and steps and presets REFUSE
     /// with the ladder's own conflict sentence, moving nothing.</summary>

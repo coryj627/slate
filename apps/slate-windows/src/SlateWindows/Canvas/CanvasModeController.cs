@@ -224,6 +224,8 @@ internal sealed class CanvasModeController : BindableBase
 
     private bool _earlyAbandon;
 
+    private object? _earlyDisplaced;
+
     /// <summary>Set by <see cref="Shutdown"/>. The stack is TERMINAL from
     /// then on: no mode may be entered, committed or cancelled, and
     /// nothing is announced about it.</summary>
@@ -458,6 +460,14 @@ internal sealed class CanvasModeController : BindableBase
                         ResolveCommit(early.OperationId, early.Outcome);
                         return _active is null;
                     }
+                    if (_earlyDisplaced is { } displaced
+                        && ReferenceEquals(displaced, _pendingCommit))
+                    {
+                        _earlyDisplaced = null;
+                        _pendingCommit = null;
+                        _ = _dispatcher.BeginInvoke(() => _ = Cancel());
+                        return false;
+                    }
 
                     return false;
                 default:
@@ -469,6 +479,7 @@ internal sealed class CanvasModeController : BindableBase
             _committing = false;
             _earlyResolution = null;
             _earlyAbandon = false;
+            _earlyDisplaced = null;
             DrainDeferredDeparture();
         }
     }
@@ -518,6 +529,44 @@ internal sealed class CanvasModeController : BindableBase
         }
         // Refused: the mode and its state stand (M2's rule, one seam
         // over) — the effect's own sentence spoke already.
+    }
+
+    /// <summary>§F PR-review round 1 (F4b/IF-2 reconciled): a
+    /// DISPLACED completion ends the mode as a CANCELLATION. F4b's
+    /// row says "the mode is already cancelling per F1a" — but IF-2's
+    /// own-commit exemption stands the watcher down exactly while the
+    /// commit pends, so in that window nobody cancels and the mode
+    /// wedged. The completion is the one arbiter while pending
+    /// (IF-2's own words), so it owns the cancel: this resolution
+    /// clears the mark and runs the machine's cancel — restoration,
+    /// token clear and the cancelled sentence all riding the same
+    /// wrapped closures. Inside a synchronous commit stack it is
+    /// REMEMBERED like the other early arrivals and the cancel posts
+    /// outside the stack, because frozen C refuses a cancel from
+    /// inside a commit effect.</summary>
+    internal void ResolveCommitDisplaced(object operationId)
+    {
+        ArgumentNullException.ThrowIfNull(operationId);
+        if (!_dispatcher.CheckAccess())
+        {
+            _ = _dispatcher.BeginInvoke(() => ResolveCommitDisplaced(operationId));
+            return;
+        }
+        if (_retired)
+        {
+            return;
+        }
+        if (!ReferenceEquals(_pendingCommit, operationId))
+        {
+            if (_committing && _pendingCommit is null)
+            {
+                _earlyDisplaced = operationId;
+            }
+
+            return;
+        }
+        _pendingCommit = null;
+        _ = Cancel();
     }
 
     /// <summary>§F TF-0: a cancellation (F1a displacement, Esc-led

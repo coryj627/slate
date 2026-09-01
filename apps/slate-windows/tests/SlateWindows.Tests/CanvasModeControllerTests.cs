@@ -347,6 +347,64 @@ public sealed class CanvasModeControllerTests
 
     private readonly List<RenderedAnnouncement> _announced = [];
 
+    /// <summary>§F review round 1 (F4b/IF-2): a DISPLACED resolution
+    /// ends the mode as a cancellation — the pending mark clears, the
+    /// wrapped cancel runs, the cancelled sentence speaks.</summary>
+    [Fact]
+    public void ADisplacedResolutionCancelsTheMode()
+    {
+        List<CanvasA11yEvent> spoken = [];
+        var controller = new CanvasModeController(spoken.Add);
+        var mode = new TestMode();
+        var id = new object();
+        Assert.True(controller.Enter(mode.PendingSpec(id), _modePane));
+        Assert.False(controller.Commit());
+        Assert.True(controller.HasPendingCommitForTests);
+
+        controller.ResolveCommitDisplaced(id);
+
+        Assert.False(controller.IsActive);
+        Assert.False(controller.HasPendingCommitForTests);
+        Assert.Contains(spoken, e => e is CanvasA11yEvent.CanvasModeCancelled);
+    }
+
+    /// <summary>§F review round 1: a displaced resolution arriving
+    /// INSIDE the commit stack (the synchronous funnel) is remembered
+    /// and the cancel lands outside it — frozen C refuses a cancel
+    /// from within a commit effect, and the mode still must not
+    /// wedge.</summary>
+    [Fact]
+    public void AnEarlyDisplacedResolutionLandsOutsideTheStack()
+    {
+        List<CanvasA11yEvent> spoken = [];
+        var controller = new CanvasModeController(spoken.Add);
+        var id = new object();
+        CanvasModeController? captured = null;
+        var spec = new CanvasModeSpec(
+            CanvasMode.Move,
+            new CanvasModeObject.Card("Research"),
+            () =>
+            {
+                captured!.ResolveCommitDisplaced(id);
+                return CanvasModeCommitResult.Pending(id);
+            },
+            () => new CanvasModeRestoration.BackAt("Research"));
+        captured = controller;
+        Assert.True(controller.Enter(spec, _modePane));
+
+        Assert.False(controller.Commit());
+        Assert.False(controller.HasPendingCommitForTests);
+
+        var frame = new System.Windows.Threading.DispatcherFrame();
+        _ = System.Windows.Threading.Dispatcher.CurrentDispatcher.BeginInvoke(
+            System.Windows.Threading.DispatcherPriority.Background,
+            () => frame.Continue = false);
+        System.Windows.Threading.Dispatcher.PushFrame(frame);
+
+        Assert.False(controller.IsActive);
+        Assert.Contains(spoken, e => e is CanvasA11yEvent.CanvasModeCancelled);
+    }
+
     /// <summary>§F TF-3: a SYNCHRONOUS funnel resolves while
     /// OnCommit is still on the stack. The early resolution is
     /// remembered and lands the moment the pending mark exists — the

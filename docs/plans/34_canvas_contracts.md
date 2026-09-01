@@ -9428,6 +9428,28 @@ arm awaits a recovery flow that writes through
 `ConflictResolutionToken`; the F1a watcher and the completion remain
 the two arbiters until then.
 
+### PR review round 1 — the Displaced completion, confirmed and closed
+
+Codoki's automated round approved the PR and still carried one
+finding worth its name, and the finding was REAL: the Displaced
+completion arms did nothing on the theory that "the F1a watcher
+already cancelled" — but IF-2's own-commit exemption stands the
+watcher down exactly while a commit pends, so F4b's "already
+cancelling per F1a" never happens in that window and the mode
+wedged, pending forever, Escape and Return refusing at a door
+nobody could reopen. The two frozen texts reconcile the way IF-2
+itself says: THE COMPLETION IS THE ONE ARBITER WHILE PENDING. The
+controller gains `ResolveCommitDisplaced` — dispatcher-marshalled
+like every resolution, clearing the mark and running the machine's
+own cancel so restoration, token clear and the cancelled sentence
+all ride the wrapped closures; inside a synchronous commit stack the
+arrival is REMEMBERED like the other early arrivals and the cancel
+posts outside it, because frozen C refuses a cancel from within a
+commit effect. Both completion arms wire to it in one line each.
+Four facts (the resolution's two windows at the controller, the
+transient and connect halves at the document, each proving the
+document FREE afterward); two byte-restored mutations, both bitten.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same

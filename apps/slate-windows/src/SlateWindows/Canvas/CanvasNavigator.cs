@@ -372,6 +372,9 @@ internal sealed class CanvasNavigator
                         operation.Id, CanvasModeCommitResult.Refused());
                     break;
                 case CanvasOperationOutcome.Displaced:
+                    // IF-2's arbiter rule, as in the transient
+                    // completion (review round 1).
+                    _document.Modes.ResolveCommitDisplaced(operation.Id);
                     break;
                 default:
                     _document.ClearConnectOrigin();
@@ -736,7 +739,11 @@ internal sealed class CanvasNavigator
                         operation.Id, CanvasModeCommitResult.Refused());
                     break;
                 case CanvasOperationOutcome.Displaced:
-                    // The F1a watcher already cancelled; nothing to do.
+                    // The completion is the one arbiter while pending
+                    // (IF-2) — the F1a watcher stood down, so the
+                    // displaced resolution cancels the mode itself
+                    // (review round 1).
+                    _document.Modes.ResolveCommitDisplaced(operation.Id);
                     break;
                 default:
                     // Unindexed / RefreshRefused: the write landed; the
