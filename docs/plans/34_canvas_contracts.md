@@ -1936,7 +1936,8 @@ announcement are PR A's, unchanged and unduplicated. A group row has
 nothing to expand on a flat projection and falls through silently, as
 mac's does (its `activate` has no group arm at all). Row actions are
 mac's three, in mac's order: **Open**, **Toggle Mark** (disabled until
-PR G) and **Delete** (disabled until PR E), each disabled one carrying
+PR G) and **Delete** (disabled until §E's verbs land — the section
+now owns the row), each disabled one carrying
 its reason, which the substrate exposes as HelpText and a tooltip — the
 mac RowAction contract ("context menus retain a temporarily unavailable
 relevant action WITH its reason"), and the reason a screen-reader user
@@ -2808,8 +2809,8 @@ it exactly. Classified by walking the focused element's ancestors for a
 `MenuBase` — logical parents first, visual parents when the chain runs
 out, because a `ContextMenu` lives in its own popup. One question covers
 the menu bar, submenus and context menus; what is TESTED is the menu-bar
-chain, because no canvas surface has a context menu until PR E/F ship
-the row menus, and the popup arm is named as the untested half so the PR
+chain, because no canvas surface has a context menu until the §E/§F
+row menus ship, and the popup arm is named as the untested half so the PR
 that ships the first one owns the fact (m11).
 `OpeningAMenuKeepsTheModeAliveAndLeavingTheCanvasCancelsIt` drives a
 real menu and a real non-menu focus loss in one fact, so it cannot pass
@@ -7104,6 +7105,280 @@ whole, and the PR is the next act.
 
 ---
 
+## PR E — the mutation funnel, the undo domain, the authoring verbs, the pickers, and the card editor
+
+**Goal (spec §PR E).** Everything that is a single committed
+`canvas_apply` from a command, plus the undo domain and the editor.
+After this PR a keyboard user can create a canvas and author cards,
+groups and connections' basics without the visual surface. This is the
+first WRITING PR of the series: every section before it reads; this
+one is where the funnel, the stacks and the sheets arrive — and where
+five ledgered inheritances come due (M8, m5, m7, m11, the media-class
+export).
+
+This section is revision 1, written before round 1 per the protocol's
+§0. New types are deliberately plain text until tasks bind them
+(§C-unit's convention, §D's practice): the funnel, the stacks, the
+pickers and the sheets are named without backticks below, and each
+implementation task binds its names and raises the citation floor.
+
+### Contracts
+
+**E1 — One funnel, one call site, and the admission table is a table.**
+Every mutation is one CanvasMutationFunnel.Apply(action) — the ONE
+`canvas_apply` call site in the shell (spec R-A), the twin of mac's
+`canvasApply(_:to:)` (`AppState+Canvas.swift:613`, the funnel that
+admits, applies, pushes the inverse, clears redo, reloads and
+announces). Admission is a table over the refusal STATES, not a chain
+of guards somebody remembered: degraded ⇒ refuse with the one reason
+string (t0 §5); no attached handle (absent, retarget-pending, shut
+down) ⇒ refuse — the mac recovery contract: mutations stay disabled
+until a handle attaches; a mode transient held ⇒ refuse naming the
+mode (the mac red-team #521 guard — out-of-band verbs cannot clobber a
+mode's entry snapshot; the mode's own commit clears the transient
+before entering the funnel, and PR F enters through exactly this
+seam). The apply itself runs OFF the dispatcher (the §C scheduler
+lesson: FFI never under a UI lock on the UI thread), and the funnel is
+the only code that may follow it with the refresh.
+
+**E2 — The post-apply sequence is fixed, and selection reconciliation
+is part of it.** On success, in order: refresh outline, table and
+scene from core (one republish — E12 owns what the republish preserves);
+drop a selection the refreshed outline cannot resolve (the mac Duplicate
+lesson, recorded in §0a's register: a stale selection makes the NEXT
+verb announce over an empty resolution — "Duplicated 0 cards" — and
+Windows must not copy it); push (name, inverse) from
+`CanvasApplyResult` onto the undo stack and clear redo; announce the
+verb's confirmation event (t0 §1.3). On WriteConflict: the t0 §5
+surface — assertive CanvasSaveConflict plus a focusable error region
+offering Reload / Overwrite / Save a Copy, in-window, never a
+MessageBox from an uninjected seam (the W4-7 hang lesson: every dialog
+seam is injected). On any other error: an inline error region, never a
+dialog, never silence (the §C never-silent table extends to every
+funnel outcome).
+
+**E3 — The undo domain is session state with mac's exact stale rule.**
+Per-document stacks of (name, inverse); undo pops, applies the inverse
+flagged not-to-push, and pushes the RETURNED inverse onto redo; redo is
+symmetric. A stale entry — the file changed externally since the entry
+was pushed — is refused by core's CAS as WriteConflict, and the entry
+is RE-PUSHED so the user's history is not consumed by a refusal
+(`AppState+Canvas.swift:679`, the one behavior the spec pins by line).
+Stacks clear on document release and are never persisted (core's
+journal owns durability). Announcements are the 0a arms: "Undid: ⟨name⟩"
+/ "Redid: ⟨name⟩", "Nothing to undo.", and the blocked arm when
+admission refuses. Chords are D-6's: Ctrl+Z / Ctrl+Y, canvas-focus-
+scoped imperative delivery exactly as the structural rows
+(`StructuralUndoJournal` precedent; allow-listed in
+ImperativeGlobalRows with the reason); no Ctrl+Shift+Z alias unless the
+editor already honors it — the table adjudicates, and ED-2 records the
+answer.
+
+**E4 — Undo/redo route by FOCUS across three domains, and the menu
+titles say which.** The Edit menu's Undo/Redo are focus-routed: card-
+editor sheet open ⇒ the editor's own stack (AvalonEdit's, inside
+`AvalonDocumentBufferSession`); a canvas projection focused ⇒ the
+canvas stacks; the files tree ⇒ the structural journal; else the note
+editor. While a canvas projection has focus the titles render the 0a
+menu-title event with the top entry's name, so a reader knows what ⌘Z
+will take back before pressing it (mac's #867 pulse; the stacks are
+plain state, so the pulse is explicit at the funnel's tail). The
+precedence is a TABLE with a fact per row, not an if-chain.
+
+**E5 — The verb inventory is mac's, verb for verb, and each row names
+its op, its event and its twin.** The single-shot verbs this PR ships
+(modes are F's, marks are G's):
+
+| Verb | Core write | Confirmation | mac twin |
+|---|---|---|---|
+| New Card | CreateNode at `canvas_place_new` (anchor = selection, size from `canvas_constants`, no hint) | `CanvasCreated` with core's relative phrase; lands IN the editor sheet | `canvasNewCard` (`AppState+CanvasActions.swift:69`) |
+| New Group… | CreateGroup at place-new geometry, label from the prompt; inserts beneath contained nodes (core rule #960) | `CanvasCreated` | `canvasNewGroup` (`:112`) |
+| Delete Selection | DeleteNode / DeleteEdge; a GROUP delete offers Ungroup instead via a two-button confirmation | `CanvasDeleted` with the undo hint (t0 §1.3) | `canvasDeleteSelection` (`:317`) |
+| Rename Group… | SetNodeContent on the group label | connection-free confirmation, name in the event | `canvasRenameGroup` (`:361`) |
+| Move into Group… | `canvas_place_inside_group` → UpdateNodeGeometry (reparenting is geometric; the model re-derives) | `CanvasMovedIntoGroup` | `canvasMoveIntoGroup` (`:432`) |
+| Remove from Group | `canvas_place_new` (anchor = the group, hint Below) → UpdateNodeGeometry | confirmation names the departure | `canvasRemoveFromGroup` (`AppState+CanvasCreate.swift:280`) |
+| Set Color… / Clear Color | SetNodeColor preset or None | `CanvasColorSet` — the NAME, never the number (t1) | `canvasSetColor` (`:340`) |
+| Edit Card Text… | SetNodeContent on commit (E8) | "No changes." on an untouched buffer | `canvasCommitCardEdit` (`AppState+CanvasCreate.swift:71`) |
+| Add Note to Canvas… / Add Media… | CreateNode file card, `File{file, subpath}`; the vault picker filters by `FileFilter` | `CanvasCreated`, kind label from core | `canvasAddFileCard` (`:169`) |
+| Add Link Card… | CreateNode link card from the URL prompt; label = host, from core | `CanvasCreated` | `canvasAddLinkCard` (`:178`) |
+| Locate File… | SetNodeContent repointing a missing-target file card | confirmation; the card was navigable throughout, labelled "— file not found" (t0 §5) | `canvasLocate` (`:261`) |
+| Edit Connection… | UpdateEdge — label, direction radio one-way/both/none onto from-end/to-end, sides defaulted from `canvas_auto_sides` | `CanvasConnectionUpdated` | `canvasEditConnection` (`AppState+CanvasConnect.swift:170`) |
+| Delete Connection… | DeleteEdge; the structural lookup runs BEFORE the apply and a miss returns without deleting (0a-2/CD-7 — the mac trailing-space bug is unreachable by construction) | `CanvasDeleted` | `canvasDeleteConnection` (`:131`) |
+| New Canvas | `create_exclusive_bytes` with the canonical empty document bytes — the O never-clobber path with the #1123 typed outcome | `CanvasFileCreated`; the tab opens and focus lands on the onboarding region | `canvasNewCanvasFile` (`AppState+CanvasActions.swift:158`) |
+
+Every verb: palette row + menu item + context-menu row (E13) + a
+chord only where §7 grants one — R1: a chord is a convenience, never
+the only path. Non-visual reachability is asserted per verb: the verb
+works with the renderer hidden.
+
+**E6 — Placement is core's, and the two group refusals are ONE refusal
+to a host.** All geometry for new content comes from `canvas_place_new`
+/ `canvas_place_inside_group`; the host never invents a rect (R-D — the
+one C# geometry is viewport transforms, which this PR does not touch).
+The 0b API note binds here, verbatim: `bad_node` and `not_a_group` are
+two MESSAGES on one error case, a host cannot discriminate them without
+matching on the string, and no host should — the funnel treats both as
+"the id the user picked cannot take a card" and says so once. If a
+picker someday wants "create a group here" for the second case only,
+that is a typed-variant escalation decided in core, not a
+contains("not a group") in the shell.
+
+**E7 — Pickers are modal sheets under the shell's one admission, and
+their interaction model is the palette's.** The card picker (proximity-
+sorted by model geometry with reading-order ties — core's order, not
+screen distance), the group picker, the connection picker, the vault-
+file picker (notes or media via `FileFilter`, capped at 200 rows with
+"type to narrow"), the color picker (six NAMED preset buttons + hex
+entry + Clear — the name travels in text, WCAG 1.4.1, the mac palette's
+three rules), the URL prompt and the text prompt (New/Rename Group) are
+each a member of the `ModalSurface` enum — the CS8509 promotion makes a
+missing arm a compile error — and each passes the #1118 chord admission
+(`SheetChordAdmissionTests`). In-window sheets, never a Popup (W4-5
+D-1). Esc cancels a picker (M6's sheets are the visible-control path;
+only the EDITOR commits on Esc — E8). Focus returns to the invoking
+row on dismiss, asserted per sheet. Mac's picker purposes that belong
+to F (place-relative, align, connect) arrive with F; this PR ships the
+picker COMPONENT with E's purposes, so F adds rows, not a component
+(mac's picker-purpose enum, the one-picker-one-model rule).
+
+**E8 — The card editor is the real editor, and Escape COMMITS.** An
+in-window sheet hosting the W2-1 editor host (`AvalonDocumentBufferSession`)
+over a scratch buffer seeded from `canvas_node_text` — the real
+component: spans from the W2-2 colorizer, the editor's own undo inside.
+t0 M8 carves it out of the mode stack: it is not a spatial mode, it
+joins no Esc ladder rung, and **Escape commits** — one SetNodeContent
+when the text changed, the "No changes." status when it did not — then
+returns focus to the card row. Discarding is the editor's own undo
+before Escape; closing with an unsaved draft asks (the mac Discard
+flow). Apply failure keeps the sheet and the draft. Degraded ⇒ the
+buffer is read-only with the reason, selectable and copyable (the mac
+label inventory). Every string and every comment about editor Escape
+says "commits" and never cites M2 — the §C I2 paragraph is the
+inheritance this satisfies.
+
+**E9 — Core exports the media classification, and the CD-38 copy
+retires.** This PR is the first that needs `media_class` for its own
+reasons (Add Media's kinds and labels), so it adds the export to core,
+deletes the transliterated copy behind the shell's media gate, and
+retires the pin that guarded the copy — exactly as the CD-38 drift
+note staged it. The gate's behavior does not change: media by
+extension opens externally, everything else is refused audibly and
+never launched. The two edge rules (the basename's real extension; a
+dotfile like ".mov" is hidden, not video) move INTO the exported
+answer's tests, and the audio/video thirds get the pin the kind-label
+detour could not give them.
+
+**E10 — The refused-open sentence gets its typed reason.** §A flagged
+that a refused file-type open renders the generic action-failed
+sentence — accurate and uninformative — because adding a typed
+`CanvasBlockedReason` arm was a core change that task could not make.
+This PR is the 0a follow-up the flag names: the arm lands in the
+vocabulary with a rendered sentence naming the refusal, the corpus
+gains the witness, and the shell's refusal site switches from the
+generic arm to the typed one. Safety shipped in §A; the sentence
+ships here.
+
+**E11 — The two staged swaps land: onboarding and activation.** The
+empty canvas swaps `CanvasStatus{Empty}` for `CanvasEmptyOnboarding`
+rendered with the REAL New Card chord — CD-37's tie-breaker inverts
+the moment the command exists, and the region's copy leads with the
+chord (spec behavior 2, no longer deferred). Activation's text arm
+swaps the read-only interim detail for the editor sheet (A13's staged
+replacement; the interim region and its Esc-dismisses arm retire —
+E8's ladder note). The file arm's anchor behavior is unchanged and
+stays A13's; the "anchor lands only at note top" caveat is re-verified
+against the W3-5 resolution and either closed or recorded.
+
+**E12 — The republish preserves what the user arranged, because the
+funnel republishes on EVERY write.** §A's ledgered m5 comes due: a
+rebuild force-expands every group, which was one lost collapse per
+explicit reload while nothing else republished — this PR's funnel
+republishes on every mutation, so expansion state is preserved across
+a rebuild rather than reset. The decision covers its §C sibling m-5
+(the collapsed outline's shadow expansions while the table shows):
+one preservation rule for BOTH surfaces, keyed by node id, dropping
+state for ids the refresh no longer knows. The §C m8 note travels
+with the off-dispatcher work: the funnel's scheduling guard scans the
+whole Canvas directory, not one file.
+
+**E13 — Context menus are the M6 rows, and they inherit the menu
+classification's untested half.** Every verb reaches a context menu on
+the outline row, the table row and the renderer card (Menu key /
+Shift+F10), replacing the disabled placeholders §B staged (the Delete
+row action goes live; Toggle Mark stays disabled until G with its
+reason). Opening one keeps a future mode alive: the MenuOpen ancestor
+walk already classifies ContextMenu popups by visual parent, and m11
+lands here — the popup arm's fact ships with the first real context
+menu. The ENVIRONMENT FACT binds: the CI desktop refuses keyboard
+focus into menus, so the facts drive the classification through a
+focusable element hosted in the menu row, keep the real MenuBase in
+the chain, write the premise message before the first push, and
+budget a CI round trip for the first ContextMenu popup — which is
+likely WORSE than an in-window Menu on that desktop.
+
+**E14 — The focus-request lifecycle closes m7.** A durable focus
+request naming a filtered-out node is SUPERSEDED when the filter
+excludes its target, instead of surviving to deliver a surprise jump
+when the filter clears. This is the A14 state-machine change §C
+deferred to the request-lifecycle work this PR owns; the landing
+rules' unfiltered read stays for every other case.
+
+**E15 — The §W-A canvas scenarios are the cross-platform oracle.** A
+canvas scenario set joins the mutation-golden fixtures: scripted
+`CanvasAction` sequences per fixture, executed verbatim by both
+harness twins, asserting final `.canvas` bytes and undo round-trip
+bytes byte-identical cross-platform AND against committed goldens
+(the W5-4 two-oracle rule). Undo restores the EXACT prior bytes —
+apply→invert→serialize equality against disk, per verb.
+
+**E16 — Menus and chords are table rows with drift tests.** The verb
+rows land in `ChordTable` (Canvas section; New Canvas in File),
+resolve in `SlateCommandRegistrar`, and the menu items mirror mac's
+menu ownership — drift tests 2/3 bind menu to table to palette. New
+chords are §7's: New Card Ctrl+Alt+N; undo/redo per D-6. Everything
+else is palette/menu/context-menu only.
+
+### Decisions
+
+- **ED-1 (D-6 adopted).** Canvas undo/redo are Ctrl+Z / Ctrl+Y,
+  imperative canvas-focus-scoped delivery; no Ctrl+Shift+Z alias —
+  the editor host does not register one today, and the table's rule
+  is "only if the editor already honors it".
+- **ED-2.** The vault-file picker cap is 200 with "type to narrow" —
+  the spec's number, recorded so a review argues with the record, not
+  the recollection.
+- **ED-3.** The group-delete confirmation offers Ungroup instead —
+  two buttons, both destructive-confirmation styled, undo hint on
+  both (t0 §1.3's hint rule).
+- **ED-4.** Expansion-state preservation (E12) is keyed by node id
+  and drops unknown ids; it does NOT persist across close/reopen —
+  session state, like the undo stacks.
+
+### Verification plan
+
+Batteries: mutation facts per verb (real vault, bytes + announcement +
+undo restores exact bytes + non-visual reachability); undo-domain
+facts (stack discipline, stale re-push, three-domain focus routing,
+menu titles); editor facts (seed, Esc commits, no-op, failure keeps
+sheet, Discard, focus return, degraded read-only); picker facts
+(order, ties, filter, cap, focus return, admission); the swaps'
+facts (onboarding chord, activation-to-editor); republish-
+preservation facts (E12, both surfaces); the m11 popup fact; New
+Canvas end-to-end; the §W-A scenario set green on both twins; census
+sweeps extended (the announcer census already reads Canvas/
+recursively — the pickers directory arrives pre-covered); FlaUI
+authoring journey (New Card → type → Esc → named card selected; Set
+Color via context menu; Ctrl+Z → "Undid:"; axe on sheet and pickers).
+
+### Hand-off rows
+
+1. **To PR F:** the funnel's transient guard is the seam modes enter
+   through; the picker component takes F's purposes as rows.
+2. **To PR G:** marks verbs reuse the funnel and the bulk = one
+   action rule; the marks list is the picker component's sibling.
+3. **To PR H:** the refused-open caveat (E10) closes §A's flag; the
+   anchor caveat's re-verification (E11) is recorded either way.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same
@@ -8096,7 +8371,8 @@ says Image (`model.rs:646`), and that reaches the host as
 opens a canvas of file cards over every image extension the host set
 claims plus six non-media ones, and asserts core's own row agrees in
 both directions. The audio and video thirds have no exported answer —
-`kind_label` calls them plain `"file"` — and stay unpinned until PR E.
+`kind_label` calls them plain `"file"` — and stay unpinned until §E's
+export (E9) lands.
 
 **Drift note:** PR E is the first PR that needs the classification for
 its own reasons (the spec's Add Media row — "media kinds by extension

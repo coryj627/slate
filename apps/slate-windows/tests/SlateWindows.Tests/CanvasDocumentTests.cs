@@ -2031,7 +2031,8 @@ public sealed class CanvasDocumentTests : IDisposable
     /// host set claims, core's own row must agree — and for a
     /// non-media extension core must say `"file"`, which catches the
     /// gate widening in either direction. The audio and video thirds
-    /// have no exported answer and stay unpinned until PR E; CD-38
+    /// have no exported answer and stay unpinned until §E's media-class
+    /// export lands; CD-38
     /// records that.
     /// </remarks>
     [Fact]

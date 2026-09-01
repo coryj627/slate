@@ -121,7 +121,9 @@ public sealed class ContractsCitationCensus
             (
                 "D",
                 "## PR D — the visual renderer",
-                "## §W-G canonical-consumption audit",
+                // Terminated by §E since its section landed — §B's
+                // rule, three sections later.
+                "## PR E — the mutation funnel",
                 12_000,
                 // A DESIGN floor, §C-unit's convention: the section's
                 // own new types are deliberately plain text until tasks
@@ -163,6 +165,21 @@ public sealed class ContractsCitationCensus
                 // post-sweep 48, and 50 sits above it — a sixth
                 // time.
                 50),
+            (
+                "E",
+                "## PR E — the mutation funnel",
+                "## §W-G canonical-consumption audit",
+                12_000,
+                // A DESIGN floor, §C-unit's convention: the section's
+                // own new types (the funnel, the stacks, the pickers,
+                // the sheets) are deliberately plain text until tasks
+                // bind them, so revision 1's 12 occurrences are all
+                // EXISTING names. 9 sits above the empty pre-section
+                // population and below the current 12, so unbinding
+                // the section's citations fails while prose churn
+                // does not; each implementation task raises it above
+                // what the section carried before that task.
+                9),
         ];
 
     public static TheoryData<string, string, string> SectionRanges
@@ -817,6 +834,10 @@ public sealed class ContractsCitationCensus
         (
             "§D",
             "## PR D — the visual renderer",
+            "## PR E — the mutation funnel"),
+        (
+            "§E",
+            "## PR E — the mutation funnel",
             "## §W-G canonical-consumption audit"),
         (
             "divergences",
