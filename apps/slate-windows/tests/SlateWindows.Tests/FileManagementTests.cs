@@ -1370,6 +1370,114 @@ public sealed class FileManagementTests
             GetEnumerator();
     }
 
+    /// <summary>§E TE-10 (IE-21/IE-22): New Canvas is the vault-scoped
+    /// create — core's canonical bytes, never a host literal; the new
+    /// document gets its OWN tab (mac's rule: replacing the current tab
+    /// could destroy an unsaved buffer's only owner); the sentence is
+    /// <summary>§E TE-10 (IE-21/IE-22): New Canvas is the vault-scoped
+    /// create - core's canonical bytes, never a host literal; the new
+    /// document gets its OWN tab (mac's rule: replacing the current tab
+    /// could destroy an unsaved buffer's only owner); the sentence is
+    /// core's CanvasFileCreated render, spoken once.</summary>
+    [Fact]
+    public async Task NewCanvasCreatesTheCanonicalDocumentAndOpensItInANewTab()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "fm-new-canvas");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new SynchronizedAnnouncements();
+        SidebarRig rig = await NewSidebar(session, fixture, announced);
+        var opened = new List<(string Path, WorkspaceOpenTarget Target)>();
+        rig.Sidebar.OpenTargetRequested += (_, request) => opened.Add(request);
+
+        rig.Sidebar.CreateCanvasCommand.Execute(null);
+        await rig.Settle();
+
+        Assert.Equal(
+            SlateUniffiMethods.CanvasCanonicalEmptyText(),
+            File.ReadAllText(Path.Combine(fixture.Root, "Untitled Canvas.canvas")));
+        (string path, WorkspaceOpenTarget target) = Assert.Single(opened);
+        Assert.Equal("Untitled Canvas.canvas", path);
+        Assert.Equal(WorkspaceOpenTarget.NewTab, target);
+        Assert.Equal("Created canvas \"Untitled Canvas\".", rig.Sidebar.Status);
+        _ = Assert.Single(announced.OfType<A11yEvent.Canvas>());
+    }
+
+    /// <summary>§E TE-10: the unique-untitled sequence advances on the
+    /// typed DestinationExists - never a pre-check, never a clobber.</summary>
+    [Fact]
+    public async Task NewCanvasAdvancesPastAnOccupiedNameByTheTypedRefusal()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "fm-new-canvas-adv");
+        File.WriteAllText(
+            Path.Combine(fixture.Root, "Untitled Canvas.canvas"), "occupied\n");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new SynchronizedAnnouncements();
+        SidebarRig rig = await NewSidebar(session, fixture, announced);
+
+        rig.Sidebar.CreateCanvasCommand.Execute(null);
+        await rig.Settle();
+
+        Assert.Equal(
+            "occupied\n",
+            File.ReadAllText(Path.Combine(fixture.Root, "Untitled Canvas.canvas")));
+        Assert.Equal(
+            SlateUniffiMethods.CanvasCanonicalEmptyText(),
+            File.ReadAllText(Path.Combine(fixture.Root, "Untitled Canvas 2.canvas")));
+    }
+
+    /// <summary>§E TE-10 (IE-23, #1123): the terminal outcome table. A
+    /// landed-but-unindexed create FINALIZES - the caveat is spoken
+    /// after the created sentence, the file opens by path, and the flow
+    /// never retries under another name; the NEXT invoke advances past
+    /// the landed file by the disk gate's typed refusal.</summary>
+    [Fact]
+    public async Task ALandedButUnindexedCanvasOpensAndIsNeverRecreated()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "fm-new-canvas-landed");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new SynchronizedAnnouncements();
+        SidebarRig rig = await NewSidebar(session, fixture, announced);
+        var opened = new List<string>();
+        rig.Sidebar.OpenTargetRequested += (_, request) => opened.Add(request.Path);
+
+        using (EnvFaultLock.Acquire())
+        {
+            Environment.SetEnvironmentVariable(
+                "SLATE_TEST_FAULT_AFTER_WRITE", "Untitled Canvas");
+            try
+            {
+                rig.Sidebar.CreateCanvasCommand.Execute(null);
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable(
+                    "SLATE_TEST_FAULT_AFTER_WRITE", null);
+            }
+        }
+        await rig.Settle();
+
+        // Finalized ONCE: the landed file, opened, with no second name.
+        Assert.Equal(
+            SlateUniffiMethods.CanvasCanonicalEmptyText(),
+            File.ReadAllText(Path.Combine(fixture.Root, "Untitled Canvas.canvas")));
+        Assert.Equal("Untitled Canvas.canvas", Assert.Single(opened));
+        Assert.False(
+            File.Exists(Path.Combine(fixture.Root, "Untitled Canvas 2.canvas")),
+            "the landed arm advanced the sequence - a duplicate create (IE-23).");
+        _ = Assert.Single(announced.OfType<A11yEvent.Canvas>());
+        Assert.Contains(
+            announced.OfType<A11yEvent.HostComposed>(),
+            e => e.Text.Contains("was written but not indexed", StringComparison.Ordinal));
+
+        // The NEXT create is a NEW create: the landed file's name is
+        // occupied on disk, so the typed refusal advances - no retry.
+        rig.Sidebar.CreateCanvasCommand.Execute(null);
+        await rig.Settle();
+        Assert.Equal(
+            SlateUniffiMethods.CanvasCanonicalEmptyText(),
+            File.ReadAllText(Path.Combine(fixture.Root, "Untitled Canvas 2.canvas")));
+    }
+
     private sealed record SidebarRig(FilesSidebarViewModel Sidebar)
     {
         /// <summary>Settle the tree after a mutation's Refresh —

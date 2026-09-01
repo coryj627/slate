@@ -8170,6 +8170,43 @@ every toggle — the capture-at-rebuild reads the row VMs' final
 state, which the TwoWay binding already holds, so a tracker would be
 a second copy of a truth the view owns.
 
+**TE-10 — New Canvas as the vault-scoped create operation (IE-21,
+IE-22, IE-23).** The operation lives where IE-21 put it: on the
+sidebar, beside the note and folder creates, deliberately OUTSIDE
+the handle-mutation funnel — before creation there is no document,
+lease, basis or gate to run it through. The flow is mac's
+canvasNewCanvasFile verb for verb: `UntitledCandidates` walks
+"Untitled Canvas.canvas" then "Untitled Canvas 2.canvas" onward,
+advanced ONLY by the typed `DestinationExists` (never a pre-check);
+the bytes are core's `CanvasCanonicalEmptyText` (IE-22 — no host
+literal); a create is a `StructuralHistoryBarrier`; the new document
+opens in its OWN tab (mac's rule: replacing the current tab could
+destroy an unsaved buffer's only owner). IE-23's terminal outcome
+table reuses the #1123 helper the note create already trusts,
+`CreateOutcomes.CreateReporting` over `CreateExclusiveReporting`: a
+refusal stops with the failure spoken; a LANDED write — committed or
+published-but-unindexed — finalizes the creation exactly once, opens
+the real file by path, speaks the caveat AFTER the created sentence,
+and never retries under another name; the NEXT invoke advances past
+the landed file by the disk gate's own refusal. The sentence is
+core's `CanvasFileCreated` render — announced once as the canvas
+EVENT through the sidebar's own sink, with ReportResult's status
+discipline inlined so the corpus row and the status line are one
+sentence, not two compositions. The command is a registered,
+chordless FILE-section row on both hosts (`slate.file.newCanvas`;
+mac registers section .file with no chord), a File-menu item below
+the template item, a palette row by derivation, and NOT in
+`SidebarPinnedOrder`, which is Sidebar-section only; chords.json
+reprojected by its own gate. Four facts: the canonical document in a
+new tab with the spoken sentence; the typed advance past an occupied
+name; the landed-but-unindexed create that opens and is never
+recreated, with the SLATE_TEST_FAULT_AFTER_WRITE seam driven
+end-to-end; the chord-row registration shape. Three mutations, each
+byte-restored: the content argument swapped for an empty host
+literal and the byte fact failed; the landed arm taught to advance
+the sequence and the no-duplicate fact failed; the announce dropped
+and the spoken-once fact failed.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same

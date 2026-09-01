@@ -1114,6 +1114,18 @@
       "registered": true
     },
     {
+      "id": "slate.file.newCanvas",
+      "label": "New Canvas",
+      "section": "File",
+      "hint": "Create an empty canvas file in the vault and open it.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
       "id": "slate.file.importFilesAndFolders",
       "label": "Import Files and Folders…",
       "section": "Sidebar",

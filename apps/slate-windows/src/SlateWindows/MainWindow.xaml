@@ -144,6 +144,11 @@
                           AutomationProperties.AutomationId="NewFromTemplateMenuItem"
                           InputGestureText="{cmd:ChordText slate.file.newFromTemplate}"
                           Command="{Binding Workspace.NewFromTemplateCommand}" />
+                <!-- §E TE-10 (IE-21): the vault-scoped create — mac's
+                     File-menu New Canvas, chordless on both hosts. -->
+                <MenuItem Header="New _Canvas"
+                          AutomationProperties.AutomationId="NewCanvasMenuItem"
+                          Command="{Binding FileSidebar.CreateCanvasCommand}" />
                 <Separator />
                 <MenuItem Header="_Close Vault"
                           AutomationProperties.AutomationId="CloseVaultMenuItem"

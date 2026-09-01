@@ -431,6 +431,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         // these verbs.
         CreateFolderCommand = new RelayCommand(_ => CreateFolder(), _ => !IsImporting);
         CreateNoteCommand = new RelayCommand(_ => CreateNote(), _ => !IsImporting);
+        CreateCanvasCommand = new RelayCommand(_ => CreateCanvas(), _ => !IsImporting);
         RenameCommand = new RelayCommand(
             _ => TryRenameSelected(),
             _ => !IsImporting
@@ -713,6 +714,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     public ICommand RemoveTagCommand { get; }
     public ICommand CreateFolderCommand { get; }
     public ICommand CreateNoteCommand { get; }
+    public ICommand CreateCanvasCommand { get; }
     public ICommand RenameCommand { get; }
     public ICommand DeleteCommand { get; }
     public ICommand CreateFolderNoteCommand { get; }
@@ -1284,6 +1286,95 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         catch (VaultException exception)
         {
             ReportFailure($"Could not create note {attempted}: {exception.Message}");
+        }
+    }
+
+    /// <summary>§E TE-10 (IE-21): New Canvas, the vault-scoped create
+    /// operation — deliberately OUTSIDE the handle-mutation funnel,
+    /// because before creation there is no document, lease, basis or
+    /// gate to run it through. mac's canvasNewCanvasFile verb for verb:
+    /// the unique-untitled sequence ("Untitled Canvas.canvas", then
+    /// "Untitled Canvas 2.canvas" …) advanced ONLY by the typed
+    /// DestinationExists; the bytes are core's canonical empty document
+    /// (IE-22), never a host literal; the new document gets its OWN tab.
+    /// </summary>
+    /// <remarks>
+    /// The terminal outcome table (IE-23, #1123): a refusal stops with
+    /// the failure spoken; DestinationExists advances the name; a
+    /// LANDED write — committed or published-but-unindexed — finalizes
+    /// the creation exactly once. On the unindexed arm the file is real
+    /// and opens by path (core reads from disk), so the flow still
+    /// opens it and never retries under another name; the caveat is
+    /// spoken after the created sentence, not instead of it. The
+    /// sentence is core's own CanvasFileCreated render — announced as
+    /// the canvas EVENT (mac's announcement, the corpus's row), with
+    /// ReportResult's status discipline inlined so the one sentence is
+    /// spoken once rather than composed twice.
+    /// </remarks>
+    private void CreateCanvas()
+    {
+        string parent = CreationParentPath();
+        string attempted = "Untitled Canvas.canvas";
+        try
+        {
+            string content = SlateUniffiMethods.CanvasCanonicalEmptyText();
+            string? created = null;
+            string? caveat = null;
+            foreach (string candidate in UntitledCandidates(
+                parent, "Untitled Canvas", ".canvas"))
+            {
+                attempted = System.IO.Path.GetFileName(candidate);
+                try
+                {
+                    if (!TryRunSessionWork(
+                        () => CreateOutcomes.CreateReporting(
+                            _session, candidate, content, attempted),
+                        out caveat))
+                    {
+                        return;
+                    }
+
+                    created = candidate;
+                    break;
+                }
+                catch (VaultException.DestinationExists)
+                {
+                    // The unique-untitled advance signal.
+                }
+            }
+
+            if (created is null)
+            {
+                ReportFailure($"Could not create canvas {attempted}: no free name.");
+                return;
+            }
+
+            // A create is a structural history barrier (mac's table) —
+            // a stale inverse must never target this path.
+            StructuralHistoryBarrier();
+            Refresh();
+            var sentence = new A11yEvent.Canvas(
+                new CanvasA11yEvent.CanvasFileCreated(
+                    System.IO.Path.GetFileNameWithoutExtension(created)));
+            Status = SlateUniffiMethods.A11yRender(sentence).Text;
+            if (IsRefreshingTree)
+            {
+                _statusToReassert = Status;
+            }
+            _announce(sentence);
+            if (caveat is not null)
+            {
+                // The landed-but-unindexed arm: the canvas is real and
+                // opens (core reads from disk); the tree shows it after
+                // the next scan. Say so, then open it — never recreate.
+                ReportFailure(caveat);
+            }
+
+            RequestOpen(created, WorkspaceOpenTarget.NewTab, trackHistory: true);
+        }
+        catch (VaultException exception)
+        {
+            ReportFailure($"Could not create canvas {attempted}: {exception.Message}");
         }
     }
 
@@ -2096,6 +2187,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             RemoveTagCommand,
             CreateFolderCommand,
             CreateNoteCommand,
+            CreateCanvasCommand,
             RenameCommand,
             DeleteCommand,
             CreateFolderNoteCommand,

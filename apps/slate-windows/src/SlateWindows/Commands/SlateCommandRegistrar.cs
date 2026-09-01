@@ -528,6 +528,7 @@ internal static class SlateCommandRegistrar
             // Sidebar / file management.
             [ChordTable.Ids.SidebarOpen] = host => host.FileSidebar?.OpenCurrentCommand,
             [ChordTable.Ids.NewNote] = host => host.FileSidebar?.CreateNoteCommand,
+            [ChordTable.Ids.NewCanvas] = host => host.FileSidebar?.CreateCanvasCommand,
             [ChordTable.Ids.NewFromTemplate] =
                 host => host.Workspace?.NewFromTemplateCommand,
             [ChordTable.Ids.NewFolder] = host => host.FileSidebar?.CreateFolderCommand,

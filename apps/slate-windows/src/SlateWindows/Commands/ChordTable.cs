@@ -293,6 +293,7 @@ internal static class ChordTable
         // Sidebar / file management (mac projects these into CommandSection.sidebar).
         public const string SidebarOpen = "slate.sidebar.open";
         public const string NewNote = "slate.file.newNote";
+        public const string NewCanvas = "slate.file.newCanvas";
         public const string NewFromTemplate = "slate.file.newFromTemplate";
         public const string NewFolder = "slate.file.newFolder";
         public const string ImportFilesAndFolders = "slate.file.importFilesAndFolders";
@@ -991,6 +992,12 @@ internal static class ChordTable
             // conflict). Contracts doc TD-6.
             Reg(Ids.NewFromTemplate, "New Note from Template…", CommandSection.Sidebar,
                 "Choose a template for a new note.", "⇧⌘N", "Ctrl+Shift+N"),
+            // §E TE-10 (IE-21): New Canvas is FILE-level on both hosts
+            // (mac registers section .file, chordless) — a vault-scoped
+            // create, deliberately outside the canvas section whose
+            // verbs need an open document.
+            Reg(Ids.NewCanvas, "New Canvas", CommandSection.File,
+                "Create an empty canvas file in the vault and open it."),
             Reg(Ids.ImportFilesAndFolders, "Import Files and Folders…",
                 CommandSection.Sidebar,
                 "Choose files and folders. External items are copied into the selected "

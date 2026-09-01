@@ -505,6 +505,24 @@ public sealed class ChordTableTests
             ChordTable.Entries.Count(row => row.Scope == ChordScope.Reading));
     }
 
+    /// <summary>§E TE-10 (IE-21): New Canvas is a FILE-section row on
+    /// both hosts (mac registers slate.file.newCanvas in section .file,
+    /// chordless) - registered, so the palette and the File menu both
+    /// resolve it; deliberately NOT in the sidebar's pinned order,
+    /// which is Sidebar-section only.</summary>
+    [Fact]
+    public void NewCanvasIsARegisteredChordlessFileRow()
+    {
+        ChordTableEntry row = RequireRow(ChordTable.Ids.NewCanvas);
+        Assert.Equal("New Canvas", row.Label);
+        Assert.Equal(uniffi.slate_uniffi.CommandSection.File, row.Section);
+        Assert.True(row.IsRegistered);
+        Assert.Null(row.MacChord);
+        Assert.Null(row.WindowsChord);
+        Assert.DoesNotContain(
+            ChordTable.Ids.NewCanvas, ChordTable.SidebarPinnedOrder);
+    }
+
     [Fact]
     public void SidebarPinnedOrder_MirrorsMacCatalogOrder_AndOnlyNamesRealIds()
     {

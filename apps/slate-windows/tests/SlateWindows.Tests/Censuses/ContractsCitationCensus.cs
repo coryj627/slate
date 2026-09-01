@@ -241,7 +241,12 @@ public sealed class ContractsCitationCensus
                 // supersession, taking the section to 57; 56 sits
                 // above the pre-task population of 55 — a twelfth
                 // time.
-                56),
+                //
+                // TE-10 bound the vault-scoped create and its
+                // terminal outcome table, taking the section to 64;
+                // 58 sits above the pre-task population of 57 — a
+                // thirteenth time.
+                58),
         ];
 
     public static TheoryData<string, string, string> SectionRanges
