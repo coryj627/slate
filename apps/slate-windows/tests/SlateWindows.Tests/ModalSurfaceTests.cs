@@ -222,6 +222,8 @@ public sealed class ModalSurfaceTests
             ModalSurface.TemplateFlow,
             ModalSurface.MoveTo,
             ModalSurface.CanvasCardEditor,
+            ModalSurface.CanvasCardPicker,
+            ModalSurface.CanvasPrompt,
         ];
 
         Assert.Equal(
@@ -386,7 +388,9 @@ public sealed class ModalSurfaceTests
             TemplatePicker: surface == ModalSurface.TemplatePicker,
             TemplateFlow: surface == ModalSurface.TemplateFlow,
             MoveTo: surface == ModalSurface.MoveTo,
-            CanvasCardEditor: surface == ModalSurface.CanvasCardEditor);
+            CanvasCardEditor: surface == ModalSurface.CanvasCardEditor,
+            CanvasCardPicker: surface == ModalSurface.CanvasCardPicker,
+            CanvasPrompt: surface == ModalSurface.CanvasPrompt);
 
     /// <summary>
     /// The topmost-open walk returns the LAST open surface in paint order,
@@ -552,6 +556,8 @@ public sealed class ModalSurfaceTests
             (ModalSurface.TemplateFlow, "TemplateFlowSheet"),
             (ModalSurface.MoveTo, "MoveToSheet"),
             (ModalSurface.CanvasCardEditor, "CanvasCardEditorSheet"),
+            (ModalSurface.CanvasCardPicker, "CanvasCardPickerSheet"),
+            (ModalSurface.CanvasPrompt, "CanvasPromptSheet"),
         ];
 
         // Exhaustiveness (red team W5-3, tests finding 3): the two
@@ -602,6 +608,8 @@ public sealed class ModalSurfaceTests
             [ModalSurface.TemplateFlow] = "Workspace.TemplateFlowSheet",
             [ModalSurface.MoveTo] = "FileSidebar.MoveToSheet",
             [ModalSurface.CanvasCardEditor] = "Workspace.CanvasCardEditorSheet",
+            [ModalSurface.CanvasCardPicker] = "Workspace.CanvasCardPickerSheet",
+            [ModalSurface.CanvasPrompt] = "Workspace.CanvasPromptSheet",
         };
 
     /// <summary>
@@ -1153,6 +1161,8 @@ public sealed class ModalSurfaceTests
                 ModalSurface.TemplatePicker => "TemplatePickerSheet",
                 ModalSurface.TemplateFlow => "TemplateFlowSheet",
                 ModalSurface.CanvasCardEditor => "CanvasCardEditorSheet",
+                ModalSurface.CanvasCardPicker => "CanvasCardPickerSheet",
+                ModalSurface.CanvasPrompt => "CanvasPromptSheet",
                 _ => throw new Xunit.Sdk.XunitException(
                     $"{sheet} is a sheet with no property mapping here — "
                     + "add it AND the observer arm."),
@@ -1592,7 +1602,9 @@ public sealed class ModalSurfaceTests
             TemplatePicker: first is ModalSurface.TemplatePicker || second is ModalSurface.TemplatePicker,
             TemplateFlow: first is ModalSurface.TemplateFlow || second is ModalSurface.TemplateFlow,
             MoveTo: first is ModalSurface.MoveTo || second is ModalSurface.MoveTo,
-            CanvasCardEditor: first is ModalSurface.CanvasCardEditor || second is ModalSurface.CanvasCardEditor);
+            CanvasCardEditor: first is ModalSurface.CanvasCardEditor || second is ModalSurface.CanvasCardEditor,
+            CanvasCardPicker: first is ModalSurface.CanvasCardPicker || second is ModalSurface.CanvasCardPicker,
+            CanvasPrompt: first is ModalSurface.CanvasPrompt || second is ModalSurface.CanvasPrompt);
 
     [Fact]
     public void EveryMenuDisablePathResolvesAgainstTheLiveViewModels()

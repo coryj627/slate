@@ -48,6 +48,33 @@ public sealed class CanvasPresentationEngineTests
             + "check-and-swap argument is a hope.");
     }
 
+    /// <summary>§F TF-11 (the modes journey's catch): the TRANSIENT
+    /// intake marshals itself too — the mode completion runs on the
+    /// funnel's worker and its teardown fires the aggregate
+    /// observable from that thread. The first cut asserted instead,
+    /// and the thrown assert killed the completion before the mode
+    /// could resolve: a stuck mode with a green unit suite.</summary>
+    [Fact]
+    public void AWorkerThreadTransientCommitIsMarshalledNotFatal()
+    {
+        var engine = new CanvasPresentationEngine(synchronousForTests: true);
+        Exception? caught = null;
+        var worker = new CanvasWorker(() =>
+        {
+            try
+            {
+                engine.CommitTransient(null);
+            }
+            catch (Exception exception)
+            {
+                caught = exception;
+            }
+        });
+        worker.Start();
+        worker.Join(TimeSpan.FromSeconds(10));
+        Assert.Null(caught);
+    }
+
     /// <summary>The intake marshals itself: a publication applied on a
     /// worker still commits on the engine's dispatcher — the
     /// scheduler's inline-post arm is survived, not assumed away.</summary>

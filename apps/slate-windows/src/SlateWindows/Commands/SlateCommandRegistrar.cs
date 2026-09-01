@@ -502,6 +502,27 @@ internal static class SlateCommandRegistrar
             [ChordTable.Ids.CanvasNewCard] =
                 host => host.Workspace?.CanvasNewCardCommand,
             [ChordTable.Ids.CanvasWhereAmI] = host => host.Workspace?.CanvasWhereAmICommand,
+            [ChordTable.Ids.CanvasConnectTo] =
+                host => host.Workspace?.CanvasConnectToCommand,
+            [ChordTable.Ids.CanvasConnectMode] =
+                host => host.Workspace?.CanvasConnectModeCommand,
+            [ChordTable.Ids.CanvasPlaceBelow] =
+                host => host.Workspace?.CanvasPlaceBelowCommand,
+            [ChordTable.Ids.CanvasPlaceRightOf] =
+                host => host.Workspace?.CanvasPlaceRightOfCommand,
+            [ChordTable.Ids.CanvasPlaceAbove] =
+                host => host.Workspace?.CanvasPlaceAboveCommand,
+            [ChordTable.Ids.CanvasPlaceLeftOf] =
+                host => host.Workspace?.CanvasPlaceLeftOfCommand,
+            [ChordTable.Ids.CanvasAlignWith] =
+                host => host.Workspace?.CanvasAlignWithCommand,
+            [ChordTable.Ids.CanvasMoveMode] = host => host.Workspace?.CanvasMoveModeCommand,
+            [ChordTable.Ids.CanvasResizeMode] =
+                host => host.Workspace?.CanvasResizeModeCommand,
+            [ChordTable.Ids.CanvasResizeDefaultSize] =
+                host => host.Workspace?.CanvasResizeDefaultSizeCommand,
+            [ChordTable.Ids.CanvasResizeFitContent] =
+                host => host.Workspace?.CanvasResizeFitContentCommand,
             [ChordTable.Ids.CanvasNextCard] = host => host.Workspace?.CanvasNextCardCommand,
             [ChordTable.Ids.CanvasPreviousCard] =
                 host => host.Workspace?.CanvasPreviousCardCommand,

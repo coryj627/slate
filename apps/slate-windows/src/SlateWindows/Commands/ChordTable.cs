@@ -278,6 +278,28 @@ internal static class ChordTable
         public const string CanvasFollowConnectionBack =
             "slate.canvas.followConnectionBack";
         public const string CanvasTracePath = "slate.canvas.tracePath";
+        public const string CanvasConnectTo = "slate.canvas.connectTo";
+
+        public const string CanvasConnectMode = "slate.canvas.connectMode";
+
+        public const string CanvasPlaceBelow = "slate.canvas.placeBelow";
+
+        public const string CanvasPlaceRightOf = "slate.canvas.placeRightOf";
+
+        public const string CanvasPlaceAbove = "slate.canvas.placeAbove";
+
+        public const string CanvasPlaceLeftOf = "slate.canvas.placeLeftOf";
+
+        public const string CanvasAlignWith = "slate.canvas.alignWith";
+
+        public const string CanvasMoveMode = "slate.canvas.moveMode";
+
+        public const string CanvasResizeMode = "slate.canvas.resizeMode";
+
+        public const string CanvasResizeDefaultSize = "slate.canvas.resizeDefaultSize";
+
+        public const string CanvasResizeFitContent = "slate.canvas.resizeFitContent";
+
         public const string CanvasNewCard = "slate.canvas.newCard";
         public const string CanvasFilterCards = "slate.canvas.filterCards";
         public const string CanvasClearFilter = "slate.canvas.clearFilter";
@@ -888,9 +910,23 @@ internal static class ChordTable
         Reg(Ids.CanvasNextCard, "Canvas: Next Card", CommandSection.Canvas,
             "Select the next card in reading order.",
             "↓", "Down", ChordScope.Canvas),
+        Chord("windows.canvas.modeStepLargeDown",
+            "Canvas mode: large step down",
+            "Shift+Down", ChordScope.Canvas,
+            "§F TF-3 (FD-3): the large grid step while a move or "
+            + "resize transient holds the arrows; without a mode the "
+            + "chord is unbound and typing keeps Shift+arrows.",
+            mac: "⇧↓"),
         Reg(Ids.CanvasPreviousCard, "Canvas: Previous Card", CommandSection.Canvas,
             "Select the previous card in reading order.",
             "↑", "Up", ChordScope.Canvas),
+        Chord("windows.canvas.modeStepLargeUp",
+            "Canvas mode: large step up",
+            "Shift+Up", ChordScope.Canvas,
+            "§F TF-3 (FD-3): the large grid step while a move or "
+            + "resize transient holds the arrows; without a mode the "
+            + "chord is unbound and typing keeps Shift+arrows.",
+            mac: "⇧↑"),
         Reg(Ids.CanvasEnterGroup, "Canvas: Enter Group", CommandSection.Canvas,
             "Move into the selected group's first card."),
         Reg(Ids.CanvasExitGroup, "Canvas: Exit Group", CommandSection.Canvas,
@@ -899,10 +935,24 @@ internal static class ChordTable
             CommandSection.Canvas,
             "Jump along the selected card's first outgoing connection.",
             "→", "Right", ChordScope.Canvas),
+        Chord("windows.canvas.modeStepLargeRight",
+            "Canvas mode: large step right",
+            "Shift+Right", ChordScope.Canvas,
+            "§F TF-3 (FD-3): the large grid step while a move or "
+            + "resize transient holds the arrows; without a mode the "
+            + "chord is unbound and typing keeps Shift+arrows.",
+            mac: "⇧→"),
         Reg(Ids.CanvasFollowConnectionBack, "Canvas: Follow Connection Back",
             CommandSection.Canvas,
             "Jump along the selected card's first incoming connection.",
             "←", "Left", ChordScope.Canvas),
+        Chord("windows.canvas.modeStepLargeLeft",
+            "Canvas mode: large step left",
+            "Shift+Left", ChordScope.Canvas,
+            "§F TF-3 (FD-3): the large grid step while a move or "
+            + "resize transient holds the arrows; without a mode the "
+            + "chord is unbound and typing keeps Shift+arrows.",
+            mac: "⇧←"),
         Reg(Ids.CanvasTracePath, "Canvas: Trace Path from Selected Card",
             CommandSection.Canvas,
             "Walk the outgoing chain, announcing each hop and the visited count."),
@@ -931,6 +981,47 @@ internal static class ChordTable
             // maps to Ctrl+Alt+N (Ctrl+N stays free for notes, mac's own
             // allocation rule #368). Every other mutation verb is
             // palette/menu/context-menu only (R1).
+            // §F TF-4 (F9/M6): the spatial mode front doors, labels
+            // byte-identical to mac (P3). R is mac's quick loop: during
+            // resize it commits. The presets are palette rows - mac
+            // allocates them no chord and neither do we.
+            // §F TF-7 (F5/F6/F9): structural placement — the picker
+            // names a reference card, the ENGINE computes the slot.
+            // Labels and hints byte-identical to mac (P3); no chords,
+            // as mac allocates none.
+            // §F TF-8 (F7): the staged connect flow's front door.
+            Reg(Ids.CanvasConnectTo, "Canvas: Connect To…", CommandSection.Canvas,
+                "Draw a connection from the selected card to a card you pick, "
+                + "with an optional label.",
+                "⌃⌘C", "Ctrl+Alt+C", ChordScope.Canvas),
+            Reg(Ids.CanvasConnectMode, "Canvas: Connect Mode", CommandSection.Canvas,
+                "Remember the selected card, navigate to a target with the "
+                + "usual movements, press Return to connect."),
+            Reg(Ids.CanvasPlaceBelow, "Canvas: Place Below…", CommandSection.Canvas,
+                "Move the selected card (or the marked set) just below a card you pick."),
+            Reg(Ids.CanvasPlaceRightOf, "Canvas: Place Right Of…", CommandSection.Canvas,
+                "Move the selection just right of a card you pick."),
+            Reg(Ids.CanvasPlaceAbove, "Canvas: Place Above…", CommandSection.Canvas,
+                "Move the selection just above a card you pick."),
+            Reg(Ids.CanvasPlaceLeftOf, "Canvas: Place Left Of…", CommandSection.Canvas,
+                "Move the selection just left of a card you pick."),
+            Reg(Ids.CanvasAlignWith, "Canvas: Align With…", CommandSection.Canvas,
+                "Align the selected card's top edge with a card you pick. Overlaps "
+                + "are refused, never silent."),
+            Reg(Ids.CanvasMoveMode, "Canvas: Move Mode", CommandSection.Canvas,
+                "Grab the selection. Arrows nudge on the grid, Shift for big "
+                + "steps, Return places, Escape cancels.",
+                "⌃⌘G", "Ctrl+Alt+G", ChordScope.Canvas),
+            Reg(Ids.CanvasResizeMode, "Canvas: Resize Mode", CommandSection.Canvas,
+                "Resize the selected card. Left and Right change width, Up and "
+                + "Down change height.",
+                "⌃⌘R", "Ctrl+Alt+R", ChordScope.Canvas),
+            Reg(Ids.CanvasResizeDefaultSize, "Canvas: Resize to Default Size",
+                CommandSection.Canvas,
+                "Set the card being resized back to the default card size."),
+            Reg(Ids.CanvasResizeFitContent, "Canvas: Resize to Fit Content",
+                CommandSection.Canvas,
+                "Size the card being resized to its text."),
             Reg(Ids.CanvasNewCard, "Canvas: New Card", CommandSection.Canvas,
                 "Create a text card next to the selection - placement is "
                 + "automatic and announced.",

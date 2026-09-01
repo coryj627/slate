@@ -3,6 +3,34 @@
 
 namespace SlateWindows.Canvas;
 
+/// <summary>§F TF-0 (the recorded §E supersession): the typed
+/// completion a submitted operation can deliver to its initiator.
+/// Synchronous admission refusals NEVER produce one — Pending is
+/// legal only after Admitted (IF-12).</summary>
+internal enum CanvasOperationOutcome
+{
+    /// <summary>Applied, refreshed, presentation installed.</summary>
+    Installed,
+
+    /// <summary>Preparation refused or the apply was rejected whole;
+    /// nothing moved.</summary>
+    RefusedPrepare,
+
+    /// <summary>The write conflicted; the conflict record stands.</summary>
+    Conflict,
+
+    /// <summary>The write landed but the index did not; the
+    /// publication is committed-unpresented.</summary>
+    Unindexed,
+
+    /// <summary>Displaced mid-apply; the receipt is quarantined.</summary>
+    Displaced,
+
+    /// <summary>Applied and recorded, but the refresh could not
+    /// present (required target missing).</summary>
+    RefreshRefused,
+}
+
 /// <summary>
 /// W6-1 §E TE-1 (IE-1): one mutation invocation's opaque identity.
 /// Reference identity only — the `CanvasRequestIdentity` discipline:
@@ -65,6 +93,7 @@ internal enum CanvasMutationEffect
 /// "a different operation holds now" are reference questions.
 /// </para>
 /// </remarks>
+
 internal sealed class CanvasMutationOperation
 {
     internal CanvasMutationOperation(
@@ -115,6 +144,12 @@ internal sealed class CanvasMutationOperation
     /// mode's token, so a refused commit leaves the mode and its
     /// transient standing (IE-7 / C7). PR F consumes this seam.</summary>
     internal object? ModeToken { get; }
+
+    /// <summary>§F TF-0: the completion callback the funnel invokes
+    /// with the terminal outcome, from whatever thread the transaction
+    /// ran on — the consumer marshals itself (the controller does).
+    /// Null for ordinary verbs.</summary>
+    internal Action<CanvasOperationOutcome>? Completion { get; set; }
 
     /// <summary>The one currency question, asked at every boundary:
     /// the publication is live and still holds the exact loaded triple

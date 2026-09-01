@@ -56,11 +56,11 @@ internal static class CanvasContextMenuPlan
             CanvasContextVerb.ToggleMark));
         if (kind == "group")
         {
-            // Rename's COMMIT path shipped; its prompt sheet has not —
-            // visible with the why (the mac shape), never a dead click.
+            // §F TF-8 (FD-4): the prompt machinery landed — the row
+            // goes live on the §E commit path.
             rows.Add(new(
-                CanvasPhrase.RenameGroupRowAction, false,
-                CanvasPhrase.PromptArrivesLater, CanvasContextVerb.RenameGroup));
+                CanvasPhrase.RenameGroupRowAction, true,
+                null, CanvasContextVerb.RenameGroup));
             rows.Add(new(
                 CanvasPhrase.UngroupRowAction, true, null, CanvasContextVerb.Ungroup));
         }
@@ -73,8 +73,8 @@ internal static class CanvasContextMenuPlan
                     CanvasContextVerb.EditCard));
             }
             rows.Add(new(
-                CanvasPhrase.SetColorRowAction, false,
-                CanvasPhrase.PromptArrivesLater, CanvasContextVerb.SetColor));
+                CanvasPhrase.SetColorRowAction, true,
+                null, CanvasContextVerb.SetColor));
             rows.Add(new(
                 CanvasPhrase.DeleteRowAction, true, null, CanvasContextVerb.Delete));
         }

@@ -192,6 +192,117 @@ public sealed class CanvasMutationFunnelTests
             h.Announced, e => e is CanvasA11yEvent.CanvasHistoryApplied);
     }
 
+    /// <summary>§F TF-1 (IF-7/IF-8): mode entry is ADMITTED — the
+    /// token installs under the held gate, an operation in flight
+    /// refuses the entry, and once installed every unmarked verb is
+    /// ModeHeld with its sentence.</summary>
+    [Fact]
+    public void ModeEntryInstallsUnderTheGateAndExcludesBothWays()
+    {
+        var h = new Harness();
+        CanvasMutationOperation holder = h.Operation("in flight");
+        Assert.True(h.Gate.TryAcquire(holder));
+        var token = new object();
+        CanvasMutationOperation entry = new(
+            new CanvasOperationId("enter move"), new object(), null,
+            h.Slot.Current.Loaded!, CanvasMutationEffect.KeepSelection,
+            modeToken: token);
+        Assert.Equal(
+            CanvasMutationAdmission.Busy, h.Funnel.AdmitModeEntry(entry));
+        h.Gate.Release(holder);
+
+        Assert.Equal(
+            CanvasMutationAdmission.Admitted, h.Funnel.AdmitModeEntry(entry));
+        Assert.Equal(CanvasMutationAdmission.ModeHeld, h.Apply("verb"));
+        Assert.Contains(
+            h.Announced,
+            e => e is CanvasA11yEvent.CanvasBlocked
+            {
+                Reason: CanvasBlockedReason.ModeBusy,
+            });
+        h.Funnel.ClearModeToken(token);
+        Assert.Equal(CanvasMutationAdmission.Admitted, h.Apply("verb 2"));
+    }
+
+    /// <summary>§F TF-1 (F4c): the clear is identity-checked — a
+    /// stale clear from an ended mode cannot strip a successor.</summary>
+    [Fact]
+    public void ClearModeTokenIsIdentityChecked()
+    {
+        var h = new Harness();
+        var token = new object();
+        CanvasMutationOperation entry = new(
+            new CanvasOperationId("enter move"), new object(), null,
+            h.Slot.Current.Loaded!, CanvasMutationEffect.KeepSelection,
+            modeToken: token);
+        Assert.Equal(
+            CanvasMutationAdmission.Admitted, h.Funnel.AdmitModeEntry(entry));
+
+        h.Funnel.ClearModeToken(new object());
+        Assert.Equal(CanvasMutationAdmission.ModeHeld, h.Apply("still held"));
+        h.Funnel.ClearModeToken(token);
+        Assert.Equal(CanvasMutationAdmission.Admitted, h.Apply("freed"));
+    }
+
+    /// <summary>§F TF-1 (FD-5's token half): a conflict yields the
+    /// token to the resolution, reinstall matches ONLY the suspended
+    /// identity, and a forget (the F1a cancel's row) makes a late
+    /// reinstall a no-op.</summary>
+    [Fact]
+    public void SuspendReinstallAndForgetHonorTheIdentity()
+    {
+        var h = new Harness();
+        var token = new object();
+        CanvasMutationOperation entry = new(
+            new CanvasOperationId("enter move"), new object(), null,
+            h.Slot.Current.Loaded!, CanvasMutationEffect.KeepSelection,
+            modeToken: token);
+        Assert.Equal(
+            CanvasMutationAdmission.Admitted, h.Funnel.AdmitModeEntry(entry));
+
+        h.Funnel.SuspendModeToken(token);
+        Assert.Equal(CanvasMutationAdmission.Admitted, h.Apply("recovery write"));
+        Assert.False(h.Funnel.ReinstallSuspendedModeToken(new object()));
+        Assert.True(h.Funnel.ReinstallSuspendedModeToken(token));
+        Assert.Equal(CanvasMutationAdmission.ModeHeld, h.Apply("held again"));
+
+        h.Funnel.SuspendModeToken(token);
+        h.Funnel.ForgetSuspendedModeToken(token);
+        Assert.False(h.Funnel.ReinstallSuspendedModeToken(token));
+        Assert.Equal(CanvasMutationAdmission.Admitted, h.Apply("free after forget"));
+    }
+
+    /// <summary>§F TF-0: the completion seam end to end — a
+    /// submitted operation delivers its terminal outcome to the
+    /// completion callback, Installed on the happy path, from the
+    /// transaction's own seam.</summary>
+    [Fact]
+    public void ASubmittedOperationDeliversItsCompletion()
+    {
+        var h = new Harness();
+        var outcomes = new List<CanvasOperationOutcome>();
+        CanvasMutationOperation operation = h.Operation("mode commit");
+        operation.Completion = outcomes.Add;
+        Assert.Equal(
+            CanvasMutationAdmission.Admitted,
+            h.Funnel.Apply(
+                operation, _ => new CanvasAction("mode commit", []), "mode commit"));
+        Assert.Equal([CanvasOperationOutcome.Installed], outcomes);
+
+        // The conflict arm reports Conflict, and exactly once.
+        var h2 = new Harness();
+        var outcomes2 = new List<CanvasOperationOutcome>();
+        h2.Writes.ApplyScript = _ => new VaultException.WriteConflict(
+            "current", "expected", 42);
+        CanvasMutationOperation second = h2.Operation("mode commit 2");
+        second.Completion = outcomes2.Add;
+        Assert.Equal(
+            CanvasMutationAdmission.Admitted,
+            h2.Funnel.Apply(
+                second, _ => new CanvasAction("mode commit 2", []), "mode commit 2"));
+        Assert.Equal([CanvasOperationOutcome.Conflict], outcomes2);
+    }
+
     /// <summary>§E TE-11c (E8a/E2): a not-ready admission SPEAKS the
     /// typed refusal - mac's exact reason table over the publication's
     /// load state.</summary>

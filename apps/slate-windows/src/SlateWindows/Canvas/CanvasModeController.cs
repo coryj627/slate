@@ -3,6 +3,7 @@
 
 using System.Diagnostics;
 using uniffi.slate_uniffi;
+using System.Windows.Threading;
 
 namespace SlateWindows.Canvas;
 
@@ -91,7 +92,8 @@ internal sealed record CanvasModeSpec(
     CanvasMode Mode,
     CanvasModeObject Object,
     Func<CanvasModeCommitResult> OnCommit,
-    Func<CanvasModeRestoration> OnCancel);
+    Func<CanvasModeRestoration> OnCancel,
+    object? Token = null);
 
 /// <summary>
 /// What a mode's commit effect did (t0 §2 M2).
@@ -118,18 +120,40 @@ internal sealed record CanvasModeSpec(
 /// effect's knowledge, and inventing one here would be host prose.
 /// </para>
 /// </remarks>
-internal readonly record struct CanvasModeCommitResult(
-    bool Applied, CanvasA11yEvent? Confirmation)
+internal enum CanvasModeCommitArm
 {
-    /// <summary>The effect applied. <paramref name="confirmation"/> is
-    /// the t0 §1.3 sentence, or null when the action announces for
-    /// itself.</summary>
-    internal static CanvasModeCommitResult Committed(
-        CanvasA11yEvent? confirmation = null) => new(true, confirmation);
+    /// <summary>The effect ran and the mode ends now.</summary>
+    Applied,
 
-    /// <summary>The effect REFUSED: the mode and its transient state
-    /// survive, and the effect has already said why.</summary>
-    internal static CanvasModeCommitResult Refused() => new(false, null);
+    /// <summary>The effect refused; the mode stands (M2).</summary>
+    Refused,
+
+    /// <summary>§F TF-0 (IF-6's recorded supersession of the frozen
+    /// two-arm shape): the effect SUBMITTED an operation to the funnel
+    /// and the truth arrives asynchronously — the mode STANDS until
+    /// <see cref="CanvasModeController.ResolveCommit"/> delivers the
+    /// outcome under the submitted operation's identity. Pending is
+    /// legal ONLY when the submission was Admitted; a synchronous
+    /// admission refusal must answer Refused instead (IF-12).</summary>
+    Pending,
+}
+
+internal readonly record struct CanvasModeCommitResult(
+    CanvasModeCommitArm Arm, CanvasA11yEvent? Confirmation, object? OperationId)
+{
+    internal bool Applied => Arm == CanvasModeCommitArm.Applied;
+
+    internal static CanvasModeCommitResult Committed(
+        CanvasA11yEvent? confirmation = null) =>
+        new(CanvasModeCommitArm.Applied, confirmation, null);
+
+    internal static CanvasModeCommitResult Refused() =>
+        new(CanvasModeCommitArm.Refused, null, null);
+
+    /// <summary>The pending arm carries the operation identity the
+    /// completion must match (IF-9).</summary>
+    internal static CanvasModeCommitResult Pending(object operationId) =>
+        new(CanvasModeCommitArm.Pending, null, operationId);
 }
 
 /// <summary>
@@ -174,10 +198,33 @@ internal sealed class CanvasModeController : BindableBase
     private readonly List<(CanvasEscapeRung Rung, Func<bool> Consume)> _rungs = [];
     private CanvasModeSpec? _active;
 
+    /// <summary>§F TF-0: the thread this controller was built
+    /// on - ResolveCommit marshals home to it (the announcer's own
+    /// capture idiom).</summary>
+    private readonly Dispatcher _dispatcher = Dispatcher.CurrentDispatcher;
+
     /// <summary>True while a commit effect is running — the window in
     /// which the stack must not be transitioned by anybody else (M2's
     /// one outcome).</summary>
+
     private bool _committing;
+
+    /// <summary>§F TF-0: the in-flight commit's operation identity.
+    /// While set, the mode STANDS, re-entrant Commit and Cancel refuse
+    /// (IF-11), and only a completion bearing THIS identity resolves
+    /// (IF-9) — a late or foreign completion drops itself.</summary>
+    private object? _pendingCommit;
+
+    /// <summary>§F TF-3: a SYNCHRONOUS funnel completes while
+    /// `OnCommit` is still on the stack — the resolution or abandon
+    /// arrives EARLY rather than wrong. It is remembered here and
+    /// consumed the moment the pending mark exists; a truly foreign
+    /// identity still dies at the identity check.</summary>
+    private (object OperationId, CanvasModeCommitResult Outcome)? _earlyResolution;
+
+    private bool _earlyAbandon;
+
+    private object? _earlyDisplaced;
 
     /// <summary>Set by <see cref="Shutdown"/>. The stack is TERMINAL from
     /// then on: no mode may be entered, committed or cancelled, and
@@ -301,7 +348,12 @@ internal sealed class CanvasModeController : BindableBase
     /// <summary>The M6 visible controls' enablement, and the palette
     /// rows': a mode transition is only offered while one is
     /// active.</summary>
-    public bool CanCommitOrCancel => IsActive;
+    public bool CanCommitOrCancel => IsActive && _pendingCommit is null;
+
+    /// <summary>§F TF-2 (IF-2): the own-commit exemption's read —
+    /// while a commit is pending, the completion is the one arbiter
+    /// and the displacement watcher stands down.</summary>
+    internal bool HasPendingCommitForTests => _pendingCommit is not null;
 
     /// <summary>
     /// Whether an entry would be ADMITTED — asked by callers that must
@@ -368,73 +420,167 @@ internal sealed class CanvasModeController : BindableBase
     /// </returns>
     public bool Commit()
     {
-        if (_retired || _active is not { } spec || _committing)
+        if (_retired || _active is not { } spec || _committing
+            || _pendingCommit is not null)
         {
             return false;
         }
-        // THE TRANSITION IS CLOSED while the effect runs (t0 §2 M2's one
-        // outcome). The effect is arbitrary host code — it opens a sheet,
-        // it moves focus, it lets the shell switch tabs — and any of that
-        // reaches this controller SYNCHRONOUSLY. Without the guard a
-        // departure raised from inside the effect re-entered `Cancel`,
-        // cleared the stack, announced a cancellation, and then this
-        // method carried on and announced the confirmation too: two
-        // outcomes for one press, and a final state that is neither.
         _committing = true;
         try
         {
-            // The effect runs FIRST and the stack is cleared only if it
-            // APPLIED: a refused commit keeps the mode and its transient
-            // state, so the user can fix what refused it or cancel out
-            // with the restoration intact. Clearing first would drop a
-            // move that was never made, with neither a commit nor a
-            // restoration to show for it.
             CanvasModeCommitResult result = spec.OnCommit();
-            if (result.Applied)
+            switch (result.Arm)
             {
-                // Cleared BEFORE the confirmation is announced: a
-                // sentence that asks whether a mode is active
-                // (Where-am-I does) must see the stack as it will be,
-                // not as it was.
-                Active = null;
-                if (result.Confirmation is { } confirmation)
-                {
-                    // FALLIBLE, like everything else in here: the render
-                    // goes through core. It sits INSIDE the try for that
-                    // reason — an announcement that faulted after the
-                    // outcome applied used to skip the drain entirely and
-                    // leave the slot loaded for the next commit. And
-                    // the effect may have RETIRED the document from
-                    // inside itself, which the boundary reads.
-                    Speak(confirmation);
-                }
+                case CanvasModeCommitArm.Applied:
+                    Active = null;
+                    if (result.Confirmation is { } confirmation)
+                    {
+                        Speak(confirmation);
+                    }
+
+                    return true;
+                case CanvasModeCommitArm.Pending:
+                    // §F TF-0: the truth is in flight. The mode
+                    // stands; departures follow the LIVE table rather
+                    // than deferring forever (the drain below runs with
+                    // the pending mark already set).
+                    _pendingCommit = result.OperationId
+                        ?? throw new CanvasLeaseViolationException(
+                            "a Pending commit carried no operation identity");
+                    if (_earlyAbandon)
+                    {
+                        _earlyAbandon = false;
+                        _earlyResolution = null;
+                        _pendingCommit = null;
+                        return false;
+                    }
+                    if (_earlyResolution is { } early)
+                    {
+                        _earlyResolution = null;
+                        ResolveCommit(early.OperationId, early.Outcome);
+                        return _active is null;
+                    }
+                    if (_earlyDisplaced is { } displaced
+                        && ReferenceEquals(displaced, _pendingCommit))
+                    {
+                        _earlyDisplaced = null;
+                        _pendingCommit = null;
+                        _ = _dispatcher.BeginInvoke(() => _ = Cancel());
+                        return false;
+                    }
+
+                    return false;
+                default:
+                    return false;
             }
-            // A refusal is silent HERE, not silent to the user: which
-            // refusal it is is the effect's knowledge, so the effect said
-            // it.
-            return result.Applied;
         }
         finally
         {
-            // ONE exit, and every exit passes through it: applied,
-            // refused, and thrown. The transition reopens — a controller
-            // stuck in it would refuse every later commit and cancel,
-            // which is worse than what the guard prevents — and the
-            // departure the effect provoked is then applied to the
-            // RESULT, which is the M4-correct order: a commit that
-            // APPLIED leaves no mode for it to cancel and it is moot,
-            // while a REFUSED one (a throw included) keeps a mode, and a
-            // mode may not survive a focus departure.
-            //
-            // This runs BEFORE an exception propagates, which is what
-            // makes `finally` right here. Round 2 rejected a finally that
-            // only REOPENED the transition and left the drain on the
-            // success path, so a throw skipped it and the slot cancelled
-            // a later commit's mode. The objection was to the missing
-            // drain, never to `finally`.
             _committing = false;
+            _earlyResolution = null;
+            _earlyAbandon = false;
+            _earlyDisplaced = null;
             DrainDeferredDeparture();
         }
+    }
+
+    /// <summary>§F TF-0: the completion side of the Pending arm.
+    /// Identity-checked (IF-9) and dispatcher-marshaled (IF-10, the
+    /// presentation engine's own intake discipline): a completion from
+    /// the work seam re-invokes itself on the thread this controller
+    /// was built on, and one that no longer matches the pending
+    /// identity — a late arrival after a cancel, a foreign operation —
+    /// drops itself without touching the mode.</summary>
+    internal void ResolveCommit(object operationId, CanvasModeCommitResult outcome)
+    {
+        ArgumentNullException.ThrowIfNull(operationId);
+        if (!_dispatcher.CheckAccess())
+        {
+            _ = _dispatcher.BeginInvoke(() => ResolveCommit(operationId, outcome));
+            return;
+        }
+        if (_retired)
+        {
+            return;
+        }
+        if (!ReferenceEquals(_pendingCommit, operationId))
+        {
+            if (_committing && _pendingCommit is null)
+            {
+                _earlyResolution = (operationId, outcome);
+            }
+
+            return;
+        }
+        _pendingCommit = null;
+        if (_active is null)
+        {
+            return;
+        }
+        if (outcome.Arm == CanvasModeCommitArm.Applied)
+        {
+            // Clear FIRST, speak after — the §C Committed(confirmation)
+            // order preserved across the bridge.
+            Active = null;
+            if (outcome.Confirmation is { } confirmation)
+            {
+                Speak(confirmation);
+            }
+        }
+        // Refused: the mode and its state stand (M2's rule, one seam
+        // over) — the effect's own sentence spoke already.
+    }
+
+    /// <summary>§F PR-review round 1 (F4b/IF-2 reconciled): a
+    /// DISPLACED completion ends the mode as a CANCELLATION. F4b's
+    /// row says "the mode is already cancelling per F1a" — but IF-2's
+    /// own-commit exemption stands the watcher down exactly while the
+    /// commit pends, so in that window nobody cancels and the mode
+    /// wedged. The completion is the one arbiter while pending
+    /// (IF-2's own words), so it owns the cancel: this resolution
+    /// clears the mark and runs the machine's cancel — restoration,
+    /// token clear and the cancelled sentence all riding the same
+    /// wrapped closures. Inside a synchronous commit stack it is
+    /// REMEMBERED like the other early arrivals and the cancel posts
+    /// outside the stack, because frozen C refuses a cancel from
+    /// inside a commit effect.</summary>
+    internal void ResolveCommitDisplaced(object operationId)
+    {
+        ArgumentNullException.ThrowIfNull(operationId);
+        if (!_dispatcher.CheckAccess())
+        {
+            _ = _dispatcher.BeginInvoke(() => ResolveCommitDisplaced(operationId));
+            return;
+        }
+        if (_retired)
+        {
+            return;
+        }
+        if (!ReferenceEquals(_pendingCommit, operationId))
+        {
+            if (_committing && _pendingCommit is null)
+            {
+                _earlyDisplaced = operationId;
+            }
+
+            return;
+        }
+        _pendingCommit = null;
+        _ = Cancel();
+    }
+
+    /// <summary>§F TF-0: a cancellation (F1a displacement, Esc-led
+    /// teardown) clears any in-flight mark so a late completion finds
+    /// nothing to resolve.</summary>
+    internal void AbandonPendingCommit()
+    {
+        if (_committing && _pendingCommit is null)
+        {
+            _earlyAbandon = true;
+            return;
+        }
+
+        _pendingCommit = null;
     }
 
     /// <summary>
@@ -574,7 +720,8 @@ internal sealed class CanvasModeController : BindableBase
     /// rung.</summary>
     public bool Cancel()
     {
-        if (_retired || _active is not { } spec || _committing)
+        if (_retired || _active is not { } spec || _committing
+            || _pendingCommit is not null)
         {
             // Refused rather than deferred while a commit is in flight:
             // a direct cancel from inside a commit effect is a caller
@@ -629,6 +776,14 @@ internal sealed class CanvasModeController : BindableBase
             // the moment that outcome is known — see `Commit`.
             _deferredDeparture = departure;
             return false;
+        }
+        if (CancelsFor(departure) && _pendingCommit is not null)
+        {
+            // §F TF-0: a departure during a PENDING commit follows
+            // the LIVE table — the in-flight mark is abandoned so the
+            // cancel can run now, and the late completion finds nothing
+            // to resolve (the identity check drops it).
+            AbandonPendingCommit();
         }
         return CancelsFor(departure) && Cancel();
     }

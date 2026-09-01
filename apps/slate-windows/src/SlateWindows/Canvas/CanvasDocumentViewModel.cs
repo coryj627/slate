@@ -1436,6 +1436,8 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             // presentation engine on the previous population for the
             // life of the publication.
             PublicationApplied?.Invoke(current);
+            // §F TF-2 (F1a): displacement ends a held mode.
+            WatchTransientDisplacement(current);
         }
         // The APPLY-WINDOW seat, reconciled (the tooltip slice's
         // finding): a projection can seat the shared selection DURING
@@ -2170,6 +2172,94 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// short-circuit SPEAKS the same typed refusal the funnel's
     /// ladder announces - one shared derivation, so the guard and
     /// the admission can never say different things.</summary>
+
+    /// <summary>§F TF-1: the basis a mode-entry operation mints
+    /// against - null while nothing is loaded, and the entry then
+    /// refuses with the not-ready sentence.</summary>
+    internal CanvasLoaded? CurrentLoadedForModeEntry => _slot.Current.Loaded;
+
+    /// <summary>§F TF-3: the session the mode's reads run
+    /// against - the navigator's steps query overlap and the
+    /// relative description under the lease.</summary>
+    internal VaultSession SessionForModeEntry => _session;
+
+    /// <summary>§F TF-1: the navigator's no-basis entry refusal
+    /// speaks the same shared derivation the guards use.</summary>
+    internal void SpeakModeEntryNotReady() => SpeakNotReady();
+
+    /// <summary>§F TF-2 (F1): the active mode's transient, or null.
+    /// The renderer reads it; the outline and table never do.</summary>
+    internal CanvasTransientHolder? Transient { get; private set; }
+
+    /// <summary>§F TF-5 (F10): the ONE aggregate mode-visible
+    /// observable. Fired exactly once per transition — entry after
+    /// the machine entered AND the holder installed, teardown after
+    /// both cleared, and each step after the rects moved — so an
+    /// observer can never see active-without-overlay or
+    /// idle-with-overlay.</summary>
+    internal event Action? ModeVisibleChanged;
+
+    /// <summary>§F TF-5: the navigator's step notify — the rects
+    /// moved in place; the observable is the change.</summary>
+    internal void NotifyTransientChanged() => ModeVisibleChanged?.Invoke();
+
+    /// <summary>§F TF-2: install the captured holder — entry's
+    /// last step, after the preflight admitted and the machine
+    /// entered.</summary>
+    internal void InstallTransient(CanvasTransientHolder holder)
+    {
+        ArgumentNullException.ThrowIfNull(holder);
+        Transient = holder;
+        ModeVisibleChanged?.Invoke();
+    }
+
+    /// <summary>§F TF-2: discard — cancel's arm (no backend call)
+    /// and every F1a teardown.</summary>
+    internal void DiscardTransient()
+    {
+        bool held = Transient is not null;
+        Transient = null;
+        if (held)
+        {
+            ModeVisibleChanged?.Invoke();
+        }
+    }
+
+    /// <summary>§F TF-2 (F1a): the displacement watcher. A publish
+    /// whose LOADED reference differs from the transient's identity
+    /// — and that is not the mode's own completion in flight — ends
+    /// the mode through the machine's cancel: the transient is a
+    /// guess about rows that moved, so it discards, the suspended
+    /// or pending marks are forgotten, and the restoration sentence
+    /// is the cancel's own. The own-commit exemption (IF-2): while
+    /// a mode commit is PENDING, the funnel's completion is the one
+    /// arbiter — its refresh publishes a new Loaded and must not
+    /// cancel the mode it is completing.</summary>
+    private void WatchTransientDisplacement(CanvasPublication current)
+    {
+        if (Modes.HasPendingCommitForTests)
+        {
+            return;
+        }
+        if (Transient is { } transient
+            && !ReferenceEquals(current.Loaded, transient.Identity))
+        {
+            DiscardTransient();
+            _ = Modes.Cancel();
+            return;
+        }
+        // §F TF-9 (F8/F1a): connect mode's displacement arm — the
+        // origin memory is a guess about a publication that no longer
+        // stands, so the mode cancels the same way a transient's
+        // would.
+        if (ConnectOrigin is { } origin
+            && !ReferenceEquals(current.Loaded, origin.Identity))
+        {
+            ClearConnectOrigin();
+            _ = Modes.Cancel();
+        }
+    }
+
     private void SpeakNotReady() =>
         Speak(new CanvasA11yEvent.CanvasMutationRefused(
             CanvasMutationFunnel.NotReadyReason(_slot.Current)));
@@ -2820,6 +2910,456 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// they are.</summary>
     internal void SpeakForEditor(CanvasA11yEvent @event) => Speak(@event);
 
+    /// <summary>§F TF-7 (F5/F6): open a card picker — the request
+    /// captures IF-19's immutable context in ONE lease read (the
+    /// TF-2 capture, reading-ordered, never silent), and the model's
+    /// proximity anchor is the PRIMARY MOVER (IF-20), the moving set
+    /// excluded. The TF-8 sheet consumes the event; refusals speak
+    /// here.</summary>
+    internal event Action<CanvasCardPickerRequest, CanvasCardPickerModel>?
+        CardPickerRequested;
+
+    internal void OpenCardPicker(CanvasCardPickerPurpose purpose)
+    {
+        if (_slot.Current.Loaded is not { } loaded)
+        {
+            SpeakNotReady();
+            return;
+        }
+        // §F TF-8 (F7): connect stages from the SELECTED card only —
+        // the marked set is placement's rigid unit, never an edge's.
+        var members = purpose != CanvasCardPickerPurpose.ConnectTo
+            && Selection.Marked.Count > 0
+            ? new List<string>(Selection.Marked)
+            : Selection.Selected is { } one ? [one] : [];
+        if (members.Count == 0)
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(
+                new CanvasStatusNote.NothingSelected()));
+            return;
+        }
+        CanvasTransientHolder? captured = CanvasTransientHolder.TryCapture(
+            _session, loaded, members, isResize: false);
+        if (captured is null)
+        {
+            Speak(new CanvasA11yEvent.CanvasActionFailed(
+                CanvasFailedAction.Placement, "open the picker"));
+            return;
+        }
+        var request = new CanvasCardPickerRequest(
+            purpose,
+            captured.Ids,
+            captured.Originals,
+            loaded);
+        LastCardPickerRequestForTests = request;
+        CardPickerRequested?.Invoke(
+            request,
+            BuildCardPickerModel(captured.Ids[0], [.. captured.Ids]));
+    }
+
+    internal CanvasCardPickerRequest? LastCardPickerRequestForTests
+    {
+        get;
+        private set;
+    }
+
+    /// <summary>§F TF-7 (F5/F6): route a completed pick. The request
+    /// re-validates FIRST — a reload between open and confirm makes
+    /// the context a guess, and a guess refuses PickDifferentTarget
+    /// (IF-19); a target inside the moving set refuses
+    /// PickOutsideMovingSet with the picker's state kept.</summary>
+    internal bool HandleCardPick(CanvasCardPickerRequest request, string target)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(target);
+        if (_slot.Current.Loaded is not { } loaded
+            || !ReferenceEquals(loaded, request.Identity))
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(
+                new CanvasStatusNote.PickDifferentTarget()));
+            return false;
+        }
+        if (request.Moving.Contains(target))
+        {
+            // §F TF-8 (IF-26): connect's self-pick is a TARGET
+            // problem, mac's sentence; placement's is a moving-set
+            // problem, F5's.
+            Speak(new CanvasA11yEvent.CanvasStatus(
+                request.Purpose == CanvasCardPickerPurpose.ConnectTo
+                    ? new CanvasStatusNote.PickDifferentTarget()
+                    : new CanvasStatusNote.PickOutsideMovingSet()));
+            return false;
+        }
+        if (request.Purpose == CanvasCardPickerPurpose.ConnectTo)
+        {
+            // §F TF-8 (F7): confirm STAGES; the label step runs before
+            // any apply exists.
+            var stage = new CanvasConnectStage(
+                request.Moving[0],
+                RowFor(request.Moving[0])?.Title ?? "card",
+                target,
+                RowFor(target)?.Title ?? "card",
+                request.Identity);
+            ConnectPromptRequested?.Invoke(stage);
+            return true;
+        }
+        switch (request.Purpose)
+        {
+            case CanvasCardPickerPurpose.PlaceBelow:
+                CanvasPlaceRelative(request, target, CanvasPlaceDirection.Below);
+                break;
+            case CanvasCardPickerPurpose.PlaceRightOf:
+                CanvasPlaceRelative(request, target, CanvasPlaceDirection.RightOf);
+                break;
+            case CanvasCardPickerPurpose.PlaceAbove:
+                CanvasPlaceRelative(request, target, CanvasPlaceDirection.Above);
+                break;
+            case CanvasCardPickerPurpose.PlaceLeftOf:
+                CanvasPlaceRelative(request, target, CanvasPlaceDirection.LeftOf);
+                break;
+            default:
+                CanvasAlignWith(request, target);
+                break;
+        }
+
+        return true;
+    }
+
+    /// <summary>§F TF-8 (F7): the staged apply — ONCE, inside
+    /// prepare-under-the-gate. Both endpoints re-resolve against the
+    /// held handle (either vanished refuses PickDifferentTarget, the
+    /// STAGE kept — it is immutable and the operation wrote nothing);
+    /// the self gate stands belt-and-braces under the pick's; sides
+    /// come from core's CanvasAutoSides over the RECTS; every
+    /// generated AddEdge parameter is spelled. An empty submitted
+    /// label normalizes to null (IF-27) — Enter-skips and
+    /// click-with-empty-field serialize identically.</summary>
+    internal void CanvasConnect(
+        CanvasConnectStage stage,
+        string? label,
+        object? modeToken = null,
+        Action<CanvasOperationOutcome>? completion = null)
+    {
+        ArgumentNullException.ThrowIfNull(stage);
+        string? clean = string.IsNullOrEmpty(label) ? null : label;
+        string name = "connect \"" + stage.OriginTitle
+            + "\" to \"" + stage.TargetTitle + "\"";
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId("connect"),
+            this,
+            Selection.Selected,
+            stage.Identity,
+            CanvasMutationEffect.KeepSelection,
+            modeToken: modeToken)
+        {
+            Completion = completion,
+        };
+        _ = Funnel.Apply(
+            operation,
+            handle => PrepareConnectAction(stage, clean),
+            name,
+            // §F TF-9 (F8/F4b): under a mode token the COMPLETION owns
+            // the sentence — Committed(confirmation) speaks after the
+            // clear; the picker flow keeps the funnel's confirm.
+            confirm: completion is null
+                ? () => new CanvasA11yEvent.CanvasConnected(
+                    stage.OriginTitle, stage.TargetTitle, clean)
+                : null);
+    }
+
+    /// <summary>§F TF-8/TF-9 (F7): the ONE connect preparation both
+    /// flows share — endpoints re-resolved against the live
+    /// population, the self gate belt-and-braces, sides from core,
+    /// every AddEdge parameter spelled.</summary>
+    private CanvasAction? PrepareConnectAction(
+        CanvasConnectStage stage, string? clean)
+    {
+        try
+        {
+            CanvasPopulation? population = _slot.Current.Population;
+            CanvasSceneNode? origin =
+                population?.SceneByNode.GetValueOrDefault(stage.OriginId);
+            CanvasSceneNode? target =
+                population?.SceneByNode.GetValueOrDefault(stage.TargetId);
+            if (origin is null || target is null
+                || stage.OriginId == stage.TargetId)
+            {
+                Speak(new CanvasA11yEvent.CanvasStatus(
+                    new CanvasStatusNote.PickDifferentTarget()));
+                return null;
+            }
+            CanvasSidePair sides = SlateUniffiMethods.CanvasAutoSides(
+                new CanvasRect(origin.X, origin.Y, origin.Width, origin.Height),
+                new CanvasRect(target.X, target.Y, target.Width, target.Height));
+            return new CanvasAction(
+                $"connect \"{stage.OriginTitle}\" to \"{stage.TargetTitle}\"",
+                [
+                    new CanvasOp.AddEdge(
+                        SlateUniffiMethods.CanvasNewId(),
+                        stage.OriginId,
+                        sides.From,
+                        stage.TargetId,
+                        sides.To,
+                        CanvasEndStyle.None,
+                        CanvasEndStyle.Arrow,
+                        clean,
+                        null),
+                ]);
+        }
+        catch (VaultException)
+        {
+            Speak(new CanvasA11yEvent.CanvasActionFailed(
+                CanvasFailedAction.CanvasAction, "connect"));
+            return null;
+        }
+    }
+
+    /// <summary>§F TF-9 (F8): connect mode's origin memory, or
+    /// apply, answering the OPERATION so the mode can hold Pending on
+    /// its identity.</summary>
+    internal CanvasMutationOperation? ConnectForMode(
+        CanvasConnectStage stage,
+        object modeToken,
+        Action<CanvasMutationOperation, CanvasOperationOutcome> completion)
+    {
+        ArgumentNullException.ThrowIfNull(stage);
+        ArgumentNullException.ThrowIfNull(modeToken);
+        ArgumentNullException.ThrowIfNull(completion);
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId("connect"),
+            this,
+            Selection.Selected,
+            stage.Identity,
+            CanvasMutationEffect.KeepSelection,
+            modeToken: modeToken);
+        operation.Completion = outcome => completion(operation, outcome);
+        CanvasMutationAdmission admission = Funnel.Apply(
+            operation,
+            handle => PrepareConnectAction(stage, null),
+            "connect \"" + stage.OriginTitle
+                + "\" to \"" + stage.TargetTitle + "\"");
+        return admission == CanvasMutationAdmission.Admitted ? operation : null;
+    }
+
+    /// <summary>§F TF-9 (F8): connect mode's origin memory, or
+    /// null.</summary>
+    internal CanvasConnectOrigin? ConnectOrigin { get; private set; }
+
+    internal void InstallConnectOrigin(CanvasConnectOrigin origin)
+    {
+        ArgumentNullException.ThrowIfNull(origin);
+        ConnectOrigin = origin;
+    }
+
+    internal void ClearConnectOrigin() => ConnectOrigin = null;
+
+    /// <summary>§F TF-8 (F7): the staged-prompt seam — the workspace
+    /// presents the label step; tests tap it directly.</summary>
+    internal event Action<CanvasConnectStage>? ConnectPromptRequested;
+
+    /// <summary>§F TF-8 (FD-4): the carried Rename Group prompt — the
+    /// COMMIT verb shipped in §E; this is its front door.</summary>
+    internal event Action<string, string>? GroupRenameRequested;
+
+    internal void RequestGroupRename(string groupId)
+    {
+        ArgumentNullException.ThrowIfNull(groupId);
+        GroupRenameRequested?.Invoke(groupId, RowFor(groupId)?.Title ?? "group");
+    }
+
+    /// <summary>§F TF-8 (FD-4): the carried Set Color prompt — acts
+    /// on the selection, mac's shape.</summary>
+    internal event Action? SetColorRequested;
+
+    internal void RequestSetColor() => SetColorRequested?.Invoke();
+
+    /// <summary>§F TF-7 (F5): picker-anchored engine placement, one
+    /// action end to end. EVERYTHING against the handle runs inside
+    /// prepare-under-the-gate: existence, the engine query, the op —
+    /// each refusal typed, each null action writing nothing. The set
+    /// routes CanvasPlaceSet with boxes IN THE SET'S READING ORDER
+    /// and the positional Origins map back by that same order; a
+    /// cardinality mismatch refuses WHOLE (IF-21). Verb identity is
+    /// Placement (IF-22).</summary>
+    internal void CanvasPlaceRelative(
+        CanvasCardPickerRequest request, string target, CanvasPlaceDirection direction)
+    {
+        if (_slot.Current.Loaded is not { } basis)
+        {
+            SpeakNotReady();
+            return;
+        }
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId("place relative"),
+            this,
+            Selection.Selected,
+            basis,
+            CanvasMutationEffect.KeepSelection);
+        bool single = request.Moving.Length == 1;
+        string primaryTitle = RowFor(request.Moving[0])?.Title ?? "card";
+        CanvasRelativeDesc? relative = null;
+        string name = single
+            ? $"move \"{primaryTitle}\""
+            : $"move {SlateUniffiMethods.CountNoun((ulong)request.Moving.Length, "card", "cards")}";
+        _ = Funnel.Apply(
+            operation,
+            handle =>
+            {
+                try
+                {
+                    CanvasPopulation? population = _slot.Current.Population;
+                    if (population is null
+                        || !population.SceneByNode.ContainsKey(target))
+                    {
+                        Speak(new CanvasA11yEvent.CanvasStatus(
+                            new CanvasStatusNote.PickDifferentTarget()));
+                        return null;
+                    }
+                    foreach (string id in request.Moving)
+                    {
+                        if (!population.SceneByNode.ContainsKey(id))
+                        {
+                            Speak(new CanvasA11yEvent.CanvasStatus(
+                                new CanvasStatusNote.NothingSelected()));
+                            return null;
+                        }
+                    }
+                    if (single)
+                    {
+                        CanvasRect box = request.Rects[request.Moving[0]];
+                        CanvasPlacement placement = _session.CanvasPlaceNew(
+                            handle,
+                            target,
+                            box.Width,
+                            box.Height,
+                            direction,
+                            [.. request.Moving]);
+                        relative = placement.Relative;
+                        return new CanvasAction(
+                            name,
+                            [
+                                new CanvasOp.UpdateNodeGeometry(
+                                    request.Moving[0],
+                                    placement.X,
+                                    placement.Y,
+                                    box.Width,
+                                    box.Height),
+                            ]);
+                    }
+                    CanvasRect[] boxes =
+                        [.. request.Moving.Select(id => request.Rects[id])];
+                    CanvasSetPlacement set = _session.CanvasPlaceSet(
+                        handle, target, boxes, direction, [.. request.Moving]);
+                    if (set.Origins.Length != request.Moving.Length)
+                    {
+                        // IF-21: the positional contract broke — refuse
+                        // WHOLE rather than move a subset.
+                        Speak(new CanvasA11yEvent.CanvasActionFailed(
+                            CanvasFailedAction.Placement, "place the set"));
+                        return null;
+                    }
+                    relative = set.Relative;
+                    var ops = new List<CanvasOp>();
+                    for (int i = 0; i < request.Moving.Length; i++)
+                    {
+                        CanvasRect box = request.Rects[request.Moving[i]];
+                        ops.Add(new CanvasOp.UpdateNodeGeometry(
+                            request.Moving[i],
+                            set.Origins[i].X,
+                            set.Origins[i].Y,
+                            box.Width,
+                            box.Height));
+                    }
+                    return new CanvasAction(name, [.. ops]);
+                }
+                catch (VaultException)
+                {
+                    Speak(new CanvasA11yEvent.CanvasActionFailed(
+                        CanvasFailedAction.Placement, "place"));
+                    return null;
+                }
+            },
+            name,
+            confirm: () => single
+                ? new CanvasA11yEvent.CanvasCardPlaced(
+                    CanvasPlaceVerb.Moved, primaryTitle, relative!)
+                : new CanvasA11yEvent.CanvasBulkMoved(
+                    (uint)request.Moving.Length, relative!));
+    }
+
+    /// <summary>§F TF-7 (F6): the same-axis slot with a TOTAL refusal
+    /// table — top edges (FD-2), already-aligned answers NoChanges
+    /// writing nothing (the arm mac lacks, added by contract), an
+    /// occupied slot refuses AlignWouldOverlap, and the overlap check
+    /// runs inside prepare with the write it guards. Verb identity is
+    /// Align (IF-22).</summary>
+    internal void CanvasAlignWith(CanvasCardPickerRequest request, string target)
+    {
+        if (_slot.Current.Loaded is not { } basis)
+        {
+            SpeakNotReady();
+            return;
+        }
+        string mover = request.Moving[0];
+        string primaryTitle = RowFor(mover)?.Title ?? "card";
+        string targetTitle = RowFor(target)?.Title ?? "card";
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId("align with"),
+            this,
+            Selection.Selected,
+            basis,
+            CanvasMutationEffect.KeepSelection);
+        _ = Funnel.Apply(
+            operation,
+            handle =>
+            {
+                try
+                {
+                    CanvasPopulation? population = _slot.Current.Population;
+                    CanvasSceneNode? node =
+                        population?.SceneByNode.GetValueOrDefault(mover);
+                    CanvasSceneNode? anchor =
+                        population?.SceneByNode.GetValueOrDefault(target);
+                    if (node is null || anchor is null)
+                    {
+                        Speak(new CanvasA11yEvent.CanvasStatus(
+                            new CanvasStatusNote.PickDifferentTarget()));
+                        return null;
+                    }
+                    if (node.Y == anchor.Y)
+                    {
+                        Speak(new CanvasA11yEvent.CanvasStatus(
+                            new CanvasStatusNote.NoChanges()));
+                        return null;
+                    }
+                    var slot = new CanvasRect(
+                        node.X, anchor.Y, node.Width, node.Height);
+                    if (_session.CanvasCheckOverlap(handle, slot, [mover])
+                        .Length > 0)
+                    {
+                        Speak(new CanvasA11yEvent.CanvasBlocked(
+                            new CanvasBlockedReason.AlignWouldOverlap()));
+                        return null;
+                    }
+                    return new CanvasAction(
+                        $"align \"{primaryTitle}\"",
+                        [
+                            new CanvasOp.UpdateNodeGeometry(
+                                mover, node.X, anchor.Y, node.Width, node.Height),
+                        ]);
+                }
+                catch (VaultException)
+                {
+                    Speak(new CanvasA11yEvent.CanvasActionFailed(
+                        CanvasFailedAction.Align, "align"));
+                    return null;
+                }
+            },
+            $"align \"{primaryTitle}\"",
+            confirm: () => new CanvasA11yEvent.CanvasCardAligned(
+                primaryTitle, targetTitle));
+    }
+
     /// <summary>The live population's basis — the editor's commit
     /// compares its seed against THIS (IE-18's re-validation).</summary>
     internal string? PublishedBasis => _slot.Current.Population?.ContentHash;
@@ -2828,7 +3368,14 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// order over the lease (anchor = the selection; reading-order
     /// ties; groups included), labelled the palette way. The model
     /// only filters; a picker with no handle answers empty.</summary>
-    internal CanvasCardPickerModel BuildCardPickerModel(params string[] exclude)
+    internal CanvasCardPickerModel BuildCardPickerModel(params string[] exclude) =>
+        BuildCardPickerModel(Selection.Selected, exclude);
+
+    /// <summary>§F TF-7 (IF-20): the F5 pickers anchor proximity at
+    /// the PRIMARY MOVER — the anchor is a parameter, and the §E
+    /// callers keep the selection default.</summary>
+    internal CanvasCardPickerModel BuildCardPickerModel(
+        string? anchor, string[] exclude)
     {
         string[] ordered = [];
         if (_slot.Current.Lease is { } lease)
@@ -2840,7 +3387,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                     return !now.Retired && now.Names(lease);
                 },
                 handle => ordered = _session.CanvasProximityOrder(
-                    handle, Selection.Selected, exclude));
+                    handle, anchor, exclude));
         }
         return new CanvasCardPickerModel(
             ordered

@@ -168,7 +168,9 @@ public sealed class ContractsCitationCensus
             (
                 "E",
                 "## PR E — the mutation funnel",
-                "## §W-G canonical-consumption audit",
+                // Terminated by §F since its section landed — §B's
+                // rule, again.
+                "## PR F — move and resize modes, structural placement, and the connect flow",
                 12_000,
                 // A DESIGN floor, §C-unit's convention: the section's
                 // own new types (the funnel, the stacks, the pickers,
@@ -269,6 +271,87 @@ public sealed class ContractsCitationCensus
                 // taking the section to 76; 75 sits above the
                 // pre-task population of 74 — an eighteenth time.
                 75),
+            (
+                "F",
+                "## PR F — move and resize modes, structural placement, and the connect flow",
+                "## §W-G canonical-consumption audit",
+                // The length pin guards marker movement; a young
+                // section pins below its honest size and rises with
+                // its records, as §E's did. TF-3's record took
+                // the section well past its youth; the pin follows.
+                40_000,
+                // A DESIGN floor, the §C-unit/§E convention: the
+                // section's own new types stay plain text until
+                // tasks bind them, so today's citations are
+                // EXISTING names (the mode controller, the funnel,
+                // the 0a/0b exports). 12 sits above the empty
+                // pre-section population and below the landed
+                // count; each task raises it, as every §E task did.
+                //
+                // TF-0 bound the completion seam — the Pending arm,
+                // the resolve machinery and the typed operation
+                // outcome — taking the section to 47; 43 sits above
+                // the pre-task population of 42, the rule's first
+                // §F application.
+                //
+                // TF-1 bound the entry preflight and the token
+                // lifecycle — the admitted install, the identity-
+                // checked clear and the suspend trio — taking the
+                // section to 50; 48 sits above the pre-task
+                // population of 47 — a second time.
+                //
+                // TF-2 bound the holder, its identity and the
+                // displacement watcher, taking the section to 52;
+                // 51 sits above the pre-task population of 50 — a
+                // third time.
+                //
+                // TF-3 bound the move machine — the overlap and
+                // describe reads, the geometry commit and the
+                // controller's early-resolution memory — taking
+                // the section to 59; 56 sits above the pre-task
+                // population of 52 — a fourth time.
+                //
+                // TF-4 bound the resize surface — the preset
+                // gate, the minting rule and the quick loop —
+                // taking the section to 63; 61 sits above the
+                // pre-task population of 59 — a fifth time.
+                //
+                // TF-5 bound the presentation authority — the
+                // effective-rect derivation and the aggregate
+                // observable — taking the section to 66; 64 sits
+                // above the pre-task population of 63 — a sixth
+                // time.
+                //
+                // TF-6 bound the retirement rule at the announcer
+                // seam, taking the section to 67; 66 sits
+                // above the pre-task population of 66 — a seventh
+                // time.
+                //
+                // TF-7 bound the picker request and the placement
+                // verbs, taking the section to 71; 69 sits
+                // above the pre-task population of 67 — an eighth
+                // time.
+                //
+                // TF-8 bound the prompt machinery and the staged
+                // connect flow, taking the section to 75; 73
+                // sits above the pre-task population of 71 — a
+                // ninth time.
+                //
+                // TF-9 bound the connect-mode memory and its shared
+                // preparation, taking the section to 76; 75
+                // sits above the pre-task population of 75 — a
+                // tenth time.
+                //
+                // TF-10 bound the suspended column and published the
+                // matrix, taking the section to 80; 79 sits
+                // above the pre-task population of 76 — an
+                // eleventh time.
+                //
+                // TF-11 bound the journey's marshalling catch and
+                // swept the ledger, taking the section to 81;
+                // 80 sits above the pre-task population of 80
+                // — a twelfth time.
+                80),
         ];
 
     public static TheoryData<string, string, string> SectionRanges
@@ -927,6 +1010,10 @@ public sealed class ContractsCitationCensus
         (
             "§E",
             "## PR E — the mutation funnel",
+            "## PR F — move and resize modes, structural placement, and the connect flow"),
+        (
+            "§F",
+            "## PR F — move and resize modes, structural placement, and the connect flow",
             "## §W-G canonical-consumption audit"),
         (
             "divergences",

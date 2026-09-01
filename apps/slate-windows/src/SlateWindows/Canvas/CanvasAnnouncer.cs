@@ -86,7 +86,7 @@ internal sealed class CanvasAnnouncer
     public void Announce(CanvasA11yEvent @event)
     {
         ArgumentNullException.ThrowIfNull(@event);
-        Emit(new A11yEvent.Canvas(@event), CoalescingClassOf(@event));
+        Emit(new A11yEvent.Canvas(@event), CoalescingClassOf(@event), RetiresNavigation(@event));
     }
 
     /// <summary>
@@ -151,7 +151,7 @@ internal sealed class CanvasAnnouncer
     /// SPEAKER asks before composing (contract A5).</summary>
     internal bool IsRetired => _isShutDown;
 
-    private void Emit(A11yEvent @event, EventClass? eventClass)
+    private void Emit(A11yEvent @event, EventClass? eventClass, bool retiresNavigation = false)
     {
         if (_isShutDown)
         {
@@ -177,10 +177,21 @@ internal sealed class CanvasAnnouncer
             // discipline: subscribers marshal, order preserved per
             // dispatcher queue), so the timers and the publishes it
             // feeds still run where they were built.
-            _ = _dispatcher.BeginInvoke(() => Emit(@event, eventClass));
+            _ = _dispatcher.BeginInvoke(() => Emit(@event, eventClass, retiresNavigation));
             return;
         }
 
+        if (retiresNavigation
+            && _pending.TryGetValue(EventClass.Navigation, out PendingLine? stale))
+        {
+            // §F TF-6 (F11, IF-32 reconciled): a mode TRANSITION
+            // retires the pending NAVIGATION line — named explicitly,
+            // because "same class" had no determinate meaning: Medium
+            // is a priority. A cancel is never followed by a now-false
+            // position sentence. FILTER survives: pending filter
+            // feedback is not made false by a mode ending.
+            _ = stale.Take();
+        }
         RenderedAnnouncement rendered = SlateUniffiMethods.A11yRender(@event);
         if (rendered.Text.Length == 0)
         {
@@ -208,6 +219,17 @@ internal sealed class CanvasAnnouncer
         }
         _post(rendered);
     }
+
+    /// <summary>§F TF-6 (F11): the five transitions — entered,
+    /// committed, cancelled, no-effect, clamped. A REJECTION is not a
+    /// transition: the mode did not change, so nothing already queued
+    /// became false.</summary>
+    private static bool RetiresNavigation(CanvasA11yEvent @event) => @event
+        is CanvasA11yEvent.CanvasModeEntered
+        or CanvasA11yEvent.CanvasModeCommitted
+        or CanvasA11yEvent.CanvasModeCancelled
+        or CanvasA11yEvent.CanvasModeEndedWithoutEffect
+        or CanvasA11yEvent.CanvasResizeClamped;
 
     /// <summary>
     /// The coalescing class of a canvas event, per the list pinned on
