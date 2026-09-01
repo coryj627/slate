@@ -168,7 +168,9 @@ public sealed class ContractsCitationCensus
             (
                 "E",
                 "## PR E — the mutation funnel",
-                "## §W-G canonical-consumption audit",
+                // Terminated by §F since its section landed — §B's
+                // rule, again.
+                "## PR F — move and resize modes, structural placement, and the connect flow",
                 12_000,
                 // A DESIGN floor, §C-unit's convention: the section's
                 // own new types (the funnel, the stacks, the pickers,
@@ -269,6 +271,22 @@ public sealed class ContractsCitationCensus
                 // taking the section to 76; 75 sits above the
                 // pre-task population of 74 — an eighteenth time.
                 75),
+            (
+                "F",
+                "## PR F — move and resize modes, structural placement, and the connect flow",
+                "## §W-G canonical-consumption audit",
+                // The length pin guards marker movement; a young
+                // section pins below its honest size and rises with
+                // its records, as §E's did.
+                6_000,
+                // A DESIGN floor, the §C-unit/§E convention: the
+                // section's own new types stay plain text until
+                // tasks bind them, so today's citations are
+                // EXISTING names (the mode controller, the funnel,
+                // the 0a/0b exports). 12 sits above the empty
+                // pre-section population and below the landed
+                // count; each task raises it, as every §E task did.
+                12),
         ];
 
     public static TheoryData<string, string, string> SectionRanges
@@ -927,6 +945,10 @@ public sealed class ContractsCitationCensus
         (
             "§E",
             "## PR E — the mutation funnel",
+            "## PR F — move and resize modes, structural placement, and the connect flow"),
+        (
+            "§F",
+            "## PR F — move and resize modes, structural placement, and the connect flow",
             "## §W-G canonical-consumption audit"),
         (
             "divergences",
