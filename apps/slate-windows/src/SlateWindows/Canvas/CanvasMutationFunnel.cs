@@ -185,6 +185,18 @@ internal sealed class CanvasMutationFunnel(
         }
     }
 
+    /// <summary>§F TF-10 (IF-30): whether a mode's token is
+    /// SUSPENDED — the conflict yielded it and the transient is
+    /// frozen. Steps and presets gate on this; the ladder already
+    /// refuses everything that submits.</summary>
+    internal bool ModeSuspended => _suspendedModeToken is not null;
+
+    /// <summary>§F TF-10 (IF-30): the suspended column's one voice —
+    /// a gated step or preset speaks the ladder's own ConflictPending
+    /// sentence, never a second phrasing.</summary>
+    internal void AnnounceConflictPending() =>
+        AnnounceAdmission(CanvasMutationAdmission.ConflictPending);
+
     /// <summary>§F TF-1 (FD-5, the token half): the conflict
     /// completion YIELDS the mode's token so the recovery's writes pass
     /// through <see cref="ConflictResolutionToken"/>; the suspended

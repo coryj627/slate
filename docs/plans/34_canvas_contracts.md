@@ -9320,6 +9320,50 @@ no-effect arm dropped, M2 the re-seat dropped, M3 the focus address
 dropped, M4 the watcher arm dropped, M5 the label forced non-null.
 All bitten.
 
+### TF-10 — the F9 matrix published, and the suspended column closed
+
+IF-31 demanded the matrix be PUBLISHED, not delegated. Here it is,
+the decision table this task ships and its facts pin:
+
+| Row | Normal state | Suspended (conflict pending) |
+| --- | --- | --- |
+| Mode entry, no selection | `NothingSelected` | ConflictPending (the ladder, ahead of everything) |
+| Mode entry, a mode active | frozen C's M7 rejection; the resize chord's quick loop commits its OWN mode | ConflictPending |
+| Arrows / steps | the active mode's step; navigator movement otherwise | REFUSED — the ladder's conflict sentence, nothing moves |
+| Resize presets | outside resize: `CanvasBlocked(ModeBusy)`; inside: the preset | REFUSED — the conflict sentence |
+| Commit / Return | the mode's completion table (F4b) | ConflictPending through the ladder; the mode STANDS |
+| Cancel / Esc | the mode's restoration | ALLOWED — local restore, the suspended identity FORGOTTEN |
+| Ordinary funnel verbs | `ModeHeld` while a token holds | ConflictPending (the ladder's precedence) |
+| Picker rows without their selection | their F5–F7 arms | ConflictPending |
+| Header commit/cancel buttons | HIDDEN with no mode (the shipped C gate) | visible; presses refuse through the machine |
+| Palette rows | visible; refusals are typed (C9: hidden is for controls that mean nothing; refusal is for state the user can change) | same, the conflict sentence |
+| Owner-pane departure | the C machine's cancel | the same cancel; the wrap forgets the identity |
+
+IF-30's matrix half closes with two code changes and one probe. The
+probe: `ModeSuspended` on the funnel, true while the yielded identity
+is remembered. The first change: the step gate sits INSIDE
+`ModeStep` — the one door every step takes, chord-routed or direct —
+and the presets gate the same way; both speak `AnnounceConflictPending`,
+the LADDER'S own sentence (`CanvasSaveConflict` renders "The canvas
+changed on disk. Reload it to continue…"), never a second phrasing.
+The second change is a LEAK found while building: the entry wrap
+cleared only the live token, so a cancel during suspension left the
+suspended identity remembered forever — the wrap now forgets it
+beside every clear. Suspension's real exits today are cancel,
+departure and reload (nothing writes through
+`ConflictResolutionToken` yet and the record's Terminal flag has no
+writer); the reinstall arm stands contractual with its TF-1 fact,
+recorded. F9a lands as a fact pinning all four stored names
+byte-exact — and it caught the connect flows passing the SHORT
+operation name where mac's full sentence belonged; both connect
+paths now name `connect "A" to "B"`.
+
+Facts: four — the frozen steps and presets under suspension, the
+forgotten identity after a suspended cancel, the ladder-refused
+second Return, and the verbatim action names. Mutations, each
+byte-restored: M1 the step gate dropped, M2 the forget dropped, M3
+the preset gate dropped, M4 a name reworded. All bitten.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same

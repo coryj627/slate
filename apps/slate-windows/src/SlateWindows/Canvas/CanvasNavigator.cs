@@ -528,6 +528,11 @@ internal sealed class CanvasNavigator
     /// with the mode reason (F9's typed refusal).</summary>
     internal bool ResizeDefaultSize()
     {
+        if (_document.Funnel.ModeSuspended)
+        {
+            _document.Funnel.AnnounceConflictPending();
+            return false;
+        }
         if (_document.Transient is not { } transient || !transient.IsResize
             || _document.CurrentLoadedForModeEntry is not { } loaded)
         {
@@ -553,6 +558,11 @@ internal sealed class CanvasNavigator
     /// spoken.</summary>
     internal bool ResizeFitContent()
     {
+        if (_document.Funnel.ModeSuspended)
+        {
+            _document.Funnel.AnnounceConflictPending();
+            return false;
+        }
         if (_document.Transient is not { } transient || !transient.IsResize
             || _document.CurrentLoadedForModeEntry is not { } loaded)
         {
@@ -770,6 +780,15 @@ internal sealed class CanvasNavigator
         {
             return false;
         }
+        // §F TF-10 (IF-30): the suspended column — the transient is
+        // FROZEN while the conflict pends, so a step refuses with the
+        // ladder's own sentence and moves nothing. The gate sits in
+        // the ONE door every step takes, chord-routed or direct.
+        if (_document.Funnel.ModeSuspended)
+        {
+            _document.Funnel.AnnounceConflictPending();
+            return true;
+        }
         if (transient.IsResize)
         {
             return ResizeStep(transient, loaded, dx, dy, large);
@@ -958,13 +977,19 @@ internal sealed class CanvasNavigator
                 if (result.Arm == CanvasModeCommitArm.Applied)
                 {
                     _document.Funnel.ClearModeToken(token);
+                    _document.Funnel.ForgetSuspendedModeToken(token);
                 }
 
                 return result;
             },
             OnCancel = () =>
             {
+                // §F TF-10 (IF-30): a cancel during SUSPENSION must
+                // forget the yielded identity too — the first cut
+                // cleared only the live token, and the suspended one
+                // lingered forever.
                 _document.Funnel.ClearModeToken(token);
+                _document.Funnel.ForgetSuspendedModeToken(token);
                 return onCancel();
             },
         };
@@ -972,6 +997,7 @@ internal sealed class CanvasNavigator
         if (!entered)
         {
             _document.Funnel.ClearModeToken(token);
+            _document.Funnel.ForgetSuspendedModeToken(token);
         }
         return entered;
     }

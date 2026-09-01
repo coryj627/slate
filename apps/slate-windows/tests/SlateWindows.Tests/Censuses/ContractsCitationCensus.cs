@@ -341,7 +341,12 @@ public sealed class ContractsCitationCensus
                 // preparation, taking the section to 76; 75
                 // sits above the pre-task population of 75 — a
                 // tenth time.
-                75),
+                //
+                // TF-10 bound the suspended column and published the
+                // matrix, taking the section to 80; 79 sits
+                // above the pre-task population of 76 — an
+                // eleventh time.
+                79),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

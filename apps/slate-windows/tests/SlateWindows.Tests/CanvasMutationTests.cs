@@ -287,6 +287,129 @@ public sealed class CanvasMutationTests : IDisposable
         document.Shutdown();
     }
 
+    /// <summary>§F TF-10 (IF-30): the suspended column — a conflicted
+    /// Return freezes the transient, and steps and presets REFUSE
+    /// with the ladder's own conflict sentence, moving nothing.</summary>
+    [Fact]
+    public void ASuspendedModeFreezesItsSteps()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        document.Navigator.AttachPresenter(new FakePane());
+        Assert.True(document.Navigator.EnterResizeMode());
+        Assert.True(document.Navigator.ModeStep(1, 0, large: false));
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "board.canvas"),
+            DiskBytes() + "\n");
+        Assert.False(document.Modes.Commit());
+        Assert.True(document.Funnel.ModeSuspended);
+        CanvasRect frozen = document.Transient!.Rects["a"];
+        _announced.Clear();
+
+        Assert.True(document.Navigator.ModeStep(1, 0, large: false));
+        Assert.False(document.Navigator.ResizeDefaultSize());
+
+        Assert.Equal(frozen, document.Transient!.Rects["a"]);
+        document.AnnouncerForTests.FlushForTests();
+        Assert.True(
+            _announced.Count(a => a.Text.Contains(
+                "changed on disk", StringComparison.Ordinal)) >= 2,
+            "the step and the preset must each speak the conflict sentence");
+        Assert.True(document.Modes.Cancel());
+        document.Shutdown();
+    }
+
+    /// <summary>§F TF-10 (IF-30): a cancel during suspension forgets
+    /// the yielded identity — nothing lingers, and a fresh mode
+    /// admits.</summary>
+    [Fact]
+    public void ASuspendedCancelForgetsTheIdentity()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        document.Navigator.AttachPresenter(new FakePane());
+        Assert.True(document.Navigator.EnterMoveMode());
+        Assert.True(document.Navigator.ModeStep(1, 0, large: false));
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "board.canvas"),
+            DiskBytes() + "\n");
+        Assert.False(document.Modes.Commit());
+        Assert.True(document.Funnel.ModeSuspended);
+
+        Assert.True(document.Modes.Cancel());
+
+        Assert.False(document.Funnel.ModeSuspended);
+        Assert.False(document.Modes.IsActive);
+        document.Shutdown();
+    }
+
+    /// <summary>§F TF-10 (IF-30): a second Return during suspension
+    /// refuses THROUGH THE LADDER — the conflict sentence, the mode
+    /// standing, the frozen transient untouched.</summary>
+    [Fact]
+    public void CommitDuringSuspensionRefusesThroughTheLadder()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        document.Navigator.AttachPresenter(new FakePane());
+        Assert.True(document.Navigator.EnterMoveMode());
+        Assert.True(document.Navigator.ModeStep(1, 0, large: false));
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "board.canvas"),
+            DiskBytes() + "\n");
+        Assert.False(document.Modes.Commit());
+        _announced.Clear();
+
+        Assert.False(document.Modes.Commit());
+
+        Assert.True(document.Modes.IsActive);
+        Assert.NotNull(document.Transient);
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            a => a.Text.Contains("changed on disk", StringComparison.Ordinal));
+        Assert.True(document.Modes.Cancel());
+        document.Shutdown();
+    }
+
+    /// <summary>§F TF-10 (F9a): the stored action names are mac's
+    /// VERBATIM — part of Ctrl+Z's observable sentence, pinned
+    /// byte-exact across all four verbs.</summary>
+    [Fact]
+    public void TheActionNamesAreMacsVerbatim()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        var pane = new FakePane();
+        document.Navigator.AttachPresenter(pane);
+
+        Assert.True(document.Navigator.EnterMoveMode());
+        Assert.True(document.Navigator.ModeStep(1, 0, large: false));
+        Assert.True(document.Modes.Commit());
+        Assert.Equal("move \"Alpha\"", document.UndoStack.OfferedUndo!.Name);
+
+        Assert.True(document.Navigator.EnterResizeMode());
+        Assert.True(document.Navigator.ModeStep(1, 0, large: false));
+        Assert.True(document.Modes.Commit());
+        Assert.Equal("resize \"Alpha\"", document.UndoStack.OfferedUndo!.Name);
+
+        document.OpenCardPicker(CanvasCardPickerPurpose.AlignWith);
+        Assert.True(document.HandleCardPick(
+            document.LastCardPickerRequestForTests!, "blocker"));
+        Assert.Equal("align \"Alpha\"", document.UndoStack.OfferedUndo!.Name);
+
+        CanvasConnectStage? staged = null;
+        document.ConnectPromptRequested += stage => staged = stage;
+        document.OpenCardPicker(CanvasCardPickerPurpose.ConnectTo);
+        Assert.True(document.HandleCardPick(
+            document.LastCardPickerRequestForTests!, "grp"));
+        document.CanvasConnect(staged!, null);
+        Assert.Equal(
+            "connect \"Alpha\" to \"Ideas\"",
+            document.UndoStack.OfferedUndo!.Name);
+        document.Shutdown();
+    }
+
     /// <summary>§F TF-9 (F8): connect mode end to end — the origin
     /// remembered, the reader's own movement steps the candidate,
     /// Return applies F7's staged connect with label NULL, one entry,

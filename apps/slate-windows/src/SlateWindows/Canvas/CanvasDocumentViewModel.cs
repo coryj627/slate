@@ -3042,6 +3042,8 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     {
         ArgumentNullException.ThrowIfNull(stage);
         string? clean = string.IsNullOrEmpty(label) ? null : label;
+        string name = "connect \"" + stage.OriginTitle
+            + "\" to \"" + stage.TargetTitle + "\"";
         var operation = new CanvasMutationOperation(
             new CanvasOperationId("connect"),
             this,
@@ -3055,7 +3057,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         _ = Funnel.Apply(
             operation,
             handle => PrepareConnectAction(stage, clean),
-            "connect",
+            name,
             // §F TF-9 (F8/F4b): under a mode token the COMPLETION owns
             // the sentence — Committed(confirmation) speaks after the
             // clear; the picker flow keeps the funnel's confirm.
@@ -3134,7 +3136,8 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         CanvasMutationAdmission admission = Funnel.Apply(
             operation,
             handle => PrepareConnectAction(stage, null),
-            "connect");
+            "connect \"" + stage.OriginTitle
+                + "\" to \"" + stage.TargetTitle + "\"");
         return admission == CanvasMutationAdmission.Admitted ? operation : null;
     }
 
