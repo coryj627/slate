@@ -654,6 +654,17 @@ internal sealed class CanvasNavigator
         {
             return;
         }
+        if (verb == CanvasViewportVerb.ZoomToSelection
+            && _document.Selection.Selected is null)
+        {
+            // D14's data arm: no selection is the verb's OWN
+            // precondition, answered with the canonical sentence
+            // before any pane is consulted — a zoom to nothing is not
+            // a pane problem.
+            Announce(new CanvasA11yEvent.CanvasStatus(
+                new CanvasStatusNote.NothingSelected()));
+            return;
+        }
         if (_presenter is { } pane && pane.ViewportCommand(verb))
         {
             return;

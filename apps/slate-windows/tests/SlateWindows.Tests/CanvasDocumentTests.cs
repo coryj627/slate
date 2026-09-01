@@ -1356,20 +1356,22 @@ public sealed class CanvasDocumentTests : IDisposable
         });
 
     [Fact]
-    public void TheSurfaceSwitcherIsNamedAndTheUnshippedArmIsDisabled() => RunSta(() =>
+    public void TheSurfaceSwitcherIsNamedAndAllThreeArmsAreLive() => RunSta(() =>
     {
         CanvasDocumentViewModel document = NewDocument("board.canvas");
         document.Load();
         var surface = new CanvasSurfaceView { Model = document };
 
-        // W6-1 PR B shipped the table, so its arm is live now; the
-        // visual arm is PR D's and stays disabled with its reason.
+        // §D TD-6 shipped the visual, so every arm is live and the
+        // ships-later hint is GONE — a help text promising a later
+        // slice on an enabled control would be the stale claim the
+        // enablement census exists to catch.
         Assert.True(surface.TableChoiceForTests.IsEnabled);
-        Assert.False(surface.VisualChoiceForTests.IsEnabled);
+        Assert.True(surface.VisualChoiceForTests.IsEnabled);
         Assert.Equal(
-            CanvasPhrase.VisualShipsLater,
+            string.Empty,
             System.Windows.Automation.AutomationProperties.GetHelpText(
-                surface.VisualChoiceForTests));
+                surface.VisualChoiceForTests) ?? string.Empty);
         document.Shutdown();
     });
 
@@ -1507,7 +1509,7 @@ public sealed class CanvasDocumentTests : IDisposable
     /// <c>CanvasTableTests</c> owns the other half.
     /// </remarks>
     [Fact]
-    public void ShowVisualRegistersAndStaysDisabledUntilItsProjectionShips()
+    public void ShowVisualIsEnabledAndDrivesTheSurfaceSwitch()
     {
         using WorkspaceViewModel workspace = NewWorkspace();
         workspace.OpenPath("board.canvas");
@@ -1534,10 +1536,11 @@ public sealed class CanvasDocumentTests : IDisposable
 
         Assert.Null(Commands.SlateCommandRegistrar.DisabledReason(
             host, Commands.ChordTable.Ids.CanvasShowOutline));
-        Assert.Equal(
-            Commands.SlateCommandRegistrar.UnavailableReason,
-            Commands.SlateCommandRegistrar.DisabledReason(
-                host, Commands.ChordTable.Ids.CanvasShowVisual));
+        // §D TD-6: the visual shipped, so its row is as live as the
+        // other two — the fact that pinned the DISABLED half now pins
+        // the flip.
+        Assert.Null(Commands.SlateCommandRegistrar.DisabledReason(
+            host, Commands.ChordTable.Ids.CanvasShowVisual));
 
         // The one that IS shipped switches the shared surface and
         // speaks core's sentence.
@@ -1557,6 +1560,18 @@ public sealed class CanvasDocumentTests : IDisposable
         Assert.Equal(
             SlateUniffiMethods.A11yRender(new A11yEvent.Canvas(
                 new CanvasA11yEvent.CanvasSurfaceShown(CanvasSurfaceKind.Table))).Text,
+            _announced[^1].Text);
+
+        // And the FLIPPED row drives the same one switch (A15/A18).
+        _announced.Clear();
+        Commands.SlateCommandRegistrar
+            .Resolve(host, Commands.ChordTable.Ids.CanvasShowVisual)!
+            .Execute(null);
+        Assert.Equal(CanvasSurfaceKind.Visual, document.Selection.ActiveSurface);
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Equal(
+            SlateUniffiMethods.A11yRender(new A11yEvent.Canvas(
+                new CanvasA11yEvent.CanvasSurfaceShown(CanvasSurfaceKind.Visual))).Text,
             _announced[^1].Text);
     }
 
@@ -3654,5 +3669,89 @@ public sealed class CanvasDocumentTests : IDisposable
         {
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
         }
+    }
+
+    /// <summary>§D TD-6: the third arm is REAL — the persisted or
+    /// switched visual surface renders the ready publication through
+    /// the engine's installed state (the Ready-integration fact TD-3's
+    /// record deferred here), and exactly one projection stays in the
+    /// tree with three arms to choose from.</summary>
+    [Fact]
+    public void TheVisualArmRendersTheReadyPublication() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = NewDocument("board.canvas");
+        document.Load();
+        var surface = new CanvasSurfaceView { Model = document };
+        using HostedWindow host = Host(surface);
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        PumpUntil(() => surface.VisualForTests.Engine.Current is not null);
+
+        Assert.Equal(Visibility.Visible, surface.VisualForTests.Visibility);
+        Assert.Equal(Visibility.Collapsed, surface.OutlineForTests.Visibility);
+        CanvasPresentationState state = Assert.IsType<CanvasPresentationState>(
+            surface.VisualForTests.Engine.Current);
+        Assert.True(
+            state.Source.Loaded is not null,
+            "the installed state does not carry the ready publication.");
+        Assert.Contains(
+            state.Topology.Placements,
+            placement => placement.Value.Cell == CanvasPeerCell.Materialized);
+        document.Shutdown();
+    });
+
+    /// <summary>§D D14 end to end: a viewport verb through the
+    /// presenter seam moves the engine's installed zoom — the
+    /// pane-addressed route, no cache consulted.</summary>
+    [Fact]
+    public void AViewportVerbThroughThePresenterMovesTheInstalledZoom() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = NewDocument("board.canvas");
+        document.Load();
+        var surface = new CanvasSurfaceView { Model = document };
+        using HostedWindow host = Host(surface);
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        PumpUntil(() => surface.VisualForTests.Engine.Current is not null);
+
+        Assert.True(
+            ((ICanvasSurfacePresenter)surface).ViewportCommand(
+                CanvasViewportVerb.ZoomIn),
+            "the pane refused a viewport verb with a mounted renderer.");
+        PumpUntil(() =>
+            surface.VisualForTests.Engine.Current is { } zoomed
+            && zoomed.Viewport.Zoom > 1.0);
+        Assert.Equal(
+            1.25,
+            surface.VisualForTests.Engine.Current!.Viewport.Zoom,
+            precision: 6);
+        document.Shutdown();
+    });
+
+    /// <summary>Pump until the condition holds or the budget runs out
+    /// — the async engine's install rides a pool continuation, so one
+    /// drained frame can beat it (the engine battery's own loop, here
+    /// for the windowed facts).</summary>
+    private static void PumpUntil(Func<bool> condition)
+    {
+        var budget = System.Diagnostics.Stopwatch.StartNew();
+        while (!condition() && budget.Elapsed < TimeSpan.FromSeconds(10))
+        {
+            PumpDispatcher();
+            Thread.Yield();
+        }
+        Assert.True(condition(), "premise: the pumped condition never held.");
+    }
+
+    /// <summary>The facts' own pump: run everything queued at Loaded
+    /// priority or above — the pass the app gets for free, and the
+    /// async engine's install continuations ride it.</summary>
+    private static void PumpDispatcher()
+    {
+        var frame = new System.Windows.Threading.DispatcherFrame();
+        _ = System.Windows.Threading.Dispatcher.CurrentDispatcher.BeginInvoke(
+            System.Windows.Threading.DispatcherPriority.Background,
+            () => frame.Continue = false);
+        System.Windows.Threading.Dispatcher.PushFrame(frame);
     }
 }

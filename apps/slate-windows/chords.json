@@ -1920,7 +1920,7 @@
           "apps/slate-windows/src/SlateWindows/Commands/ChordTable.cs#CanvasRows"
         ],
         "tests": [
-          "apps/slate-windows/tests/SlateWindows.Tests/CanvasDocumentTests.cs#ShowVisualRegistersAndStaysDisabledUntilItsProjectionShips",
+          "apps/slate-windows/tests/SlateWindows.Tests/CanvasDocumentTests.cs#ShowVisualIsEnabledAndDrivesTheSurfaceSwitch",
           "apps/slate-windows/tests/SlateWindows.Tests/CanvasTableTests.cs#ShowTableIsEnabledAndDrivesTheOneSurfaceSwitch",
           "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#CanvasSurfaces_OutlineTreeSelectionAndActivation_AreClean",
           "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#CanvasSurfaces_TableGridSortSelectionAndActivation_AreClean"
@@ -2056,6 +2056,13 @@
       "slate.file.newFromTemplate": "templates",
       "slate.canvas.showOutline": "canvasSurfaces",
       "slate.canvas.showTable": "canvasSurfaces",
+      "slate.canvas.showVisual": "canvasSurfaces",
+      "slate.canvas.zoomIn": "canvasNavigator",
+      "slate.canvas.zoomOut": "canvasNavigator",
+      "slate.canvas.actualSize": "canvasNavigator",
+      "slate.canvas.fitCanvas": "canvasNavigator",
+      "slate.canvas.zoomToSelection": "canvasNavigator",
+      "slate.canvas.toggleFollowSelection": "canvasNavigator",
       "slate.canvas.whereAmI": "canvasNavigator",
       "slate.canvas.nextCard": "canvasNavigator",
       "slate.canvas.previousCard": "canvasNavigator",

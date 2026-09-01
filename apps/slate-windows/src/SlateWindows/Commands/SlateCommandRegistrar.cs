@@ -486,10 +486,8 @@ internal static class SlateCommandRegistrar
             [ChordTable.Ids.BasesResultsPopover] = host => host.Workspace?.BasesResultsCommand,
             [ChordTable.Ids.BasesRefresh] = host => host.Workspace?.BasesRefreshCommand,
 
-            // Canvas (W6-1 #745, contract A18). showVisual resolves to
-            // a command whose CanExecute is false until §D ships the
-            // renderer; showTable's projection shipped in PR B, so its
-            // row is live.
+            // Canvas (W6-1 #745, contract A18). All three surface rows
+            // are live: outline (PR A), table (PR B), visual (§D TD-6).
             [ChordTable.Ids.CanvasShowOutline] =
                 host => host.Workspace?.CanvasShowOutlineCommand,
             [ChordTable.Ids.CanvasShowTable] =
@@ -521,7 +519,6 @@ internal static class SlateCommandRegistrar
                 host => host.Workspace?.CanvasCommitModeCommand,
             [ChordTable.Ids.CanvasCancelMode] =
                 host => host.Workspace?.CanvasCancelModeCommand,
-            // Disabled until §D ships the viewport (contract C9).
             [ChordTable.Ids.CanvasToggleFollowSelection] =
                 host => host.Workspace?.CanvasToggleFollowSelectionCommand,
             [ChordTable.Ids.BasesNewQuery] = host => host.Workspace?.BasesNewQueryCommand,

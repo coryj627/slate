@@ -184,13 +184,18 @@ internal sealed class CanvasPresentationEngine
             Install(Derive(source, viewport, retained, textScale, theme));
             return;
         }
+        // The install posts to the CAPTURED dispatcher, never the
+        // ambient context: under a test host the ambient context is
+        // the pool's, and an install landing there would throw the
+        // thread assertion into an unobserved task — the engine owns
+        // its dispatcher (ID-1), so the continuation names it.
         _ = System.Threading.Tasks.Task.Run(
                 () => Derive(source, viewport, retained, textScale, theme))
             .ContinueWith(
-                done => Install(done.Result),
+                done => _dispatcher.BeginInvoke(() => Install(done.Result)),
                 System.Threading.CancellationToken.None,
                 System.Threading.Tasks.TaskContinuationOptions.OnlyOnRanToCompletion,
-                System.Threading.Tasks.TaskScheduler.FromCurrentSynchronizationContext());
+                System.Threading.Tasks.TaskScheduler.Default);
     }
 
     /// <summary>The pure derivation — off-thread in production, over

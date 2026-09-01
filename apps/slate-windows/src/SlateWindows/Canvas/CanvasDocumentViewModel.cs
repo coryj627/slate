@@ -1064,6 +1064,11 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// owns (the cleanup pass).</summary>
     internal CanvasPopulation? AppliedPopulation => _applied?.Population;
 
+    /// <summary>The applied publication itself — the renderer's engine
+    /// seeds from this on attach (§D TD-6), then rides the post-apply
+    /// notification; both read the same committed value.</summary>
+    internal CanvasPublication? AppliedPublication => _applied;
+
     /// <summary>
     /// What the surfaces show for the current needle, in reading order —
     /// ONE value, so the rows on screen, the summary's number and the
@@ -2142,8 +2147,6 @@ internal static class CanvasPhrase
     public const string TableSurfaceLabel = "Table";
 
     public const string VisualSurfaceLabel = "Visual";
-
-    public const string VisualShipsLater = "The canvas visual view arrives in a later slice.";
 
     /// <summary>The table projection's accessible name (mac's
     /// <c>accessibilityLabel</c>, verbatim).</summary>

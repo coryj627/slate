@@ -153,9 +153,16 @@ public sealed class ContractsCitationCensus
                 //
                 // TD-5 bound the vocabulary arm, the verbs, the
                 // binding record and the enablement census, taking
-                // the section to 51; 45 sits above the pre-task
+                // the section to 51; 45 sat above the pre-task
                 // population of 43 — a fifth time.
-                45),
+                //
+                // TD-6 bound the renderer, the peers, the services
+                // and the flip's renamed facts, taking the section
+                // to 57. The flip's sweep renamed two cited facts IN
+                // PLACE, so the honest pre-task population is the
+                // post-sweep 48, and 50 sits above it — a sixth
+                // time.
+                50),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

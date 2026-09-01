@@ -73,6 +73,7 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
     private readonly TextBlock _onboarding;
     private readonly CanvasOutlineView _outline;
     private readonly CanvasTableView _table;
+    private readonly CanvasRendererView _visual;
     private readonly Grid _detailRegion;
     private readonly TextBlock _detailHeading;
     private readonly TextBox _detailText;
@@ -100,9 +101,10 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         _tableChoice = SurfaceChoice(
             "CanvasShowTable", CanvasPhrase.TableSurfaceLabel, null);
         _visualChoice = SurfaceChoice(
-            "CanvasShowVisual", CanvasPhrase.VisualSurfaceLabel, CanvasPhrase.VisualShipsLater);
+            "CanvasShowVisual", CanvasPhrase.VisualSurfaceLabel, null);
         _outlineChoice.Checked += (_, _) => RequestSurface(CanvasSurfaceKind.Outline);
         _tableChoice.Checked += (_, _) => RequestSurface(CanvasSurfaceKind.Table);
+        _visualChoice.Checked += (_, _) => RequestSurface(CanvasSurfaceKind.Visual);
 
         // A named GROUP, not a bare StackPanel (A18, round 8). A plain
         // panel gets no automation peer, so the AutomationId and Name set
@@ -235,6 +237,10 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         // had virtualized away is deliverable once containers exist
         // (A14.3).
         _table.ContainersRealized += TryDeliverFocus;
+        // §D TD-6: the THIRD arm, in the same body slot and under the
+        // same one-projection rule — collapsed unless the visual is
+        // the active surface on a ready document.
+        _visual = new CanvasRendererView { Visibility = Visibility.Collapsed };
 
         _detailHeading = new TextBlock
         {
@@ -336,6 +342,7 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         var projections = new Grid();
         projections.Children.Add(_outline);
         projections.Children.Add(_table);
+        projections.Children.Add(_visual);
         layout.Children.Add(projections);
         Content = layout;
     }
@@ -366,6 +373,8 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
 
     internal RadioButton OutlineChoiceForTests => _outlineChoice;
 
+    internal CanvasRendererView VisualForTests => _visual;
+
     internal RadioButton TableChoiceForTests => _tableChoice;
 
     internal RadioButton VisualChoiceForTests => _visualChoice;
@@ -389,36 +398,46 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
     // --- ICanvasSurfacePresenter (contract C2) ---------------------------
 
     public CanvasSurfaceKind Projection =>
-        Model is { } model && TableIsTheProjection(model)
-            ? CanvasSurfaceKind.Table
-            : CanvasSurfaceKind.Outline;
+        Model?.Selection.ActiveSurface ?? CanvasSurfaceKind.Outline;
 
-    public bool ProjectionHasFocus =>
-        Projection == CanvasSurfaceKind.Table
-            ? _table.HasKeyboardFocus
-            : _outline.HasKeyboardFocus;
+    public bool ProjectionHasFocus => Projection switch
+    {
+        CanvasSurfaceKind.Table => _table.HasKeyboardFocus,
+        CanvasSurfaceKind.Visual => _visual.IsKeyboardFocusWithin,
+        _ => _outline.HasKeyboardFocus,
+    };
 
-    public bool CanMoveWithinProjection(bool forward) =>
-        Projection == CanvasSurfaceKind.Table
-            ? _table.CanMoveRow(forward)
-            : _outline.CanMoveFocus(forward);
+    public bool CanMoveWithinProjection(bool forward) => Projection switch
+    {
+        CanvasSurfaceKind.Table => _table.CanMoveRow(forward),
+        // The visual has no intrinsic row control: every arrow is the
+        // navigator's answer (D15), so the projection itself never
+        // moves the reader.
+        CanvasSurfaceKind.Visual => false,
+        _ => _outline.CanMoveFocus(forward),
+    };
 
     /// <summary>
     /// Returns whether the row actually TOOK focus — a row that is gone,
     /// filtered out, or unrealizable answers false, and a caller with
     /// nowhere else to put the reader must not treat that as done (m6).
     /// </summary>
-    public bool FocusRow(string nodeId) =>
-        Projection == CanvasSurfaceKind.Table
-            ? _table.DeliverFocus(nodeId)
-            : _outline.DeliverFocus(nodeId) is not null;
+    public bool FocusRow(string nodeId) => Projection switch
+    {
+        CanvasSurfaceKind.Table => _table.DeliverFocus(nodeId),
+        // The visual's cards are peers, not focusable controls: a
+        // focus request has nowhere to land, and answering false lets
+        // the caller fall back honestly (m6's rule).
+        CanvasSurfaceKind.Visual => false,
+        _ => _outline.DeliverFocus(nodeId) is not null,
+    };
 
-    /// <summary>§D D7 / task TD-5: this pane's visual surface answers
-    /// a viewport verb. FALSE until TD-6 mounts the renderer — no
-    /// visual arm exists to address, so the navigator speaks the
-    /// no-pane refusal, which is the honest sentence today and the
-    /// rare one after TD-6.</summary>
-    public bool ViewportCommand(CanvasViewportVerb verb) => false;
+    /// <summary>§D D7: this pane's visual surface answers a viewport
+    /// verb through ITS renderer's engine — structural addressing, no
+    /// cache consulted. False only with no model to act for, which is
+    /// the navigator's cue to speak the typed no-pane refusal.</summary>
+    public bool ViewportCommand(CanvasViewportVerb verb) =>
+        Model is not null && _visual.Viewport(verb);
 
     public bool FocusProjection()
     {
@@ -1054,6 +1073,7 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         }
         view._outline.Model = e.NewValue as CanvasDocumentViewModel;
         view._table.Model = e.NewValue as CanvasDocumentViewModel;
+        view._visual.Model = e.NewValue as CanvasDocumentViewModel;
         if (e.NewValue is CanvasDocumentViewModel model)
         {
             model.PropertyChanged += view.OnModelPropertyChanged;
@@ -1158,9 +1178,15 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
                 // deliver: a row in a collapsed view has no container to
                 // realize and no focus to take (A14, PR B's arm).
                 delivered = model.FocusLandingNodeFor(request) is { } nodeId
-                    && (TableIsTheProjection(model)
-                        ? _table.DeliverFocus(nodeId)
-                        : _outline.DeliverFocus(nodeId) is not null);
+                    && model.Selection.ActiveSurface switch
+                    {
+                        CanvasSurfaceKind.Table => _table.DeliverFocus(nodeId),
+                        // The visual's cards are peers, not focusable
+                        // controls (m6's honest false — the banner
+                        // fallback below is the landing).
+                        CanvasSurfaceKind.Visual => false,
+                        _ => _outline.DeliverFocus(nodeId) is not null,
+                    };
                 break;
             default:
                 delivered = _stateBanner.Focus();
@@ -1435,9 +1461,13 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         // parse-error pane is a message, never an empty tree or an empty
         // grid.
         bool ready = model.State == CanvasLoadState.Ready;
-        bool table = TableIsTheProjection(model);
-        _outline.Visibility = ready && !table ? Visibility.Visible : Visibility.Collapsed;
-        _table.Visibility = ready && table ? Visibility.Visible : Visibility.Collapsed;
+        CanvasSurfaceKind projection = model.Selection.ActiveSurface;
+        _outline.Visibility = ready && projection == CanvasSurfaceKind.Outline
+            ? Visibility.Visible : Visibility.Collapsed;
+        _table.Visibility = ready && projection == CanvasSurfaceKind.Table
+            ? Visibility.Visible : Visibility.Collapsed;
+        _visual.Visibility = ready && projection == CanvasSurfaceKind.Visual
+            ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void RenderFilter(CanvasDocumentViewModel model)
@@ -1518,16 +1548,6 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         _modeCommit.Visibility = visible;
         _modeCancel.Visibility = visible;
     }
-
-    /// <summary>
-    /// Which projection the body shows. Only the table asks for itself:
-    /// <c>Visual</c> is not a projection until §D lands, and a persisted
-    /// <c>"visual"</c> token — which PR A already round-trips — must land
-    /// on a real surface rather than an empty pane, so it falls back to
-    /// the outline exactly as the absent token does.
-    /// </summary>
-    private static bool TableIsTheProjection(CanvasDocumentViewModel model) =>
-        model.Selection.ActiveSurface == CanvasSurfaceKind.Table;
 
     private void RenderSwitcher()
     {

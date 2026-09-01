@@ -1507,7 +1507,7 @@ and visual are `CanExecute == false` until their projections ship, so
 sentence, because a registered row may not carry a `Reason` (that field
 belongs to `Unreg`) and "ships in PR B" is not copy any user should
 hear. The reason those two are disabled is recorded HERE and pinned by
-`ShowVisualRegistersAndStaysDisabledUntilItsProjectionShips` (renamed in
+`ShowVisualIsEnabledAndDrivesTheSurfaceSwitch` (renamed in
 PR B, which enabled `showTable` — see B10);
 `showTable` enabled in PR B and `showVisual` enables in PR D. None of the three
 carries a chord, so `Scope` resolves to `None` through `Reg`'s own rule
@@ -1610,7 +1610,7 @@ real peers and asserts the four patterns, the control types and the
 three label properties (mutation-verified — dropping the
 `GetPattern` override makes Invoke null, which is why the custom peer
 exists at all), and
-`ShowVisualRegistersAndStaysDisabledUntilItsProjectionShips` (PR B's
+`ShowVisualIsEnabledAndDrivesTheSurfaceSwitch` (PR B's
 name for it, once `showTable` shipped)
 drives the registrar over a live workspace rather than a null-workspace
 stub.
@@ -2025,7 +2025,8 @@ surface switch.** The command's resolver drives
 drives (A15/A18), so the shared state, the persisted `"table"` token and
 the spoken `CanvasSurfaceShown` cannot disagree. `showVisual` stays
 disabled with the registrar’s canonical sentence until §D lands; §A’s fact
-was renamed accordingly (`ShowVisualRegistersAndStaysDisabledUntilItsProjectionShips`)
+was renamed accordingly (now `ShowVisualIsEnabledAndDrivesTheSurfaceSwitch` — §D TD-6 flipped
+the row and renamed the fact)
 and `ShowTableIsEnabledAndDrivesTheOneSurfaceSwitch` owns the other
 half. No chord: the row stays `ChordScope.None` for A18's reason.
 
@@ -2045,7 +2046,7 @@ in-process "absent" assertion would be testing the walker rather than
 the tree a client reads. The journey asserts the outline's element is
 gone from the LIVE tree after the switch, through the real UIA bridge,
 and that is the level at which the claim is true. `Visual` is not a
-projection until �D lands, and PR A already round-trips a persisted
+projection until §D lands, and PR A already round-trips a persisted
 `"visual"` token, so that token falls back to the OUTLINE rather than to
 an empty pane — recorded here because it is a real state a restored
 workspace can be in today. Focus delivery routes to whichever arm is
@@ -2084,7 +2085,7 @@ the pattern set now is the one PRs C–G repeat:
   **The rule this sets for the rest of the series:** a
   surface command joins the delivered set in the PR that makes it
   EXECUTABLE, not the PR that registers it — so `showVisual` stays out
-  until �D makes it executable, and each PR flips its own row rather than leaving a
+  until §D makes it executable, and each PR flips its own row rather than leaving a
   batch for PR H.
 
 ### Tests that pin PR B
@@ -2111,8 +2112,8 @@ extended from §A alone to every listed PR section — §B is inside its
 jurisdiction, and inserting §B between §A and its old terminator would
 otherwise have folded the new section into the old one's extent.
 `apps/slate-windows/tests/SlateWindows.Tests/CanvasDocumentTests.cs`:
-`ShowVisualRegistersAndStaysDisabledUntilItsProjectionShips` and
-`TheSurfaceSwitcherIsNamedAndTheUnshippedArmIsDisabled` carry §A's rows
+`ShowVisualIsEnabledAndDrivesTheSurfaceSwitch` and
+`TheSurfaceSwitcherIsNamedAndAllThreeArmsAreLive` (renamed at the flip) carry §A's rows
 forward with one arm shipped.
 `apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs`:
 `CanvasSurfaces_TableGridSortSelectionAndActivation_AreClean` — the
@@ -6431,15 +6432,14 @@ no-pane palette invocation refuses per D7. The enablement sweep is
 an EXECUTABLE CENSUS, not a grep this section performs once (round
 3, major 15): a census class derives the visual-disabled consumer
 set on the house syntax-tree helper — every consumer of
-`showVisual`, `VisualShipsLater` and the visual-disabled
+`showVisual`, VisualShipsLater (the const is retired) and the visual-disabled
 assertions — requires one disposition row per consumer, and fails
 on both a consumer without a disposition and a disposition without
 a consumer; the flip is complete when the census says so, not when
 this list does. Enumerated today for the reader: the surface
 radio's disabled wiring and help text, both workspace commands, the
 registrar comments, the §A registration fact
-(`ShowVisualRegistersAndStaysDisabledUntilItsProjectionShips`
-becomes the enabled-and-drives fact), the §B switcher facts and
+(`ShowVisualIsEnabledAndDrivesTheSurfaceSwitch`, renamed at the flip), the §B switcher facts and
 journeys that assert Visual is disabled, `toggleFollowSelection`
 parity and `chords.json` evidence per B12, and the Canvas VISUAL
 row in `w_c_matrix.md`. One §C debt lands here by name: §C's m9
@@ -6931,6 +6931,60 @@ its writer per B12. Mutations, injected and restored byte-for-byte:
 the stand-aside reverted to what-is-showing (the m9 fact red), and
 the refusal silenced (the no-pane fact red). ID-7 and ID-8 are
 discharged pending TD-5's review round.
+
+**TD-6 — the drawing, the peers, the mount and the FLIP, landed
+across four slices.** The color layer first: sixteen token keys in
+all three dictionaries, the six preset fills precomputed by
+`CanvasPalette`'s one composite (mac's 0.18 over the opaque
+surface), the Contrast dictionary per D13's literal table, and
+`ThemeTokenContrastTests` gaining the canvas matrix plus the
+hostile-hex fact that drives the PRODUCTION composite. Then the
+text-scale owner (`CanvasTextScaleService` — the registry read, the
+marshalled preference subscription, the disposable W1-1 shape). Then
+the renderer: `CanvasRendererView` drawing the installed state
+(cards, edges, the screen-space ring, dimming from the unit's
+matched set), document-order hit-testing, and the peers —
+`CanvasRendererAutomationPeer` with the value, selection and
+item-container patterns, `CanvasCardAutomationPeer` over
+`CanvasPeerKey` with the placeholder's always-exposed
+virtualized-item pattern and D6's cell-by-cell selection matrix —
+plus the viewport handler (fit and zoom-to-selection from the
+installed state's bounds). Last the MOUNT and the FLIP: the third
+arm in the same body slot under the one-projection rule, the
+presenter's three-way switches, `ViewportCommand` routing to THIS
+pane's engine, and every enablement-census disposition performed —
+the radio enabled with its ships-later hint gone (the VisualShipsLater
+const deleted), both workspace commands live, the registrar comments
+swept, the §A fact renamed to
+`ShowVisualIsEnabledAndDrivesTheSurfaceSwitch`, the §B facts
+flipped, `chords.json` and the parity generator's delivered set
+extended, and the doc's citations swept with them.
+
+**Two fixes the facts forced, recorded.** The engine's install
+continuation rode the AMBIENT synchronization context; under a test
+host that context is the pool's, the install landed off-dispatcher,
+and the thread assertion died unobserved — the continuation now
+posts to the CAPTURED dispatcher by name, which is what ID-1 meant
+all along. And the renderer's resource reads are TryFindResource
+with a transparent fallback: an unthemed host draws nothing rather
+than crashing the dispatcher, and key integrity belongs to TD-7's
+token-drift census, not to a draw-time throw.
+
+**An encoding scar, owned.** A scripted edit wrote a Latin-1 § into
+the parity generator; the blanket repair then corrupted the SHIFT
+glyph's third byte in two files. Both were repaired
+byte-precisely and every changed file decode-verified — the lesson
+(scripted edits carry their encoding with them) is this record's to
+keep.
+
+**Mutations, injected and restored byte-for-byte:** the third arm
+never showing (the render fact red); the viewport verb answering
+without acting (the zoom fact red); plus the per-slice mutations
+already recorded (the palette's dedupe, the service's stability).
+ID-9's tooltip matrix and the windowed lifecycle facts ride the
+FlaUI battery with TD-7, where a real pane closes; the w_c_matrix
+visual row and the token-drift census are TD-7's, and this entry is
+the note that keeps them owed.
 
 ---
 

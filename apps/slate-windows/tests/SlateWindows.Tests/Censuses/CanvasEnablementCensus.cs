@@ -41,8 +41,6 @@ public sealed class CanvasEnablementCensus
         ("CanvasSurfaceView.cs",
             "the visual radio enables, its ships-later help text goes, "
             + "and the surface switch grows the third arm"),
-        ("CanvasDocumentViewModel.cs",
-            "the VisualShipsLater const retires with its last caller"),
         ("CanvasTableTests.cs",
             "the switcher fact asserting the visual radio is disabled "
             + "becomes the enabled third-arm fact"),
