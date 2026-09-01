@@ -7830,6 +7830,41 @@ battery. Mutations: the door's guard removed (the opens-once fact
 failed); a failure made terminal (the record-whole fact failed);
 both restored byte-for-byte.
 
+**TE-4 — the effects split.** Discharges IE-35 and IE-34, and types
+IE-11's two halves and IE-9's refusal outcome; the funnel task wires
+the surfaces that keep their state.
+
+- **The model-side half** (`CanvasEffectPlan`): selection resolution
+  as a pure function over the REFRESHED population, callable inside
+  the publish transform so rows and seat install in one swap (§D's
+  no-callouts rule respected by construction). The four arms: keep
+  resolves the current intent — and a deleted seat resolving to null
+  is the TRUTH, the drop rule's proper home; clear seats null by
+  declaration; select-created resolves the created id, and a
+  REQUIRED target the refresh cannot resolve is the typed
+  required-target-missing resolution (IE-35) — the
+  committed-but-unpresented signal, never a silent clear; an
+  undeclared arm is the tripwire.
+- **The post-publication half** (`CanvasOperationCompletion`): the
+  addressed effects' completion state under the operation identity —
+  announce, editor-open, focus-return each at-most-once through an
+  interlocked mark, so a retry after a failed refresh re-runs only
+  what never ran and a duplicate announcement is unspellable
+  (IE-11's persistence clause).
+- **The busy gate** (`CanvasBusyGate`, IE-34): one audible refusal
+  per HOLD, keyed by the held operation REFERENCE — no timer, no
+  announcer class: key repeat under one slow apply speaks once, and
+  two distinct holds 50 ms apart are two true refusals that both
+  speak. The surviving surface state is IE-9's rule; the funnel
+  wires it and this type answers only "is this refusal the audible
+  one".
+
+Facts: four in `CanvasOperationEffectsTests`. Mutations: the
+required-target arm rewritten as the silent drop (the typed-failure
+fact failed); the completion mark stripped of at-most-once (the
+marks fact failed); the busy gate's epoch comparison removed (the
+once-per-hold fact failed); each restored byte-for-byte.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same

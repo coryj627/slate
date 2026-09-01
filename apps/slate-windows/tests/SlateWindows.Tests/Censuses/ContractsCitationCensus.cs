@@ -202,7 +202,12 @@ public sealed class ContractsCitationCensus
                 // snapshot read, taking the section to 32; 31 sits
                 // above the pre-task population of 30 — a fourth
                 // time.
-                31),
+                //
+                // TE-4 bound the effects split — the plan, the
+                // completion marks and the busy gate — taking the
+                // section to 35; 33 sits above the pre-task
+                // population of 32 — a fifth time.
+                33),
         ];
 
     public static TheoryData<string, string, string> SectionRanges
