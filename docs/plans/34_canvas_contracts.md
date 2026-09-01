@@ -9099,6 +9099,48 @@ floor proved structurally dead — the first aim not-bitten is the
 arithmetic above), M4 the quick-loop branch dropped, M5 the finite
 guard dropped. All bitten.
 
+### TF-5 — the renderer transient input and the one observable
+
+F10 lands as a fourth commit authority. The engine gains
+`CommitTransient` — the mac `transientRects` twin, dispatcher-owned
+like every authority and folded into the derivation's capture, the
+install-time revalidation and the stale-build recheck. The IDENTITY
+CHECK runs once, in the pure derivation:
+`CanvasPresentationState.EffectiveRects` admits the holder's rects
+only when its identity IS the publication's own loaded reference, so
+a sibling pane on another publication or a reloaded scene derives
+null and renders committed truth. The admitted map flows two ways
+from that one site: into `CanvasPeerTopology.Derive` as per-node
+overrides — where a transient card MATERIALIZES regardless of the
+window (virtualization must not hide the card being moved) and an
+edge follows its moved endpoint — and onto the state as
+`TransientRects` with the `NodeRect` helper the edge pass, the
+selection ring and hit-testing now answer from. Placements carry the
+moved rects, so card pixels and the a11y peers' bounding rectangles
+moved without touching either consumer: mac's full list — cards,
+edges, ring, hit-test, frames — in ONE derived install per change.
+
+The ONE AGGREGATE OBSERVABLE is the document's `ModeVisibleChanged`:
+fired exactly once per transition — entry after the machine entered
+AND the holder installed, teardown after both cleared, each step
+after the rects moved — and consumed by the renderer's model wiring
+into `CommitTransient`. An observer can never see
+active-without-overlay or idle-with-overlay; the fact SAMPLES the
+pair at every firing to pin exactly that. The surface's commit and
+cancel buttons keep riding the machine's own atomic Active-setter
+notification — frozen C wiring, deliberately untouched and recorded.
+The task table names IF-23/IF-24 here; both rows are F6/F7 surfaces
+(align's slot search, Connect To's lifecycle) and ride to TF-7/TF-8
+under the standing surface rule — recorded, not silently dropped.
+
+Facts: five — the one-pass step (state, placement and effective rect
+agree), the foreign identity rendering committed truth, the
+off-window materialization, the one-event-per-transition sampler,
+and the committed teardown deriving from the refreshed publication.
+Mutations, each byte-restored: M1 the identity check dropped, M2 the
+step notify dropped, M3 the force-materialize arm dropped, M4 an
+early double-fire installed. All bitten.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same

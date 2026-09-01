@@ -113,7 +113,9 @@ internal sealed class CanvasPeerTopology
     internal static CanvasPeerTopology Derive(
         CanvasPopulation population,
         CanvasViewportState viewport,
-        IReadOnlySet<CanvasPeerKey> retained)
+        IReadOnlySet<CanvasPeerKey> retained,
+        System.Collections.Generic.IReadOnlyDictionary<string, CanvasRect>?
+            transientRects = null)
     {
         ArgumentNullException.ThrowIfNull(population);
         ArgumentNullException.ThrowIfNull(viewport);
@@ -133,11 +135,23 @@ internal sealed class CanvasPeerTopology
             ImmutableDictionary.CreateBuilder<CanvasPeerKey, CanvasPeerPlacement>();
         foreach (CanvasSceneNode node in population.SceneNodes)
         {
-            if (Intersects(node.X, node.Y, node.Width, node.Height))
+            // §F TF-5 (F10): the transient hypothetical replaces the
+            // committed rect, and a transient card MATERIALIZES
+            // regardless of the window — virtualization must not hide
+            // the card being moved.
+            bool overridden = false;
+            (double nx, double ny, double nw, double nh) =
+                (node.X, node.Y, node.Width, node.Height);
+            if (transientRects is not null
+                && transientRects.TryGetValue(node.NodeId, out CanvasRect? over))
+            {
+                overridden = true;
+                (nx, ny, nw, nh) = (over.X, over.Y, over.Width, over.Height);
+            }
+            if (overridden || Intersects(nx, ny, nw, nh))
             {
                 placements[CanvasPeerKey.Card(node.NodeId)] =
-                    CanvasPeerPlacement.Materialized(
-                        node.X, node.Y, node.Width, node.Height);
+                    CanvasPeerPlacement.Materialized(nx, ny, nw, nh);
             }
         }
         foreach (CanvasSceneEdge edge in population.SceneEdges)
@@ -150,11 +164,16 @@ internal sealed class CanvasPeerTopology
             if (population.SceneByNode.TryGetValue(edge.FromNode, out CanvasSceneNode? from)
                 && population.SceneByNode.TryGetValue(edge.ToNode, out CanvasSceneNode? to))
             {
-                double x = Math.Min(from.X, to.X);
-                double y = Math.Min(from.Y, to.Y);
-                double w = Math.Max(from.X + from.Width, to.X + to.Width) - x;
-                double h = Math.Max(from.Y + from.Height, to.Y + to.Height) - y;
-                if (Intersects(x, y, w, h))
+                (double fx, double fy, double fw, double fh) = RectOf(from);
+                (double tx, double ty, double tw, double th) = RectOf(to);
+                bool follows = transientRects is not null
+                    && (transientRects.ContainsKey(edge.FromNode)
+                        || transientRects.ContainsKey(edge.ToNode));
+                double x = Math.Min(fx, tx);
+                double y = Math.Min(fy, ty);
+                double w = Math.Max(fx + fw, tx + tw) - x;
+                double h = Math.Max(fy + fh, ty + th) - y;
+                if (follows || Intersects(x, y, w, h))
                 {
                     placements[CanvasPeerKey.Edge(edge.EdgeId)] =
                         CanvasPeerPlacement.Materialized(x, y, w, h);
@@ -175,5 +194,11 @@ internal sealed class CanvasPeerTopology
         // rectangle semantics a reader of Rect.IntersectsWith expects.
         bool Intersects(double x, double y, double w, double h) =>
             x <= right && x + w >= left && y <= bottom && y + h >= top;
+
+        (double X, double Y, double W, double H) RectOf(CanvasSceneNode node) =>
+            transientRects is not null
+                && transientRects.TryGetValue(node.NodeId, out CanvasRect? over)
+                ? (over.X, over.Y, over.Width, over.Height)
+                : (node.X, node.Y, node.Width, node.Height);
     }
 }

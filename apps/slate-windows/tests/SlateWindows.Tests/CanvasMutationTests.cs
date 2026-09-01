@@ -287,6 +287,157 @@ public sealed class CanvasMutationTests : IDisposable
         document.Shutdown();
     }
 
+    /// <summary>§F TF-5 (F10): one derived install moves the whole
+    /// surface — the admitted rects land in the state, the placement
+    /// (pixels and a11y frames alike) moves, and the effective rect
+    /// answers hit-testing's question. Wired exactly as the renderer
+    /// wires it: the aggregate observable into CommitTransient.</summary>
+    [Fact]
+    public void ATransientStepMovesTheWholeSurfaceInOnePass()
+    {
+        CanvasDocumentViewModel document = Open();
+        var engine = new CanvasPresentationEngine(synchronousForTests: true);
+        document.ModeVisibleChanged += () => engine.CommitTransient(document.Transient);
+        engine.OnPublicationApplied(document.AppliedPublication!);
+        engine.CommitViewport(v => v.WithViewSize(800, 600));
+        document.SeatSelectionSilently("a");
+        document.Navigator.AttachPresenter(new FakePane());
+        Assert.True(document.Navigator.EnterMoveMode());
+        double x0 = document.Transient!.Originals["a"].X;
+
+        Assert.True(document.Navigator.ModeStep(1, 0, large: false));
+
+        double step = SlateUniffiMethods.CanvasConstants().GridStep;
+        CanvasPresentationState state = engine.Current!;
+        Assert.NotNull(state.TransientRects);
+        Assert.Equal(x0 + step, state.TransientRects!["a"].X);
+        CanvasPeerPlacement placement =
+            state.Topology.Placements[CanvasPeerKey.Card("a")];
+        Assert.Equal(x0 + step, placement.X);
+        CanvasSceneNode node =
+            document.AppliedPublication!.Loaded!.Population.SceneByNode["a"];
+        Assert.Equal(x0 + step, state.NodeRect(node).X);
+        Assert.True(document.Modes.Cancel());
+        document.Shutdown();
+    }
+
+    /// <summary>§F TF-5 (F10): the identity check — a holder whose
+    /// identity is NOT this state's loaded reference derives NOTHING:
+    /// a sibling pane on another publication renders committed
+    /// truth.</summary>
+    [Fact]
+    public void AForeignIdentityRendersCommittedTruth()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        document.Navigator.AttachPresenter(new FakePane());
+        Assert.True(document.Navigator.EnterMoveMode());
+        CanvasTransientHolder held = document.Transient!;
+        Assert.True(document.Navigator.ModeStep(1, 0, large: false));
+
+        // A second engine fed a DIFFERENT loaded (a fresh open of the
+        // same vault) — the sibling-pane shape.
+        CanvasDocumentViewModel sibling = Open();
+        var engine = new CanvasPresentationEngine(synchronousForTests: true);
+        engine.OnPublicationApplied(sibling.AppliedPublication!);
+        engine.CommitTransient(held);
+
+        CanvasPresentationState state = engine.Current!;
+        Assert.Null(state.TransientRects);
+        CanvasSceneNode node =
+            sibling.AppliedPublication!.Loaded!.Population.SceneByNode["a"];
+        Assert.Equal(node.X, state.NodeRect(node).X);
+        Assert.True(document.Modes.Cancel());
+        sibling.Shutdown();
+        document.Shutdown();
+    }
+
+    /// <summary>§F TF-5 (F10): virtualization treats a transient card
+    /// as MATERIALIZED — the essay sits far outside the window, and
+    /// its override materializes the placement anyway.</summary>
+    [Fact]
+    public void TheTransientMaterializesAnOffWindowCard()
+    {
+        CanvasDocumentViewModel document = Open();
+        var engine = new CanvasPresentationEngine(synchronousForTests: true);
+        document.ModeVisibleChanged += () => engine.CommitTransient(document.Transient);
+        engine.OnPublicationApplied(document.AppliedPublication!);
+        engine.CommitViewport(v => v.WithViewSize(400, 300));
+
+        // Without a transient the essay (x=5000) is unmaterialized.
+        Assert.False(engine.Current!.Topology.Placements.ContainsKey(
+            CanvasPeerKey.Card("essay")));
+
+        document.SeatSelectionSilently("essay");
+        document.Navigator.AttachPresenter(new FakePane());
+        Assert.True(document.Navigator.EnterMoveMode());
+
+        CanvasPeerPlacement placement =
+            engine.Current!.Topology.Placements[CanvasPeerKey.Card("essay")];
+        Assert.Equal(CanvasPeerCell.Materialized, placement.Cell);
+        Assert.True(document.Modes.Cancel());
+        document.Shutdown();
+    }
+
+    /// <summary>§F TF-5 (F10): ONE aggregate observable, one change
+    /// per transition — entry, each step, teardown; never a half
+    /// state.</summary>
+    [Fact]
+    public void OneEventFiresPerModeTransition()
+    {
+        CanvasDocumentViewModel document = Open();
+        int fired = 0;
+        bool halfState = false;
+        document.ModeVisibleChanged += () =>
+        {
+            fired++;
+            // At every observation the pair is CONSISTENT: an active
+            // machine with a holder, or an idle machine without one.
+            halfState |= document.Modes.IsActive == (document.Transient is null);
+        };
+        document.SeatSelectionSilently("a");
+        document.Navigator.AttachPresenter(new FakePane());
+        Assert.True(document.Navigator.EnterMoveMode());
+        Assert.Equal(1, fired);
+        Assert.True(document.Navigator.ModeStep(1, 0, large: false));
+        Assert.Equal(2, fired);
+        Assert.True(document.Navigator.ModeStep(0, 1, large: true));
+        Assert.Equal(3, fired);
+        Assert.True(document.Modes.Cancel());
+        Assert.Equal(4, fired);
+        Assert.False(halfState, "an observer saw a half state");
+        document.Shutdown();
+    }
+
+    /// <summary>§F TF-5 (F10): a committed mode tears the authority
+    /// down — after Return the engine derives committed truth from
+    /// the refreshed publication, no transient attached.</summary>
+    [Fact]
+    public void ACommittedModeRendersTheCommittedTruth()
+    {
+        CanvasDocumentViewModel document = Open();
+        var engine = new CanvasPresentationEngine(synchronousForTests: true);
+        document.ModeVisibleChanged += () => engine.CommitTransient(document.Transient);
+        document.PublicationApplied += engine.OnPublicationApplied;
+        engine.OnPublicationApplied(document.AppliedPublication!);
+        document.SeatSelectionSilently("a");
+        document.Navigator.AttachPresenter(new FakePane());
+        Assert.True(document.Navigator.EnterMoveMode());
+        double x0 = document.Transient!.Originals["a"].X;
+        Assert.True(document.Navigator.ModeStep(1, 0, large: false));
+
+        Assert.True(document.Modes.Commit());
+
+        double step = SlateUniffiMethods.CanvasConstants().GridStep;
+        CanvasPresentationState state = engine.Current!;
+        Assert.Null(state.TransientRects);
+        CanvasSceneNode node = state.Source.Loaded!.Population.SceneByNode["a"];
+        Assert.Equal(x0 + step, node.X);
+        Assert.Equal(x0 + step, state.NodeRect(node).X);
+        document.PublicationApplied -= engine.OnPublicationApplied;
+        document.Shutdown();
+    }
+
     /// <summary>§F TF-4 (F3/F4a): resize mode end to end — enter on
     /// the selected card, one width step, Return commits ONE action;
     /// the disk width moves by GridStep and core's Resized sentence

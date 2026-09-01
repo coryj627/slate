@@ -87,16 +87,25 @@ internal sealed class CanvasRendererView : FrameworkElement
             if (_model is { } old)
             {
                 old.PublicationApplied -= _engine.OnPublicationApplied;
+                old.ModeVisibleChanged -= OnModeVisibleChanged;
             }
             _model = value;
             if (value is not null)
             {
                 value.PublicationApplied += _engine.OnPublicationApplied;
+                value.ModeVisibleChanged += OnModeVisibleChanged;
                 _engine.OnPublicationApplied(
                     value.AppliedPublication ?? CanvasPublication.Seed());
+                _engine.CommitTransient(value.Transient);
             }
         }
     }
+
+    /// <summary>§F TF-5 (F10): the ONE aggregate observable's
+    /// consumer — every mode-visible transition lands here once and
+    /// becomes one derived install: pixels, edges, ring, hit shapes
+    /// and a11y frames move together or not at all.</summary>
+    private void OnModeVisibleChanged() => _engine.CommitTransient(_model?.Transient);
 
     /// <summary>This view's engine — the surface view routes
     /// ViewportCommand here (D7's structural addressing: the peer or
@@ -189,12 +198,14 @@ internal sealed class CanvasRendererView : FrameworkElement
             {
                 continue;
             }
+            CanvasRect fromRect = state.NodeRect(from);
+            CanvasRect toRect = state.NodeRect(to);
             var start = new Point(
-                ((from.X + (from.Width / 2)) * zoom) + panX,
-                ((from.Y + (from.Height / 2)) * zoom) + panY);
+                ((fromRect.X + (fromRect.Width / 2)) * zoom) + panX,
+                ((fromRect.Y + (fromRect.Height / 2)) * zoom) + panY);
             var end = new Point(
-                ((to.X + (to.Width / 2)) * zoom) + panX,
-                ((to.Y + (to.Height / 2)) * zoom) + panY);
+                ((toRect.X + (toRect.Width / 2)) * zoom) + panX,
+                ((toRect.Y + (toRect.Height / 2)) * zoom) + panY);
             context.DrawLine(edgePen, start, end);
         }
     }
@@ -215,11 +226,12 @@ internal sealed class CanvasRendererView : FrameworkElement
             return;
         }
         double zoom = state.Viewport.Zoom;
+        CanvasRect nodeRect = state.NodeRect(node);
         var rect = new Rect(
-            (node.X * zoom) + state.Viewport.PanX - 2,
-            (node.Y * zoom) + state.Viewport.PanY - 2,
-            (node.Width * zoom) + 4,
-            (node.Height * zoom) + 4);
+            (nodeRect.X * zoom) + state.Viewport.PanX - 2,
+            (nodeRect.Y * zoom) + state.Viewport.PanY - 2,
+            (nodeRect.Width * zoom) + 4,
+            (nodeRect.Height * zoom) + 4);
         var pen = new Pen(
             BrushOf("Slate.Canvas.SelectionRingBrush"),
             Math.Max(2.0, 2.0));
@@ -313,11 +325,12 @@ internal sealed class CanvasRendererView : FrameworkElement
         for (int index = population.SceneNodes.Length - 1; index >= 0; index--)
         {
             CanvasSceneNode node = population.SceneNodes[index];
+            CanvasRect hitRect = state.NodeRect(node);
             var rect = new Rect(
-                (node.X * zoom) + panX,
-                (node.Y * zoom) + panY,
-                node.Width * zoom,
-                node.Height * zoom);
+                (hitRect.X * zoom) + panX,
+                (hitRect.Y * zoom) + panY,
+                hitRect.Width * zoom,
+                hitRect.Height * zoom);
             if (rect.Contains(view))
             {
                 return node.NodeId;

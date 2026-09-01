@@ -376,6 +376,7 @@ internal sealed class CanvasNavigator
                     : null;
         transient.Rects = transient.Rects.SetItem(id, rect);
         transient.WasOverlapping = overlapping;
+        _document.NotifyTransientChanged();
         Announce(new CanvasA11yEvent.CanvasResizeGeometry(
             preset, CanvasSafeUint(rect.Width), CanvasSafeUint(rect.Height), transition));
         return true;
@@ -682,6 +683,7 @@ internal sealed class CanvasNavigator
                     : null;
         transient.Rects = moved.ToImmutableDictionary(StringComparer.Ordinal);
         transient.WasOverlapping = overlapping;
+        _document.NotifyTransientChanged();
         Announce(new CanvasA11yEvent.CanvasMoveRelative(descs, transition));
         return true;
     }

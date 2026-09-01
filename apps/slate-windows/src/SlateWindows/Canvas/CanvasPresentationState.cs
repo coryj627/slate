@@ -1,6 +1,8 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using uniffi.slate_uniffi;
+
 namespace SlateWindows.Canvas;
 
 /// <summary>
@@ -19,7 +21,10 @@ internal sealed class CanvasPresentationState
         CanvasPeerTopology topology,
         System.Collections.Immutable.ImmutableHashSet<CanvasPeerKey> retained,
         int textScaleRevision,
-        int themeRevision)
+        int themeRevision,
+        CanvasTransientHolder? transient = null,
+        System.Collections.Immutable.ImmutableDictionary<string, CanvasRect>?
+            transientRects = null)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(viewport);
@@ -31,7 +36,46 @@ internal sealed class CanvasPresentationState
         Retained = retained;
         TextScaleRevision = textScaleRevision;
         ThemeRevision = themeRevision;
+        TransientAuthority = transient;
+        TransientRects = transientRects;
     }
+
+    /// <summary>§F TF-5 (F10): the transient authority this state was
+    /// derived with — the install-time revalidation's reference, held
+    /// whether or not the identity admitted it.</summary>
+    internal CanvasTransientHolder? TransientAuthority { get; }
+
+    /// <summary>§F TF-5 (F10): the ADMITTED hypothetical rects — null
+    /// unless the transient's identity IS this state's loaded
+    /// reference, so a sibling pane on another publication or a
+    /// reloaded scene renders committed truth. The identity check ran
+    /// once, in the derivation.</summary>
+    internal System.Collections.Immutable.ImmutableDictionary<string, CanvasRect>?
+        TransientRects { get; }
+
+    /// <summary>§F TF-5 (F10): a node's EFFECTIVE rectangle — the
+    /// transient hypothetical when admitted, the committed scene rect
+    /// otherwise. Edges, the ring and hit-testing all answer from
+    /// this; placements applied it at topology derivation.</summary>
+    internal CanvasRect NodeRect(CanvasSceneNode node)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+        return TransientRects is { } rects
+            && rects.TryGetValue(node.NodeId, out CanvasRect? rect)
+            ? rect
+            : new CanvasRect(node.X, node.Y, node.Width, node.Height);
+    }
+
+    /// <summary>§F TF-5 (F10): the ONE identity check. Admitted rects
+    /// come back only when the holder's identity is the publication's
+    /// own loaded reference.</summary>
+    internal static System.Collections.Immutable.ImmutableDictionary<string, CanvasRect>?
+        EffectiveRects(CanvasPublication source, CanvasTransientHolder? transient) =>
+        transient is not null
+            && source.Loaded is { } loaded
+            && ReferenceEquals(loaded, transient.Identity)
+            ? transient.Rects
+            : null;
 
     /// <summary>The peer topology this state was derived with (§D D3,
     /// task TD-3): materialized placements and the retained keys'

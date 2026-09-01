@@ -39,6 +39,8 @@ internal sealed class CanvasPresentationEngine
     private int _themeRevision;
     private System.Collections.Immutable.ImmutableHashSet<CanvasPeerKey> _retained =
         [];
+    private CanvasTransientHolder? _transient;
+
     private bool _building;
     private bool _shutDown;
     private long _applyTicket;
@@ -83,6 +85,22 @@ internal sealed class CanvasPresentationEngine
             return;
         }
         _ = _dispatcher.BeginInvoke(() => CommitSource(applied, ticket));
+    }
+
+    /// <summary>§F TF-5 (F10): the transient authority — the mac
+    /// `transientRects` twin, committed on the dispatcher like every
+    /// authority. Reference-compared: the navigator notifies once per
+    /// step and the holder mutates in place, so an equal reference
+    /// with moved rects still rebuilds.</summary>
+    internal void CommitTransient(CanvasTransientHolder? transient)
+    {
+        AssertCommitThread();
+        if (ReferenceEquals(_transient, transient) && transient is null)
+        {
+            return;
+        }
+        _transient = transient;
+        RequestBuild();
     }
 
     /// <summary>A viewport command: commit the successor value FIRST,
@@ -190,9 +208,10 @@ internal sealed class CanvasPresentationEngine
         System.Collections.Immutable.ImmutableHashSet<CanvasPeerKey> retained = _retained;
         int textScale = _textScaleRevision;
         int theme = _themeRevision;
+        CanvasTransientHolder? transient = _transient;
         if (_synchronous)
         {
-            Install(Derive(source, viewport, retained, textScale, theme));
+            Install(Derive(source, viewport, retained, textScale, theme, transient));
             return;
         }
         // The install posts to the CAPTURED dispatcher, never the
@@ -207,7 +226,7 @@ internal sealed class CanvasPresentationEngine
         // dispatcher: a pure derivation that throws is a defect to
         // surface, never a frame to skip.
         _ = System.Threading.Tasks.Task.Run(
-                () => Derive(source, viewport, retained, textScale, theme))
+                () => Derive(source, viewport, retained, textScale, theme, transient))
             .ContinueWith(
                 done => _dispatcher.BeginInvoke(() =>
                 {
@@ -234,16 +253,23 @@ internal sealed class CanvasPresentationEngine
         CanvasViewportState viewport,
         System.Collections.Immutable.ImmutableHashSet<CanvasPeerKey> retained,
         int textScaleRevision,
-        int themeRevision) =>
-        new(
+        int themeRevision,
+        CanvasTransientHolder? transient = null)
+    {
+        System.Collections.Immutable.ImmutableDictionary<string, uniffi.slate_uniffi.CanvasRect>?
+            effective = CanvasPresentationState.EffectiveRects(source, transient);
+        return new(
             source,
             viewport,
             source.Loaded?.Population is { } population
-                ? CanvasPeerTopology.Derive(population, viewport, retained)
+                ? CanvasPeerTopology.Derive(population, viewport, retained, effective)
                 : CanvasPeerTopology.Empty(),
             retained,
             textScaleRevision,
-            themeRevision);
+            themeRevision,
+            transient,
+            effective);
+    }
 
     /// <summary>Teardown (the review round): a build in flight at
     /// teardown must not install into a dying view, and a queued
@@ -271,7 +297,8 @@ internal sealed class CanvasPresentationEngine
             || !ReferenceEquals(built.Retained, _retained)
             || !built.Viewport.SameGeometry(_viewport)
             || built.TextScaleRevision != _textScaleRevision
-            || built.ThemeRevision != _themeRevision;
+            || built.ThemeRevision != _themeRevision
+            || !ReferenceEquals(built.TransientAuthority, _transient);
         if (stale)
         {
             _discarded++;

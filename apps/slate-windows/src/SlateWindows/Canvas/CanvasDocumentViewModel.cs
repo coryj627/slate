@@ -2191,6 +2191,18 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// The renderer reads it; the outline and table never do.</summary>
     internal CanvasTransientHolder? Transient { get; private set; }
 
+    /// <summary>§F TF-5 (F10): the ONE aggregate mode-visible
+    /// observable. Fired exactly once per transition — entry after
+    /// the machine entered AND the holder installed, teardown after
+    /// both cleared, and each step after the rects moved — so an
+    /// observer can never see active-without-overlay or
+    /// idle-with-overlay.</summary>
+    internal event Action? ModeVisibleChanged;
+
+    /// <summary>§F TF-5: the navigator's step notify — the rects
+    /// moved in place; the observable is the change.</summary>
+    internal void NotifyTransientChanged() => ModeVisibleChanged?.Invoke();
+
     /// <summary>§F TF-2: install the captured holder — entry's
     /// last step, after the preflight admitted and the machine
     /// entered.</summary>
@@ -2198,11 +2210,20 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     {
         ArgumentNullException.ThrowIfNull(holder);
         Transient = holder;
+        ModeVisibleChanged?.Invoke();
     }
 
     /// <summary>§F TF-2: discard — cancel's arm (no backend call)
     /// and every F1a teardown.</summary>
-    internal void DiscardTransient() => Transient = null;
+    internal void DiscardTransient()
+    {
+        bool held = Transient is not null;
+        Transient = null;
+        if (held)
+        {
+            ModeVisibleChanged?.Invoke();
+        }
+    }
 
     /// <summary>§F TF-2 (F1a): the displacement watcher. A publish
     /// whose LOADED reference differs from the transient's identity

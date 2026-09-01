@@ -315,7 +315,13 @@ public sealed class ContractsCitationCensus
                 // gate, the minting rule and the quick loop —
                 // taking the section to 63; 61 sits above the
                 // pre-task population of 59 — a fifth time.
-                61),
+                //
+                // TF-5 bound the presentation authority — the
+                // effective-rect derivation and the aggregate
+                // observable — taking the section to 66; 64 sits
+                // above the pre-task population of 63 — a sixth
+                // time.
+                64),
         ];
 
     public static TheoryData<string, string, string> SectionRanges
