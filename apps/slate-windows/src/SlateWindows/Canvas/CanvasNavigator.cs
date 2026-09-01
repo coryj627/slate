@@ -305,11 +305,69 @@ internal sealed class CanvasNavigator
     {
         ArgumentNullException.ThrowIfNull(spec);
         ArgumentNullException.ThrowIfNull(pane);
-        if (_document.Modes.AdmitsEntry)
+        // §F TF-1 (IF-18): the C machine's OWN rejection arm answers
+        // the active-mode case FIRST — M7's vocabulary, not the
+        // funnel's Busy — so the preflight below never shadows it.
+        if (!_document.Modes.AdmitsEntry)
         {
-            AttachPresenter(pane);
+            return _document.Modes.Enter(spec, pane);
         }
-        return _document.Modes.Enter(spec, pane);
+        AttachPresenter(pane);
+        // §F TF-1 (IF-8): entry is ADMITTED like a write — the same
+        // ladder, each refusal speaking its §E sentence — and the mode
+        // token installs under the held gate. If the machine then
+        // refuses anyway, the token ROLLS BACK immediately: "token
+        // installed, mode never entered" is the leak that bricks a
+        // document.
+        if (_document.CurrentLoadedForModeEntry is not { } basis)
+        {
+            _document.SpeakModeEntryNotReady();
+            return false;
+        }
+        object token = spec.Token ?? new object();
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId($"enter {spec.Mode}"),
+            pane,
+            _document.Selection.Selected,
+            basis,
+            CanvasMutationEffect.KeepSelection,
+            modeToken: token);
+        if (_document.Funnel.AdmitModeEntry(operation)
+            != CanvasMutationAdmission.Admitted)
+        {
+            return false;
+        }
+        // §F TF-1 (F4c): every exit clears the token — the wrap
+        // covers commit, cancel, departures and retirement, because
+        // they all run these closures; a Pending commit's clear rides
+        // its completion instead. A leaked token bricks the document,
+        // which is what the first cut proved by leaking one.
+        Func<CanvasModeCommitResult> onCommit = spec.OnCommit;
+        Func<CanvasModeRestoration> onCancel = spec.OnCancel;
+        CanvasModeSpec wrapped = spec with
+        {
+            OnCommit = () =>
+            {
+                CanvasModeCommitResult result = onCommit();
+                if (result.Arm == CanvasModeCommitArm.Applied)
+                {
+                    _document.Funnel.ClearModeToken(token);
+                }
+
+                return result;
+            },
+            OnCancel = () =>
+            {
+                _document.Funnel.ClearModeToken(token);
+                return onCancel();
+            },
+        };
+        bool entered = _document.Modes.Enter(wrapped, pane);
+        if (!entered)
+        {
+            _document.Funnel.ClearModeToken(token);
+        }
+        return entered;
     }
 
     /// <summary>

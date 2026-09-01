@@ -92,7 +92,8 @@ internal sealed record CanvasModeSpec(
     CanvasMode Mode,
     CanvasModeObject Object,
     Func<CanvasModeCommitResult> OnCommit,
-    Func<CanvasModeRestoration> OnCancel);
+    Func<CanvasModeRestoration> OnCancel,
+    object? Token = null);
 
 /// <summary>
 /// What a mode's commit effect did (t0 §2 M2).

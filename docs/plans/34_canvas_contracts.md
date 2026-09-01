@@ -8923,6 +8923,46 @@ cross-thread fact failed; the clear/speak order flipped and the
 order fact failed; the funnel's delivery dropped and the wiring
 fact failed.
 
+**TF-1 — admission-preflight entry and the token lifecycle (IF-7,
+IF-8, IF-12, IF-14, IF-15, IF-18, IF-30's funnel half).** Mode entry
+is ADMITTED like a write. `AdmitModeEntry` runs the shared ladder,
+speaks every refusal through the TE-11c seam, and on Admitted
+installs the mode token UNDER THE HELD GATE before releasing — so no
+admitted operation can be in flight when the token lands (IF-8's
+observable, pinned by the entry refusing Busy while an operation
+holds). The ladder itself gains the IF-7 recheck: after TryAcquire,
+the token and the conflict record are re-asked under the held gate,
+a mismatch releasing and refusing with the arm the pre-read would
+have used; the recheck's own window is not reachable from a public
+seam deterministically, so its bite rides the install-under-gate
+fact and the recheck is recorded as belt-and-braces rather than
+claimed proven. The navigator's `EnterMode` grows the preflight with
+M7's precedence honored FIRST: an active mode answers with the C
+machine's own rejection sentence — "is active. Return to commit or
+Escape to cancel first." — never the funnel's Busy (IF-18), and the
+standing mode is untouched. The clear table (F4c) is wired by
+WRAPPING the spec's closures: commit-Applied and cancel both clear
+the token, which covers departures and retirement because they all
+run those closures; a machine refusal after install rolls back
+immediately. The first cut shipped exactly the leak this table
+exists to prevent — the entry installed and cancel never cleared,
+so the frozen §C fact's second entry found a bricked document — and
+the fix is the wrap, found by that fact. The conflict half lands as
+the token trio: `SuspendModeToken` yields to the resolution's
+writes, `ReinstallSuspendedModeToken` matches ONLY the suspended
+identity, and `ForgetSuspendedModeToken` (the F1a cancel's row)
+makes a late reinstall a no-op — IF-15's resurrection closed by
+identity, with the full second-stage outcome matrix riding the
+flows that can reach it (TF-8/TF-9), recorded honestly. `ClearModeToken`
+is identity-checked so a stale clear cannot strip a successor. Four
+facts: the both-ways exclusion with the spoken ModeHeld; the
+identity-checked clear; the suspend/reinstall/forget trio; the
+rejection-then-freed end-to-end through the real navigator. Four
+mutations, each byte-restored: the install moved off the gate and
+the Busy arm failed; the clear's identity check dropped and its fact
+failed; the reinstall's identity check dropped and the trio failed;
+the wrap's cancel-clear dropped and the end-to-end fact failed.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same

@@ -46,6 +46,8 @@ internal sealed class CanvasMutationFunnel(
     private CanvasConflictRecord? _conflict;
     private object? _modeToken;
 
+    private object? _suspendedModeToken;
+
     /// <summary>The resolving door's pass-through (IE-14): an
     /// Overwrite's own apply carries it in the mode-token slot.</summary>
     internal static readonly object ConflictResolutionToken = new();
@@ -121,7 +123,105 @@ internal sealed class CanvasMutationFunnel(
                 ? CanvasMutationAdmission.Busy
                 : CanvasMutationAdmission.BusyAlreadyAnnounced;
         }
+        // §F TF-1 (IF-7): the ladder read the token BEFORE acquiring,
+        // and a mode can install between the read and the acquire — an
+        // operation that admitted through that window would refresh
+        // through a transient it never owned. Re-ask both stateful
+        // questions UNDER the held gate; a mismatch releases and
+        // refuses with the same arm the pre-read would have used.
+        if (_modeToken is not null
+            && !ReferenceEquals(operation.ModeToken, _modeToken))
+        {
+            gate.Release(operation);
+            return CanvasMutationAdmission.ModeHeld;
+        }
+        if (_conflict is { Terminal: false }
+            && !ReferenceEquals(operation.ModeToken, ConflictResolutionToken))
+        {
+            gate.Release(operation);
+            return CanvasMutationAdmission.ConflictPending;
+        }
         return CanvasMutationAdmission.Admitted;
+    }
+
+    /// <summary>§F TF-1 (IF-8): mode entry's preflight — the same
+    /// ladder, and on Admitted the mode token installs UNDER the held
+    /// gate before it releases, so no admitted operation can be in
+    /// flight when the token lands and none can admit past it after.
+    /// Every refusal speaks its §E sentence. The caller must check
+    /// the C machine's own AdmitsEntry FIRST (M7's rejection arm owns
+    /// the active-mode case), and must roll the token back via
+    /// <see cref="ClearModeToken"/> if the machine then refuses.</summary>
+    internal CanvasMutationAdmission AdmitModeEntry(CanvasMutationOperation operation)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        if (operation.ModeToken is null)
+        {
+            throw new CanvasLeaseViolationException(
+                "a mode entry preflight requires the mode's token on the operation");
+        }
+        CanvasMutationAdmission admission = AdmitAndAcquire(operation);
+        if (admission != CanvasMutationAdmission.Admitted)
+        {
+            AnnounceAdmission(admission);
+            return admission;
+        }
+        _modeToken = operation.ModeToken;
+        gate.Release(operation);
+        return CanvasMutationAdmission.Admitted;
+    }
+
+    /// <summary>§F TF-1 (F4c): the identity-checked clear — only the
+    /// token that holds may clear, so a stale clear from an ended mode
+    /// cannot strip a successor's hold. Every row of the clear table
+    /// routes here: installed success, no-effect Return, Esc, the F1a
+    /// cancels, restoration failure, and the entry rollback.</summary>
+    internal void ClearModeToken(object token)
+    {
+        ArgumentNullException.ThrowIfNull(token);
+        if (ReferenceEquals(_modeToken, token))
+        {
+            _modeToken = null;
+        }
+    }
+
+    /// <summary>§F TF-1 (FD-5, the token half): the conflict
+    /// completion YIELDS the mode's token so the recovery's writes pass
+    /// through <see cref="ConflictResolutionToken"/>; the suspended
+    /// identity is remembered so resolution-continuation can reinstall
+    /// it — and ONLY it: a reload's F1a cancel forgets the identity,
+    /// so a late reinstall finds a mismatch and no-ops.</summary>
+    internal void SuspendModeToken(object token)
+    {
+        ArgumentNullException.ThrowIfNull(token);
+        if (ReferenceEquals(_modeToken, token))
+        {
+            _modeToken = null;
+            _suspendedModeToken = token;
+        }
+    }
+
+    /// <summary>The reinstall half of <see cref="SuspendModeToken"/>.</summary>
+    internal bool ReinstallSuspendedModeToken(object token)
+    {
+        ArgumentNullException.ThrowIfNull(token);
+        if (!ReferenceEquals(_suspendedModeToken, token))
+        {
+            return false;
+        }
+        _suspendedModeToken = null;
+        _modeToken = token;
+        return true;
+    }
+
+    /// <summary>Forget a suspended identity (the F1a cancel's row).</summary>
+    internal void ForgetSuspendedModeToken(object token)
+    {
+        ArgumentNullException.ThrowIfNull(token);
+        if (ReferenceEquals(_suspendedModeToken, token))
+        {
+            _suspendedModeToken = null;
+        }
     }
 
     /// <summary>§E TE-11 (ED-1): the history entrypoint — the same

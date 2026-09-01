@@ -292,7 +292,13 @@ public sealed class ContractsCitationCensus
                 // outcome — taking the section to 47; 43 sits above
                 // the pre-task population of 42, the rule's first
                 // §F application.
-                43),
+                //
+                // TF-1 bound the entry preflight and the token
+                // lifecycle — the admitted install, the identity-
+                // checked clear and the suspend trio — taking the
+                // section to 50; 48 sits above the pre-task
+                // population of 47 — a second time.
+                48),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

@@ -2170,6 +2170,16 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// short-circuit SPEAKS the same typed refusal the funnel's
     /// ladder announces - one shared derivation, so the guard and
     /// the admission can never say different things.</summary>
+
+    /// <summary>§F TF-1: the basis a mode-entry operation mints
+    /// against - null while nothing is loaded, and the entry then
+    /// refuses with the not-ready sentence.</summary>
+    internal CanvasLoaded? CurrentLoadedForModeEntry => _slot.Current.Loaded;
+
+    /// <summary>§F TF-1: the navigator's no-basis entry refusal
+    /// speaks the same shared derivation the guards use.</summary>
+    internal void SpeakModeEntryNotReady() => SpeakNotReady();
+
     private void SpeakNotReady() =>
         Speak(new CanvasA11yEvent.CanvasMutationRefused(
             CanvasMutationFunnel.NotReadyReason(_slot.Current)));

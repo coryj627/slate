@@ -4400,4 +4400,44 @@ public sealed class CanvasNavigatorTests : IDisposable
 
         public object? Owner => null;
     }
+
+    /// <summary>§F TF-1 (IF-18): a second entry while a mode is
+    /// active answers with the C machine's OWN rejection - M7's
+    /// vocabulary, never the funnel's Busy - and the standing mode
+    /// is untouched; every exit then clears the token so the next
+    /// verb admits (F4c end to end - the leak the first cut shipped
+    /// and this fact's sibling caught).</summary>
+    [Fact]
+    public void ASecondEntryGetsTheRejectionAndExitsFreeTheToken() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        var surface = new CanvasSurfaceView { Model = document };
+        using var host = Host(surface);
+        CanvasModeSpec Spec() => new(
+            CanvasMode.Move,
+            new CanvasModeObject.Card("Core question"),
+            () => CanvasModeCommitResult.Committed(),
+            () => new CanvasModeRestoration.BackAt("Core question"));
+        Assert.True(document.Navigator.EnterMode(Spec(), surface));
+        _announced.Clear();
+
+        Assert.False(document.Navigator.EnterMode(Spec(), surface));
+        Assert.True(document.Modes.IsActive);
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            a => a.Text.Contains(
+                "is active. Return to commit or Escape to cancel first.",
+                StringComparison.Ordinal));
+
+        // Cancel frees the token: a funnel verb admits again.
+        Assert.True(document.Modes.Cancel());
+        document.CanvasNewCard();
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            a => a.Text.Contains("Created", StringComparison.Ordinal));
+        document.Shutdown();
+    });
+
 }
