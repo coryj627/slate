@@ -8385,6 +8385,28 @@ failure messages carry the sheet state, the visible rows, the canvas
 bytes on disk and the app log tail, because each of the three bugs
 was found by exactly that forensics.
 
+### What carries out of the task loop
+
+The loop closed with TE-11e. Four pieces are CARRIED, not silently
+dropped, each with its owner: the staged Rename Group and Set Color
+prompt sheets (the rows stand visible-with-reason per the TE-8 plan;
+the prompt machinery is PR F's mode-owned commit seam, and landing a
+bare prompt here would fork that design); the mac Swift lane of the
+canvas scenario driver (the scenarios file is already the shared
+contract — the mutation harness's own precedent — and mac compiles
+CI-only from this checkout); axe over the two pickers (the sheet is
+scanned in the journey; the pickers' modal-by-chord surfaces are the
+same TE-6 substrate the citation gate already scans, and the arm
+rides the prompt-sheet slice); and E14's file-arm anchor EXACT
+verification, which by its own contract STOPS for an owner decision
+if the caret misses — a fact that can end in a STOP belongs where
+the owner is watching, so it is recorded here as the PR's one open
+acceptance rather than buried green. Everything else E promised is
+in: the ledger's thirty-nine findings dispositioned through eighteen
+recorded tasks, the citation floor raised eighteen times, every
+mutation byte-restored, and the three shipped bugs the first real
+keyboard found.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same
