@@ -267,6 +267,89 @@ public sealed class CanvasAnnouncerTests
             posted.Select(line => line.Text).ToArray());
     });
 
+    /// <summary>§F TF-6 (F11, IF-32 reconciled): a mode transition
+    /// retires the pending NAVIGATION line — a cancel is never
+    /// followed by a now-false position sentence.</summary>
+    [Fact]
+    public void ACancelRetiresThePendingNavigationLine() => RunSta(() =>
+    {
+        var posted = new List<RenderedAnnouncement>();
+        var announcer = new CanvasAnnouncer(posted.Add, TimeSpan.FromMinutes(1));
+
+        announcer.Announce(MovedTo("A"));
+        announcer.Announce(new CanvasA11yEvent.CanvasModeCancelled(
+            CanvasMode.Move, new CanvasModeRestoration.Unstated()));
+        announcer.FlushForTests();
+
+        Assert.DoesNotContain(posted, line => line.Text == Render(MovedTo("A")));
+        Assert.Contains(
+            posted,
+            line => line.Text == Render(new CanvasA11yEvent.CanvasModeCancelled(
+                CanvasMode.Move, new CanvasModeRestoration.Unstated())));
+    });
+
+    /// <summary>§F TF-6 (IF-32): FILTER SURVIVES — pending filter
+    /// feedback is not made false by a mode ending; only Navigation
+    /// retires.</summary>
+    [Fact]
+    public void AFilterLineSurvivesTheTransition() => RunSta(() =>
+    {
+        var posted = new List<RenderedAnnouncement>();
+        var announcer = new CanvasAnnouncer(posted.Add, TimeSpan.FromMinutes(1));
+
+        announcer.Announce(new CanvasA11yEvent.CanvasFilterCount(3));
+        announcer.Announce(new CanvasA11yEvent.CanvasModeEntered(
+            CanvasMode.Move, new CanvasModeObject.Card("A")));
+        announcer.FlushForTests();
+
+        Assert.Contains(
+            posted,
+            line => line.Text == Render(new CanvasA11yEvent.CanvasFilterCount(3)));
+    });
+
+    /// <summary>§F TF-6 (F11): the clamp is a transition too — a
+    /// stale geometry line after the refusal would state a size the
+    /// step never took.</summary>
+    [Fact]
+    public void TheClampRetiresTheGeometryLine() => RunSta(() =>
+    {
+        var posted = new List<RenderedAnnouncement>();
+        var announcer = new CanvasAnnouncer(posted.Add, TimeSpan.FromMinutes(1));
+
+        announcer.Announce(new CanvasA11yEvent.CanvasResizeGeometry(
+            null, 40, 60, null));
+        announcer.Announce(new CanvasA11yEvent.CanvasResizeClamped());
+        announcer.FlushForTests();
+
+        Assert.DoesNotContain(
+            posted,
+            line => line.Text == Render(new CanvasA11yEvent.CanvasResizeGeometry(
+                null, 40, 60, null)));
+        Assert.Contains(
+            posted,
+            line => line.Text == Render(new CanvasA11yEvent.CanvasResizeClamped()));
+    });
+
+    /// <summary>§F TF-6 (F11): the retirement is the TRANSITION'S
+    /// — an ordinary Medium immediate event leaves the queued
+    /// position line alone, still true and still firing. (A
+    /// REJECTION also leaves the mode unchanged, but renders High
+    /// and so drops pending lines through t0's frozen assertive
+    /// rule — a different law, recorded, not this one.)</summary>
+    [Fact]
+    public void AnOrdinaryImmediateEventRetiresNothing() => RunSta(() =>
+    {
+        var posted = new List<RenderedAnnouncement>();
+        var announcer = new CanvasAnnouncer(posted.Add, TimeSpan.FromMinutes(1));
+
+        announcer.Announce(MovedTo("A"));
+        announcer.Announce(new CanvasA11yEvent.CanvasStatus(
+            new CanvasStatusNote.NothingSelected()));
+        announcer.FlushForTests();
+
+        Assert.Contains(posted, line => line.Text == Render(MovedTo("A")));
+    });
+
     /// <summary>Run the dispatcher until the condition holds — the only
     /// way a DispatcherTimer ever ticks in a test.</summary>
     private static void PumpUntil(Func<bool> condition, TimeSpan timeout)

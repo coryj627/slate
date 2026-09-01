@@ -321,7 +321,12 @@ public sealed class ContractsCitationCensus
                 // observable — taking the section to 66; 64 sits
                 // above the pre-task population of 63 — a sixth
                 // time.
-                64),
+                //
+                // TF-6 bound the retirement rule at the announcer
+                // seam, taking the section to 67; 66 sits
+                // above the pre-task population of 66 — a seventh
+                // time.
+                66),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

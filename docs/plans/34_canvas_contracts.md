@@ -9141,6 +9141,42 @@ Mutations, each byte-restored: M1 the identity check dropped, M2 the
 step notify dropped, M3 the force-materialize arm dropped, M4 an
 early double-fire installed. All bitten.
 
+### TF-6 — transition retirement at the announcer seam
+
+F11 lands with IF-32 reconciled by NAMING: "same class" meant
+nothing — Medium is a priority — so the rule now says NAVIGATION
+explicitly. A mode transition — entered, committed, cancelled,
+no-effect, clamped — retires the pending Navigation line before it
+speaks: a cancel is never followed by a now-false position sentence,
+a clamp is never followed by a size the step never took. FILTER
+SURVIVES: pending filter feedback is not made false by a mode
+ending. The mechanics ride the seam that already owns ordering:
+`Announce` classifies the event twice (its coalescing class, its
+transition-ness) and `Emit` takes the stale Navigation line on the
+dispatcher side, after the self-marshal, before the render — order
+preserved by the dispatcher queue exactly as emission is.
+
+The task's discovery: `CanvasModeRejected` renders HIGH, and t0's
+frozen assertive rule already drops ALL pending lines for High
+events — so a rejection empties the queue through a different law
+than the transition rule, and the first cut of the
+rejection-retires-nothing fact was wrong about frozen behavior. The
+fact was rewritten to pin the actual distinction: an ordinary MEDIUM
+immediate event (a status note) leaves the queued position line
+alone; the rejection's drop is the assertive rule's own and is
+recorded here rather than re-tested. A REJECTION is still not a
+transition — the mode did not change — and the transition list
+excludes it.
+
+Facts: four — the cancel retiring the pending navigation line, the
+filter line surviving a transition, the clamp retiring the geometry
+line, and the ordinary-immediate-event control. Mutations, each
+byte-restored: M1 the retirement arm dropped, M2 transitions
+dropping EVERYTHING (the wrong reconciliation — the first aim sat in
+dead code behind the Navigation guard and was re-aimed as the
+unguarded total drop), M3 the clamped arm dropped from the list. All
+bitten.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same
