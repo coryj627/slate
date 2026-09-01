@@ -8064,6 +8064,43 @@ capping the RAW walk, and injecting exactly that stopped the paging
 two pages early and failed the beyond-cap media fact. Each restored
 byte-for-byte.
 
+**TE-7 — the card editor and the modal stack.** Discharges IE-19's
+in-sheet rule and IE-29's menu-route resolution, and consumes the
+seed token (IE-4/IE-18) end-to-end; M8 lands as code.
+
+- **The model** (`CanvasCardEditorViewModel`): the SEED TOKEN whole —
+  node, title, text and basis from one locked read via the document
+  factory — and Escape's three arms: an untouched buffer speaks "No
+  changes." and writes nothing; a draft whose seed basis the live
+  population no longer holds does NOT apply — the conflict surfaces
+  IN the sheet, the draft survives, the sheet refuses to close
+  (IE-19; the fact drives another verb's commit between seed and
+  Escape and finds the stale text absent from disk); a current draft
+  commits through the funnel verb. Every string says commits; no arm
+  cites M2.
+- **The membership, whole:** the sheet is a WORKSPACE property — the
+  modal machinery's own censuses refused the first document-held cut
+  and enumerated the real integration: the enum member, the state
+  record field, the IsOpen arm, the name-matched flat read, the
+  sheet-presentation observer arm, the Menu.Style disable trigger,
+  the decision rows in every admission table, and the REAL sheet
+  element in `MainWindow.xaml`, declared after MoveTo's so the
+  topmost-surface order stays the declaration order. The palette
+  refuses beneath it like every sheet.
+- **IE-29 resolved without a carve-out:** the ratified rule disables
+  the menu under every modal surface, the editor included — its
+  undo/redo ride the editor's own machinery inside the sheet, and
+  the canvas stacks' menu titles apply only when no sheet is open
+  (TE-2's snapshot rule already reads the captured domain).
+
+Facts: four in `CanvasCardEditorTests` over a real vault, plus the
+modal batteries' derived censuses now counting the editor among the
+sheets (one hundred forty-four across the three). Mutations: the
+basis re-validation dropped (the moved-basis fact failed); the
+no-change arm cut (the writes-nothing fact failed on the history
+entry); the conflict made to close over the draft (the keeps-draft
+fact failed); each restored byte-for-byte.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same

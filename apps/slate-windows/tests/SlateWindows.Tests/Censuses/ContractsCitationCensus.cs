@@ -226,7 +226,12 @@ public sealed class ContractsCitationCensus
                 // TE-6 bound the picker models and their factories,
                 // taking the section to 49; 46 sits above the
                 // pre-task population of 45 — a ninth time.
-                46),
+                //
+                // TE-7 bound the editor, its seed token and the
+                // modal membership, taking the section to 51; 50
+                // sits above the pre-task population of 49 — a
+                // tenth time.
+                50),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

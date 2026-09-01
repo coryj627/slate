@@ -2666,6 +2666,51 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 TitleOf(nodeId), newPath));
     }
 
+    /// <summary>§E TE-7: the editor factory — one locked seed read
+    /// (text + basis together, IE-4), refusing a non-text card and an
+    /// unreadable one with mac's arms.</summary>
+    internal CanvasCardEditorViewModel? OpenCardEditor(string nodeId)
+    {
+        ArgumentNullException.ThrowIfNull(nodeId);
+        if (!_rows.TryGetValue(nodeId, out CanvasOutlineRow? row))
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NothingSelected()));
+            return null;
+        }
+        if (row.Kind != "text")
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NotATextCard()));
+            return null;
+        }
+        CanvasEditorSeed? seed = null;
+        if (_slot.Current.Lease is { } lease)
+        {
+            _ = lease.Invoke(
+                () =>
+                {
+                    CanvasPublication now = _slot.Current;
+                    return !now.Retired && now.Names(lease);
+                },
+                handle => seed = _session.CanvasEditorSeed(handle, nodeId));
+        }
+        if (seed is null)
+        {
+            Speak(new CanvasA11yEvent.CanvasBlocked(
+                new CanvasBlockedReason.CardTextUnreadable()));
+            return null;
+        }
+        return new CanvasCardEditorViewModel(this, nodeId, row.Title, seed);
+    }
+
+    /// <summary>The editor model's announce door — the same relay the
+    /// verbs use, named so the editor's arms read as the M8 carve-out
+    /// they are.</summary>
+    internal void SpeakForEditor(CanvasA11yEvent @event) => Speak(@event);
+
+    /// <summary>The live population's basis — the editor's commit
+    /// compares its seed against THIS (IE-18's re-validation).</summary>
+    internal string? PublishedBasis => _slot.Current.Population?.ContentHash;
+
     /// <summary>§E TE-6: the card picker's rows — CORE's proximity
     /// order over the lease (anchor = the selection; reading-order
     /// ties; groups included), labelled the palette way. The model

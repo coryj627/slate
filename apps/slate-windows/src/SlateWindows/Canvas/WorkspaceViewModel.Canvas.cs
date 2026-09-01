@@ -297,6 +297,37 @@ internal sealed partial class WorkspaceViewModel
     // load gate, the pane resolution and the no-pane refusal (§D D7),
     // so the palette and the chord speak identically.
 
+    private CanvasCardEditorViewModel? _canvasCardEditorSheet;
+
+    /// <summary>W6-1 §E TE-7: the open card editor sheet — the modal
+    /// flat read, the sheet-presentation observer and the menu's
+    /// disable trigger all watch THIS one workspace property (the
+    /// sheet convention every census enforces).</summary>
+    public CanvasCardEditorViewModel? CanvasCardEditorSheet
+    {
+        get => _canvasCardEditorSheet;
+        private set => SetField(ref _canvasCardEditorSheet, value);
+    }
+
+    /// <summary>Open the editor for the active canvas selection (M8's
+    /// carve-out rides the sheet's own Esc). Refusals — no document,
+    /// no selection, not a text card — announce through the
+    /// document's arms and open nothing.</summary>
+    public void OpenCanvasCardEditor()
+    {
+        if (ActiveCanvasDocument is not { } document
+            || document.Selection.Selected is not { } selected)
+        {
+            return;
+        }
+        CanvasCardEditorSheet = document.OpenCardEditor(selected);
+    }
+
+    /// <summary>The sheet closed — a commit, a no-op, or a deliberate
+    /// discard; never a refusal, whose whole point is the sheet
+    /// standing.</summary>
+    public void CloseCanvasCardEditor() => CanvasCardEditorSheet = null;
+
     public System.Windows.Input.ICommand CanvasZoomInCommand =>
         _canvasZoomInCommand ??= new RelayCommand(
             _ => ActiveCanvasDocument?.Navigator.ZoomIn(),

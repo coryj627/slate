@@ -221,6 +221,7 @@ public sealed class ModalSurfaceTests
             ModalSurface.TemplatePicker,
             ModalSurface.TemplateFlow,
             ModalSurface.MoveTo,
+            ModalSurface.CanvasCardEditor,
         ];
 
         Assert.Equal(
@@ -384,7 +385,8 @@ public sealed class ModalSurfaceTests
             BaseQueryBuilder: surface == ModalSurface.BaseQueryBuilder,
             TemplatePicker: surface == ModalSurface.TemplatePicker,
             TemplateFlow: surface == ModalSurface.TemplateFlow,
-            MoveTo: surface == ModalSurface.MoveTo);
+            MoveTo: surface == ModalSurface.MoveTo,
+            CanvasCardEditor: surface == ModalSurface.CanvasCardEditor);
 
     /// <summary>
     /// The topmost-open walk returns the LAST open surface in paint order,
@@ -549,6 +551,7 @@ public sealed class ModalSurfaceTests
             (ModalSurface.TemplatePicker, "TemplatePickerSheet"),
             (ModalSurface.TemplateFlow, "TemplateFlowSheet"),
             (ModalSurface.MoveTo, "MoveToSheet"),
+            (ModalSurface.CanvasCardEditor, "CanvasCardEditorSheet"),
         ];
 
         // Exhaustiveness (red team W5-3, tests finding 3): the two
@@ -598,6 +601,7 @@ public sealed class ModalSurfaceTests
             [ModalSurface.TemplatePicker] = "Workspace.TemplatePickerSheet",
             [ModalSurface.TemplateFlow] = "Workspace.TemplateFlowSheet",
             [ModalSurface.MoveTo] = "FileSidebar.MoveToSheet",
+            [ModalSurface.CanvasCardEditor] = "Workspace.CanvasCardEditorSheet",
         };
 
     /// <summary>
@@ -1148,6 +1152,7 @@ public sealed class ModalSurfaceTests
                 ModalSurface.BaseQueryBuilder => "BaseQueryBuilderSheet",
                 ModalSurface.TemplatePicker => "TemplatePickerSheet",
                 ModalSurface.TemplateFlow => "TemplateFlowSheet",
+                ModalSurface.CanvasCardEditor => "CanvasCardEditorSheet",
                 _ => throw new Xunit.Sdk.XunitException(
                     $"{sheet} is a sheet with no property mapping here — "
                     + "add it AND the observer arm."),
@@ -1586,7 +1591,8 @@ public sealed class ModalSurfaceTests
             BaseQueryBuilder: first is ModalSurface.BaseQueryBuilder || second is ModalSurface.BaseQueryBuilder,
             TemplatePicker: first is ModalSurface.TemplatePicker || second is ModalSurface.TemplatePicker,
             TemplateFlow: first is ModalSurface.TemplateFlow || second is ModalSurface.TemplateFlow,
-            MoveTo: first is ModalSurface.MoveTo || second is ModalSurface.MoveTo);
+            MoveTo: first is ModalSurface.MoveTo || second is ModalSurface.MoveTo,
+            CanvasCardEditor: first is ModalSurface.CanvasCardEditor || second is ModalSurface.CanvasCardEditor);
 
     [Fact]
     public void EveryMenuDisablePathResolvesAgainstTheLiveViewModels()
