@@ -633,6 +633,28 @@ public partial class MainWindow : Window
             return;
         }
 
+        // §E TE-11e: the card editor sheet's ONE key. M8 carves the
+        // editor OUT of the mode stack - Escape COMMITS here (the
+        // sheet's own seam decides commit, no-change, or in-sheet
+        // conflict), and the ladder never sees it. Everything else
+        // passes through to the draft TextBox untouched. The authoring
+        // journey was the first real keyboard on this path: the seam
+        // existed since TE-7, but nothing wired the key.
+        if (_viewModel.Workspace?.CanvasCardEditorSheet is { } cardEditor)
+        {
+            if (e.Key == Key.Escape && modifiers == ModifierKeys.None)
+            {
+                if (cardEditor.CommitOnEscape())
+                {
+                    _viewModel.Workspace.CloseCanvasCardEditor();
+                }
+
+                e.Handled = true;
+            }
+
+            return;
+        }
+
         if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.P)
         {
             // PD-2: Ctrl+Shift+P, the direct map of mac's Shift-Command-P

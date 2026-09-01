@@ -41,13 +41,18 @@ internal sealed class CanvasCardEditorViewModel
 
     internal string NodeId { get; }
 
-    internal string Title { get; }
+    /// <summary>PUBLIC because WPF binds it (§E TE-11e): a binding
+    /// against a non-public property fails SILENTLY, which left the
+    /// sheet's box unbound - the box held the typing, the draft
+    /// held the seed, and Escape's no-changes arm closed over the
+    /// difference. The authoring journey caught it.</summary>
+    public string Title { get; }
 
     /// <summary>The working text. The real sheet binds the buffer
     /// session's document here; the model-level facts drive it
     /// directly (the session's own machinery is W2-1's, already
-    /// gated).</summary>
-    internal string Draft { get; set; }
+    /// gated).PUBLIC for the binding reason <see cref="Title"/> records.</summary>
+    public string Draft { get; set; }
 
     /// <summary>The basis the seed was read at — the token's currency
     /// half (IE-4/IE-18).</summary>

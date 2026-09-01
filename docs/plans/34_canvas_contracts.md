@@ -8346,6 +8346,45 @@ dropped and the census failed; the round-trip hash dropped from the
 artifact and the byte-compare failed; the foreign-survived gate
 deleted and the tamper fact failed.
 
+**TE-11e — the authoring journey, and the three production bugs it
+flushed.** The FlaUI journey drives the whole authoring loop through
+real chrome: File menu New Canvas into its own tab; the onboarding
+region carrying core's spelled-out chord sentence; Ctrl+Alt+N
+creating the first card; activation opening the card editor sheet
+(axe-scanned as `AssertAxeClean` "canvas-card-editor"); typing
+through the real keyboard; Escape COMMITTING; the committed title on
+the outline row; Ctrl+Z undoing it — every leg a keystroke or UIA
+invoke, no test seams. The first real keyboard on this path found
+three shipped defects the unit facts could not see. FIRST: the
+funnel's transactions run on the work seam, so every confirmation,
+admission refusal and history sentence reached `CanvasAnnouncer` on
+a pool thread — the thread-affinity Debug.Assert killed the Debug
+build, and Release would have raced the coalescing timers silently.
+The announcer now marshals ITSELF (the publish side's own
+discipline; order preserved per dispatcher queue), pinned by a fact
+whose foreign announce runs on a DEDICATED thread because
+Task.Run().Wait() inlines the lambda onto the waiting thread and
+un-crosses the very boundary under test. SECOND: `CommitOnEscape`
+had NO CALLER — TE-7 built the seam and nothing wired the key. The
+window's key gate gained the sheet's ONE arm: Escape commits (the
+seam decides commit, no-change, or in-sheet conflict), everything
+else passes to the draft box, M8's carve-out made real. THIRD: the
+sheet never bound at all — `Title` and `Draft` were internal, and a
+WPF binding against a non-public property fails SILENTLY: the box
+held the typing, the draft held the seed, and Escape's no-changes
+arm closed over the difference. Both went public with the reason in
+their doc comments, pinned by a reflection fact so a refactor back
+to internal fails in the suite, not in a screen reader. Three
+mutations, each byte-restored: the self-marshal deleted and the
+cross-thread fact failed; `Draft` back to internal and the
+visibility fact failed; the Escape arm deleted and the JOURNEY
+failed — the wiring's only honest fact is the journey itself. The
+journey's probes re-find elements fresh per poll (a republish
+rebuilds the tree, so cached UIA handles go stale mid-walk), and its
+failure messages carry the sheet state, the visible rows, the canvas
+bytes on disk and the app log tail, because each of the three bugs
+was found by exactly that forensics.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same

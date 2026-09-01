@@ -323,4 +323,39 @@ public sealed class CanvasAnnouncerTests
         Assert.Equal(Render(onboarding), CanvasAnnouncer.RenderLabel(onboarding));
         Assert.Empty(_posted);
     }
+    /// <summary>§E TE-11e: the funnel's transactions run on the
+    /// work seam, so announcements arrive on POOL threads in the
+    /// real app - the authoring journey was the first keyboard on
+    /// that path, and the old thread-affinity assert killed the
+    /// Debug build while Release raced the coalescing timers. The
+    /// announcer marshals itself; this pins the hop.</summary>
+    [Fact]
+    public void AnAnnouncementFromAForeignThreadMarshalsHome()
+    {
+        CanvasAnnouncer announcer = NewAnnouncer();
+        // An ERROR-tier event posts immediately (no coalescing timer),
+        // so the thread hop is the only thing between Announce and the
+        // sink: without the marshal this posts synchronously on the
+        // pool thread and the Empty assert below bites.
+        // A DEDICATED thread: Task.Run(...).Wait() can inline the
+        // lambda on the waiting thread, which un-crosses the very
+        // boundary this fact exists to cross.
+        var foreign = new System.Threading.Thread(
+            () => announcer.Announce(new CanvasA11yEvent.CanvasSaveConflict()));
+        foreign.Start();
+        foreign.Join();
+        Assert.Empty(_posted);
+
+        // Pump one dispatcher frame so the self-marshal lands.
+        var frame = new System.Windows.Threading.DispatcherFrame();
+        _ = System.Windows.Threading.Dispatcher.CurrentDispatcher.BeginInvoke(
+            System.Windows.Threading.DispatcherPriority.Background,
+            () => frame.Continue = false);
+        System.Windows.Threading.Dispatcher.PushFrame(frame);
+
+        RenderedAnnouncement spoken = Assert.Single(_posted);
+        Assert.Equal(
+            Render(new CanvasA11yEvent.CanvasSaveConflict()), spoken.Text);
+    }
+
 }

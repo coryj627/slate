@@ -165,11 +165,22 @@ internal sealed class CanvasAnnouncer
                 + "surface the user can see.");
             return;
         }
-        Debug.Assert(
-            _dispatcher.CheckAccess(),
-            "CanvasAnnouncer must be driven from the thread it was built on: its "
-            + "coalescing timers are bound to that dispatcher, and the publishes "
-            + "it feeds are UI state.");
+        if (!_dispatcher.CheckAccess())
+        {
+            // §E TE-11e: the funnel's transactions run on the WORK
+            // seam, so every confirmation, admission refusal and history
+            // sentence arrives on a pool thread - the authoring journey
+            // was the first real keyboard to drive that path end to end,
+            // and the old thread-affinity assert killed the Debug build
+            // while Release raced the coalescing timers silently. The
+            // announcer marshals ITSELF (the publish side's own
+            // discipline: subscribers marshal, order preserved per
+            // dispatcher queue), so the timers and the publishes it
+            // feeds still run where they were built.
+            _ = _dispatcher.BeginInvoke(() => Emit(@event, eventClass));
+            return;
+        }
+
         RenderedAnnouncement rendered = SlateUniffiMethods.A11yRender(@event);
         if (rendered.Text.Length == 0)
         {

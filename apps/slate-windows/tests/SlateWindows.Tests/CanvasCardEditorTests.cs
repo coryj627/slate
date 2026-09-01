@@ -121,4 +121,25 @@ public sealed class CanvasCardEditorTests : IDisposable
             "typed against the old revision",
             File.ReadAllText(Path.Combine(_fixture.Root, "board.canvas")));
     }
+    /// <summary>§E TE-11e: WPF binds the sheet's Title and Draft,
+    /// and a binding against a non-public property fails SILENTLY -
+    /// the box held the typing while the draft held the seed, and
+    /// Escape's no-changes arm closed over the difference. The
+    /// authoring journey caught it; this pins the visibility so a
+    /// refactor back to internal fails HERE, not in a screen
+    /// reader.</summary>
+    [Fact]
+    public void TheBindingSurfaceIsPublicBecauseWpfBindsIt()
+    {
+        foreach (string bound in new[] { "Title", "Draft" })
+        {
+            System.Reflection.PropertyInfo property =
+                typeof(CanvasCardEditorViewModel).GetProperty(bound)
+                ?? throw new Xunit.Sdk.XunitException(
+                    $"{bound} is not a public property; the XAML binding "
+                    + "fails silently without it.");
+            Assert.True(property.GetMethod!.IsPublic);
+        }
+    }
+
 }
