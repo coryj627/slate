@@ -53,4 +53,25 @@
                      Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}" />
     <SolidColorBrush x:Key="Slate.CodeFunctionBrush"
                      Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}" />
+    <!-- Canvas (W6-1 §D D13’s literal table): fills collapse to the
+         window surface, structure to window text, the ring to the
+         HIGHLIGHT brush (DD-6: the ring is a stroke on the window
+         surface; highlight-text is calibrated for the surface it never
+         sits on). Meaning stays in text and the color NAME. -->
+    <SolidColorBrush x:Key="Slate.Canvas.Fill1Brush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}" />
+    <SolidColorBrush x:Key="Slate.Canvas.Fill2Brush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}" />
+    <SolidColorBrush x:Key="Slate.Canvas.Fill3Brush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}" />
+    <SolidColorBrush x:Key="Slate.Canvas.Fill4Brush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}" />
+    <SolidColorBrush x:Key="Slate.Canvas.Fill5Brush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}" />
+    <SolidColorBrush x:Key="Slate.Canvas.Fill6Brush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}" />
+    <SolidColorBrush x:Key="Slate.Canvas.GroupFillBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}" />
+    <SolidColorBrush x:Key="Slate.Canvas.Border1Brush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}" />
+    <SolidColorBrush x:Key="Slate.Canvas.Border2Brush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}" />
+    <SolidColorBrush x:Key="Slate.Canvas.Border3Brush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}" />
+    <SolidColorBrush x:Key="Slate.Canvas.Border4Brush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}" />
+    <SolidColorBrush x:Key="Slate.Canvas.Border5Brush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}" />
+    <SolidColorBrush x:Key="Slate.Canvas.Border6Brush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}" />
+    <SolidColorBrush x:Key="Slate.Canvas.TextBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}" />
+    <SolidColorBrush x:Key="Slate.Canvas.EdgeBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}" />
+    <SolidColorBrush x:Key="Slate.Canvas.SelectionRingBrush" Color="{DynamicResource {x:Static SystemColors.HighlightColorKey}}" />
 </ResourceDictionary>

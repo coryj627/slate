@@ -69,6 +69,25 @@ public sealed class ThemeTokenContrastTests
             // this floor — so the dark caption dims by size only.
             ("tertiary/surface", "Slate.TertiaryTextColor", "Slate.SurfaceColor"),
             ("tertiary/raised", "Slate.TertiaryTextColor", "Slate.RaisedSurfaceColor"),
+            // Canvas (W6-1 §D D13): text on every preset fill and the
+            // group fill; the selection ring's carrier against every
+            // fill, the group fill and the window — mac's measured
+            // pairing, gated here per appearance.
+            ("canvas-text/fill1", "Slate.Canvas.TextColor", "Slate.Canvas.Fill1Color"),
+            ("canvas-text/fill2", "Slate.Canvas.TextColor", "Slate.Canvas.Fill2Color"),
+            ("canvas-text/fill3", "Slate.Canvas.TextColor", "Slate.Canvas.Fill3Color"),
+            ("canvas-text/fill4", "Slate.Canvas.TextColor", "Slate.Canvas.Fill4Color"),
+            ("canvas-text/fill5", "Slate.Canvas.TextColor", "Slate.Canvas.Fill5Color"),
+            ("canvas-text/fill6", "Slate.Canvas.TextColor", "Slate.Canvas.Fill6Color"),
+            ("canvas-text/groupfill", "Slate.Canvas.TextColor", "Slate.Canvas.GroupFillColor"),
+            ("canvas-ring/fill1", "Slate.Canvas.SelectionRingColor", "Slate.Canvas.Fill1Color"),
+            ("canvas-ring/fill2", "Slate.Canvas.SelectionRingColor", "Slate.Canvas.Fill2Color"),
+            ("canvas-ring/fill3", "Slate.Canvas.SelectionRingColor", "Slate.Canvas.Fill3Color"),
+            ("canvas-ring/fill4", "Slate.Canvas.SelectionRingColor", "Slate.Canvas.Fill4Color"),
+            ("canvas-ring/fill5", "Slate.Canvas.SelectionRingColor", "Slate.Canvas.Fill5Color"),
+            ("canvas-ring/fill6", "Slate.Canvas.SelectionRingColor", "Slate.Canvas.Fill6Color"),
+            ("canvas-ring/groupfill", "Slate.Canvas.SelectionRingColor", "Slate.Canvas.GroupFillColor"),
+            ("canvas-ring/window", "Slate.Canvas.SelectionRingColor", "Slate.WindowBackgroundColor"),
         };
 
         foreach ((string name, string textKey, string backgroundKey) in pairs)
@@ -77,6 +96,36 @@ public sealed class ThemeTokenContrastTests
             Assert.True(
                 contrast > 75,
                 $"{fileName} {name} measured |Lc| {contrast:F2}; expected > 75.");
+        }
+    }
+
+    /// <summary>D13's hostile hex row: a raw author color takes the
+    /// SAME composite the preset tokens precompute
+    /// (<see cref="SlateWindows.Canvas.CanvasPalette"/>), and the text
+    /// and ring tokens clear the floor on it in both appearances — the
+    /// path a preset-only matrix never exercises.</summary>
+    [Theory]
+    [InlineData("Slate.Light.xaml")]
+    [InlineData("Slate.Dark.xaml")]
+    public void AHostileHexFillKeepsTextAndRingAboveTheFloor(string fileName)
+    {
+        IReadOnlyDictionary<string, Rgb> colors = ReadColors(fileName);
+        Rgb surface = colors["Slate.SurfaceColor"];
+        System.Windows.Media.Color fill = SlateWindows.Canvas.CanvasPalette.Fill(
+            "#FF00FF",
+            System.Windows.Media.Color.FromRgb(
+                (byte)Math.Round(surface.Red * 255),
+                (byte)Math.Round(surface.Green * 255),
+                (byte)Math.Round(surface.Blue * 255)));
+        Rgb composited = Rgb.Parse($"#FF{fill.R:X2}{fill.G:X2}{fill.B:X2}");
+        foreach (string key in new[]
+            { "Slate.Canvas.TextColor", "Slate.Canvas.SelectionRingColor" })
+        {
+            double contrast = Math.Abs(ApcaLc(colors[key], composited));
+            Assert.True(
+                contrast > 75,
+                $"{fileName} {key} on the hex composite measured |Lc| "
+                + $"{contrast:F2}; expected > 75.");
         }
     }
 
