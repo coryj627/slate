@@ -474,6 +474,20 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// this, never on property-change granularity.</summary>
     public event EventHandler? OutlinePublished;
 
+    /// <summary>The post-apply notification (§D ID-1): raised after
+    /// EVERY apply, from whatever thread the apply ran on, carrying
+    /// the publication that is now applied. The presentation engine
+    /// subscribes and marshals itself — the document does not promise
+    /// a thread here, and saying so is the contract.</summary>
+    internal event Action<CanvasPublication>? PublicationApplied;
+
+    /// <summary>The notification's subscriber count — the lifecycle
+    /// facts pin that a renderer's attach/detach returns it to
+    /// baseline (the review round's leak minor). Test seam by
+    /// name.</summary>
+    internal int PublicationAppliedSubscriberCountForTests =>
+        PublicationApplied?.GetInvocationList().Length ?? 0;
+
     /// <summary>The surface switch landed — the workspace writes the
     /// persisted token for every tab on this path (contract A15).</summary>
     internal event EventHandler<CanvasSurfaceKind>? SurfaceChanged;
@@ -1057,6 +1071,11 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// owns (the cleanup pass).</summary>
     internal CanvasPopulation? AppliedPopulation => _applied?.Population;
 
+    /// <summary>The applied publication itself — the renderer's engine
+    /// seeds from this on attach (§D TD-6), then rides the post-apply
+    /// notification; both read the same committed value.</summary>
+    internal CanvasPublication? AppliedPublication => _applied;
+
     /// <summary>
     /// What the surfaces show for the current needle, in reading order —
     /// ONE value, so the rows on screen, the summary's number and the
@@ -1401,6 +1420,27 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         finally
         {
             _applying = false;
+            // In the FINALLY (the review round): a throwing Apply must
+            // not suppress the notification — the doc contract is
+            // "after EVERY apply", and a skipped raise left the
+            // presentation engine on the previous population for the
+            // life of the publication.
+            PublicationApplied?.Invoke(current);
+        }
+        // The APPLY-WINDOW seat, reconciled (the tooltip slice's
+        // finding): a projection can seat the shared selection DURING
+        // an apply — the outline's tree auto-selects its first row on
+        // rebuild — and the `_applying` guard, built to stop a
+        // failure-CLEAR from erasing the durable intent, swallowed
+        // that positive seat too, leaving the surface authority ahead
+        // of the published intent for as long as the reader stayed
+        // put. A NON-NULL seat that differs from the applied intent
+        // publishes now, after the window closes; a cleared selection
+        // still never erases the intent, which is T3's rule intact.
+        if (Selection.Selected is { } seated
+            && !string.Equals(_applied?.SelectedIntent, seated, StringComparison.Ordinal))
+        {
+            PublishIntent(nameof(CanvasSelection.Selected));
         }
     }
 
@@ -1485,8 +1525,15 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 _ = _slot.Publish(s => s.Retired ? null : s.WithMarkedIntent(marked));
                 break;
             default:
-                break;
+                return;
         }
+        // Applied HERE (§D's tooltip slice found the gap): an intent
+        // publication used to reach the slot and wait for the NEXT
+        // load or filter apply, so the applied snapshot — and the
+        // presentation engine reading it — lagged the selection the
+        // reader just made. The apply is cheap for a same-population
+        // successor and keeps the one-snapshot story true.
+        ApplyPublication();
     }
 
     private void PublishEmpty()
@@ -2135,7 +2182,12 @@ internal static class CanvasPhrase
 
     public const string VisualSurfaceLabel = "Visual";
 
-    public const string VisualShipsLater = "The canvas visual view arrives in a later slice.";
+    /// <summary>The visual board's UIA name (§D D3, "Canvas visual
+    /// view"). NOT the switcher arm's label above: the peer shipped
+    /// speaking the radio's word and the FlaUI journey caught it —
+    /// the two phrases are neighbours here so they can never be
+    /// confused for one another again.</summary>
+    public const string VisualBoardName = "Canvas visual view";
 
     /// <summary>The table projection's accessible name (mac's
     /// <c>accessibilityLabel</c>, verbatim).</summary>

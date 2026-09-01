@@ -71,7 +71,10 @@ public sealed class ContractsCitationCensus
             (
                 "C-unit",
                 "## PR C-unit — the coherent projection unit",
-                "## §W-G canonical-consumption audit",
+                // Terminated by §D for §B's reason, two sections later:
+                // the section inserted before the old terminator must
+                // not be read as part of §C-unit's extent.
+                "## PR D — the visual renderer",
                 6_000,
                 // The floor moved when the section did. It was 3 while
                 // §C-unit was a DESIGN whose own types were deliberately
@@ -115,6 +118,51 @@ public sealed class ContractsCitationCensus
                 // owners, taking the section to 95; 76 sits above
                 // the pre-pass population of 75 — a sixth time.
                 76),
+            (
+                "D",
+                "## PR D — the visual renderer",
+                "## §W-G canonical-consumption audit",
+                12_000,
+                // A DESIGN floor, §C-unit's convention: the section's
+                // own new types are deliberately plain text until tasks
+                // bind them, so the 14 occurrences at revision 1 are all
+                // EXISTING names. 10 sits above the empty pre-section
+                // population and below the current 14, so unbinding the
+                // section's citations fails while prose churn does not;
+                // each implementation task raises it above what the
+                // section carried before that task, as §C-unit's tasks
+                // did.
+                //
+                // TD-1 bound the engine, the viewport value, the
+                // presentation state and the battery's sentinels,
+                // taking the section to 28; 20 sits above the
+                // pre-task population of 18 — the §C-unit rule's
+                // first application in §D.
+                //
+                // TD-2 bound the scene's copy, its index and their
+                // facts, taking the section to 33; 30 sits above the
+                // pre-task population of 28 — a second time.
+                //
+                // TD-3 bound the topology, the third authority and
+                // their sentinels, taking the section to 39; 35 sat
+                // above the pre-task population of 33 — a third time.
+                //
+                // TD-4 bound the selection accessor and its two
+                // sentinels, taking the section to 43; 40 sat above
+                // the pre-task population of 39 — a fourth time.
+                //
+                // TD-5 bound the vocabulary arm, the verbs, the
+                // binding record and the enablement census, taking
+                // the section to 51; 45 sat above the pre-task
+                // population of 43 — a fifth time.
+                //
+                // TD-6 bound the renderer, the peers, the services
+                // and the flip's renamed facts, taking the section
+                // to 57. The flip's sweep renamed two cited facts IN
+                // PLACE, so the honest pre-task population is the
+                // post-sweep 48, and 50 sits above it — a sixth
+                // time.
+                50),
         ];
 
     public static TheoryData<string, string, string> SectionRanges
@@ -765,6 +813,10 @@ public sealed class ContractsCitationCensus
         (
             "§C-unit",
             "## PR C-unit — the coherent projection unit",
+            "## PR D — the visual renderer"),
+        (
+            "§D",
+            "## PR D — the visual renderer",
             "## §W-G canonical-consumption audit"),
         (
             "divergences",

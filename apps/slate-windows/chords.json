@@ -945,6 +945,66 @@
       "registered": true
     },
     {
+      "id": "slate.canvas.zoomIn",
+      "label": "Canvas: Zoom In",
+      "section": "Canvas",
+      "hint": "Zoom the visual board in one step.",
+      "macChord": "⌘=",
+      "mac": "Command Equals",
+      "windows": "Ctrl+=",
+      "windowsSpoken": "Control Equals",
+      "scope": "Canvas",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.zoomOut",
+      "label": "Canvas: Zoom Out",
+      "section": "Canvas",
+      "hint": "Zoom the visual board out one step.",
+      "macChord": "⌘-",
+      "mac": "Command Minus",
+      "windows": "Ctrl+-",
+      "windowsSpoken": "Control Minus",
+      "scope": "Canvas",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.actualSize",
+      "label": "Canvas: Actual Size",
+      "section": "Canvas",
+      "hint": "Zoom the visual board to 100 percent.",
+      "macChord": "⌘0",
+      "mac": "Command 0",
+      "windows": "Ctrl+0",
+      "windowsSpoken": "Control 0",
+      "scope": "Canvas",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.fitCanvas",
+      "label": "Canvas: Fit Canvas",
+      "section": "Canvas",
+      "hint": "Fit every card in the visual board's view.",
+      "macChord": "⇧1",
+      "mac": "Shift 1",
+      "windows": "Shift+1",
+      "windowsSpoken": "Shift 1",
+      "scope": "Canvas",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.zoomToSelection",
+      "label": "Canvas: Zoom to Selection",
+      "section": "Canvas",
+      "hint": "Fill the visual board's view with the selected cards.",
+      "macChord": "⇧2",
+      "mac": "Shift 2",
+      "windows": "Shift+2",
+      "windowsSpoken": "Shift 2",
+      "scope": "Canvas",
+      "registered": true
+    },
+    {
       "id": "slate.canvas.filterCards",
       "label": "Canvas: Filter Cards…",
       "section": "Canvas",
@@ -1860,7 +1920,7 @@
           "apps/slate-windows/src/SlateWindows/Commands/ChordTable.cs#CanvasRows"
         ],
         "tests": [
-          "apps/slate-windows/tests/SlateWindows.Tests/CanvasDocumentTests.cs#ShowVisualRegistersAndStaysDisabledUntilItsProjectionShips",
+          "apps/slate-windows/tests/SlateWindows.Tests/CanvasDocumentTests.cs#ShowVisualIsEnabledAndDrivesTheSurfaceSwitch",
           "apps/slate-windows/tests/SlateWindows.Tests/CanvasTableTests.cs#ShowTableIsEnabledAndDrivesTheOneSurfaceSwitch",
           "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#CanvasSurfaces_OutlineTreeSelectionAndActivation_AreClean",
           "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#CanvasSurfaces_TableGridSortSelectionAndActivation_AreClean"
@@ -1996,6 +2056,13 @@
       "slate.file.newFromTemplate": "templates",
       "slate.canvas.showOutline": "canvasSurfaces",
       "slate.canvas.showTable": "canvasSurfaces",
+      "slate.canvas.showVisual": "canvasSurfaces",
+      "slate.canvas.zoomIn": "canvasNavigator",
+      "slate.canvas.zoomOut": "canvasNavigator",
+      "slate.canvas.actualSize": "canvasNavigator",
+      "slate.canvas.fitCanvas": "canvasNavigator",
+      "slate.canvas.zoomToSelection": "canvasNavigator",
+      "slate.canvas.toggleFollowSelection": "canvasNavigator",
       "slate.canvas.whereAmI": "canvasNavigator",
       "slate.canvas.nextCard": "canvasNavigator",
       "slate.canvas.previousCard": "canvasNavigator",

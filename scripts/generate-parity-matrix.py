@@ -642,15 +642,21 @@ W6_1_STATUS = (
 )
 
 W6_1_DELIVERED_COMMANDS = {
-    # PR A / PR B: the two projections that exist.
+    # PR A / PR B / §D TD-6: the three projections that exist.
     "slate.canvas.showOutline",
     "slate.canvas.showTable",
+    "slate.canvas.showVisual",
+    # §D TD-6: the viewport verbs, executable with the renderer — B12's
+    # rule (a command joins this set in the PR that makes it
+    # EXECUTABLE) finally paying out for the rows PR C registered.
+    "slate.canvas.zoomIn",
+    "slate.canvas.zoomOut",
+    "slate.canvas.actualSize",
+    "slate.canvas.fitCanvas",
+    "slate.canvas.zoomToSelection",
+    "slate.canvas.toggleFollowSelection",
     # PR C: the navigator command layer, the filter, Where-am-I and the
-    # mode transitions. `slate.canvas.toggleFollowSelection` is
-    # deliberately absent — it registers in C and stays disabled until
-    # PR D ships the viewport, and §B12's rule is that a command joins
-    # this set in the PR that makes it EXECUTABLE, not the one that
-    # registers it.
+    # mode transitions.
     #
     # `commitMode` and `cancelMode` are absent for the SAME reason, and
     # the split is what made that true. They gate on `CanCommitOrCancel`,

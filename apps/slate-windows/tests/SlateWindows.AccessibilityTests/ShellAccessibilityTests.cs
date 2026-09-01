@@ -9,6 +9,7 @@ using Axe.Windows.Automation;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Definitions;
 using FlaUI.Core.Input;
+using FlaUI.Core.Tools;
 using FlaUI.Core.WindowsAPI;
 using FlaUI.UIA3;
 
@@ -6297,16 +6298,18 @@ public sealed class ShellAccessibilityTests
             PressKey(VirtualKeyShort.RETURN);
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(500));
 
-            // The surface switcher is one named group, and an unshipped
-            // arm is disabled rather than absent (A18). The table arm
-            // shipped in PR B and has its own journey; the visual arm is
-            // PR D's and is the disabled one now.
+            // The surface switcher is one named group (A18). All three
+            // arms have shipped — the table in PR B, the visual in PR D
+            // (whose flip this branch carries) — so every arm is live,
+            // and the visual arm's own journey exercises the switch.
             AutomationElement switcher = WaitForElement(
                 window, "CanvasSurfaceSwitcher", TimeSpan.FromSeconds(10));
             Assert.Equal("Canvas view", switcher.Properties.Name.Value);
             AutomationElement visualChoice = WaitForElement(
                 window, "CanvasShowVisual", TimeSpan.FromSeconds(10));
-            Assert.False(visualChoice.Properties.IsEnabled.Value);
+            Assert.True(
+                visualChoice.Properties.IsEnabled.Value,
+                "the Visual arm is disabled: the flip regressed.");
 
             // The t0 §5 banner and its focusable detail rows, on a
             // fixture whose entries core preserved but cannot show.
@@ -6779,6 +6782,127 @@ public sealed class ShellAccessibilityTests
             {
             }
             catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    /// <summary>§D TD-7: the visual board's journey — the container
+    /// and card peers through the real UIA bridge, the declared Value
+    /// pattern, a rectangle that CHANGES after Ctrl+= (the stale-frame
+    /// classic, asserted at the level it is true), and axe over peered
+    /// elements only (the recorded trap).</summary>
+    [Fact]
+    [Trait("gate", "W-C")]
+    public void CanvasSurfaces_VisualBoardPeersAndZoom_AreClean()
+    {
+        string testRoot = Path.Combine(
+            Path.GetTempPath(), $"slate-canvas-visual-{Guid.NewGuid():N}");
+        string vaultRoot = Path.Combine(testRoot, "Canvas Vault");
+        string logDirectory = Path.Combine(testRoot, "logs");
+        Directory.CreateDirectory(vaultRoot);
+        File.Copy(
+            Path.Combine(DemoVaultCanvasDirectory(), "sample.canvas"),
+            Path.Combine(vaultRoot, "sample.canvas"));
+
+        Process? process = null;
+        try
+        {
+            var startInfo = new ProcessStartInfo(SlateWindowsExe())
+            {
+                UseShellExecute = false,
+            };
+            startInfo.ArgumentList.Add(vaultRoot);
+            startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
+                $"slate-canvas-visual-{Guid.NewGuid():N}";
+            startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            process = Process.Start(startInfo)
+                ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+
+            if (!HasInteractiveDesktop(process, "Canvas visual"))
+            {
+                return;
+            }
+
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(
+                process,
+                automation,
+                Path.Combine(logDirectory, "slate-windows.log"),
+                TimeSpan.FromSeconds(30));
+            window.SetForeground();
+            window.Focus();
+
+            OpenCanvasFromTree(window, automation, "sample");
+
+            // The switcher's Visual arm is LIVE (the flip) and drives
+            // the one surface switch.
+            AutomationElement visualChoice = WaitForElement(
+                window, "CanvasShowVisual", TimeSpan.FromSeconds(20));
+            Assert.True(
+                visualChoice.Properties.IsEnabled.Value,
+                "the Visual radio is disabled: the flip did not reach the tree.");
+            visualChoice.AsRadioButton().IsChecked = true;
+
+            // The board is a real Group with the declared VALUE
+            // pattern (DD-5) carrying the zoom.
+            AutomationElement board = WaitForElement(
+                window, "CanvasVisualBoard", TimeSpan.FromSeconds(20));
+            Assert.Equal("Canvas visual view", board.Properties.Name.Value);
+            var value = board.Patterns.Value;
+            Assert.True(value.IsSupported, "the container's Value pattern is missing (DD-5).");
+            Assert.StartsWith("Zoom ", value.Pattern.Value.Value, StringComparison.Ordinal);
+
+            // Card peers: materialized Buttons with unique non-empty
+            // names from core's speakable name (D3/D5's journey half).
+            AutomationElement[] cards = Retry.WhileEmpty(
+                () => board.FindAllChildren(
+                    finder => finder.ByControlType(ControlType.Button)),
+                TimeSpan.FromSeconds(20)).Result;
+            Assert.True(cards.Length >= 1, "no card peers materialized.");
+            string[] names = [.. cards.Select(card => card.Properties.Name.Value)];
+            Assert.All(names, name => Assert.False(string.IsNullOrWhiteSpace(name)));
+            Assert.Equal(names.Length, names.Distinct(StringComparer.Ordinal).Count());
+
+            // The stale-frame classic: zoom, then re-query the SAME
+            // card's rectangle — it must change (D3).
+            System.Drawing.Rectangle before = cards[0].Properties.BoundingRectangle.Value;
+            board.Focus();
+            Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.OEM_PLUS);
+            Wait.UntilInputIsProcessed();
+            AutomationElement after = Retry.WhileNull(
+                () => board.FindAllChildren(
+                        finder => finder.ByControlType(ControlType.Button))
+                    .FirstOrDefault(card => card.Properties.Name.Value == names[0]),
+                TimeSpan.FromSeconds(10)).Result!;
+            Assert.True(
+                Retry.WhileTrue(
+                    () => after.Properties.BoundingRectangle.Value == before,
+                    TimeSpan.FromSeconds(10)).Success,
+                "the card's rectangle did not change after Ctrl+=: the peer "
+                + "answered a stale frame.");
+
+            // A select through the pattern moves the selection.
+            var item = after.Patterns.SelectionItem;
+            Assert.True(item.IsSupported, "the card's SelectionItem pattern is missing.");
+            item.Pattern.Select();
+            Assert.True(
+                Retry.WhileFalse(
+                    () => item.Pattern.IsSelected.Value,
+                    TimeSpan.FromSeconds(10)).Success,
+                "the selected card does not report IsSelected.");
+
+            AssertAxeClean(process, "canvas-visual");
+        }
+        finally
+        {
+            process?.Kill(entireProcessTree: true);
+            process?.Dispose();
+            try
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
             {
             }
         }

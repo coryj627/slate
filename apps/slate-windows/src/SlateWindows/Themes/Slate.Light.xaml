@@ -14,6 +14,25 @@
     <Color x:Key="Slate.SelectionTextColor">#FFFFFFFF</Color>
     <Color x:Key="Slate.ErrorColor">#FF8A0014</Color>
     <Color x:Key="Slate.WarningColor">#FF754500</Color>
+
+    <!-- Canvas tokens (W6-1 §D D13): the dark dictionary’s note
+         applies; these are the light composites over #FFFFFFFF. -->
+    <Color x:Key="Slate.Canvas.Fill1Color">#FFFEDEDF</Color>
+    <Color x:Key="Slate.Canvas.Fill2Color">#FFFBECDC</Color>
+    <Color x:Key="Slate.Canvas.Fill3Color">#FFF9F9E5</Color>
+    <Color x:Key="Slate.Canvas.Fill4Color">#FFDDF6E5</Color>
+    <Color x:Key="Slate.Canvas.Fill5Color">#FFE0F9F9</Color>
+    <Color x:Key="Slate.Canvas.Fill6Color">#FFEFE9FF</Color>
+    <Color x:Key="Slate.Canvas.Border1Color">#FFFB464C</Color>
+    <Color x:Key="Slate.Canvas.Border2Color">#FFE9973F</Color>
+    <Color x:Key="Slate.Canvas.Border3Color">#FFE0DE71</Color>
+    <Color x:Key="Slate.Canvas.Border4Color">#FF44CF6E</Color>
+    <Color x:Key="Slate.Canvas.Border5Color">#FF53DFDD</Color>
+    <Color x:Key="Slate.Canvas.Border6Color">#FFA882FF</Color>
+    <Color x:Key="Slate.Canvas.TextColor">#FF171717</Color>
+    <Color x:Key="Slate.Canvas.GroupFillColor">#FFEFEFEF</Color>
+    <Color x:Key="Slate.Canvas.EdgeColor">#FF767676</Color>
+    <Color x:Key="Slate.Canvas.SelectionRingColor">#FF171717</Color>
     <Color x:Key="Slate.CodeKeywordColor">#FF6A1B9A</Color>
     <Color x:Key="Slate.CodeStringColor">#FF8E1515</Color>
     <Color x:Key="Slate.CodeNumberColor">#FF0D47A1</Color>
@@ -68,4 +87,20 @@
                      Color="{StaticResource Slate.CodeTypeColor}" />
     <SolidColorBrush x:Key="Slate.CodeFunctionBrush"
                      Color="{StaticResource Slate.CodeFunctionColor}" />
+    <SolidColorBrush x:Key="Slate.Canvas.Fill1Brush" Color="{StaticResource Slate.Canvas.Fill1Color}" />
+    <SolidColorBrush x:Key="Slate.Canvas.Fill2Brush" Color="{StaticResource Slate.Canvas.Fill2Color}" />
+    <SolidColorBrush x:Key="Slate.Canvas.Fill3Brush" Color="{StaticResource Slate.Canvas.Fill3Color}" />
+    <SolidColorBrush x:Key="Slate.Canvas.Fill4Brush" Color="{StaticResource Slate.Canvas.Fill4Color}" />
+    <SolidColorBrush x:Key="Slate.Canvas.Fill5Brush" Color="{StaticResource Slate.Canvas.Fill5Color}" />
+    <SolidColorBrush x:Key="Slate.Canvas.Fill6Brush" Color="{StaticResource Slate.Canvas.Fill6Color}" />
+    <SolidColorBrush x:Key="Slate.Canvas.Border1Brush" Color="{StaticResource Slate.Canvas.Border1Color}" />
+    <SolidColorBrush x:Key="Slate.Canvas.Border2Brush" Color="{StaticResource Slate.Canvas.Border2Color}" />
+    <SolidColorBrush x:Key="Slate.Canvas.Border3Brush" Color="{StaticResource Slate.Canvas.Border3Color}" />
+    <SolidColorBrush x:Key="Slate.Canvas.Border4Brush" Color="{StaticResource Slate.Canvas.Border4Color}" />
+    <SolidColorBrush x:Key="Slate.Canvas.Border5Brush" Color="{StaticResource Slate.Canvas.Border5Color}" />
+    <SolidColorBrush x:Key="Slate.Canvas.Border6Brush" Color="{StaticResource Slate.Canvas.Border6Color}" />
+    <SolidColorBrush x:Key="Slate.Canvas.TextBrush" Color="{StaticResource Slate.Canvas.TextColor}" />
+    <SolidColorBrush x:Key="Slate.Canvas.GroupFillBrush" Color="{StaticResource Slate.Canvas.GroupFillColor}" />
+    <SolidColorBrush x:Key="Slate.Canvas.EdgeBrush" Color="{StaticResource Slate.Canvas.EdgeColor}" />
+    <SolidColorBrush x:Key="Slate.Canvas.SelectionRingBrush" Color="{StaticResource Slate.Canvas.SelectionRingColor}" />
 </ResourceDictionary>

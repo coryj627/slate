@@ -7904,6 +7904,7 @@ pub enum CanvasA11yEvent {
     CanvasFollowSelectionToggled {
         following: bool,
     },
+    CanvasViewportNoPane,
     CanvasSurfaceShown {
         surface: CanvasSurfaceKind,
     },
@@ -8124,6 +8125,7 @@ impl From<CanvasA11yEvent> for core::a11y::CanvasA11yEvent {
             F::CanvasFollowSelectionToggled { following } => {
                 C::CanvasFollowSelectionToggled { following }
             }
+            F::CanvasViewportNoPane => C::CanvasViewportNoPane,
             F::CanvasSurfaceShown { surface } => C::CanvasSurfaceShown {
                 surface: surface.into(),
             },

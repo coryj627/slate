@@ -195,6 +195,30 @@ internal static class SlateCommandRegistrar
         || string.Equals(message, UnavailableReason, StringComparison.Ordinal)
         || string.Equals(message, StructuralMutationBusyReason, StringComparison.Ordinal);
 
+    /// <summary>The viewport verbs' BINDING RECORD (§D D14, obligation
+    /// ID-8): one enumerable authority holding row id, the navigator
+    /// member that delivers it, and the resolver — registration,
+    /// resolution and the census all derive from THIS, so a row cannot
+    /// register without a delivery member and cannot deliver except
+    /// through the member its row names. Declared ABOVE the resolver
+    /// map because static fields initialize in declaration order, and
+    /// the map's builder consumes this record.</summary>
+    internal static readonly
+        (string Id, string NavigatorMember, Func<ISlateCommandHost, ICommand?> Resolve)[]
+        CanvasViewportBindings =
+        [
+            (ChordTable.Ids.CanvasZoomIn, "ZoomIn",
+                host => host.Workspace?.CanvasZoomInCommand),
+            (ChordTable.Ids.CanvasZoomOut, "ZoomOut",
+                host => host.Workspace?.CanvasZoomOutCommand),
+            (ChordTable.Ids.CanvasActualSize, "ActualSize",
+                host => host.Workspace?.CanvasActualSizeCommand),
+            (ChordTable.Ids.CanvasFitCanvas, "FitCanvas",
+                host => host.Workspace?.CanvasFitCanvasCommand),
+            (ChordTable.Ids.CanvasZoomToSelection, "ZoomToSelection",
+                host => host.Workspace?.CanvasZoomToSelectionCommand),
+        ];
+
     private static readonly Dictionary<string, Func<ISlateCommandHost, ICommand?>> Resolvers =
         BuildResolvers();
 
@@ -462,10 +486,8 @@ internal static class SlateCommandRegistrar
             [ChordTable.Ids.BasesResultsPopover] = host => host.Workspace?.BasesResultsCommand,
             [ChordTable.Ids.BasesRefresh] = host => host.Workspace?.BasesRefreshCommand,
 
-            // Canvas (W6-1 #745, contract A18). showVisual resolves to
-            // a command whose CanExecute is false until PR D ships the
-            // renderer; showTable's projection shipped in PR B, so its
-            // row is live.
+            // Canvas (W6-1 #745, contract A18). All three surface rows
+            // are live: outline (PR A), table (PR B), visual (§D TD-6).
             [ChordTable.Ids.CanvasShowOutline] =
                 host => host.Workspace?.CanvasShowOutlineCommand,
             [ChordTable.Ids.CanvasShowTable] =
@@ -497,7 +519,6 @@ internal static class SlateCommandRegistrar
                 host => host.Workspace?.CanvasCommitModeCommand,
             [ChordTable.Ids.CanvasCancelMode] =
                 host => host.Workspace?.CanvasCancelModeCommand,
-            // Disabled until PR D ships the viewport (contract C9).
             [ChordTable.Ids.CanvasToggleFollowSelection] =
                 host => host.Workspace?.CanvasToggleFollowSelectionCommand,
             [ChordTable.Ids.BasesNewQuery] = host => host.Workspace?.BasesNewQueryCommand,
@@ -565,6 +586,14 @@ internal static class SlateCommandRegistrar
                     : null;
         }
 
+        // The viewport rows resolve THROUGH the binding record (§D
+        // D14 / ID-8) — one authority for registration, resolution and
+        // the census, never a literal entry that can drift from it.
+        foreach ((string id, _, Func<ISlateCommandHost, ICommand?> resolve)
+            in CanvasViewportBindings)
+        {
+            map[id] = resolve;
+        }
         return map;
     }
 }

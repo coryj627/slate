@@ -284,10 +284,49 @@ internal sealed partial class WorkspaceViewModel
             _ => ActiveCanvasDocument?.ShowSurface(CanvasSurfaceKind.Table),
             _ => ActiveCanvasDocument is not null);
 
-    /// <summary>Registered now, disabled until PR D ships the
-    /// projection (contract A18).</summary>
+    /// <summary>The visual surface switch (contract A18; §D TD-6
+    /// flips it executable — B12's rule: the PR that makes a command
+    /// executable is the one that delivers it).</summary>
     public System.Windows.Input.ICommand CanvasShowVisualCommand =>
-        _canvasShowVisualCommand ??= new RelayCommand(_ => { }, _ => false);
+        _canvasShowVisualCommand ??= new RelayCommand(
+            _ => ActiveCanvasDocument?.ShowSurface(CanvasSurfaceKind.Visual),
+            _ => ActiveCanvasDocument is not null);
+
+    // --- Viewport (§D D14, task TD-5) -----------------------------------
+    // Each command routes to the navigator's verb; the verb owns the
+    // load gate, the pane resolution and the no-pane refusal (§D D7),
+    // so the palette and the chord speak identically.
+
+    public System.Windows.Input.ICommand CanvasZoomInCommand =>
+        _canvasZoomInCommand ??= new RelayCommand(
+            _ => ActiveCanvasDocument?.Navigator.ZoomIn(),
+            _ => ActiveCanvasDocument is not null);
+
+    public System.Windows.Input.ICommand CanvasZoomOutCommand =>
+        _canvasZoomOutCommand ??= new RelayCommand(
+            _ => ActiveCanvasDocument?.Navigator.ZoomOut(),
+            _ => ActiveCanvasDocument is not null);
+
+    public System.Windows.Input.ICommand CanvasActualSizeCommand =>
+        _canvasActualSizeCommand ??= new RelayCommand(
+            _ => ActiveCanvasDocument?.Navigator.ActualSize(),
+            _ => ActiveCanvasDocument is not null);
+
+    public System.Windows.Input.ICommand CanvasFitCanvasCommand =>
+        _canvasFitCanvasCommand ??= new RelayCommand(
+            _ => ActiveCanvasDocument?.Navigator.FitCanvas(),
+            _ => ActiveCanvasDocument is not null);
+
+    public System.Windows.Input.ICommand CanvasZoomToSelectionCommand =>
+        _canvasZoomToSelectionCommand ??= new RelayCommand(
+            _ => ActiveCanvasDocument?.Navigator.ZoomToSelection(),
+            _ => ActiveCanvasDocument is not null);
+
+    private System.Windows.Input.ICommand? _canvasZoomInCommand;
+    private System.Windows.Input.ICommand? _canvasZoomOutCommand;
+    private System.Windows.Input.ICommand? _canvasActualSizeCommand;
+    private System.Windows.Input.ICommand? _canvasFitCanvasCommand;
+    private System.Windows.Input.ICommand? _canvasZoomToSelectionCommand;
 
     // --- Navigator, filter, Where-am-I, modes (contract C1) -------------
 
@@ -380,14 +419,11 @@ internal sealed partial class WorkspaceViewModel
             _ => ActiveCanvasDocument?.Navigator.CancelMode(),
             _ => ActiveCanvasDocument?.Modes.CanCommitOrCancel == true);
 
-    /// <summary>
-    /// Registered now, disabled until PR D ships the viewport (contract
-    /// C9). "State only until D" was the alternative and it is worse:
-    /// the toggle's own announcement says the viewport follows the
-    /// selection, and with no viewport that is a sentence about nothing —
-    /// the t2 rule against advertising a command that does not exist yet,
-    /// applied to a command that exists and cannot act.
-    /// </summary>
+    /// <summary>The follow toggle, live with the viewport (§D TD-6):
+    /// the navigator's verb owns the gate and the sentence, so the
+    /// palette and any future chord speak identically.</summary>
     public System.Windows.Input.ICommand CanvasToggleFollowSelectionCommand =>
-        _canvasToggleFollowSelectionCommand ??= new RelayCommand(_ => { }, _ => false);
+        _canvasToggleFollowSelectionCommand ??= new RelayCommand(
+            _ => ActiveCanvasDocument?.Navigator.ToggleFollowSelection(),
+            _ => ActiveCanvasDocument is not null);
 }

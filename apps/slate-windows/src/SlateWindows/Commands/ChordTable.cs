@@ -282,6 +282,11 @@ internal static class ChordTable
         public const string CanvasClearFilter = "slate.canvas.clearFilter";
         public const string CanvasCommitMode = "slate.canvas.commitMode";
         public const string CanvasCancelMode = "slate.canvas.cancelMode";
+        public const string CanvasZoomIn = "slate.canvas.zoomIn";
+        public const string CanvasZoomOut = "slate.canvas.zoomOut";
+        public const string CanvasActualSize = "slate.canvas.actualSize";
+        public const string CanvasFitCanvas = "slate.canvas.fitCanvas";
+        public const string CanvasZoomToSelection = "slate.canvas.zoomToSelection";
         public const string CanvasToggleFollowSelection =
             "slate.canvas.toggleFollowSelection";
 
@@ -899,6 +904,26 @@ internal static class ChordTable
         Reg(Ids.CanvasTracePath, "Canvas: Trace Path from Selected Card",
             CommandSection.Canvas,
             "Walk the outgoing chain, announcing each hop and the visited count."),
+
+        // The viewport (§D D14, task TD-5). Chorded per mac's mapping
+        // (⌘→Ctrl); fit and zoom-to-selection are VISUAL SURFACE ONLY
+        // (rule R2) and the navigator's own map gates them there.
+        Reg(Ids.CanvasZoomIn, "Canvas: Zoom In", CommandSection.Canvas,
+            "Zoom the visual board in one step.",
+            "⌘=", "Ctrl+=", ChordScope.Canvas),
+        Reg(Ids.CanvasZoomOut, "Canvas: Zoom Out", CommandSection.Canvas,
+            "Zoom the visual board out one step.",
+            "⌘-", "Ctrl+-", ChordScope.Canvas),
+        Reg(Ids.CanvasActualSize, "Canvas: Actual Size", CommandSection.Canvas,
+            "Zoom the visual board to 100 percent.",
+            "⌘0", "Ctrl+0", ChordScope.Canvas),
+        Reg(Ids.CanvasFitCanvas, "Canvas: Fit Canvas", CommandSection.Canvas,
+            "Fit every card in the visual board's view.",
+            "⇧1", "Shift+1", ChordScope.Canvas),
+        Reg(Ids.CanvasZoomToSelection, "Canvas: Zoom to Selection",
+            CommandSection.Canvas,
+            "Fill the visual board's view with the selected cards.",
+            "⇧2", "Shift+2", ChordScope.Canvas),
 
         Reg(Ids.CanvasFilterCards, "Canvas: Filter Cards…", CommandSection.Canvas,
             "Focus the filter field (Ctrl+F on a canvas): narrows by title, type, "

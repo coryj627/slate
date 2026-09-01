@@ -1356,20 +1356,22 @@ public sealed class CanvasDocumentTests : IDisposable
         });
 
     [Fact]
-    public void TheSurfaceSwitcherIsNamedAndTheUnshippedArmIsDisabled() => RunSta(() =>
+    public void TheSurfaceSwitcherIsNamedAndAllThreeArmsAreLive() => RunSta(() =>
     {
         CanvasDocumentViewModel document = NewDocument("board.canvas");
         document.Load();
         var surface = new CanvasSurfaceView { Model = document };
 
-        // W6-1 PR B shipped the table, so its arm is live now; the
-        // visual arm is PR D's and stays disabled with its reason.
+        // §D TD-6 shipped the visual, so every arm is live and the
+        // ships-later hint is GONE — a help text promising a later
+        // slice on an enabled control would be the stale claim the
+        // enablement census exists to catch.
         Assert.True(surface.TableChoiceForTests.IsEnabled);
-        Assert.False(surface.VisualChoiceForTests.IsEnabled);
+        Assert.True(surface.VisualChoiceForTests.IsEnabled);
         Assert.Equal(
-            CanvasPhrase.VisualShipsLater,
+            string.Empty,
             System.Windows.Automation.AutomationProperties.GetHelpText(
-                surface.VisualChoiceForTests));
+                surface.VisualChoiceForTests) ?? string.Empty);
         document.Shutdown();
     });
 
@@ -1507,7 +1509,7 @@ public sealed class CanvasDocumentTests : IDisposable
     /// <c>CanvasTableTests</c> owns the other half.
     /// </remarks>
     [Fact]
-    public void ShowVisualRegistersAndStaysDisabledUntilItsProjectionShips()
+    public void ShowVisualIsEnabledAndDrivesTheSurfaceSwitch()
     {
         using WorkspaceViewModel workspace = NewWorkspace();
         workspace.OpenPath("board.canvas");
@@ -1534,10 +1536,11 @@ public sealed class CanvasDocumentTests : IDisposable
 
         Assert.Null(Commands.SlateCommandRegistrar.DisabledReason(
             host, Commands.ChordTable.Ids.CanvasShowOutline));
-        Assert.Equal(
-            Commands.SlateCommandRegistrar.UnavailableReason,
-            Commands.SlateCommandRegistrar.DisabledReason(
-                host, Commands.ChordTable.Ids.CanvasShowVisual));
+        // §D TD-6: the visual shipped, so its row is as live as the
+        // other two — the fact that pinned the DISABLED half now pins
+        // the flip.
+        Assert.Null(Commands.SlateCommandRegistrar.DisabledReason(
+            host, Commands.ChordTable.Ids.CanvasShowVisual));
 
         // The one that IS shipped switches the shared surface and
         // speaks core's sentence.
@@ -1557,6 +1560,18 @@ public sealed class CanvasDocumentTests : IDisposable
         Assert.Equal(
             SlateUniffiMethods.A11yRender(new A11yEvent.Canvas(
                 new CanvasA11yEvent.CanvasSurfaceShown(CanvasSurfaceKind.Table))).Text,
+            _announced[^1].Text);
+
+        // And the FLIPPED row drives the same one switch (A15/A18).
+        _announced.Clear();
+        Commands.SlateCommandRegistrar
+            .Resolve(host, Commands.ChordTable.Ids.CanvasShowVisual)!
+            .Execute(null);
+        Assert.Equal(CanvasSurfaceKind.Visual, document.Selection.ActiveSurface);
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Equal(
+            SlateUniffiMethods.A11yRender(new A11yEvent.Canvas(
+                new CanvasA11yEvent.CanvasSurfaceShown(CanvasSurfaceKind.Visual))).Text,
             _announced[^1].Text);
     }
 
@@ -3655,4 +3670,248 @@ public sealed class CanvasDocumentTests : IDisposable
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
         }
     }
+
+    /// <summary>§D TD-6: the third arm is REAL — the persisted or
+    /// switched visual surface renders the ready publication through
+    /// the engine's installed state (the Ready-integration fact TD-3's
+    /// record deferred here), and exactly one projection stays in the
+    /// tree with three arms to choose from.</summary>
+    [Fact]
+    public void TheVisualArmRendersTheReadyPublication() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = NewDocument("board.canvas");
+        document.Load();
+        var surface = new CanvasSurfaceView { Model = document };
+        using HostedWindow host = Host(surface);
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        PumpUntil(() => surface.VisualForTests.Engine.Current is not null);
+
+        Assert.Equal(Visibility.Visible, surface.VisualForTests.Visibility);
+        Assert.Equal(Visibility.Collapsed, surface.OutlineForTests.Visibility);
+        CanvasPresentationState state = Assert.IsType<CanvasPresentationState>(
+            surface.VisualForTests.Engine.Current);
+        Assert.True(
+            state.Source.Loaded is not null,
+            "the installed state does not carry the ready publication.");
+        Assert.Contains(
+            state.Topology.Placements,
+            placement => placement.Value.Cell == CanvasPeerCell.Materialized);
+        document.Shutdown();
+    });
+
+    /// <summary>§D D14 end to end: a viewport verb through the
+    /// presenter seam moves the engine's installed zoom — the
+    /// pane-addressed route, no cache consulted.</summary>
+    [Fact]
+    public void AViewportVerbThroughThePresenterMovesTheInstalledZoom() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = NewDocument("board.canvas");
+        document.Load();
+        var surface = new CanvasSurfaceView { Model = document };
+        using HostedWindow host = Host(surface);
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        PumpUntil(() => surface.VisualForTests.Engine.Current is not null);
+
+        Assert.True(
+            ((ICanvasSurfacePresenter)surface).ViewportCommand(
+                CanvasViewportVerb.ZoomIn),
+            "the pane refused a viewport verb with a mounted renderer.");
+        PumpUntil(() =>
+            surface.VisualForTests.Engine.Current is { } zoomed
+            && zoomed.Viewport.Zoom > 1.0);
+        Assert.Equal(
+            1.25,
+            surface.VisualForTests.Engine.Current!.Viewport.Zoom,
+            precision: 6);
+        document.Shutdown();
+    });
+
+    /// <summary>Pump until the condition holds or the budget runs out
+    /// — the async engine's install rides a pool continuation, so one
+    /// drained frame can beat it (the engine battery's own loop, here
+    /// for the windowed facts).</summary>
+    private static void PumpUntil(Func<bool> condition)
+    {
+        var budget = System.Diagnostics.Stopwatch.StartNew();
+        while (!condition() && budget.Elapsed < TimeSpan.FromSeconds(10))
+        {
+            PumpDispatcher();
+            Thread.Yield();
+        }
+        Assert.True(condition(), "premise: the pumped condition never held.");
+    }
+
+    /// <summary>The facts' own pump: run everything queued at Loaded
+    /// priority or above — the pass the app gets for free, and the
+    /// async engine's install continuations ride it.</summary>
+    private static void PumpDispatcher()
+    {
+        var frame = new System.Windows.Threading.DispatcherFrame();
+        _ = System.Windows.Threading.Dispatcher.CurrentDispatcher.BeginInvoke(
+            System.Windows.Threading.DispatcherPriority.Background,
+            () => frame.Continue = false);
+        System.Windows.Threading.Dispatcher.PushFrame(frame);
+    }
+
+    private const string LongTitle =
+        "A deliberately very long card title that cannot possibly fit on "
+        + "two constrained lines of a two-hundred-and-forty-pixel card at "
+        + "any believable text scale, existing purely to be truncated";
+
+    private void WriteLongTitleCanvas() => File.WriteAllText(
+        Path.Combine(_fixture.Root, "longtitle.canvas"),
+        "{\"nodes\":[{\"id\":\"long\",\"type\":\"text\",\"text\":\""
+        + LongTitle
+        + "\",\"x\":0,\"y\":0,\"width\":240,\"height\":140},"
+        + "{\"id\":\"short\",\"type\":\"text\",\"text\":\"Short\","
+        + "\"x\":300,\"y\":0,\"width\":240,\"height\":140}],\"edges\":[]}");
+
+    /// <summary>§D D11 / obligation ID-9, the keyboard half: SELECTING
+    /// a truncated card summons the tooltip with the FULL title (cards
+    /// are peers, so the arrows' selection is the keyboard's presence),
+    /// and Esc dismisses it through the surface rung — DD-3's most
+    /// transient, ahead of the interim detail.</summary>
+    [Fact]
+    public void SelectingATruncatedCardSummonsTheTooltipAndEscDismissesIt() => RunSta(() =>
+    {
+        WriteLongTitleCanvas();
+        CanvasDocumentViewModel document = NewDocument("longtitle.canvas");
+        document.Load();
+        var surface = new CanvasSurfaceView { Model = document };
+        using HostedWindow host = Host(surface);
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        PumpUntil(() => surface.VisualForTests.Engine.Current is not null);
+
+        document.SelectNode("long");
+        // The legs separately, so a failure names its own leg: the
+        // selection must reach the INSTALLED state, and the install's
+        // own revalidation must then have opened the tooltip.
+        PumpUntil(() =>
+            surface.VisualForTests.Engine.Current is { } state
+            && state.Selection == "long");
+        Assert.True(
+            surface.VisualForTests.TooltipIsOpenForTests,
+            "the selection reached the installed state but the install's "
+            + "revalidation did not open the tooltip: the truncation set "
+            + "or the subject rule is the broken leg.");
+        Assert.Equal(LongTitle, surface.VisualForTests.TooltipTextForTests);
+
+        Assert.True(
+            ((ICanvasSurfacePresenter)surface).DismissTransientRegion(),
+            "Esc's surface rung did not consume the open tooltip.");
+        Assert.False(
+            surface.VisualForTests.TooltipIsOpenForTests,
+            "the tooltip survived its own dismissal.");
+        document.Shutdown();
+    });
+
+    /// <summary>The trigger matrix's departure and persistence arms:
+    /// hover opens it, hover leaving with the SELECTION still on the
+    /// card keeps it (all-triggers-departed, not first-departure), and
+    /// selecting an untruncated card closes it.</summary>
+    [Fact]
+    public void TheTooltipClosesOnlyWhenEveryTriggerHasDeparted() => RunSta(() =>
+    {
+        WriteLongTitleCanvas();
+        CanvasDocumentViewModel document = NewDocument("longtitle.canvas");
+        document.Load();
+        var surface = new CanvasSurfaceView { Model = document };
+        using HostedWindow host = Host(surface);
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        PumpUntil(() => surface.VisualForTests.Engine.Current is not null);
+
+        surface.VisualForTests.PointerEnteredForTests("long");
+        Assert.True(surface.VisualForTests.TooltipIsOpenForTests, "hover did not summon it.");
+        document.SelectNode("long");
+        PumpUntil(() => surface.VisualForTests.Engine.Current!.Selection == "long");
+        surface.VisualForTests.PointerLeftForTests();
+        Assert.True(
+            surface.VisualForTests.TooltipIsOpenForTests,
+            "the pointer's departure closed a tooltip the SELECTION still "
+            + "holds: 1.4.13's persistence is all-triggers-departed.");
+        document.SelectNode("short");
+        PumpUntil(() => !surface.VisualForTests.TooltipIsOpenForTests);
+        document.Shutdown();
+    });
+
+    /// <summary>The review round's lifecycle minor, closed: a
+    /// renderer's attach subscribes ONE handler and its detach returns
+    /// the count to baseline — panes close and reopen without
+    /// accumulating.</summary>
+    [Fact]
+    public void ARendererDetachReturnsTheSubscriberCountToBaseline() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = NewDocument("board.canvas");
+        document.Load();
+        int baseline = document.PublicationAppliedSubscriberCountForTests;
+        var renderer = new CanvasRendererView { Model = document };
+        Assert.Equal(baseline + 1, document.PublicationAppliedSubscriberCountForTests);
+        renderer.Model = null;
+        Assert.Equal(baseline, document.PublicationAppliedSubscriberCountForTests);
+        renderer.Shutdown();
+        // The renderer's teardown reaches the ENGINE (codoki on this
+        // PR caught the missing call): a post-shutdown intake installs
+        // nothing into the detached view.
+        CanvasPresentationState? parked = renderer.Engine.Current;
+        renderer.Engine.OnPublicationApplied(
+            CanvasPublication.Seed().WithNeedleIntent("late"));
+        Assert.True(
+            ReferenceEquals(renderer.Engine.Current, parked),
+            "a shut-down renderer's engine installed a late publication.");
+        document.Shutdown();
+    });
+
+    /// <summary>The board peer speaks its RATIFIED name (§D D3,
+    /// "Canvas visual view") — not the switcher arm's label. The peer
+    /// shipped saying "Visual" and only the FlaUI journey noticed;
+    /// this is the unit-level tripwire that failure bought.</summary>
+    [Fact]
+    public void TheBoardPeerSpeaksItsRatifiedName() => RunSta(() =>
+    {
+        var renderer = new CanvasRendererView();
+        var peer = new CanvasRendererAutomationPeer(renderer);
+        Assert.Equal("Canvas visual view", peer.GetName());
+        Assert.NotEqual(CanvasPhrase.VisualSurfaceLabel, peer.GetName());
+        Assert.Equal(
+            System.Windows.Automation.Peers.AutomationControlType.Group,
+            peer.GetAutomationControlType());
+    });
+
+    /// <summary>A COLLAPSED board exposes no child peers, a visible
+    /// one exposes its materialized cards (the axe gate's catch: the
+    /// hidden board's 0×0 window materialized origin nodes and put
+    /// offscreen, pattern-less Buttons in the UIA tree).</summary>
+    [Fact]
+    public void AHiddenBoardExposesNoChildPeers() => RunSta(() =>
+    {
+        WriteLongTitleCanvas();
+        CanvasDocumentViewModel document = NewDocument("longtitle.canvas");
+        document.Load();
+        var surface = new CanvasSurfaceView { Model = document };
+        using HostedWindow host = Host(surface);
+        host.UpdateLayout();
+        PumpUntil(() => surface.VisualForTests.Engine.Current is not null);
+        // The platform caches children until the cache is reset, so
+        // every read here resets first — production tree walks do the
+        // same through the peer's invalidation.
+        var peer = new CanvasRendererAutomationPeer(surface.VisualForTests);
+        System.Collections.Generic.List<
+            System.Windows.Automation.Peers.AutomationPeer>? Children()
+        {
+            peer.ResetChildrenCache();
+            return peer.GetChildren();
+        }
+
+        Assert.Empty(Children() ?? []);
+
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        PumpUntil(() => (Children()?.Count ?? 0) > 0);
+        Assert.NotEmpty(Children());
+        document.Shutdown();
+    });
 }

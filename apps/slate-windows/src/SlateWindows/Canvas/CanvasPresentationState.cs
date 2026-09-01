@@ -1,0 +1,75 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+namespace SlateWindows.Canvas;
+
+/// <summary>
+/// ONE installed presentation state (§D D1): everything the visual
+/// projection's readers consume, immutable, installed by a single
+/// reference swap on the commit thread. Task TD-1 carries the render
+/// source and the viewport; TD-3 extends this value with the peer
+/// topology — extended, not replaced, so the install discipline is
+/// built once and every later field inherits it.
+/// </summary>
+internal sealed class CanvasPresentationState
+{
+    internal CanvasPresentationState(
+        CanvasPublication source,
+        CanvasViewportState viewport,
+        CanvasPeerTopology topology,
+        System.Collections.Immutable.ImmutableHashSet<CanvasPeerKey> retained,
+        int textScaleRevision,
+        int themeRevision)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(viewport);
+        ArgumentNullException.ThrowIfNull(topology);
+        ArgumentNullException.ThrowIfNull(retained);
+        Source = source;
+        Viewport = viewport;
+        Topology = topology;
+        Retained = retained;
+        TextScaleRevision = textScaleRevision;
+        ThemeRevision = themeRevision;
+    }
+
+    /// <summary>The peer topology this state was derived with (§D D3,
+    /// task TD-3): materialized placements and the retained keys'
+    /// tombstones — peers read THIS, and a discarded build's topology
+    /// vanishes with the build.</summary>
+    internal CanvasPeerTopology Topology { get; }
+
+    /// <summary>The retained-key snapshot the topology was derived
+    /// from — the third authority's half of the install-time
+    /// revalidation.</summary>
+    internal System.Collections.Immutable.ImmutableHashSet<CanvasPeerKey> Retained { get; }
+
+    /// <summary>The applied publication this state renders — the
+    /// identity the commit revalidates at install (ID-1), and the one
+    /// carrier of population, unit and scene (D2): selection and
+    /// filter state are DERIVED from it, never carried twice.</summary>
+    internal CanvasPublication Source { get; }
+
+    /// <summary>The viewport value the state was built against.</summary>
+    internal CanvasViewportState Viewport { get; }
+
+    /// <summary>The selection this state RENDERS (§D D6, obligation
+    /// ID-5): the publication's durable selected intent, resolved
+    /// against the population this state draws — never the unit's
+    /// filtered resolution, which keeps a selection only when the
+    /// filter matched it, while D4 keeps unmatched cards visible and
+    /// selectable. A pure function of <see cref="Source"/>, so the
+    /// mid-apply divergence the periphery's T5 row records cannot
+    /// reach a reader: two states answer with their own selections
+    /// and no live authority is consulted — obligation ID-6's settled
+    /// direction, the machine gaining no event.</summary>
+    internal string? Selection =>
+        Source.Loaded?.Population.Resolve(Source.SelectedIntent);
+
+    /// <summary>The text-scale revision consumed from the owned
+    /// service (D11); a bumped revision is a new state.</summary>
+    internal int TextScaleRevision { get; }
+
+    /// <summary>The theme revision (D13's re-render trigger).</summary>
+    internal int ThemeRevision { get; }
+}

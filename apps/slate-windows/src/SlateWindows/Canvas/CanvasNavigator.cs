@@ -6,6 +6,19 @@ using uniffi.slate_uniffi;
 
 namespace SlateWindows.Canvas;
 
+/// <summary>The five viewport verbs plus the follow toggle (§D D14) —
+/// one closed set, so the presenter seam grows ONE member for all six
+/// and the binding record enumerates them by name.</summary>
+internal enum CanvasViewportVerb
+{
+    ZoomIn,
+    ZoomOut,
+    ActualSize,
+    FitCanvas,
+    ZoomToSelection,
+    ToggleFollowSelection,
+}
+
 /// <summary>
 /// What the navigator needs from whichever projection the reader is
 /// actually looking at (contract C2).
@@ -43,6 +56,15 @@ internal interface ICanvasSurfacePresenter
     /// that does nothing must say so. This is that question.
     /// </remarks>
     bool CanMoveWithinProjection(bool forward);
+
+    /// <summary>Answer a viewport verb on THIS pane's visual surface
+    /// (§D D7, task TD-5). False when this pane has no visual renderer
+    /// to address — the caller owns the no-pane refusal, because the
+    /// presenter answers for one pane and the refusal speaks for the
+    /// document. TD-6's renderer implements the true; until it mounts,
+    /// every pane answers false and the refusal is the honest
+    /// sentence.</summary>
+    bool ViewportCommand(CanvasViewportVerb verb);
 
     /// <summary>Put keyboard focus on a row, silently (contract C12).
     /// False when the row could not take it — gone, filtered out, or
@@ -159,6 +181,16 @@ internal sealed class CanvasNavigator
         AddChord(Key.Enter, ModifierKeys.None, CommitModeFromKey);
         AddChord(Key.Escape, ModifierKeys.None, EscapeFromKey);
         AddChord(Key.F, ModifierKeys.Control, FilterCardsFromKey);
+        // The viewport chords (§D D14). Zoom rides Ctrl and answers
+        // from anywhere on the canvas tab; fit and zoom-to-selection
+        // are bare Shift chords and therefore VISUAL SURFACE ONLY
+        // (rule R2 — on the outline or table those keys belong to
+        // typing).
+        AddChord(Key.OemPlus, ModifierKeys.Control, () => ViewportFromKey(CanvasViewportVerb.ZoomIn));
+        AddChord(Key.OemMinus, ModifierKeys.Control, () => ViewportFromKey(CanvasViewportVerb.ZoomOut));
+        AddChord(Key.D0, ModifierKeys.Control, () => ViewportFromKey(CanvasViewportVerb.ActualSize));
+        AddChord(Key.D1, ModifierKeys.Shift, () => VisualOnlyFromKey(CanvasViewportVerb.FitCanvas));
+        AddChord(Key.D2, ModifierKeys.Shift, () => VisualOnlyFromKey(CanvasViewportVerb.ZoomToSelection));
         AddChord(
             Key.I,
             ModifierKeys.Control | ModifierKeys.Alt | ModifierKeys.Shift,
@@ -588,6 +620,58 @@ internal sealed class CanvasNavigator
         Announce(readback);
     }
 
+    // --- Viewport (§D D14, task TD-5) ------------------------------------
+
+    /// <summary>Ctrl+= / the palette row: one step in.</summary>
+    public void ZoomIn() => ViewportVerb(CanvasViewportVerb.ZoomIn);
+
+    /// <summary>Ctrl+- / the palette row: one step out.</summary>
+    public void ZoomOut() => ViewportVerb(CanvasViewportVerb.ZoomOut);
+
+    /// <summary>Ctrl+0 / the palette row: zoom 1.0.</summary>
+    public void ActualSize() => ViewportVerb(CanvasViewportVerb.ActualSize);
+
+    /// <summary>Shift+1 on the visual surface / the palette row.</summary>
+    public void FitCanvas() => ViewportVerb(CanvasViewportVerb.FitCanvas);
+
+    /// <summary>Shift+2 on the visual surface / the palette row.</summary>
+    public void ZoomToSelection() => ViewportVerb(CanvasViewportVerb.ZoomToSelection);
+
+    /// <summary>The follow toggle (§D D4's origin-sensitive rule).</summary>
+    public void ToggleFollowSelection() =>
+        ViewportVerb(CanvasViewportVerb.ToggleFollowSelection);
+
+    /// <summary>The one route every viewport verb takes (§D D7): the
+    /// load gate first — a document that cannot answer says so through
+    /// the state mapping — then the pane. The PRESENTER answers for
+    /// its own pane; when no pane can answer, the refusal is the
+    /// document's typed no-pane sentence (obligation ID-7's arm),
+    /// because C4's load mapping admits a Ready document and has
+    /// nothing honest to say about panes.</summary>
+    private void ViewportVerb(CanvasViewportVerb verb)
+    {
+        if (!_document.AdmitStructuralRead())
+        {
+            return;
+        }
+        if (verb == CanvasViewportVerb.ZoomToSelection
+            && _document.Selection.Selected is null)
+        {
+            // D14's data arm: no selection is the verb's OWN
+            // precondition, answered with the canonical sentence
+            // before any pane is consulted — a zoom to nothing is not
+            // a pane problem.
+            Announce(new CanvasA11yEvent.CanvasStatus(
+                new CanvasStatusNote.NothingSelected()));
+            return;
+        }
+        if (_presenter is { } pane && pane.ViewportCommand(verb))
+        {
+            return;
+        }
+        Announce(new CanvasA11yEvent.CanvasViewportNoPane());
+    }
+
     // --- Filter (#373) ---------------------------------------------------
 
     /// <summary>Ctrl+F / the palette row: reveal and focus the filter
@@ -872,13 +956,46 @@ internal sealed class CanvasNavigator
     private bool FilterCardsFromKey()
     {
         // On the TABLE the grid's own `FilterCommand` owns Ctrl+F and is
-        // subscribed to this same field (spec §7), so the navigator stands
-        // aside rather than shadowing the substrate's route.
-        if (_presenter is not { Projection: CanvasSurfaceKind.Outline })
+        // subscribed to this same field (spec §7) — but only when the
+        // GRID has the keys. §C's m9 (repaired here, in §D as assigned):
+        // with the table showing and focus in the HEADER, the grid's
+        // binding never fires, so standing aside on "the table is
+        // showing" made Ctrl+F reach nobody. The stand-aside now asks
+        // who OWNS the keys, not what is showing.
+        if (_presenter is { Projection: CanvasSurfaceKind.Table } table
+            && table.ProjectionHasFocus)
+        {
+            return false;
+        }
+        if (_presenter is null)
         {
             return false;
         }
         FilterCards();
+        return true;
+    }
+
+    private bool ViewportFromKey(CanvasViewportVerb verb)
+    {
+        ViewportVerb(verb);
+        return true;
+    }
+
+    /// <summary>Rule R2 for the two bare Shift chords: they exist only
+    /// where the projection owns the keys AND it is the VISUAL board —
+    /// on the outline or table, Shift+1 is a typed character.</summary>
+    private bool VisualOnlyFromKey(CanvasViewportVerb verb)
+    {
+        // BOTH halves of R2 (the review round): the visual must be
+        // showing AND own the keys — a bare Shift chord consumed while
+        // the caret sits in the filter field would eat the '!' the
+        // reader typed.
+        if (_presenter is not { Projection: CanvasSurfaceKind.Visual } pane
+            || !pane.ProjectionHasFocus)
+        {
+            return false;
+        }
+        ViewportVerb(verb);
         return true;
     }
 

@@ -1491,6 +1491,13 @@ pub enum CanvasA11yEvent {
     CanvasFollowSelectionToggled {
         following: bool,
     },
+    /// A viewport verb reached a document with NO addressable canvas
+    /// view — no initiating renderer and no last owner (W6-1 §D D7,
+    /// obligation ID-7): a restored, never-focused tab receiving Zoom
+    /// from the palette. The presentation-address refusal is its own
+    /// arm because the load-state mapping admits a Ready document and
+    /// has nothing honest to say about panes.
+    CanvasViewportNoPane,
     CanvasSurfaceShown {
         surface: CanvasSurfaceKind,
     },
@@ -2541,6 +2548,7 @@ impl CanvasA11yEvent {
                 "Viewport stays put."
             }
             .to_owned(),
+            CanvasViewportNoPane => "No canvas view to act on.".to_owned(),
             CanvasSurfaceShown { surface } => format!(
                 "Canvas {} view.",
                 match surface {
@@ -3685,6 +3693,7 @@ fn canvas_corpus() -> Vec<CanvasA11yEvent> {
             count: 1,
         },
         CanvasGroupLeft { label: "Q3".into() },
+        CanvasViewportNoPane,
         CanvasConnectionTraversed {
             direction: EdgeDirection::Outgoing,
             kind_label: "text".into(),
@@ -4776,6 +4785,7 @@ mod tests {
             (Medium, "Entering group \"Q3\", 4 cards"),
             (Medium, "Entering group \"Solo\", 1 card"),
             (Medium, "Leaving group \"Q3\""),
+            (Medium, "No canvas view to act on."),
             (
                 Medium,
                 "Connects to Text card \"Ideas\", labelled \"supports\"",
@@ -5708,6 +5718,7 @@ mod tests {
             | CanvasCardAligned { .. }
             | CanvasConvertedToNote { .. }
             | CanvasFollowSelectionToggled { .. }
+            | CanvasViewportNoPane
             | CanvasSaveConflict
             | CanvasFileNotFound { .. }
             | CanvasEmptyOnboarding { .. } => None,

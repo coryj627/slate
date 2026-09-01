@@ -883,23 +883,23 @@ public sealed class CanvasTableTests : IDisposable
                 new TraversalRequest(FocusNavigationDirection.Left)));
         Assert.Same(surface.OutlineChoiceForTests, host.FocusedElement());
 
-        // The unshipped arm is DISABLED and can be the persisted one
-        // (PR A round-trips a "visual" token). Tabbing into the group
-        // must still land on a choice the user can reach.
+        // §D TD-6: the persisted "visual" token lands on a REAL arm
+        // now — checked, ENABLED, and reachable, which is the whole
+        // reachability claim with the third radio live.
         document.ShowSurface(CanvasSurfaceKind.Visual);
         host.UpdateLayout();
         Assert.True(surface.VisualChoiceForTests.IsChecked);
-        Assert.False(surface.VisualChoiceForTests.IsEnabled);
+        Assert.True(surface.VisualChoiceForTests.IsEnabled);
         Assert.True(
             surface.SwitcherForTests.MoveFocus(
                 new TraversalRequest(FocusNavigationDirection.First)));
-        IInputElement? landed = host.FocusedElement();
-        Assert.NotSame(surface.VisualChoiceForTests, landed);
         Assert.Contains(
-            landed,
+            host.FocusedElement(),
             new IInputElement[]
             {
-                surface.OutlineChoiceForTests, surface.TableChoiceForTests,
+                surface.OutlineChoiceForTests,
+                surface.TableChoiceForTests,
+                surface.VisualChoiceForTests,
             });
         document.Shutdown();
     });
@@ -1163,12 +1163,11 @@ public sealed class CanvasTableTests : IDisposable
 
         Assert.Null(Commands.SlateCommandRegistrar.DisabledReason(
             host, Commands.ChordTable.Ids.CanvasShowTable));
-        // The one still unshipped stays disabled with the registrar's
-        // canonical sentence (contract A18).
-        Assert.Equal(
-            Commands.SlateCommandRegistrar.UnavailableReason,
-            Commands.SlateCommandRegistrar.DisabledReason(
-                host, Commands.ChordTable.Ids.CanvasShowVisual));
+        // §D TD-6 shipped the visual, so all three rows answer enabled
+        // — the third arm's flip, asserted where the disabled half
+        // used to be.
+        Assert.Null(Commands.SlateCommandRegistrar.DisabledReason(
+            host, Commands.ChordTable.Ids.CanvasShowVisual));
 
         _announced.Clear();
         Commands.SlateCommandRegistrar

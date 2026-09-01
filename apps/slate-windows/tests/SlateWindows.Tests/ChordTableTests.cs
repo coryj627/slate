@@ -1200,6 +1200,11 @@ public sealed class ChordTableTests
             "OemPeriod" => ".",
             "Return" => "Enter",
             "Back" => "Backspace",
+            // The digit row: WPF spells them D0–D9; the table speaks
+            // the digit (§D D14's viewport rows are the first users).
+            "D0" => "0",
+            "D1" => "1",
+            "D2" => "2",
             _ => key,
         });
         return string.Join("+", parts);
@@ -1221,5 +1226,49 @@ public sealed class ChordTableTests
 
         return directory?.FullName
             ?? throw new InvalidOperationException("Could not locate repository root.");
+    }
+
+    /// <summary>§D D14 / obligation ID-8: the viewport binding record
+    /// is the ONE authority — every binding names a chord row that
+    /// exists and registers, a navigator member that exists, and a
+    /// resolver that resolves; and every viewport chord row appears in
+    /// exactly one binding. A row cannot register without a delivery
+    /// member, and cannot deliver except through the member its row
+    /// names.</summary>
+    [Fact]
+    public void TheViewportBindingRecordIsTheOneAuthority()
+    {
+        var bindings = SlateCommandRegistrar.CanvasViewportBindings;
+        string[] viewportIds =
+        [
+            ChordTable.Ids.CanvasZoomIn,
+            ChordTable.Ids.CanvasZoomOut,
+            ChordTable.Ids.CanvasActualSize,
+            ChordTable.Ids.CanvasFitCanvas,
+            ChordTable.Ids.CanvasZoomToSelection,
+        ];
+        Assert.Equal(
+            viewportIds.OrderBy(id => id, StringComparer.Ordinal),
+            bindings.Select(binding => binding.Id)
+                .OrderBy(id => id, StringComparer.Ordinal));
+        foreach ((string id, string member, _) in bindings)
+        {
+            ChordTableEntry row = Assert.Single(
+                ChordTable.Entries, entry => entry.Id == id);
+            Assert.True(
+                row.IsRegistered,
+                $"the binding for {id} names a row the bridge never registers.");
+            Assert.True(
+                typeof(SlateWindows.Canvas.CanvasNavigator).GetMethod(
+                    member,
+                    System.Reflection.BindingFlags.Public
+                    | System.Reflection.BindingFlags.Instance) is not null,
+                $"the binding for {id} names navigator member {member}, "
+                + "which does not exist — the record would be resolving to "
+                + "a ghost.");
+            Assert.True(
+                SlateCommandRegistrar.ResolvableIds.Contains(id),
+                $"the binding for {id} did not reach the resolver map.");
+        }
     }
 }

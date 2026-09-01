@@ -56,7 +56,7 @@ internal sealed class CanvasPopulation
         IEnumerable<CanvasTableRow>? table,
         IEnumerable<CanvasLoadWarning>? warnings,
         string? lastActivatedNode,
-        IEnumerable<CanvasSceneNode>? scene = null)
+        CanvasScene? scene = null)
     {
         Outline = CanvasModelCopy.Rows(outline);
         Table = CanvasModelCopy.Rows(table);
@@ -64,7 +64,17 @@ internal sealed class CanvasPopulation
         PreservedCount = (uint)Warnings.Count(
             warning => warning.Kind == CanvasLoadWarningKind.SkippedEntry);
         LastActivatedNode = lastActivatedNode;
-        Subpaths = CanvasModelCopy.Subpaths(scene);
+        Subpaths = CanvasModelCopy.Subpaths(scene?.Nodes);
+        SceneNodes = CanvasModelCopy.Ordered(scene?.Nodes);
+        SceneEdges = CanvasModelCopy.Ordered(scene?.Edges);
+        ImmutableDictionary<string, CanvasSceneNode>.Builder byNode =
+            ImmutableDictionary.CreateBuilder<string, CanvasSceneNode>(
+                StringComparer.Ordinal);
+        foreach (CanvasSceneNode node in SceneNodes)
+        {
+            byNode[node.NodeId] = node;
+        }
+        SceneByNode = byNode.ToImmutable();
 
         ImmutableDictionary<string, CanvasOutlineRow>.Builder byId =
             ImmutableDictionary.CreateBuilder<string, CanvasOutlineRow>(
@@ -143,9 +153,30 @@ internal sealed class CanvasPopulation
 
     /// <summary>The JSON Canvas subpath per file card that names one,
     /// from core's scene — population-class because it is a function
-    /// of ONE load, and the only thing the scene contributes to the
-    /// model: geometry is the renderer's and never enters here.</summary>
+    /// of ONE load.</summary>
     internal ImmutableDictionary<string, string> Subpaths { get; }
+
+    /// <summary>The scene's cards — geometry, kind and the speakable
+    /// name — deep-copied at construction (§D D2, task TD-2): the
+    /// collection copy IS the whole copy because a scene record's
+    /// fields are scalars and strings, so no FFI array survives into
+    /// the model. The pre-TD-2 sentence here said geometry never
+    /// enters the model; D2's ruling superseded it — the scene rides
+    /// the population so the pair cannot disagree, and the renderer
+    /// re-queries nothing.</summary>
+    internal ImmutableArray<CanvasSceneNode> SceneNodes { get; }
+
+    /// <summary>The scene's connections, same discipline — the edge
+    /// algebra D5's end-style table reads (arrows, label, endpoints)
+    /// travels with the load it described.</summary>
+    internal ImmutableArray<CanvasSceneEdge> SceneEdges { get; }
+
+    /// <summary>The load-class descriptor index (obligation ID-3):
+    /// geometry and name by node id, built ONCE with this population
+    /// and identity-retained with it across every same-population
+    /// publication — a presentation build reuses the reference and
+    /// allocates nothing per pan.</summary>
+    internal ImmutableDictionary<string, CanvasSceneNode> SceneByNode { get; }
 
     internal int Count => Outline.Length;
 
