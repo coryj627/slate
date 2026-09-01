@@ -835,6 +835,26 @@ fn proximity_order_sorts_by_distance_with_reading_order_ties() {
 }
 
 #[test]
+fn proximity_order_excludes_the_anchor_itself() {
+    // Codoki round 4's focused case: the anchor is IN the model and
+    // must not be in its own answer; everyone else is. The distance
+    // tests prove this implicitly (their expected lists omit the
+    // anchor); this pins the edge by name.
+    let model = model_of(
+        r#"{"nodes":[
+        {"id":"a","type":"text","text":"Anchor","x":0,"y":0,"width":10,"height":10},
+        {"id":"b","type":"text","text":"East","x":100,"y":0,"width":10,"height":10},
+        {"id":"c","type":"text","text":"West","x":-100,"y":0,"width":10,"height":10}
+        ],"edges":[]}"#,
+    );
+    let answer = ids(proximity_order(&model, Some(&id("a")), &[]));
+    assert!(!answer.contains(&"a".to_string()));
+    assert_eq!(answer.len(), 2);
+    assert!(answer.contains(&"b".to_string()));
+    assert!(answer.contains(&"c".to_string()));
+}
+
+#[test]
 fn proximity_order_includes_groups_and_respects_exclusions() {
     let model = model_of(SAMPLE);
     let all = proximity_order(&model, None, &[]);

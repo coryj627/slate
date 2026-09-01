@@ -8430,7 +8430,9 @@ landed-write sentence (bytes real, index catches up, never recreate
 this repo's recorded convention for the mac lane. The lane's second
 pass surfaced the same debt's test-side tail — the mutation-harness
 twin's refusal-kind switch and a prepared-load fixture missing the
-CAS basis — both extended the same way.
+CAS basis — both extended the same way — and a third pass found the
+FFI smoke example's own exhaustive switch, whose entire purpose is
+to fail compile when the Rust side grows an arm; it did its job.
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
