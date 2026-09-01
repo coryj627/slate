@@ -1005,6 +1005,54 @@
       "registered": true
     },
     {
+      "id": "slate.canvas.moveMode",
+      "label": "Canvas: Move Mode",
+      "section": "Canvas",
+      "hint": "Grab the selection. Arrows nudge on the grid, Shift for big steps, Return places, Escape cancels.",
+      "macChord": "⌃⌘G",
+      "mac": "Control Command G",
+      "windows": "Ctrl+Alt+G",
+      "windowsSpoken": "Control Alt G",
+      "scope": "Canvas",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.resizeMode",
+      "label": "Canvas: Resize Mode",
+      "section": "Canvas",
+      "hint": "Resize the selected card. Left and Right change width, Up and Down change height.",
+      "macChord": "⌃⌘R",
+      "mac": "Control Command R",
+      "windows": "Ctrl+Alt+R",
+      "windowsSpoken": "Control Alt R",
+      "scope": "Canvas",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.resizeDefaultSize",
+      "label": "Canvas: Resize to Default Size",
+      "section": "Canvas",
+      "hint": "Set the card being resized back to the default card size.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.resizeFitContent",
+      "label": "Canvas: Resize to Fit Content",
+      "section": "Canvas",
+      "hint": "Size the card being resized to its text.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
       "id": "slate.canvas.newCard",
       "label": "Canvas: New Card",
       "section": "Canvas",

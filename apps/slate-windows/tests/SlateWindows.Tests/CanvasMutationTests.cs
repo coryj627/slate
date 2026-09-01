@@ -29,7 +29,8 @@ public sealed class CanvasMutationTests : IDisposable
             		{"id":"a","type":"text","text":"Alpha","x":0,"y":0,"width":260,"height":140},
             		{"id":"grp","type":"group","label":"Ideas","x":600,"y":0,"width":400,"height":300},
             		{"id":"cramped","type":"group","label":"Cramped","x":1200,"y":0,"width":50,"height":40},
-            		{"id":"blocker","type":"text","text":"Blocker","x":1220,"y":40,"width":260,"height":140}
+            		{"id":"blocker","type":"text","text":"Blocker","x":1220,"y":40,"width":260,"height":140},
+            		{"id":"essay","type":"text","text":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","x":5000,"y":0,"width":260,"height":140}
             	],
             	"edges":[
             		{"id":"e1","fromNode":"a","fromSide":"right","toNode":"blocker","toSide":"left","color":"2","label":"feeds"}
@@ -284,6 +285,202 @@ public sealed class CanvasMutationTests : IDisposable
         Assert.False(document.Modes.IsActive);
         document.DiscardTransient();
         document.Shutdown();
+    }
+
+    /// <summary>§F TF-4 (F3/F4a): resize mode end to end — enter on
+    /// the selected card, one width step, Return commits ONE action;
+    /// the disk width moves by GridStep and core's Resized sentence
+    /// speaks after the clear.</summary>
+    [Fact]
+    public void ResizeModeEntersStepsAndCommitsOneAction()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        document.Navigator.AttachPresenter(new FakePane());
+        Assert.True(document.Navigator.EnterResizeMode());
+        Assert.True(document.Transient!.IsResize);
+        double w0 = document.Transient!.Originals["a"].Width;
+
+        Assert.True(document.Navigator.ModeStep(1, 0, large: false));
+
+        Assert.True(document.Modes.Commit());
+        Assert.False(document.Modes.IsActive);
+        Assert.Null(document.Transient);
+        double step = SlateUniffiMethods.CanvasConstants().GridStep;
+        Assert.Contains(
+            $"\"width\":{(int)(w0 + step)}",
+            DiskBytes().Replace(" ", ""));
+        Assert.NotNull(document.UndoStack.OfferedUndo);
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            a => a.Text.Contains("Resized", StringComparison.Ordinal));
+        document.Shutdown();
+    }
+
+    /// <summary>§F TF-4 (F3): REJECT-THE-STEP — a step that would
+    /// cross MinCardSize refuses with the clamped sentence and
+    /// changes NOTHING; the mode stands.</summary>
+    [Fact]
+    public void AStepBelowTheMinimumRefusesWholly()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        document.Navigator.AttachPresenter(new FakePane());
+        Assert.True(document.Navigator.EnterResizeMode());
+
+        bool clamped = false;
+        for (int i = 0; i < 60 && !clamped; i++)
+        {
+            CanvasRect before = document.Transient!.Rects["a"];
+            _announced.Clear();
+            Assert.True(document.Navigator.ModeStep(-1, 0, large: true));
+            document.AnnouncerForTests.FlushForTests();
+            if (_announced.Any(a => a.Text.Contains(
+                    "small", StringComparison.OrdinalIgnoreCase)
+                || a.Text.Contains("minimum", StringComparison.OrdinalIgnoreCase)))
+            {
+                clamped = true;
+                Assert.Equal(before, document.Transient!.Rects["a"]);
+            }
+        }
+
+        Assert.True(clamped, "the clamp never spoke");
+        Assert.True(document.Modes.IsActive);
+        Assert.True(document.Modes.Cancel());
+        document.Shutdown();
+    }
+
+    /// <summary>§F TF-4 (F3): presets land through the SAME overlap
+    /// machine as steps — Default Size on a card jammed against a
+    /// neighbor speaks the onset in its geometry sentence.</summary>
+    [Fact]
+    public void PresetsRouteThroughTheOverlapMachine()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("cramped");
+        document.Navigator.AttachPresenter(new FakePane());
+        Assert.True(document.Navigator.EnterResizeMode());
+        document.AnnouncerForTests.FlushForTests();
+        _announced.Clear();
+
+        Assert.True(document.Navigator.ResizeDefaultSize());
+
+        CanvasConstants constants = SlateUniffiMethods.CanvasConstants();
+        Assert.Equal(
+            constants.DefaultCardW, document.Transient!.Rects["cramped"].Width);
+        document.AnnouncerForTests.FlushForTests();
+        RenderedAnnouncement geometry = Assert.Single(_announced);
+        Assert.Contains("by", geometry.Text, StringComparison.Ordinal);
+        Assert.Contains(
+            "overlap", geometry.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.True(document.Modes.Cancel());
+        document.Shutdown();
+    }
+
+    /// <summary>§F TF-4 (F3): Fit to Content is the D-5 placeholder
+    /// formula at default width; a non-text node's refused read keeps
+    /// the transient — the VM's own table already spoke.</summary>
+    [Fact]
+    public void FitContentUsesTheFormulaAndKeepsTheTransientOnRefusal()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        document.Navigator.AttachPresenter(new FakePane());
+        Assert.True(document.Navigator.EnterResizeMode());
+
+        string text = document.NodeTextOf("a")!;
+        int lines = Math.Max(
+            1, (text.Length / 32) + text.Count(c => c == '\n'));
+        CanvasConstants constants = SlateUniffiMethods.CanvasConstants();
+        double expected = Math.Min(
+            600, Math.Max((lines * 24) + 40, constants.MinCardSize));
+
+        Assert.True(document.Navigator.ResizeFitContent());
+        Assert.Equal(expected, document.Transient!.Rects["a"].Height);
+        Assert.Equal(
+            constants.DefaultCardW, document.Transient!.Rects["a"].Width);
+        Assert.True(document.Modes.Cancel());
+
+        // The CAP half (the formula's one live guard beside the
+        // width: MinCardSize is 40, below any one-line text's 64,
+        // so the floor is belt-and-braces by arithmetic): an 800-char
+        // essay wants 25 lines' height and the cap holds it at 600.
+        document.SeatSelectionSilently("essay");
+        Assert.True(document.Navigator.EnterResizeMode());
+        Assert.True(document.Navigator.ResizeFitContent());
+        Assert.Equal(600, document.Transient!.Rects["essay"].Height);
+        Assert.True(document.Modes.Cancel());
+
+        // The refusal half: a group has no text; the read speaks its
+        // own sentence, the preset does nothing, the mode stands.
+        document.SeatSelectionSilently("grp");
+        Assert.True(document.Navigator.EnterResizeMode());
+        CanvasRect before = document.Transient!.Rects["grp"];
+        Assert.False(document.Navigator.ResizeFitContent());
+        Assert.Equal(before, document.Transient!.Rects["grp"]);
+        Assert.True(document.Modes.IsActive);
+        Assert.True(document.Modes.Cancel());
+        document.Shutdown();
+    }
+
+    /// <summary>§F TF-4 (IF-18 reconciled): the resize chord is mac's
+    /// quick loop — it enters, and during resize it COMMITS; a
+    /// DIFFERENT active mode still gets frozen C's M7 rejection.</summary>
+    [Fact]
+    public void TheResizeChordCommitsTheActiveLoop()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        var pane = new FakePane();
+        document.Navigator.AttachPresenter(pane);
+
+        Assert.True(document.Navigator.HandleKey(
+            System.Windows.Input.Key.R,
+            System.Windows.Input.ModifierKeys.Control | System.Windows.Input.ModifierKeys.Alt,
+            pane));
+        Assert.True(document.Modes.IsActive);
+        Assert.True(document.Navigator.ModeStep(1, 0, large: false));
+
+        Assert.True(document.Navigator.HandleKey(
+            System.Windows.Input.Key.R,
+            System.Windows.Input.ModifierKeys.Control | System.Windows.Input.ModifierKeys.Alt,
+            pane));
+        Assert.False(document.Modes.IsActive);
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            a => a.Text.Contains("Resized", StringComparison.Ordinal));
+
+        // Cross-mode: move active, the resize chord is REJECTED by M7.
+        Assert.True(document.Navigator.EnterMoveMode());
+        _announced.Clear();
+        Assert.True(document.Navigator.HandleKey(
+            System.Windows.Input.Key.R,
+            System.Windows.Input.ModifierKeys.Control | System.Windows.Input.ModifierKeys.Alt,
+            pane));
+        Assert.Equal(CanvasMode.Move, document.Modes.Active!.Mode);
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            a => a.Text.Contains("is active", StringComparison.Ordinal));
+        Assert.True(document.Modes.Cancel());
+        document.Shutdown();
+    }
+
+    /// <summary>§F TF-4 (F3): the minting rule at its edges — the
+    /// material rule, not a cast: non-finite mints 0, negatives clamp
+    /// to 0, huge values saturate, fractions round.</summary>
+    [Fact]
+    public void SafeUintMintsTheEdges()
+    {
+        Assert.Equal(0u, CanvasNavigator.CanvasSafeUint(double.NaN));
+        Assert.Equal(0u, CanvasNavigator.CanvasSafeUint(double.PositiveInfinity));
+        Assert.Equal(0u, CanvasNavigator.CanvasSafeUint(-5));
+        Assert.Equal(uint.MaxValue, CanvasNavigator.CanvasSafeUint(1e300));
+        Assert.Equal(uint.MaxValue, CanvasNavigator.CanvasSafeUint(9e15));
+        Assert.Equal(4u, CanvasNavigator.CanvasSafeUint(3.6));
+        Assert.Equal(120u, CanvasNavigator.CanvasSafeUint(120.0));
     }
 
     /// <summary>§F TF-3 (F2/F4a/F9a): move mode end to end — enter on

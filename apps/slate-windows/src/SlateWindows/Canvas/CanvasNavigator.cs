@@ -194,6 +194,10 @@ internal sealed class CanvasNavigator
         // pair - canvas-scoped delivery, live exactly while a canvas
         // surface holds the keys (rule R2).
         AddChord(Key.N, ModifierKeys.Control | ModifierKeys.Alt, NewCardFromKey);
+        // §F TF-4 (F9): the mode front doors. G grabs, R is mac's
+        // quick loop — during resize it COMMITS, otherwise it enters.
+        AddChord(Key.G, ModifierKeys.Control | ModifierKeys.Alt, MoveModeFromKey);
+        AddChord(Key.R, ModifierKeys.Control | ModifierKeys.Alt, CommitOrEnterResizeFromKey);
         AddChord(Key.Z, ModifierKeys.Control, UndoFromKey);
         AddChord(Key.Y, ModifierKeys.Control, RedoFromKey);
         // The viewport chords (§D D14). Zoom rides Ctrl and answers
@@ -230,6 +234,221 @@ internal sealed class CanvasNavigator
     {
         _document.CanvasRedo();
         return true;
+    }
+
+    private bool MoveModeFromKey()
+    {
+        _ = EnterMoveMode();
+        return true;
+    }
+
+    private bool CommitOrEnterResizeFromKey()
+    {
+        CommitOrEnterResize();
+        return true;
+    }
+
+    /// <summary>§F TF-4 (F3/IF-18 reconciled): mac's quick loop is
+    /// the SAME-MODE exception only — the resize chord during resize
+    /// commits it; any other active mode still gets frozen C's M7
+    /// rejection inside EnterMode.</summary>
+    internal void CommitOrEnterResize()
+    {
+        if (_document.Modes.Active?.Mode == CanvasMode.Resize)
+        {
+            _ = _document.Modes.Commit();
+            return;
+        }
+
+        _ = EnterResizeMode();
+    }
+
+    /// <summary>§F TF-4 (F3): resize mode — a single SELECTED scene
+    /// node, groups included through the Card grammar (the recorded
+    /// mac divergence, adopted). Refusals speak; the capture is
+    /// TF-2's never-silent read with the resize flag.</summary>
+    internal bool EnterResizeMode()
+    {
+        if (_presenter is not { } presenter)
+        {
+            return false;
+        }
+        if (_document.CurrentLoadedForModeEntry is not { } loaded)
+        {
+            _document.SpeakModeEntryNotReady();
+            return false;
+        }
+        if (_document.Selection.Selected is not { } selected)
+        {
+            Announce(new CanvasA11yEvent.CanvasStatus(
+                new CanvasStatusNote.NothingSelected()));
+            return false;
+        }
+        CanvasTransientHolder? holder = CanvasTransientHolder.TryCapture(
+            _document.SessionForModeEntry, loaded, [selected], isResize: true);
+        if (holder is null)
+        {
+            Announce(new CanvasA11yEvent.CanvasActionFailed(
+                CanvasFailedAction.CanvasAction, "resize"));
+            return false;
+        }
+        string title = _document.RowFor(selected)?.Title ?? "card";
+        var obj = new CanvasModeObject.Card(title);
+        var token = new object();
+        var spec = new CanvasModeSpec(
+            CanvasMode.Resize,
+            obj,
+            () => SubmitTransientCommit(
+                token, CanvasTransientVerb.Resize, obj, "resize", title),
+            () =>
+            {
+                _document.DiscardTransient();
+                return new CanvasModeRestoration.SizeRestored();
+            },
+            Token: token);
+        bool entered = EnterMode(spec, presenter);
+        if (entered)
+        {
+            _document.InstallTransient(holder);
+        }
+
+        return entered;
+    }
+
+    /// <summary>§F TF-4 (F3): the resize step — ←→ width, ↑↓ height.
+    /// REJECT-THE-STEP, mac's rule copied by contract: neither
+    /// dimension moves when either would cross MinCardSize; the
+    /// refusal is CanvasResizeClamped and nothing changes.</summary>
+    private bool ResizeStep(CanvasTransientHolder transient, CanvasLoaded loaded, int dx, int dy, bool large)
+    {
+        CanvasConstants constants = SlateUniffiMethods.CanvasConstants();
+        double step = large ? constants.GridStepLarge : constants.GridStep;
+        string id = transient.Ids[0];
+        CanvasRect r = transient.Rects[id];
+        double width = r.Width + (dx * step);
+        double height = r.Height + (dy * step);
+        if (width < constants.MinCardSize || height < constants.MinCardSize)
+        {
+            Announce(new CanvasA11yEvent.CanvasResizeClamped());
+            return true;
+        }
+
+        return ApplyResizeRect(
+            transient, loaded, new CanvasRect(r.X, r.Y, width, height), preset: null);
+    }
+
+    /// <summary>§F TF-4 (F3): presets and steps land through the SAME
+    /// overlap machine — a preset that creates or clears overlap
+    /// speaks the transition in its geometry sentence. The spoken
+    /// width and height are MINTED (the safeInt twin), a material
+    /// rule rather than a cast.</summary>
+    private bool ApplyResizeRect(
+        CanvasTransientHolder transient,
+        CanvasLoaded loaded,
+        CanvasRect rect,
+        CanvasResizePreset? preset)
+    {
+        string id = transient.Ids[0];
+        bool overlapping = false;
+        bool ran;
+        try
+        {
+            ran = loaded.Lease.Invoke(
+                () => true,
+                handle => overlapping = _document.SessionForModeEntry.CanvasCheckOverlap(
+                    handle, rect, [id]).Length > 0);
+        }
+        catch (VaultException)
+        {
+            ran = false;
+        }
+        if (!ran)
+        {
+            Announce(new CanvasA11yEvent.CanvasActionFailed(
+                CanvasFailedAction.CanvasAction, "resize"));
+            return true;
+        }
+        CanvasOverlapTransition? transition =
+            overlapping && !transient.WasOverlapping
+                ? CanvasOverlapTransition.Onset
+                : !overlapping && transient.WasOverlapping
+                    ? CanvasOverlapTransition.Cleared
+                    : null;
+        transient.Rects = transient.Rects.SetItem(id, rect);
+        transient.WasOverlapping = overlapping;
+        Announce(new CanvasA11yEvent.CanvasResizeGeometry(
+            preset, CanvasSafeUint(rect.Width), CanvasSafeUint(rect.Height), transition));
+        return true;
+    }
+
+    /// <summary>§F TF-4 (F3): Default Size — core's DefaultCardW/H
+    /// through the preset path. Outside resize mode the verb refuses
+    /// with the mode reason (F9's typed refusal).</summary>
+    internal bool ResizeDefaultSize()
+    {
+        if (_document.Transient is not { } transient || !transient.IsResize
+            || _document.CurrentLoadedForModeEntry is not { } loaded)
+        {
+            Announce(new CanvasA11yEvent.CanvasBlocked(
+                new CanvasBlockedReason.ModeBusy()));
+            return false;
+        }
+        CanvasConstants constants = SlateUniffiMethods.CanvasConstants();
+        CanvasRect r = transient.Rects[transient.Ids[0]];
+        return ApplyResizeRect(
+            transient,
+            loaded,
+            new CanvasRect(r.X, r.Y, constants.DefaultCardW, constants.DefaultCardH),
+            CanvasResizePreset.DefaultSize);
+    }
+
+    /// <summary>§F TF-4 (F3): Fit to Content — the D-5 placeholder
+    /// formula, identical on both hosts by contract: default width;
+    /// height from the text length (32 chars a line, 24 a line plus
+    /// 40, capped at 600, floored at MinCardSize). The content read
+    /// is the VM's never-silent node-text table — a refused read
+    /// keeps the transient and its own sentence has already
+    /// spoken.</summary>
+    internal bool ResizeFitContent()
+    {
+        if (_document.Transient is not { } transient || !transient.IsResize
+            || _document.CurrentLoadedForModeEntry is not { } loaded)
+        {
+            Announce(new CanvasA11yEvent.CanvasBlocked(
+                new CanvasBlockedReason.ModeBusy()));
+            return false;
+        }
+        string id = transient.Ids[0];
+        if (_document.NodeTextOf(id) is not { } text)
+        {
+            return false;
+        }
+        CanvasConstants constants = SlateUniffiMethods.CanvasConstants();
+        int newlines = text.Count(c => c == '\n');
+        int lines = Math.Max(1, (text.Length / 32) + newlines);
+        double height = Math.Min(
+            600, Math.Max((lines * 24) + 40, constants.MinCardSize));
+        CanvasRect r = transient.Rects[id];
+        return ApplyResizeRect(
+            transient,
+            loaded,
+            new CanvasRect(r.X, r.Y, constants.DefaultCardW, height),
+            CanvasResizePreset.FitToContent);
+    }
+
+    /// <summary>§F TF-4 (F3): the minting rule, mac's `canvasSafeInt`
+    /// twin — non-finite mints 0, the clamp is [0, 9e15], the value
+    /// rounds, and the cast saturates. A material rule: hostile
+    /// .canvas geometry the parser tolerates must not trap the
+    /// announcer.</summary>
+    internal static uint CanvasSafeUint(double value)
+    {
+        if (!double.IsFinite(value))
+        {
+            return 0;
+        }
+        double clamped = Math.Round(Math.Min(Math.Max(value, 0), 9e15));
+        return clamped >= uint.MaxValue ? uint.MaxValue : (uint)clamped;
     }
 
     /// <summary>§F TF-3 (F2): move mode — entry on the moving set
@@ -408,6 +627,10 @@ internal sealed class CanvasNavigator
             || _document.CurrentLoadedForModeEntry is not { } loaded)
         {
             return false;
+        }
+        if (transient.IsResize)
+        {
+            return ResizeStep(transient, loaded, dx, dy, large);
         }
         CanvasConstants constants = SlateUniffiMethods.CanvasConstants();
         double step = large ? constants.GridStepLarge : constants.GridStep;

@@ -375,6 +375,14 @@ internal sealed partial class WorkspaceViewModel
     private RelayCommand? _canvasTracePathCommand;
     private RelayCommand? _canvasNewCardCommand;
     private RelayCommand? _canvasWhereAmICommand;
+
+    private RelayCommand? _canvasMoveModeCommand;
+
+    private RelayCommand? _canvasResizeModeCommand;
+
+    private RelayCommand? _canvasResizeDefaultSizeCommand;
+
+    private RelayCommand? _canvasResizeFitContentCommand;
     private RelayCommand? _canvasFilterCardsCommand;
     private RelayCommand? _canvasClearFilterCommand;
     private RelayCommand? _canvasCommitModeCommand;
@@ -440,6 +448,26 @@ internal sealed partial class WorkspaceViewModel
     public System.Windows.Input.ICommand CanvasWhereAmICommand =>
         _canvasWhereAmICommand ??= NavigatorCommand(
             navigator => navigator.WhereAmI());
+
+    /// <summary>§F TF-4 (F9/M6): the spatial mode verbs for the
+    /// palette and the chord resolver. Gated only on a canvas being
+    /// active — the entry preflight and the modes own every other
+    /// refusal and speak it.</summary>
+    public System.Windows.Input.ICommand CanvasMoveModeCommand =>
+        _canvasMoveModeCommand ??= NavigatorCommand(
+            navigator => navigator.EnterMoveMode());
+
+    public System.Windows.Input.ICommand CanvasResizeModeCommand =>
+        _canvasResizeModeCommand ??= NavigatorCommand(
+            navigator => navigator.CommitOrEnterResize());
+
+    public System.Windows.Input.ICommand CanvasResizeDefaultSizeCommand =>
+        _canvasResizeDefaultSizeCommand ??= NavigatorCommand(
+            navigator => navigator.ResizeDefaultSize());
+
+    public System.Windows.Input.ICommand CanvasResizeFitContentCommand =>
+        _canvasResizeFitContentCommand ??= NavigatorCommand(
+            navigator => navigator.ResizeFitContent());
 
     public System.Windows.Input.ICommand CanvasFilterCardsCommand =>
         _canvasFilterCardsCommand ??= NavigatorCommand(

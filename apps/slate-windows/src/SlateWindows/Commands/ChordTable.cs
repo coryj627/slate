@@ -278,6 +278,14 @@ internal static class ChordTable
         public const string CanvasFollowConnectionBack =
             "slate.canvas.followConnectionBack";
         public const string CanvasTracePath = "slate.canvas.tracePath";
+        public const string CanvasMoveMode = "slate.canvas.moveMode";
+
+        public const string CanvasResizeMode = "slate.canvas.resizeMode";
+
+        public const string CanvasResizeDefaultSize = "slate.canvas.resizeDefaultSize";
+
+        public const string CanvasResizeFitContent = "slate.canvas.resizeFitContent";
+
         public const string CanvasNewCard = "slate.canvas.newCard";
         public const string CanvasFilterCards = "slate.canvas.filterCards";
         public const string CanvasClearFilter = "slate.canvas.clearFilter";
@@ -959,6 +967,24 @@ internal static class ChordTable
             // maps to Ctrl+Alt+N (Ctrl+N stays free for notes, mac's own
             // allocation rule #368). Every other mutation verb is
             // palette/menu/context-menu only (R1).
+            // §F TF-4 (F9/M6): the spatial mode front doors, labels
+            // byte-identical to mac (P3). R is mac's quick loop: during
+            // resize it commits. The presets are palette rows - mac
+            // allocates them no chord and neither do we.
+            Reg(Ids.CanvasMoveMode, "Canvas: Move Mode", CommandSection.Canvas,
+                "Grab the selection. Arrows nudge on the grid, Shift for big "
+                + "steps, Return places, Escape cancels.",
+                "⌃⌘G", "Ctrl+Alt+G", ChordScope.Canvas),
+            Reg(Ids.CanvasResizeMode, "Canvas: Resize Mode", CommandSection.Canvas,
+                "Resize the selected card. Left and Right change width, Up and "
+                + "Down change height.",
+                "⌃⌘R", "Ctrl+Alt+R", ChordScope.Canvas),
+            Reg(Ids.CanvasResizeDefaultSize, "Canvas: Resize to Default Size",
+                CommandSection.Canvas,
+                "Set the card being resized back to the default card size."),
+            Reg(Ids.CanvasResizeFitContent, "Canvas: Resize to Fit Content",
+                CommandSection.Canvas,
+                "Size the card being resized to its text."),
             Reg(Ids.CanvasNewCard, "Canvas: New Card", CommandSection.Canvas,
                 "Create a text card next to the selection - placement is "
                 + "automatic and announced.",

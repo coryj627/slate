@@ -9050,6 +9050,55 @@ also discarded the task's own uncommitted production code — the round
 was rebuilt from the payloads and rerun with scratchpad-copy restores;
 the discipline is copies, never checkout, while work is uncommitted.
 
+### TF-4 — resize mode, the quick loop, and the minting rule
+
+Resize is the single-node mode: entry on the selected scene node
+(groups included through the Card grammar — the recorded mac
+divergence, adopted), TF-2's holder with the resize flag, and the
+same commit bridge move built — `SubmitTransientCommit` needed no
+change, which is the §F architecture doing its job. The step is
+REJECT-THE-STEP, mac's rule copied by contract: when either
+dimension would cross the minimum, nothing moves and the clamped
+sentence speaks. Presets — Default Size from core's constants, Fit
+to Content by D-5's placeholder formula at default width — land
+through `ApplyResizeRect`, the ONE gate where steps and presets
+alike read overlap under the lease and speak their geometry sentence
+with the transition; the spoken width and height are MINTED by
+`CanvasSafeUint`, mac's `canvasSafeInt` twin (non-finite mints 0,
+clamp, round, saturate) — a material rule with its own edge facts.
+The content read rides the VM's never-silent node-text table: a
+refused read keeps the transient, and the table's own sentence has
+already spoken. FIT-FORMULA ARITHMETIC, recorded: MinCardSize is 40
+and one line wants 64, so the formula's floor can never fire today —
+it stands as belt-and-braces (mac carries the same dead guard); the
+600 CAP is the live guard and the mutation aims there, proven by an
+800-character fixture essay.
+
+IF-18's resize half is RECONCILED as the same-mode exception: the
+resize chord routes through `CommitOrEnterResize` — during resize it
+COMMITS (mac's grab-adjust-done loop), otherwise it enters; a
+DIFFERENT active mode still gets frozen C's M7 rejection inside the
+entry, exactly as TF-1 built it. The chord table gains the four F9
+rows — `moveMode` (Ctrl+Alt+G) and `resizeMode` (Ctrl+Alt+R) with
+mac's glyphs, the two presets palette-only as mac allocates them —
+and the moveMode row is TF-3's owed front door, delivered here and
+recorded as owed. IF-21 and IF-22 name cells on the PLACEMENT and
+ALIGN refusal tables (`Origins` cardinality, the vanished mover, the
+`CanvasFailedAction` verb arms); TF-4 touches neither surface, so
+both ride to TF-7 where those tables are built — recorded as a
+ledger reassignment, not a silent drop.
+
+Facts: six — the end-to-end enter/step/commit (disk width, one
+history entry, core's Resized sentence), the whole-step refusal, the
+preset overlap onset (one geometry sentence, `Assert.Single`), the
+fit formula with its cap half and the group-refusal half, the quick
+loop with the cross-mode rejection, and the minting edges. Mutations,
+each byte-restored: M1 the reject gate dropped, M2 the preset
+transition suppressed, M3 the cap dropped (re-aimed there after the
+floor proved structurally dead — the first aim not-bitten is the
+arithmetic above), M4 the quick-loop branch dropped, M5 the finite
+guard dropped. All bitten.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same

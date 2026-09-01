@@ -310,7 +310,12 @@ public sealed class ContractsCitationCensus
                 // controller's early-resolution memory — taking
                 // the section to 59; 56 sits above the pre-task
                 // population of 52 — a fourth time.
-                56),
+                //
+                // TF-4 bound the resize surface — the preset
+                // gate, the minting rule and the quick loop —
+                // taking the section to 63; 61 sits above the
+                // pre-task population of 59 — a fifth time.
+                61),
         ];
 
     public static TheoryData<string, string, string> SectionRanges
