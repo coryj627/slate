@@ -165,6 +165,33 @@ public sealed class CanvasMutationFunnelTests
         h.Gate.Release(holder);
     }
 
+    /// <summary>Codoki on §E TE-11 (the PR review's one finding):
+    /// the HISTORY path must take the verb path's landed-but-unindexed
+    /// arm - the receipt crosses with its REAL inverse, the publication
+    /// marks committed-unpresented, and nothing publishes or speaks
+    /// against the stale index (no Undid confirmation).</summary>
+    [Fact]
+    public void AnUnindexedHistoryApplyCrossesTheReceiptAndBlocksOnRecovery()
+    {
+        var h = new Harness();
+        h.History.PushAndClearRedo(
+            new CanvasHistoryEntry(
+                "create card", new CanvasAction("undo create card", []), "rev-1"),
+            "rev-1");
+        CanvasHistorySnapshot snapshot = h.History.SnapshotUndo()!;
+        h.Writes.ReportUnindexed = true;
+
+        Assert.Equal(
+            CanvasMutationAdmission.Admitted,
+            h.Funnel.ApplyHistory(h.Operation("undo"), snapshot, redo: false));
+
+        Assert.NotNull(h.History.OfferedRedo);
+        Assert.Null(h.History.OfferedUndo);
+        Assert.NotNull(h.Slot.Current.CommittedUnpresented);
+        Assert.DoesNotContain(
+            h.Announced, e => e is CanvasA11yEvent.CanvasHistoryApplied);
+    }
+
     /// <summary>§E TE-11c (E8a/E2): a not-ready admission SPEAKS the
     /// typed refusal - mac's exact reason table over the publication's
     /// load state.</summary>

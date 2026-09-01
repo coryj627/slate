@@ -211,6 +211,15 @@ internal sealed class CanvasMutationFunnel(
                 new CanvasHistoryEntry(
                     snapshot.Entry.Name, result!.Inverse, result.NewContentHash),
                 result.NewContentHash);
+            if (!result.Indexed)
+            {
+                // The verb path's arm, checkout-shaped (codoki on
+                // §E TE-11: a landed-but-unindexed apply must not
+                // publish or speak against a stale index). The receipt
+                // crossed; recovery is refresh-only.
+                MarkUnpresented(operation);
+                return;
+            }
             if (RefreshAndPublish(operation) == CanvasRefreshOutcome.Installed)
             {
                 announce(new CanvasA11yEvent.CanvasHistoryApplied(

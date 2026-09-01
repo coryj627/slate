@@ -8407,6 +8407,18 @@ recorded tasks, the citation floor raised eighteen times, every
 mutation byte-restored, and the three shipped bugs the first real
 keyboard found.
 
+### Codoki round 1
+
+One finding, and it was right: the history path took the landed-but-
+unindexed apply straight into publish and speech, missing the verb
+path's guard — an undo against a stale index would have confirmed a
+presentation that never installed. The guard is mirrored
+checkout-shaped (the receipt crosses with its REAL inverse, the
+publication marks committed-unpresented, recovery is refresh-only),
+and the review's own prescribed fact pins all four claims, bitten by
+deleting the guard. The formal review approved with the no-issues
+sentence; the comment's finding was addressed rather than waved at.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same
