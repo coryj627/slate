@@ -260,7 +260,11 @@ public sealed class ContractsCitationCensus
                 // core sentence, taking the section to 73; 70 sits
                 // above the pre-task population of 69 — a sixteenth
                 // time.
-                70),
+                //
+                // TE-11d bound the scenario driver and its census,
+                // taking the section to 75; 74 sits above the
+                // pre-task population of 73 — a seventeenth time.
+                74),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

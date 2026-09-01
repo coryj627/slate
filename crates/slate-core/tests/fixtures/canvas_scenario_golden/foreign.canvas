@@ -1,0 +1,30 @@
+{
+    "edges": [
+        {
+            "toNode": "beta",
+            "label": "links",
+            "id": "e-ab",
+            "fromNode": "alpha"
+        }
+    ],
+    "nodes": [
+        {
+            "type": "text",
+            "width": 240,
+            "text": "original body",
+            "x": 0,
+            "id": "alpha",
+            "height": 140,
+            "y": 0
+        },
+        {
+            "y": 0,
+            "id": "beta",
+            "x": 300,
+            "type": "text",
+            "height": 140,
+            "text": "second card",
+            "width": 240
+        }
+    ]
+}

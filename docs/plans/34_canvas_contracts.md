@@ -8311,6 +8311,41 @@ announce dropped and the not-ready fact failed; one guard's sentence
 dropped and its cell failed; one no-basis speak dropped and the
 unready fact failed.
 
+**TE-11d — E18's scenario goldens: the canvas mode of the §W-A
+differential harness.** The scripts are DATA — a shared scenarios
+file beside the mutation harness's, executed verbatim so identical
+`CanvasAction` sequences on both platforms are enforced by
+construction — and the driver (`CanvasScenarioDriver`, the harness's
+canvas mode behind a new flag) seeds each fixture into a fresh temp
+vault, applies every step through the REAL vault apply for the
+inverse-carrying receipts, then walks the inverses backward. The
+E18 rules are DRIVER-ENFORCED, not aspirational: every scenario's
+post-inverse bytes must equal core's OWN canonical serialization of
+the original content — the empty detached apply is the canonicalizer,
+so semantic equality is core's judgment, never a host
+reimplementation; a canonical fixture must round-trip BYTE-IDENTICAL
+to its original; and a foreign-formatted fixture must NOT — the
+foreign formatting dies on the first write, which is E18's
+apply-plus-invert rule said from the other side. Three scenarios:
+the sample corpus fixture through every op kind the algebra exports
+(create card and group, content, both color arms, geometry, add,
+update and delete edge, delete card); the nested-groups fixture
+through geometry and a deep-group delete; a committed
+foreign-formatted fixture (four-space indentation, reordered keys)
+through content and color. Three committed artifacts pin step-level
+content hashes, terminal bytes and the round-trip hash;
+`CanvasScenarioCensus` asserts them byte-for-byte with the mutation
+census's regen instruction, its determinism twin reruns the driver
+in-process, and the tamper fact proves the foreign gate has teeth —
+a canonical fixture mislabeled foreign makes the driver throw. The
+mac Swift twin lane is recorded as OWED to keep this diff
+reviewable (the mutation harness's own precedent): the scenarios
+file is already the shared contract, and the Swift driver lands as
+its own slice. Three mutations, each byte-restored: the inverse walk
+dropped and the census failed; the round-trip hash dropped from the
+artifact and the byte-compare failed; the foreign-survived gate
+deleted and the tamper fact failed.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same
