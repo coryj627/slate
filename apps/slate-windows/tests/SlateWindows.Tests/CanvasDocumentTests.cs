@@ -3853,6 +3853,15 @@ public sealed class CanvasDocumentTests : IDisposable
         renderer.Model = null;
         Assert.Equal(baseline, document.PublicationAppliedSubscriberCountForTests);
         renderer.Shutdown();
+        // The renderer's teardown reaches the ENGINE (codoki on this
+        // PR caught the missing call): a post-shutdown intake installs
+        // nothing into the detached view.
+        CanvasPresentationState? parked = renderer.Engine.Current;
+        renderer.Engine.OnPublicationApplied(
+            CanvasPublication.Seed().WithNeedleIntent("late"));
+        Assert.True(
+            ReferenceEquals(renderer.Engine.Current, parked),
+            "a shut-down renderer's engine installed a late publication.");
         document.Shutdown();
     });
 }

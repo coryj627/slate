@@ -418,6 +418,12 @@ internal sealed class CanvasRendererView : FrameworkElement
     internal void Shutdown()
     {
         Model = null;
+        // The engine's own teardown guard (codoki on this PR): the
+        // review round ADDED the guard and its record said the
+        // renderer calls it — this call is where that sentence
+        // becomes true, so an in-flight or queued install can never
+        // draw into a detached view.
+        _engine.Shutdown();
         _textScale.Dispose();
     }
 
