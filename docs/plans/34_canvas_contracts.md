@@ -8450,133 +8450,339 @@ After this PR a keyboard user can rearrange a canvas — grab, nudge,
 place, align, resize, connect — without the visual surface, and
 every spatial sentence is core's.
 
-Contract ids are `F1…`; decisions are `FD-…`. Every core name cited
-is verified against the FFI surface as it exists today (the §E
-convention). New types remain plain text until tasks bind them.
+This section is revision 2, rewritten against round 1's thirty-four
+findings. Round 1's central finding was revision 1's central
+omission: a mode's COMMIT is not a call, it is an OPERATION IN
+FLIGHT — the E funnel completes asynchronously, and a contract that
+lets `OnCommit` answer synchronously either ends the mode before the
+truth exists or leaves it standing on success. This revision is
+organized around the MODE COMPLETION value that closes that gap.
+New types remain plain text until tasks bind them (the series
+convention); every core name cited is verified against the generated
+surface, with required parameters spelled.
 
-**F1 — The transient is UI-held hypothetical geometry, and R-A's one
-carved exception is honored exactly.** Move and resize hold a
-transient holder — ids in reading order (a rigid unit for sets),
-original rects (restored on cancel), hypothetical rects (what commit
-writes), an is-resize flag and the entry overlap state — the mac
-CanvasTransientState twin. Per step the UI queries
-`CanvasCheckOverlap(rect, exclude: moving set)` and repaints the
-renderer's transient overlay; the outline and table DO NOT change
-until commit. **Return** commits ONE `CanvasAction` of
-`UpdateNodeGeometry` start→end per changed node (one write, one undo
-entry, one announcement) through the E funnel — the mode-owned
-commit token E2 froze passes through the operation, so a refused
-commit leaves the mode and its exact transient standing (C7's rule,
-inherited not restated). **Esc** restores the exact prior geometry
-with NO backend call. A commit whose transient moved nothing speaks
-`CanvasModeEndedWithoutEffect` and applies nothing.
+Contract ids are `F1…`; decisions are `FD-…`.
+
+**F1 — The transient is UI-held hypothetical geometry with an
+IDENTITY, and R-A's one carved exception is honored exactly.** Move
+and resize hold a transient: ids in reading order via
+`CanvasOrderNodes` (a rigid unit for sets — a TOTAL bijection
+id ↔ original rect ↔ hypothetical rect, entry refuses if any member
+lacks scene geometry), original rects (restored on cancel),
+hypothetical rects (what commit writes), the is-resize flag, the
+entry overlap state, AND the publication the mode entered against —
+the same reference identity every §E operation carries, compared by
+reference, never a stamp. Per step the UI queries
+`CanvasCheckOverlap(rect, exclude: the moving ids)` for EVERY moved
+rect (overlap is the logical OR) under the read lease — steps are
+reads; only Return writes (FD-1). The outline and table do not
+change until an INSTALLED commit; the renderer alone draws the
+hypothetical state (F10).
+
+**F1a — Displacement cancels the mode, audibly.** A publication
+displacement while a mode holds — reload, retarget, conflict record
+installed by another path, committed-unpresented, shutdown, tab
+close — CANCELS the mode through the C machine's own cancel: the
+transient is discarded (no write, no rebase — hypothetical geometry
+over rows that moved is a guess, and the §E Stale arm would
+otherwise eat Return forever), the restoration is the cancel
+announcement's (cards-returned / size-restored where the original
+rows still exist; UNSTATED where they do not — the C vocabulary
+already carries it), and the mode token clears in the same
+transition. Rebase-on-reload is REJECTED as a design: round 1 #3
+showed both rebase shapes write entry-era geometry over reloaded
+truth. mac diverges here (its transient silently survives what its
+single-threaded reload path never interleaves); the divergence is
+admitted and the Windows rule is the contract.
 
 **F2 — Move mode enters on the moving set, and the set rule is
 mac's.** Entry on the selection, or the marked set as a rigid unit
 once G lands — the holder takes a set from day one; an empty set
-refuses with NothingSelected. Arrows nudge by `GridStep`, Shift by
-`GridStepLarge` (`CanvasConstants` — never a host constant); each
+refuses NothingSelected; a set member without scene geometry refuses
+NothingSelected (gone is gone). Arrows nudge by `GridStep`, Shift by
+`GridStepLarge` (`CanvasConstants`; never a host constant); each
 step announces the coalesced `CanvasMoveRelative` built from
-`CanvasDescribeRelative`, plus the overlap two-state machine:
-`CanvasOverlapTransition` onset when overlap begins, cleared when it
-ends, silence while the state holds (the §2 N machine — transitions,
-never per-step spam).
+`CanvasDescribeRelative` over the PRIMARY rect (the first id in
+reading order — the one-rect API's designated feeder), plus the
+overlap two-state machine: `CanvasOverlapTransition` onset when any
+member's overlap begins, cleared when the last ends, silence while
+the state holds.
 
-**F3 — Resize mode is single-card, clamped, and preset-equipped.**
-←/→ change width, ↑/↓ height, Shift the large step; any step that
-would cross `MinCardSize` refuses with `CanvasResizeClamped` and
-changes nothing. Presets: Default Size (`DefaultCardW/H`) and Fit to
-Content (the D-5 placeholder formula, both hosts). The resize chord
-while resize mode is ACTIVE commits it — mac's
-`canvasCommitOrEnterResize` quick loop, one chord in and out.
-Geometry announcements are `CanvasResizeGeometry` with the preset
-arm when a preset drove the change.
+**F2a — A step that cannot answer does not move.** Entry and step
+reads are never-silent and atomic: a refused lease or a thrown
+`CanvasCheckOverlap`/`CanvasDescribeRelative` leaves the transient
+and overlay EXACTLY as they were and speaks the generic failed-action
+arm (`CanvasActionFailed{CanvasAction}` — FD-6). mac's `try?` swallow
+is an admitted divergence assigned to the mac lane, not imported.
 
-**F4 — Both modes are M-conformant by inheritance, not by fresh
-proof.** The specs enter through `CanvasModeController.Enter` with
-`OnCommit`/`OnCancel` closures (the C machine); the M1–M7
-conformance suite re-runs against the real move and resize modes —
-`ARefusedCommitKeepsTheModeAlive` and the focus-departure table are
-conformance arms the modes inherit. The mode's `ContainerValue`
-appears on the surface while active; every focus departure answers
-per C8's closed table.
+**F3 — Resize mode is a single NODE, clamped, preset-equipped.**
+Eligibility is mac's: any scene node, groups included, announced
+through `CanvasModeObject.Card` with the node's title — the
+card-grammar-on-a-group is mac's shipped shape and is adopted, not
+fixed silently (recorded divergence at the tail). ←/→ change width,
+↑/↓ height, Shift the large step; any step that would cross
+`MinCardSize` refuses `CanvasResizeClamped` and changes nothing.
+Presets — Default Size (`DefaultCardW/H`) and Fit to Content (the
+D-5 placeholder formula; the content read is `CanvasNodeText` under
+the mode's currency, and an unreadable or non-text node refuses
+`CardTextUnreadable` keeping the transient) — route through the SAME
+overlap machine as steps: a preset that creates or clears overlap
+speaks the transition in its `CanvasResizeGeometry`, whose
+`Width/Height` are minted through the mac `canvasSafeInt` twin
+(clamp to non-negative finite, round, saturate at the integer type)
+— a material rule, not a cast. The resize chord while resize mode is
+ACTIVE commits it (mac's quick loop).
+
+**F4 — Mode entry is ADMITTED, and commit is a completion, not a
+return.** Entry routes through `CanvasNavigator.EnterMode(spec,
+pane)` — the frozen C seam that attaches the invoking presenter —
+and F adds the admission PREFLIGHT in front of the C machine: entry
+acquires the E gate exactly as an operation does (the same ladder —
+NotReady, RecoveryPending, ConflictPending, Busy — each refusing
+with its §E sentence and entering nothing), and the mode token is
+installed WHILE THE GATE IS HELD, then the gate released with the
+token standing — so no previously admitted operation can be in
+flight when the token installs, and none can admit after (round 1
+#4's atomicity, IE-7's other half closed with the same lock).
+
+**F4a — The commit bridge.** Return runs `OnCommit`, which submits
+ONE `CanvasAction` of `UpdateNodeGeometry` per changed node (the
+start lives in the holder and in the returned inverse — the op
+carries only the end; round 1 #23) through the funnel WITH the mode
+token, and answers the C machine PENDING — a third
+`CanvasModeCommitResult` arm the tasks bind. The mode and its
+transient STAND while the operation is in flight; the funnel's
+completion — a per-outcome callback carried on the operation, the
+mode-completion seam — resolves it per the terminal table (F4b).
+The C machine's conformance suite gains the pending arm and re-runs
+against move, resize AND connect (round 1 #34); refused-commit,
+focus-departure, retirement and transition-closure run against the
+real specs.
+
+**F4b — The terminal outcome table.** Per outcome, in the funnel's
+own vocabulary — mode / transient+overlay / token / history /
+announcement:
+- **Installed success:** mode ends committed; transient and overlay
+  clear in the same completion; token clears; one history entry; the
+  mode's confirmation (`CanvasModeCommitted`) speaks AFTER the clear
+  (the §C Committed(confirmation) shape).
+- **No-effect Return** (no rect changed): mode ends; nothing
+  applies; token clears; no history; `CanvasModeEndedWithoutEffect`.
+- **Preparation refusal / InvalidArgument:** the mode and transient
+  STAND, token retained; no history; the preparation's own typed
+  sentence spoke already; the user adjusts or cancels.
+- **WriteConflict:** the conflict record installs (E6); the mode
+  SUSPENDS — the transient and overlay stand frozen, the mode token
+  YIELDS to `ConflictResolutionToken` for the recovery's writes and
+  reinstalls atomically when the record resolves to this document's
+  continuation, or the mode cancels per F1a when resolution reloads
+  (round 1 #6's deadlock closed by the yield).
+- **SavedButUnindexed / committed-unpresented:** the write landed —
+  the mode ends committed, transient clears, token clears, the entry
+  records with the landed hash (§E's arm), NO confirirmation beyond
+  the refresh-only region: nothing speaks success against a stale
+  index.
+- **Mid-apply displacement:** §E retains the receipt quarantined;
+  the mode is already cancelling per F1a; the token cleared with
+  that cancel.
+- **Esc:** restores exact prior geometry with NO backend call; token
+  clears; `CanvasModeCancelled` with the restoration.
+
+**F4c — The token lifecycle is a closed table.** Installed
+atomically at admission (F4); retained across every non-commit
+outcome that keeps the mode; yielded-then-reinstalled across a
+conflict suspension; cleared exactly once at: installed success,
+no-effect Return, Esc, every F1a cancellation (departure, reload,
+tab close, shutdown), and restoration failure (the cancel that
+cannot restore still clears — a leaked token is a bricked document).
+`ARefusedCommitKeepsTheModeAlive` and the departure table are
+inherited conformance arms over this table.
+
+**F4d — History during a held mode is refused, audibly.** Ctrl+Z /
+Ctrl+Y while a mode holds route through `ApplyHistory` as ever and
+the token refuses them `ModeHeld` → `CanvasBlocked(ModeBusy)` — the
+shipped arm IS the contract (round 1 #15); connect mode installs the
+token too (F8), so no mode's remembered state can be undone out from
+under it. A commit-pending window answers the same way: the token
+stands until completion.
 
 **F5 — Placement commands are picker-anchored engine placement, one
 action end to end.** Place Below/Above/Left Of/Right Of… open the
-card picker purpose-labelled (the §E hand-off: the picker takes F's
-purposes as rows); the anchor must be OUTSIDE the moving set
-(PickOutsideMovingSet refuses). A single mover routes
-`CanvasPlaceNew(anchor, hint, exclude: moving)`; a set routes
-`CanvasPlaceSet` and moves rigidly. One `CanvasAction`, one undo,
-announced with the relative family (`CanvasCardPlaced` /
-`CanvasBulkMoved`) — mac's `canvasPlaceRelative` verb for verb.
+card picker purpose-labelled (the §E hand-off), proximity-sorted via
+`CanvasProximityOrder(model, anchor: the primary mover, exclude: the
+moving ids)`. Refusals, each exact and state-keeping (the picker
+retains its filter and highlight): empty moving set — NothingSelected;
+anchor inside the moving set — PickOutsideMovingSet; anchor vanished
+at confirm — PickDifferentTarget; a mover vanished — NothingSelected;
+the placement query throwing — the FD-6 arm, nothing written. The
+placement itself runs INSIDE the operation's prepare-under-the-gate
+(§E's `prepare(handle)` — round 1 #10): a single mover routes
+`CanvasPlaceNew(handle, anchor, width, height, directionHint,
+exclude: moving)` with the mover's OWN width/height; a set routes
+`CanvasPlaceSet(handle, anchor, boxes, directionHint, exclude)`
+where `boxes` is the movers' rects IN THE SET'S READING ORDER and
+the result's positional `Origins` map back BY THAT SAME ORDER
+(cardinality must match or the preparation refuses whole). One
+`CanvasAction`, one undo, `CanvasCardPlaced` / `CanvasBulkMoved`.
 
-**F6 — Align With… is the same-axis slot with a refusal, never a
-silent nudge.** Align sets the mover's Y to the anchor's Y (top
-edges), checks `CanvasCheckOverlap` first, and REFUSES with
-`AlignWouldOverlap` when the slot is occupied — announced, nothing
-written (mac's align-refuses-overlap). Success is one action
-announced `CanvasCardAligned` with both titles.
+**F6 — Align With… is the same-axis slot with a total refusal
+table.** Align sets the mover's Y to the anchor's Y (top edges,
+FD-2). Refusals: no selection — NothingSelected; target vanished or
+self — PickDifferentTarget; already aligned — NoChanges, nothing
+written, no history (round 1 #27); occupied slot — AlignWouldOverlap;
+the overlap check runs inside prepare-under-the-gate with the write
+it guards (round 1 #10). Success is one action announced
+`CanvasCardAligned` with both titles.
 
-**F7 — Connect To… is picker-first, sides are core's, and the arrow
-points one way.** The picker is proximity-sorted from the selected
-card (`CanvasProximityOrder` — E's export, its first F consumer);
-confirm applies `AddEdge` with sides from `CanvasAutoSides`,
-`FromEnd: None, ToEnd: Arrow` (one-way to target, the Obsidian
-default), then the optional label step (Enter skips). Announced
-`CanvasConnected`. Connection editing and deletion stay E's verbs,
-reachable from the connection rows and the palette — F adds no
-second edit surface.
+**F7 — Connect To… stages, then applies ONCE.** The picker is
+proximity-sorted from the selected card. Confirm STAGES an immutable
+request — origin id, owner pane, the entry publication, the target —
+then runs the label step (the prompt machinery this PR lands; Enter
+skips); only after the label answer does ONE apply run, inside
+prepare-under-the-gate: re-resolve both endpoints against the held
+handle (either vanished → PickDifferentTarget, staged state kept),
+sides from `CanvasAutoSides(from, to)`, then `AddEdge(id:
+CanvasNewId(), fromNode, fromSide, toNode, toSide, FromEnd: None,
+ToEnd: Arrow, label: the answer or null, color: null)` — every
+generated parameter spelled (round 1 #25). Announced
+`CanvasConnected`. The staged request never re-reads live selection
+(round 1 #12 — the mac prompt's re-read is an admitted divergence
+assigned to the mac lane). Connection editing and deletion stay E's
+verbs; F adds no second edit surface. Refusal table: no origin —
+NothingSelected; no candidates — NoConnections is WRONG and not
+used — the picker simply shows none and Esc returns; apply failure —
+the F4b table (this is a funnel operation like any other).
 
-**F8 — Connect MODE is navigator movement verbatim, no second
-traversal grammar.** Entering connect mode remembers the origin;
-the navigator's own movements step candidates (the same chords,
-handlers and announcements — R1); Return connects origin→current via
-F7's exact apply; Esc returns the selection to the origin and
-connects nothing. The mode enters through the same controller and
-inherits F4's conformance whole.
+**F8 — Connect MODE is navigator movement verbatim, label-less, and
+token-holding.** Entering connect mode remembers the origin
+(id + publication identity), installs the mode token through F4's
+admission, and the navigator's own movements step candidates — the
+same chords, handlers and announcements (R1). Return with the
+reader ON the origin — or with no movement — ends
+`CanvasModeEndedWithoutEffect(Connect)` (round 1 #14); Return
+elsewhere applies F7's exact staged apply WITH `label: null` — the
+mode is the no-label fast path BY CONTRACT (round 1 #13's fork
+closed: the label flow is the picker's, the mode's is immediacy);
+Esc returns the selection to the origin and connects nothing. F1a
+binds: displacement cancels the mode; a vanished origin at Return
+refuses PickDifferentTarget and cancels with the selection left
+where the reader stands.
 
-**F9 — Every mode and command has visible controls (M6).** Header
-buttons for the active mode's commit/cancel, context-menu rows from
-the ONE TE-8 plan for the mode and placement verbs, palette rows by
-registration, and chord rows: `moveMode` (Ctrl+Alt+G), `resizeMode`
+**F9 — Every mode and command has visible controls (M6), and the
+matrix is total.** Header buttons for commit/cancel while a mode is
+active; context-menu rows from the ONE TE-8 plan; palette rows by
+registration; chord rows: `moveMode` (Ctrl+Alt+G), `resizeMode`
 (Ctrl+Alt+R), `resizeDefaultSize`, `resizeFitContent`, the four
 `place…` rows, `alignWith…`, `connectTo…` (Ctrl+Alt+C), and
-`connectMode` — labels byte-identical to mac's (P3), divergences
-recorded where the ⌘ rule predicts otherwise.
+`connectMode` — labels byte-identical to mac (P3), divergences
+recorded. The applicability matrix is pinned per row: resize presets
+OUTSIDE resize mode — disabled with the mode's reason; commit/cancel
+with no mode — disabled (the shipped C gate); entry while a mode is
+active — invoked-and-refused through F4's admission (Busy speaks);
+picker rows without the selection they need — invoked-and-refused
+with their F5–F7 arms; ordinary funnel verbs during a held mode —
+invoked-and-refused ModeHeld (F4d). Disabled-with-reason is for
+structural impossibility; typed refusal is for state the user can
+change; each row's side is named in the tasks' decision tables.
+The staged Rename Group and Set Color prompt sheets carried from §E
+land HERE, on the prompt machinery F7's label step builds — the
+hand-off honored, not narrowed (round 1 #16).
 
-**F10 — The renderer draws the transient; nothing else does.** PR
-D's renderer gains the transient-rect input (the mac
-`doc.transientRects` twin): while a transient holds, the moving
-cards' visual elements render at the hypothetical rects; commit or
-cancel clears the overlay in the same change that ends the mode. The
-outline and table never render hypothetical state (F1's other half).
+**F9a — Action names are contract.** The stored action names core
+speaks through `CanvasHistoryApplied` and the undo menu title are
+mac's verbatim: `move "T"` / `move N cards` (the count-noun rule),
+`resize "T"`, `align "T"`, `connect "A" to "B"`, with quoting
+exactly as §E's verbs quote. A name is part of Ctrl+Z's observable
+sentence, not an implementation string.
+
+**F10 — The renderer draws the transient; the pairing is
+identity-checked; the visible state is one observable.** PR D's
+renderer gains the transient input (the mac `transientRects` twin)
+carrying the F1 publication identity: a scene render pairs rects
+with cards ONLY when identities match — a sibling pane on another
+publication, or a reloaded scene, renders committed truth. The
+transient applies to card visuals, their connected edge paths, the
+selection ring, hit-testing and the accessibility frames (round 1
+#33 — mac's full list); virtualization treats a transient card as
+materialized. Mode-visible state — active spec, container value,
+overlay rects — is ONE aggregate observable derived in a single
+change per transition (round 1 #8): observers never see
+idle-with-overlay or active-without-overlay; the C machine's
+clear-then-effect order is bridged by that derivation, not by
+ordering promises at every site.
+
+**F11 — Mode transitions retire the pending navigation line.** The
+announcer's Medium coalescing class holds a 200 ms pending line;
+every mode TRANSITION — entered, committed, cancelled, no-effect,
+clamped — retires any pending line in the same class before
+speaking (round 1 #31): a cancel is never followed by a now-false
+position sentence. The rule is the transition's, enforced at the
+announcer seam the tasks bind, and it is grammar (0a), not polish.
 
 ### Decisions
 
-- **FD-1.** The transient's per-step overlap query is fired by the
-  UI against the live handle under the read lease — steps are reads;
-  ONLY Return writes. The E gate is not held during stepping.
-- **FD-2.** The align axis is the TOP edge (mac's shipped shape:
-  same Y). A future same-X variant is a new command, not an option.
-- **FD-3.** Chords: Ctrl+Alt+G / Ctrl+Alt+R / Ctrl+Alt+C per the
-  spec's table; mode arrows are surface keys live only while the
-  mode holds them (`canvasModeConsumesArrows`' twin rule). No
-  Ctrl+Shift variants.
-- **FD-4.** The label step in Connect To… is a staged reuse of the
-  prompt machinery carried from §E (the prompt sheets are this PR's
-  to land for its own flows where needed; Enter-skips is the
-  contract either way).
+- **FD-1.** Steps are reads under the read lease; ONLY Return
+  writes. The E gate is not held during stepping — the mode token is
+  what excludes writers (F4c), not a held gate.
+- **FD-2.** The align axis is the TOP edge (mac's shipped shape).
+  A same-X variant is a new command, not an option.
+- **FD-3.** Chords: Ctrl+Alt+G / Ctrl+Alt+R / Ctrl+Alt+C; mode
+  arrows are surface keys consumed by the ACTIVE mode ahead of
+  selection movement (the `canvasModeConsumesArrows` twin — the
+  navigator's arrow handlers gain the mode branch); no Ctrl+Shift
+  variants.
+- **FD-4.** The prompt machinery (F7's label step) is this PR's
+  build, and the §E-carried Rename Group and Set Color sheets land
+  on it in this PR (F9). Enter-skips is the label step's contract.
+- **FD-5.** A mode conflict SUSPENDS rather than cancels (F4b's
+  WriteConflict arm): the recovery owns the writes through
+  `ConflictResolutionToken`, and the mode resumes or cancels with
+  the record's resolution. Suspension is a C-machine state the tasks
+  bind.
+- **FD-6.** F's non-admission failures speak the generic
+  `CanvasFailedAction.CanvasAction` arm with the dynamic detail —
+  the generated vocabulary has no Move/Resize/Connect arms, host
+  prose is forbidden (0a), and minting new core arms is deferred to
+  the tasks' judgment under the lifted ceiling with the §E
+  RefreshPending precedent.
+
+### Recorded divergences (mac, admitted — assigned, not imported)
+
+- mac clears `active` before `onCommit` and its transient before
+  `canvasApply`, so a conflict there loses mode and preview; the
+  Windows contract preserves both (F4b). The Swift repair is the
+  mac lane's, recorded as owed.
+- mac's step reads `try?`-swallow overlap/describe failures (F2a);
+  same assignment.
+- mac's connect prompt re-reads live selection as origin (F7); same
+  assignment.
+- mac announces a group resize through the Card grammar (F3);
+  adopted as shipped grammar for parity, both hosts.
 
 ### Accepted risks
 
 - The marked-set rigid move is exercised with test-built sets until
-  PR G lands marks; the holder's set-shape is contract now, its G
-  reachability is G's.
+  PR G lands marks; the holder's set-shape is contract now.
 - The FlaUI modes journey budgets the recorded CI round trip for
-  first-popup/menu legs (the §E precedent).
-- mac compiles CI-only from this checkout; any Swift-side touches
-  land blind with CI as the oracle (the recorded convention).
+  first-popup/menu legs.
+- mac compiles CI-only from this checkout; Swift touches land blind
+  with CI as the oracle.
+
+### Round record
+
+**Round 1 (xhigh, 2026-09-01): 34 findings — 17 blockers.** The
+central finding: revision 1 treated a mode's commit as a call where
+the platform needs a COMPLETION — the funnel finishes
+asynchronously, and every blocker cluster (the commit bridge, the
+terminal outcome table, the token lifecycle, the transient's
+publication identity, the conflict deadlock, the admission preflight)
+is that one gap seen from a different edge. Revision 2 is organized
+around the mode-completion value; the FFI-exact call shapes, the
+refusal tables, the action names, the coalescing-supersession rule,
+the F9 matrix and the four admitted mac divergences all come from
+the round's remaining findings. The §E hand-off narrowing (#16) was
+an error and is reverted: the prompt sheets are F's.
+
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
