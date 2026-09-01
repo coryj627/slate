@@ -8768,21 +8768,118 @@ announcer seam the tasks bind, and it is grammar (0a), not polish.
 - mac compiles CI-only from this checkout; Swift touches land blind
   with CI as the oracle.
 
+### THE FREEZE — read this first
+
+**This section is CLOSED to further prose revision**, frozen at
+revision 2 after two adversarial rounds, by APPLICATION OF THE
+STANDING PRECEDENT — the owner's ruling that closed §C-unit, §D and
+§E, applied here by the session rather than freshly ruled, and
+recorded as such; the owner may overrule. The trajectory is rule 5's
+signal on the same schedule as §E: 34 findings, then 32 with the
+blocker half CREATED by revision 2's own fixes — the completion
+bridge, the displacement rule and the token atomicity are defects OF
+the new text. The missing model is not a prose question: it is the
+identity of a completion, the transactionality of a token install
+against a funnel that reads then acquires, and the semantics of a
+suspension — questions every prose answer re-opened, exactly as
+§E's operation identity did.
+
+**The ruling: design by implementation.** Round 2's thirty-two
+findings are reclassified as the IF ledger below — obligations
+discharged by the task loop, each task binding names, running the
+per-task gauntlet (code + facts + byte-restored mutations + a record
+entry + a citation-floor raise + a suite-gated commit), with the
+following explicitly permitted where a finding demands it, ceiling
+lifted as §E's was: amendments to the FROZEN C machine and §E funnel
+(IF-6's supersession — the Pending arm, the completion seam, the
+Suspended state, the admission re-check under the gate), and core
+vocabulary additions through the full playbook. A frozen section's
+AMENDMENT BY TASK is recorded in that task's §F record entry naming
+the frozen contract it supersedes — the freeze bars prose
+re-litigation, not the code the rulings exist to produce.
+
+The revision-2 contracts stand as the ratified baseline the ledger
+refines; where a ledger entry contradicts the prose (IF-1's identity
+type, IF-2's own-commit exemption, IF-16's connect confirmation,
+IF-18's quick-loop precedence, IF-28's vanished-origin arm), the
+LEDGER's direction governs and the discharging task's record is the
+normative text.
+
 ### Round record
 
 **Round 1 (xhigh, 2026-09-01): 34 findings — 17 blockers.** The
 central finding: revision 1 treated a mode's commit as a call where
-the platform needs a COMPLETION — the funnel finishes
-asynchronously, and every blocker cluster (the commit bridge, the
-terminal outcome table, the token lifecycle, the transient's
-publication identity, the conflict deadlock, the admission preflight)
-is that one gap seen from a different edge. Revision 2 is organized
-around the mode-completion value; the FFI-exact call shapes, the
-refusal tables, the action names, the coalescing-supersession rule,
-the F9 matrix and the four admitted mac divergences all come from
-the round's remaining findings. The §E hand-off narrowing (#16) was
-an error and is reverted: the prompt sheets are F's.
+the platform needs a COMPLETION. Revision 2 was organized around
+the mode-completion value.
 
+**Round 2 (xhigh, 2026-09-01): 32 findings — 16 blockers, and rule
+5 fired.** The blockers are defects of revision 2's own new text:
+the transient's identity names the wrong reference type (IF-1); the
+displacement rule eats the mode's own commit (IF-2); the token
+install's claimed atomicity is false against the shipped
+read-then-acquire ladder (IF-7); entry is not a closed transaction
+(IF-8); the completion handshake has no delivery-order or affinity
+rules (IF-9, IF-10); the terminal table misses the synchronous
+admissions, the thrown preparations and the whole conflict
+second-stage matrix (IF-12..IF-14); and the suspension contradicts
+the displacement rule it shares a boundary with (IF-15). The freeze
+above is the disposition.
+
+### The IF ledger (round 2's findings, discharged by the task loop)
+- **IF-1.** [BLOCKER] [F1/F1a/F7/F8/F10] Revision 2 names a `CanvasPublication` as the transient’s identity and claims it is “the same reference identity every §E operation carries.” §E operations actually carry a `CanvasLoaded` reference. Implementing the text literally makes connect mode cancel on its first navigation step because selection changes publish a fresh `CanvasPublication`; implementing `CanvasLoaded` contradicts the contract’s stated type. The identity must be corrected consistently throughout F1, F7, F8, and F10.
+- **IF-2.** [BLOCKER] [F1a/F4b] F1a does not exempt publications caused by the mode’s own commit. An installed mutation refresh creates a new `CanvasLoaded`, and committed-unpresented explicitly creates a new publication—yet F1a says displacement cancels while F4b says those outcomes end committed. Consequently every successful refresh, and certainly SavedButUnindexed, can take both the cancel and commit arms. Mid-apply displacement also can announce “cancelled/returned” before §E later reports that the write durably landed.
+- **IF-3.** [MAJOR] [F1/F2a/F5] `CanvasOrderNodes` is a required entry query, but F2a’s supposedly exhaustive never-silent entry-read rule covers only lease refusal and throws from `CanvasCheckOverlap`/`CanvasDescribeRelative`. A thrown or refused ordering query has no announcement or mode/token rollback row. Placement’s moving-set construction inherits the same hole.
+- **IF-4.** [MAJOR] [F3] The Fit-to-Content refusal collapses two different generated outcomes. `CanvasNodeText` returns `null` for a known non-text node and throws for an unreadable/unknown node; the vocabulary has `CanvasStatus(NotATextCard)` for the former and `CanvasBlocked(CardTextUnreadable)` for the latter. F3 assigns `CardTextUnreadable` to both, producing a false sentence and an unrecorded behavioral divergence from mac, which treats non-text content as empty.
+- **IF-5.** [MAJOR] [F3] The stated `canvasSafeInt` twin is not the shipped function. Swift rejects non-finite values, clamps to ±9e15, and `Int(Double)` truncates toward zero; the later `UInt32(clamping:)` supplies non-negative saturation. It does not round. Fractional imported geometry therefore produces different announced dimensions under F3’s rule.
+- **IF-6.** [BLOCKER] [F4a/FD-5] The completion design directly changes both frozen machines without a normative supersession. Frozen C has a two-arm synchronous `CanvasModeCommitResult` and closes/drains its transition in `Commit()`’s `finally`; frozen §E’s operation has no outcome callback. F4a adds `Pending`, while FD-5 adds `Suspended`, and F4a adds a funnel callback, but never reconciles those changes with the frozen contracts.
+- **IF-7.** [BLOCKER] [F4] Holding the mutation gate while installing the token does not establish the claimed admission atomicity. Frozen `AdmitAndAcquire` reads `_modeToken` before `gate.TryAcquire`. An operation can read `null`, lose the gate to mode entry, then acquire it after entry releases and proceed without rechecking the newly installed token. Revision 2’s “none can admit after” claim is therefore false against the shipped funnel.
+- **IF-8.** [BLOCKER] [F4/F4c] Entry is not a closed transaction. The real admission enum also has `ModeHeld`, `BusyAlreadyAnnounced`, and `Stale`, and §E deliberately does not serialize reload/shutdown with the mutation gate. A lifecycle displacement or C rejection can therefore occur after token installation but before `EnterMode` succeeds. F4c has no rollback row for “token installed, mode never entered,” leaving a leaked token that bricks mutations.
+- **IF-9.** [BLOCKER] [F4a] The completion handshake has no early- or late-delivery rule. §E’s `run` seam is inline in its conformance tests, so a callback may arrive before `OnCommit` has returned `Pending`; it may also arrive after F1a cancellation or retirement. No operation identity/state check says whether to buffer, accept, or discard such a callback, allowing resolution of a not-yet-pending transition or resurrection of an ended mode.
+- **IF-10.** [BLOCKER] [F4a/F4b] Completion affinity and confirmation ownership are undefined. Funnel transactions run on the work seam, while mode, overlay, and WPF property state must change on the UI dispatcher. The existing §E confirmation seam also announces inside `Transact`; unless mode operations pass it as null and make the marshalled completion solely responsible, success can speak before the clear or speak twice. Neither requirement is stated.
+- **IF-11.** [BLOCKER] [F4a/F4b/F4c] Focus and direct commands arriving during `Pending` have no total rule. Frozen C drains a deferred departure as soon as `OnCommit` returns, while F4a requires the mode to stand until asynchronous completion. F4b does not say how an already-arrived departure combines with Installed, refusal, conflict, or committed-unpresented. Esc, Cancel, a second Return, and the Escape ladder are also undecided: C refuses Cancel while closed, whereas F4b’s Esc row says it cancels.
+- **IF-12.** [BLOCKER] [F4a/F4b] The terminal table omits synchronous funnel admission outcomes. `Apply` can return NotReady, RecoveryPending, ConflictPending, ModeHeld, Busy, BusyAlreadyAnnounced, or Stale without scheduling work and therefore without ever invoking a completion callback. If `OnCommit` nevertheless returns `Pending`, the mode is stranded permanently. These are not “preparation refusal / InvalidArgument.”
+- **IF-13.** [BLOCKER] [F4b] The post-admission outcome table is also incomplete. It has no row for a thrown preparation, non-InvalidArgument `VaultException`, refresh/read exception, or `CanvasRefreshOutcome.Refused`. Some occur after the action and history entry have landed, so they cannot safely inherit either “refusal—mode stands” or “mid-apply displacement—receipt quarantined.”
+- **IF-14.** [BLOCKER] [F4b/FD-5] WriteConflict is listed in a “terminal” table but is explicitly non-terminal, and its second-stage matrix is absent. There are no mode/token/history/announcement answers for Overwrite success, repeated conflict, InvalidArgument or I/O failure; Reload failure; or Save a Copy success, failure, collision, and landed-but-unindexed outcomes. In particular, a successful Overwrite committed the mode action and should not generically “reinstall” the transient for another commit.
+- **IF-15.** [BLOCKER] [F1a/F4b/F4c/FD-5] Reload during suspension has contradictory token outcomes. F1a cancellation clears the token, while F4b/F4c promise later atomic reinstallation when resolution continues. A late resolution completion can therefore reinstall the mode token after reload already cancelled the mode. No comparison against the same suspended mode, conflict record, and publication prevents that resurrection.
+- **IF-16.** [BLOCKER] [F4b/F7/F8] The universal Installed-success announcement is unconstructible for Connect. Generated `CanvasModeCommitted` requires `CanvasTransientVerb`, whose only arms are Move and Resize. F7 correctly requires `CanvasConnected`; F4b incorrectly requires `CanvasModeCommitted` for the same connect-mode success.
+- **IF-17.** [MAJOR] [F1a/F4b/F8] The cancellation rows are not total over Connect. F4b says Esc restores prior geometry, and F1a lists only CardsReturned, SizeRestored, and Unstated. Generated vocabulary has the required `CanvasModeRestoration.BackAt`, and F8 separately says selection returns to the origin. The declared terminal table therefore contradicts its Connect specialization.
+- **IF-18.** [BLOCKER] [F3/F4/F9] Active-mode entry precedence contradicts frozen C and contradicts the resize quick loop. C’s M7 contract requires `CanvasModeRejected(activeMode)` when another entry is attempted. F4/F9 instead preflight through §E and say Busy/ModeBusy, bypassing C’s conformance arm. Separately, F3 says invoking `resizeMode` during Resize commits it, while F9’s blanket active-mode cell says the entry is refused.
+- **IF-19.** [MAJOR] [F5/F6] Placement and alignment picker requests do not carry the immutable operation context §C/§E require: originating pane, captured moving IDs/rects, and currency basis. F7 explicitly stages these for Connect, but F5/F6 do not. A confirm after shared selection or presenter affinity changes can therefore move the wrong set or address effects to the wrong pane.
+- **IF-20.** [MAJOR] [F5] The FFI-exactness claim is false. Generated C# exposes `VaultSession.CanvasProximityOrder(ulong handle, string? anchor, string[] exclude)`, not `CanvasProximityOrder(model, …)`. F5 also has no refusal row for this picker-building query throwing or losing its lease; presenting an empty picker would conflate “no candidates” with “the query never answered.”
+- **IF-21.** [MAJOR] [F5/F6] The refusal tables still have unnamed cells. F5 says an `Origins` cardinality mismatch refuses whole but names no event. F6 omits a selected mover that vanished after picker open, despite separately covering a vanished target. Neither table states precedence when these conditions combine with query failure.
+- **IF-22.** [MAJOR] [F5/F6/FD-6] FD-6 selects the wrong existing grammar and then reopens its own decision. Generated `CanvasFailedAction` already has `Placement` and `Align`, and mac uses those exact arms; forcing F5/F6 through generic `CanvasAction` loses verb identity. The final sentence then permits tasks to mint different arms, so the supposedly contractual announcement remains undecided.
+- **IF-23.** [MAJOR] [F6/FD-2] F6 contradicts executable spec §PR F. The spec requires the same-X-or-Y, first-non-overlapping-slot behavior and refusal only when overlap is unavoidable. F6 checks only the exact same-Y/top-edge slot and refuses immediately when that slot is occupied, even if another qualifying slot is free. This divergence is not in the recorded list.
+- **IF-24.** [MAJOR] [F7/F4b] “Apply failure — the F4b table” is invalid for Connect To. The picker flow has no active mode, transient, overlay, or mode token, so it cannot stand, suspend, yield, resume, or cancel as F4b prescribes. It must use §E’s committing-surface lifecycle and state-preservation rules instead.
+- **IF-25.** [MAJOR] [F7] The staged request retains entry currency but has no displacement rule. A reload while the label sheet is open makes the eventual operation Stale; frozen §E deliberately announces nothing for Stale and schedules no completion. F7 promises a kept staged state and routes failures to F4b, leaving this ordinary prompt/reload path silent and without a defined retry basis.
+- **IF-26.** [MAJOR] [F7] Self-connection is not excluded or refused. `CanvasProximityOrder` requires an explicit `exclude` argument, but F7 never requires the origin in it, and its prepare validation checks only endpoint existence—not `origin != target`. The shipped mac apply has an explicit inequality gate and `PickDifferentTarget`.
+- **IF-27.** [MAJOR] [F7] Empty-label normalization is missing. Mac converts an explicitly submitted empty string to null; F7 says only “answer or null,” which distinguishes Enter-to-skip but not clicking Connect with an empty field. Persisting `""` instead of null changes serialized data and can produce an empty “labelled” clause.
+- **IF-28.** [BLOCKER] [F8/F4a/F4b] The vanished-origin Return arm contradicts both the completion table and C conformance. F4b says preparation refusal keeps the mode and token; C’s `ARefusedCommitKeepsTheModeAlive` requires the same. F8 instead says `PickDifferentTarget` and then cancels. Calling Cancel inside `OnCommit` is expressly refused by frozen C, and returning Refused cannot produce the demanded cancellation.
+- **IF-29.** [MAJOR] [F8] Esc restores only selection, not reader focus. After connect navigation, focus remains on the target row while F8 silently seats selection at the origin, violating C12/CD-40’s frozen reader/selection agreement. The restoration must address the owning presenter and focus the origin, with the existing seat fallback if it vanished.
+- **IF-30.** [BLOCKER] [F4b/FD-5/F9] F9 has no suspended-state applicability matrix. Immediately after WriteConflict, arrows and presets are still routed by FD-3’s “ACTIVE mode” rule although F4b says the transient is frozen; commit/cancel controls remain visible with no enablement; entry and ordinary verbs can resolve as ConflictPending rather than F9’s Busy/ModeHeld; and owner-pane departure is unspecified. Every conflict reaches this undecided state.
+- **IF-31.** [MAJOR] [F9] The claimed normal-state matrix is not actually published; it defers each row’s side to future task decision tables. Missing explicit cells include no-selection behavior for Move/Resize/Connect mode entry, each entry command under each active mode, per-row context-menu applicability, the two carried prompt sheets, and the distinction C9 requires between hidden header controls and disabled palette rows. “Total” cannot be delegated past contract freeze.
+- **IF-32.** [MAJOR] [F11] The new coalescing rule names a class that does not exist. The frozen announcer has `Navigation` and `Filter` coalescing classes; Medium is a priority, and mode events plus `CanvasResizeClamped` are immediate/unclassified. Therefore “retire any pending line in the same class” has no determinate meaning and could either fail to drop stale navigation or incorrectly drop pending filter feedback. The contract must name `Navigation` explicitly and define whether Filter survives.
+
+### The task loop
+
+| Task | Slice | Discharges |
+| --- | --- | --- |
+| TF-0 | The mode-completion seam: the Pending arm and the completion callback with identity, delivery-order and dispatcher-affinity rules; the frozen-C/§E supersessions recorded | IF-6, IF-9, IF-10, IF-11, IF-16 |
+| TF-1 | Admission-preflight entry as a closed transaction; the token install re-checked under the gate; the closed clear table with the rollback row; the conflict suspension with its second-stage matrix and the reload boundary | IF-7, IF-8, IF-12, IF-14, IF-15, IF-18, IF-30 |
+| TF-2 | The transient holder with the corrected identity; the own-commit exemption; displacement-cancels; the arrow mode-branch; the total never-silent entry/step read rule | IF-1, IF-2, IF-3, IF-4, IF-5 |
+| TF-3 | Move mode end to end through the bridge; the set bijection; the describe feeder; action names | IF-17, IF-19, IF-20 |
+| TF-4 | Resize mode: clamp, presets through the overlap machine, the minting rule, the quick loop's precedence reconciled | IF-18's resize half, IF-21, IF-22 |
+| TF-5 | The renderer transient input with identity pairing and the one aggregate observable | IF-23, IF-24 |
+| TF-6 | The transition-retirement rule at the announcer seam | IF-25 |
+| TF-7 | Placement and align: FFI-exact shapes, total refusal tables, prepare-under-the-gate | IF-26, IF-27 |
+| TF-8 | The prompt machinery, the staged Connect To… flow, and the carried Rename/Set Color sheets | IF-28's staging half, IF-29 |
+| TF-9 | Connect mode: token-holding, navigator reuse, the no-effect and vanished-origin arms reconciled with conformance | IF-16's connect half, IF-28 |
+| TF-10 | The F9 matrix: chords, menus, palette, context rows, decision tables, the suspended-state column | IF-30's matrix half, IF-31 |
+| TF-11 | The journeys: the FlaUI modes journey, axe, and the remaining ledger sweep | IF-32, the sweep |
+
+Task order: TF-0 → TF-1 → TF-2 (the spine), then TF-3..TF-11 in
+order, each under the §E gauntlet. Ledger entries not named above
+ride the task whose surface they touch; the closing record sweeps
+the ledger for stragglers, as §E's did.
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
