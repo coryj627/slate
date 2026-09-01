@@ -6482,7 +6482,9 @@ public sealed class ShellAccessibilityTests
 
             AssertAxeClean(process, "canvas-outline");
 
-            // Invoke on a text card opens the interim read-only detail.
+            // Invoke on a text card opens the CARD EDITOR SHEET
+            // (§E TE-11b: the interim read-only detail retired; the
+            // activation seam asks the workspace for the real editor).
             // The pattern lives on the ITEM's own peer — no nested
             // element, which is the peered-elements-only trap.
             AutomationElement textCardToOpen = tree
@@ -6495,19 +6497,29 @@ public sealed class ShellAccessibilityTests
                 "a card row must expose Invoke");
             textCardToOpen.Patterns.Invoke.Pattern.Invoke();
             // Invoke is asynchronous by contract: settle before reading.
-            AutomationElement detail = WaitForElement(
-                window, "CanvasCardDetail", TimeSpan.FromSeconds(10));
+            AutomationElement sheet = WaitForElement(
+                window, "CanvasCardEditorSheet", TimeSpan.FromSeconds(10));
+            Assert.Equal("Card editor", sheet.Properties.Name.Value);
+            AutomationElement draft = WaitForElement(
+                window, "CanvasCardEditorText", TimeSpan.FromSeconds(10));
             Assert.True(
                 SpinWait.SpinUntil(
-                    () => detail.Patterns.Value.IsSupported
+                    () => draft.Patterns.Value.IsSupported
                         && !string.IsNullOrEmpty(
-                            detail.Patterns.Value.Pattern.Value.Value),
+                            draft.Patterns.Value.Pattern.Value.Value),
                     TimeSpan.FromSeconds(10)),
-                "the interim card detail never carried the card's text");
-            Assert.StartsWith(
-                "Card text:",
-                detail.Properties.Name.Value,
-                StringComparison.Ordinal);
+                "the editor sheet never carried the card's text");
+            // Escape COMMITS (no changes here) and closes — the modal
+            // must not swallow the legs below.
+            draft.Focus();
+            Keyboard.Press(VirtualKeyShort.ESCAPE);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => window.FindFirstDescendant(
+                        automation.ConditionFactory.ByAutomationId(
+                            "CanvasCardEditorSheet")) is null,
+                    TimeSpan.FromSeconds(10)),
+                "the editor sheet never closed on Escape");
 
             // Keyboard-only reachability: focus the tree and press Enter
             // on a row. Foreground is re-asserted first — another app can
@@ -6521,6 +6533,18 @@ public sealed class ShellAccessibilityTests
                 textCardToOpen, "the outline row never took keyboard focus");
             PressKey(VirtualKeyShort.RETURN);
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(500));
+            // Enter opens the editor sheet now (TE-11b): close it so
+            // the legs below are not under a modal.
+            _ = WaitForElement(
+                window, "CanvasCardEditorSheet", TimeSpan.FromSeconds(10));
+            Keyboard.Press(VirtualKeyShort.ESCAPE);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => window.FindFirstDescendant(
+                        automation.ConditionFactory.ByAutomationId(
+                            "CanvasCardEditorSheet")) is null,
+                    TimeSpan.FromSeconds(10)),
+                "the keyboard leg's editor sheet never closed");
 
             // The surface switcher is one named group (A18). All three
             // arms have shipped — the table in PR B, the visual in PR D
@@ -6726,7 +6750,15 @@ public sealed class ShellAccessibilityTests
             // and the one a screen-reader user gets. The menu is a
             // separate popup HWND, so it is looked up from the desktop
             // rather than under the window.
+            // §E TE-8 flipped Delete LIVE on card rows; the menu is
+            // asserted from a TEXT row so the expectation is
+            // deterministic whatever the sort put first.
+            AutomationElement menuAnchorCell =
+                WaitForCellStartingWith(grid, "Type: Text");
             ReassertForegroundForAChord(window);
+            menuAnchorCell.Focus();
+            AssertEventuallyFocused(
+                menuAnchorCell, "the text row never took focus for the menu");
             PressKey(VirtualKeyShort.APPS);
             AutomationElement[] rowActions = WaitForRowActionItems(automation, process.Id);
             Assert.Equal(
@@ -6735,17 +6767,17 @@ public sealed class ShellAccessibilityTests
             Assert.True(
                 rowActions[0].Properties.IsEnabled.Value,
                 "Open must be live — it is the shipped verb");
-            foreach (AutomationElement unshipped in rowActions.Skip(1))
-            {
-                Assert.False(
-                    unshipped.Properties.IsEnabled.Value,
-                    $"{unshipped.Properties.Name.Value} ships in a later slice and "
-                    + "must be listed disabled, not enabled");
-                Assert.Contains(
-                    "arrives in a later slice",
-                    unshipped.Properties.HelpText.Value,
-                    StringComparison.Ordinal);
-            }
+            Assert.False(
+                rowActions[1].Properties.IsEnabled.Value,
+                "Toggle Mark stays staged until PR G");
+            Assert.Contains(
+                "arrives in a later slice",
+                rowActions[1].Properties.HelpText.Value,
+                StringComparison.Ordinal);
+            Assert.True(
+                rowActions[2].Properties.IsEnabled.Value,
+                "Delete went live on card rows in TE-8; a disabled Delete "
+                + "on a text row is the stale staging");
             // Close it before the activation leg: a live popup owns the
             // keyboard, and Enter would pick a menu item instead.
             PressKey(VirtualKeyShort.ESCAPE);
@@ -6755,9 +6787,9 @@ public sealed class ShellAccessibilityTests
                     TimeSpan.FromSeconds(10)),
                 "the row-actions menu never closed on Escape");
 
-            // Contract B6: Enter opens the card, through the same
-            // activation seam the outline uses — a text card publishes
-            // the interim read-only detail.
+            // Contract B6: Enter opens the card through the same
+            // activation seam the outline uses — a text card opens the
+            // CARD EDITOR SHEET (§E TE-11b).
             AutomationElement textCell = WaitForCellStartingWith(grid, "Type: Text");
             ReassertForegroundForAChord(window);
             textCell.Focus();
@@ -6765,15 +6797,17 @@ public sealed class ShellAccessibilityTests
                 textCell, "the canvas table's text-card row never took focus");
             PressKey(VirtualKeyShort.RETURN);
 
-            AutomationElement detail = WaitForElement(
-                window, "CanvasCardDetail", TimeSpan.FromSeconds(10));
+            _ = WaitForElement(
+                window, "CanvasCardEditorSheet", TimeSpan.FromSeconds(10));
+            AutomationElement tableDraft = WaitForElement(
+                window, "CanvasCardEditorText", TimeSpan.FromSeconds(10));
             Assert.True(
                 SpinWait.SpinUntil(
-                    () => detail.Patterns.Value.IsSupported
+                    () => tableDraft.Patterns.Value.IsSupported
                         && !string.IsNullOrEmpty(
-                            detail.Patterns.Value.Pattern.Value.Value),
+                            tableDraft.Patterns.Value.Pattern.Value.Value),
                     TimeSpan.FromSeconds(10)),
-                "activating a table row never opened the card's text");
+                "activating a table row never opened the editor's text");
         }
         finally
         {

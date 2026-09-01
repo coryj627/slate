@@ -8433,6 +8433,12 @@ twin's refusal-kind switch and a prepared-load fixture missing the
 CAS basis — both extended the same way — and a third pass found the
 FFI smoke example's own exhaustive switch, whose entire purpose is
 to fail compile when the Rust side grows an arm; it did its job.
+The Windows FlaUI gate then failed HONESTLY on the two journeys this
+PR's own ratified flips outdated — the outline and table activation
+legs still expected the retired interim detail, and the row-actions
+leg still pinned the staged Delete — both flipped to the TE-8/
+TE-11b truth, with the editor sheet closed inside each leg so the
+modal never swallows what follows.
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
