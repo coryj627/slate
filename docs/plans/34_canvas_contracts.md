@@ -8440,6 +8440,144 @@ leg still pinned the staged Delete — both flipped to the TE-8/
 TE-11b truth, with the editor sheet closed inside each leg so the
 modal never swallows what follows.
 
+## PR F — move and resize modes, structural placement, and the connect flow
+
+**Goal (spec §PR F).** The spatial and connection authoring that runs
+on the C mode controller and the E funnel: move/resize modes (t4
+#521), placement commands via the card picker (#522), and the
+Connect To… picker, connect mode and connection editing (#523).
+After this PR a keyboard user can rearrange a canvas — grab, nudge,
+place, align, resize, connect — without the visual surface, and
+every spatial sentence is core's.
+
+Contract ids are `F1…`; decisions are `FD-…`. Every core name cited
+is verified against the FFI surface as it exists today (the §E
+convention). New types remain plain text until tasks bind them.
+
+**F1 — The transient is UI-held hypothetical geometry, and R-A's one
+carved exception is honored exactly.** Move and resize hold a
+transient holder — ids in reading order (a rigid unit for sets),
+original rects (restored on cancel), hypothetical rects (what commit
+writes), an is-resize flag and the entry overlap state — the mac
+`CanvasTransientState` twin. Per step the UI queries
+`CanvasCheckOverlap(rect, exclude: moving set)` and repaints the
+renderer's transient overlay; the outline and table DO NOT change
+until commit. **Return** commits ONE `CanvasAction` of
+`UpdateNodeGeometry` start→end per changed node (one write, one undo
+entry, one announcement) through the E funnel — the mode-owned
+commit token E2 froze passes through the operation, so a refused
+commit leaves the mode and its exact transient standing (C7's rule,
+inherited not restated). **Esc** restores the exact prior geometry
+with NO backend call. A commit whose transient moved nothing speaks
+`CanvasModeEndedWithoutEffect` and applies nothing.
+
+**F2 — Move mode enters on the moving set, and the set rule is
+mac's.** Entry on the selection, or the marked set as a rigid unit
+once G lands — the holder takes a set from day one; an empty set
+refuses with NothingSelected. Arrows nudge by `GridStep`, Shift by
+`GridStepLarge` (`CanvasConstants` — never a host constant); each
+step announces the coalesced `CanvasMoveRelative` built from
+`CanvasDescribeRelative`, plus the overlap two-state machine:
+`CanvasOverlapTransition` onset when overlap begins, cleared when it
+ends, silence while the state holds (the §2 N machine — transitions,
+never per-step spam).
+
+**F3 — Resize mode is single-card, clamped, and preset-equipped.**
+←/→ change width, ↑/↓ height, Shift the large step; any step that
+would cross `MinCardSize` refuses with `CanvasResizeClamped` and
+changes nothing. Presets: Default Size (`DefaultCardW/H`) and Fit to
+Content (the D-5 placeholder formula, both hosts). The resize chord
+while resize mode is ACTIVE commits it — mac's
+`canvasCommitOrEnterResize` quick loop, one chord in and out.
+Geometry announcements are `CanvasResizeGeometry` with the preset
+arm when a preset drove the change.
+
+**F4 — Both modes are M-conformant by inheritance, not by fresh
+proof.** The specs enter through `CanvasModeController.Enter` with
+`OnCommit`/`OnCancel` closures (the C machine); the M1–M7
+conformance suite re-runs against the real move and resize modes —
+`ARefusedCommitKeepsTheModeAlive` and the focus-departure table are
+conformance arms the modes inherit. The mode's `ContainerValue`
+appears on the surface while active; every focus departure answers
+per C8's closed table.
+
+**F5 — Placement commands are picker-anchored engine placement, one
+action end to end.** Place Below/Above/Left Of/Right Of… open the
+card picker purpose-labelled (the §E hand-off: the picker takes F's
+purposes as rows); the anchor must be OUTSIDE the moving set
+(PickOutsideMovingSet refuses). A single mover routes
+`CanvasPlaceNew(anchor, hint, exclude: moving)`; a set routes
+`CanvasPlaceSet` and moves rigidly. One `CanvasAction`, one undo,
+announced with the relative family (`CanvasCardPlaced` /
+`CanvasBulkMoved`) — mac's `canvasPlaceRelative` verb for verb.
+
+**F6 — Align With… is the same-axis slot with a refusal, never a
+silent nudge.** Align sets the mover's Y to the anchor's Y (top
+edges), checks `CanvasCheckOverlap` first, and REFUSES with
+`AlignWouldOverlap` when the slot is occupied — announced, nothing
+written (mac's align-refuses-overlap). Success is one action
+announced `CanvasCardAligned` with both titles.
+
+**F7 — Connect To… is picker-first, sides are core's, and the arrow
+points one way.** The picker is proximity-sorted from the selected
+card (`CanvasProximityOrder` — E's export, its first F consumer);
+confirm applies `AddEdge` with sides from `CanvasAutoSides`,
+`FromEnd: None, ToEnd: Arrow` (one-way to target, the Obsidian
+default), then the optional label step (Enter skips). Announced
+`CanvasConnected`. Connection editing and deletion stay E's verbs,
+reachable from the connection rows and the palette — F adds no
+second edit surface.
+
+**F8 — Connect MODE is navigator movement verbatim, no second
+traversal grammar.** Entering connect mode remembers the origin;
+the navigator's own movements step candidates (the same chords,
+handlers and announcements — R1); Return connects origin→current via
+F7's exact apply; Esc returns the selection to the origin and
+connects nothing. The mode enters through the same controller and
+inherits F4's conformance whole.
+
+**F9 — Every mode and command has visible controls (M6).** Header
+buttons for the active mode's commit/cancel, context-menu rows from
+the ONE TE-8 plan for the mode and placement verbs, palette rows by
+registration, and chord rows: `moveMode` (Ctrl+Alt+G), `resizeMode`
+(Ctrl+Alt+R), `resizeDefaultSize`, `resizeFitContent`, the four
+`place…` rows, `alignWith…`, `connectTo…` (Ctrl+Alt+C), and
+`connectMode` — labels byte-identical to mac's (P3), divergences
+recorded where the ⌘ rule predicts otherwise.
+
+**F10 — The renderer draws the transient; nothing else does.** PR
+D's renderer gains the transient-rect input (the mac
+`doc.transientRects` twin): while a transient holds, the moving
+cards' visual elements render at the hypothetical rects; commit or
+cancel clears the overlay in the same change that ends the mode. The
+outline and table never render hypothetical state (F1's other half).
+
+### Decisions
+
+- **FD-1.** The transient's per-step overlap query is fired by the
+  UI against the live handle under the read lease — steps are reads;
+  ONLY Return writes. The E gate is not held during stepping.
+- **FD-2.** The align axis is the TOP edge (mac's shipped shape:
+  same Y). A future same-X variant is a new command, not an option.
+- **FD-3.** Chords: Ctrl+Alt+G / Ctrl+Alt+R / Ctrl+Alt+C per the
+  spec's table; mode arrows are surface keys live only while the
+  mode holds them (`canvasModeConsumesArrows`' twin rule). No
+  Ctrl+Shift variants.
+- **FD-4.** The label step in Connect To… is a staged reuse of the
+  prompt machinery carried from §E (the prompt sheets are this PR's
+  to land for its own flows where needed; Enter-skips is the
+  contract either way).
+
+### Accepted risks
+
+- The marked-set rigid move is exercised with test-built sets until
+  PR G lands marks; the holder's set-shape is contract now, its G
+  reachability is G's.
+- The FlaUI modes journey budgets the recorded CI round trip for
+  first-popup/menu legs (the §E precedent).
+- mac compiles CI-only from this checkout; any Swift-side touches
+  land blind with CI as the oracle (the recorded convention).
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same
