@@ -202,6 +202,90 @@ public sealed class CanvasMutationTests : IDisposable
     private int CountOf(string fragment) =>
         _announced.Count(a => a.Text.Contains(fragment, StringComparison.OrdinalIgnoreCase));
 
+    /// <summary>§F TF-2 (F1/F2a): the holder captures reading
+    /// order and a TOTAL bijection under one never-silent read - a
+    /// member without scene geometry builds NOTHING.</summary>
+    [Fact]
+    public void TheHolderCapturesReadingOrderAndRefusesAGhost()
+    {
+        CanvasDocumentViewModel document = Open();
+        CanvasLoaded loaded = document.CurrentLoadedForModeEntry!;
+        CanvasTransientHolder holder = Assert.IsType<CanvasTransientHolder>(
+            CanvasTransientHolder.TryCapture(
+                _session, loaded, ["blocker", "a"], isResize: false));
+        Assert.Equal(holder.Ids.Length, holder.Originals.Count);
+        Assert.All(holder.Ids, id => Assert.True(holder.Originals.ContainsKey(id)));
+        Assert.Same(loaded, holder.Identity);
+
+        Assert.Null(
+            CanvasTransientHolder.TryCapture(
+                _session, loaded, ["a", "ghost"], isResize: false));
+        document.Shutdown();
+    }
+
+    /// <summary>§F TF-2 (IF-1): the identity is the LOADED triple -
+    /// a selection publish swaps the publication but keeps the triple,
+    /// and the mode STANDS; a reload installs a new triple and F1a
+    /// cancels with the machine's own restoration.</summary>
+    [Fact]
+    public void ASelectionPublishKeepsTheModeAndAReloadCancelsIt()
+    {
+        CanvasDocumentViewModel document = Open();
+        CanvasLoaded loaded = document.CurrentLoadedForModeEntry!;
+        var spec = new CanvasModeSpec(
+            CanvasMode.Move,
+            new CanvasModeObject.Card("A"),
+            () => CanvasModeCommitResult.Committed(),
+            () => new CanvasModeRestoration.BackAt("a"));
+        var pane = new object();
+        Assert.True(document.Modes.Enter(spec, pane));
+        document.InstallTransient(
+            CanvasTransientHolder.TryCapture(
+                _session, loaded, ["a"], isResize: false)!);
+
+        document.SelectNode("blocker", announce: false);
+        Assert.True(document.Modes.IsActive);
+        Assert.NotNull(document.Transient);
+
+        document.Load();
+        Assert.False(document.Modes.IsActive);
+        Assert.Null(document.Transient);
+        document.Shutdown();
+    }
+
+    /// <summary>§F TF-2 (IF-2): the own-commit exemption - while a
+    /// commit is PENDING the completion is the one arbiter, so the
+    /// commit's own refresh must not cancel the mode it completes.</summary>
+    [Fact]
+    public void TheModesOwnPendingCommitDoesNotCancelItself()
+    {
+        CanvasDocumentViewModel document = Open();
+        CanvasLoaded loaded = document.CurrentLoadedForModeEntry!;
+        var id = new object();
+        var spec = new CanvasModeSpec(
+            CanvasMode.Move,
+            new CanvasModeObject.Card("A"),
+            () => CanvasModeCommitResult.Pending(id),
+            () => new CanvasModeRestoration.BackAt("a"));
+        Assert.True(document.Modes.Enter(spec, new object()));
+        document.InstallTransient(
+            CanvasTransientHolder.TryCapture(
+                _session, loaded, ["a"], isResize: false)!);
+        Assert.False(document.Modes.Commit());
+
+        // The commit's refresh: a verb through the funnel republishes
+        // a NEW Loaded while the commit is pending - the watcher must
+        // stand down.
+        document.CanvasSetColor("2");
+        Assert.True(document.Modes.IsActive);
+        Assert.NotNull(document.Transient);
+
+        document.Modes.ResolveCommit(id, CanvasModeCommitResult.Committed());
+        Assert.False(document.Modes.IsActive);
+        document.DiscardTransient();
+        document.Shutdown();
+    }
+
     /// <summary>New Card: a text card lands on disk at core's
     /// placement, the confirmation speaks core's relative phrase, the
     /// created card is SELECTED, and the inverse restores the exact

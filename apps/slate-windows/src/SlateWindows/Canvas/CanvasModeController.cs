@@ -339,6 +339,11 @@ internal sealed class CanvasModeController : BindableBase
     /// active.</summary>
     public bool CanCommitOrCancel => IsActive && _pendingCommit is null;
 
+    /// <summary>§F TF-2 (IF-2): the own-commit exemption's read —
+    /// while a commit is pending, the completion is the one arbiter
+    /// and the displacement watcher stands down.</summary>
+    internal bool HasPendingCommitForTests => _pendingCommit is not null;
+
     /// <summary>
     /// Whether an entry would be ADMITTED — asked by callers that must
     /// not act on a refusal (contract C8).

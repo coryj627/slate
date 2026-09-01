@@ -1436,6 +1436,8 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             // presentation engine on the previous population for the
             // life of the publication.
             PublicationApplied?.Invoke(current);
+            // §F TF-2 (F1a): displacement ends a held mode.
+            WatchTransientDisplacement(current);
         }
         // The APPLY-WINDOW seat, reconciled (the tooltip slice's
         // finding): a projection can seat the shared selection DURING
@@ -2179,6 +2181,45 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// <summary>§F TF-1: the navigator's no-basis entry refusal
     /// speaks the same shared derivation the guards use.</summary>
     internal void SpeakModeEntryNotReady() => SpeakNotReady();
+
+    /// <summary>§F TF-2 (F1): the active mode's transient, or null.
+    /// The renderer reads it; the outline and table never do.</summary>
+    internal CanvasTransientHolder? Transient { get; private set; }
+
+    /// <summary>§F TF-2: install the captured holder — entry's
+    /// last step, after the preflight admitted and the machine
+    /// entered.</summary>
+    internal void InstallTransient(CanvasTransientHolder holder)
+    {
+        ArgumentNullException.ThrowIfNull(holder);
+        Transient = holder;
+    }
+
+    /// <summary>§F TF-2: discard — cancel's arm (no backend call)
+    /// and every F1a teardown.</summary>
+    internal void DiscardTransient() => Transient = null;
+
+    /// <summary>§F TF-2 (F1a): the displacement watcher. A publish
+    /// whose LOADED reference differs from the transient's identity
+    /// — and that is not the mode's own completion in flight — ends
+    /// the mode through the machine's cancel: the transient is a
+    /// guess about rows that moved, so it discards, the suspended
+    /// or pending marks are forgotten, and the restoration sentence
+    /// is the cancel's own. The own-commit exemption (IF-2): while
+    /// a mode commit is PENDING, the funnel's completion is the one
+    /// arbiter — its refresh publishes a new Loaded and must not
+    /// cancel the mode it is completing.</summary>
+    private void WatchTransientDisplacement(CanvasPublication current)
+    {
+        if (Transient is not { } transient
+            || ReferenceEquals(current.Loaded, transient.Identity)
+            || Modes.HasPendingCommitForTests)
+        {
+            return;
+        }
+        DiscardTransient();
+        _ = Modes.Cancel();
+    }
 
     private void SpeakNotReady() =>
         Speak(new CanvasA11yEvent.CanvasMutationRefused(

@@ -298,7 +298,12 @@ public sealed class ContractsCitationCensus
                 // checked clear and the suspend trio — taking the
                 // section to 50; 48 sits above the pre-task
                 // population of 47 — a second time.
-                48),
+                //
+                // TF-2 bound the holder, its identity and the
+                // displacement watcher, taking the section to 52;
+                // 51 sits above the pre-task population of 50 — a
+                // third time.
+                51),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

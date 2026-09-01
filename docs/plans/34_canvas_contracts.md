@@ -8963,6 +8963,38 @@ the Busy arm failed; the clear's identity check dropped and its fact
 failed; the reinstall's identity check dropped and the trio failed;
 the wrap's cancel-clear dropped and the end-to-end fact failed.
 
+**TF-2 — the transient holder, its identity, and displacement
+(IF-1, IF-2, IF-3, IF-5; the arrow branch rides TF-3 where the step
+exists, recorded here so the rescope is deliberate).**
+`CanvasTransientHolder` is the F1 value: ids reading-ordered by
+`CanvasOrderNodes`, a TOTAL bijection over originals and
+hypotheticals, the resize flag, the entry overlap state — and the
+IDENTITY, corrected per IF-1 to the `CanvasLoaded` reference every
+§E operation carries: a selection intent publishes a fresh
+publication but keeps the loaded triple, so navigation during a
+held mode survives, while a reload installs a different reference
+and F1a answers. The capture is ONE never-silent read under the
+lease (IF-3): ordering, geometry and entry overlap inside a single
+try — a vanished member, a short ordering answer or a thrown query
+builds NOTHING and the caller speaks; the ordering-length gate is
+the ghost's real door (its mutation bites), and the per-node null
+arm behind it is recorded as belt-and-braces. The displacement
+watcher rides the publication-applied seam: a publish whose Loaded
+differs from the holder's identity discards the transient and
+cancels through the machine — restoration is the cancel's own
+sentence — EXCEPT while this mode's commit is pending, where the
+completion is the one arbiter (IF-2's own-commit exemption: the
+commit's refresh publishes a new Loaded and must not cancel the
+mode it is completing; the pending mark stands the watcher down).
+Three facts: the reading-order bijection with the ghost refusal;
+the selection-publish-stands / reload-cancels pair through real
+publishes; the pending-commit exemption driven by a real funnel
+verb republishing mid-pending. Three mutations, each byte-restored:
+the identity comparison dropped and the selection publish cancelled
+a living mode; the exemption dropped and the mode's own refresh
+killed it; the ordering-length gate dropped and the ghost built a
+holder.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same
