@@ -28,6 +28,8 @@ internal sealed class CanvasRendererView : FrameworkElement
     public CanvasRendererView()
     {
         Focusable = true;
+        System.Windows.Automation.AutomationProperties.SetAutomationId(
+            this, "CanvasVisualBoard");
         _engine = new CanvasPresentationEngine();
         _textScale = new CanvasTextScaleService();
         _textScale.Changed += () => _engine.CommitTextScaleRevision(_textScale.Revision);

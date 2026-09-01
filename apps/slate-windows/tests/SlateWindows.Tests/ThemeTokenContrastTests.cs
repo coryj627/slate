@@ -129,6 +129,44 @@ public sealed class ThemeTokenContrastTests
         }
     }
 
+
+    /// <summary>§D TD-7's token-drift census (the gap TD-6's record
+    /// kept owed): the six precomputed Fill tokens in each appearance
+    /// ARE CanvasPalette's arithmetic — the preset tint at the pinned
+    /// fraction over that appearance's surface — so a hand-edited
+    /// token or a retuned fraction cannot drift apart silently while
+    /// the contrast floor still happens to pass.</summary>
+    [Theory]
+    [InlineData("Slate.Light.xaml")]
+    [InlineData("Slate.Dark.xaml")]
+    public void ThePrecomputedFillTokensMatchThePaletteArithmetic(string fileName)
+    {
+        IReadOnlyDictionary<string, Rgb> colors = ReadColors(fileName);
+        Rgb surface = colors["Slate.SurfaceColor"];
+        var surfaceColor = System.Windows.Media.Color.FromRgb(
+            (byte)Math.Round(surface.Red * 255),
+            (byte)Math.Round(surface.Green * 255),
+            (byte)Math.Round(surface.Blue * 255));
+        for (var preset = 1; preset <= 6; preset++)
+        {
+            System.Windows.Media.Color expected =
+                SlateWindows.Canvas.CanvasPalette.Fill(
+                    preset.ToString(
+                        System.Globalization.CultureInfo.InvariantCulture),
+                    surfaceColor);
+            Rgb token = colors[$"Slate.Canvas.Fill{preset}Color"];
+            var actual = System.Windows.Media.Color.FromRgb(
+                (byte)Math.Round(token.Red * 255),
+                (byte)Math.Round(token.Green * 255),
+                (byte)Math.Round(token.Blue * 255));
+            Assert.True(
+                expected == actual,
+                $"{fileName} Fill{preset} is {actual} but the arithmetic "
+                + $"says {expected}: the token drifted from the one "
+                + "composite, and the contrast floor alone cannot see it.");
+        }
+    }
+
     private static IReadOnlyDictionary<string, Rgb> ReadColors(string fileName)
     {
         string filePath = Path.GetFullPath(Path.Combine(

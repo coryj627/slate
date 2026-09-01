@@ -878,3 +878,19 @@ asserts a complete document load (open + outline + table + scene +
 publish) under **500 ms** in both scheduling modes — the §K interactive
 budget the mac renderer suite also asserts. Measured headroom here is
 roughly an order of magnitude.
+
+## W6-1 §D — 2026-08-31 (Windows canvas renderer derivation, #745)
+
+`CanvasRendererBenchmarks` (SlateWindows.Benchmarks, `--canvas
+--validate-budgets`) over the committed 2,000-node fixture: the PURE
+derivation half the presentation engine runs off-thread — the windowed
+peer topology and the descriptor read — asserted against mac's §K
+budgets by the suite's own budget arm (a MISS fails the run). The
+numbers measure derivation only; the draw and UIA re-frame ride the
+app and the FlaUI journey. Windows x64 laptop, Release.
+
+| Bench | 2026-08 p50 | Budget | Meaning |
+|---|---|---|---|
+| `FirstWindowedDerivation` | **0.018 ms** | 500 ms | First windowed topology over 2,000 cards (viewport + 1-viewport margin). |
+| `PanWindowHop` | **0.023 ms** | 100 ms | A pan's re-derivation — window churn and edge re-test. |
+| `SelectionStepRead` | **<0.001 ms** | 50 ms | The descriptor lookup a selection step's ring redraw costs. |

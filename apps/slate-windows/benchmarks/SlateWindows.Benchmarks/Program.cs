@@ -25,7 +25,36 @@ ManualConfig benchmarkConfig = ManualConfig.Create(DefaultConfig.Instance)
 if (canvasSuite)
 {
     _ = BenchmarkRunner.Run<CanvasOpenBenchmarks>(benchmarkConfig, benchmarkArgs);
-    return 0;
+    Summary rendererSummary = BenchmarkRunner.Run<CanvasRendererBenchmarks>(
+        benchmarkConfig, benchmarkArgs);
+    if (!validateBudgets)
+    {
+        return 0;
+    }
+    // §D D16: mac's three budgets, asserted (the W2-2 arm's shape).
+    var rendererBudgets = new Dictionary<string, double>
+    {
+        ["FirstWindowedDerivation"] = 500.0,
+        ["PanWindowHop"] = 100.0,
+        ["SelectionStepRead"] = 50.0,
+    };
+    bool rendererPassed = true;
+    foreach (BenchmarkReport rendererReport in rendererSummary.Reports)
+    {
+        string name = rendererReport.BenchmarkCase.Descriptor.WorkloadMethod.Name;
+        double? median = rendererReport.ResultStatistics?.Median;
+        if (median is null || !rendererBudgets.TryGetValue(name, out double budget))
+        {
+            rendererPassed = false;
+            continue;
+        }
+        double ms = median.Value / 1_000_000;
+        bool ok = ms <= budget;
+        rendererPassed &= ok;
+        Console.WriteLine(
+            $"§D D16 {name} p50 {ms:F3} ms / {budget:F0} ms: {(ok ? "PASS" : "MISS")}");
+    }
+    return rendererPassed ? 0 : 1;
 }
 
 Summary summary = BenchmarkRunner.Run<EditorHighlightBenchmarks>(

@@ -7025,6 +7025,40 @@ derive is pure and private), and the stale-ticket race has no
 deterministic arrangement in-process — both are covered by the
 review's own verification and stated here instead of implied.
 
+**TD-7 — the censuses, the benchmarks, the journey and the evidence,
+landed; and the section's remaining debt said out loud.** The
+token-drift census closes TD-6's recorded gap:
+`ThePrecomputedFillTokensMatchThePaletteArithmetic` proves the six
+Fill tokens in each appearance ARE the palette's one composite, so a
+hand-edited token cannot drift while the contrast floor happens to
+pass. The `w_c_matrix.md` gains the Canvas VISUAL row, composed from
+this section's own contract inventory as B12's pattern requires.
+`CanvasRendererBenchmarks` lands in the canvas suite with its own
+budget arm (the W2-2 shape): the derivation medians on the
+2,000-node fixture are 0.018 / 0.023 / <0.001 ms against the
+500 / 100 / 50 budgets — recorded in `BENCHMARKS.md` with the
+honest scope note that these measure the pure derivation the engine
+pays per pan, while the draw and the UIA re-frame ride the app and
+the journey. The FlaUI journey
+(`CanvasSurfaces_VisualBoardPeersAndZoom_AreClean`) drives the flip
+end to end through the real bridge: the enabled radio, the board's
+declared Value pattern, unique card names, the rectangle that
+CHANGES after Ctrl+= — the stale-frame classic asserted at the level
+it is true — a pattern select reporting selected, and axe over
+peered elements only; the renderer gained its findable automation
+id for it. CI arbitrates the journey per the recorded desktop rules.
+
+**The debt, named rather than implied away:** obligation ID-9's
+tooltip is UNBUILT — D11's truncated-label tooltip with its
+focus/hover trigger matrix never landed in TD-6's drawing, so
+nothing here can evidence it; and the close/reopen lifecycle facts
+(the subscription-count half of the review round's minor) remain
+unwritten for the same reason — the pane-close path they need is the
+workspace's, not this battery's. Both stay OPEN on the ledger for
+the review round to weigh: a §D that ships owes them either a
+follow-up slice or an owner's recorded deferral, and this entry is
+where that decision starts from the truth.
+
 ---
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
