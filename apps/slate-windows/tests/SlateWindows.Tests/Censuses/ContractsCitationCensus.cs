@@ -286,7 +286,13 @@ public sealed class ContractsCitationCensus
                 // the 0a/0b exports). 12 sits above the empty
                 // pre-section population and below the landed
                 // count; each task raises it, as every §E task did.
-                12),
+                //
+                // TF-0 bound the completion seam — the Pending arm,
+                // the resolve machinery and the typed operation
+                // outcome — taking the section to 47; 43 sits above
+                // the pre-task population of 42, the rule's first
+                // §F application.
+                43),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

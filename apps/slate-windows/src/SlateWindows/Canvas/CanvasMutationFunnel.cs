@@ -288,6 +288,11 @@ internal sealed class CanvasMutationFunnel(
         string name,
         Func<CanvasA11yEvent>? confirm)
     {
+        // §F TF-0: the terminal outcome, delivered to the operation's
+        // completion (if any) in the finally — from THIS thread; the
+        // consumer marshals itself. Defaults to the refused arm so an
+        // early return reports honestly.
+        CanvasOperationOutcome outcome = CanvasOperationOutcome.RefusedPrepare;
         try
         {
             CanvasApplyResult? result = null;
@@ -331,6 +336,7 @@ internal sealed class CanvasMutationFunnel(
             }
             if (refusal is VaultException.WriteConflict)
             {
+                outcome = CanvasOperationOutcome.Conflict;
                 announce(new CanvasA11yEvent.CanvasSaveConflict());
                 return;
             }
@@ -344,6 +350,7 @@ internal sealed class CanvasMutationFunnel(
                     new CanvasHistoryEntry(
                         name, new CanvasAction(name, []), unindexed.newContentHash),
                     unindexed.newContentHash);
+                outcome = CanvasOperationOutcome.Unindexed;
                 MarkUnpresented(operation);
                 return;
             }
@@ -362,6 +369,7 @@ internal sealed class CanvasMutationFunnel(
                 // rather than offered against a document it does not
                 // describe. No publish, no effects.
                 history.PushRetained(entry);
+                outcome = CanvasOperationOutcome.Displaced;
                 return;
             }
 
@@ -369,10 +377,15 @@ internal sealed class CanvasMutationFunnel(
             history.PushAndClearRedo(entry, result.NewContentHash);
             if (!result.Indexed)
             {
+                outcome = CanvasOperationOutcome.Unindexed;
                 MarkUnpresented(operation);
                 return;
             }
-            if (RefreshAndPublish(operation) == CanvasRefreshOutcome.Installed
+            outcome =
+                RefreshAndPublish(operation) == CanvasRefreshOutcome.Installed
+                    ? CanvasOperationOutcome.Installed
+                    : CanvasOperationOutcome.RefreshRefused;
+            if (outcome == CanvasOperationOutcome.Installed
                 && confirm is not null)
             {
                 // The verb's confirmation (t0 §1.3), spoken only for
@@ -384,6 +397,7 @@ internal sealed class CanvasMutationFunnel(
         finally
         {
             gate.Release(operation);
+            operation.Completion?.Invoke(outcome);
         }
     }
 

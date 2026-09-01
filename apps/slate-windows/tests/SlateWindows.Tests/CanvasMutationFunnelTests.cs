@@ -192,6 +192,37 @@ public sealed class CanvasMutationFunnelTests
             h.Announced, e => e is CanvasA11yEvent.CanvasHistoryApplied);
     }
 
+    /// <summary>§F TF-0: the completion seam end to end — a
+    /// submitted operation delivers its terminal outcome to the
+    /// completion callback, Installed on the happy path, from the
+    /// transaction's own seam.</summary>
+    [Fact]
+    public void ASubmittedOperationDeliversItsCompletion()
+    {
+        var h = new Harness();
+        var outcomes = new List<CanvasOperationOutcome>();
+        CanvasMutationOperation operation = h.Operation("mode commit");
+        operation.Completion = outcomes.Add;
+        Assert.Equal(
+            CanvasMutationAdmission.Admitted,
+            h.Funnel.Apply(
+                operation, _ => new CanvasAction("mode commit", []), "mode commit"));
+        Assert.Equal([CanvasOperationOutcome.Installed], outcomes);
+
+        // The conflict arm reports Conflict, and exactly once.
+        var h2 = new Harness();
+        var outcomes2 = new List<CanvasOperationOutcome>();
+        h2.Writes.ApplyScript = _ => new VaultException.WriteConflict(
+            "current", "expected", 42);
+        CanvasMutationOperation second = h2.Operation("mode commit 2");
+        second.Completion = outcomes2.Add;
+        Assert.Equal(
+            CanvasMutationAdmission.Admitted,
+            h2.Funnel.Apply(
+                second, _ => new CanvasAction("mode commit 2", []), "mode commit 2"));
+        Assert.Equal([CanvasOperationOutcome.Conflict], outcomes2);
+    }
+
     /// <summary>§E TE-11c (E8a/E2): a not-ready admission SPEAKS the
     /// typed refusal - mac's exact reason table over the publication's
     /// load state.</summary>

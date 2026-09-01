@@ -8881,6 +8881,48 @@ order, each under the §E gauntlet. Ledger entries not named above
 ride the task whose surface they touch; the closing record sweeps
 the ledger for stragglers, as §E's did.
 
+### Implementation record
+
+**TF-0 — the mode-completion seam (IF-6, IF-9, IF-10, IF-11,
+IF-16).** The two recorded supersessions of frozen machines land
+together, each named here as the freeze requires. The C machine's
+two-arm commit result becomes three: `CanvasModeCommitArm` adds
+Pending, legal ONLY when the submission was Admitted (IF-12's rule
+stated at the type), carrying the submitted operation's identity.
+`Commit` on Pending keeps the mode standing and refuses re-entrant
+Commit and Cancel while the truth is in flight (IF-11);
+`CanCommitOrCancel` reads pending-aware, so the header buttons and
+the Esc ladder see the window honestly. The completion side is
+`ResolveCommit(operationId, outcome)` — identity-checked by
+reference so a late or foreign completion drops itself without
+touching the mode (IF-9), and dispatcher-marshaled with the
+presentation engine's own capture idiom so a work-seam completion
+re-invokes itself home before any mode state changes (IF-10); an
+Installed resolution clears FIRST and speaks after, the §C
+Committed-confirmation order preserved across the bridge, and the
+confirmation type is the spec's business — move and resize carry
+`CanvasModeCommitted`, connect carries `CanvasConnected` (IF-16).
+A departure arriving mid-pending follows the LIVE table: the
+in-flight mark is abandoned so the cancel runs now and the late
+completion finds nothing — a rule the fact found when the first cut
+let the pending guard refuse the departure's own cancel. The §E
+side: `CanvasOperationOutcome` types the terminal outcomes
+(Installed, RefusedPrepare, Conflict, Unindexed, Displaced,
+RefreshRefused) and the operation carries an optional completion the
+transaction invokes in its finally, gate released first — one
+delivery per transaction, from the transaction's own thread, the
+consumer marshaling. Six facts: the pending window's standing mode
+with live departures; the foreign completion dropping itself; the
+foreign-thread marshal home (a dedicated thread, the inlining
+lesson); clear-before-speak pinned by reading the mode from inside
+the announce sink; the second-Return-and-Cancel refusal; the funnel
+delivering Installed and Conflict to the callback exactly once.
+Four mutations, each byte-restored: the identity check widened and
+the foreign fact failed; the marshal block deleted and the
+cross-thread fact failed; the clear/speak order flipped and the
+order fact failed; the funnel's delivery dropped and the wiring
+fact failed.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same
