@@ -9364,6 +9364,41 @@ second Return, and the verbatim action names. Mutations, each
 byte-restored: M1 the step gate dropped, M2 the forget dropped, M3
 the preset gate dropped, M4 a name reworded. All bitten.
 
+### TF-11 — the modes journey, and the sweep
+
+The FlaUI modes journey lands beside §E's five: one launch, every
+leg — a canvas authored by chord, move mode entered by Ctrl+Alt+G
+with the M6 commit control APPEARING (and axe scanning the
+mode-active state), an arrow step, Return collapsing the controls;
+resize mode entered and Escape collapsing it; Ctrl+Alt+C raising the
+card-picker sheet (axe again) and Escape closing it. Budgeted per
+the recorded accepted risk: real keystrokes, fresh element probes,
+the journey traps honored.
+
+THE JOURNEY'S CATCH — the series' fifth shipped bug found by a real
+keyboard: under the production funnel the mode COMPLETION runs on
+the worker thread, its teardown fires the aggregate observable from
+that thread, and the renderer's `CommitTransient` intake ASSERTED
+the commit thread — the thrown assert killed the completion before
+`ResolveCommit`, leaving a committed mode's controls up forever
+while every unit suite stayed green (their funnel is synchronous).
+The intake now marshals ITSELF exactly as the publication intake
+does — ID-1's discipline, not an exemption from it — and a unit
+regression fact drives the worker-thread commit and finds no throw.
+
+THE SWEEP: a mechanical survey of the ledger against the eleven
+records finds every row IF-1 through IF-32 named by the task that
+discharged, reconciled, reassigned, or recorded it — none silently
+dropped. The dispositions of note: IF-18 reconciled (TF-1/TF-4),
+IF-21's cardinality arm belt-and-braces (TF-7), IF-23's divergence
+recorded with frozen F6 winning (TF-7), IF-24/IF-25 as lifecycle
+dispositions under silent-Stale (TF-8), IF-28's mode half closed by
+construction with its hook removed (TF-9), IF-29 discharged at Esc
+(TF-9), IF-30's matrix half closed with the published table
+(TF-10), IF-31 discharged by that same table, IF-32 reconciled by
+naming (TF-6). The task loop is complete; the close-out record
+follows.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same

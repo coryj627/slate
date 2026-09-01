@@ -346,7 +346,12 @@ public sealed class ContractsCitationCensus
                 // matrix, taking the section to 80; 79 sits
                 // above the pre-task population of 76 — an
                 // eleventh time.
-                79),
+                //
+                // TF-11 bound the journey's marshalling catch and
+                // swept the ledger, taking the section to 81;
+                // 80 sits above the pre-task population of 80
+                // — a twelfth time.
+                80),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

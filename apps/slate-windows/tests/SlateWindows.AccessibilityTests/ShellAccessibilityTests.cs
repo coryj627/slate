@@ -6357,6 +6357,167 @@ public sealed class ShellAccessibilityTests
     /// the synthetic Alt tap is what satisfies the Windows foreground
     /// lock.
     /// </remarks>
+    /// <summary>§F TF-11: the MODES journey — a real keyboard drives
+    /// move mode, resize mode and the connect picker end to end: the
+    /// M6 visible controls appear with the mode and collapse with it,
+    /// the sheets land, and axe scans the mode-active and
+    /// picker-open states. Budgeted per the recorded accepted risk:
+    /// one launch, every leg in sequence.</summary>
+    [Fact]
+    [Trait("gate", "W-C")]
+    public void CanvasModes_MoveResizeAndConnectPicker_AreReachable()
+    {
+        string testRoot = Path.Combine(
+            Path.GetTempPath(), $"slate-canvas-modes-{Guid.NewGuid():N}");
+        string vaultRoot = Path.Combine(testRoot, "Modes Vault");
+        string logDirectory = Path.Combine(testRoot, "logs");
+        Directory.CreateDirectory(vaultRoot);
+        File.WriteAllText(
+            Path.Combine(vaultRoot, "note.md"), "# Note\n\nBody.\n");
+
+        Process? process = null;
+        try
+        {
+            var startInfo = new ProcessStartInfo(SlateWindowsExe())
+            {
+                UseShellExecute = false,
+            };
+            startInfo.ArgumentList.Add(vaultRoot);
+            startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
+                $"slate-canvas-modes-{Guid.NewGuid():N}";
+            startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            process = Process.Start(startInfo)
+                ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+
+            if (!HasInteractiveDesktop(process, "Canvas modes"))
+            {
+                return;
+            }
+
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(
+                process,
+                automation,
+                Path.Combine(logDirectory, "slate-windows.log"),
+                TimeSpan.FromSeconds(30));
+            window.SetForeground();
+            window.Focus();
+
+            // ---- A canvas with two cards, by the authoring path ----
+            AutomationElement newCanvas = WaitForMenuItem(
+                window, "FileMenu", "NewCanvasMenuItem", TimeSpan.FromSeconds(10));
+            newCanvas.Patterns.Invoke.Pattern.Invoke();
+            AutomationElement tree = WaitForElement(
+                window, "CanvasOutlineTree", TimeSpan.FromSeconds(20));
+            tree.Focus();
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+
+            AutomationElement[] Rows()
+            {
+                try
+                {
+                    AutomationElement? liveTree = window.FindFirstDescendant(
+                        automation.ConditionFactory.ByAutomationId(
+                            "CanvasOutlineTree"));
+                    return liveTree is null
+                        ? []
+                        : liveTree.FindAllDescendants(
+                            automation.ConditionFactory.ByControlType(
+                                ControlType.TreeItem));
+                }
+                catch (System.Runtime.InteropServices.COMException)
+                {
+                    return [];
+                }
+            }
+
+            Keyboard.TypeSimultaneously(
+                VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.KEY_N);
+            Assert.True(
+                SpinWait.SpinUntil(() => Rows().Length >= 1, TimeSpan.FromSeconds(15)),
+                "the first Ctrl+Alt+N never produced a card row");
+            Keyboard.TypeSimultaneously(
+                VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.KEY_N);
+            Assert.True(
+                SpinWait.SpinUntil(() => Rows().Length >= 2, TimeSpan.FromSeconds(15)),
+                "the second Ctrl+Alt+N never produced a card row");
+
+            // ---- Move mode: the M6 controls appear with the mode ----
+            AutomationElement? Commit() =>
+                window.FindFirstDescendant(
+                    automation.ConditionFactory.ByAutomationId("CanvasCommitMode"));
+
+            Keyboard.TypeSimultaneously(
+                VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.KEY_G);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => Commit() is { } button && !button.Properties.IsOffscreen,
+                    TimeSpan.FromSeconds(10)),
+                "move mode never showed the commit control; app log tail: "
+                + ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log")));
+            AssertAxeClean(process, "canvas-move-mode-active");
+
+            Keyboard.Press(VirtualKeyShort.RIGHT);
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+            Keyboard.Press(VirtualKeyShort.ENTER);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => Commit() is null or { Properties.IsOffscreen.Value: true },
+                    TimeSpan.FromSeconds(10)),
+                "Return never collapsed the mode controls");
+
+            // ---- Resize mode enters and Escape restores -------------
+            Keyboard.TypeSimultaneously(
+                VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.KEY_R);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => Commit() is { } button && !button.Properties.IsOffscreen,
+                    TimeSpan.FromSeconds(10)),
+                "resize mode never showed the commit control");
+            Keyboard.Press(VirtualKeyShort.ESCAPE);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => Commit() is null or { Properties.IsOffscreen.Value: true },
+                    TimeSpan.FromSeconds(10)),
+                "Escape never collapsed the mode controls");
+
+            // ---- Connect To…: the picker sheet, scanned, then Esc ---
+            Keyboard.TypeSimultaneously(
+                VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.KEY_C);
+            AutomationElement picker = WaitForElement(
+                window, "CanvasCardPickerSheet", TimeSpan.FromSeconds(10));
+            Assert.NotNull(picker);
+            AssertAxeClean(process, "canvas-card-picker");
+            Keyboard.Press(VirtualKeyShort.ESCAPE);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => window.FindFirstDescendant(
+                        automation.ConditionFactory.ByAutomationId(
+                            "CanvasCardPickerSheet")) is null,
+                    TimeSpan.FromSeconds(10)),
+                "Escape never closed the picker sheet");
+        }
+        finally
+        {
+            try
+            {
+                if (process is { HasExited: false })
+                {
+                    process.Kill(entireProcessTree: true);
+                    process.WaitForExit(5000);
+                }
+                process?.Dispose();
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
     [Fact]
     [Trait("gate", "W-C")]
     public void CanvasSurfaces_OutlineTreeSelectionAndActivation_AreClean()

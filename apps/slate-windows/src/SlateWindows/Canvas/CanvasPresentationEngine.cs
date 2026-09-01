@@ -94,7 +94,16 @@ internal sealed class CanvasPresentationEngine
     /// with moved rects still rebuilds.</summary>
     internal void CommitTransient(CanvasTransientHolder? transient)
     {
-        AssertCommitThread();
+        // §F TF-11 (the modes journey's catch): the mode COMPLETION
+        // runs on the funnel's worker, and its teardown fires the
+        // aggregate observable from that thread — so this intake
+        // marshals ITSELF exactly as the publication intake does
+        // (ID-1's discipline, not an exemption from it).
+        if (!_dispatcher.CheckAccess())
+        {
+            _ = _dispatcher.BeginInvoke(() => CommitTransient(transient));
+            return;
+        }
         if (ReferenceEquals(_transient, transient) && transient is null)
         {
             return;
