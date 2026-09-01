@@ -2182,6 +2182,13 @@ internal static class CanvasPhrase
 
     public const string VisualSurfaceLabel = "Visual";
 
+    /// <summary>The visual board's UIA name (§D D3, "Canvas visual
+    /// view"). NOT the switcher arm's label above: the peer shipped
+    /// speaking the radio's word and the FlaUI journey caught it —
+    /// the two phrases are neighbours here so they can never be
+    /// confused for one another again.</summary>
+    public const string VisualBoardName = "Canvas visual view";
+
     /// <summary>The table projection's accessible name (mac's
     /// <c>accessibilityLabel</c>, verbatim).</summary>
     public const string TableName = "Canvas table";

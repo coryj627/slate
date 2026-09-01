@@ -177,6 +177,47 @@ public sealed class CanvasPresentationEngineTests
             + "comparison is the deduplication ID-2 names.");
     }
 
+    /// <summary>Deduplication survives rounding (codoki on this PR):
+    /// a ceiling-clamped zoom recomputes the pan through
+    /// centre − ((centre − pan) × 1.0), which drifts by ulps, so
+    /// exact double equality called a visual no-op a new geometry
+    /// and queued a rebuild. The comparison forgives drift within
+    /// its tolerance.</summary>
+    [Fact]
+    public void ACeilingClampedZoomStillDeduplicates()
+    {
+        CanvasViewportState v = CanvasViewportState.Seed()
+            .WithViewSize(800, 600)
+            .WithZoom(CanvasViewportState.MaxZoom, 0, 0)
+            .PannedTo(7.7, 3.3);
+        CanvasViewportState drifted = v.ZoomedIn(100.3, 50.7);
+        Assert.True(
+            drifted.PanX != v.PanX || drifted.PanY != v.PanY,
+            "the scenario lost its teeth: the ceiling zoom no longer "
+            + "drifts the pan, so this fact pins nothing.");
+        Assert.True(
+            drifted.SameGeometry(v),
+            "a zoom at the ceiling produced a \"new\" geometry out of "
+            + "rounding drift: ID-2's deduplication is defeated by ulps.");
+    }
+
+    /// <summary>The boundary: the tolerance forgives rounding, never
+    /// a verb. The smallest real pan is a hop, orders of magnitude
+    /// above the tolerance.</summary>
+    [Fact]
+    public void TheGeometryToleranceCannotSwallowARealPan()
+    {
+        CanvasViewportState v = CanvasViewportState.Seed().WithViewSize(800, 600);
+        Assert.True(
+            !v.PannedTo(v.PanX + 0.5, v.PanY).SameGeometry(v),
+            "a half-pixel pan compared as the same geometry: the "
+            + "tolerance is wide enough to eat a real viewport verb.");
+        Assert.True(
+            v.PannedTo(v.PanX + 1e-9, v.PanY).SameGeometry(v),
+            "a nano-pixel drift compared as a new geometry: the "
+            + "tolerance is not doing its one job.");
+    }
+
     // ---------------------------------------------------------------
     // The viewport value's arithmetic (D1's pinned constants)
     // ---------------------------------------------------------------

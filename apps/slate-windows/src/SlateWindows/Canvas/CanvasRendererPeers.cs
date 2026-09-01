@@ -36,7 +36,7 @@ internal sealed class CanvasRendererAutomationPeer :
 
     protected override string GetClassNameCore() => nameof(CanvasRendererView);
 
-    protected override string GetNameCore() => CanvasPhrase.VisualSurfaceLabel;
+    protected override string GetNameCore() => CanvasPhrase.VisualBoardName;
 
     public override object? GetPattern(PatternInterface patternInterface) =>
         patternInterface is PatternInterface.Value
@@ -45,8 +45,17 @@ internal sealed class CanvasRendererAutomationPeer :
             ? this
             : base.GetPattern(patternInterface);
 
+    /// <summary>Children only while the board is the ACTIVE projection
+    /// (its own Visibility, the projection cluster's signal). The
+    /// collapsed board's engine still installs (its unlaid-out 0×0
+    /// window can swallow origin nodes), and exposing those peers put
+    /// offscreen, pattern-less Buttons in the UIA tree — the axe
+    /// gate's ButtonShouldHavePatterns catch. A hidden surface has no
+    /// automation children; the topology's cells are untouched.</summary>
     protected override System.Collections.Generic.List<AutomationPeer> GetChildrenCore() =>
-        _view.MaterializedPeers();
+        _view.Visibility is System.Windows.Visibility.Visible
+            ? _view.MaterializedPeers()
+            : [];
 
     // --- Value (DD-5): the zoom a reader polls -------------------------
 

@@ -3864,4 +3864,54 @@ public sealed class CanvasDocumentTests : IDisposable
             "a shut-down renderer's engine installed a late publication.");
         document.Shutdown();
     });
+
+    /// <summary>The board peer speaks its RATIFIED name (§D D3,
+    /// "Canvas visual view") — not the switcher arm's label. The peer
+    /// shipped saying "Visual" and only the FlaUI journey noticed;
+    /// this is the unit-level tripwire that failure bought.</summary>
+    [Fact]
+    public void TheBoardPeerSpeaksItsRatifiedName() => RunSta(() =>
+    {
+        var renderer = new CanvasRendererView();
+        var peer = new CanvasRendererAutomationPeer(renderer);
+        Assert.Equal("Canvas visual view", peer.GetName());
+        Assert.NotEqual(CanvasPhrase.VisualSurfaceLabel, peer.GetName());
+        Assert.Equal(
+            System.Windows.Automation.Peers.AutomationControlType.Group,
+            peer.GetAutomationControlType());
+    });
+
+    /// <summary>A COLLAPSED board exposes no child peers, a visible
+    /// one exposes its materialized cards (the axe gate's catch: the
+    /// hidden board's 0×0 window materialized origin nodes and put
+    /// offscreen, pattern-less Buttons in the UIA tree).</summary>
+    [Fact]
+    public void AHiddenBoardExposesNoChildPeers() => RunSta(() =>
+    {
+        WriteLongTitleCanvas();
+        CanvasDocumentViewModel document = NewDocument("longtitle.canvas");
+        document.Load();
+        var surface = new CanvasSurfaceView { Model = document };
+        using HostedWindow host = Host(surface);
+        host.UpdateLayout();
+        PumpUntil(() => surface.VisualForTests.Engine.Current is not null);
+        // The platform caches children until the cache is reset, so
+        // every read here resets first — production tree walks do the
+        // same through the peer's invalidation.
+        var peer = new CanvasRendererAutomationPeer(surface.VisualForTests);
+        System.Collections.Generic.List<
+            System.Windows.Automation.Peers.AutomationPeer>? Children()
+        {
+            peer.ResetChildrenCache();
+            return peer.GetChildren();
+        }
+
+        Assert.Empty(Children() ?? []);
+
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        PumpUntil(() => (Children()?.Count ?? 0) > 0);
+        Assert.NotEmpty(Children());
+        document.Shutdown();
+    });
 }

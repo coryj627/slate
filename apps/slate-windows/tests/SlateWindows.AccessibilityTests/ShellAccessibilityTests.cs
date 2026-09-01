@@ -6298,16 +6298,18 @@ public sealed class ShellAccessibilityTests
             PressKey(VirtualKeyShort.RETURN);
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(500));
 
-            // The surface switcher is one named group, and an unshipped
-            // arm is disabled rather than absent (A18). The table arm
-            // shipped in PR B and has its own journey; the visual arm is
-            // PR D's and is the disabled one now.
+            // The surface switcher is one named group (A18). All three
+            // arms have shipped — the table in PR B, the visual in PR D
+            // (whose flip this branch carries) — so every arm is live,
+            // and the visual arm's own journey exercises the switch.
             AutomationElement switcher = WaitForElement(
                 window, "CanvasSurfaceSwitcher", TimeSpan.FromSeconds(10));
             Assert.Equal("Canvas view", switcher.Properties.Name.Value);
             AutomationElement visualChoice = WaitForElement(
                 window, "CanvasShowVisual", TimeSpan.FromSeconds(10));
-            Assert.False(visualChoice.Properties.IsEnabled.Value);
+            Assert.True(
+                visualChoice.Properties.IsEnabled.Value,
+                "the Visual arm is disabled: the flip regressed.");
 
             // The t0 §5 banner and its focusable detail rows, on a
             // fixture whose entries core preserved but cannot show.

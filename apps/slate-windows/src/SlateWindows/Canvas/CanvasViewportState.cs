@@ -95,13 +95,23 @@ internal sealed class CanvasViewportState
     internal CanvasViewportState WithFollowSelection(bool follow) =>
         new(Zoom, PanX, PanY, ViewWidth, ViewHeight, follow);
 
+    /// <summary>The widest drift the geometry comparison forgives.
+    /// Exact double equality broke ID-2 (codoki on this PR): a
+    /// ceiling-clamped zoom recomputes the pan through
+    /// centre − ((centre − pan) × 1.0), which rounds ulps away from
+    /// the original, so a visual no-op queued a full rebuild. A
+    /// micro-pixel is far above any accumulated rounding and far
+    /// below anything a viewport verb can mean.</summary>
+    internal const double GeometryTolerance = 1e-6;
+
     /// <summary>Whether two values would produce the same transform —
-    /// the build deduplication's viewport half (ID-2).</summary>
+    /// the build deduplication's viewport half (ID-2). Doubles are
+    /// compared within <see cref="GeometryTolerance"/>, not exactly.</summary>
     internal bool SameGeometry(CanvasViewportState other) =>
-        Zoom == other.Zoom
-        && PanX == other.PanX
-        && PanY == other.PanY
-        && ViewWidth == other.ViewWidth
-        && ViewHeight == other.ViewHeight
+        Math.Abs(Zoom - other.Zoom) <= GeometryTolerance
+        && Math.Abs(PanX - other.PanX) <= GeometryTolerance
+        && Math.Abs(PanY - other.PanY) <= GeometryTolerance
+        && Math.Abs(ViewWidth - other.ViewWidth) <= GeometryTolerance
+        && Math.Abs(ViewHeight - other.ViewHeight) <= GeometryTolerance
         && FollowSelection == other.FollowSelection;
 }
