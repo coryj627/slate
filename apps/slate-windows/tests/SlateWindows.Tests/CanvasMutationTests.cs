@@ -146,6 +146,62 @@ public sealed class CanvasMutationTests : IDisposable
         document.Shutdown();
     }
 
+    /// <summary>§E TE-11c (E8a): the never-silent table's verb
+    /// cells - every pre-funnel exit a surface can reach speaks its
+    /// exact existing arm. "Returns without deleting ALWAYS has a
+    /// sentence."</summary>
+    [Fact]
+    public void EveryReachableGuardExitSpeaksItsCell()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SelectNode(null, announce: false);
+        _announced.Clear();
+
+        // No selection: the acting verbs' shared cell.
+        document.CanvasDeleteSelection();
+        document.CanvasSetColor("1");
+        document.CanvasMoveIntoGroup("grp");
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Equal(3, CountOf("Nothing selected."));
+
+        // Unknown group: the group verbs' cell.
+        _announced.Clear();
+        document.CanvasUngroup("no-such-group");
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Equal(1, CountOf("not a group"));
+
+        // A vanished endpoint or card: gone is gone.
+        _announced.Clear();
+        document.CanvasConnect("ghost", "also-ghost", null);
+        document.CanvasLocateFile("ghost", "note0.md");
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Equal(2, CountOf("Nothing selected."));
+        document.Shutdown();
+    }
+
+    /// <summary>§E TE-11c: the verbs' no-basis short-circuit speaks
+    /// the SAME typed refusal the funnel's ladder would - one shared
+    /// derivation, exercised through a still-loading document.</summary>
+    [Fact]
+    public void AVerbOnAnUnreadyDocumentSpeaksTheRefusal()
+    {
+        // The ctor WITHOUT Load(): the publication stays Loading.
+        CanvasDocumentViewModel document =
+            new CanvasDocumentViewModel(
+            _session,
+            "board.canvas",
+            new CanvasAnnouncer(_announced.Add, TimeSpan.FromMinutes(1)),
+            synchronousForTests: true);
+        document.CanvasNewCard();
+        Assert.Contains(
+            _announced,
+            a => a.Text.Contains("still opening", StringComparison.Ordinal));
+        document.Shutdown();
+    }
+
+    private int CountOf(string fragment) =>
+        _announced.Count(a => a.Text.Contains(fragment, StringComparison.OrdinalIgnoreCase));
+
     /// <summary>New Card: a text card lands on disk at core's
     /// placement, the confirmation speaks core's relative phrase, the
     /// created card is SELECTED, and the inverse restores the exact

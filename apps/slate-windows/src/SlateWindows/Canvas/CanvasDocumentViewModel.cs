@@ -2141,6 +2141,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     {
         if (_slot.Current.Loaded is not { } basis)
         {
+            SpeakNotReady();
             return;
         }
         CanvasHistorySnapshot? snapshot =
@@ -2165,6 +2166,14 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         _ = Funnel.ApplyHistory(operation, snapshot, redo);
     }
 
+    /// <summary>§E TE-11c (E8a/E2): the verbs' no-basis
+    /// short-circuit SPEAKS the same typed refusal the funnel's
+    /// ladder announces - one shared derivation, so the guard and
+    /// the admission can never say different things.</summary>
+    private void SpeakNotReady() =>
+        Speak(new CanvasA11yEvent.CanvasMutationRefused(
+            CanvasMutationFunnel.NotReadyReason(_slot.Current)));
+
     /// <summary>§E TE-5b, the first funnel verb: a text card at
     /// core's placement (anchor = the selection, defaults from
     /// `canvas_constants`, no hint), landing selected. Preparation
@@ -2174,6 +2183,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     {
         if (_slot.Current.Loaded is not { } basis)
         {
+            SpeakNotReady();
             return;
         }
         var operation = new CanvasMutationOperation(
@@ -2225,6 +2235,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         ArgumentNullException.ThrowIfNull(newText);
         if (_slot.Current.Loaded is not { } basis)
         {
+            SpeakNotReady();
             return;
         }
         var operation = new CanvasMutationOperation(
@@ -2248,11 +2259,25 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// ride the next slice with their tables.</summary>
     public void CanvasDeleteSelection()
     {
-        if (_slot.Current.Loaded is not { } basis
-            || Selection.Selected is not { } selected
-            || !_rows.TryGetValue(selected, out CanvasOutlineRow? row)
-            || row.Kind == "group")
+        if (_slot.Current.Loaded is not { } basis)
         {
+            SpeakNotReady();
+            return;
+        }
+        if (Selection.Selected is not { } selected
+            || !_rows.TryGetValue(selected, out CanvasOutlineRow? row))
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(
+                new CanvasStatusNote.NothingSelected()));
+            return;
+        }
+        if (row.Kind == "group")
+        {
+            // UNREACHABLE from the surfaces (§E TE-11c): the grid's
+            // Delete gates on kind, the context-menu plan omits Delete
+            // on groups (ED-3 - the group's one removal is Ungroup),
+            // and the chord path seats through the same rows. A guard,
+            // not a cell.
             return;
         }
         var operation = new CanvasMutationOperation(
@@ -2284,6 +2309,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         ArgumentNullException.ThrowIfNull(label);
         if (_slot.Current.Loaded is not { } basis)
         {
+            SpeakNotReady();
             return;
         }
         var operation = new CanvasMutationOperation(
@@ -2321,6 +2347,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         ArgumentNullException.ThrowIfNull(label);
         if (_slot.Current.Loaded is not { } basis)
         {
+            SpeakNotReady();
             return;
         }
         var operation = new CanvasMutationOperation(
@@ -2342,9 +2369,15 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     public void CanvasUngroup(string groupId)
     {
         ArgumentNullException.ThrowIfNull(groupId);
-        if (_slot.Current.Loaded is not { } basis
-            || !_rows.TryGetValue(groupId, out CanvasOutlineRow? row))
+        if (_slot.Current.Loaded is not { } basis)
         {
+            SpeakNotReady();
+            return;
+        }
+        if (!_rows.TryGetValue(groupId, out CanvasOutlineRow? row))
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(
+                new CanvasStatusNote.NotAGroup()));
             return;
         }
         var operation = new CanvasMutationOperation(
@@ -2371,12 +2404,23 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     public void CanvasMoveIntoGroup(string groupId)
     {
         ArgumentNullException.ThrowIfNull(groupId);
-        if (_slot.Current.Loaded is not { } basis
-            || Selection.Selected is not { } selected
-            || basis.Population.SceneByNode.GetValueOrDefault(selected)
-                is not { } node
-            || !_rows.TryGetValue(groupId, out CanvasOutlineRow? group))
+        if (_slot.Current.Loaded is not { } basis)
         {
+            SpeakNotReady();
+            return;
+        }
+        if (Selection.Selected is not { } selected
+            || basis.Population.SceneByNode.GetValueOrDefault(selected)
+                is not { } node)
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(
+                new CanvasStatusNote.NothingSelected()));
+            return;
+        }
+        if (!_rows.TryGetValue(groupId, out CanvasOutlineRow? group))
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(
+                new CanvasStatusNote.NotAGroup()));
             return;
         }
         var operation = new CanvasMutationOperation(
@@ -2423,13 +2467,21 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// error surface; an invalid value never reaches the funnel).</summary>
     public void CanvasSetColor(string? color)
     {
-        if (_slot.Current.Loaded is not { } basis
-            || Selection.Selected is not { } selected)
+        if (_slot.Current.Loaded is not { } basis)
         {
+            SpeakNotReady();
+            return;
+        }
+        if (Selection.Selected is not { } selected)
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(
+                new CanvasStatusNote.NothingSelected()));
             return;
         }
         if (color is not null && !IsCanvasColor(color))
         {
+            // UNREACHABLE from the surfaces (§E TE-11c): every color
+            // arrives from the fixed palette rows. A guard, not a cell.
             return;
         }
         var operation = new CanvasMutationOperation(
@@ -2464,10 +2516,16 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     {
         ArgumentNullException.ThrowIfNull(fromId);
         ArgumentNullException.ThrowIfNull(toId);
-        if (_slot.Current.Loaded is not { } basis
-            || basis.Population.SceneByNode.GetValueOrDefault(fromId) is not { } from
+        if (_slot.Current.Loaded is not { } basis)
+        {
+            SpeakNotReady();
+            return;
+        }
+        if (basis.Population.SceneByNode.GetValueOrDefault(fromId) is not { } from
             || basis.Population.SceneByNode.GetValueOrDefault(toId) is not { } to)
         {
+            Speak(new CanvasA11yEvent.CanvasStatus(
+                new CanvasStatusNote.NothingSelected()));
             return;
         }
         var operation = new CanvasMutationOperation(
@@ -2505,6 +2563,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         ArgumentNullException.ThrowIfNull(edgeId);
         if (_slot.Current.Loaded is not { } basis)
         {
+            SpeakNotReady();
             return;
         }
         CanvasSceneEdge? edge =
@@ -2548,6 +2607,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         ArgumentNullException.ThrowIfNull(edgeId);
         if (_slot.Current.Loaded is not { } basis)
         {
+            SpeakNotReady();
             return;
         }
         if (basis.Population.SceneEdges.All(e => e.EdgeId != edgeId))
@@ -2592,6 +2652,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         ArgumentNullException.ThrowIfNull(path);
         if (_slot.Current.Loaded is not { } basis)
         {
+            SpeakNotReady();
             return;
         }
         var operation = new CanvasMutationOperation(
@@ -2633,6 +2694,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         ArgumentNullException.ThrowIfNull(url);
         if (_slot.Current.Loaded is not { } basis)
         {
+            SpeakNotReady();
             return;
         }
         if (!Uri.TryCreate(url, UriKind.Absolute, out Uri? parsed)
@@ -2677,9 +2739,15 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     {
         ArgumentNullException.ThrowIfNull(nodeId);
         ArgumentNullException.ThrowIfNull(newPath);
-        if (_slot.Current.Loaded is not { } basis
-            || !_rows.ContainsKey(nodeId))
+        if (_slot.Current.Loaded is not { } basis)
         {
+            SpeakNotReady();
+            return;
+        }
+        if (!_rows.ContainsKey(nodeId))
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(
+                new CanvasStatusNote.NothingSelected()));
             return;
         }
         var operation = new CanvasMutationOperation(

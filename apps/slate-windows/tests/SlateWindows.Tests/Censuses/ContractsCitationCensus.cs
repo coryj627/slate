@@ -255,7 +255,12 @@ public sealed class ContractsCitationCensus
                 // whole retirement, taking the section to 69; 68 sits
                 // above the pre-task population of 67 — a fifteenth
                 // time.
-                68),
+                //
+                // TE-11c bound the never-silent tables and the one
+                // core sentence, taking the section to 73; 70 sits
+                // above the pre-task population of 69 — a sixteenth
+                // time.
+                70),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

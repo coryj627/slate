@@ -2120,6 +2120,11 @@
     "text": "This canvas is no longer available. Copy your draft before closing the editor."
   },
   {
+    "event": "Canvas { event: CanvasMutationRefused { reason: RefreshPending } }",
+    "priority": "medium",
+    "text": "Your last change is saved but not shown yet. Refresh to see it before making more changes."
+  },
+  {
     "event": "Canvas { event: CanvasLoadedDegraded { skipped: 3 } }",
     "priority": "medium",
     "text": "Canvas loaded. 3 unsupported items are preserved in the file but not shown."

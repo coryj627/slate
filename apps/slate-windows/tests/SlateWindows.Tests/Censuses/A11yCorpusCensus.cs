@@ -473,6 +473,7 @@ public sealed class A11yCorpusCensus
         new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasMutationRefused(Reason: CanvasMutationRefusal.Unavailable)),
         new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasMutationRefused(Reason: CanvasMutationRefusal.ReadOnly)),
         new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasMutationRefused(Reason: CanvasMutationRefusal.CardEditorUnavailable)),
+        new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasMutationRefused(Reason: CanvasMutationRefusal.RefreshPending)),
         new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasLoadedDegraded(Skipped: 3)),
         new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasLoadedDegraded(Skipped: 1)),
         new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasEmptyOnboarding(NewCardChord: "Option Command N", PaletteChord: "Command Shift P")),

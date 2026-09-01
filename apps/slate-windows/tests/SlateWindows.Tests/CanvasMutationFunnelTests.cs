@@ -96,8 +96,13 @@ public sealed class CanvasMutationFunnelTests
         Assert.Equal("pre-conflict", h.Funnel.Conflict.PreConflictSnapshot.ContentHash);
         Assert.Contains(h.Announced, e => e is CanvasA11yEvent.CanvasSaveConflict);
         Assert.Null(h.History.OfferedUndo);
-        // And the table refuses the NEXT write while the record stands.
+        // And the table refuses the NEXT write while the record stands
+        // - AUDIBLY (§E TE-11c): the pending-conflict refusal speaks
+        // the conflict's own event again, never silence.
         Assert.Equal(CanvasMutationAdmission.ConflictPending, h.Apply("another"));
+        Assert.Equal(
+            2,
+            h.Announced.Count(e => e is CanvasA11yEvent.CanvasSaveConflict));
     }
 
     /// <summary>The unindexed commit arm: the entry lands with the
@@ -150,6 +155,65 @@ public sealed class CanvasMutationFunnelTests
         Assert.Equal(CanvasMutationAdmission.Busy, h.Apply("eager"));
         Assert.Equal(CanvasMutationAdmission.BusyAlreadyAnnounced, h.Apply("eager 2"));
         Assert.Equal(0, h.Writes.Applies);
+        // §E TE-11c: audible means SPOKEN - exactly once per hold.
+        Assert.Single(
+            h.Announced,
+            e => e is CanvasA11yEvent.CanvasBlocked
+            {
+                Reason: CanvasBlockedReason.ModeBusy,
+            });
         h.Gate.Release(holder);
+    }
+
+    /// <summary>§E TE-11c (E8a/E2): a not-ready admission SPEAKS the
+    /// typed refusal - mac's exact reason table over the publication's
+    /// load state.</summary>
+    [Fact]
+    public void ANotReadyAdmissionSpeaksTheTypedRefusal()
+    {
+        var h = new Harness();
+        _ = h.Slot.Publish(s => s.WithLoadState(CanvasLoadState.Loading, null));
+        Assert.Equal(CanvasMutationAdmission.NotReady, h.Apply("early"));
+        Assert.Single(
+            h.Announced,
+            e => e is CanvasA11yEvent.CanvasMutationRefused
+            {
+                Reason: CanvasMutationRefusal.Opening,
+            });
+    }
+
+    /// <summary>§E TE-11c (IE-10): the committed-but-unpresented
+    /// admission speaks core's RefreshPending sentence - Refresh, not
+    /// Reload, because the recovery re-runs the refresh, never the
+    /// committed action.</summary>
+    [Fact]
+    public void ARecoveryPendingAdmissionSpeaksRefreshPending()
+    {
+        var h = new Harness();
+        _ = h.Slot.Publish(s =>
+            s.WithCommittedUnpresented(new CanvasOperationId("landed")));
+        Assert.Equal(CanvasMutationAdmission.RecoveryPending, h.Apply("blocked"));
+        Assert.Single(
+            h.Announced,
+            e => e is CanvasA11yEvent.CanvasMutationRefused
+            {
+                Reason: CanvasMutationRefusal.RefreshPending,
+            });
+    }
+
+    /// <summary>§E TE-11c: a foreign mode transient refuses audibly
+    /// with the mode sentence (mac's #521 guard).</summary>
+    [Fact]
+    public void AForeignModeTokenRefusesAudibly()
+    {
+        var h = new Harness();
+        h.Funnel.SetModeToken(new object());
+        Assert.Equal(CanvasMutationAdmission.ModeHeld, h.Apply("verb"));
+        Assert.Single(
+            h.Announced,
+            e => e is CanvasA11yEvent.CanvasBlocked
+            {
+                Reason: CanvasBlockedReason.ModeBusy,
+            });
     }
 }

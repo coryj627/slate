@@ -8274,6 +8274,43 @@ activation stopped raising and the request fact failed; the seat
 dropped and the landing fact failed; the event raise deleted and the
 table's seam fact failed.
 
+**TE-11c — E8a's never-silent table: the funnel half and the verb
+half.** The admission ladder SPEAKS now. Every refused admission
+announces its typed event at the refusal site, shared by both
+entrypoints: NotReady renders mac's exact reason table over the
+publication's load state through one derivation
+(the `CanvasMutationFunnel` ladder's `AnnounceAdmission` and its
+NotReadyReason — Loading is Opening, the
+parse error is ReadOnly, a lost retarget is RetargetFailed, the rest
+Unavailable); a pending conflict re-speaks the conflict's own event;
+a foreign mode transient and a held gate speak the mode sentence,
+the gate once per hold through the existing dedup; Stale stays
+silent BY CONTRACT (E2 — a displaced operation swallows). The
+committed-but-unpresented arm had no true sentence anywhere, so the
+freeze-lifted ceiling paid for one CORE addition:
+`CanvasMutationRefusal`'s RefreshPending arm, rendered "Your last change
+is saved but not shown yet. Refresh to see it before making more
+changes." — IE-10's say-Refresh-not-Reload ruling verbatim — carried
+through the TE-4 playbook's places (enum, render, witness, golden
+expected row, the cardinality group, the regenerated corpus, both
+hosts' corpus censuses, the uniffi mirror, regenerated bindings; mac
+renders refusals through core, so no Swift switch widened). The verb
+half: fourteen silent guard exits split and spoken — the no-basis
+short-circuits speak the SAME derivation the ladder uses
+(`SpeakNotReady`, so guard and admission can never disagree);
+no-selection and vanished-endpoint exits speak `CanvasStatusNote`'s
+NothingSelected; an unknown group speaks NotAGroup; the two guards no surface can reach
+(delete-on-group behind ED-3's routing and the fixed-palette color
+check) are recorded as guards, not cells. Facts: the not-ready,
+refresh-pending and foreign-mode admissions each pinned to their
+sentence; the busy hold's once-audible refusal; the pending
+conflict's audible second refusal; the verb cells counted per
+sentence through the coalescing announcer's flush; the unready-verb
+refusal end to end. Three mutations, each byte-restored: the ladder
+announce dropped and the not-ready fact failed; one guard's sentence
+dropped and its cell failed; one no-basis speak dropped and the
+unready fact failed.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same

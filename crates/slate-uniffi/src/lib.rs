@@ -7543,6 +7543,7 @@ pub enum CanvasMutationRefusal {
     Unavailable,
     ReadOnly,
     CardEditorUnavailable,
+    RefreshPending,
 }
 
 impl From<CanvasMutationRefusal> for core::a11y::CanvasMutationRefusal {
@@ -7555,6 +7556,7 @@ impl From<CanvasMutationRefusal> for core::a11y::CanvasMutationRefusal {
             CanvasMutationRefusal::Unavailable => C::Unavailable,
             CanvasMutationRefusal::ReadOnly => C::ReadOnly,
             CanvasMutationRefusal::CardEditorUnavailable => C::CardEditorUnavailable,
+            CanvasMutationRefusal::RefreshPending => C::RefreshPending,
         }
     }
 }

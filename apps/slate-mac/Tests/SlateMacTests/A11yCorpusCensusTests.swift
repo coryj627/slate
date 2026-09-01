@@ -485,6 +485,7 @@ final class A11yCorpusCensusTests: XCTestCase {
             .canvas(event: .canvasMutationRefused(reason: .unavailable)),
             .canvas(event: .canvasMutationRefused(reason: .readOnly)),
             .canvas(event: .canvasMutationRefused(reason: .cardEditorUnavailable)),
+            .canvas(event: .canvasMutationRefused(reason: .refreshPending)),
             .canvas(event: .canvasLoadedDegraded(skipped: 3)),
             .canvas(event: .canvasLoadedDegraded(skipped: 1)),
             .canvas(event: .canvasEmptyOnboarding(newCardChord: "Option Command N", paletteChord: "Command Shift P")),

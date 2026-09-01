@@ -367,6 +367,12 @@ pub enum CanvasMutationRefusal {
     Unavailable,
     ReadOnly,
     CardEditorUnavailable,
+    /// A commit landed but its refresh could not present it (the
+    /// COMMITTED-BUT-UNPRESENTED admission arm, W6-1 §E TE-11c /
+    /// IE-10): writes stay refused until a REFRESH shows the change.
+    /// The sentence says Refresh, not Reload — the recovery re-runs
+    /// the refresh, never the committed action.
+    RefreshPending,
 }
 
 /// Undo or redo — for the Edit-menu title, which is LABEL class, not
@@ -2743,6 +2749,10 @@ impl CanvasA11yEvent {
                     "This canvas is no longer available. Copy your draft before closing \
                      the editor."
                 }
+                CanvasMutationRefusal::RefreshPending => {
+                    "Your last change is saved but not shown yet. Refresh to see it \
+                     before making more changes."
+                }
             }
             .to_owned(),
 
@@ -4334,6 +4344,9 @@ fn canvas_corpus() -> Vec<CanvasA11yEvent> {
         CanvasMutationRefused {
             reason: CanvasMutationRefusal::CardEditorUnavailable,
         },
+        CanvasMutationRefused {
+            reason: CanvasMutationRefusal::RefreshPending,
+        },
         CanvasLoadedDegraded { skipped: 3 },
         CanvasLoadedDegraded { skipped: 1 },
         CanvasEmptyOnboarding {
@@ -5079,6 +5092,10 @@ mod tests {
             ),
             (
                 Medium,
+                "Your last change is saved but not shown yet. Refresh to see it before making more changes.",
+            ),
+            (
+                Medium,
                 "Canvas loaded. 3 unsupported items are preserved in the file but not shown.",
             ),
             (
@@ -5753,7 +5770,8 @@ mod tests {
                 | CanvasMutationRefusal::RetargetFailed
                 | CanvasMutationRefusal::Unavailable
                 | CanvasMutationRefusal::ReadOnly
-                | CanvasMutationRefusal::CardEditorUnavailable => None,
+                | CanvasMutationRefusal::CardEditorUnavailable
+                | CanvasMutationRefusal::RefreshPending => None,
             },
 
             // No closed parameter set at all — plain data only.

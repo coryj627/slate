@@ -79,6 +79,7 @@ internal sealed class CanvasMutationFunnel(
         CanvasMutationAdmission admission = AdmitAndAcquire(operation);
         if (admission != CanvasMutationAdmission.Admitted)
         {
+            AnnounceAdmission(admission);
             return admission;
         }
 
@@ -139,6 +140,7 @@ internal sealed class CanvasMutationFunnel(
         CanvasMutationAdmission admission = AdmitAndAcquire(operation);
         if (admission != CanvasMutationAdmission.Admitted)
         {
+            AnnounceAdmission(admission);
             return admission;
         }
         run(() => TransactHistory(operation, snapshot, redo));
@@ -227,6 +229,49 @@ internal sealed class CanvasMutationFunnel(
             redo
                 ? new CanvasBlockedReason.RedoBlocked()
                 : new CanvasBlockedReason.UndoBlocked()));
+
+    /// <summary>§E TE-11c (E8a/E2): every refused admission SPEAKS its
+    /// typed event — the never-silent table's funnel half. Stale is
+    /// silent BY CONTRACT (E2: a displaced operation swallows — no
+    /// announcement for a document that moved on), and a Busy repeat
+    /// against the same hold stays quiet (the once-per-hold gate).</summary>
+    private void AnnounceAdmission(CanvasMutationAdmission admission)
+    {
+        switch (admission)
+        {
+            case CanvasMutationAdmission.NotReady:
+                announce(new CanvasA11yEvent.CanvasMutationRefused(
+                    NotReadyReason(slot.Current)));
+                break;
+            case CanvasMutationAdmission.RecoveryPending:
+                announce(new CanvasA11yEvent.CanvasMutationRefused(
+                    CanvasMutationRefusal.RefreshPending));
+                break;
+            case CanvasMutationAdmission.ConflictPending:
+                announce(new CanvasA11yEvent.CanvasSaveConflict());
+                break;
+            case CanvasMutationAdmission.ModeHeld:
+            case CanvasMutationAdmission.Busy:
+                announce(new CanvasA11yEvent.CanvasBlocked(
+                    new CanvasBlockedReason.ModeBusy()));
+                break;
+            default:
+                break;
+        }
+    }
+
+    /// <summary>The one NotReady → refusal-reason derivation, shared
+    /// with the verbs' guard short-circuits so the guard and the
+    /// ladder can never say different things: mac's exact table
+    /// (canvasMutationRefusal), publication-shaped.</summary>
+    internal static CanvasMutationRefusal NotReadyReason(CanvasPublication now) =>
+        now.LoadState switch
+        {
+            CanvasLoadState.Loading => CanvasMutationRefusal.Opening,
+            CanvasLoadState.ParseError => CanvasMutationRefusal.ReadOnly,
+            CanvasLoadState.RetargetAbsent => CanvasMutationRefusal.RetargetFailed,
+            _ => CanvasMutationRefusal.Unavailable,
+        };
 
     private void Transact(
         CanvasMutationOperation operation,
