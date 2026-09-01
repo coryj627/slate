@@ -1017,6 +1017,18 @@
       "registered": true
     },
     {
+      "id": "slate.canvas.connectMode",
+      "label": "Canvas: Connect Mode",
+      "section": "Canvas",
+      "hint": "Remember the selected card, navigate to a target with the usual movements, press Return to connect.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
       "id": "slate.canvas.placeBelow",
       "label": "Canvas: Place Below…",
       "section": "Canvas",

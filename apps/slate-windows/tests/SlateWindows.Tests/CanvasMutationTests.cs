@@ -287,6 +287,133 @@ public sealed class CanvasMutationTests : IDisposable
         document.Shutdown();
     }
 
+    /// <summary>§F TF-9 (F8): connect mode end to end — the origin
+    /// remembered, the reader's own movement steps the candidate,
+    /// Return applies F7's staged connect with label NULL, one entry,
+    /// the connected sentence after the clear.</summary>
+    [Fact]
+    public void ConnectModeConnectsTheReadersCard()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        document.Navigator.AttachPresenter(new FakePane());
+        Assert.True(document.Navigator.EnterConnectMode());
+        Assert.NotNull(document.ConnectOrigin);
+        Assert.Null(document.Transient);
+
+        document.SeatSelectionSilently("grp");
+        Assert.True(document.Modes.Commit());
+
+        Assert.False(document.Modes.IsActive);
+        Assert.Null(document.ConnectOrigin);
+        string disk = DiskBytes().Replace(" ", "").Replace("\t", "");
+        Assert.Contains("\"fromSide\":\"right\",\"toNode\":\"grp\"", disk);
+        Assert.DoesNotContain("\"toNode\":\"grp\",\"toSide\":\"left\",\"label\"", disk);
+        Assert.NotNull(document.UndoStack.OfferedUndo);
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            a => a.Text.Contains("onnected", StringComparison.Ordinal));
+        document.Shutdown();
+    }
+
+    /// <summary>§F TF-9 (F8): Return with no movement ends without
+    /// effect — nothing written, and the token is FREE (a later verb
+    /// admits).</summary>
+    [Fact]
+    public void ReturnOnTheOriginEndsWithoutEffect()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        document.Navigator.AttachPresenter(new FakePane());
+        string before = DiskBytes();
+        Assert.True(document.Navigator.EnterConnectMode());
+
+        Assert.True(document.Modes.Commit());
+
+        Assert.False(document.Modes.IsActive);
+        Assert.Equal(before, DiskBytes());
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            a => a.Text.Contains("no target", StringComparison.OrdinalIgnoreCase));
+
+        // The token yielded: an ordinary verb admits.
+        document.CanvasNewCard();
+        Assert.NotEqual(before, DiskBytes());
+        document.Shutdown();
+    }
+
+    /// <summary>§F TF-9 (IF-29): Esc returns SELECTION AND READER
+    /// FOCUS to the origin — the restoration addresses the owning
+    /// presenter, and the seat is the fallback.</summary>
+    [Fact]
+    public void EscReturnsSelectionAndFocusToTheOrigin()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        var pane = new RecordingPane();
+        document.Navigator.AttachPresenter(pane);
+        Assert.True(document.Navigator.EnterConnectMode());
+
+        document.SeatSelectionSilently("blocker");
+        Assert.True(document.Modes.Cancel());
+
+        Assert.Equal("a", document.Selection.Selected);
+        Assert.Contains("a", pane.FocusedRows);
+        Assert.Null(document.ConnectOrigin);
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            a => a.Text.Contains("Alpha", StringComparison.Ordinal)
+                && a.Text.Contains("ancel", StringComparison.Ordinal));
+        document.Shutdown();
+    }
+
+    /// <summary>§F TF-9 (F1a): a displacement — a publish whose loaded
+    /// reference is not the origin's — cancels connect mode and clears
+    /// the memory.</summary>
+    [Fact]
+    public void ADisplacementCancelsConnectMode()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        document.Navigator.AttachPresenter(new FakePane());
+        Assert.True(document.Navigator.EnterConnectMode());
+
+        // A reload installs a new loaded triple (the TF-2 idiom).
+        document.Load();
+
+        Assert.False(document.Modes.IsActive);
+        Assert.Null(document.ConnectOrigin);
+        document.Shutdown();
+    }
+
+    private sealed class RecordingPane : ICanvasSurfacePresenter
+    {
+        public List<string> FocusedRows { get; } = [];
+
+        public CanvasSurfaceKind Projection => CanvasSurfaceKind.Outline;
+
+        public bool ProjectionHasFocus => true;
+
+        public bool CanMoveWithinProjection(bool forward) => true;
+
+        public bool DismissTransientRegion() => false;
+
+        public object? Owner => null;
+
+        public bool ViewportCommand(CanvasViewportVerb verb) => false;
+
+        public bool FocusRow(string nodeId)
+        {
+            FocusedRows.Add(nodeId);
+            return true;
+        }
+
+        public bool FocusProjection() => false;
+    }
+
     /// <summary>§F TF-8 (F7): the staged connect applies ONCE with
     /// every generated parameter spelled — core's sides, None/Arrow
     /// ends, the label — one action, one undo, the connected

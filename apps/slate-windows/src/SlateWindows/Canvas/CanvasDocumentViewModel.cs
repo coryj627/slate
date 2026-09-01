@@ -2237,14 +2237,27 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// cancel the mode it is completing.</summary>
     private void WatchTransientDisplacement(CanvasPublication current)
     {
-        if (Transient is not { } transient
-            || ReferenceEquals(current.Loaded, transient.Identity)
-            || Modes.HasPendingCommitForTests)
+        if (Modes.HasPendingCommitForTests)
         {
             return;
         }
-        DiscardTransient();
-        _ = Modes.Cancel();
+        if (Transient is { } transient
+            && !ReferenceEquals(current.Loaded, transient.Identity))
+        {
+            DiscardTransient();
+            _ = Modes.Cancel();
+            return;
+        }
+        // §F TF-9 (F8/F1a): connect mode's displacement arm — the
+        // origin memory is a guess about a publication that no longer
+        // stands, so the mode cancels the same way a transient's
+        // would.
+        if (ConnectOrigin is { } origin
+            && !ReferenceEquals(current.Loaded, origin.Identity))
+        {
+            ClearConnectOrigin();
+            _ = Modes.Cancel();
+        }
     }
 
     private void SpeakNotReady() =>
@@ -3021,7 +3034,11 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// generated AddEdge parameter is spelled. An empty submitted
     /// label normalizes to null (IF-27) — Enter-skips and
     /// click-with-empty-field serialize identically.</summary>
-    internal void CanvasConnect(CanvasConnectStage stage, string? label)
+    internal void CanvasConnect(
+        CanvasConnectStage stage,
+        string? label,
+        object? modeToken = null,
+        Action<CanvasOperationOutcome>? completion = null)
     {
         ArgumentNullException.ThrowIfNull(stage);
         string? clean = string.IsNullOrEmpty(label) ? null : label;
@@ -3030,56 +3047,108 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             this,
             Selection.Selected,
             stage.Identity,
-            CanvasMutationEffect.KeepSelection);
+            CanvasMutationEffect.KeepSelection,
+            modeToken: modeToken)
+        {
+            Completion = completion,
+        };
         _ = Funnel.Apply(
             operation,
-            handle =>
-            {
-                try
-                {
-                    CanvasPopulation? population = _slot.Current.Population;
-                    CanvasSceneNode? origin =
-                        population?.SceneByNode.GetValueOrDefault(stage.OriginId);
-                    CanvasSceneNode? target =
-                        population?.SceneByNode.GetValueOrDefault(stage.TargetId);
-                    if (origin is null || target is null
-                        || stage.OriginId == stage.TargetId)
-                    {
-                        Speak(new CanvasA11yEvent.CanvasStatus(
-                            new CanvasStatusNote.PickDifferentTarget()));
-                        return null;
-                    }
-                    CanvasSidePair sides = SlateUniffiMethods.CanvasAutoSides(
-                        new CanvasRect(
-                            origin.X, origin.Y, origin.Width, origin.Height),
-                        new CanvasRect(
-                            target.X, target.Y, target.Width, target.Height));
-                    return new CanvasAction(
-                        $"connect \"{stage.OriginTitle}\" to \"{stage.TargetTitle}\"",
-                        [
-                            new CanvasOp.AddEdge(
-                                SlateUniffiMethods.CanvasNewId(),
-                                stage.OriginId,
-                                sides.From,
-                                stage.TargetId,
-                                sides.To,
-                                CanvasEndStyle.None,
-                                CanvasEndStyle.Arrow,
-                                clean,
-                                null),
-                        ]);
-                }
-                catch (VaultException)
-                {
-                    Speak(new CanvasA11yEvent.CanvasActionFailed(
-                        CanvasFailedAction.CanvasAction, "connect"));
-                    return null;
-                }
-            },
+            handle => PrepareConnectAction(stage, clean),
             "connect",
-            confirm: () => new CanvasA11yEvent.CanvasConnected(
-                stage.OriginTitle, stage.TargetTitle, clean));
+            // §F TF-9 (F8/F4b): under a mode token the COMPLETION owns
+            // the sentence — Committed(confirmation) speaks after the
+            // clear; the picker flow keeps the funnel's confirm.
+            confirm: completion is null
+                ? () => new CanvasA11yEvent.CanvasConnected(
+                    stage.OriginTitle, stage.TargetTitle, clean)
+                : null);
     }
+
+    /// <summary>§F TF-8/TF-9 (F7): the ONE connect preparation both
+    /// flows share — endpoints re-resolved against the live
+    /// population, the self gate belt-and-braces, sides from core,
+    /// every AddEdge parameter spelled.</summary>
+    private CanvasAction? PrepareConnectAction(
+        CanvasConnectStage stage, string? clean)
+    {
+        try
+        {
+            CanvasPopulation? population = _slot.Current.Population;
+            CanvasSceneNode? origin =
+                population?.SceneByNode.GetValueOrDefault(stage.OriginId);
+            CanvasSceneNode? target =
+                population?.SceneByNode.GetValueOrDefault(stage.TargetId);
+            if (origin is null || target is null
+                || stage.OriginId == stage.TargetId)
+            {
+                Speak(new CanvasA11yEvent.CanvasStatus(
+                    new CanvasStatusNote.PickDifferentTarget()));
+                return null;
+            }
+            CanvasSidePair sides = SlateUniffiMethods.CanvasAutoSides(
+                new CanvasRect(origin.X, origin.Y, origin.Width, origin.Height),
+                new CanvasRect(target.X, target.Y, target.Width, target.Height));
+            return new CanvasAction(
+                $"connect \"{stage.OriginTitle}\" to \"{stage.TargetTitle}\"",
+                [
+                    new CanvasOp.AddEdge(
+                        SlateUniffiMethods.CanvasNewId(),
+                        stage.OriginId,
+                        sides.From,
+                        stage.TargetId,
+                        sides.To,
+                        CanvasEndStyle.None,
+                        CanvasEndStyle.Arrow,
+                        clean,
+                        null),
+                ]);
+        }
+        catch (VaultException)
+        {
+            Speak(new CanvasA11yEvent.CanvasActionFailed(
+                CanvasFailedAction.CanvasAction, "connect"));
+            return null;
+        }
+    }
+
+    /// <summary>§F TF-9 (F8): connect mode's origin memory, or
+    /// apply, answering the OPERATION so the mode can hold Pending on
+    /// its identity.</summary>
+    internal CanvasMutationOperation? ConnectForMode(
+        CanvasConnectStage stage,
+        object modeToken,
+        Action<CanvasMutationOperation, CanvasOperationOutcome> completion)
+    {
+        ArgumentNullException.ThrowIfNull(stage);
+        ArgumentNullException.ThrowIfNull(modeToken);
+        ArgumentNullException.ThrowIfNull(completion);
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId("connect"),
+            this,
+            Selection.Selected,
+            stage.Identity,
+            CanvasMutationEffect.KeepSelection,
+            modeToken: modeToken);
+        operation.Completion = outcome => completion(operation, outcome);
+        CanvasMutationAdmission admission = Funnel.Apply(
+            operation,
+            handle => PrepareConnectAction(stage, null),
+            "connect");
+        return admission == CanvasMutationAdmission.Admitted ? operation : null;
+    }
+
+    /// <summary>§F TF-9 (F8): connect mode's origin memory, or
+    /// null.</summary>
+    internal CanvasConnectOrigin? ConnectOrigin { get; private set; }
+
+    internal void InstallConnectOrigin(CanvasConnectOrigin origin)
+    {
+        ArgumentNullException.ThrowIfNull(origin);
+        ConnectOrigin = origin;
+    }
+
+    internal void ClearConnectOrigin() => ConnectOrigin = null;
 
     /// <summary>§F TF-8 (F7): the staged-prompt seam — the workspace
     /// presents the label step; tests tap it directly.</summary>

@@ -336,7 +336,12 @@ public sealed class ContractsCitationCensus
                 // connect flow, taking the section to 75; 73
                 // sits above the pre-task population of 71 — a
                 // ninth time.
-                73),
+                //
+                // TF-9 bound the connect-mode memory and its shared
+                // preparation, taking the section to 76; 75
+                // sits above the pre-task population of 75 — a
+                // tenth time.
+                75),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

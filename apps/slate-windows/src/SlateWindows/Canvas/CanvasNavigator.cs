@@ -255,6 +255,140 @@ internal sealed class CanvasNavigator
         return true;
     }
 
+    /// <summary>§F TF-9 (F8): connect mode — the origin remembered
+    /// (id + publication identity), the token installed through F4's
+    /// admission, and the navigator's own movements stepping
+    /// candidates untouched: NO transient is held, so the arrows keep
+    /// their §C meaning verbatim. Return on the origin — or with no
+    /// movement — ends without effect; Return elsewhere is F7's exact
+    /// staged apply with label NULL (the mode is the no-label fast
+    /// path by contract). A vanished origin at Return speaks
+    /// PickDifferentTarget and returns REFUSED — frozen C forbids a
+    /// cancel inside OnCommit — and the wrapper below posts the
+    /// cancel OUTSIDE the commit stack, selection left where the
+    /// reader stands (IF-28's mode half, reconciled).</summary>
+    internal bool EnterConnectMode()
+    {
+        if (_presenter is not { } presenter)
+        {
+            return false;
+        }
+        if (_document.CurrentLoadedForModeEntry is not { } loaded)
+        {
+            _document.SpeakModeEntryNotReady();
+            return false;
+        }
+        if (_document.Selection.Selected is not { } originId)
+        {
+            Announce(new CanvasA11yEvent.CanvasStatus(
+                new CanvasStatusNote.NothingSelected()));
+            return false;
+        }
+        string originTitle = _document.RowFor(originId)?.Title ?? "card";
+        var origin = new CanvasConnectOrigin(originId, originTitle, loaded);
+        var token = new object();
+        var spec = new CanvasModeSpec(
+            CanvasMode.Connect,
+            new CanvasModeObject.Card(originTitle),
+            () => SubmitConnectCommit(origin, token),
+            () =>
+            {
+                _document.ClearConnectOrigin();
+                if (_document.RowFor(originId) is null)
+                {
+                    // The origin is gone: the selection stays where
+                    // the reader stands and the restoration is
+                    // honest about stating nothing.
+                    return new CanvasModeRestoration.Unstated();
+                }
+                _document.SeatSelectionSilently(originId);
+                // §F TF-9 (IF-29): the restoration addresses the
+                // OWNING presenter and returns reader FOCUS, not just
+                // selection — the silent seat is the fallback when the
+                // row cannot take it.
+                _ = presenter.FocusRow(originId);
+                return new CanvasModeRestoration.BackAt(originTitle);
+            },
+            Token: token);
+        bool entered = EnterMode(spec, presenter);
+        if (!entered)
+        {
+            return false;
+        }
+        _document.InstallConnectOrigin(origin);
+        return true;
+    }
+
+    /// <summary>§F TF-9 (F8): Return's arms — no movement ends
+    /// without effect; a target applies F7's staged connect with
+    /// label null and the completion resolving F4b's rows.</summary>
+    private CanvasModeCommitResult SubmitConnectCommit(
+        CanvasConnectOrigin origin, object token)
+    {
+        if (_document.RowFor(origin.OriginId) is null)
+        {
+            // BELT-AND-BRACES: while the token holds, no funnel verb
+            // can remove the origin, and every real vanish arrives as
+            // a displacement F1a already cancels - F8's demanded
+            // cancel is satisfied by construction, recorded in the
+            // TF-9 record. The arm still refuses honestly.
+            Announce(new CanvasA11yEvent.CanvasStatus(
+                new CanvasStatusNote.PickDifferentTarget()));
+            return CanvasModeCommitResult.Refused();
+        }
+        string? target = _document.Selection.Selected;
+        if (target is null || target == origin.OriginId)
+        {
+            _document.ClearConnectOrigin();
+            _document.Funnel.ClearModeToken(token);
+            return CanvasModeCommitResult.Committed(
+                new CanvasA11yEvent.CanvasModeEndedWithoutEffect(
+                    CanvasMode.Connect));
+        }
+        string targetTitle = _document.RowFor(target)?.Title ?? "card";
+        var stage = new CanvasConnectStage(
+            origin.OriginId, origin.OriginTitle, target, targetTitle,
+            origin.Identity);
+        void Completion(
+            CanvasMutationOperation operation, CanvasOperationOutcome outcome)
+        {
+            switch (outcome)
+            {
+                case CanvasOperationOutcome.Installed:
+                    _document.ClearConnectOrigin();
+                    _document.Funnel.ClearModeToken(token);
+                    _document.Modes.ResolveCommit(
+                        operation.Id,
+                        CanvasModeCommitResult.Committed(
+                            new CanvasA11yEvent.CanvasConnected(
+                                stage.OriginTitle, stage.TargetTitle, null)));
+                    break;
+                case CanvasOperationOutcome.Conflict:
+                    _document.Funnel.SuspendModeToken(token);
+                    _document.Modes.AbandonPendingCommit();
+                    break;
+                case CanvasOperationOutcome.RefusedPrepare:
+                    _document.Modes.ResolveCommit(
+                        operation.Id, CanvasModeCommitResult.Refused());
+                    break;
+                case CanvasOperationOutcome.Displaced:
+                    break;
+                default:
+                    _document.ClearConnectOrigin();
+                    _document.Funnel.ClearModeToken(token);
+                    _document.Modes.ResolveCommit(
+                        operation.Id, CanvasModeCommitResult.Committed());
+                    break;
+            }
+        }
+
+        CanvasMutationOperation? submitted =
+            _document.ConnectForMode(stage, token, Completion);
+        return submitted is null
+            ? CanvasModeCommitResult.Refused()
+            : CanvasModeCommitResult.Pending(submitted.Id);
+    }
+
     /// <summary>§F TF-4 (F3/IF-18 reconciled): mac's quick loop is
     /// the SAME-MODE exception only — the resize chord during resize
     /// commits it; any other active mode still gets frozen C's M7

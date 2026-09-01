@@ -9275,6 +9275,51 @@ runner's set -e did not trip — caught by the mutation gauntlet
 running against an unchanged fact; the patch moved to a file payload
 and the gauntlet reran.
 
+### TF-9 — connect mode
+
+F8 lands WITHOUT a transient — that is the design's teeth: the
+arrows must stay navigator movement verbatim, and a held transient
+would route them to the step machine, so connect mode remembers its
+origin in its own small memory (`CanvasConnectOrigin`: id, title,
+and the publication identity it was remembered against). The F1a
+watcher gains the connect arm — a publish whose loaded reference is
+not the origin's clears the memory and cancels through the machine.
+Entry rides TF-1's preflight whole; Return with no movement — or on
+the origin — ends `CanvasModeEndedWithoutEffect(Connect)` with the
+token freed (the fact proves a later verb admits); Return elsewhere
+is F7's exact staged apply with label NULL by contract, through
+`ConnectForMode` — the same shared preparation the picker flow uses
+(one builder, extracted), the operation carrying the mode token and
+a completion that maps F4b's rows, with the funnel's confirm
+SUPPRESSED so the connected sentence rides Committed(confirmation)
+and speaks after the clear. The completion takes its OPERATION as a
+parameter — the first cut closed over a variable assigned after
+`Apply` returned, and the synchronous funnel's inline completion
+read it null; the restructure is the same lesson TF-3's early
+memory taught, one seam over.
+
+Esc discharges IF-29: the restoration seats the origin silently AND
+addresses the OWNING presenter — `FocusRow(origin)` with the seat as
+the fallback — so reader focus returns with selection, honoring
+C12/CD-40. IF-28's mode half closes BY CONSTRUCTION: while the token
+holds, no funnel verb can remove the origin (the fact that tried
+found the delete refused ModeHeld), and every real vanish arrives as
+a displacement F1a already cancels — so F8's vanished-origin-cancels
+demand is satisfied vacuously; the OnCommit arm still refuses
+PickDifferentTarget as belt-and-braces, and the planned
+outside-the-stack cancel hook was REMOVED as machinery guarding an
+unreachable state. Recorded, not silently dropped: the fact that
+would have driven it was cut for an impossible premise. The
+connectMode palette row lands, chord-less as mac allocates it.
+
+Facts: four — the end-to-end connect (label absent on disk, sides
+unique to the new edge), no-movement ending with the freed token,
+Esc's selection-and-focus return, and the displacement cancel via
+the TF-2 reload idiom. Mutations, each byte-restored: M1 the
+no-effect arm dropped, M2 the re-seat dropped, M3 the focus address
+dropped, M4 the watcher arm dropped, M5 the label forced non-null.
+All bitten.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same

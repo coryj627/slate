@@ -441,6 +441,8 @@ internal sealed partial class WorkspaceViewModel
 
     private RelayCommand? _canvasConnectToCommand;
 
+    private RelayCommand? _canvasConnectModeCommand;
+
     private RelayCommand? _canvasPlaceRightOfCommand;
 
     private RelayCommand? _canvasPlaceAboveCommand;
@@ -522,6 +524,10 @@ internal sealed partial class WorkspaceViewModel
 
     /// <summary>§F TF-7 (F5/F6): the picker-opening verbs — the
     /// document owns every refusal and the request.</summary>
+    public System.Windows.Input.ICommand CanvasConnectModeCommand =>
+        _canvasConnectModeCommand ??= NavigatorCommand(
+            navigator => navigator.EnterConnectMode());
+
     public System.Windows.Input.ICommand CanvasConnectToCommand =>
         _canvasConnectToCommand ??= DocumentCommand(
             document => document.OpenCardPicker(CanvasCardPickerPurpose.ConnectTo));

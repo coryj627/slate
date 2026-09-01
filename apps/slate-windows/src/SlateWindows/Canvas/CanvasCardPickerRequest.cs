@@ -33,6 +33,15 @@ internal sealed record CanvasConnectStage(
     string TargetTitle,
     CanvasLoaded Identity);
 
+/// <summary>§F TF-9 (F8): connect MODE's whole memory — the origin
+/// and the publication identity it was remembered against. No
+/// transient: the arrows must stay navigator movement verbatim, and
+/// a held transient would route them to the step machine.</summary>
+internal sealed record CanvasConnectOrigin(
+    string OriginId,
+    string OriginTitle,
+    CanvasLoaded Identity);
+
 /// <summary>
 /// §F TF-7 (IF-19): the picker's IMMUTABLE operation context,
 /// captured whole at open — the reading-ordered moving ids, their

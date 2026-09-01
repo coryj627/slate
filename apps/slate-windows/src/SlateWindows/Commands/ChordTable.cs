@@ -280,6 +280,8 @@ internal static class ChordTable
         public const string CanvasTracePath = "slate.canvas.tracePath";
         public const string CanvasConnectTo = "slate.canvas.connectTo";
 
+        public const string CanvasConnectMode = "slate.canvas.connectMode";
+
         public const string CanvasPlaceBelow = "slate.canvas.placeBelow";
 
         public const string CanvasPlaceRightOf = "slate.canvas.placeRightOf";
@@ -992,6 +994,9 @@ internal static class ChordTable
                 "Draw a connection from the selected card to a card you pick, "
                 + "with an optional label.",
                 "⌃⌘C", "Ctrl+Alt+C", ChordScope.Canvas),
+            Reg(Ids.CanvasConnectMode, "Canvas: Connect Mode", CommandSection.Canvas,
+                "Remember the selected card, navigate to a target with the "
+                + "usual movements, press Return to connect."),
             Reg(Ids.CanvasPlaceBelow, "Canvas: Place Below…", CommandSection.Canvas,
                 "Move the selected card (or the marked set) just below a card you pick."),
             Reg(Ids.CanvasPlaceRightOf, "Canvas: Place Right Of…", CommandSection.Canvas,
