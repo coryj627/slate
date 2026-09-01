@@ -598,12 +598,12 @@ public sealed class CanvasTableTests : IDisposable
                 return true;
             };
 
-            // Text ⇒ the interim read-only detail, and the surface is
-            // told to move focus there (the outline's contract, one
-            // projection over).
+            // Text => the editor sheet is REQUESTED through the
+            // TE-8 seam (§E TE-11b); the workspace answers.
+            string? requested = null;
+            document.CardEditorRequested += nodeId => requested = nodeId;
             PressEnterOn(grid, "zeta");
-            Assert.Equal("Zeta", document.DetailText);
-            Assert.Equal(document.DetailText, surface.DetailForTests.Text);
+            Assert.Equal("zeta", requested);
 
             // Markdown file ⇒ the note tab; image ⇒ the default app.
             PressEnterOn(grid, "note");
@@ -632,9 +632,9 @@ public sealed class CanvasTableTests : IDisposable
             // falls through the same way: no crash, no announcement, no
             // move.
             _announced.Clear();
-            document.CloseDetail();
+            requested = null;
             PressEnterOn(grid, "grp");
-            Assert.Null(document.DetailText);
+            Assert.Null(requested);
             document.AnnouncerForTests.FlushForTests();
             Assert.DoesNotContain(
                 _announced,
@@ -680,9 +680,12 @@ public sealed class CanvasTableTests : IDisposable
             delete.IsEnabled,
             "Delete stayed staged on a card row after the TE-8 flip.");
 
-        // Open runs the same activation Enter runs.
+        // Open runs the same activation Enter runs - the editor
+        // request is the observable now (§E TE-11b).
+        string? requested = null;
+        document.CardEditorRequested += nodeId => requested = nodeId;
         open.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
-        Assert.Equal("Zeta", document.DetailText);
+        Assert.Equal("zeta", requested);
         document.Shutdown();
     });
 

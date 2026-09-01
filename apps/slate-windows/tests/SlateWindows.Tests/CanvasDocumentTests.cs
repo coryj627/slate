@@ -618,14 +618,19 @@ public sealed class CanvasDocumentTests : IDisposable
         CanvasDocumentViewModel document = NewDocument("board.canvas");
         document.Load();
 
+        // §E TE-11b (E14's second swap, A13): activation asks for
+        // the REAL editor through the TE-8 seam - the interim detail
+        // retired, and the fact that once pinned it pins the request.
+        string? requested = null;
+        document.CardEditorRequested += nodeId => requested = nodeId;
         Assert.Equal(
-            CanvasActivation.DetailShown, document.Activate(Row(document, "question")));
-        Assert.Equal("# Core question\nCan it be accessible?", document.DetailText);
-        Assert.Equal(Row(document, "question").Title, document.DetailTitle);
+            CanvasActivation.EditorRequested,
+            document.Activate(Row(document, "question")));
+        Assert.Equal("question", requested);
         Assert.Equal("question", document.LastActivatedNode);
-
-        document.CloseDetail();
-        Assert.Null(document.DetailText);
+        CanvasCardEditorViewModel editor =
+            Assert.IsType<CanvasCardEditorViewModel>(document.OpenCardEditor("question"));
+        Assert.Equal("# Core question\nCan it be accessible?", editor.Draft);
         document.Shutdown();
     }
 
@@ -1369,30 +1374,6 @@ public sealed class CanvasDocumentTests : IDisposable
             string.Empty,
             System.Windows.Automation.AutomationProperties.GetHelpText(
                 surface.VisualChoiceForTests) ?? string.Empty);
-        document.Shutdown();
-    });
-
-    [Fact]
-    public void EscapeClosesTheInterimDetailSoItIsNeverAKeyboardTrap() => RunSta(() =>
-    {
-        CanvasDocumentViewModel document = NewDocument("board.canvas");
-        document.Load();
-        var surface = new CanvasSurfaceView { Model = document };
-        using var host = Host(surface);
-        _ = document.Activate(Row(document, "question"));
-        Assert.Equal(document.DetailText, surface.DetailForTests.Text);
-
-        PresentationSource source = Assert.IsAssignableFrom<PresentationSource>(
-            PresentationSource.FromVisual(surface.DetailForTests));
-        surface.DetailForTests.RaiseEvent(new System.Windows.Input.KeyEventArgs(
-            System.Windows.Input.Keyboard.PrimaryDevice,
-            source,
-            0,
-            System.Windows.Input.Key.Escape)
-        {
-            RoutedEvent = System.Windows.Input.Keyboard.PreviewKeyDownEvent,
-        });
-        Assert.Null(document.DetailText);
         document.Shutdown();
     });
 

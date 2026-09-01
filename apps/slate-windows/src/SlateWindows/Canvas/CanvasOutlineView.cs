@@ -364,7 +364,6 @@ internal sealed class CanvasOutlineView : UserControl
 
     /// <summary>Raised when a text card's read-only detail was
     /// published — the surface moves focus there (contract A13).</summary>
-    internal event Action? DetailRequested;
 
     /// <summary>The tree realized containers — a pending focus request
     /// that could not reach its row may be deliverable now.</summary>
@@ -898,8 +897,9 @@ internal sealed class CanvasOutlineView : UserControl
             case CanvasActivation.ExpandGroup:
                 line.IsExpanded = !line.IsExpanded;
                 break;
-            case CanvasActivation.DetailShown:
-                DetailRequested?.Invoke();
+            case CanvasActivation.EditorRequested:
+                // The workspace opens the sheet; the modal machinery
+                // owns focus (TE-11b).
                 break;
             default:
                 break;

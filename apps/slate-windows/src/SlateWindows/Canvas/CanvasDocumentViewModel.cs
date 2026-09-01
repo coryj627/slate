@@ -49,9 +49,10 @@ internal enum CanvasActivation
     /// <summary>A group row: the view expands it.</summary>
     ExpandGroup,
 
-    /// <summary>A text card: <see cref="CanvasDocumentViewModel.DetailText"/>
-    /// is published and the view focuses the detail region.</summary>
-    DetailShown,
+    /// <summary>A text card: the editor sheet was REQUESTED through
+    /// the TE-8 seam (§E TE-11b) - the workspace opens it and the
+    /// modal machinery owns focus, so the view does nothing.</summary>
+    EditorRequested,
 
     /// <summary>A file/image card opened a note tab.</summary>
     Navigated,
@@ -199,8 +200,6 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     private IReadOnlyList<CanvasOutlineRow> _outline = [];
     private IReadOnlyList<CanvasTableRow> _tableRows = [];
     private IReadOnlyList<CanvasLoadWarning> _warnings = [];
-    private string? _detailText;
-    private string? _detailTitle;
     private bool _announcedDegradedLoad;
     private Task? _asyncClose;
     private string _filterText = string.Empty;
@@ -476,26 +475,6 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// <summary>Mutations are refused outside Ready (spec behavior 2);
     /// PR E's funnel is the first consumer.</summary>
     public bool IsReadOnly => State != CanvasLoadState.Ready;
-
-    /// <summary>The interim read-only card text (t2 #362), published by
-    /// activating a text card; PR E swaps in the editor sheet.</summary>
-    public string? DetailText
-    {
-        get => _detailText;
-        private set => SetField(ref _detailText, value);
-    }
-
-    public string? DetailTitle
-    {
-        get => _detailTitle;
-        private set => SetField(ref _detailTitle, value);
-    }
-
-    public void CloseDetail()
-    {
-        DetailText = null;
-        DetailTitle = null;
-    }
 
     /// <summary>The row whose activation opened a card — the focus
     /// restoration target when the user comes back (WCAG 2.4.3,
@@ -1396,7 +1375,6 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             return;
         }
         _announcedDegradedLoad = false;
-        CloseDetail();
         ApplyPublication();
         StartWork(() =>
         {
@@ -1850,14 +1828,14 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
 
     private CanvasActivation ActivateTextCard(CanvasOutlineRow row)
     {
-        if (NodeTextOf(row.NodeId) is not { } text)
-        {
-            return CanvasActivation.Refused;
-        }
+        // §E TE-11b (E14's second staged swap, A13): activation
+        // opens the REAL editor sheet through the TE-8 seam - the
+        // workspace answers the request, and OpenCardEditor owns every
+        // refusal (not-a-text-card, unreadable) with its spoken arms.
+        // The interim read-only detail retired with this.
         LastActivatedNode = row.NodeId;
-        DetailTitle = row.Title;
-        DetailText = text;
-        return CanvasActivation.DetailShown;
+        RequestCardEditor(row.NodeId);
+        return CanvasActivation.EditorRequested;
     }
 
     private CanvasActivation ActivateLinkCard(CanvasOutlineRow row)

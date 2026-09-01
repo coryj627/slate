@@ -74,9 +74,6 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
     private readonly CanvasOutlineView _outline;
     private readonly CanvasTableView _table;
     private readonly CanvasRendererView _visual;
-    private readonly Grid _detailRegion;
-    private readonly TextBlock _detailHeading;
-    private readonly TextBox _detailText;
     private readonly AutomationNamedGroupPanel _whereAmIPanel;
     private readonly TextBox _whereAmIReadback;
     private bool _synchronizingSwitcher;
@@ -227,12 +224,10 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         banners.Children.Add(_onboarding);
 
         _outline = new CanvasOutlineView();
-        _outline.DetailRequested += FocusDetail;
         // PR B's projection, in the SAME body slot: exactly one of them
         // is ever visible, so exactly one is ever in the UIA tree
         // (spec §1).
         _table = new CanvasTableView { Visibility = Visibility.Collapsed };
-        _table.DetailRequested += FocusDetail;
         // Same reason as the outline's: a request for a row the panel
         // had virtualized away is deliverable once containers exist
         // (A14.3).
@@ -242,29 +237,6 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         // the active surface on a ready document.
         _visual = new CanvasRendererView { Visibility = Visibility.Collapsed };
 
-        _detailHeading = new TextBlock
-        {
-            FontWeight = FontWeights.SemiBold,
-            Margin = new Thickness(0, 0, 0, 4),
-        };
-        _detailText = new TextBox
-        {
-            IsReadOnly = true,
-            AcceptsReturn = true,
-            TextWrapping = TextWrapping.Wrap,
-            MaxHeight = 180,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-        };
-        AutomationProperties.SetAutomationId(_detailText, "CanvasCardDetail");
-        var detailStack = new StackPanel();
-        detailStack.Children.Add(_detailHeading);
-        detailStack.Children.Add(_detailText);
-        _detailRegion = new Grid
-        {
-            Margin = new Thickness(12, 4, 12, 8),
-            Visibility = Visibility.Collapsed,
-        };
-        _detailRegion.Children.Add(detailStack);
 
         // t0 §1.4: the transient, focusable Where-am-I panel — the
         // PULL-based counterpart to the announcement, so a braille user
@@ -332,12 +304,10 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         DockPanel.SetDock(banners, Dock.Top);
         DockPanel.SetDock(_warningRows, Dock.Bottom);
         DockPanel.SetDock(_whereAmIPanel, Dock.Bottom);
-        DockPanel.SetDock(_detailRegion, Dock.Bottom);
         layout.Children.Add(header);
         layout.Children.Add(banners);
         layout.Children.Add(_warningRows);
         layout.Children.Add(_whereAmIPanel);
-        layout.Children.Add(_detailRegion);
         // Both projections share the fill slot; Render() gates them.
         var projections = new Grid();
         projections.Children.Add(_outline);
@@ -361,7 +331,6 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
 
     internal CanvasTableView TableForTests => _table;
 
-    internal TextBox DetailForTests => _detailText;
 
     internal ListBox WarningRowsForTests => _warningRows;
 
@@ -551,28 +520,6 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         // projections never feel this arm.
         if (_visual.DismissTooltip())
         {
-            return true;
-        }
-        // The READ-ONLY interim detail (PR A / t2 #362), where Escape
-        // closes a view and there is nothing to keep. PR E replaces this
-        // region with the real card editor, which t0 §2 M8 carves OUT of
-        // the mode stack: Escape COMMITS there and the sheet owns its own
-        // key, so it must not become a rung of this ladder. Porting this
-        // arm forward would throw away a user's typing (contract C6).
-        if (Model is { DetailText: not null } model)
-        {
-            model.CloseDetail();
-            // Back to the row that opened it (WCAG 2.1.2/2.4.3) — on the
-            // projection that opened it, which is the one still showing.
-            // The FALLBACK is load-bearing and mirrors CloseWhereAmI's: a
-            // row can be gone by now (an external edit plus a reload),
-            // and a delivery that quietly fails would drop focus on the
-            // window root — a keyboard user with nowhere to go, which is
-            // the trap this Escape exists to prevent (m6).
-            if (model.LastActivatedNode is not { } row || !FocusRow(row))
-            {
-                FocusProjection();
-            }
             return true;
         }
         if (_filterField.IsKeyboardFocusWithin || _filterSummary.IsKeyboardFocusWithin)
@@ -1220,7 +1167,6 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
             // raises OutlinePublished (the displayed rows changed), and
             // rendering on both signals would rebuild the projection
             // twice per keystroke.
-            or nameof(CanvasDocumentViewModel.DetailText)
             or nameof(CanvasDocumentViewModel.WhereAmIText))
         {
             Render();
@@ -1451,16 +1397,6 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
             ? Visibility.Visible
             : Visibility.Collapsed;
 
-        _detailHeading.Text = model.DetailTitle ?? string.Empty;
-        _detailText.Text = model.DetailText ?? string.Empty;
-        AutomationProperties.SetName(
-            _detailText,
-            model.DetailTitle is { Length: > 0 } title
-                ? $"{CanvasPhrase.DetailRegionName}: {title}"
-                : CanvasPhrase.DetailRegionName);
-        _detailRegion.Visibility = model.DetailText is null
-            ? Visibility.Collapsed
-            : Visibility.Visible;
 
         // Exactly one projection in the UIA tree (spec §1): the arm that
         // is not showing is COLLAPSED, which is what keeps it out of the
@@ -1581,5 +1517,4 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         banner.Visibility = text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
-    private void FocusDetail() => _ = _detailText.Focus();
 }

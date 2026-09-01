@@ -250,7 +250,12 @@ public sealed class ContractsCitationCensus
                 // TE-11a bound the wiring slice and the onboarding
                 // swap, taking the section to 67; 65 sits above the
                 // pre-task population of 64 — a fourteenth time.
-                65),
+                //
+                // TE-11b bound the activation swap and the interim's
+                // whole retirement, taking the section to 69; 68 sits
+                // above the pre-task population of 67 — a fifteenth
+                // time.
+                68),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

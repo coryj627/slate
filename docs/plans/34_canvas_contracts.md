@@ -8247,6 +8247,33 @@ failed. chords.json reprojected by its own gate. Owed onward within
 TE-11: the activation-to-editor swap, the anchor acceptance rule,
 the E8a tables, the scenario goldens, the journeys.
 
+**TE-11b — E14's second staged swap: activation opens the real
+editor, and the interim detail retires whole.** Activating a text
+card now asks for the editor through the TE-8 seam — the document
+seats `LastActivatedNode`, raises the request, and the workspace
+opens the sheet whose modal machinery owns focus; `OpenCardEditor`
+owns every refusal with its spoken arms (not-a-text-card,
+unreadable), so the activation path carries no second refusal
+vocabulary. The A13 interim retired WHOLE, not half: the
+`DetailShown` arm became `EditorRequested` (the view does nothing —
+the workspace answers); the document's DetailText/DetailTitle pair,
+their reload clear and the close verb are gone; the surface's detail
+region — fields, construction, docking, property-change arm, apply
+site, focus hop and test accessor — deleted; both row surfaces'
+DetailRequested events deleted; and the Escape rung retired exactly
+as its own comment promised, because t0 §2 M8 carves the editor OUT
+of the mode stack: Escape COMMITS there (C6 — porting the arm
+forward would throw away a user's typing), and the sheet's
+focus-return owns m6's trap, pinned since TE-7. The facts flipped to
+the new truth: activation asserts the raised request, the seat and
+the seed's text through `CanvasCardEditorViewModel.Draft`; the
+table's text arm, its group fall-through and its Open row action
+assert the request; the interim's Escape keyboard-trap fact retired
+WITH its subject. Three mutations, each byte-restored: the
+activation stopped raising and the request fact failed; the seat
+dropped and the landing fact failed; the event raise deleted and the
+table's seam fact failed.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same

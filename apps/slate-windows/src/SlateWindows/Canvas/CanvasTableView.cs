@@ -83,7 +83,6 @@ internal sealed class CanvasTableView : UserControl
     /// <summary>Raised when a text card's read-only detail was published
     /// — the surface moves focus there, exactly as the outline does
     /// (contract A13).</summary>
-    internal event Action? DetailRequested;
 
     /// <summary>The grid realized row containers — a pending focus
     /// request that could not reach its row may be deliverable now
@@ -361,10 +360,7 @@ internal sealed class CanvasTableView : UserControl
         {
             return;
         }
-        if (model.Activate(outlineRow) == CanvasActivation.DetailShown)
-        {
-            DetailRequested?.Invoke();
-        }
+        _ = model.Activate(outlineRow);
         // ExpandGroup has nothing to expand on a flat projection, and
         // mac's table falls through the same way (its activate has no
         // group arm at all). The row stays where it is; nothing is
