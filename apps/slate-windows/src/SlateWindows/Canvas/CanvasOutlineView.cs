@@ -297,6 +297,15 @@ internal sealed class CanvasOutlineView : UserControl
     private int _connectionCount;
     private bool _syncingSelection;
 
+    /// <summary>This VIEW's expansion memory (contract E15, IE-30):
+    /// keyed by node id, session-scoped, pruned to the ids the current
+    /// population knows (ED-4). Per-VIEW because per-surface — two
+    /// panes share one document, and pane A's mutation must not
+    /// overwrite pane B's independent expansion intent, which a
+    /// document-level set would do.</summary>
+    private readonly Dictionary<string, bool> _expansion =
+        new(StringComparer.Ordinal);
+
     public CanvasOutlineView()
     {
         _tree = new CanvasOutlineTree
@@ -600,6 +609,18 @@ internal sealed class CanvasOutlineView : UserControl
     /// which is the same shape rather than a special case.</summary>
     private void Rebuild()
     {
+        // E15: remember what the reader expanded BEFORE the rows are
+        // torn down — a funnel republish rebuilds every row, and the
+        // default-open rule below would otherwise undo every collapse.
+        // Group rows only: connection-host expansion is the selection's,
+        // re-derived on every sync.
+        foreach ((string id, CanvasOutlineRowViewModel row) in _byNode)
+        {
+            if (row.IsGroup)
+            {
+                _expansion[id] = row.IsExpanded;
+            }
+        }
         _roots.Clear();
         _byNode.Clear();
         _parentOf.Clear();
@@ -632,6 +653,32 @@ internal sealed class CanvasOutlineView : UserControl
         // until the cleanup pass folded the two.
         CanvasPopulation? population = model.AppliedPopulation;
 
+        // ED-4's drop rule, against the POPULATION rather than the
+        // displayed rows: a group hidden by a filter keeps its remembered
+        // collapse for the filter's clearing, but an id this canvas no
+        // longer contains — or never did, after a model swap — is
+        // forgotten here, before the memory is consulted.
+        if (population is not null)
+        {
+            var known = new HashSet<string>(StringComparer.Ordinal);
+            foreach (CanvasOutlineRow row in population.Outline)
+            {
+                known.Add(row.NodeId);
+            }
+            var stale = new List<string>();
+            foreach (string id in _expansion.Keys)
+            {
+                if (!known.Contains(id))
+                {
+                    stale.Add(id);
+                }
+            }
+            foreach (string id in stale)
+            {
+                _ = _expansion.Remove(id);
+            }
+        }
+
         bool filtered = model.FilterActive;
         foreach (CanvasOutlineRow row in model.FilteredOutline)
         {
@@ -661,8 +708,10 @@ internal sealed class CanvasOutlineView : UserControl
                 parent.Children.Add(line);
                 _parentOf[line] = parent;
                 // A group with members is expandable; it opens by
-                // default so a first read is the whole structure.
-                parent.IsExpanded = true;
+                // default so a first read is the whole structure —
+                // unless THIS view's reader already chose (E15).
+                parent.IsExpanded =
+                    !_expansion.TryGetValue(parent.Id, out bool kept) || kept;
             }
             _byNode[row.NodeId] = line;
         }
@@ -745,10 +794,16 @@ internal sealed class CanvasOutlineView : UserControl
             }
             _connectionHost = selected;
             _connectionCount = neighbors.Count;
-            if (neighbors.Count > 0)
+            if (neighbors.Count > 0
+                && model.Selection.ActiveSurface == CanvasSurfaceKind.Outline)
             {
                 // Never hidden behind a collapse the user did not ask
-                // for (CD-33).
+                // for (CD-33) — while the outline IS the showing
+                // surface. A seat synchronized into a hidden outline
+                // seats WITHOUT expanding (E15's cause rule): the §C
+                // m-5 sibling is discharged here, at the source of the
+                // unwanted expansion bit, not papered over in the
+                // preservation above.
                 line.IsExpanded = true;
             }
         }

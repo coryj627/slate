@@ -236,7 +236,12 @@ public sealed class ContractsCitationCensus
                 // popup fact, taking the section to 55; 52 sits
                 // above the pre-task population of 51 — an
                 // eleventh time.
-                52),
+                //
+                // TE-9 bound the expansion memory and the aimed
+                // supersession, taking the section to 57; 56 sits
+                // above the pre-task population of 55 — a twelfth
+                // time.
+                56),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

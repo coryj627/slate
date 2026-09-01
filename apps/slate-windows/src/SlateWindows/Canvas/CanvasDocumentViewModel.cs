@@ -1518,6 +1518,23 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                     // so only a landed answer, or its failure, rebuilds
                     // the surfaces; and that is the debounced count's
                     // moment to speak.
+                    //
+                    // E16/m7: the supersession happens IN the
+                    // publication that accepts the filter ANSWER. A
+                    // pending focus request naming a node this answer
+                    // excludes would otherwise sleep through the
+                    // narrowing and land a surprise jump when the
+                    // filter later cleared; the request and the result
+                    // cannot cross, so they meet here — before any
+                    // surface hears the rows changed. A FAILED answer
+                    // keeps the rows it was showing (contract C10), so
+                    // it excludes nothing new and supersedes nothing.
+                    if (loaded.Unit.Answer is CanvasAnswerState.Answered
+                        && _focusRequest is { NodeId: { } sought }
+                        && !loaded.Unit.FilteredOrder.Contains(sought))
+                    {
+                        FocusRequest = null;
+                    }
                     OutlinePublished?.Invoke(this, EventArgs.Empty);
                     Navigator.AnnounceFilterCount();
                 }

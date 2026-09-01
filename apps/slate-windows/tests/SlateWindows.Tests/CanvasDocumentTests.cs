@@ -3557,6 +3557,148 @@ public sealed class CanvasDocumentTests : IDisposable
     private static int CountLines(IEnumerable<CanvasOutlineRowViewModel> rows) =>
         rows.Sum(row => 1 + CountLines(row.Children));
 
+    /// <summary>
+    /// §E TE-9 (E15, ED-4): a collapse the reader chose survives a
+    /// republish. The rebuild tears every row down and the default-open
+    /// rule would re-open the group; the view's expansion memory is the
+    /// difference between a collapse and a suggestion.
+    /// </summary>
+    [Fact]
+    public void ACollapsedGroupStaysCollapsedAcrossARepublish() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = NewDocument("board.canvas");
+        document.Load();
+        var view = new CanvasOutlineView { Model = document };
+        CanvasOutlineRowViewModel grp =
+            Assert.Single(view.RootsForTests, row => row.Id == "grp");
+        Assert.True(grp.IsExpanded, "a group with members opens by default.");
+        grp.IsExpanded = false;
+
+        document.Load();
+
+        CanvasOutlineRowViewModel republished =
+            Assert.Single(view.RootsForTests, row => row.Id == "grp");
+        Assert.NotSame(grp, republished);
+        Assert.False(
+            republished.IsExpanded,
+            "the republish re-opened a group the reader collapsed (E15).");
+        document.Shutdown();
+    });
+
+    /// <summary>
+    /// §E TE-9 (IE-30): expansion is keyed per INSTALLED SURFACE, not
+    /// per document. Two panes share one document; pane A's collapse
+    /// must not overwrite pane B's independent expansion intent when a
+    /// republish rebuilds both.
+    /// </summary>
+    [Fact]
+    public void TwoPanesKeepIndependentExpansionAcrossOneRepublish() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = NewDocument("board.canvas");
+        document.Load();
+        var paneA = new CanvasOutlineView { Model = document };
+        var paneB = new CanvasOutlineView { Model = document };
+        Assert.Single(paneA.RootsForTests, row => row.Id == "grp").IsExpanded = false;
+
+        document.Load();
+
+        Assert.False(
+            Assert.Single(paneA.RootsForTests, row => row.Id == "grp").IsExpanded,
+            "pane A's collapse did not survive its own republish.");
+        Assert.True(
+            Assert.Single(paneB.RootsForTests, row => row.Id == "grp").IsExpanded,
+            "pane A's collapse leaked into pane B — a document-level "
+            + "expansion set, which IE-30 forbids.");
+        document.Shutdown();
+    });
+
+
+    /// <summary>
+    /// §E TE-9 (E15's cause rule, the §C m-5 sibling): a seat
+    /// synchronized into a NON-showing outline seats without expanding.
+    /// The connection rows still materialize under the selected card —
+    /// what is forbidden is CHANGING the expansion bit while another
+    /// surface holds the reader, so there is no unwanted bit for the
+    /// preservation to faithfully keep.
+    /// </summary>
+    [Fact]
+    public void ASeatSyncedIntoAHiddenOutlineSeatsWithoutExpanding() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = NewDocument("board.canvas");
+        document.Load();
+        var view = new CanvasOutlineView { Model = document };
+        document.Selection.ActiveSurface = CanvasSurfaceKind.Table;
+
+        document.SelectNode("question", announce: false);
+
+        CanvasOutlineRowViewModel grp =
+            Assert.Single(view.RootsForTests, row => row.Id == "grp");
+        CanvasOutlineRowViewModel question =
+            Assert.Single(grp.Children, row => row.Id == "question");
+        Assert.NotEmpty(question.Children);
+        Assert.False(
+            question.IsExpanded,
+            "a seat on a hidden outline expanded the connection host "
+            + "(E15's cause rule).");
+
+        document.Selection.ActiveSurface = CanvasSurfaceKind.Outline;
+        document.SelectNode("evidence", announce: false);
+        document.SelectNode("question", announce: false);
+        Assert.True(
+            question.IsExpanded,
+            "the SHOWING outline must still open the connection host "
+            + "(CD-33).");
+        document.Shutdown();
+    });
+
+    /// <summary>
+    /// §E TE-9 (E16, m7): the supersession happens IN the publication
+    /// that accepts the filter answer. A pending focus request naming a
+    /// node the answer excludes would otherwise sleep through the
+    /// narrowing and land a surprise jump when the filter later cleared.
+    /// </summary>
+    [Fact]
+    public void AFocusRequestForAFilteredOutNodeIsSupersededByTheAnswer()
+    {
+        CanvasDocumentViewModel document = NewDocument("board.canvas");
+        document.Load();
+        var owner = new object();
+        document.RequestFocusLanding(owner, "loose");
+        Assert.NotNull(document.FocusRequest);
+
+        document.FilterText = "question";
+
+        Assert.Equal(CanvasAnswerState.Answered, document.AppliedFilterAnswerForTests);
+        Assert.True(
+            document.FocusRequest is null,
+            "the answer excluded the request's node and the request "
+            + "out-slept it (m7).");
+        document.Shutdown();
+    }
+
+    /// <summary>
+    /// §E TE-9 (E16): the supersession is aimed. A request whose node
+    /// SURVIVES the answer keeps waiting for a surface to deliver it —
+    /// superseding every pending request on any answer would re-open
+    /// A14's lost-delivery hole from the other side.
+    /// </summary>
+    [Fact]
+    public void AFocusRequestForASurvivingNodeOutlivesTheAnswer()
+    {
+        CanvasDocumentViewModel document = NewDocument("board.canvas");
+        document.Load();
+        document.RequestFocusLanding(new object(), "question");
+
+        document.FilterText = "question";
+
+        Assert.Equal(CanvasAnswerState.Answered, document.AppliedFilterAnswerForTests);
+        Assert.True(
+            document.FocusRequest is not null,
+            "a surviving node's request must outlive the answer.");
+        document.Shutdown();
+    }
+
+
     /// <summary>A shown, laid-out window: containers exist, focus is
     /// real, and a raised key event has a live PresentationSource.</summary>
     private static HostedWindow Host(UIElement content)

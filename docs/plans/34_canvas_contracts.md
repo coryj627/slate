@@ -8136,6 +8136,40 @@ a staged reason nulled (the no-silent-staging fact failed); the
 builder hand-listed a kind (the equality fact failed); each
 restored byte-for-byte.
 
+**TE-9 — expansion preservation per installed surface; the atomic
+focus-request supersession (IE-30, E15, E16).** The outline view
+gained an expansion memory — a per-VIEW dictionary, which is per
+installed surface by construction, so IE-30's two-pane overwrite
+cannot be written at all: pane A's collapse and pane B's open state
+live in different objects. `Rebuild` captures group rows' expansion
+before teardown, prunes the memory against the POPULATION rather
+than the displayed rows (a group hidden by a filter keeps its
+remembered collapse for the filter's clearing; an id the canvas no
+longer contains is forgotten — ED-4's drop rule), and the
+default-open rule consults the memory before it opens anything. The
+cause side of E15 landed where the contract put it: the
+connection-host expansion in the selection sync is gated on the
+outline being the ACTIVE surface, so a seat synchronized into a
+hidden outline seats without expanding and there is no unwanted bit
+for the preservation to faithfully keep. E16's supersession sits IN
+the publication that accepts the filter answer: a pending
+`CanvasFocusRequest` naming a node the ANSWERED unit's
+`FilteredOrder` excludes is cleared before `OutlinePublished` fires —
+the request and the result meet atomically and cannot cross (m7's
+surprise jump), while a FAILED answer keeps its rows and supersedes
+nothing, and a surviving node's request outlives the answer for a
+surface to deliver. Five facts: the collapse that survives a
+republish; the two-pane independence; the hidden-outline seat; the
+superseded excluded-node request; the surviving request. Three
+mutations, each byte-restored: the default-open rule stopped
+consulting the memory and the republish re-opened the reader's
+collapse; the ActiveSurface gate dropped and the hidden seat
+expanded; the supersession block deleted and the excluded request
+out-slept the answer. Not taken: a live expansion tracker mirroring
+every toggle — the capture-at-rebuild reads the row VMs' final
+state, which the TwoWay binding already holds, so a tracker would be
+a second copy of a truth the view owns.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same
