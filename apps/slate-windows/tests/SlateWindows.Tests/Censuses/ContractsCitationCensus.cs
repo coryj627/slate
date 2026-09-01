@@ -207,7 +207,13 @@ public sealed class ContractsCitationCensus
                 // completion marks and the busy gate — taking the
                 // section to 35; 33 sits above the pre-task
                 // population of 32 — a fifth time.
-                33),
+                //
+                // TE-5a bound the funnel's spine — the admission
+                // table, the transaction, the two seams and the
+                // receipt push — taking the section to 38; 36 sits
+                // above the pre-task population of 35 — a sixth
+                // time.
+                36),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

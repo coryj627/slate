@@ -7865,6 +7865,46 @@ fact failed); the completion mark stripped of at-most-once (the
 marks fact failed); the busy gate's epoch comparison removed (the
 once-per-hold fact failed); each restored byte-for-byte.
 
+**TE-5a — the funnel's spine.** The one `canvas_apply` call site
+(R-A) as a class, integrating every prior task's type; discharges the
+admission and transaction halves of the E1–E3 contracts and IE-5's
+receipt arm end-to-end; the verbs, their surfaces and the real-vault
+batteries are the loop's next slices.
+
+- **Admission is E2's table in order** — not ready, recovery pending
+  (the committed-unpresented state), conflict pending (with the
+  resolving door's pass-through token), mode held (the TE-1 token
+  seam), stale (currency by reference at mint), then ONE atomic gate
+  acquisition whose refusal consults the TE-4 busy gate: audible
+  once per hold, and never a queue. Two FFI seams enter the ctor —
+  `ICanvasLoadSource`'s refresh trio REUSED, plus apply and the
+  snapshot read on the two-method `ICanvasMutationSource`.
+- **The transaction is E3's order with the gate held throughout**,
+  released in a finally: apply through the lease (currency re-checked
+  inside the FFI lock), the history entry recorded before anything
+  fallible, the refresh read under the lease again, and ONE publish
+  installing rows and the effect-plan seat together on the SAME
+  loaded reference. A required-missing seat marks
+  committed-unpresented instead of publishing (IE-35 wired).
+- **The three failure arms, each typed:** WriteConflict builds the
+  retained record AT refusal — snapshot taken with the gate held —
+  and announces the conflict; SavedButUnindexed records the landed
+  commit and marks recovery (TE-0's boundary honored host-side); a
+  mid-apply displacement retains its receipt through a NEW
+  non-rebasing push. The battery caught the first cut rebasing the
+  stack onto the displaced entry's own basis — self-defeating the
+  quarantine — and PushRetained is the repair: the receipt lands
+  under the displacing reload's basis and quarantines by the same
+  comparison that admits current entries.
+
+Facts: six in `CanvasMutationFunnelTests` over scripted seams (the
+run seam inline, the write seam scripted per call — the filter
+machine's source-free discipline). Mutations: the E3 order inverted
+(the record-before-fallible fact failed); the conflict arm dropped
+from admission (the conflict fact's refusal tail failed); the
+displaced arm made rebasing again (the receipt fact failed); each
+restored byte-for-byte.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same

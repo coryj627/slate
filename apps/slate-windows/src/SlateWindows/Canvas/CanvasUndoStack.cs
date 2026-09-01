@@ -67,6 +67,21 @@ internal sealed class CanvasUndoStack
         _epoch++;
     }
 
+    /// <summary>TE-5's displaced-receipt arm (IE-5's second half): a
+    /// commit whose operation lost currency mid-apply is RETAINED
+    /// without rebasing — the live document's basis belongs to the
+    /// displacing reload, so the entry lands quarantined by the same
+    /// comparison that admits current ones, and becomes usable only
+    /// if its exact basis returns. Redo stays: its entries quarantine
+    /// by their own bases.</summary>
+    internal void PushRetained(CanvasHistoryEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        RefuseWhileCheckedOut("push");
+        _undo = _undo.Push(entry);
+        _epoch++;
+    }
+
     /// <summary>Session end: everything goes.</summary>
     internal void Clear()
     {

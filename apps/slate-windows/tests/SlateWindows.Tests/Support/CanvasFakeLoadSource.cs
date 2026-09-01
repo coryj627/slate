@@ -27,7 +27,7 @@ internal sealed class CanvasFakeLoadSource : ICanvasLoadSource
 
     internal Exception? OpenFault { get; set; }
 
-    internal Exception? ReadFault { get; init; }
+    internal Exception? ReadFault { get; set; }
 
     internal Exception? CloseFault { get; set; }
 
