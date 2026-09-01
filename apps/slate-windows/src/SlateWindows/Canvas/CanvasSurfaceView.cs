@@ -545,6 +545,14 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
             CloseWhereAmI();
             return true;
         }
+        // DD-3's literal order inside the rung: the tooltip is the
+        // most transient — dismissed before the interim detail and the
+        // filter seating. False whenever it is closed, so the other
+        // projections never feel this arm.
+        if (_visual.DismissTooltip())
+        {
+            return true;
+        }
         // The READ-ONLY interim detail (PR A / t2 #362), where Escape
         // closes a view and there is nothing to keep. PR E replaces this
         // region with the real card editor, which t0 §2 M8 carves OUT of

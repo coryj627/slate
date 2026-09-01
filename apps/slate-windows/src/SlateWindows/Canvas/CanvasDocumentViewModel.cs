@@ -481,6 +481,13 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// a thread here, and saying so is the contract.</summary>
     internal event Action<CanvasPublication>? PublicationApplied;
 
+    /// <summary>The notification's subscriber count — the lifecycle
+    /// facts pin that a renderer's attach/detach returns it to
+    /// baseline (the review round's leak minor). Test seam by
+    /// name.</summary>
+    internal int PublicationAppliedSubscriberCountForTests =>
+        PublicationApplied?.GetInvocationList().Length ?? 0;
+
     /// <summary>The surface switch landed — the workspace writes the
     /// persisted token for every tab on this path (contract A15).</summary>
     internal event EventHandler<CanvasSurfaceKind>? SurfaceChanged;
@@ -1420,6 +1427,21 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             // life of the publication.
             PublicationApplied?.Invoke(current);
         }
+        // The APPLY-WINDOW seat, reconciled (the tooltip slice's
+        // finding): a projection can seat the shared selection DURING
+        // an apply — the outline's tree auto-selects its first row on
+        // rebuild — and the `_applying` guard, built to stop a
+        // failure-CLEAR from erasing the durable intent, swallowed
+        // that positive seat too, leaving the surface authority ahead
+        // of the published intent for as long as the reader stayed
+        // put. A NON-NULL seat that differs from the applied intent
+        // publishes now, after the window closes; a cleared selection
+        // still never erases the intent, which is T3's rule intact.
+        if (Selection.Selected is { } seated
+            && !string.Equals(_applied?.SelectedIntent, seated, StringComparison.Ordinal))
+        {
+            PublishIntent(nameof(CanvasSelection.Selected));
+        }
     }
 
     private void Apply(CanvasPublication current, CanvasPublication? was)
@@ -1503,8 +1525,15 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 _ = _slot.Publish(s => s.Retired ? null : s.WithMarkedIntent(marked));
                 break;
             default:
-                break;
+                return;
         }
+        // Applied HERE (§D's tooltip slice found the gap): an intent
+        // publication used to reach the slot and wait for the NEXT
+        // load or filter apply, so the applied snapshot — and the
+        // presentation engine reading it — lagged the selection the
+        // reader just made. The apply is cheap for a same-population
+        // successor and keeps the one-snapshot story true.
+        ApplyPublication();
     }
 
     private void PublishEmpty()

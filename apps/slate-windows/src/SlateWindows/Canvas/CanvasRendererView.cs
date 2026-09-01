@@ -43,6 +43,32 @@ internal sealed class CanvasRendererView : FrameworkElement
         _ = _visuals.Add(_ring);
         SizeChanged += (_, e) => _engine.CommitViewport(
             v => v.WithViewSize(e.NewSize.Width, e.NewSize.Height));
+        _tooltipText = new System.Windows.Controls.TextBlock
+        {
+            Padding = new Thickness(6, 4, 6, 4),
+            MaxWidth = 360,
+            TextWrapping = TextWrapping.Wrap,
+        };
+        var tooltipBorder = new System.Windows.Controls.Border
+        {
+            Child = _tooltipText,
+            BorderThickness = new Thickness(1),
+        };
+        _tooltip = new System.Windows.Controls.Primitives.Popup
+        {
+            Child = tooltipBorder,
+            PlacementTarget = this,
+            Placement = System.Windows.Controls.Primitives.PlacementMode.Relative,
+            StaysOpen = true,
+        };
+        // HOVERABLE (1.4.13): the pointer travelling ONTO the tooltip
+        // is itself a trigger, so arriving there never closes it.
+        tooltipBorder.MouseEnter += (_, _) => _pointerOnTooltip = true;
+        tooltipBorder.MouseLeave += (_, _) =>
+        {
+            _pointerOnTooltip = false;
+            UpdateTooltip();
+        };
     }
 
     /// <summary>The pane's document. Attach subscribes the engine to
@@ -92,11 +118,17 @@ internal sealed class CanvasRendererView : FrameworkElement
         DrawCards(state);
         DrawEdges(state);
         DrawRing(state);
+        // The tooltip revalidates on EVERY install: the selection
+        // trigger, the truncation set and the content's validity all
+        // derive from the state that just landed (ID-9's
+        // becomes-invalid arm).
+        UpdateTooltip();
     }
 
     private void DrawCards(CanvasPresentationState state)
     {
         using DrawingContext context = _cards.RenderOpen();
+        _truncated.Clear();
         CanvasPopulation? population = state.Source.Loaded?.Population;
         if (population is null)
         {
@@ -245,6 +277,22 @@ internal sealed class CanvasRendererView : FrameworkElement
             MaxLineCount = 2,
             Trimming = TextTrimming.CharacterEllipsis,
         };
+        // The truncation set feeds the tooltip (ID-9): a card whose
+        // full text does not fit its two constrained lines carries
+        // the FULL title in the peer Name and in the tooltip.
+        var unconstrained = new FormattedText(
+            node.Title,
+            System.Globalization.CultureInfo.CurrentUICulture,
+            FlowDirection.LeftToRight,
+            new Typeface("Segoe UI"),
+            fontSize,
+            Brushes.Transparent,
+            VisualTreeHelper.GetDpi(this).PixelsPerDip);
+        if (unconstrained.WidthIncludingTrailingWhitespace > text.MaxTextWidth
+            || unconstrained.Height > text.Height)
+        {
+            _ = _truncated.Add(node.NodeId);
+        }
         context.DrawText(text, new Point(rect.X + 4, rect.Y + 4));
     }
 
@@ -548,4 +596,123 @@ internal sealed class CanvasRendererView : FrameworkElement
         System.Windows.Point bottomRight = PointToScreen(view.BottomRight);
         return new System.Windows.Rect(topLeft, bottomRight);
     }
+
+    // --- The truncated-label tooltip (§D D11, obligation ID-9) ----------
+
+    private readonly System.Windows.Controls.Primitives.Popup _tooltip;
+    private readonly System.Windows.Controls.TextBlock _tooltipText;
+    private readonly System.Collections.Generic.HashSet<string> _truncated =
+        new(StringComparer.Ordinal);
+    private string? _hoverNode;
+    private bool _pointerOnTooltip;
+
+    /// <summary>The three 1.4.13 conditions, as ONE rule (round 4's
+    /// matrix): the tooltip is OPEN while any trigger is active — the
+    /// SELECTION on a truncated card (the keyboard trigger: cards are
+    /// peers, and the arrows' selection is the keyboard's presence) or
+    /// the POINTER on the card or on the tooltip itself (hoverable) —
+    /// and it closes only when every trigger has departed, Esc
+    /// dismisses it through the surface rung (DD-3), or the content
+    /// stops being valid (the card gone, or no longer
+    /// truncated).</summary>
+    private void UpdateTooltip()
+    {
+        string? subject = TooltipSubject();
+        if (subject is null)
+        {
+            _tooltip.IsOpen = false;
+            _tooltipTextSubject = null;
+            return;
+        }
+        if (_engine.Current?.Source.Loaded?.Population is not { } population
+            || !population.SceneByNode.TryGetValue(subject, out CanvasSceneNode? node))
+        {
+            _tooltip.IsOpen = false;
+            return;
+        }
+        _tooltipTextSubject = subject;
+        _tooltipText.Text = node.Title;
+        double zoom = _engine.Current.Viewport.Zoom;
+        _tooltip.HorizontalOffset = (node.X * zoom) + _engine.Current.Viewport.PanX;
+        _tooltip.VerticalOffset =
+            ((node.Y + node.Height) * zoom) + _engine.Current.Viewport.PanY;
+        _tooltip.IsOpen = true;
+    }
+
+    /// <summary>The active trigger's card, or null: the selection on a
+    /// truncated card wins; else the hovered truncated card; else —
+    /// PERSISTENT — the pointer sitting on the open tooltip keeps its
+    /// current subject alive.</summary>
+    private string? TooltipSubject()
+    {
+        string? selection = _engine.Current?.Selection;
+        if (selection is not null && _truncated.Contains(selection))
+        {
+            return selection;
+        }
+        if (_hoverNode is { } hovered && _truncated.Contains(hovered))
+        {
+            return hovered;
+        }
+        if (_pointerOnTooltip && _tooltip.IsOpen && _tooltipText.Text.Length > 0)
+        {
+            return _tooltipTextSubject;
+        }
+        return null;
+    }
+
+    private string? _tooltipTextSubject;
+
+    /// <summary>Esc's answer, called by the surface rung (DD-3: the
+    /// tooltip is the most transient — first inside the rung, after
+    /// CD-47's panel pre-emption).</summary>
+    internal bool DismissTooltip()
+    {
+        if (!_tooltip.IsOpen)
+        {
+            return false;
+        }
+        _tooltip.IsOpen = false;
+        _hoverNode = null;
+        _pointerOnTooltip = false;
+        return true;
+    }
+
+    protected override void OnMouseMove(System.Windows.Input.MouseEventArgs e)
+    {
+        base.OnMouseMove(e);
+        string? hovered = HitTest(e.GetPosition(this));
+        if (!string.Equals(hovered, _hoverNode, StringComparison.Ordinal))
+        {
+            _hoverNode = hovered;
+            UpdateTooltip();
+        }
+    }
+
+    protected override void OnMouseLeave(System.Windows.Input.MouseEventArgs e)
+    {
+        base.OnMouseLeave(e);
+        _hoverNode = null;
+        UpdateTooltip();
+    }
+
+    /// <summary>The hover trigger's seams — dispositioned instruments:
+    /// a windowed fact cannot steer the real pointer reliably, and the
+    /// journey owns the physical half.</summary>
+    internal void PointerEnteredForTests(string nodeId)
+    {
+        _hoverNode = nodeId;
+        UpdateTooltip();
+    }
+
+    internal void PointerLeftForTests()
+    {
+        _hoverNode = null;
+        _pointerOnTooltip = false;
+        UpdateTooltip();
+    }
+
+    internal bool TooltipIsOpenForTests => _tooltip.IsOpen;
+
+    internal string TooltipTextForTests => _tooltipText.Text;
 }

@@ -3754,4 +3754,105 @@ public sealed class CanvasDocumentTests : IDisposable
             () => frame.Continue = false);
         System.Windows.Threading.Dispatcher.PushFrame(frame);
     }
+
+    private const string LongTitle =
+        "A deliberately very long card title that cannot possibly fit on "
+        + "two constrained lines of a two-hundred-and-forty-pixel card at "
+        + "any believable text scale, existing purely to be truncated";
+
+    private void WriteLongTitleCanvas() => File.WriteAllText(
+        Path.Combine(_fixture.Root, "longtitle.canvas"),
+        "{\"nodes\":[{\"id\":\"long\",\"type\":\"text\",\"text\":\""
+        + LongTitle
+        + "\",\"x\":0,\"y\":0,\"width\":240,\"height\":140},"
+        + "{\"id\":\"short\",\"type\":\"text\",\"text\":\"Short\","
+        + "\"x\":300,\"y\":0,\"width\":240,\"height\":140}],\"edges\":[]}");
+
+    /// <summary>§D D11 / obligation ID-9, the keyboard half: SELECTING
+    /// a truncated card summons the tooltip with the FULL title (cards
+    /// are peers, so the arrows' selection is the keyboard's presence),
+    /// and Esc dismisses it through the surface rung — DD-3's most
+    /// transient, ahead of the interim detail.</summary>
+    [Fact]
+    public void SelectingATruncatedCardSummonsTheTooltipAndEscDismissesIt() => RunSta(() =>
+    {
+        WriteLongTitleCanvas();
+        CanvasDocumentViewModel document = NewDocument("longtitle.canvas");
+        document.Load();
+        var surface = new CanvasSurfaceView { Model = document };
+        using HostedWindow host = Host(surface);
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        PumpUntil(() => surface.VisualForTests.Engine.Current is not null);
+
+        document.SelectNode("long");
+        // The legs separately, so a failure names its own leg: the
+        // selection must reach the INSTALLED state, and the install's
+        // own revalidation must then have opened the tooltip.
+        PumpUntil(() =>
+            surface.VisualForTests.Engine.Current is { } state
+            && state.Selection == "long");
+        Assert.True(
+            surface.VisualForTests.TooltipIsOpenForTests,
+            "the selection reached the installed state but the install's "
+            + "revalidation did not open the tooltip: the truncation set "
+            + "or the subject rule is the broken leg.");
+        Assert.Equal(LongTitle, surface.VisualForTests.TooltipTextForTests);
+
+        Assert.True(
+            ((ICanvasSurfacePresenter)surface).DismissTransientRegion(),
+            "Esc's surface rung did not consume the open tooltip.");
+        Assert.False(
+            surface.VisualForTests.TooltipIsOpenForTests,
+            "the tooltip survived its own dismissal.");
+        document.Shutdown();
+    });
+
+    /// <summary>The trigger matrix's departure and persistence arms:
+    /// hover opens it, hover leaving with the SELECTION still on the
+    /// card keeps it (all-triggers-departed, not first-departure), and
+    /// selecting an untruncated card closes it.</summary>
+    [Fact]
+    public void TheTooltipClosesOnlyWhenEveryTriggerHasDeparted() => RunSta(() =>
+    {
+        WriteLongTitleCanvas();
+        CanvasDocumentViewModel document = NewDocument("longtitle.canvas");
+        document.Load();
+        var surface = new CanvasSurfaceView { Model = document };
+        using HostedWindow host = Host(surface);
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        PumpUntil(() => surface.VisualForTests.Engine.Current is not null);
+
+        surface.VisualForTests.PointerEnteredForTests("long");
+        Assert.True(surface.VisualForTests.TooltipIsOpenForTests, "hover did not summon it.");
+        document.SelectNode("long");
+        PumpUntil(() => surface.VisualForTests.Engine.Current!.Selection == "long");
+        surface.VisualForTests.PointerLeftForTests();
+        Assert.True(
+            surface.VisualForTests.TooltipIsOpenForTests,
+            "the pointer's departure closed a tooltip the SELECTION still "
+            + "holds: 1.4.13's persistence is all-triggers-departed.");
+        document.SelectNode("short");
+        PumpUntil(() => !surface.VisualForTests.TooltipIsOpenForTests);
+        document.Shutdown();
+    });
+
+    /// <summary>The review round's lifecycle minor, closed: a
+    /// renderer's attach subscribes ONE handler and its detach returns
+    /// the count to baseline — panes close and reopen without
+    /// accumulating.</summary>
+    [Fact]
+    public void ARendererDetachReturnsTheSubscriberCountToBaseline() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = NewDocument("board.canvas");
+        document.Load();
+        int baseline = document.PublicationAppliedSubscriberCountForTests;
+        var renderer = new CanvasRendererView { Model = document };
+        Assert.Equal(baseline + 1, document.PublicationAppliedSubscriberCountForTests);
+        renderer.Model = null;
+        Assert.Equal(baseline, document.PublicationAppliedSubscriberCountForTests);
+        renderer.Shutdown();
+        document.Shutdown();
+    });
 }

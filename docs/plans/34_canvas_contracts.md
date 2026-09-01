@@ -7059,6 +7059,49 @@ the review round to weigh: a §D that ships owes them either a
 follow-up slice or an owner's recorded deferral, and this entry is
 where that decision starts from the truth.
 
+**The tooltip slice — obligation ID-9 discharged, and the ledger
+closed by the owner's ruling.** D11's tooltip landed whole: the
+truncation set derives per draw pass from the same constrained text
+the cards render; keyboard FOCUS summons it — cards are peers, so
+the arrows' selection IS the keyboard's presence on a card — and the
+three 1.4.13 conditions are one rule
+(`TheTooltipClosesOnlyWhenEveryTriggerHasDeparted`): open while ANY
+trigger is active (the selection, the pointer on the card, the
+pointer on the tooltip itself), closed only when every trigger has
+departed, Esc dismisses through the surface rung — DD-3's most
+transient, inserted after CD-47's panel pre-emption
+(`SelectingATruncatedCardSummonsTheTooltipAndEscDismissesIt` pins
+both legs) — or the content stops being valid, revalidated on every
+installed state. The review round's lifecycle minor closes with it:
+`ARendererDetachReturnsTheSubscriberCountToBaseline` pins the
+attach/detach pair against the document's subscriber count.
+
+**And the slice EARNED its keep on the way in: a T5-class divergence
+in the shipped intent path, found and fixed.** The failing tooltip
+fact would not open, and the diagnosis ran to the model: the
+outline's tree auto-selects its first row DURING an apply, and
+`PublishIntent`'s applying-guard — built so a failure-CLEAR cannot
+erase the durable intent (the T3 review's fourth finding) —
+swallowed that positive seat too. The surface authority then ran
+AHEAD of the published intent for as long as the reader stayed put:
+the exact divergence class the periphery's T-rows describe, live in
+shipped code, invisible until a consumer finally read the applied
+intent. The fix reconciles at the apply's close: a NON-NULL seat
+that differs from the applied intent publishes once the window
+ends; a cleared selection still never erases the intent, so T3's
+rule survives verbatim. An intent publication also APPLIES
+immediately now — the applied snapshot used to lag every selection
+until the next load or filter answer, which no consumer noticed
+before the renderer became one.
+
+**Mutations, injected and restored byte-for-byte:** the keyboard
+trigger removed from the subject rule (the summon fact red), and the
+rung arm removed from the surface (the dismiss leg red). The
+hover-departure persistence rides its own fact's arrangement. With
+ID-9 discharged, every obligation on the §D ledger — ID-1 through
+ID-9 — is code, facts and mutations; the section's evidence is
+whole, and the PR is the next act.
+
 ---
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
