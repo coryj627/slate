@@ -328,6 +328,7 @@ final class A11yCorpusCensusTests: XCTestCase {
             .canvas(event: .canvasGroupEntered(label: "Q3", count: 4)),
             .canvas(event: .canvasGroupEntered(label: "Solo", count: 1)),
             .canvas(event: .canvasGroupLeft(label: "Q3")),
+            .canvas(event: .canvasViewportNoPane),
             .canvas(event: .canvasConnectionTraversed(direction: .outgoing, kindLabel: "text", title: "Ideas", label: "supports")),
             .canvas(event: .canvasConnectionTraversed(direction: .incoming, kindLabel: "text", title: "Research", label: nil)),
             .canvas(event: .canvasConnectionTraversed(direction: .undirected, kindLabel: "group", title: "Q3", label: nil)),

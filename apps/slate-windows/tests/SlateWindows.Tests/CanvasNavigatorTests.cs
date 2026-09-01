@@ -331,6 +331,14 @@ public sealed class CanvasNavigatorTests : IDisposable
             ("ClearFilter", "clearFilter", navigator => navigator.ClearFilter()),
             ("AnnounceFilterCount", "announceFilterCount",
                 navigator => navigator.AnnounceFilterCount()),
+            ("ZoomIn", "zoomIn", navigator => navigator.ZoomIn()),
+            ("ZoomOut", "zoomOut", navigator => navigator.ZoomOut()),
+            ("ActualSize", "actualSize", navigator => navigator.ActualSize()),
+            ("FitCanvas", "fitCanvas", navigator => navigator.FitCanvas()),
+            ("ZoomToSelection", "zoomToSelection",
+                navigator => navigator.ZoomToSelection()),
+            ("ToggleFollowSelection", "toggleFollowSelection",
+                navigator => navigator.ToggleFollowSelection()),
         ];
 
         // NOT read verbs, each with the reason it is not — and each must
@@ -4213,5 +4221,63 @@ public sealed class CanvasNavigatorTests : IDisposable
         {
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
         }
+    }
+
+    /// <summary>§D D7 / obligation ID-7, task TD-5: a viewport verb on
+    /// a READY canvas with no pane to address answers the typed
+    /// no-pane refusal — not silence, and not a false percent. (Until
+    /// TD-6 mounts the renderer, every pane answers false, so this is
+    /// also today's honest sentence for all five verbs.)</summary>
+    [Fact]
+    public void AViewportVerbWithNoPaneSpeaksTheTypedRefusal()
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        Assert.True(document.RendersRetainedSnapshot, "premise: the canvas is ready.");
+        document.Navigator.ZoomIn();
+        Assert.Equal(
+            CanvasAnnouncer.RenderLabel(new CanvasA11yEvent.CanvasViewportNoPane()),
+            OneLine(document));
+    }
+
+    /// <summary>§C's m9, repaired here as §D assigned: Ctrl+F with the
+    /// TABLE showing and focus in the HEADER reaches the filter — the
+    /// stand-aside asks who OWNS the keys, not what is showing. The
+    /// grid's own binding covers the case where the grid has focus;
+    /// this is the case where it does not, which used to reach
+    /// nobody.</summary>
+    [Fact]
+    public void CtrlFFromTheTableHeaderReachesTheFilter()
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        var header = new HeaderedTablePresenter();
+        document.Navigator.AttachPresenter(header);
+        Assert.True(
+            document.Navigator.HandleKey(
+                Key.F, ModifierKeys.Control, header),
+            "the chord was not consumed: the navigator stood aside for a "
+            + "grid that does not own the keys, which is m9's silent "
+            + "arrangement verbatim.");
+        Assert.NotNull(document.FilterFocusRequest);
+    }
+
+    /// <summary>The m9 fake: the table is SHOWING and the projection
+    /// does NOT own the keys — the header arrangement, presenter-side.</summary>
+    private sealed class HeaderedTablePresenter : ICanvasSurfacePresenter
+    {
+        public CanvasSurfaceKind Projection => CanvasSurfaceKind.Table;
+
+        public bool ProjectionHasFocus => false;
+
+        public bool CanMoveWithinProjection(bool forward) => false;
+
+        public bool ViewportCommand(CanvasViewportVerb verb) => false;
+
+        public bool FocusRow(string nodeId) => false;
+
+        public bool FocusProjection() => false;
+
+        public bool DismissTransientRegion() => false;
+
+        public object? Owner => null;
     }
 }

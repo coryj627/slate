@@ -316,6 +316,7 @@ public sealed class A11yCorpusCensus
         new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasGroupEntered(Label: "Q3", Count: 4)),
         new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasGroupEntered(Label: "Solo", Count: 1)),
         new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasGroupLeft(Label: "Q3")),
+        new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasViewportNoPane()),
         new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasConnectionTraversed(Direction: CanvasEdgeDirection.Outgoing, KindLabel: "text", Title: "Ideas", Label: "supports")),
         new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasConnectionTraversed(Direction: CanvasEdgeDirection.Incoming, KindLabel: "text", Title: "Research", Label: null)),
         new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasConnectionTraversed(Direction: CanvasEdgeDirection.Undirected, KindLabel: "group", Title: "Q3", Label: null)),

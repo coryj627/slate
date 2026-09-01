@@ -148,9 +148,14 @@ public sealed class ContractsCitationCensus
                 // above the pre-task population of 33 — a third time.
                 //
                 // TD-4 bound the selection accessor and its two
-                // sentinels, taking the section to 43; 40 sits above
+                // sentinels, taking the section to 43; 40 sat above
                 // the pre-task population of 39 — a fourth time.
-                40),
+                //
+                // TD-5 bound the vocabulary arm, the verbs, the
+                // binding record and the enablement census, taking
+                // the section to 51; 45 sits above the pre-task
+                // population of 43 — a fifth time.
+                45),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

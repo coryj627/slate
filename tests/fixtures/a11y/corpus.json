@@ -1335,6 +1335,11 @@
     "text": "Leaving group \"Q3\""
   },
   {
+    "event": "Canvas { event: CanvasViewportNoPane }",
+    "priority": "medium",
+    "text": "No canvas view to act on."
+  },
+  {
     "event": "Canvas { event: CanvasConnectionTraversed { direction: Outgoing, kind_label: \"text\", title: \"Ideas\", label: Some(\"supports\") } }",
     "priority": "medium",
     "text": "Connects to Text card \"Ideas\", labelled \"supports\""

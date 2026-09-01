@@ -413,6 +413,13 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
             ? _table.DeliverFocus(nodeId)
             : _outline.DeliverFocus(nodeId) is not null;
 
+    /// <summary>§D D7 / task TD-5: this pane's visual surface answers
+    /// a viewport verb. FALSE until TD-6 mounts the renderer — no
+    /// visual arm exists to address, so the navigator speaks the
+    /// no-pane refusal, which is the honest sentence today and the
+    /// rare one after TD-6.</summary>
+    public bool ViewportCommand(CanvasViewportVerb verb) => false;
+
     public bool FocusProjection()
     {
         // The projections are COLLAPSED unless the state renders rows

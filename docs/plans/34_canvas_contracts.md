@@ -2174,7 +2174,7 @@ uniform**, so this row names them rather than gesturing at "the chords":
 | Right / Left | a projection owns the keys AND it is the OUTLINE (the table's arrows are the grid's cell navigation) |
 | Enter | a projection owns the keys — so a focused button, field or any other control keeps its own Enter |
 | Escape | UNGATED within the surface: the ladder answers from anywhere, and an open Where-am-I panel pre-empts it (CD-47) |
-| Ctrl+F | the OUTLINE is showing; on the table the substrate's own gesture delivers it (C10) |
+| Ctrl+F | the GRID does not own the keys — the substrate's own gesture delivers it when it does (C10); §C's m9 rerouted this from "the table is showing", repaired in §D with the header arrangement's fact |
 | Ctrl+Alt+Shift+I | ungated within the surface — a pull surface must answer wherever the reader is |
 
 The two ungated rows are the deliberate ones. Escape is M4-adjacent (no
@@ -6898,6 +6898,39 @@ byte-for-byte: the selection read from the unit's filtered
 resolution, the dimmed-card fact red on the lost selection. ID-5
 and ID-6 are discharged pending TD-4's review round; the pattern
 MATRIX's cells are peer behavior and land with TD-6's objects.
+
+**TD-5 — the viewport verbs, the typed refusal, the binding record
+and the enablement census, landed.** The vocabulary gained
+`CanvasViewportNoPane` through all five places — the core enum with
+its render ("No canvas view to act on."), the golden table, the
+regenerated corpus artifact, the uniffi mirror, and both hosts'
+corpus mirrors — obligation ID-7's arm, a Medium-priority
+uncoalesced status. The navigator gained the six public verbs
+routing through one gate (`ViewportFromKey` for the Ctrl chords,
+`VisualOnlyFromKey` for the two bare Shift chords R2 confines to
+the visual board), the presenter seam gained its one viewport
+member with `CanvasViewportVerb` as the closed set, and the C4
+derivation swept all six into the mapping fact automatically — the
+reflection-derived surface working exactly as codex round 11 built
+it to. Obligation ID-8's `CanvasViewportBindings` is the one
+authority: the resolver map consumes it in a loop, and
+`TheViewportBindingRecordIsTheOneAuthority` pins id ↔ registered
+row ↔ existing navigator member ↔ resolvable id; the record's known
+limit — it cannot see a resolver returning the WRONG command — is
+stated here rather than implied away, and the full delivery fact
+rides TD-6's windowed battery. The enablement sweep is
+`CanvasEnablementCensus`, executable: consumers derived from the
+three markers, one disposition per consumer, failing both ways —
+and its first run caught two consumers the hand list missed, which
+is the census earning its keep on day one. §C's m9 is repaired by
+name: the stand-aside asks who OWNS the keys
+(`CtrlFFromTheTableHeaderReachesTheFilter`), and C1's gate-table
+row is swept to match. Five chord rows landed with mac's glyphs;
+the scrape learned the digit row; `chords.json` regenerated through
+its writer per B12. Mutations, injected and restored byte-for-byte:
+the stand-aside reverted to what-is-showing (the m9 fact red), and
+the refusal silenced (the no-pane fact red). ID-7 and ID-8 are
+discharged pending TD-5's review round.
 
 ---
 
