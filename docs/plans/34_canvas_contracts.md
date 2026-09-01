@@ -8459,7 +8459,7 @@ carved exception is honored exactly.** Move and resize hold a
 transient holder — ids in reading order (a rigid unit for sets),
 original rects (restored on cancel), hypothetical rects (what commit
 writes), an is-resize flag and the entry overlap state — the mac
-`CanvasTransientState` twin. Per step the UI queries
+CanvasTransientState twin. Per step the UI queries
 `CanvasCheckOverlap(rect, exclude: moving set)` and repaints the
 renderer's transient overlay; the outline and table DO NOT change
 until commit. **Return** commits ONE `CanvasAction` of
