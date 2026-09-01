@@ -8419,6 +8419,16 @@ and the review's own prescribed fact pins all four claims, bitten by
 deleting the guard. The formal review approved with the no-issues
 sentence; the comment's finding was addressed rather than waved at.
 
+### CI round 1 (mac)
+
+The Mac XCTest lane refused the PR at compile: TE-0's
+`SavedButUnindexed` arm made two exhaustive `VaultError` switches in
+AppState.swift non-exhaustive — a debt invisible from this checkout
+because mac compiles CI-only. Both switches gained the arm with the
+landed-write sentence (bytes real, index catches up, never recreate
+— the #1123 shape), landed blind with CI as the oracle, which is
+this repo's recorded convention for the mac lane.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same
