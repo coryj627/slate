@@ -287,6 +287,210 @@ public sealed class CanvasMutationTests : IDisposable
         document.Shutdown();
     }
 
+    /// <summary>§F TF-7 (F5): picker-anchored engine placement, one
+    /// action end to end — the pick routes through the request, the
+    /// engine computes the slot inside prepare-under-the-gate, disk
+    /// geometry moves, ONE history entry, the placed sentence
+    /// speaks.</summary>
+    [Fact]
+    public void PlaceBelowLandsOneActionWithCoresSlot()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        string before = DiskBytes();
+        document.OpenCardPicker(CanvasCardPickerPurpose.PlaceBelow);
+        CanvasCardPickerRequest request = document.LastCardPickerRequestForTests!;
+        Assert.Equal(["a"], request.Moving.ToArray());
+
+        document.HandleCardPick(request, "blocker");
+
+        Assert.NotEqual(before, DiskBytes());
+        Assert.NotNull(document.UndoStack.OfferedUndo);
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            a => a.Text.Contains("Moved", StringComparison.Ordinal));
+        document.Shutdown();
+    }
+
+    /// <summary>§F TF-7 (F5): a marked set moves as a RIGID UNIT —
+    /// boxes in reading order, the positional Origins mapped back by
+    /// that same order, one action, the bulk sentence.</summary>
+    [Fact]
+    public void ASetPlacesRigidlyByReadingOrder()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        _ = document.Selection.ToggleMark("grp");
+        _ = document.Selection.ToggleMark("a");
+        document.OpenCardPicker(CanvasCardPickerPurpose.PlaceRightOf);
+        CanvasCardPickerRequest request = document.LastCardPickerRequestForTests!;
+
+        // Reading order, not mark order: "a" (0,0) precedes "grp" (600,0).
+        Assert.Equal(["a", "grp"], request.Moving.ToArray());
+
+        double offsetBefore =
+            request.Rects["grp"].X - request.Rects["a"].X;
+        document.HandleCardPick(request, "blocker");
+
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            a => a.Text.Contains("2 cards", StringComparison.Ordinal));
+        CanvasPopulation population =
+            document.AppliedPublication!.Loaded!.Population;
+        double offsetAfter =
+            population.SceneByNode["grp"].X - population.SceneByNode["a"].X;
+        Assert.Equal(offsetBefore, offsetAfter);
+        Assert.NotNull(document.UndoStack.OfferedUndo);
+        document.Shutdown();
+    }
+
+    /// <summary>§F TF-7 (F5): the refusal table is TOTAL and
+    /// state-keeping — a pick inside the moving set and a vanished
+    /// target each refuse with their exact sentence and write
+    /// nothing.</summary>
+    [Fact]
+    public void TheRefusalTableIsTotal()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        string before = DiskBytes();
+        document.OpenCardPicker(CanvasCardPickerPurpose.PlaceBelow);
+        CanvasCardPickerRequest request = document.LastCardPickerRequestForTests!;
+
+        document.HandleCardPick(request, "a");
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            a => a.Text.Contains("outside", StringComparison.OrdinalIgnoreCase));
+
+        _announced.Clear();
+        document.HandleCardPick(request, "never-existed");
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            a => a.Text.Contains("different", StringComparison.OrdinalIgnoreCase));
+
+        Assert.Equal(before, DiskBytes());
+        Assert.Null(document.UndoStack.OfferedUndo);
+        document.Shutdown();
+    }
+
+    /// <summary>§F TF-7 (F6): align is the same-axis top-edge slot
+    /// with a total table — an occupied slot refuses, success moves Y
+    /// only, and doing it again answers NoChanges writing
+    /// nothing.</summary>
+    [Fact]
+    public void AlignSetsTheTopEdgeOrRefuses()
+    {
+        CanvasDocumentViewModel document = Open();
+
+        // Occupied: cramped's slot at blocker's Y collides with blocker.
+        document.SeatSelectionSilently("cramped");
+        string before = DiskBytes();
+        document.OpenCardPicker(CanvasCardPickerPurpose.AlignWith);
+        document.HandleCardPick(
+            document.LastCardPickerRequestForTests!, "blocker");
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            a => a.Text.Contains("overlap", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(before, DiskBytes());
+
+        // Success: "a" aligns to blocker's top edge — Y moves, X stays.
+        document.SeatSelectionSilently("a");
+        double x0 = document.AppliedPublication!.Loaded!
+            .Population.SceneByNode["a"].X;
+        document.OpenCardPicker(CanvasCardPickerPurpose.AlignWith);
+        document.HandleCardPick(
+            document.LastCardPickerRequestForTests!, "blocker");
+        CanvasPopulation population =
+            document.AppliedPublication!.Loaded!.Population;
+        Assert.Equal(40, population.SceneByNode["a"].Y);
+        Assert.Equal(x0, population.SceneByNode["a"].X);
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            a => a.Text.Contains("Aligned", StringComparison.Ordinal));
+
+        // Already aligned: NoChanges, nothing written.
+        string aligned = DiskBytes();
+        _announced.Clear();
+        document.OpenCardPicker(CanvasCardPickerPurpose.AlignWith);
+        document.HandleCardPick(
+            document.LastCardPickerRequestForTests!, "blocker");
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            a => a.Text.Contains("No changes", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(aligned, DiskBytes());
+        document.Shutdown();
+    }
+
+    /// <summary>§F TF-7 (IF-19): the request carries its immutable
+    /// context — reading-ordered movers, their rects, the loaded
+    /// identity — and a confirm against a FOREIGN identity refuses
+    /// PickDifferentTarget writing nothing.</summary>
+    [Fact]
+    public void ThePickerRequestCarriesItsContext()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        _ = document.Selection.ToggleMark("a");
+        _ = document.Selection.ToggleMark("grp");
+        document.OpenCardPicker(CanvasCardPickerPurpose.PlaceBelow);
+        CanvasCardPickerRequest request = document.LastCardPickerRequestForTests!;
+        Assert.Equal(["a", "grp"], request.Moving.ToArray());
+        Assert.Equal(0, request.Rects["a"].X);
+        Assert.Equal(600, request.Rects["grp"].X);
+
+        CanvasDocumentViewModel other = Open();
+        CanvasCardPickerRequest foreign = request with
+        {
+            Identity = other.AppliedPublication!.Loaded!,
+        };
+        string before = DiskBytes();
+        document.HandleCardPick(foreign, "blocker");
+
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            a => a.Text.Contains("different", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(before, DiskBytes());
+        other.Shutdown();
+        document.Shutdown();
+    }
+
+    /// <summary>§F TF-7 (IF-20): the F5 picker anchors proximity at
+    /// the PRIMARY MOVER, not the bare selection — the model's rows
+    /// are core's answer VERBATIM for that anchor.</summary>
+    [Fact]
+    public void TheProximityAnchorIsThePrimaryMover()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("essay");
+        _ = document.Selection.ToggleMark("a");
+        _ = document.Selection.ToggleMark("essay");
+        CanvasCardPickerModel? shown = null;
+        document.CardPickerRequested += (_, model) => shown = model;
+
+        document.OpenCardPicker(CanvasCardPickerPurpose.PlaceBelow);
+
+        // The primary mover is "a" (reading order), though the far
+        // "essay" is selected — the two anchors ORDER DIFFERENTLY
+        // ("grp" is nearest to "a" and farthest from "essay"), so an
+        // anchor quietly reverted to the selection cannot pass.
+        Assert.Equal(
+            ["a", "essay"],
+            document.LastCardPickerRequestForTests!.Moving.ToArray());
+        string[] expected = [];
+        ulong handle = HandleOf(document);
+        expected = _session.CanvasProximityOrder(handle, "a", ["a", "essay"]);
+        Assert.Equal(expected, shown!.Rows.Select(r => r.NodeId).ToArray());
+        document.Shutdown();
+    }
+
     /// <summary>§F TF-5 (F10): one derived install moves the whole
     /// surface — the admitted rects land in the state, the placement
     /// (pixels and a11y frames alike) moves, and the effective rect

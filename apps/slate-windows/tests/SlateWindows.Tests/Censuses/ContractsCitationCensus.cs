@@ -326,7 +326,12 @@ public sealed class ContractsCitationCensus
                 // seam, taking the section to 67; 66 sits
                 // above the pre-task population of 66 — a seventh
                 // time.
-                66),
+                //
+                // TF-7 bound the picker request and the placement
+                // verbs, taking the section to 71; 69 sits
+                // above the pre-task population of 67 — an eighth
+                // time.
+                69),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

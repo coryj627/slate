@@ -278,6 +278,16 @@ internal static class ChordTable
         public const string CanvasFollowConnectionBack =
             "slate.canvas.followConnectionBack";
         public const string CanvasTracePath = "slate.canvas.tracePath";
+        public const string CanvasPlaceBelow = "slate.canvas.placeBelow";
+
+        public const string CanvasPlaceRightOf = "slate.canvas.placeRightOf";
+
+        public const string CanvasPlaceAbove = "slate.canvas.placeAbove";
+
+        public const string CanvasPlaceLeftOf = "slate.canvas.placeLeftOf";
+
+        public const string CanvasAlignWith = "slate.canvas.alignWith";
+
         public const string CanvasMoveMode = "slate.canvas.moveMode";
 
         public const string CanvasResizeMode = "slate.canvas.resizeMode";
@@ -971,6 +981,21 @@ internal static class ChordTable
             // byte-identical to mac (P3). R is mac's quick loop: during
             // resize it commits. The presets are palette rows - mac
             // allocates them no chord and neither do we.
+            // §F TF-7 (F5/F6/F9): structural placement — the picker
+            // names a reference card, the ENGINE computes the slot.
+            // Labels and hints byte-identical to mac (P3); no chords,
+            // as mac allocates none.
+            Reg(Ids.CanvasPlaceBelow, "Canvas: Place Below…", CommandSection.Canvas,
+                "Move the selected card (or the marked set) just below a card you pick."),
+            Reg(Ids.CanvasPlaceRightOf, "Canvas: Place Right Of…", CommandSection.Canvas,
+                "Move the selection just right of a card you pick."),
+            Reg(Ids.CanvasPlaceAbove, "Canvas: Place Above…", CommandSection.Canvas,
+                "Move the selection just above a card you pick."),
+            Reg(Ids.CanvasPlaceLeftOf, "Canvas: Place Left Of…", CommandSection.Canvas,
+                "Move the selection just left of a card you pick."),
+            Reg(Ids.CanvasAlignWith, "Canvas: Align With…", CommandSection.Canvas,
+                "Align the selected card's top edge with a card you pick. Overlaps "
+                + "are refused, never silent."),
             Reg(Ids.CanvasMoveMode, "Canvas: Move Mode", CommandSection.Canvas,
                 "Grab the selection. Arrows nudge on the grid, Shift for big "
                 + "steps, Return places, Escape cancels.",

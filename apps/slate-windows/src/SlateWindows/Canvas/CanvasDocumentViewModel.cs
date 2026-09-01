@@ -2897,6 +2897,285 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// they are.</summary>
     internal void SpeakForEditor(CanvasA11yEvent @event) => Speak(@event);
 
+    /// <summary>§F TF-7 (F5/F6): open a card picker — the request
+    /// captures IF-19's immutable context in ONE lease read (the
+    /// TF-2 capture, reading-ordered, never silent), and the model's
+    /// proximity anchor is the PRIMARY MOVER (IF-20), the moving set
+    /// excluded. The TF-8 sheet consumes the event; refusals speak
+    /// here.</summary>
+    internal event Action<CanvasCardPickerRequest, CanvasCardPickerModel>?
+        CardPickerRequested;
+
+    internal void OpenCardPicker(CanvasCardPickerPurpose purpose)
+    {
+        if (_slot.Current.Loaded is not { } loaded)
+        {
+            SpeakNotReady();
+            return;
+        }
+        var members = Selection.Marked.Count > 0
+            ? new List<string>(Selection.Marked)
+            : Selection.Selected is { } one ? [one] : [];
+        if (members.Count == 0)
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(
+                new CanvasStatusNote.NothingSelected()));
+            return;
+        }
+        CanvasTransientHolder? captured = CanvasTransientHolder.TryCapture(
+            _session, loaded, members, isResize: false);
+        if (captured is null)
+        {
+            Speak(new CanvasA11yEvent.CanvasActionFailed(
+                CanvasFailedAction.Placement, "open the picker"));
+            return;
+        }
+        var request = new CanvasCardPickerRequest(
+            purpose,
+            captured.Ids,
+            captured.Originals,
+            loaded);
+        LastCardPickerRequestForTests = request;
+        CardPickerRequested?.Invoke(
+            request,
+            BuildCardPickerModel(captured.Ids[0], [.. captured.Ids]));
+    }
+
+    internal CanvasCardPickerRequest? LastCardPickerRequestForTests
+    {
+        get;
+        private set;
+    }
+
+    /// <summary>§F TF-7 (F5/F6): route a completed pick. The request
+    /// re-validates FIRST — a reload between open and confirm makes
+    /// the context a guess, and a guess refuses PickDifferentTarget
+    /// (IF-19); a target inside the moving set refuses
+    /// PickOutsideMovingSet with the picker's state kept.</summary>
+    internal void HandleCardPick(CanvasCardPickerRequest request, string target)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(target);
+        if (_slot.Current.Loaded is not { } loaded
+            || !ReferenceEquals(loaded, request.Identity))
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(
+                new CanvasStatusNote.PickDifferentTarget()));
+            return;
+        }
+        if (request.Moving.Contains(target))
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(
+                new CanvasStatusNote.PickOutsideMovingSet()));
+            return;
+        }
+        switch (request.Purpose)
+        {
+            case CanvasCardPickerPurpose.PlaceBelow:
+                CanvasPlaceRelative(request, target, CanvasPlaceDirection.Below);
+                break;
+            case CanvasCardPickerPurpose.PlaceRightOf:
+                CanvasPlaceRelative(request, target, CanvasPlaceDirection.RightOf);
+                break;
+            case CanvasCardPickerPurpose.PlaceAbove:
+                CanvasPlaceRelative(request, target, CanvasPlaceDirection.Above);
+                break;
+            case CanvasCardPickerPurpose.PlaceLeftOf:
+                CanvasPlaceRelative(request, target, CanvasPlaceDirection.LeftOf);
+                break;
+            default:
+                CanvasAlignWith(request, target);
+                break;
+        }
+    }
+
+    /// <summary>§F TF-7 (F5): picker-anchored engine placement, one
+    /// action end to end. EVERYTHING against the handle runs inside
+    /// prepare-under-the-gate: existence, the engine query, the op —
+    /// each refusal typed, each null action writing nothing. The set
+    /// routes CanvasPlaceSet with boxes IN THE SET'S READING ORDER
+    /// and the positional Origins map back by that same order; a
+    /// cardinality mismatch refuses WHOLE (IF-21). Verb identity is
+    /// Placement (IF-22).</summary>
+    internal void CanvasPlaceRelative(
+        CanvasCardPickerRequest request, string target, CanvasPlaceDirection direction)
+    {
+        if (_slot.Current.Loaded is not { } basis)
+        {
+            SpeakNotReady();
+            return;
+        }
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId("place relative"),
+            this,
+            Selection.Selected,
+            basis,
+            CanvasMutationEffect.KeepSelection);
+        bool single = request.Moving.Length == 1;
+        string primaryTitle = RowFor(request.Moving[0])?.Title ?? "card";
+        CanvasRelativeDesc? relative = null;
+        string name = single
+            ? $"move \"{primaryTitle}\""
+            : $"move {SlateUniffiMethods.CountNoun((ulong)request.Moving.Length, "card", "cards")}";
+        _ = Funnel.Apply(
+            operation,
+            handle =>
+            {
+                try
+                {
+                    CanvasPopulation? population = _slot.Current.Population;
+                    if (population is null
+                        || !population.SceneByNode.ContainsKey(target))
+                    {
+                        Speak(new CanvasA11yEvent.CanvasStatus(
+                            new CanvasStatusNote.PickDifferentTarget()));
+                        return null;
+                    }
+                    foreach (string id in request.Moving)
+                    {
+                        if (!population.SceneByNode.ContainsKey(id))
+                        {
+                            Speak(new CanvasA11yEvent.CanvasStatus(
+                                new CanvasStatusNote.NothingSelected()));
+                            return null;
+                        }
+                    }
+                    if (single)
+                    {
+                        CanvasRect box = request.Rects[request.Moving[0]];
+                        CanvasPlacement placement = _session.CanvasPlaceNew(
+                            handle,
+                            target,
+                            box.Width,
+                            box.Height,
+                            direction,
+                            [.. request.Moving]);
+                        relative = placement.Relative;
+                        return new CanvasAction(
+                            name,
+                            [
+                                new CanvasOp.UpdateNodeGeometry(
+                                    request.Moving[0],
+                                    placement.X,
+                                    placement.Y,
+                                    box.Width,
+                                    box.Height),
+                            ]);
+                    }
+                    CanvasRect[] boxes =
+                        [.. request.Moving.Select(id => request.Rects[id])];
+                    CanvasSetPlacement set = _session.CanvasPlaceSet(
+                        handle, target, boxes, direction, [.. request.Moving]);
+                    if (set.Origins.Length != request.Moving.Length)
+                    {
+                        // IF-21: the positional contract broke — refuse
+                        // WHOLE rather than move a subset.
+                        Speak(new CanvasA11yEvent.CanvasActionFailed(
+                            CanvasFailedAction.Placement, "place the set"));
+                        return null;
+                    }
+                    relative = set.Relative;
+                    var ops = new List<CanvasOp>();
+                    for (int i = 0; i < request.Moving.Length; i++)
+                    {
+                        CanvasRect box = request.Rects[request.Moving[i]];
+                        ops.Add(new CanvasOp.UpdateNodeGeometry(
+                            request.Moving[i],
+                            set.Origins[i].X,
+                            set.Origins[i].Y,
+                            box.Width,
+                            box.Height));
+                    }
+                    return new CanvasAction(name, [.. ops]);
+                }
+                catch (VaultException)
+                {
+                    Speak(new CanvasA11yEvent.CanvasActionFailed(
+                        CanvasFailedAction.Placement, "place"));
+                    return null;
+                }
+            },
+            name,
+            confirm: () => single
+                ? new CanvasA11yEvent.CanvasCardPlaced(
+                    CanvasPlaceVerb.Moved, primaryTitle, relative!)
+                : new CanvasA11yEvent.CanvasBulkMoved(
+                    (uint)request.Moving.Length, relative!));
+    }
+
+    /// <summary>§F TF-7 (F6): the same-axis slot with a TOTAL refusal
+    /// table — top edges (FD-2), already-aligned answers NoChanges
+    /// writing nothing (the arm mac lacks, added by contract), an
+    /// occupied slot refuses AlignWouldOverlap, and the overlap check
+    /// runs inside prepare with the write it guards. Verb identity is
+    /// Align (IF-22).</summary>
+    internal void CanvasAlignWith(CanvasCardPickerRequest request, string target)
+    {
+        if (_slot.Current.Loaded is not { } basis)
+        {
+            SpeakNotReady();
+            return;
+        }
+        string mover = request.Moving[0];
+        string primaryTitle = RowFor(mover)?.Title ?? "card";
+        string targetTitle = RowFor(target)?.Title ?? "card";
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId("align with"),
+            this,
+            Selection.Selected,
+            basis,
+            CanvasMutationEffect.KeepSelection);
+        _ = Funnel.Apply(
+            operation,
+            handle =>
+            {
+                try
+                {
+                    CanvasPopulation? population = _slot.Current.Population;
+                    CanvasSceneNode? node =
+                        population?.SceneByNode.GetValueOrDefault(mover);
+                    CanvasSceneNode? anchor =
+                        population?.SceneByNode.GetValueOrDefault(target);
+                    if (node is null || anchor is null)
+                    {
+                        Speak(new CanvasA11yEvent.CanvasStatus(
+                            new CanvasStatusNote.PickDifferentTarget()));
+                        return null;
+                    }
+                    if (node.Y == anchor.Y)
+                    {
+                        Speak(new CanvasA11yEvent.CanvasStatus(
+                            new CanvasStatusNote.NoChanges()));
+                        return null;
+                    }
+                    var slot = new CanvasRect(
+                        node.X, anchor.Y, node.Width, node.Height);
+                    if (_session.CanvasCheckOverlap(handle, slot, [mover])
+                        .Length > 0)
+                    {
+                        Speak(new CanvasA11yEvent.CanvasBlocked(
+                            new CanvasBlockedReason.AlignWouldOverlap()));
+                        return null;
+                    }
+                    return new CanvasAction(
+                        $"align \"{primaryTitle}\"",
+                        [
+                            new CanvasOp.UpdateNodeGeometry(
+                                mover, node.X, anchor.Y, node.Width, node.Height),
+                        ]);
+                }
+                catch (VaultException)
+                {
+                    Speak(new CanvasA11yEvent.CanvasActionFailed(
+                        CanvasFailedAction.Align, "align"));
+                    return null;
+                }
+            },
+            $"align \"{primaryTitle}\"",
+            confirm: () => new CanvasA11yEvent.CanvasCardAligned(
+                primaryTitle, targetTitle));
+    }
+
     /// <summary>The live population's basis — the editor's commit
     /// compares its seed against THIS (IE-18's re-validation).</summary>
     internal string? PublishedBasis => _slot.Current.Population?.ContentHash;
@@ -2905,7 +3184,14 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// order over the lease (anchor = the selection; reading-order
     /// ties; groups included), labelled the palette way. The model
     /// only filters; a picker with no handle answers empty.</summary>
-    internal CanvasCardPickerModel BuildCardPickerModel(params string[] exclude)
+    internal CanvasCardPickerModel BuildCardPickerModel(params string[] exclude) =>
+        BuildCardPickerModel(Selection.Selected, exclude);
+
+    /// <summary>§F TF-7 (IF-20): the F5 pickers anchor proximity at
+    /// the PRIMARY MOVER — the anchor is a parameter, and the §E
+    /// callers keep the selection default.</summary>
+    internal CanvasCardPickerModel BuildCardPickerModel(
+        string? anchor, string[] exclude)
     {
         string[] ordered = [];
         if (_slot.Current.Lease is { } lease)
@@ -2917,7 +3203,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                     return !now.Retired && now.Names(lease);
                 },
                 handle => ordered = _session.CanvasProximityOrder(
-                    handle, Selection.Selected, exclude));
+                    handle, anchor, exclude));
         }
         return new CanvasCardPickerModel(
             ordered

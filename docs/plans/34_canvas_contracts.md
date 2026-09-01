@@ -9177,6 +9177,51 @@ dead code behind the Navigation guard and was re-aimed as the
 unguarded total drop), M3 the clamped arm dropped from the list. All
 bitten.
 
+### TF-7 — placement and align: the verb layer
+
+F5 and F6 land as verbs with their tables total; the SHEET — XAML
+overlay, `ModalSurface` membership, the workspace property, the
+admission rows — rides TF-8's prompt machinery, one modal-clone pass
+for picker and prompts together, exactly as §E's TE-6 record divided
+the same ground ("the sheets ... are TE-7's"). The boundary is
+recorded here so nobody reads the unpresented event as an accident.
+
+The request is IF-19 discharged: `CanvasCardPickerRequest` captures
+the reading-ordered movers, their rects and the LOADED IDENTITY in
+one TF-2 lease read at open; a confirm re-validates the identity
+FIRST and a stale request refuses PickDifferentTarget writing
+nothing. The pick routes mac's switch; a target inside the moving
+set refuses PickOutsideMovingSet before any operation exists.
+`CanvasPlaceRelative` runs EVERYTHING against the handle inside
+prepare-under-the-gate: existence checks with their typed refusals,
+`CanvasPlaceNew` with the mover's own box, `CanvasPlaceSet` with
+boxes in the set's reading order and the positional Origins mapped
+back by that same order — a cardinality mismatch refuses WHOLE
+(IF-21; the arm is belt-and-braces against an engine that never
+misbehaves in the vault, recorded as such), and the FD-6 arms carry
+their VERB IDENTITY (IF-22): Placement and Align, never the generic
+action. `CanvasAlignWith` is the same-axis top-edge slot (FD-2) with
+the arm mac lacks — already-aligned answers NoChanges and writes
+nothing — and the overlap check runs inside prepare with the write
+it guards. IF-20 is discharged at the model: `BuildCardPickerModel`
+gained the anchor parameter and F5 anchors proximity at the PRIMARY
+MOVER; IF-23's disposition is that frozen F6 WINS — the exact slot,
+refuse on occupied — and the executable-spec divergence stands
+recorded rather than silently resolved. Five palette rows land,
+labels byte-identical to mac, no chords as mac allocates none.
+
+Facts: six — the single place end to end, the rigid set by reading
+order, the total refusal table, align's three arms, the request's
+context with a foreign-identity confirm, and the proximity anchor
+compared VERBATIM against core. Mutations, each byte-restored: M1
+the identity re-validation dropped, M2 the self-pick guard dropped,
+M3 the already-aligned arm dropped, M4 the overlap refusal inverted,
+M5 the anchor reverted to the selection — M5's first aim was
+INVISIBLE on the fixture's near-collinear geometry (both anchors
+ordered the field identically), so the fact moved to a divergent
+pair where the nearest-from-one is farthest-from-the-other. All
+bitten.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same

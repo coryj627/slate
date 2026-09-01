@@ -1005,6 +1005,66 @@
       "registered": true
     },
     {
+      "id": "slate.canvas.placeBelow",
+      "label": "Canvas: Place Below…",
+      "section": "Canvas",
+      "hint": "Move the selected card (or the marked set) just below a card you pick.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.placeRightOf",
+      "label": "Canvas: Place Right Of…",
+      "section": "Canvas",
+      "hint": "Move the selection just right of a card you pick.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.placeAbove",
+      "label": "Canvas: Place Above…",
+      "section": "Canvas",
+      "hint": "Move the selection just above a card you pick.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.placeLeftOf",
+      "label": "Canvas: Place Left Of…",
+      "section": "Canvas",
+      "hint": "Move the selection just left of a card you pick.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.alignWith",
+      "label": "Canvas: Align With…",
+      "section": "Canvas",
+      "hint": "Align the selected card's top edge with a card you pick. Overlaps are refused, never silent.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
       "id": "slate.canvas.moveMode",
       "label": "Canvas: Move Mode",
       "section": "Canvas",

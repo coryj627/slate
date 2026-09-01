@@ -51,7 +51,8 @@ internal sealed class CanvasPresentationState
     /// reloaded scene renders committed truth. The identity check ran
     /// once, in the derivation.</summary>
     internal System.Collections.Immutable.ImmutableDictionary<string, CanvasRect>?
-        TransientRects { get; }
+        TransientRects
+    { get; }
 
     /// <summary>§F TF-5 (F10): a node's EFFECTIVE rectangle — the
     /// transient hypothetical when admitted, the committed scene rect

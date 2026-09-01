@@ -378,6 +378,16 @@ internal sealed partial class WorkspaceViewModel
 
     private RelayCommand? _canvasMoveModeCommand;
 
+    private RelayCommand? _canvasPlaceBelowCommand;
+
+    private RelayCommand? _canvasPlaceRightOfCommand;
+
+    private RelayCommand? _canvasPlaceAboveCommand;
+
+    private RelayCommand? _canvasPlaceLeftOfCommand;
+
+    private RelayCommand? _canvasAlignWithCommand;
+
     private RelayCommand? _canvasResizeModeCommand;
 
     private RelayCommand? _canvasResizeDefaultSizeCommand;
@@ -448,6 +458,34 @@ internal sealed partial class WorkspaceViewModel
     public System.Windows.Input.ICommand CanvasWhereAmICommand =>
         _canvasWhereAmICommand ??= NavigatorCommand(
             navigator => navigator.WhereAmI());
+
+    /// <summary>§F TF-7 (F5/F6): the picker-opening verbs — the
+    /// document owns every refusal and the request.</summary>
+    public System.Windows.Input.ICommand CanvasPlaceBelowCommand =>
+        _canvasPlaceBelowCommand ??= DocumentCommand(
+            document => document.OpenCardPicker(CanvasCardPickerPurpose.PlaceBelow));
+
+    public System.Windows.Input.ICommand CanvasPlaceRightOfCommand =>
+        _canvasPlaceRightOfCommand ??= DocumentCommand(
+            document => document.OpenCardPicker(CanvasCardPickerPurpose.PlaceRightOf));
+
+    public System.Windows.Input.ICommand CanvasPlaceAboveCommand =>
+        _canvasPlaceAboveCommand ??= DocumentCommand(
+            document => document.OpenCardPicker(CanvasCardPickerPurpose.PlaceAbove));
+
+    public System.Windows.Input.ICommand CanvasPlaceLeftOfCommand =>
+        _canvasPlaceLeftOfCommand ??= DocumentCommand(
+            document => document.OpenCardPicker(CanvasCardPickerPurpose.PlaceLeftOf));
+
+    public System.Windows.Input.ICommand CanvasAlignWithCommand =>
+        _canvasAlignWithCommand ??= DocumentCommand(
+            document => document.OpenCardPicker(CanvasCardPickerPurpose.AlignWith));
+
+    private RelayCommand DocumentCommand(
+        Action<CanvasDocumentViewModel> run) =>
+        new RelayCommand(
+            _ => { if (ActiveCanvasDocument is { } document) { run(document); } },
+            _ => ActiveCanvasDocument is not null);
 
     /// <summary>§F TF-4 (F9/M6): the spatial mode verbs for the
     /// palette and the chord resolver. Gated only on a canvas being
