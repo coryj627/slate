@@ -11601,6 +11601,71 @@ where it is pinned:
 Discharges G2-13, G2-14's sweep clause, and closes IG2-45's journey
 half. No §G2 ledger row remains open.
 
+### §G2 close-out — the residue shipped, the record closed
+
+Ten tasks, fourteen commits, the ledger swept. What §G2 leaves behind:
+every mac canvas verb with a Windows front door — the eighteen the
+census found without one, each a row on both tables, a resolver and
+an owner-carrying command; operations that carry their invoking tab
+(`DocumentCommand` handing `ActiveGroup.ActiveTab`, the navigator's
+chord handing its presenter's owner) so a landing that opens an
+editor can check currency; the shared prepare clause that catches its
+own vault refusal inside the gate (`EveryQueryingFrontDoorPrepareCatchesItsOwnRefusal`);
+the prompt answer as a sealed family (`CanvasPromptSubmit` — Refused,
+Pending, Completed, and `Advanced` carrying its non-null successor)
+with the workspace's atomic swap and the window's focus seam landing
+on the successor's first field; `CanvasPromptContext` on every staged
+verb, checked against the loaded identity before it applies; mac's
+cardinality on the connection verbs (a refusal read aloud, no
+connections, one edge direct, many through the picker) and the
+two-stage edit; one picker slot typed `ICanvasPickerSheet` serving the
+card picker and the vault file picker alike, the vault pick requested
+off the dispatcher with generation supersession and owner-checked on
+confirm; the editor through the operation's receipt, raised only once
+the row is present; Remove from Group, Create Connected Card (the exact
+two-op tuple, the directional variant, Ctrl+Alt+Shift+N recorded as a
+divergence), Duplicate (a snapshot, a visited set, exact equality,
+edges never copied, marks kept), Convert Card to Note through the
+sidebar's own seam inside the gate with a recovery state after a
+landed note; the context plan over (surface, target) with one dispatch
+for every consumer, connection rows on their edge, the grid's Toggle
+Mark live and the last staged reasons retired; the matrix with every
+executable canvas id delivered and its evidence anchored; and the
+journey driving every verb at a real keyboard.
+
+The section's discoveries, honestly counted: the navigator chord that
+discarded its presenter (TG2-0, IG2-34); the ghost anchor that does not
+throw, which turned a fact into a source census over the prepare
+clause (TG2-0); the reading order that put a new group first, so the
+facts find groups by name (TG2-1); the Uri parser that forgives
+whitespace, so the fact asserts the written bytes (TG2-2); the owner
+refusal with no active document, answered through `RefuseStale`
+(TG2-3); the editor receipt that fired before the rows were rebuilt
+(TG2-4, `RaiseCreatedEditorWhenPresent`), and `OpenPath` replacing the
+current tab where the fact needed a new one; the children query that
+throws on a ghost, so Duplicate projects its seed first (TG2-5); the
+announcement seam census refusing a prompt's direct reach at the
+announcer, and the leaf-name census refusing a forwarded display name
+— both right (TG2-6); two guards for one rule, of which only one could
+bite (TG2-6); the grid's reader currency that already seats the row,
+so the seat's own proof moved to the document level (TG2-7); the
+chords.json projection that must be regenerated LAST (TG2-4's
+follow-up); and the journey's three catches (TG2-9): an empty group
+remembered as collapsed and hiding the card moved into it, the prompt
+lists naming their rows by a record's ToString, and the sibling
+journeys left standing in TG2-4's editor landing.
+
+Owed to the mac lane, restated from the freeze: G2D-1 through G2D-12
+— among them the connected-card chord's divergence, the unmet deep
+copy, the URL scheme policy, the renderer without a context menu, and
+Delete on a group kept as a confirmation. Owed here, recorded: E8's
+missing-target signal for Locate File stays with the owner (the FFI
+has none to report); the "Accessible canvas" surface row of
+`parity_matrix.md` stays pending for PR H, which reconciles the
+evidence and flips only that row; a fresh group holds one card and
+refuses a second for want of free space — mac's placement, recorded
+where the fact met it.
+
 ---
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
