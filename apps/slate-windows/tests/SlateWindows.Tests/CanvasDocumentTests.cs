@@ -95,6 +95,124 @@ public sealed class CanvasDocumentTests : IDisposable
             new CanvasAnnouncer(_announced.Add, TimeSpan.FromMinutes(1)),
             synchronousForTests);
 
+    /// <summary>§G2 TG2-3 (G2-6): Add Note to Canvas… — the vault picker in
+    /// the card picker's slot lists the vault's notes with the path as
+    /// each row's status, the filter narrows, and Enter lands a file
+    /// card next to the selection; Add Media… on a vault with no media
+    /// refuses NoMediaInVault and presents nothing.</summary>
+    [Fact]
+    public void AddNoteListsTheVaultsNotesAndAddMediaRefusesAnEmptySet()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        document.SeatSelectionSilently("question");
+        int filesBefore = document.AppliedPublication!.Loaded!.Population.SceneNodes.Count(n => n.Kind == "file");
+
+        workspace.CanvasAddNoteCommand.Execute(null);
+
+        var sheet = Assert.IsType<CanvasVaultFilePickerViewModel>(workspace.CanvasCardPickerSheet);
+        Assert.Equal("Note picker", sheet.SheetName);
+        Assert.True(sheet.Rows.Length >= 3);
+        Assert.All(sheet.Rows, row => Assert.EndsWith(".md", row.Value));
+        Assert.All(sheet.Rows, row => Assert.Equal(row.Value, row.Status));
+        sheet.Filter = "note1";
+        Assert.Single(sheet.Rows);
+        Assert.Equal("note1.md", sheet.SelectedRow?.Value);
+
+        workspace.ConfirmCanvasCardPick();
+
+        Assert.Null(workspace.CanvasCardPickerSheet);
+        Assert.Equal(
+            filesBefore + 1,
+            document.AppliedPublication!.Loaded!.Population.SceneNodes.Count(n => n.Kind == "file"));
+
+        _announced.Clear();
+        workspace.CanvasAddMediaCommand.Execute(null);
+        Assert.Null(workspace.CanvasCardPickerSheet);
+        Assert.Contains(_announced, a => a.Text.Contains("media", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>§G2 TG2-3 (G2-6, G2D-8): Locate File… refuses a card that is
+    /// not a file card, presents the union of notes and media for a file
+    /// card, and a pick repoints it.</summary>
+    [Fact]
+    public void LocateFileRefusesANonFileCardAndRepointsAFileCard()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+
+        document.SeatSelectionSilently("question");
+        _announced.Clear();
+        workspace.CanvasLocateFileCommand.Execute(null);
+        Assert.Null(workspace.CanvasCardPickerSheet);
+        Assert.Contains(_announced, a => a.Text.Contains("file card", StringComparison.OrdinalIgnoreCase));
+
+        document.SeatSelectionSilently("note");
+        workspace.CanvasLocateFileCommand.Execute(null);
+        var sheet = Assert.IsType<CanvasVaultFilePickerViewModel>(workspace.CanvasCardPickerSheet);
+        Assert.Equal("File picker", sheet.SheetName);
+        sheet.Filter = "note2";
+        Assert.Equal("note2.md", sheet.SelectedRow?.Value);
+
+        workspace.ConfirmCanvasCardPick();
+
+        Assert.Null(workspace.CanvasCardPickerSheet);
+        Assert.Contains("\"file\":\"note2.md\"", File.ReadAllText(Path.Combine(_fixture.Root, "board.canvas")));
+    }
+
+    /// <summary>§G2 TG2-3 (IG2-19/49/50): the request's three checks — a
+    /// superseded generation (a second open replaces the first; the
+    /// first sheet's pick is a guess), a moved loaded identity, and an
+    /// owner that is no longer the active tab — each refuse
+    /// PickDifferentTarget with nothing written.</summary>
+    [Fact]
+    public void AStaleVaultPickRefusesPickDifferentTarget()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        document.SeatSelectionSilently("question");
+        string before = File.ReadAllText(Path.Combine(_fixture.Root, "board.canvas"));
+
+        workspace.CanvasAddNoteCommand.Execute(null);
+        var first = Assert.IsType<CanvasVaultFilePickerViewModel>(workspace.CanvasCardPickerSheet);
+        workspace.CanvasAddNoteCommand.Execute(null);
+        var second = Assert.IsType<CanvasVaultFilePickerViewModel>(workspace.CanvasCardPickerSheet);
+        Assert.NotSame(first, second);
+        _announced.Clear();
+        Assert.False(first.Confirm());
+        Assert.Contains(_announced, a => a.Text.Contains("different", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(before, File.ReadAllText(Path.Combine(_fixture.Root, "board.canvas")));
+
+        document.Load();
+        _announced.Clear();
+        Assert.False(second.Confirm());
+        Assert.Contains(_announced, a => a.Text.Contains("different", StringComparison.OrdinalIgnoreCase));
+        workspace.CloseCanvasCardPicker();
+
+        document.SeatSelectionSilently("question");
+        workspace.CanvasAddNoteCommand.Execute(null);
+        Assert.IsType<CanvasVaultFilePickerViewModel>(workspace.CanvasCardPickerSheet);
+        workspace.OpenPath("note0.md", WorkspaceOpenTarget.NewTab);
+        Assert.NotSame(tab, workspace.ActiveGroup.ActiveTab);
+        _announced.Clear();
+        workspace.ConfirmCanvasCardPick();
+        Assert.NotNull(workspace.CanvasCardPickerSheet);
+        Assert.Contains(_announced, a => a.Text.Contains("different", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(before, File.ReadAllText(Path.Combine(_fixture.Root, "board.canvas")));
+    }
+
     /// <summary>§G2 TG2-2 (G2-5, IG2-15, IG2-19/35): Move into Group… lists
     /// EVERY group in reading order and moves the card; a submit against a
     /// reloaded document refuses PickDifferentTarget with the sheet kept.</summary>

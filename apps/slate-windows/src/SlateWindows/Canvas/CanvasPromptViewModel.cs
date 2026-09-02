@@ -747,7 +747,7 @@ internal sealed class CanvasSetColorPrompt : CanvasPromptViewModel
 /// ROUTED pick closes it.
 /// </summary>
 internal sealed class CanvasCardPickerViewModel
-    : System.ComponentModel.INotifyPropertyChanged
+    : System.ComponentModel.INotifyPropertyChanged, ICanvasPickerSheet
 {
     private readonly CanvasDocumentViewModel _document;
     private string _filter = string.Empty;
@@ -780,6 +780,14 @@ internal sealed class CanvasCardPickerViewModel
         _ => "Connect To…",
     };
 
+    /// <summary>§G2 TG2-3 (IG2-48): the sheet-level UIA names are the
+    /// purpose's — the card picker's, here.</summary>
+    public string SheetName => "Card picker";
+
+    public string FilterName => "Filter cards";
+
+    public string RowsName => "Cards, nearest first. Enter picks.";
+
     public string Filter
     {
         get => _filter;
@@ -810,7 +818,7 @@ internal sealed class CanvasCardPickerViewModel
     /// <summary>True when the pick ROUTED (a verb ran or a stage's
     /// prompt opened) — the sheet closes; false keeps it, filter and
     /// highlight intact (F5's state-keeping refusals).</summary>
-    internal bool Confirm()
+    public bool Confirm()
     {
         return SelectedRow is { } row
             && _document.HandleCardPick(Request, row.NodeId);

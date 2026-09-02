@@ -425,7 +425,11 @@ public sealed class ContractsCitationCensus
                 // TG2-2 bound the choices pickers, taking the section to
                 // 134; 133 sits above the pre-task population of 123
                 // — a third time.
-                133),
+                //
+                // TG2-3 bound the vault file picker, taking the section to
+                // 146; 145 sits above the pre-task population of 134
+                // — a fourth time.
+                145),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

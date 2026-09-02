@@ -3769,7 +3769,7 @@
                     KeyboardNavigation.TabNavigation="Cycle"
                     KeyboardNavigation.ControlTabNavigation="Cycle"
                     AutomationProperties.AutomationId="CanvasCardPickerSheet"
-                    AutomationProperties.Name="Card picker"
+                    AutomationProperties.Name="{Binding SheetName}"
                     AutomationProperties.IsDialog="True">
                 <StackPanel>
                     <TextBlock Text="{Binding Title}"
@@ -3778,14 +3778,22 @@
                     <TextBox x:Name="CanvasCardPickerFilterBox"
                              Text="{Binding Filter, UpdateSourceTrigger=PropertyChanged}"
                              AutomationProperties.AutomationId="CanvasCardPickerFilter"
-                             AutomationProperties.Name="Filter cards"
+                             AutomationProperties.Name="{Binding FilterName}"
                              Margin="0,0,0,8" />
                     <ListBox ItemsSource="{Binding Rows}"
                              SelectedItem="{Binding SelectedRow}"
                              DisplayMemberPath="Label"
                              MaxHeight="240"
                              AutomationProperties.AutomationId="CanvasCardPickerRows"
-                             AutomationProperties.Name="Cards, nearest first. Enter picks." />
+                             AutomationProperties.Name="{Binding RowsName}">
+                        <!-- §G2 TG2-3 (IG2-48): a row's Status (the vault path for a
+                             file) rides the item's UIA ItemStatus. -->
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="AutomationProperties.ItemStatus" Value="{Binding Status}" />
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                    </ListBox>
                 </StackPanel>
             </local:AutomationLandmarkBorder>
 

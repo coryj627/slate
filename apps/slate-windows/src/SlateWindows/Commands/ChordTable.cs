@@ -289,6 +289,9 @@ internal static class ChordTable
         public const string CanvasMoveIntoGroup = "slate.canvas.moveIntoGroup";
         public const string CanvasEditConnection = "slate.canvas.editConnection";
         public const string CanvasDeleteConnection = "slate.canvas.deleteConnection";
+        public const string CanvasAddNote = "slate.canvas.addNote";
+        public const string CanvasAddMedia = "slate.canvas.addMedia";
+        public const string CanvasLocateFile = "slate.canvas.locateFile";
 
         public const string CanvasClearMarks = "slate.canvas.clearMarks";
 
@@ -1065,6 +1068,13 @@ internal static class ChordTable
                 "Change one of the selected card's connection labels or direction."),
             Reg(Ids.CanvasDeleteConnection, "Canvas: Delete Connection…", CommandSection.Canvas,
                 "Delete one of the selected card's connections. Undo with Ctrl+Z."),
+            // §G2 TG2-3: the vault file picker's front doors.
+            Reg(Ids.CanvasAddNote, "Canvas: Add Note to Canvas…", CommandSection.Canvas,
+                "Pick a vault note; a file card is placed next to your selection."),
+            Reg(Ids.CanvasAddMedia, "Canvas: Add Media…", CommandSection.Canvas,
+                "Pick a vault media file; a file card is placed next to your selection."),
+            Reg(Ids.CanvasLocateFile, "Canvas: Locate File…", CommandSection.Canvas,
+                "Repoint the selected file card at a different vault file."),
             Reg(Ids.CanvasConnectMode, "Canvas: Connect Mode", CommandSection.Canvas,
                 "Remember the selected card, navigate to a target with the "
                 + "usual movements, press Return to connect."),

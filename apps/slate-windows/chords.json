@@ -1209,6 +1209,42 @@
       "registered": true
     },
     {
+      "id": "slate.canvas.addNote",
+      "label": "Canvas: Add Note to Canvas…",
+      "section": "Canvas",
+      "hint": "Pick a vault note; a file card is placed next to your selection.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.addMedia",
+      "label": "Canvas: Add Media…",
+      "section": "Canvas",
+      "hint": "Pick a vault media file; a file card is placed next to your selection.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.locateFile",
+      "label": "Canvas: Locate File…",
+      "section": "Canvas",
+      "hint": "Repoint the selected file card at a different vault file.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
       "id": "slate.canvas.connectMode",
       "label": "Canvas: Connect Mode",
       "section": "Canvas",

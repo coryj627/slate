@@ -97,6 +97,18 @@ internal sealed partial class WorkspaceViewModel
             document.EditConnectionRequested += (context, neighbor) =>
                 _ = TryPresentCanvasPrompt(
                     CanvasPromptViewModel.EditConnectionDirection(document, context, neighbor));
+            // §G2 TG2-3 (IG2-50): the vault picker presents only for the
+            // owner that is still current; a load that completes for a
+            // tab that moved on presents nothing and says so.
+            document.VaultPickerRequested += request =>
+            {
+                if (!ReferenceEquals(request.Owner, ActiveGroup.ActiveTab))
+                {
+                    document.SpeakPickDifferentTarget();
+                    return;
+                }
+                CanvasCardPickerSheet = new CanvasVaultFilePickerViewModel(document, request);
+            };
             document.UngroupConfirmRequested += (groupId, title) =>
                 _ = TryPresentCanvasPrompt(
                     CanvasPromptViewModel.UngroupConfirm(document, groupId, title));
@@ -377,9 +389,12 @@ internal sealed partial class WorkspaceViewModel
     /// standing.</summary>
     public void CloseCanvasCardEditor() => CanvasCardEditorSheet = null;
 
-    private CanvasCardPickerViewModel? _canvasCardPickerSheet;
+    private ICanvasPickerSheet? _canvasCardPickerSheet;
 
-    public CanvasCardPickerViewModel? CanvasCardPickerSheet
+    /// <summary>§G2 TG2-3 (G2-6, G2D-1): the ONE picker slot — the card
+    /// picker or the vault file picker, through the shared contract; the
+    /// modal arm is CanvasCardPicker for either.</summary>
+    public ICanvasPickerSheet? CanvasCardPickerSheet
     {
         get => _canvasCardPickerSheet;
         private set => SetField(ref _canvasCardPickerSheet, value);
@@ -391,7 +406,20 @@ internal sealed partial class WorkspaceViewModel
     /// it; a refusal keeps it, filter and highlight intact.</summary>
     public void ConfirmCanvasCardPick()
     {
-        if (CanvasCardPickerSheet is { } sheet && sheet.Confirm())
+        if (CanvasCardPickerSheet is not { } sheet)
+        {
+            return;
+        }
+        // §G2 TG2-3 (IG2-50): the OWNER half of a vault pick's validation —
+        // the invoking tab must still be the active one; a pick from a
+        // tab that moved on is a guess, refused with the sheet kept.
+        if (sheet is CanvasVaultFilePickerViewModel vault
+            && !ReferenceEquals(vault.Request.Owner, ActiveGroup.ActiveTab))
+        {
+            vault.RefuseStale();
+            return;
+        }
+        if (sheet.Confirm())
         {
             CanvasCardPickerSheet = null;
         }
@@ -707,6 +735,18 @@ internal sealed partial class WorkspaceViewModel
         _canvasDeleteConnectionCommand ??= DocumentCommand(
             (document, owner) => document.RequestDeleteConnection(owner));
 
+    public System.Windows.Input.ICommand CanvasAddNoteCommand =>
+        _canvasAddNoteCommand ??= DocumentCommand(
+            (document, owner) => document.RequestVaultPick(CanvasVaultPickPurpose.Note, owner));
+
+    public System.Windows.Input.ICommand CanvasAddMediaCommand =>
+        _canvasAddMediaCommand ??= DocumentCommand(
+            (document, owner) => document.RequestVaultPick(CanvasVaultPickPurpose.Media, owner));
+
+    public System.Windows.Input.ICommand CanvasLocateFileCommand =>
+        _canvasLocateFileCommand ??= DocumentCommand(
+            (document, owner) => document.RequestVaultPick(CanvasVaultPickPurpose.Locate, owner));
+
     private RelayCommand? _canvasDeleteCommand;
     private RelayCommand? _canvasEditCardCommand;
     private RelayCommand? _canvasRenameGroupCommand;
@@ -717,6 +757,9 @@ internal sealed partial class WorkspaceViewModel
     private RelayCommand? _canvasMoveIntoGroupCommand;
     private RelayCommand? _canvasEditConnectionCommand;
     private RelayCommand? _canvasDeleteConnectionCommand;
+    private RelayCommand? _canvasAddNoteCommand;
+    private RelayCommand? _canvasAddMediaCommand;
+    private RelayCommand? _canvasLocateFileCommand;
 
     public System.Windows.Input.ICommand CanvasConnectModeCommand =>
         _canvasConnectModeCommand ??= NavigatorCommand(

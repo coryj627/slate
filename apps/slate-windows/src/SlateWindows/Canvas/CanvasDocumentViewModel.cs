@@ -3385,6 +3385,117 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
 
     internal void RequestDeleteConnection(object? owner = null) => RequestConnectionVerb(owner, toDelete: true);
 
+    /// <summary>§G2 TG2-3 (G2-6): the vault file picker's front door for Add
+    /// Note, Add Media and Locate File. The openers speak here; the load
+    /// runs OFF the dispatcher on the document's own scheduler; a later
+    /// request supersedes an earlier load, which never presents; a
+    /// paging throw answers the verb's typed failure and presents
+    /// nothing; an empty classified set answers the purpose's refusal.</summary>
+    internal event Action<CanvasVaultPickRequest>? VaultPickerRequested;
+
+    private int _vaultPickGeneration;
+    private CanvasVaultFilePickerModel? _currentVaultPick;
+
+    internal void RequestVaultPick(CanvasVaultPickPurpose purpose, object? owner = null)
+    {
+        if (_slot.Current.Loaded is not { } loaded)
+        {
+            SpeakNotReady();
+            return;
+        }
+        string? target = null;
+        if (purpose == CanvasVaultPickPurpose.Locate)
+        {
+            if (Selection.Selected is not { } selected || RowFor(selected) is not { } row)
+            {
+                Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NothingSelected()));
+                return;
+            }
+            // §G2 G2D-8: every file or image card (mac's later rule; the
+            // FFI carries no missing-target signal for a card).
+            if (row.Kind is not ("file" or "image"))
+            {
+                Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NotAFileCard()));
+                return;
+            }
+            target = selected;
+        }
+        int generation = ++_vaultPickGeneration;
+        StartWork(() =>
+        {
+            CanvasVaultFilePickerModel? model = null;
+            string? failure = null;
+            try
+            {
+                model = BuildVaultFilePickerModel(purpose);
+            }
+            catch (VaultException e)
+            {
+                failure = e.Message;
+            }
+            Post(() =>
+            {
+                // IG2-20/IG2-49: a superseded load never presents.
+                if (generation != _vaultPickGeneration || IsShutDown)
+                {
+                    return;
+                }
+                if (failure is not null || model is null)
+                {
+                    Speak(new CanvasA11yEvent.CanvasActionFailed(
+                        purpose == CanvasVaultPickPurpose.Locate
+                            ? CanvasFailedAction.CanvasAction
+                            : CanvasFailedAction.Create,
+                        failure ?? "the vault listing did not answer"));
+                    return;
+                }
+                if (model.Classified.IsEmpty)
+                {
+                    Speak(new CanvasA11yEvent.CanvasStatus(purpose switch
+                    {
+                        CanvasVaultPickPurpose.Note => new CanvasStatusNote.NoNotesInVault(),
+                        CanvasVaultPickPurpose.Media => new CanvasStatusNote.NoMediaInVault(),
+                        _ => new CanvasStatusNote.NoFilesToPointAt(),
+                    }));
+                    return;
+                }
+                // IG2-49: the identity at load completion must still be the
+                // one the opener saw; a moved document presents nothing.
+                if (!IsCurrentLoaded(loaded))
+                {
+                    SpeakPickDifferentTarget();
+                    return;
+                }
+                _currentVaultPick = model;
+                VaultPickerRequested?.Invoke(
+                    new CanvasVaultPickRequest(purpose, target, loaded, owner, model));
+            });
+        });
+    }
+
+    /// <summary>§G2 TG2-3 (IG2-19/49): route a completed vault pick. The
+    /// request re-validates FIRST — the loaded identity and the model
+    /// generation — and a guess refuses PickDifferentTarget with the
+    /// sheet kept; then the purpose's verb runs with the request's
+    /// owner. True when routed.</summary>
+    internal bool HandleVaultPick(CanvasVaultPickRequest request, string path)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(path);
+        if (IsShutDown
+            || !IsCurrentLoaded(request.Identity)
+            || !ReferenceEquals(_currentVaultPick, request.Model)
+            || !request.Model.Admits(request.Model))
+        {
+            SpeakPickDifferentTarget();
+            return false;
+        }
+        CanvasMutationOperation? operation = request.Purpose == CanvasVaultPickPurpose.Locate
+            ? CanvasLocateFile(request.TargetId!, path, owner: request.Owner)
+            : CanvasAddFileCard(path, null, owner: request.Owner);
+        return operation is not null;
+    }
+
     internal void RequestEditConnection(object? owner = null) => RequestConnectionVerb(owner, toDelete: false);
 
     private void RequestConnectionVerb(object? owner, bool toDelete)
@@ -4119,12 +4230,22 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// completion, classified BEFORE the cap (notes = markdown; media
     /// = core's classification over the FFI).</summary>
     internal CanvasVaultFilePickerModel BuildVaultFilePickerModel(bool mediaOnly) =>
+        BuildVaultFilePickerModel(mediaOnly ? CanvasVaultPickPurpose.Media : CanvasVaultPickPurpose.Note);
+
+    /// <summary>§G2 TG2-3 (G2-6, G2D-6): the admission predicate by purpose —
+    /// notes are markdown, media is core's classification over the path,
+    /// Locate admits the union of both.</summary>
+    internal CanvasVaultFilePickerModel BuildVaultFilePickerModel(CanvasVaultPickPurpose purpose) =>
         CanvasVaultFilePickerModel.LoadAll(
             cursor => _session.ListFiles(
                 FileFilter.All, new Paging(cursor, 128)),
-            file => mediaOnly
-                ? SlateUniffiMethods.CanvasMediaClass(file.Path) is not null
-                : file.IsMarkdown);
+            file => purpose switch
+            {
+                CanvasVaultPickPurpose.Note => file.IsMarkdown,
+                CanvasVaultPickPurpose.Media =>
+                    SlateUniffiMethods.CanvasMediaClass(file.Path) is not null,
+                _ => file.IsMarkdown || SlateUniffiMethods.CanvasMediaClass(file.Path) is not null,
+            });
 
     private string PublishedTitleOf(string? nodeId) =>
         PublishedRowOf(nodeId)?.Title ?? nodeId ?? string.Empty;

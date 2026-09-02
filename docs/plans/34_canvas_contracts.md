@@ -11148,6 +11148,66 @@ byte-restored: M1 the single-connection direct route removed, M2 the
 stale check removed, M3 the delete sentence from the to-node again,
 M4 the picker completing instead of advancing. All bitten.
 
+### TG2-3 — the vault file picker: one slot, one contract, a request checked three ways
+
+The card picker's slot becomes ONE picker slot. `ICanvasPickerSheet`
+is the contract both sheets satisfy — Title, Filter, Confirm, and the
+sheet-level UIA names as PROPERTIES (the dialog's, the filter's, the
+rows') — and the workspace's `CanvasCardPickerSheet` is retyped to it,
+so the modal arm `ModalSurface.CanvasCardPicker`, the window's key
+routing and the modal state derivation all serve either sheet without
+a new cell (G2-6, G2D-1, IG2-18). The XAML binds the three names, and
+each row's Status rides the item's ItemStatus through an
+item-container style: the card picker's rows gain a null status, the
+vault picker's carry the path (IG2-48). `CanvasVaultFilePickerViewModel`
+projects `CanvasVaultFilePickerModel`'s classified generation through
+`CanvasPickerRow` — value the path, label the display name else the
+name, status the path — narrowed by the filter over the complete set
+and capped at 200 (ED-2).
+
+The request is a VALUE, `CanvasVaultPickRequest`: purpose (Note,
+Media, Locate), the target card for Locate, the exact loaded
+identity, the invoking owner, and the model generation the sheet
+shows. It is checked THREE ways (IG2-19, IG2-49, IG2-50): at load
+completion, a moved identity presents nothing and speaks
+`PickDifferentTarget`; at submit, the document's `HandleVaultPick`
+refuses a moved identity or a superseded generation (a second open
+replaces the sheet; the first sheet's pick is a guess) with the sheet
+kept; and the workspace's `ConfirmCanvasCardPick` refuses a pick whose
+owner is no longer the active tab, spoken through the SHEET's own
+document because the active tab may no longer be a canvas at all. The
+checkpoint table revision 2 could not write is now the code's: a
+superseded load never presents; a moved identity at completion
+presents nothing and says so; a mismatch at submit refuses and keeps.
+
+The load runs OFF the dispatcher on the document's own scheduler
+(`StartWork`, inline in the synchronous host), posting back through
+`Post`; a later request's generation supersedes an earlier load, which
+never presents; a paging throw answers `CanvasActionFailed` — `Create`
+for the add verbs, `CanvasAction` for Locate — with the message and
+presents nothing; an empty classified set answers `NoNotesInVault`,
+`NoMediaInVault` or `NoFilesToPointAt` (IG2-20). Recorded against
+mac (IG2-37, G2D-13's sibling): mac keeps a silently partial set when
+a page fails; Windows refuses audibly and presents nothing — a
+divergence of policy, chosen because a list with silent holes is the
+never-silent rule's opposite. The admission predicate is the
+purpose's (G2D-6): notes are markdown, media is core's
+`CanvasMediaClass` over the path, Locate admits the union; Locate is
+offered on every file or image card (G2D-8, IG2-52 owed to the owner
+with E8's wording). Three rows, resolvers and owner-carrying commands:
+Add Note to Canvas…, Add Media…, Locate File…; `chords.json`
+regenerated.
+
+Facts: three — Add Note listing the vault's notes with the path as
+status, the filter narrowing to one, the pick landing a file card, and
+Add Media refusing an empty set; Locate refusing a text card and
+repointing a file card; the stale pick's three refusals (a superseded
+generation, a reloaded identity, a tab that moved on — the note
+opened in a NEW tab, since the current-tab default replaces the item
+and keeps the tab). Mutations, each byte-restored: M1 the generation
+check removed, M2 the identity check removed, M3 Locate's file-card
+guard removed, M4 the empty-set refusal removed. All bitten.
+
 ---
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
