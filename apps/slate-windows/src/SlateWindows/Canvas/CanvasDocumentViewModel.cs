@@ -3754,6 +3754,163 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         return admission == CanvasMutationAdmission.Admitted ? operation : null;
     }
 
+    /// <summary>§G2 TG2-6 (G2-11, IG2-43): Convert Card to Note…'s front door
+    /// — not-ready, the selection, a text card only, no held mode; the
+    /// suggested path is mac's: the title with every slash a dash,
+    /// trimmed, "Untitled" when empty, plus .md.</summary>
+    internal event Action<CanvasPromptContext, string>? ConvertToNoteRequested;
+
+    internal void RequestConvertToNote(object? owner = null)
+    {
+        if (_slot.Current.Loaded is not { } loaded)
+        {
+            SpeakNotReady();
+            return;
+        }
+        if (Selection.Selected is not { } selected || RowFor(selected) is not { } row)
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NothingSelected()));
+            return;
+        }
+        if (row.Kind != "text")
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.OnlyTextCardsConvert()));
+            return;
+        }
+        if (Modes.IsActive)
+        {
+            Speak(new CanvasA11yEvent.CanvasBlocked(new CanvasBlockedReason.ModeBusy()));
+            return;
+        }
+        ConvertToNoteRequested?.Invoke(
+            new CanvasPromptContext(owner, loaded, selected), SuggestedNotePath(row.Title));
+    }
+
+    internal static string SuggestedNotePath(string title)
+    {
+        string stem = title.Replace("/", "-", StringComparison.Ordinal).Trim();
+        return (stem.Length == 0 ? "Untitled" : stem) + ".md";
+    }
+
+    /// <summary>§G2 TG2-6 (G2-11, IG2-26/27/41/42/55/56/58): Convert Card to
+    /// Note — ONE operation. Inside prepare, under the canvas gate: the
+    /// card's text (a throw NoteReadFailed with the message, a null the
+    /// fixed detail); the note through the sidebar's seam (Exists is
+    /// NotePathExists on disk, a refusal NoteCreateFailed, the shutdown
+    /// arm NoteCreateFailed with its own detail); a LANDED note returns
+    /// the one retarget op, and the funnel is the one arbiter after it.
+    /// The completion posts the barrier and refresh to the UI once the
+    /// note landed, whatever the canvas outcome, and speaks the
+    /// landed-note truth for every outcome that did not retarget the
+    /// card — displacement included, which the funnel keeps silent.</summary>
+    public CanvasMutationOperation? CanvasConvertToNote(
+        string nodeId,
+        string cleanPath,
+        ICanvasNoteCreator creator,
+        object? owner = null,
+        Action<CanvasOperationOutcome>? completion = null,
+        Action? noteLanded = null)
+    {
+        ArgumentNullException.ThrowIfNull(nodeId);
+        ArgumentNullException.ThrowIfNull(cleanPath);
+        ArgumentNullException.ThrowIfNull(creator);
+        if (_slot.Current.Loaded is not { } basis)
+        {
+            SpeakNotReady();
+            return null;
+        }
+        if (RowFor(nodeId) is not { } row)
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NothingSelected()));
+            return null;
+        }
+        if (row.Kind != "text")
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.OnlyTextCardsConvert()));
+            return null;
+        }
+        if (!cleanPath.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
+        {
+            Speak(new CanvasA11yEvent.CanvasBlocked(new CanvasBlockedReason.NotePathMustEndInMd()));
+            return null;
+        }
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId("convert to note"), owner ?? this, nodeId,
+            basis, CanvasMutationEffect.KeepSelection);
+        bool landed = false;
+        string? caveat = null;
+        operation.Completion = outcome =>
+        {
+            completion?.Invoke(outcome);
+            if (!landed)
+            {
+                return;
+            }
+            Post(() =>
+            {
+                // IG2-55: the barrier and the refresh are UI-owned; posted
+                // ONCE the note landed, whatever the canvas outcome.
+                creator.NoteLanded(cleanPath, caveat);
+                if (outcome is not (CanvasOperationOutcome.Installed
+                    or CanvasOperationOutcome.Unindexed
+                    or CanvasOperationOutcome.RefreshRefused))
+                {
+                    // IG2-58: the note exists and the card was not retargeted —
+                    // said once, after whatever the funnel said, or alone
+                    // where the funnel is silent (displacement).
+                    SpeakNoteRetargetFailed(cleanPath);
+                }
+            });
+        };
+        CanvasMutationAdmission admission = Funnel.Apply(
+            operation,
+            handle =>
+            {
+                string? text;
+                try
+                {
+                    text = _session.CanvasNodeText(handle, nodeId);
+                }
+                catch (VaultException e)
+                {
+                    Speak(new CanvasA11yEvent.CanvasBlocked(new CanvasBlockedReason.NoteReadFailed(e.Message)));
+                    return null;
+                }
+                if (text is null)
+                {
+                    Speak(new CanvasA11yEvent.CanvasBlocked(
+                        new CanvasBlockedReason.NoteReadFailed("The card text is unavailable.")));
+                    return null;
+                }
+                switch (creator.TryCreateNote(cleanPath, text))
+                {
+                    case CanvasNoteCreateResult.Exists:
+                        Speak(new CanvasA11yEvent.CanvasBlocked(
+                            new CanvasBlockedReason.NotePathExists(cleanPath, true)));
+                        return null;
+                    case CanvasNoteCreateResult.Failed failed:
+                        Speak(new CanvasA11yEvent.CanvasBlocked(
+                            new CanvasBlockedReason.NoteCreateFailed(cleanPath, failed.Message)));
+                        return null;
+                    case CanvasNoteCreateResult.Unavailable:
+                        Speak(new CanvasA11yEvent.CanvasBlocked(
+                            new CanvasBlockedReason.NoteCreateFailed(cleanPath, "the vault is closing")));
+                        return null;
+                    case CanvasNoteCreateResult.Landed ok:
+                        landed = true;
+                        caveat = ok.Caveat;
+                        noteLanded?.Invoke();
+                        break;
+                }
+                return new CanvasAction(
+                    $"convert \"{row.Title}\" to note",
+                    [new CanvasOp.SetNodeContent(nodeId, new CanvasNodeContent.File(cleanPath, null))]);
+            },
+            "convert to note",
+            confirm: () => new CanvasA11yEvent.CanvasConvertedToNote(cleanPath));
+        return admission == CanvasMutationAdmission.Admitted ? operation : null;
+    }
+
     /// <summary>§G2 TG2-4 (G2-5): the directional variant's front door —
     /// the selection first (mac's canvasPromptConnectedDirection), then
     /// the direction prompt with the typed context.</summary>
@@ -3934,6 +4091,16 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// loaded identity the prompt captured is still the one applied.</summary>
     internal bool IsCurrentLoaded(CanvasLoaded identity) =>
         ReferenceEquals(_slot.Current.Loaded, identity);
+
+    /// <summary>§G2 TG2-6: the note-path refusals a prompt may need, as
+    /// BOUNDARY methods — the prompt names the typed arm, the document's
+    /// one announcer speaks it (the announcement seam census's rule).</summary>
+    internal void SpeakNoteRetargetFailed(string path) =>
+        Speak(new CanvasA11yEvent.CanvasBlocked(new CanvasBlockedReason.NoteRetargetFailed(
+            path, "the note was created; the card still points at its text")));
+
+    internal void SpeakNoteCreateFailed(string path, string detail) =>
+        Speak(new CanvasA11yEvent.CanvasBlocked(new CanvasBlockedReason.NoteCreateFailed(path, detail)));
 
     internal void SpeakPickDifferentTarget() =>
         Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.PickDifferentTarget()));

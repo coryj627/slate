@@ -436,7 +436,11 @@ public sealed class ContractsCitationCensus
                 //
                 // TG2-5 bound Duplicate, taking the section to 165; 164
                 // sits above the pre-task population of 159 — a sixth time.
-                164),
+                //
+                // TG2-6 bound Convert Card to Note, taking the section to 181;
+                // 180 sits above the pre-task population of 165 — a seventh
+                // time.
+                180),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

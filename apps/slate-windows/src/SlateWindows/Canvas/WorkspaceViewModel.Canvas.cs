@@ -113,6 +113,19 @@ internal sealed partial class WorkspaceViewModel
                     CanvasCardEditorSheet = document.OpenCardEditor(nodeId);
                 }
             };
+            // §G2 TG2-6 (IG2-6): the structural-aware route — the sidebar's
+            // note creator rides into the prompt; without one (no sidebar)
+            // the verb cannot write and says so.
+            document.ConvertToNoteRequested += (context, suggested) =>
+            {
+                if (CanvasNoteCreator is not { } creator)
+                {
+                    document.SpeakNoteCreateFailed(suggested, "no vault to write to");
+                    return;
+                }
+                _ = TryPresentCanvasPrompt(
+                    CanvasPromptViewModel.ConvertToNote(document, context, suggested, creator));
+            };
             document.ConnectedDirectionRequested += context =>
                 _ = TryPresentCanvasPrompt(CanvasPromptViewModel.ConnectedDirection(document, context));
             document.VaultPickerRequested += request =>
@@ -770,6 +783,14 @@ internal sealed partial class WorkspaceViewModel
         _canvasCreateConnectedCardCommand ??= DocumentCommand(
             (document, owner) => document.CanvasCreateConnectedCard(owner: owner));
 
+    /// <summary>§G2 TG2-6: the sidebar as the canvas's note creator — set by
+    /// the vault lifecycle when both exist.</summary>
+    public ICanvasNoteCreator? CanvasNoteCreator { get; set; }
+
+    public System.Windows.Input.ICommand CanvasConvertToNoteCommand =>
+        _canvasConvertToNoteCommand ??= DocumentCommand(
+            (document, owner) => document.RequestConvertToNote(owner));
+
     public System.Windows.Input.ICommand CanvasDuplicateCommand =>
         _canvasDuplicateCommand ??= DocumentCommand(
             (document, owner) => document.CanvasDuplicate(owner: owner));
@@ -795,6 +816,7 @@ internal sealed partial class WorkspaceViewModel
     private RelayCommand? _canvasCreateConnectedCardCommand;
     private RelayCommand? _canvasCreateConnectedCardDirectionalCommand;
     private RelayCommand? _canvasDuplicateCommand;
+    private RelayCommand? _canvasConvertToNoteCommand;
 
     public System.Windows.Input.ICommand CanvasConnectModeCommand =>
         _canvasConnectModeCommand ??= NavigatorCommand(

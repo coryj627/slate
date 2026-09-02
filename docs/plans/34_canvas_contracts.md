@@ -11317,6 +11317,78 @@ the seed-equality check removed (the subset copied), M2 the
 transitive walk removed, M3 the ghost arm removed, M4 the first copy
 not seated. All bitten.
 
+### TG2-6 — Convert Card to Note: the note through the sidebar's seam, inside the gate, with a recovery state
+
+The structural-aware route (G2-11, IG2-6): `ICanvasNoteCreator` is the
+seam — `TryCreateNote` (worker-safe) and `NoteLanded` (UI-owned) — and
+`FilesSidebarViewModel` implements it in a partial of its own: the
+create runs under the sidebar's session-work lease through
+`CreateOutcomes.CreateReporting`, the SAME path every sidebar create
+takes, answering a discriminated `CanvasNoteCreateResult` — `Landed`
+with the unindexed caveat, `Exists`, `Failed` with the message, and
+`Unavailable` for a session-work refusal at shutdown (IG2-56); the
+landing runs `StructuralHistoryBarrier`, `Refresh` and the caveat
+through the sidebar's own report path. The vault lifecycle hands the
+sidebar to the workspace as `CanvasNoteCreator` when both exist; the
+prompt carries it; a workspace with none refuses `NoteCreateFailed`
+with "no vault to write to" and presents nothing.
+
+The verb, `CanvasConvertToNote(nodeId, cleanPath, creator, …)`, is ONE
+operation. The openers: not-ready, the row, a text card only
+(`OnlyTextCardsConvert`), a path ending in `.md` — the verb's guard,
+one rule in one place, the prompt's duplicate removed when the gauntlet
+showed two guards for one rule cannot both bite. Inside `prepare`,
+under the canvas gate (IG2-26): the card's text through
+`CanvasNodeText` — a throw `NoteReadFailed` with the message, a null
+the fixed detail "The card text is unavailable." (IG2-42); the note
+through the seam, whose lease nests inside the canvas gate and never
+takes it, so no cycle — `Exists` is `NotePathExists` on disk, `Failed`
+is `NoteCreateFailed` with the message, `Unavailable` is
+`NoteCreateFailed` with "the vault is closing"; a LANDED note returns
+the one retarget op, `SetNodeContent` to `File` at the path, and the
+funnel is the one arbiter after it. The completion (IG2-55, IG2-58):
+once the note landed, whatever the canvas outcome, the barrier, the
+refresh and the caveat are POSTED to the UI through the seam's
+`NoteLanded`; for every outcome that did not retarget the card —
+conflict, refusal, displacement, which the funnel keeps silent — the
+landed-note truth is spoken once, after the funnel's own sentence:
+`NoteRetargetFailed` with the path and "the note was created; the card
+still points at its text". Success speaks `CanvasConvertedToNote`
+with the path; canvas undo restores the text card and the note stays
+(G2D-3).
+
+The prompt, `CanvasConvertToNotePrompt`: prefilled with mac's suggested
+path — the title with every slash a dash, trimmed, "Untitled" when
+empty, plus `.md` (`SuggestedNotePath`, IG2-43) — the submit trims the
+draft ONCE and carries that exact value through the verb, every
+sentence and the file (IG2-41). Once the note landed and the canvas
+did not retarget, the sheet is a RECOVERY state (IG2-57): `IsRecovery`
+stands, Enter re-speaks the landed-note truth through a boundary
+method and writes nothing (a retry would collide with the note that
+exists), Escape closes; TG-1's close table is not widened — Pending
+closes on the landing arms only. The typed sentences a prompt needs
+are BOUNDARY methods on the document (`SpeakNoteRetargetFailed`,
+`SpeakNoteCreateFailed`), because the announcement seam census
+refused the first version's direct reach at the announcer, and it was
+right. A row, a resolver and an owner-carrying command; `chords.json`
+regenerated. `RequestConvertToNote` refuses a held mode with
+`ModeBusy` before any sheet (mac's order).
+
+Facts: three — the note written first with the card's text, the card
+retargeted, the barrier landing once, the sentence naming the path,
+undo restoring the text card with the note kept; the typed arms (a
+file card, a draft without `.md` with the sheet kept, a path that
+exists refusing the "already exists" render with nothing written and
+no barrier, the shutdown arm refusing "the vault is closing" with no
+file) and mac's suggested path for a slashed, padded and empty title;
+the recovery state after a landed note with a moved canvas file — the
+note on disk, the barrier landed, the card still text, the landed-note
+sentence spoken, Enter re-speaking and writing nothing, Escape
+closing. Mutations, each byte-restored: M1 the verb's `.md` guard
+removed, M2 the recovery state removed (a retry re-created), M3 the
+posted landing removed, M4 Exists answered as a create failure. All
+bitten.
+
 ---
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)

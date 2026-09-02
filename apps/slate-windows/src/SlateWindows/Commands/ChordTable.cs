@@ -297,6 +297,7 @@ internal static class ChordTable
         public const string CanvasCreateConnectedCardDirectional =
             "slate.canvas.createConnectedCardDirectional";
         public const string CanvasDuplicate = "slate.canvas.duplicate";
+        public const string CanvasConvertToNote = "slate.canvas.convertToNote";
 
         public const string CanvasClearMarks = "slate.canvas.clearMarks";
 
@@ -1099,6 +1100,10 @@ internal static class ChordTable
             // §G2 TG2-5: Duplicate — the selection or the marked set, one action.
             Reg(Ids.CanvasDuplicate, "Canvas: Duplicate", CommandSection.Canvas,
                 "Duplicate the selected card or the marked set — one action, one undo."),
+            // §G2 TG2-6: Convert — mac registers it structural; here the
+            // structural half is the sidebar's seam behind the verb.
+            Reg(Ids.CanvasConvertToNote, "Canvas: Convert Card to Note…", CommandSection.Canvas,
+                "Create a vault note from the text card; the card then points at it."),
             Reg(Ids.CanvasConnectMode, "Canvas: Connect Mode", CommandSection.Canvas,
                 "Remember the selected card, navigate to a target with the "
                 + "usual movements, press Return to connect."),

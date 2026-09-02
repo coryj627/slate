@@ -95,6 +95,181 @@ public sealed class CanvasDocumentTests : IDisposable
             new CanvasAnnouncer(_announced.Add, TimeSpan.FromMinutes(1)),
             synchronousForTests);
 
+    /// <summary>§G2 TG2-6 (G2-11, G2D-3): Convert Card to Note… writes the note
+    /// through the seam FIRST, then retargets the card in one canvas
+    /// action; the barrier and refresh land once; the sentence names the
+    /// path; undo restores the TEXT card and the note stays.</summary>
+    [Fact]
+    public void ConvertWritesTheNoteThenRetargetsAndUndoKeepsTheNote()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        var creator = new RecordingNoteCreator(_session);
+        workspace.CanvasNoteCreator = creator;
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        document.SeatSelectionSilently("question");
+        _announced.Clear();
+
+        workspace.CanvasConvertToNoteCommand.Execute(null);
+
+        var sheet = Assert.IsType<CanvasConvertToNotePrompt>(workspace.CanvasPromptSheet);
+        Assert.Equal("Core question.md", sheet.Draft);
+        sheet.Draft = "  Converted question.md  ";
+        workspace.SubmitCanvasPrompt();
+        PumpDispatcher();
+
+        Assert.Null(workspace.CanvasPromptSheet);
+        string note = Path.Combine(_fixture.Root, "Converted question.md");
+        Assert.True(File.Exists(note));
+        Assert.Contains("Can it be accessible?", File.ReadAllText(note));
+        Assert.Equal("file", document.RowFor("question")!.Kind);
+        Assert.Single(creator.Landed);
+        Assert.Equal("Converted question.md", creator.Landed[0]);
+        Assert.Contains(_announced, a => a.Text.Contains("Converted to note Converted question.md", StringComparison.Ordinal));
+
+        document.CanvasUndo();
+
+        Assert.Equal("text", document.RowFor("question")!.Kind);
+        Assert.True(File.Exists(note));
+    }
+
+    /// <summary>§G2 TG2-6 (G2-3, IG2-41/42/43/56): the openers and the
+    /// submit's refusals — a file card refuses OnlyTextCardsConvert; a
+    /// draft without .md refuses with the sheet kept; a path that exists
+    /// refuses NotePathExists with nothing written and no barrier; the
+    /// shutdown arm refuses NoteCreateFailed; a slashed, padded, empty
+    /// title suggests mac's path.</summary>
+    [Fact]
+    public void ConvertRefusesTheTypedArmsAndSuggestsMacsPath()
+    {
+        Assert.Equal("a - b.md", CanvasDocumentViewModel.SuggestedNotePath("  a / b  "));
+        Assert.Equal("Untitled.md", CanvasDocumentViewModel.SuggestedNotePath("   "));
+
+        using WorkspaceViewModel workspace = NewWorkspace();
+        var creator = new RecordingNoteCreator(_session);
+        workspace.CanvasNoteCreator = creator;
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+
+        document.SeatSelectionSilently("note");
+        _announced.Clear();
+        workspace.CanvasConvertToNoteCommand.Execute(null);
+        Assert.Null(workspace.CanvasPromptSheet);
+        Assert.Contains(_announced, a => a.Text.Contains("text card", StringComparison.OrdinalIgnoreCase));
+
+        document.SeatSelectionSilently("question");
+        workspace.CanvasConvertToNoteCommand.Execute(null);
+        CanvasPromptViewModel sheet = Assert.IsType<CanvasConvertToNotePrompt>(workspace.CanvasPromptSheet);
+        sheet.Draft = "no extension";
+        _announced.Clear();
+        workspace.SubmitCanvasPrompt();
+        Assert.Same(sheet, workspace.CanvasPromptSheet);
+        Assert.Contains(_announced, a => a.Text.Contains(".md", StringComparison.Ordinal));
+
+        sheet.Draft = "note0.md";
+        _announced.Clear();
+        workspace.SubmitCanvasPrompt();
+        PumpDispatcher();
+        Assert.Same(sheet, workspace.CanvasPromptSheet);
+        Assert.Contains(_announced, a => a.Text.Contains("note0.md", StringComparison.Ordinal)
+            && a.Text.Contains("already exists", StringComparison.OrdinalIgnoreCase));
+        Assert.Empty(creator.Landed);
+        Assert.Equal("text", document.RowFor("question")!.Kind);
+
+        creator.Unavailable = true;
+        sheet.Draft = "fresh.md";
+        _announced.Clear();
+        workspace.SubmitCanvasPrompt();
+        PumpDispatcher();
+        Assert.Same(sheet, workspace.CanvasPromptSheet);
+        Assert.Contains(_announced, a => a.Text.Contains("fresh.md", StringComparison.Ordinal)
+            && a.Text.Contains("closing", StringComparison.OrdinalIgnoreCase));
+        Assert.False(File.Exists(Path.Combine(_fixture.Root, "fresh.md")));
+    }
+
+    /// <summary>§G2 TG2-6 (IG2-57, IG2-58): the note LANDED but the canvas
+    /// did not retarget (the file moved under the operation) — the funnel
+    /// speaks its refusal, the landed-note truth is spoken once after it,
+    /// the barrier still lands, and the sheet is a RECOVERY state: Enter
+    /// re-speaks and writes nothing, Escape closes.</summary>
+    [Fact]
+    public void ConvertAfterALandedNoteIsARecoveryStateNotARetry()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        var creator = new RecordingNoteCreator(_session);
+        workspace.CanvasNoteCreator = creator;
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        document.SeatSelectionSilently("question");
+        workspace.CanvasConvertToNoteCommand.Execute(null);
+        var sheet = Assert.IsType<CanvasConvertToNotePrompt>(workspace.CanvasPromptSheet);
+        sheet.Draft = "landed.md";
+        string canvasPath = Path.Combine(_fixture.Root, "board.canvas");
+        File.WriteAllText(canvasPath, File.ReadAllText(canvasPath) + "\n");
+        _announced.Clear();
+
+        workspace.SubmitCanvasPrompt();
+        PumpDispatcher();
+
+        Assert.Same(sheet, workspace.CanvasPromptSheet);
+        Assert.True(sheet.IsRecovery);
+        Assert.True(File.Exists(Path.Combine(_fixture.Root, "landed.md")));
+        Assert.Single(creator.Landed);
+        Assert.Equal("text", document.RowFor("question")!.Kind);
+        Assert.Contains(_announced, a => a.Text.Contains("landed.md", StringComparison.Ordinal)
+            && a.Text.Contains("still points", StringComparison.OrdinalIgnoreCase));
+
+        _announced.Clear();
+        workspace.SubmitCanvasPrompt();
+        Assert.Same(sheet, workspace.CanvasPromptSheet);
+        Assert.Single(creator.Landed);
+        Assert.Contains(_announced, a => a.Text.Contains("still points", StringComparison.OrdinalIgnoreCase));
+        workspace.CloseCanvasPrompt();
+        Assert.Null(workspace.CanvasPromptSheet);
+    }
+
+    /// <summary>The seam over the fixture's real session — the sidebar's
+    /// create path in miniature — with the shutdown arm switchable and
+    /// every landing recorded.</summary>
+    private sealed class RecordingNoteCreator(VaultSession session) : ICanvasNoteCreator
+    {
+        public bool Unavailable { get; set; }
+
+        public List<string> Landed { get; } = [];
+
+        public CanvasNoteCreateResult TryCreateNote(string path, string content)
+        {
+            if (Unavailable)
+            {
+                return new CanvasNoteCreateResult.Unavailable();
+            }
+            try
+            {
+                return new CanvasNoteCreateResult.Landed(
+                    CreateOutcomes.CreateReporting(session, path, content, Path.GetFileName(path)));
+            }
+            catch (VaultException.DestinationExists)
+            {
+                return new CanvasNoteCreateResult.Exists();
+            }
+            catch (VaultException exception)
+            {
+                return new CanvasNoteCreateResult.Failed(exception.Message);
+            }
+        }
+
+        public void NoteLanded(string path, string? caveat) => Landed.Add(path);
+    }
+
     /// <summary>§G2 TG2-4 (E4, G2-9, IG2-23/53): New Card and Create Connected
     /// Card LAND IN THE EDITOR through TE-4's receipt — for an owner that is
     /// still current; an operation whose owner is a tab that is not the

@@ -189,6 +189,11 @@ internal abstract class CanvasPromptViewModel : System.ComponentModel.INotifyPro
         IReadOnlyList<CanvasNeighbor> neighbors, bool toDelete) =>
         new CanvasPickConnectionPrompt(document, context, neighbors, toDelete);
 
+    internal static CanvasPromptViewModel ConvertToNote(
+        CanvasDocumentViewModel document, CanvasPromptContext context, string suggested,
+        ICanvasNoteCreator creator) =>
+        new CanvasConvertToNotePrompt(document, context, suggested, creator);
+
     internal static CanvasPromptViewModel ConnectedDirection(
         CanvasDocumentViewModel document, CanvasPromptContext context) =>
         new CanvasConnectedDirectionPrompt(document, context);
@@ -726,6 +731,59 @@ internal sealed class CanvasConnectedDirectionPrompt : CanvasPromptViewModel
         CanvasMutationOperation? operation = Document.CanvasCreateConnectedCard(
             Enum.Parse<CanvasPlaceDirection>(chosen), owner: Context.Owner,
             completion: outcome => { if (Landed(outcome)) { onLanded(); } });
+        return operation is null ? CanvasPromptSubmit.Refused : CanvasPromptSubmit.Pending;
+    }
+}
+
+/// <summary>§G2 TG2-6 (G2-11, IG2-41, IG2-57): Convert Card to Note… — a
+/// text kind prefilled with mac's suggested path; the submit TRIMS the
+/// draft once and carries that exact value everywhere, refuses a path
+/// not ending in .md, and runs the verb. Once the NOTE LANDED and the
+/// canvas did not retarget, the sheet is a RECOVERY state: Enter
+/// re-speaks the landed-note truth and writes nothing (a retry would
+/// collide with the note that exists); Escape closes. TG-1's close
+/// table stands: Pending closes on the landing arms only.</summary>
+internal sealed class CanvasConvertToNotePrompt : CanvasPromptViewModel
+{
+    private readonly ICanvasNoteCreator _creator;
+    private bool _noteLanded;
+    private string _landedPath = string.Empty;
+
+    internal CanvasConvertToNotePrompt(
+        CanvasDocumentViewModel document, CanvasPromptContext context, string suggested,
+        ICanvasNoteCreator creator)
+        : base(document, "Convert Card to Note", suggested, [])
+    {
+        Context = context;
+        _creator = creator;
+    }
+
+    internal CanvasPromptContext Context { get; }
+
+    /// <summary>True once the note landed without the card retargeting —
+    /// the sheet no longer submits.</summary>
+    internal bool IsRecovery => _noteLanded;
+
+    internal override CanvasPromptSubmit Submit(Action onLanded)
+    {
+        ArgumentNullException.ThrowIfNull(onLanded);
+        if (_noteLanded)
+        {
+            Document.SpeakNoteRetargetFailed(_landedPath);
+            return CanvasPromptSubmit.Refused;
+        }
+        if (!Document.IsCurrentLoaded(Context.Identity) || Context.SourceNode is not { } nodeId)
+        {
+            Document.SpeakPickDifferentTarget();
+            return CanvasPromptSubmit.Refused;
+        }
+        // The .md rule is the VERB's guard (one rule, one place); a refusal
+        // answers null and the sheet keeps its draft.
+        string cleanPath = Draft.Trim();
+        CanvasMutationOperation? operation = Document.CanvasConvertToNote(
+            nodeId, cleanPath, _creator, owner: Context.Owner,
+            completion: outcome => { if (Landed(outcome)) { onLanded(); } },
+            noteLanded: () => { _noteLanded = true; _landedPath = cleanPath; });
         return operation is null ? CanvasPromptSubmit.Refused : CanvasPromptSubmit.Pending;
     }
 }

@@ -1294,6 +1294,18 @@
       "registered": true
     },
     {
+      "id": "slate.canvas.convertToNote",
+      "label": "Canvas: Convert Card to Note…",
+      "section": "Canvas",
+      "hint": "Create a vault note from the text card; the card then points at it.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
       "id": "slate.canvas.connectMode",
       "label": "Canvas: Connect Mode",
       "section": "Canvas",
