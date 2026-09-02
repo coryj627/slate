@@ -6452,27 +6452,30 @@ public sealed class ShellAccessibilityTests
                 AutomationElement results = WaitForElement(
                     window, "CommandPaletteResults", TimeSpan.FromSeconds(10));
                 AutomationElement? row = null;
-                Assert.True(
-                    SpinWait.SpinUntil(
-                        () =>
+                bool found = SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
                         {
-                            try
-                            {
-                                row = results
-                                    .FindAllDescendants(automation.ConditionFactory
-                                        .ByControlType(ControlType.ListItem))
-                                    .FirstOrDefault(item => item.Name.StartsWith(
-                                        rowPrefix, StringComparison.Ordinal));
-                                return row is not null;
-                            }
-                            catch (System.Runtime.InteropServices.COMException)
-                            {
-                                return false;
-                            }
-                        },
-                        TimeSpan.FromSeconds(10)),
-                    "no palette row for " + rowPrefix + "; app log tail: "
-                    + ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log")));
+                            row = results
+                                .FindAllDescendants(automation.ConditionFactory
+                                    .ByControlType(ControlType.ListItem))
+                                .FirstOrDefault(item => item.Name.StartsWith(
+                                    rowPrefix, StringComparison.Ordinal));
+                            return row is not null;
+                        }
+                        catch (System.Runtime.InteropServices.COMException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10));
+                if (!found)
+                {
+                    Assert.Fail(
+                        "no palette row for " + rowPrefix + "; app log tail: "
+                        + ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log")));
+                }
                 row!.Patterns.SelectionItem.Pattern.Select();
                 PressKey(VirtualKeyShort.ENTER);
                 Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
@@ -6492,14 +6495,16 @@ public sealed class ShellAccessibilityTests
             // ---- Mark both by chord; the rows say so to UIA (G1) ----
             Keyboard.TypeSimultaneously(
                 VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.KEY_M);
-            Assert.True(
-                SpinWait.SpinUntil(() => MarkedRows() == 1, TimeSpan.FromSeconds(10)),
-                "Ctrl+Alt+M never marked the selected row; statuses: "
-                + string.Join(" | ", Rows().Select(r => r.Properties.ItemStatus.ValueOrDefault ?? "<null>"))
-                + "; names: "
-                + string.Join(" | ", Rows().Select(r => r.Name))
-                + "; app log tail: "
-                + ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log")));
+            if (!SpinWait.SpinUntil(() => MarkedRows() == 1, TimeSpan.FromSeconds(10)))
+            {
+                Assert.Fail(
+                    "Ctrl+Alt+M never marked the selected row; statuses: "
+                    + string.Join(" | ", Rows().Select(r => r.Properties.ItemStatus.ValueOrDefault ?? "<null>"))
+                    + "; names: "
+                    + string.Join(" | ", Rows().Select(r => r.Name))
+                    + "; app log tail: "
+                    + ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log")));
+            }
             PressKey(VirtualKeyShort.UP);
             Keyboard.TypeSimultaneously(
                 VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.KEY_M);
@@ -6560,11 +6565,13 @@ public sealed class ShellAccessibilityTests
             emptyTree.Focus();
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
             Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_Z);
-            Assert.True(
-                SpinWait.SpinUntil(() => Rows().Length == 2, TimeSpan.FromSeconds(10)),
-                "Ctrl+Z never restored both cards; rows: " + Rows().Length
-                + "; app log tail: "
-                + ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log")));
+            if (!SpinWait.SpinUntil(() => Rows().Length == 2, TimeSpan.FromSeconds(10)))
+            {
+                Assert.Fail(
+                    "Ctrl+Z never restored both cards; rows: " + Rows().Length
+                    + "; app log tail: "
+                    + ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log")));
+            }
         }
         finally
         {

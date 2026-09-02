@@ -10296,6 +10296,17 @@ Marks clears without a sheet) and the bulk commands reach it (Color
 and Group Marked present their prompts for the marked set, Delete
 Marked removes it in one action with the marks going with it).
 
+### PR review round 2 — the evidence read only on a miss
+
+Codoki's second round approved the head and named one real thing:
+three of the journey's failure messages called `ReadSharedLog` inside
+an `Assert.True` argument list, so the app log was read on every
+passing leg and an I/O failure there would have failed the journey
+for the wrong reason. The three sites now test the condition first
+and build the evidence — statuses, names, the row count, the log
+tail — only inside the failure branch, the shape the first canvas
+wait already had.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same
