@@ -2413,39 +2413,57 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// <summary>§E TE-5c: New Group — the label arrives as a
     /// parameter (the prompt sheet is TE-7's); geometry from core's
     /// group defaults at the selection anchor.</summary>
-    public void CanvasNewGroup(string label)
+    public CanvasMutationOperation? CanvasNewGroup(
+        string label, object? owner = null, Action<CanvasOperationOutcome>? completion = null)
     {
         ArgumentNullException.ThrowIfNull(label);
         if (_slot.Current.Loaded is not { } basis)
         {
             SpeakNotReady();
-            return;
+            return null;
         }
         var operation = new CanvasMutationOperation(
-            new CanvasOperationId("new group"), this, Selection.Selected,
-            basis, CanvasMutationEffect.SelectCreated);
+            new CanvasOperationId("new group"), owner ?? this, Selection.Selected,
+            basis, CanvasMutationEffect.SelectCreated)
+        {
+            Completion = completion,
+        };
         CanvasRelativeDesc? relative = null;
-        _ = Funnel.Apply(
+        CanvasMutationAdmission admission = Funnel.Apply(
             operation,
             handle =>
             {
-                CanvasConstants constants = SlateUniffiMethods.CanvasConstants();
-                CanvasPlacement placement = _session.CanvasPlaceNew(
-                    handle, operation.Anchor,
-                    constants.DefaultGroupW, constants.DefaultGroupH, null, []);
-                relative = placement.Relative;
-                string id = SlateUniffiMethods.CanvasNewId();
-                operation.CreatedId = id;
-                return new CanvasAction(
-                    $"create group \"{label}\"",
-                    [
-                        new CanvasOp.CreateGroup(
-                            id, label, placement.X, placement.Y,
-                            constants.DefaultGroupW, constants.DefaultGroupH, null),
-                    ]);
+                // §G2 TG2-0 (G2-2): every action-determining query runs
+                // HERE, on the basis, under the gate — and catches its
+                // own refusal, because the funnel's transaction catches
+                // only the apply's.
+                try
+                {
+                    CanvasConstants constants = SlateUniffiMethods.CanvasConstants();
+                    CanvasPlacement placement = _session.CanvasPlaceNew(
+                        handle, operation.Anchor,
+                        constants.DefaultGroupW, constants.DefaultGroupH, null, []);
+                    relative = placement.Relative;
+                    string id = SlateUniffiMethods.CanvasNewId();
+                    operation.CreatedId = id;
+                    return new CanvasAction(
+                        $"create group \"{label}\"",
+                        [
+                            new CanvasOp.CreateGroup(
+                                id, label, placement.X, placement.Y,
+                                constants.DefaultGroupW, constants.DefaultGroupH, null),
+                        ]);
+                }
+                catch (VaultException e)
+                {
+                    Speak(new CanvasA11yEvent.CanvasActionFailed(
+                        CanvasFailedAction.NewGroup, e.Message));
+                    return null;
+                }
             },
             $"create group \"{label}\"",
             confirm: () => new CanvasA11yEvent.CanvasCreated("group", label, relative!));
+        return admission == CanvasMutationAdmission.Admitted ? operation : null;
     }
 
     /// <summary>§E TE-5c: Rename Group — the real op (IE-23's round-1
@@ -2515,13 +2533,14 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// — and an occupied inset — refuse audibly with the group's
     /// label, from PREPARATION, inside the gate; nothing
     /// half-happens (the mac twin, verb for verb).</summary>
-    public void CanvasMoveIntoGroup(string groupId)
+    public CanvasMutationOperation? CanvasMoveIntoGroup(
+        string groupId, object? owner = null, Action<CanvasOperationOutcome>? completion = null)
     {
         ArgumentNullException.ThrowIfNull(groupId);
         if (_slot.Current.Loaded is not { } basis)
         {
             SpeakNotReady();
-            return;
+            return null;
         }
         if (Selection.Selected is not { } selected
             || basis.Population.SceneByNode.GetValueOrDefault(selected)
@@ -2529,58 +2548,71 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         {
             Speak(new CanvasA11yEvent.CanvasStatus(
                 new CanvasStatusNote.NothingSelected()));
-            return;
+            return null;
         }
         if (!_rows.TryGetValue(groupId, out CanvasOutlineRow? group))
         {
             Speak(new CanvasA11yEvent.CanvasStatus(
                 new CanvasStatusNote.NotAGroup()));
-            return;
+            return null;
         }
         var operation = new CanvasMutationOperation(
-            new CanvasOperationId("move into group"), this, selected,
-            basis, CanvasMutationEffect.KeepSelection);
-        _ = Funnel.Apply(
+            new CanvasOperationId("move into group"), owner ?? this, selected,
+            basis, CanvasMutationEffect.KeepSelection)
+        {
+            Completion = completion,
+        };
+        CanvasMutationAdmission admission = Funnel.Apply(
             operation,
             handle =>
             {
-                CanvasInsideGroupPlacement placement = _session.CanvasPlaceInsideGroup(
-                    handle, groupId, node.Width, node.Height, [selected]);
-                double x;
-                double y;
-                switch (placement)
+                try
                 {
-                    case CanvasInsideGroupPlacement.Placed placed:
-                        (x, y) = (placed.X, placed.Y);
-                        break;
-                    case CanvasInsideGroupPlacement.TooSmall inset
-                        when _session.CanvasCheckOverlap(
-                            handle,
-                            new CanvasRect(inset.X, inset.Y, node.Width, node.Height),
-                            [selected]).Length == 0:
-                        (x, y) = (inset.X, inset.Y);
-                        break;
-                    default:
-                        Speak(new CanvasA11yEvent.CanvasBlocked(
-                            new CanvasBlockedReason.NoFreeSpaceInGroup(group.Title)));
-                        return null;
+                    CanvasInsideGroupPlacement placement = _session.CanvasPlaceInsideGroup(
+                        handle, groupId, node.Width, node.Height, [selected]);
+                    double x;
+                    double y;
+                    switch (placement)
+                    {
+                        case CanvasInsideGroupPlacement.Placed placed:
+                            (x, y) = (placed.X, placed.Y);
+                            break;
+                        case CanvasInsideGroupPlacement.TooSmall inset
+                            when _session.CanvasCheckOverlap(
+                                handle,
+                                new CanvasRect(inset.X, inset.Y, node.Width, node.Height),
+                                [selected]).Length == 0:
+                            (x, y) = (inset.X, inset.Y);
+                            break;
+                        default:
+                            Speak(new CanvasA11yEvent.CanvasBlocked(
+                                new CanvasBlockedReason.NoFreeSpaceInGroup(group.Title)));
+                            return null;
+                    }
+                    return new CanvasAction(
+                        $"move \"{TitleOf(selected)}\" into \"{group.Title}\"",
+                        [
+                            new CanvasOp.UpdateNodeGeometry(
+                                selected, x, y, node.Width, node.Height),
+                        ]);
                 }
-                return new CanvasAction(
-                    $"move \"{TitleOf(selected)}\" into \"{group.Title}\"",
-                    [
-                        new CanvasOp.UpdateNodeGeometry(
-                            selected, x, y, node.Width, node.Height),
-                    ]);
+                catch (VaultException e)
+                {
+                    Speak(new CanvasA11yEvent.CanvasActionFailed(
+                        CanvasFailedAction.MoveIntoGroup, e.Message));
+                    return null;
+                }
             },
             "move into group",
             confirm: () => new CanvasA11yEvent.CanvasMovedIntoGroup(group.Title));
+        return admission == CanvasMutationAdmission.Admitted ? operation : null;
     }
 
     /// <summary>§E TE-5c: Set Color — a preset "1".."6", a validated
     /// hex, or null to clear (the picker's field owns the invalid-hex
     /// error surface; an invalid value never reaches the funnel).</summary>
     public CanvasMutationOperation? CanvasSetColor(
-        string? color, Action<CanvasOperationOutcome>? completion = null)
+        string? color, Action<CanvasOperationOutcome>? completion = null, object? owner = null)
     {
         if (_slot.Current.Loaded is not { } basis)
         {
@@ -2600,7 +2632,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             return null;
         }
         var operation = new CanvasMutationOperation(
-            new CanvasOperationId("set color"), this, selected,
+            new CanvasOperationId("set color"), owner ?? this, selected,
             basis, CanvasMutationEffect.KeepSelection)
         {
             Completion = completion,
@@ -2676,21 +2708,22 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// end-style mappings ONLY; sides and color PRESERVED from the
     /// scene edge (the mac twin's rule: never recompute what the
     /// author placed).</summary>
-    public void CanvasEditConnection(
-        string edgeId, string? label, CanvasConnectionDirection direction)
+    public CanvasMutationOperation? CanvasEditConnection(
+        string edgeId, string? label, CanvasConnectionDirection direction,
+        object? owner = null, Action<CanvasOperationOutcome>? completion = null)
     {
         ArgumentNullException.ThrowIfNull(edgeId);
         if (_slot.Current.Loaded is not { } basis)
         {
             SpeakNotReady();
-            return;
+            return null;
         }
         CanvasSceneEdge? edge =
             basis.Population.SceneEdges.FirstOrDefault(e => e.EdgeId == edgeId);
         if (edge is null)
         {
             Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoConnections()));
-            return;
+            return null;
         }
         (CanvasEndStyle fromEnd, CanvasEndStyle toEnd) = direction switch
         {
@@ -2703,9 +2736,12 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             _ => (CanvasEndStyle.Arrow, CanvasEndStyle.None),
         };
         var operation = new CanvasMutationOperation(
-            new CanvasOperationId("edit connection"), this, edgeId,
-            basis, CanvasMutationEffect.KeepSelection);
-        _ = Funnel.Apply(
+            new CanvasOperationId("edit connection"), owner ?? this, edgeId,
+            basis, CanvasMutationEffect.KeepSelection)
+        {
+            Completion = completion,
+        };
+        CanvasMutationAdmission admission = Funnel.Apply(
             operation,
             _ => new CanvasAction(
                 "edit connection",
@@ -2716,28 +2752,33 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 ]),
             "edit connection",
             confirm: () => new CanvasA11yEvent.CanvasConnectionUpdated(label));
+        return admission == CanvasMutationAdmission.Admitted ? operation : null;
     }
 
     /// <summary>§E TE-5c: Delete Connection — the lookup runs BEFORE
     /// the apply and a miss refuses AUDIBLY (0a-2's rule: the mac
     /// trailing-space sentence is unreachable by construction).</summary>
-    public void CanvasDeleteConnection(string edgeId)
+    public CanvasMutationOperation? CanvasDeleteConnection(
+        string edgeId, object? owner = null, Action<CanvasOperationOutcome>? completion = null)
     {
         ArgumentNullException.ThrowIfNull(edgeId);
         if (_slot.Current.Loaded is not { } basis)
         {
             SpeakNotReady();
-            return;
+            return null;
         }
         if (basis.Population.SceneEdges.All(e => e.EdgeId != edgeId))
         {
             Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoConnections()));
-            return;
+            return null;
         }
         var operation = new CanvasMutationOperation(
-            new CanvasOperationId("delete connection"), this, edgeId,
-            basis, CanvasMutationEffect.KeepSelection);
-        _ = Funnel.Apply(
+            new CanvasOperationId("delete connection"), owner ?? this, edgeId,
+            basis, CanvasMutationEffect.KeepSelection)
+        {
+            Completion = completion,
+        };
+        CanvasMutationAdmission admission = Funnel.Apply(
             operation,
             _ => new CanvasAction(
                 "delete connection",
@@ -2761,118 +2802,153 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                     _verbosity(),
                     CanvasPhrase.UndoChord);
             });
+        return admission == CanvasMutationAdmission.Admitted ? operation : null;
     }
 
     /// <summary>§E TE-5c: Add Note / Add Media — a file card at
     /// core's placement; the vault picker (TE-6) supplies the path,
     /// kinds and labels are core's (`media_class` via the row).</summary>
-    public void CanvasAddFileCard(string path, string? subpath)
+    public CanvasMutationOperation? CanvasAddFileCard(
+        string path, string? subpath, object? owner = null,
+        Action<CanvasOperationOutcome>? completion = null)
     {
         ArgumentNullException.ThrowIfNull(path);
         if (_slot.Current.Loaded is not { } basis)
         {
             SpeakNotReady();
-            return;
+            return null;
         }
         var operation = new CanvasMutationOperation(
-            new CanvasOperationId("add file card"), this, Selection.Selected,
-            basis, CanvasMutationEffect.SelectCreated);
+            new CanvasOperationId("add file card"), owner ?? this, Selection.Selected,
+            basis, CanvasMutationEffect.SelectCreated)
+        {
+            Completion = completion,
+        };
         CanvasRelativeDesc? relative = null;
-        _ = Funnel.Apply(
+        CanvasMutationAdmission admission = Funnel.Apply(
             operation,
             handle =>
             {
-                CanvasConstants constants = SlateUniffiMethods.CanvasConstants();
-                CanvasPlacement placement = _session.CanvasPlaceNew(
-                    handle, operation.Anchor,
-                    constants.DefaultCardW, constants.DefaultCardH, null, []);
-                relative = placement.Relative;
-                string id = SlateUniffiMethods.CanvasNewId();
-                operation.CreatedId = id;
-                return new CanvasAction(
-                    $"add \"{path}\"",
-                    [
-                        new CanvasOp.CreateNode(
-                            id, new CanvasNodeContent.File(path, subpath),
-                            placement.X, placement.Y,
-                            constants.DefaultCardW, constants.DefaultCardH, null),
-                    ]);
+                try
+                {
+                    CanvasConstants constants = SlateUniffiMethods.CanvasConstants();
+                    CanvasPlacement placement = _session.CanvasPlaceNew(
+                        handle, operation.Anchor,
+                        constants.DefaultCardW, constants.DefaultCardH, null, []);
+                    relative = placement.Relative;
+                    string id = SlateUniffiMethods.CanvasNewId();
+                    operation.CreatedId = id;
+                    return new CanvasAction(
+                        $"add \"{path}\"",
+                        [
+                            new CanvasOp.CreateNode(
+                                id, new CanvasNodeContent.File(path, subpath),
+                                placement.X, placement.Y,
+                                constants.DefaultCardW, constants.DefaultCardH, null),
+                        ]);
+                }
+                catch (VaultException e)
+                {
+                    Speak(new CanvasA11yEvent.CanvasActionFailed(
+                        CanvasFailedAction.Create, e.Message));
+                    return null;
+                }
             },
             $"add \"{path}\"",
             confirm: () => new CanvasA11yEvent.CanvasCreated(
                 RowKindOf(operation.CreatedId),
                 PublishedTitleOf(operation.CreatedId),
                 relative!));
+        return admission == CanvasMutationAdmission.Admitted ? operation : null;
     }
 
     /// <summary>§E TE-5c: Add Link Card — the URL prompt's commit;
     /// an unparseable URL refuses audibly and never reaches the
     /// funnel (the NotAUrl arm).</summary>
-    public void CanvasAddLinkCard(string url)
+    public CanvasMutationOperation? CanvasAddLinkCard(
+        string url, object? owner = null, Action<CanvasOperationOutcome>? completion = null)
     {
         ArgumentNullException.ThrowIfNull(url);
         if (_slot.Current.Loaded is not { } basis)
         {
             SpeakNotReady();
-            return;
+            return null;
         }
         if (!Uri.TryCreate(url, UriKind.Absolute, out Uri? parsed)
             || parsed.Scheme is not ("http" or "https"))
         {
             Speak(new CanvasA11yEvent.CanvasBlocked(new CanvasBlockedReason.NotAUrl()));
-            return;
+            return null;
         }
         var operation = new CanvasMutationOperation(
-            new CanvasOperationId("add link card"), this, Selection.Selected,
-            basis, CanvasMutationEffect.SelectCreated);
+            new CanvasOperationId("add link card"), owner ?? this, Selection.Selected,
+            basis, CanvasMutationEffect.SelectCreated)
+        {
+            Completion = completion,
+        };
         CanvasRelativeDesc? relative = null;
-        _ = Funnel.Apply(
+        CanvasMutationAdmission admission = Funnel.Apply(
             operation,
             handle =>
             {
-                CanvasConstants constants = SlateUniffiMethods.CanvasConstants();
-                CanvasPlacement placement = _session.CanvasPlaceNew(
-                    handle, operation.Anchor,
-                    constants.DefaultCardW, constants.DefaultCardH, null, []);
-                relative = placement.Relative;
-                string id = SlateUniffiMethods.CanvasNewId();
-                operation.CreatedId = id;
-                return new CanvasAction(
-                    "add link card",
-                    [
-                        new CanvasOp.CreateNode(
-                            id, new CanvasNodeContent.Link(url),
-                            placement.X, placement.Y,
-                            constants.DefaultCardW, constants.DefaultCardH, null),
-                    ]);
+                try
+                {
+                    CanvasConstants constants = SlateUniffiMethods.CanvasConstants();
+                    CanvasPlacement placement = _session.CanvasPlaceNew(
+                        handle, operation.Anchor,
+                        constants.DefaultCardW, constants.DefaultCardH, null, []);
+                    relative = placement.Relative;
+                    string id = SlateUniffiMethods.CanvasNewId();
+                    operation.CreatedId = id;
+                    return new CanvasAction(
+                        "add link card",
+                        [
+                            new CanvasOp.CreateNode(
+                                id, new CanvasNodeContent.Link(url),
+                                placement.X, placement.Y,
+                                constants.DefaultCardW, constants.DefaultCardH, null),
+                        ]);
+                }
+                catch (VaultException e)
+                {
+                    Speak(new CanvasA11yEvent.CanvasActionFailed(
+                        CanvasFailedAction.Create, e.Message));
+                    return null;
+                }
             },
             "add link card",
             confirm: () => new CanvasA11yEvent.CanvasCreated(
                 "link", PublishedTitleOf(operation.CreatedId), relative!));
+        return admission == CanvasMutationAdmission.Admitted ? operation : null;
     }
 
     /// <summary>§E TE-5c: Locate File — repoint a missing-target file
     /// card (the card stayed navigable throughout, t0 §5); the vault
     /// picker (TE-6) supplies the replacement path.</summary>
-    public void CanvasLocateFile(string nodeId, string newPath)
+    public CanvasMutationOperation? CanvasLocateFile(
+        string nodeId, string newPath, object? owner = null,
+        Action<CanvasOperationOutcome>? completion = null)
     {
         ArgumentNullException.ThrowIfNull(nodeId);
         ArgumentNullException.ThrowIfNull(newPath);
         if (_slot.Current.Loaded is not { } basis)
         {
             SpeakNotReady();
-            return;
+            return null;
         }
         if (!_rows.ContainsKey(nodeId))
         {
             Speak(new CanvasA11yEvent.CanvasStatus(
                 new CanvasStatusNote.NothingSelected()));
-            return;
+            return null;
         }
         var operation = new CanvasMutationOperation(
-            new CanvasOperationId("locate file"), this, nodeId,
-            basis, CanvasMutationEffect.KeepSelection);
-        _ = Funnel.Apply(
+            new CanvasOperationId("locate file"), owner ?? this, nodeId,
+            basis, CanvasMutationEffect.KeepSelection)
+        {
+            Completion = completion,
+        };
+        CanvasMutationAdmission admission = Funnel.Apply(
             operation,
             _ => new CanvasAction(
                 $"repoint \"{TitleOf(nodeId)}\"",
@@ -2883,6 +2959,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             $"repoint \"{TitleOf(nodeId)}\"",
             confirm: () => new CanvasA11yEvent.CanvasCardRetargeted(
                 TitleOf(nodeId), newPath));
+        return admission == CanvasMutationAdmission.Admitted ? operation : null;
     }
 
     /// <summary>§E TE-7: the editor factory — one locked seed read
@@ -3201,7 +3278,44 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// on the selection, mac's shape.</summary>
     internal event Action? SetColorRequested;
 
-    internal void RequestSetColor() => SetColorRequested?.Invoke();
+    internal void RequestSetColor()
+    {
+        // §G2 TG2-0 (G2-3): the opener refuses before any sheet — mac's
+        // canvasSetColor tests the selection first.
+        if (Selection.Selected is null)
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NothingSelected()));
+            return;
+        }
+        SetColorRequested?.Invoke();
+    }
+
+    /// <summary>§G2 TG2-0 (G2-3): Rename Group's front door over the
+    /// SELECTION — an absent selection or a non-group answers
+    /// <c>NotAGroup</c> before any sheet (mac's canvasRenameGroup).</summary>
+    internal void RequestGroupRenameForSelection()
+    {
+        if (Selection.Selected is not { } selected
+            || RowFor(selected) is not { Kind: "group" })
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NotAGroup()));
+            return;
+        }
+        RequestGroupRename(selected);
+    }
+
+    /// <summary>§G2 TG2-0 (G2-3): Edit Card Text's front door over the
+    /// SELECTION — no selection answers <c>NothingSelected</c>; the
+    /// editor factory answers a non-text card with its own arm.</summary>
+    internal void RequestCardEditorForSelection()
+    {
+        if (Selection.Selected is not { } selected)
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NothingSelected()));
+            return;
+        }
+        RequestCardEditor(selected);
+    }
 
     /// <summary>§F TF-7 (F5): picker-anchored engine placement, one
     /// action end to end. EVERYTHING against the handle runs inside

@@ -1089,6 +1089,66 @@
       "registered": true
     },
     {
+      "id": "slate.canvas.delete",
+      "label": "Canvas: Delete Selection",
+      "section": "Canvas",
+      "hint": "Delete the selected card, or ungroup the selected group keeping its cards. Undo with Ctrl+Z.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.editCard",
+      "label": "Canvas: Edit Card Text…",
+      "section": "Canvas",
+      "hint": "Open the selected text card in the editor. Escape saves and returns.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.renameGroup",
+      "label": "Canvas: Rename Group…",
+      "section": "Canvas",
+      "hint": "Rename the selected group — group labels are the skeleton of the reading order.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.setColor",
+      "label": "Canvas: Set Color…",
+      "section": "Canvas",
+      "hint": "Color the selected card by name: red, orange, yellow, green, cyan, or purple.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.clearColor",
+      "label": "Canvas: Clear Color",
+      "section": "Canvas",
+      "hint": "Remove the selected card's color.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
       "id": "slate.canvas.connectMode",
       "label": "Canvas: Connect Mode",
       "section": "Canvas",

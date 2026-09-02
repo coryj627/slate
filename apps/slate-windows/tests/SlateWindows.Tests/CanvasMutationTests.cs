@@ -2188,6 +2188,114 @@ public sealed class CanvasMutationTests : IDisposable
         Assert.Equal(before, DiskBytes());
     }
 
+    /// <summary>§G2 TG2-0 (G2-2, IG2-34): the seven §E verbs answer with
+    /// their OPERATION — minted with the invoking owner when one is
+    /// passed (the document otherwise), carrying the completion, and
+    /// null when the opener refused.</summary>
+    [Fact]
+    public void TheFrontDoorVerbsAnswerWithTheirOperationAndOwner()
+    {
+        CanvasDocumentViewModel document = Open();
+        var tab = new object();
+        var landed = new List<CanvasOperationOutcome>();
+        document.SeatSelectionSilently("a");
+
+        CanvasMutationOperation? group = document.CanvasNewGroup(
+            "Q3", owner: tab, completion: landed.Add);
+
+        Assert.NotNull(group);
+        Assert.Same(tab, group.Owner);
+        Assert.Contains(CanvasOperationOutcome.Installed, landed);
+
+        document.SeatSelectionSilently("a");
+        CanvasMutationOperation? moved = document.CanvasMoveIntoGroup("grp");
+        Assert.NotNull(moved);
+        Assert.Same(document, moved.Owner);
+
+        Assert.NotNull(document.CanvasAddFileCard("note.md", null, owner: tab));
+        Assert.NotNull(document.CanvasAddLinkCard("https://example.org/x", owner: tab));
+        Assert.NotNull(document.CanvasLocateFile("a", "other.md", owner: tab));
+        Assert.NotNull(document.CanvasEditConnection(
+            "e1", "again", CanvasConnectionDirection.Both, owner: tab));
+        Assert.NotNull(document.CanvasDeleteConnection("e1", owner: tab));
+
+        // The openers' refusals answer null, the sentence spoken.
+        _announced.Clear();
+        Assert.Null(document.CanvasDeleteConnection("ghost"));
+        Assert.Contains(_announced, s => s.Text.Contains("no connections", StringComparison.OrdinalIgnoreCase));
+        Assert.Null(document.CanvasMoveIntoGroup("ghost"));
+        document.Shutdown();
+    }
+
+    /// <summary>§G2 TG2-0 (G2-2, IG2-21): every front-door verb whose
+    /// preparation queries the session CATCHES its own refusal inside
+    /// the prepare lambda — the funnel's transaction catches only the
+    /// apply's exception, so a placement or lookup that throws would
+    /// otherwise escape the gate. Pinned as a SOURCE census: no session
+    /// fault is inducible from a real vault (an unknown anchor does not
+    /// throw — core places anyway), so the clause is asserted on the
+    /// verbs' text, the way the chord scrape asserts the navigator's.</summary>
+    [Fact]
+    public void EveryQueryingFrontDoorPrepareCatchesItsOwnRefusal()
+    {
+        CSharpSource source = CSharpSource.Load("Canvas", "CanvasDocumentViewModel.cs");
+        foreach (string verb in (string[])["CanvasNewGroup", "CanvasMoveIntoGroup", "CanvasAddFileCard", "CanvasAddLinkCard"])
+        {
+            Microsoft.CodeAnalysis.SyntaxNode method = source.Method(verb);
+            var catches = method.DescendantNodes()
+                .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.CatchClauseSyntax>()
+                .Where(c => c.Declaration?.Type.ToString() == "VaultException")
+                .ToArray();
+            Assert.True(catches.Length >= 1, verb + " prepares without catching VaultException");
+            Assert.Contains("CanvasActionFailed", catches[0].Block.ToString());
+            Assert.Contains("return null", catches[0].Block.ToString());
+        }
+    }
+
+    /// <summary>§G2 TG2-0 (G2-3): the surfaced verbs' openers over the
+    /// selection — Set Color and Edit Card Text refuse
+    /// NothingSelected, Rename Group refuses NotAGroup on a card and on
+    /// nothing — each before any sheet.</summary>
+    [Fact]
+    public void TheSurfacedVerbsOpenersRefuseBeforeAnySheet()
+    {
+        CanvasDocumentViewModel document = Open();
+        int colorRequests = 0;
+        int renameRequests = 0;
+        int editorRequests = 0;
+        document.SetColorRequested += () => colorRequests++;
+        document.GroupRenameRequested += (_, _) => renameRequests++;
+        document.CardEditorRequested += _ => editorRequests++;
+        // Load seats the landing selection (A14); the openers are
+        // exercised over NO selection first.
+        document.Selection.Selected = null;
+        _announced.Clear();
+
+        document.RequestSetColor();
+        document.RequestGroupRenameForSelection();
+        document.RequestCardEditorForSelection();
+
+        Assert.Equal(0, colorRequests + renameRequests + editorRequests);
+        Assert.Equal(
+            2, _announced.Count(s => s.Text.Contains("Nothing selected", StringComparison.Ordinal)));
+        Assert.Contains(_announced, s => s.Text.Contains("not a group", StringComparison.OrdinalIgnoreCase));
+
+        document.SeatSelectionSilently("a");
+        _announced.Clear();
+        document.RequestGroupRenameForSelection();
+        Assert.Equal(0, renameRequests);
+        Assert.Contains(_announced, s => s.Text.Contains("not a group", StringComparison.OrdinalIgnoreCase));
+
+        document.RequestSetColor();
+        document.RequestCardEditorForSelection();
+        Assert.Equal(1, colorRequests);
+        Assert.Equal(1, editorRequests);
+        document.SeatSelectionSilently("grp");
+        document.RequestGroupRenameForSelection();
+        Assert.Equal(1, renameRequests);
+        document.Shutdown();
+    }
+
     /// <summary>New Group: core's group defaults at the anchor, the
     /// created group selected, exact-bytes undo.</summary>
     [Fact]

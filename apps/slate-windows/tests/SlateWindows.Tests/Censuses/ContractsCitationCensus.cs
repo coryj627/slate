@@ -413,7 +413,11 @@ public sealed class ContractsCitationCensus
                 // hierarchy, the FFI shapes); 4 sits above the empty
                 // pre-section population and below the landed count;
                 // each task raises it.
-                4),
+                //
+                // TG2-0 bound the front-door substrate, taking the
+                // section to 114; 113 sits above the pre-task
+                // population of 96 — a first time.
+                113),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

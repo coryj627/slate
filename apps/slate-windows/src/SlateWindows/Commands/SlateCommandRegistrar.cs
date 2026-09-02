@@ -510,6 +510,14 @@ internal static class SlateCommandRegistrar
                 host => host.Workspace?.CanvasToggleMarkCommand,
             [ChordTable.Ids.CanvasClearMarks] =
                 host => host.Workspace?.CanvasClearMarksCommand,
+            // §G2 TG2-0 (G2-1): the front doors over §E's verbs.
+            [ChordTable.Ids.CanvasDelete] = host => host.Workspace?.CanvasDeleteCommand,
+            [ChordTable.Ids.CanvasEditCard] = host => host.Workspace?.CanvasEditCardCommand,
+            [ChordTable.Ids.CanvasRenameGroup] =
+                host => host.Workspace?.CanvasRenameGroupCommand,
+            [ChordTable.Ids.CanvasSetColor] = host => host.Workspace?.CanvasSetColorCommand,
+            [ChordTable.Ids.CanvasClearColor] =
+                host => host.Workspace?.CanvasClearColorCommand,
             [ChordTable.Ids.CanvasShowMarks] =
                 host => host.Workspace?.CanvasShowMarksCommand,
             [ChordTable.Ids.CanvasGroupMarked] =

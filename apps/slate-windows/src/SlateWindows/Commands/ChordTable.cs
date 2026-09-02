@@ -279,6 +279,11 @@ internal static class ChordTable
             "slate.canvas.followConnectionBack";
         public const string CanvasTracePath = "slate.canvas.tracePath";
         public const string CanvasToggleMark = "slate.canvas.toggleMark";
+        public const string CanvasDelete = "slate.canvas.delete";
+        public const string CanvasEditCard = "slate.canvas.editCard";
+        public const string CanvasRenameGroup = "slate.canvas.renameGroup";
+        public const string CanvasSetColor = "slate.canvas.setColor";
+        public const string CanvasClearColor = "slate.canvas.clearColor";
 
         public const string CanvasClearMarks = "slate.canvas.clearMarks";
 
@@ -1025,6 +1030,23 @@ internal static class ChordTable
                 "Set every marked card's color at once - one action, one undo."),
             Reg(Ids.CanvasClearMarks, "Canvas: Clear All Marks", CommandSection.Canvas,
                 "Unmark every marked card."),
+            // §G2 TG2-0 (G2-1): the front doors over §E's shipped verbs —
+            // labels byte-identical to mac (P3), hints mac's with the
+            // undo chord spelled for Windows. No chords: mac allocates
+            // none (R1 — a chord is a convenience, never the only path).
+            Reg(Ids.CanvasDelete, "Canvas: Delete Selection", CommandSection.Canvas,
+                "Delete the selected card, or ungroup the selected group keeping its "
+                + "cards. Undo with Ctrl+Z."),
+            Reg(Ids.CanvasEditCard, "Canvas: Edit Card Text…", CommandSection.Canvas,
+                "Open the selected text card in the editor. Escape saves and returns."),
+            Reg(Ids.CanvasRenameGroup, "Canvas: Rename Group…", CommandSection.Canvas,
+                "Rename the selected group — group labels are the skeleton of the "
+                + "reading order."),
+            Reg(Ids.CanvasSetColor, "Canvas: Set Color…", CommandSection.Canvas,
+                "Color the selected card by name: red, orange, yellow, green, cyan, "
+                + "or purple."),
+            Reg(Ids.CanvasClearColor, "Canvas: Clear Color", CommandSection.Canvas,
+                "Remove the selected card's color."),
             Reg(Ids.CanvasConnectMode, "Canvas: Connect Mode", CommandSection.Canvas,
                 "Remember the selected card, navigate to a target with the "
                 + "usual movements, press Return to connect."),

@@ -637,6 +637,34 @@ internal sealed partial class WorkspaceViewModel
     public System.Windows.Input.ICommand CanvasClearMarksCommand =>
         _canvasClearMarksCommand ??= DocumentCommand(document => document.ClearMarks());
 
+    // §G2 TG2-0 (G2-1/G2-2): the front doors over §E's shipped verbs.
+    // Each resolves to a document seam whose OPENER speaks the refusal
+    // (G2-3's table); the verbs that mint an operation take the invoking
+    // TAB as owner (TE-1's initiating surface, IG2-34).
+    public System.Windows.Input.ICommand CanvasDeleteCommand =>
+        _canvasDeleteCommand ??= DocumentCommand(document => document.CanvasDeleteSelection());
+
+    public System.Windows.Input.ICommand CanvasEditCardCommand =>
+        _canvasEditCardCommand ??= DocumentCommand(
+            document => document.RequestCardEditorForSelection());
+
+    public System.Windows.Input.ICommand CanvasRenameGroupCommand =>
+        _canvasRenameGroupCommand ??= DocumentCommand(
+            document => document.RequestGroupRenameForSelection());
+
+    public System.Windows.Input.ICommand CanvasSetColorCommand =>
+        _canvasSetColorCommand ??= DocumentCommand(document => document.RequestSetColor());
+
+    public System.Windows.Input.ICommand CanvasClearColorCommand =>
+        _canvasClearColorCommand ??= DocumentCommand(
+            (document, owner) => document.CanvasSetColor(null, owner: owner));
+
+    private RelayCommand? _canvasDeleteCommand;
+    private RelayCommand? _canvasEditCardCommand;
+    private RelayCommand? _canvasRenameGroupCommand;
+    private RelayCommand? _canvasSetColorCommand;
+    private RelayCommand? _canvasClearColorCommand;
+
     public System.Windows.Input.ICommand CanvasConnectModeCommand =>
         _canvasConnectModeCommand ??= NavigatorCommand(
             navigator => navigator.EnterConnectMode());
@@ -671,6 +699,21 @@ internal sealed partial class WorkspaceViewModel
         Action<CanvasDocumentViewModel> run) =>
         new RelayCommand(
             _ => { if (ActiveCanvasDocument is { } document) { run(document); } },
+            _ => ActiveCanvasDocument is not null);
+
+    /// <summary>§G2 TG2-0 (G2-2, IG2-34): the owner-carrying shape —
+    /// the invoking TAB rides into the operation as TE-1's initiating
+    /// surface, captured at execution, never at construction.</summary>
+    private RelayCommand DocumentCommand(
+        Action<CanvasDocumentViewModel, object?> run) =>
+        new RelayCommand(
+            _ =>
+            {
+                if (ActiveCanvasDocument is { } document)
+                {
+                    run(document, ActiveGroup.ActiveTab);
+                }
+            },
             _ => ActiveCanvasDocument is not null);
 
     /// <summary>§F TF-4 (F9/M6): the spatial mode verbs for the

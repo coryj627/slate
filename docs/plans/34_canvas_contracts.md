@@ -10941,6 +10941,82 @@ raised citation floor — the §F gauntlet, unchanged.
 
 ### Implementation records
 
+### TG2-0 — the front-door substrate: operations with owners, guarded prepares, the first five rows
+
+The seven §E verbs that answered nothing now answer with their
+OPERATION, the shape `CanvasRenameGroup` and `CanvasSetColor` already
+had (G2-2, IG2-8): `CanvasNewGroup`, `CanvasMoveIntoGroup`,
+`CanvasAddFileCard`, `CanvasAddLinkCard`, `CanvasLocateFile`,
+`CanvasEditConnection` and `CanvasDeleteConnection` return the
+`CanvasMutationOperation` the funnel admitted — null when the opener
+refused, the refusal spoken — carry an optional completion, and take
+an optional OWNER minted into the operation in place of the document
+(TE-1's initiating surface, IG2-34); `CanvasSetColor` gains the same
+owner. The workspace's `DocumentCommand` gains an owner-carrying
+overload that hands the verb `ActiveGroup.ActiveTab` at execution,
+never at construction. Every prepare that queries the session —
+placement for New Group and the two add verbs, the inside-group
+placement and overlap check for Move into Group — runs inside a
+`catch (VaultException)` that speaks the verb's `CanvasActionFailed`
+arm with the exception's message and returns no action (G2-2,
+IG2-21): the funnel's transaction catches only the apply's exception,
+so a thrown query would otherwise escape the gate. Locate and the
+two connection verbs prepare from the basis alone and need no catch;
+the record says so rather than decorating them.
+
+Three request seams give the surfaced verbs their G2-3 openers over
+the selection: `RequestSetColor` refuses `NothingSelected` before any
+sheet (mac's order for that verb), `RequestGroupRenameForSelection`
+refuses `NotAGroup` on nothing and on a card, and
+`RequestCardEditorForSelection` refuses `NothingSelected` and lets
+the editor factory speak `NotATextCard`. The rows: FIVE, not
+eighteen — Delete Selection, Edit Card Text…, Rename Group…, Set
+Color… and Clear Color, the verbs a surface already reached — with
+labels byte-identical to mac's registrations and mac's hints (the undo
+chord spelled Ctrl+Z), resolvers over five workspace commands, and
+`chords.json` regenerated. The other thirteen rows ride the tasks
+that land their sheets and verbs: a registered row must be
+EXECUTABLE (B12's rule, the reason PR C withheld commitMode until §F),
+and a row whose sheet is not yet built would be a silent click. The
+task table said eighteen; the loop says five now and the rest with
+their sheets, and this record is where the difference is written.
+
+The Canvas-menu ownership census (G2-1, IG2-2, IG2-33):
+`TheCanvasMenuMirrorsMacsMenuOwnershipOverTheResidue` scrapes the
+verbs mac's toolbar command group invokes in `SlateMacApp.swift`, maps
+each residue id to its registration closure's verb in
+`SlateCommands.swift`, resolves each Windows row to its resolver path
+in `SlateCommandRegistrar` and asks whether the CanvasMenu subtree of
+`MainWindow.xaml` binds it — and asserts the two owned sets equal,
+both ways, over the residue ids that HAVE a Windows row. It tightens
+as rows land: the day TG2-4 registers Create Connected Card, the
+census demands its menu item, because mac's menu has one; today it
+holds over five ids with no menu items on either side. The one-way
+`CommandDriftTests` stays what it is.
+
+Recorded here (IG2-36, G2D-13): every Windows verb speaks the
+not-ready sentence FIRST — the document's own load state precedes the
+verb's selection and kind guards — where mac's verbs interleave
+admission with those guards differently per verb. A Windows-wide
+divergence of ORDER, not of outcome: the same refusal is spoken for
+the same state, one sentence, and a document that is not ready cannot
+answer any other question honestly.
+
+Facts: five — the seven verbs answering with their operation and
+owner (the passed owner kept, the document by default, the completion
+landing Installed, the openers' null-with-sentence); the prepare
+clause as a SOURCE census over the four querying verbs' catch clauses
+(no session fault is inducible from a real vault — an unknown anchor
+does not throw, core places anyway — so the clause is pinned on the
+text, the way the chord scrape pins the navigator's map); the three
+openers over no selection and a card; the five commands reaching the
+document from the workspace; the ownership census. Mutations, each
+byte-restored: M1 New Group's catch narrowed to a foreign exception
+type (the census bit), M2 New Group minted with the document as
+owner (the owner fact bit), M3 Set Color's opener guard removed (the
+openers fact bit), M4 Clear Color's resolver removed (the registrar's
+coverage census bit). All bitten.
+
 ---
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)

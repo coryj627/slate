@@ -95,6 +95,47 @@ public sealed class CanvasDocumentTests : IDisposable
             new CanvasAnnouncer(_announced.Add, TimeSpan.FromMinutes(1)),
             synchronousForTests);
 
+    /// <summary>§G2 TG2-0 (G2-1): the five front-door commands over §E's
+    /// surfaced verbs reach the document from the workspace — Delete
+    /// removes the seated card, Edit Card Text opens the editor sheet,
+    /// Rename Group and Set Color present their prompts, Clear Color
+    /// runs Set Color's null arm with the TAB as the operation's owner.</summary>
+    [Fact]
+    public void TheFrontDoorCommandsReachTheDocument()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        document.SeatSelectionSilently("question");
+
+        workspace.CanvasSetColorCommand.Execute(null);
+        Assert.IsType<CanvasSetColorPrompt>(workspace.CanvasPromptSheet);
+        workspace.CloseCanvasPrompt();
+
+        Assert.NotNull(document.CanvasSetColor("2"));
+        Assert.Equal("2", document.AppliedPublication!.Loaded!.Population.SceneByNode["question"].Color);
+        workspace.CanvasClearColorCommand.Execute(null);
+        Assert.Null(document.AppliedPublication!.Loaded!.Population.SceneByNode["question"].Color);
+
+        workspace.CanvasEditCardCommand.Execute(null);
+        Assert.NotNull(workspace.CanvasCardEditorSheet);
+        workspace.CloseCanvasCardEditor();
+
+        document.SeatSelectionSilently("grp");
+        workspace.CanvasRenameGroupCommand.Execute(null);
+        Assert.IsType<CanvasRenameGroupPrompt>(workspace.CanvasPromptSheet);
+        workspace.CloseCanvasPrompt();
+
+        document.SeatSelectionSilently("question");
+        workspace.CanvasDeleteCommand.Execute(null);
+        Assert.DoesNotContain(
+            document.AppliedPublication!.Loaded!.Population.Outline,
+            row => row.NodeId == "question");
+    }
+
     /// <summary>§G PR review round 1: the workspace's mark commands —
     /// the palette's and the chords' targets — REACH the document:
     /// Toggle Mark marks the seated card, Show Marked Cards presents
