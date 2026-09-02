@@ -154,6 +154,33 @@ internal sealed partial class WorkspaceViewModel
         return document;
     }
 
+    /// <summary>§H TH-6 (IH-40): the anchor navigation's announcements on a
+    /// CANVAS-origin open. A miss — the editor's generic heading-not-found,
+    /// or its block-not-found sentence — is spoken as core's canvas reason
+    /// with the subpath and the file, through the document's announcer,
+    /// once; everything else (the landing) goes to the shell as before.</summary>
+    internal static void RouteCanvasAnchorAnnouncement(
+        CanvasDocumentViewModel document,
+        LinkAnchor anchor,
+        string path,
+        A11yEvent spoken,
+        Action<A11yEvent> shell)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(anchor);
+        ArgumentNullException.ThrowIfNull(spoken);
+        ArgumentNullException.ThrowIfNull(shell);
+        bool miss = spoken is A11yEvent.HeadingNotFound
+            || (spoken is A11yEvent.HostComposed composed
+                && composed.Text.EndsWith(" was not found.", StringComparison.Ordinal));
+        if (miss)
+        {
+            document.SpeakHeadingNotFound(anchor.Text, System.IO.Path.GetFileName(path));
+            return;
+        }
+        shell(spoken);
+    }
+
     /// <summary>The document never opens tabs or launches the shell; it
     /// hands the workspace what it decided (contract A13), which owns
     /// the ONE navigation seam and the shared external-link policy's
@@ -170,10 +197,13 @@ internal sealed partial class WorkspaceViewModel
                 {
                     WorkspaceGroupViewModel group = ActiveGroup;
                     WorkspaceTabViewModel? tab = group.ActiveTab;
+                    // §H TH-6 (IH-40): the editor's generic miss becomes the
+                    // canvas reason, once, through the document's announcer.
                     _ = tab?.NavigateToAnchor(
                         anchor,
                         null,
-                        _announce,
+                        spoken => RouteCanvasAnchorAnnouncement(
+                            document, anchor, path, spoken, _announce),
                         () => ReferenceEquals(ActiveGroup, group)
                             && ReferenceEquals(group.ActiveTab, tab));
                 }

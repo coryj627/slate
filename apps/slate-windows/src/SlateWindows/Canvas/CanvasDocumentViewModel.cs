@@ -2169,9 +2169,19 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             redo ? UndoStack.SnapshotRedo() : UndoStack.SnapshotUndo();
         if (snapshot is null)
         {
-            // Quarantined or empty: the OFFERED read is the gate
-            // (basis quarantine, TE-4), and an unoffered stack has
-            // nothing true to run - the status arm says so.
+            // The OFFERED read is the gate (basis quarantine, TE-4).
+            // §H TH-6 (IH-40, TE-2's deferred speaker): a QUARANTINED
+            // stack has entries that apply to an earlier revision, and
+            // says so with core's truthful sentence; only an EMPTY stack
+            // has nothing to undo.
+            if (redo ? UndoStack.RedoQuarantined : UndoStack.UndoQuarantined)
+            {
+                Speak(new CanvasA11yEvent.CanvasBlocked(
+                    redo
+                        ? new CanvasBlockedReason.RedoQuarantined()
+                        : new CanvasBlockedReason.UndoQuarantined()));
+                return;
+            }
             Speak(new CanvasA11yEvent.CanvasStatus(
                 redo
                     ? new CanvasStatusNote.NothingToRedo()
@@ -4124,6 +4134,14 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     internal void SpeakPickDifferentTarget() =>
         Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.PickDifferentTarget()));
 
+    /// <summary>§H TH-6 (IH-40): a file card's subpath that the note does
+    /// not contain — the canvas reason, with the heading and the file, as
+    /// mac speaks it for a subpath miss; the workspace routes the editor's
+    /// generic miss here for a canvas-origin open.</summary>
+    internal void SpeakHeadingNotFound(string heading, string filename) =>
+        Speak(new CanvasA11yEvent.CanvasBlocked(
+            new CanvasBlockedReason.HeadingNotFound(heading, filename)));
+
     internal void SpeakNoConnections() =>
         Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoConnections()));
 
@@ -5166,8 +5184,14 @@ internal static class CanvasPhrase
     public static string OpenFailed(string path, Exception exception) =>
         $"This canvas could not be opened: {exception.Message} ({path})";
 
+    /// <summary>§H TH-6 (IH-17, IH-40): the reopen failure is core's
+    /// <c>ReopenFailed</c> sentence, rendered with the move as its message
+    /// — the banner consumes the vocabulary instead of composing its own.
+    /// The initial-open failure above stays host text (§W-G row S).</summary>
     public static string RetargetAbsent(string from, string to, Exception exception) =>
-        $"{from} moved to {to}, which could not be reopened: {exception.Message}";
+        CanvasAnnouncer.RenderLabel(new CanvasA11yEvent.CanvasBlocked(
+            new CanvasBlockedReason.ReopenFailed(
+                $"{from} moved to {to}: {exception.Message}")));
 }
 
 /// <summary>§E TE-5c: the connection editor's direction radio, mapped

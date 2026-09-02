@@ -485,7 +485,11 @@ public sealed class ContractsCitationCensus
                 // TH-5 bound the viewport consumers, taking the
                 // section to 88; 87 sits above the pre-task population
                 // of 80 — a fifth time.
-                87),
+                //
+                // TH-6 bound the remaining consumers, taking the
+                // section to 95; 94 sits above the pre-task population
+                // of 88 — a sixth time.
+                94),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

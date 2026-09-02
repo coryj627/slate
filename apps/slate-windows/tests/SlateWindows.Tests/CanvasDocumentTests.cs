@@ -1295,6 +1295,69 @@ public sealed class CanvasDocumentTests : IDisposable
             + "a request nobody can ever deliver.");
     });
 
+    /// <summary>§H TH-6 (H4, H6 row S; IH-17, IH-40): the reopen failure's
+    /// banner is core's <c>ReopenFailed</c> sentence rendered with the move
+    /// as its message — consumed vocabulary, not host composition — while
+    /// the initial-open failure stays host text.</summary>
+    [Fact]
+    public void TheReopenFailureBannerIsCoresSentence()
+    {
+        var thrown = new InvalidOperationException("nothing at the new path");
+        Assert.Equal(
+            CanvasAnnouncer.RenderLabel(new CanvasA11yEvent.CanvasBlocked(
+                new CanvasBlockedReason.ReopenFailed(
+                    "board.canvas moved to gone.canvas: nothing at the new path"))),
+            CanvasPhrase.RetargetAbsent("board.canvas", "gone.canvas", thrown));
+        Assert.StartsWith("Canvas could not be reopened.", CanvasPhrase.RetargetAbsent("a", "b", thrown));
+        Assert.Equal(
+            "This canvas could not be opened: nothing at the new path (board.canvas)",
+            CanvasPhrase.OpenFailed("board.canvas", thrown));
+    }
+
+    /// <summary>§H TH-6 (H4, IH-40): on a canvas-origin open, the editor's
+    /// generic heading miss — and its block-not-found sentence — become
+    /// core's canvas reason with the subpath and the file, spoken ONCE
+    /// through the document's announcer and never through the shell's;
+    /// the landing announcements still reach the shell.</summary>
+    [Fact]
+    public void ACanvasOriginHeadingMissSpeaksTheCanvasReasonOnce()
+    {
+        CanvasDocumentViewModel document = NewDocument("board.canvas");
+        document.Load();
+        var shell = new List<A11yEvent>();
+        var anchor = new LinkAnchor("heading", "Missing heading");
+
+        _announced.Clear();
+        WorkspaceViewModel.RouteCanvasAnchorAnnouncement(
+            document, anchor, "notes/note0.md", new A11yEvent.HeadingNotFound(), shell.Add);
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Equal(
+            CanvasAnnouncer.RenderLabel(new CanvasA11yEvent.CanvasBlocked(
+                new CanvasBlockedReason.HeadingNotFound("Missing heading", "note0.md"))),
+            Assert.Single(_announced).Text);
+        Assert.Empty(shell);
+
+        _announced.Clear();
+        var block = new LinkAnchor("block", "abc123");
+        WorkspaceViewModel.RouteCanvasAnchorAnnouncement(
+            document, block, "note0.md",
+            new A11yEvent.HostComposed("Block abc123 was not found.", A11yPriority.Medium), shell.Add);
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Equal(
+            CanvasAnnouncer.RenderLabel(new CanvasA11yEvent.CanvasBlocked(
+                new CanvasBlockedReason.HeadingNotFound("abc123", "note0.md"))),
+            Assert.Single(_announced).Text);
+        Assert.Empty(shell);
+
+        _announced.Clear();
+        WorkspaceViewModel.RouteCanvasAnchorAnnouncement(
+            document, anchor, "note0.md", new A11yEvent.ScrolledToHeading("Found"), shell.Add);
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Empty(_announced);
+        Assert.IsType<A11yEvent.ScrolledToHeading>(Assert.Single(shell));
+        document.Shutdown();
+    }
+
     /// <summary>
     /// A pane that still EXISTS but now shows a different canvas is not a
     /// live address for the one it left.

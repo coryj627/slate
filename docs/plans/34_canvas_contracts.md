@@ -12528,6 +12528,52 @@ the negated state (both states bit); M3 the renderer's zoom step
 answering the percent from BEFORE its commit (the mounted fact bit).
 All bitten.
 
+### TH-6 — The remaining consumers: the quarantined history's truth, the reopen banner, the canvas-origin heading miss
+
+Three of the eight unconsumed arms (H4, IH-40), each with its trigger on
+Windows:
+
+- **`UndoQuarantined` and `RedoQuarantined`.** `RunHistory` asked the
+  stack for its offered snapshot and, given none, said "nothing to undo"
+  — true for an empty stack and false for a QUARANTINED one, whose
+  entries stand for an earlier revision after a reload onto a changed
+  basis (TE-4's offered read is the gate; TE-2 pinned the vocabulary and
+  deferred the Windows speaker to the funnel's wiring, which never
+  came). The arm now asks `UndoStack.UndoQuarantined` /
+  `RedoQuarantined` first and speaks core's truthful sentence — "Undo
+  unavailable: the canvas changed on disk, and this entry applies to an
+  earlier revision" — leaving the entries quarantined for the revision
+  that returns; only an empty stack says nothing to undo.
+- **`ReopenFailed`.** The retarget-absent banner, `CanvasPhrase.RetargetAbsent`,
+  composed "moved to … which could not be reopened" itself; it now
+  renders core's `CanvasBlocked` with `ReopenFailed` and the move as the
+  message — the banner CONSUMES the vocabulary. The initial-open failure
+  (`CanvasPhrase.OpenFailed`) stays host text, §W-G row S's designation
+  (TH-7 records it).
+- **`HeadingNotFound`.** A canvas-origin open hands (path, anchor) to the
+  workspace, whose editor resolves the subpath and, on a miss, announced
+  the editor's GENERIC heading-not-found (or, for a block anchor, a
+  host-composed "Block … was not found." — a pre-existing shell residue,
+  noted for the reconciliation). The seam now routes those two misses,
+  and only those, through `WorkspaceViewModel.RouteCanvasAnchorAnnouncement`
+  to the document's new boundary `SpeakHeadingNotFound(heading, filename)`
+  — core's canvas reason with the subpath and the file, as mac speaks a
+  subpath miss — spoken ONCE through the canvas announcer and never
+  through the shell's; the landing announcements still reach the shell.
+  E14's exact-landing facts are TH-11's; this is the miss's consumer.
+
+Facts: `AQuarantinedStackSpeaksTheTruthfulSentenceNotNothingToUndo` (the
+disk changed and RELOADED, the undo entry quarantined, the truthful
+undo sentence and the entry still standing; then the redo side the same
+way), `TheReopenFailureBannerIsCoresSentence` (the exact render with the
+move as the message; the open failure unchanged), and
+`ACanvasOriginHeadingMissSpeaksTheCanvasReasonOnce` (a heading miss and
+a block miss each spoken as the canvas reason through the document,
+nothing through the shell; a landing passing through to the shell).
+Mutations, each byte-restored: M1 the quarantine arm removed ("nothing
+to undo" again; bit); M2 the miss passed to the shell (bit); M3 the
+banner back to host text (bit). All bitten.
+
 ---
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
