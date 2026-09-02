@@ -363,8 +363,10 @@ public sealed class ContractsCitationCensus
                 // citations are EXISTING names (the selection store, the
                 // funnel, the prompt kinds, the FFI shapes); 4 sits
                 // above the empty pre-section population and below the
-                // landed count; each task raises it.
-                4),
+                // landed count; each task raises it. Revision 2's
+                // thirty closures cited the shipped seams by name,
+                // lifting the pre-task population to 13.
+                12),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

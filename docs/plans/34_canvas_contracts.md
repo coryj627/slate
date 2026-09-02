@@ -9454,154 +9454,311 @@ document FREE afterward); two byte-restored mutations, both bitten.
 
 Milestone T's multi-select on Windows (#524, interview decision 4: no
 shift-range selection). The STORE shipped in PR A and the §C-unit
-split: `CanvasSelection.Marked` with `ToggleMark` as its one mutator
-("present now so the marked set is never mutated from two places"),
-the publication's durable `MarkedIntent`, the outline rows and the
-renderer peers rendering `marked`, `CanvasMovedTo`/`CanvasWhereAmI`
-carrying the flag, and CD-32's retarget seeding. §E handed off "marks
-verbs reuse the gate and the bulk-is-one-action rule; the marks list
-is the picker's sibling"; §F built the rigid moving set over
-test-built marks and recorded the risk. PR G lands what is missing:
-the VERBS, the marks list on TF-8's prompt machinery, the three bulk
-verbs through the funnel, the chord and rows, the context row going
-live, and the journey. Contract numbering is per-wave: G1–G9, GD-1
-onward.
+split: `CanvasSelection.Marked` behind its two mutators (`ToggleMark`
+and `ClearMarks` — "present now so the marked set is never mutated
+from two places"), the publication's durable `MarkedIntent`, the
+outline rows and renderer peers rendering `marked`,
+`CanvasMovedTo`/`CanvasWhereAmI` carrying the flag, and CD-32's
+retarget seeding. §E handed off "marks verbs reuse the gate and the
+bulk-is-one-action rule; the marks list is the picker's sibling"; §F
+built the rigid moving set over test-built marks and recorded the
+risk. PR G lands what is missing: the VERBS, the marks list on TF-8's
+prompt machinery, the three bulk verbs through the funnel, the chord
+and rows, the context row going live, and the journey. Contract
+numbering is per-wave: G1–G9, GD-1 onward. This is revision 2, after
+round 1's thirty findings (the record follows the section).
 
-**G1 — Toggle Mark is the one mutator, and it speaks the live
-count.** Ctrl+Alt+M (mac ⌃⌘M, FD-3's Ctrl+Alt family), the palette
-row and the context-menu row all route to ONE document verb that
-calls `CanvasSelection.ToggleMark` on the SELECTED node — groups
-included, because mac marks any outline row (`canvasToggleMark`,
-`AppState+CanvasActions.swift:753–771`) — and announces
-`CanvasMarkToggled(marked, title, count)` with the store's count
-AFTER the toggle. No selection refuses `NothingSelected`. Arrows
-never mutate marks (PR A's rule, unchanged); a toggle republishes
-through the publication's marked intent so every pane's rows and the
-peers' `marked` state move together (`CanvasDocumentViewModel`'s
-`Marked` republish arm, the `WithMarkedIntent` seam).
+**G1 — The store is the one mark authority; the document's two verbs
+over it speak the live store count.** `CanvasSelection` owns the
+set; the document exposes exactly two store verbs: `ToggleMark` (the
+Ctrl+Alt+M chord — mac's ⌃⌘M in FD-3's family — the palette row, and
+the context row) and an IDEMPOTENT `Unmark(nodeId)` for the marks
+list's row action, both answering the resulting store count. Both
+require the target to RESOLVE in the current population (mac's
+`doc.outline.first`, `AppState+CanvasActions.swift:753–758`): a
+selection that is absent OR holds an id the population no longer
+resolves refuses `CanvasStatus(NothingSelected)` and mutates nothing
+— the `CanvasMarkToggled` event needs a non-null title
+(`slate_uniffi.cs:24956–24960`). Groups are markable (mac marks any
+outline row). Toggle announces `CanvasMarkToggled(marked, title,
+count)` and Unmark announces `CanvasMarkToggled(false, title, count)`
+with the STORE's count after the write, published through the
+document's `Marked` republish arm (`WithMarkedIntent`, applied
+immediately) so every pane's rows and the peers' `marked` state move
+together. Arrows never mutate marks (PR A's rule). Every
+context-menu consumer SILENTLY SEATS its source row before invoking
+the verb — the outline dispatcher's existing Delete/Set Color shape
+(`CanvasOutlineView.cs:923–945`; mac's `CanvasOutlineView.swift:303–305`,
+`CanvasTableView.swift:87–92`) — and a vanished source takes G1's
+unresolvable-row refusal.
 
-**G2 — Marks are durable per document and honest about the scene.**
-The set lives on the document, shared across panes, seeded across a
-retarget (CD-32), and cleared when the last tab closes (PR A's
-teardown row). A mark on a node the scene no longer holds is kept in
-the store and DROPPED by every projection: core's `CanvasOrderNodes`
-drops unknown ids silently (§W-G row F, contract 0b-10), and the
-count SPOKEN is the store's, mac's shape (`marked.count`). No verb
-reads marks except through the reading-order projection, so "in
-order" has exactly one meaning on both hosts.
+**G2 — Durable per document, honest about the scene, and read by
+two rules.** The set lives on the document, shared across panes,
+seeded across a retarget (CD-32), cleared when the last tab closes
+(PR A's teardown row). Two READ RULES: (a) MEMBERSHIP, LIVE COUNT,
+EMPTINESS, and F2's marks-versus-selection choice read the STORE
+directly (G1, G3, the list's admission, `CanvasNavigator.cs:625–634`);
+(b) every MULTI-NODE TARGET for geometry or mutation reads the
+store through core's reading-order projection `CanvasOrderNodes`
+(§W-G row F, contract 0b-10), which drops ids the scene no longer
+holds SILENTLY — so a ghost mark stays in the store, counts in
+Toggle's and Clear's sentences, and vanishes from every target and
+from the list's rows and heading. Store count is spoken by Toggle,
+Unmark and Clear ONLY; the list heading and every bulk sentence
+speak the PROJECTED count.
 
-**G3 — Clear All Marks never refuses and speaks its count.**
-`CanvasMarksCleared(count)` — the render's own `No marks.` arm at
-zero, `Cleared ⟨n⟩ mark[s].` otherwise — from the palette row and
-from the marks list's button; the store's `ClearMarks` is the
-mutator.
+**G3 — Clear All Marks never refuses on a live document and speaks
+the store count.** From the palette row and the marks list's
+control: `ClearMarks`, then `CanvasMarksCleared(count)` — the
+render's `No marks.` arm at zero, `Cleared ⟨n⟩ mark[s].` otherwise
+(vocabulary row). A retired document is the one refusal: the
+announcer's retirement boundary drops the sentence and nothing
+mutates.
 
-**G4 — The marks list is the picker's sibling on the prompt
-machinery.** A KIND of the TF-8 prompt sheet, not a new modal
-surface (GD-1): choices-shaped rows over the marked set in READING
-ORDER, each row named `⟨title⟩, marked`, the heading carrying the
-count. Enter on a row JUMPS: the selection seats the row and the
-owning presenter takes reader focus through `FocusRow` (the IF-29
-lesson), then the sheet closes. Delete on a row UNMARKS it and the
-sheet stays with the highlight kept — and closes when the set
-empties. A Clear All Marks control runs G3 and closes. Escape closes
-choosing nothing. Opening with an empty set refuses
-`CanvasStatus(NoMarks)` and presents nothing (mac's
-`canvasShowMarksList`, `:782–792`).
+**G4 — The marks list is a KIND of the TF-8 prompt sheet with a live
+projection and an addressed landing.** The prompt model becomes an
+EXHAUSTIVE variant set (GD-1): `CanvasPromptKind` = ConnectLabel,
+RenameGroup, SetColor(target: Selection | Marked), GroupMarked,
+MarksList — each kind with its OWN submit arm and NO default arm
+(`CanvasPromptViewModel.cs:117–130`'s fall-through retires). The
+marks-list request captures the INVOKING SURFACE OWNER (the pane
+the verb ran from, TF-7's request shape). Admission reads STORE
+emptiness — an empty store refuses `CanvasStatus(NoMarks)` and
+presents nothing (mac's `canvasShowMarksList`, `:782–792`); the rows
+and heading read the PROJECTION over the full population's reading
+order — so a store holding only ghosts opens a zero-row list whose
+Clear control removes the ghosts (mac's shape, `CanvasPromptSheet.swift:333–338`).
+Rows are keyed by node id and REPROJECT LIVE on every marked-intent
+and population change; the accessible name is
+`SpeakableName + ", marked"` (`CanvasOutlineRow.SpeakableName`,
+`slate_uniffi.cs:15539–15555`, the unique name every Windows
+projection already uses) with `Title` for visual display; the
+active row survives reprojection by id, and a removed active row's
+successor is the next row at the same ordinal, else the previous.
+ENTER JUMPS: the selection seats the row SILENTLY (frozen A12,
+`SeatSelectionSilently`), the document leaves an A14 focus request
+addressed to the captured owner (`RequestFocusLanding(owner,
+nodeId)`) that SURVIVES the sheet's closure and that the SURFACE
+delivers, and NO `CanvasMovedTo` speaks — the landing is the line.
+A row that is filtered out of the owner's projection CLEARS THE
+FILTER first (the shipped `CanvasFilterCleared` sentence, never a
+silent hidden seat) and then lands (GD-6). A vanished row lands by
+A14's own order — the named row, the last activated row, the first
+row (`FocusLandingNodeFor`) — and speaks
+`CanvasActionFailed(CanvasFailedAction.CanvasAction, "jump")` when
+even that fails; the sheet closes on every Jump. DELETE on a row
+runs G1's `Unmark` — `CanvasMarkToggled(false, title, storeCount)`
+speaks — the sheet stays with the successor active, and CLOSES when
+the STORE empties. The Clear control runs G3 and closes. Escape
+closes choosing nothing.
 
-**G5 — Bulk verbs are ONE action each, over the reading-ordered
-marked set, through the funnel.** Each bulk verb mints one §E
-operation and prepares under the gate; an empty projected set
-refuses `NoMarks`; the action NAME is core's `CountNoun` over the
-FFI (`delete ⟨n⟩ card[s]`, `color ⟨n⟩ card[s]`, `group ⟨n⟩
-card[s]`) so the undo sentence and the verb's own sentence group
-identically at ≥ 1000 (CD-6/CD-26):
+**G5 — Bulk verbs are one funnel action each over an IMMUTABLE
+snapshot, with a total outcome table.** Each bulk verb captures the
+raw marked-intent SNAPSHOT at invocation — the direct row's press, or
+the prompt's SUBMIT for Group and Color (live-at-submit, immutable
+once submitted) — and mints one §E operation carrying it (E1's
+invocation value). Preparation under the gate projects the snapshot
+through `CanvasOrderNodes`; an EMPTY projection refuses
+`CanvasStatus(NoMarks)` — AFTER admission, under the gate; a THROWN
+query (`CanvasOrderNodes` and `CanvasGroupRectAround` both throw
+`VaultException`, `slate_uniffi.cs:11165–11166,11179–11182`) refuses
+`CanvasActionFailed(CanvasFailedAction.CanvasAction, detail)` writing
+nothing, the prompt and the marks preserved. Every bulk target and
+count INCLUDES marked groups — mac passes the whole projected set to
+all three verbs — and the canonical `card[s]` in the names and
+sentences denotes those NODES (GD-2). Names are core's `CountNoun`
+over the FFI (`delete ⟨n⟩ card[s]`, `color ⟨n⟩ card[s]`, `group ⟨n⟩
+card[s]`). All three carry E4's `KeepSelection` (a deleted selected
+node drops by resolution; a later seat survives) and a NEW typed
+model-side MARK EFFECT on the operation, `CanvasMarkEffect { Keep,
+RemoveCaptured }`, applied in the SAME publication as the refreshed
+rows and retained under the operation identity for refresh-only
+recovery; later local mark writes win over it (GD-7):
 
-- **Delete Marked** — `DeleteNode` per id in reading order; success
-  clears the marks and drops the selection if it was marked;
-  announces `CanvasDeleted(Cards(count), verbosity, undo chord)`. A
-  marked GROUP deletes by the algebra's ONE group removal — frame and
-  incident edges gone, contained cards kept (ED-3, `apply.rs:410`)
-  — so no bulk delete can lose a card the user did not mark (GD-2).
-- **Color Marked** — `SetNodeColor` per id; announces
-  `CanvasBulkColorSet(count, color?)`; marks are KEPT (mac keeps
-  them, `:838–865`).
-- **Group Marked Cards…** — the label prompt (TF-8's text kind,
-  Enter with an empty field means an unlabeled group — the IF-27
-  normalization); the frame is core's `CanvasGroupRectAround(handle,
-  members)` under the gate; ONE `CreateGroup(id, label?, frame,
-  color null)`; success clears the marks and announces
-  `CanvasGrouped(count, label ‖ "Untitled")`. A null frame — no
-  member resolves — is mac's SILENT no-op (`:867–914`, the recorded
-  mac detail "deciding what the host SAYS there is PR G's"): here it
-  speaks the FD-6 arm `CanvasActionFailed(CanvasAction, "group")`
+- **Delete Marked** — `DeleteNode(Id)` per projected id in reading
+  order; mark effect RemoveCaptured; announces
+  `CanvasDeleted(CanvasDeleteTarget.Cards(count), verbosity,
+  CanvasPhrase.UndoChord)`. A marked group deletes by the algebra's
+  one group removal — frame and incident edges gone, contained cards
+  kept (ED-3, `apply.rs:410`).
+- **Color Marked** — `SetNodeColor(Id, Color)` per id with the
+  storage string (`"1"`–`"6"` or null); mark effect Keep; announces
+  `CanvasBulkColorSet(count, color)` with the TYPED
+  `CanvasColor.Preset(byte)` or null — two representations, one
+  mapping (mac keeps the marks, `:838–865`).
+- **Group Marked Cards…** — the GroupMarked prompt kind (Enter with
+  an empty field means a null label, IF-27's normalization); the
+  frame is `CanvasGroupRectAround(handle, members)` under the gate;
+  ONE `CreateGroup(Id: CanvasNewId(), Label: label or null, X, Y,
+  Width, Height from the returned CanvasRect, Color: null)` — all
+  seven arguments spelled (`slate_uniffi.cs:27113–27121`); mark
+  effect RemoveCaptured; announces `CanvasGrouped(count, label ‖
+  "Untitled")`. A NULL frame — no member resolves — speaks
+  `CanvasActionFailed(CanvasFailedAction.CanvasAction, "group")`
   and writes nothing (GD-3).
 
-**G6 — Marks and modes.** The marked set IS the moving set (F2,
-unchanged); a bulk verb during a held mode refuses `ModeHeld` →
-`CanvasBlocked(ModeBusy)` (F4d, the shipped arm); a mode commit
-KEEPS the marks (mac's `canvasCommitTransient` never touches them);
-during suspension every bulk verb answers the ladder's
-ConflictPending (TF-10's column). Toggle Mark during a held mode is
-a selection-store write, not a funnel verb: it is ALLOWED, and the
-next mode entry reads the new set (GD-4).
+The TERMINAL OUTCOME TABLE, per funnel arm — write / marks / prompt
+sheet and draft / speech: **Installed**: landed; the mark effect
+applied with the refreshed rows; the sheet CLOSES; the verb's
+sentence. **RefusedPrepare** (empty projection, thrown query, null
+frame): nothing written; marks untouched; sheet and draft KEPT; the
+preparation's own typed sentence spoke. **Conflict**: E6's record
+installs; nothing written; marks untouched; sheet KEPT (mac keeps
+the sheet unless an undo step appended, `AppState+Canvas.swift:509–522`);
+the conflict sentence. **Unindexed / RefreshRefused**: the write
+LANDED — the mark effect is applied under the operation identity
+when the recovery presents; the sheet CLOSES; no spoken success
+beyond the refresh-only region (§E's arm). **Displaced**: the
+receipt quarantined, nothing published; marks untouched; sheet KEPT.
+Admission refusals (the ladder, G7) keep sheet and draft and speak
+the ladder's sentence. No arm that wrote nothing closes the sheet.
 
-**G7 — Controls and the matrix (M6, F9's pattern).** Palette rows,
-labels byte-identical to mac (P3): `toggleMark` "Canvas: Toggle Mark"
-(Ctrl+Alt+M), `showMarks` "Canvas: Show Marked Cards", `clearMarks`
-"Canvas: Clear All Marks", `groupMarked` "Canvas: Group Marked
-Cards…", `deleteMarked` "Canvas: Delete Marked Cards". Color Marked
-has NO front door on mac — `canvasColorMarked` has no caller
-(recorded divergence, assigned there); Windows lands `colorMarked`
-"Canvas: Color Marked Cards…" on the Set Color prompt kind with a
-BULK target (GD-5). The context-menu Toggle Mark row goes LIVE and
-its "arrives later" reason retires. The matrix cells: toggle with no
-selection → `NothingSelected`; list/group/delete/color with no marks
-→ `NoMarks`; bulk verbs under a held mode → `ModeHeld`; under
-suspension → ConflictPending; the marks list's Jump onto a vanished
-row → the seat fallback, the row dropped from the list on the next
-projection.
+**G6 — Marks and modes: store actions are free, funnel actions
+answer the ladder, and a holder never re-reads the store.** The
+marked set IS the moving set at ENTRY (F2, unchanged); a mode's
+captured holder is IMMUTABLE — Toggle, Unmark, Clear, Show List,
+Jump, Escape and prompt OPENING are store or focus actions allowed
+during a held mode, during a pending commit and during suspension,
+and never alter the current holder; only a later mode entry reads
+the new set (GD-4). Jump during connect mode moves the reader as
+the mode's own arrows do; the origin memory stands. Prompt
+SUBMISSION (Group, Color) and Delete Marked are funnel verbs: under
+a held mode `ModeHeld` → `CanvasBlocked(ModeBusy)` (F4d); under
+suspension ConflictPending; under a busy gate Busy — the ladder's
+sentences, sheet and draft kept. A mode commit KEEPS the marks; a
+mode's own Installed completion does not touch them.
 
-**G8 — Undo of a bulk verb is one entry, spoken by its name.** §E's
-history seam: the inverse restores every node in one checkout, and
-`CanvasHistoryApplied` speaks the F9a-style name — `Undid delete
-⟨n⟩ cards.` after `Deleted ⟨n⟩ cards.` — the pair agreeing because
-both call `CountNoun` over the FFI.
+**G7 — Controls, the literal ladder, and the matrix (M6, F9's
+pattern).** Palette rows, labels byte-identical to mac (P3):
+`toggleMark` "Canvas: Toggle Mark" (Ctrl+Alt+M), `showMarks` "Canvas:
+Show Marked Cards", `clearMarks` "Canvas: Clear All Marks",
+`groupMarked` "Canvas: Group Marked Cards…", `deleteMarked` "Canvas:
+Delete Marked Cards"; and `colorMarked` "Canvas: Color Marked Cards…"
+— mac's `canvasColorMarked` has no caller (recorded divergence), so
+this row is Windows' front door onto the SetColor kind with the
+Marked target, its title carrying the projected count (GD-5). The
+context-menu Toggle Mark row goes LIVE with the seat rule of G1; its
+"arrives later" reason retires. THE LITERAL ORDERED LADDER every
+bulk verb answers, the shipped one (`CanvasMutationFunnel.cs:95–144`,
+frozen TE-5a): NotReady → RecoveryPending → ConflictPending →
+ModeHeld → Stale → Busy ‖ BusyAlreadyAnnounced → (post-acquire
+rechecks: ModeHeld, ConflictPending) → Admitted; ONLY THEN the
+projection and `NoMarks`. So an empty store under suspension says
+ConflictPending here where mac's pre-admission emptiness check says
+`No marks.` (recorded divergence). The remaining cells: Toggle with
+no or unresolvable selection → `NothingSelected`; list opening with
+an empty STORE → `NoMarks`; Jump's filtered and vanished rows per G4.
 
-**G9 — The journey.** The FlaUI marks journey: two cards authored by
-chord, both marked by Ctrl+Alt+M with the rows' `marked` state
-visible to UIA, the marks list opened (sheet + axe), Jump landing
-reader focus on the row, Delete Marked removing both in one action,
-Ctrl+Z restoring both.
+**G8 — History: one checkout of the single returned inverse, and
+marks are not history.** §E's seam applies the ONE inverse action
+the apply returned, and the effect is the verb's own: Delete's
+inverse restores the removed structure, Color's restores the prior
+colors, Group's removes the created group. `CanvasHistoryApplied(verb,
+name)` renders core's `Undid: ⟨name⟩` ‖ `Redid: ⟨name⟩` (vocabulary
+row) — so `Deleted ⟨n⟩ cards — Ctrl+Z to undo` (standard verbosity)
+is followed by `Undid: delete ⟨n⟩ cards`, the pair agreeing at ≥ 1000
+because the NAME was built by `CountNoun` over the FFI; host-composed
+history or delete prose is forbidden (0a). Marks and selection are
+NOT history: undo and redo never snapshot or replay them — after an
+undone Delete or Group the marks stay cleared, after an undone Color
+they stay live, and the selection is whatever live intent resolves
+after the checkout (mac's shape; GD-7).
+
+**G9 — Verification: the journey and the named facts.** The FlaUI
+marks journey — two cards authored by chord, both marked by
+Ctrl+Alt+M with the rows' `marked` state visible to UIA, the marks
+list opened (sheet + axe), Jump landing reader focus on the row,
+Delete Marked removing both in one action, Ctrl+Z restoring both —
+is the end-to-end leg; the tasks' fact tables carry a named fact for
+every G1–G8 row, every refusal and outcome cell, all three inverses,
+the mark-effect atomicity, the context seat, the store-versus-
+projection counts, the filtered and vanished Jump cells, and each
+recorded divergence's Windows side.
 
 ### Decisions
 
-- **GD-1.** The marks list is a kind of the TF-8 prompt sheet — one
-  modal membership, reused; the choices shape carries per-row
-  actions (Enter jumps, Delete unmarks) rather than per-row buttons.
-- **GD-2.** Delete Marked admits marked groups under the algebra's
-  one group removal (cards kept); the bulk sentence counts NODES.
-- **GD-3.** A null group frame speaks the FD-6 arm; mac's silence
-  is a recorded divergence assigned to the mac lane.
-- **GD-4.** Toggle Mark is a store write, never a funnel verb; it is
-  allowed during a held mode and during suspension.
+- **GD-1.** The marks list is a KIND of the TF-8 prompt sheet — one
+  modal membership, an exhaustive variant model with per-kind submit
+  arms and no default; keyed row actions (Enter jumps, Delete
+  unmarks) rather than per-row buttons.
+- **GD-2.** All three bulk targets and counts include marked groups;
+  `card[s]` denotes nodes; Delete removes a group by the algebra's
+  one removal (cards kept).
+- **GD-3.** A null group frame speaks the FD-6 arm; mac's silence is
+  a recorded divergence assigned to the mac lane.
+- **GD-4.** Store and focus actions are free under every mode state;
+  a captured holder is immutable; only entry reads the store.
 - **GD-5.** Color Marked lands with a Windows front door; mac's
   missing row is a recorded divergence assigned there.
+- **GD-6.** Jump onto a filtered-out row clears the filter (spoken)
+  and lands; mac's silent hidden-node select is a recorded
+  divergence.
+- **GD-7.** Marks carry a typed model-side effect applied with the
+  refreshed rows; history never replays marks or selection.
 
 ### Recorded divergences (mac, admitted — assigned, not imported)
 
 - mac's `canvasGroupMarked` is a silent no-op when no member
-  resolves (G5, GD-3); the Swift repair is the mac lane's.
-- mac's `canvasColorMarked` has no palette row or chord (G7, GD-5).
-- mac's marks list Jump seats selection without addressing reader
-  focus (G4 applies the IF-29 lesson); same assignment.
+  resolves (GD-3); the Swift repair is the mac lane's.
+- mac's `try?` also silences a thrown `canvasGroupRectAround`
+  (`:885–891`), and mac maps a thrown `canvasOrderNodes` to `[]` and
+  then `NoMarks` (`:545–546`); Windows speaks the FD-6 arm for both.
+- mac's `canvasColorMarked` has no palette row or chord (GD-5).
+- mac's marks list Jump calls `canvasSelect` with its default
+  ANNOUNCING behavior and addresses no reader focus
+  (`CanvasPromptSheet.swift:343–348`); Windows seats silently and
+  lands through A14.
+- mac's marks list row Unmark is silent (`:350–355`); Windows speaks
+  `CanvasMarkToggled(false, …)`.
+- mac's marks list names rows by `title`, not `SpeakableName`
+  (`:333–338`); the Windows list uses the unique name.
+- mac's marks list Jump selects a filtered-out node silently; Windows
+  clears the filter first (GD-6).
+- mac's `canvasPromptGroupMarked` checks store emptiness BEFORE
+  admission (`:916–922`); Windows admits first, so empty-plus-suspended
+  says ConflictPending here and `No marks.` there.
 
 ### Accepted risks
 
 - The marks list rides the prompt sheet's choices shape with keyed
-  actions; a per-row button layout is a later polish if UIA clients
+  actions; a per-row button layout is later polish if UIA clients
   prove to need it.
 - The journey budgets one launch for every leg, as §F's did.
+
+### Round 1 (revision 1 → revision 2) — thirty findings, each closed
+
+| Finding | Closed by |
+| --- | --- |
+| IG-1 store authority / idempotent Unmark | G1 (two document verbs over the store; `Unmark` idempotent) |
+| IG-2 unresolvable selection | G1 (absent OR unresolvable → NothingSelected, no mutation) |
+| IG-3 the read rule over-claimed | G2 (two read rules; membership/count/emptiness read the store) |
+| IG-4 store vs projected count | G2 (Toggle/Unmark/Clear speak the store; list and bulk speak the projection) |
+| IG-5 row naming | G4 (`SpeakableName + ", marked"`; divergence recorded) |
+| IG-6 Jump's focus seam | G4 (owner captured; A14 `RequestFocusLanding` survives closure; the surface delivers) |
+| IG-7 Jump's seat announces | G4 (silent seat, no `CanvasMovedTo`; divergence recorded) |
+| IG-8 silent row Unmark | G4 (`Unmark` → `CanvasMarkToggled(false, …)`; divergence recorded) |
+| IG-9 live projection / successor | G4 (rows keyed by id, live reprojection, next-else-previous) |
+| IG-10 store vs projection emptiness | G4 (admission on the store, rows on the projection) |
+| IG-11 vanished-row landing | G4 (A14's order; the FD-6 "jump" arm when even that fails) |
+| IG-12 filtered-row Jump | G4/GD-6 (clear the filter, spoken; divergence recorded) |
+| IG-13 prompt variants | G4/GD-1 (exhaustive kinds with targets; no default submit) |
+| IG-14 prompt lifecycle | G5's outcome table (no no-write arm closes the sheet; live-at-submit, immutable after) |
+| IG-15 snapshot timing | G5 (immutable snapshot at invocation or submit, projected in prepare) |
+| IG-16 atomic mark effect | G5/GD-7 (CanvasMarkEffect, applied with the refreshed rows, retained for recovery) |
+| IG-17 selection effect | G5 (`KeepSelection` for all three) |
+| IG-18 the literal ladder | G7 (published in order; NoMarks after admission; divergence recorded) |
+| IG-19 terminal outcomes | G5's table (every funnel arm) |
+| IG-20 thrown queries | G5 (FD-6 rows; two mac silences recorded) |
+| IG-21 CreateGroup shape | G5 (seven arguments spelled) |
+| IG-22 color representations | G5 (storage string for the op, typed `CanvasColor` for the event) |
+| IG-23 `CanvasFailedAction.CanvasAction` | G4/G5 (spelled everywhere) |
+| IG-24 mode/suspension cells | G6 (store and focus actions free; funnel actions answer the ladder; holder immutable) |
+| IG-25 context seat | G1 (every context consumer seats silently first) |
+| IG-26 groups in counts | G5/GD-2 (all three include groups; `card[s]` = nodes) |
+| IG-27 "restores every node" | G8 (one inverse; per-verb effect) |
+| IG-28 history render | G8 (`Undid: ⟨name⟩`; host prose forbidden) |
+| IG-29 marks and history | G8/GD-7 (never snapshotted or replayed) |
+| IG-30 verification | G9 (named facts per row and cell; the journey kept) |
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
