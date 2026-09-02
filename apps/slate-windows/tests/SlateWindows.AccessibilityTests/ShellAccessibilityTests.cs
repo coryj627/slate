@@ -6547,12 +6547,24 @@ public sealed class ShellAccessibilityTests
                 "Delete Marked never removed both cards");
 
             // ---- One undo restores both (G8) --------------------------
+            // Ctrl+Z is two chords split by a focus gate (canvas undo
+            // under the canvas, structural undo elsewhere). The deletion
+            // destroyed the focused row, so seat focus on the (now empty)
+            // outline tree deliberately — the modes journey seats a row
+            // before its chord for the same reason — rather than trust
+            // where the palette's close happened to leave it.
             WaitForElement(window, "CanvasEmptyOnboarding", TimeSpan.FromSeconds(10));
+            AutomationElement emptyTree = WaitForElement(
+                window, "CanvasOutlineTree", TimeSpan.FromSeconds(10));
             window.SetForeground();
+            emptyTree.Focus();
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
             Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_Z);
             Assert.True(
                 SpinWait.SpinUntil(() => Rows().Length == 2, TimeSpan.FromSeconds(10)),
-                "Ctrl+Z never restored both cards");
+                "Ctrl+Z never restored both cards; rows: " + Rows().Length
+                + "; app log tail: "
+                + ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log")));
         }
         finally
         {

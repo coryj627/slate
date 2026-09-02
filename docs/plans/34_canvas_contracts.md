@@ -10267,6 +10267,17 @@ Enter go through `PressKey` (type and settle) instead of
 and in the runner's order (the visual-board journey, then the marks
 journey), both green.
 
+The re-run of the same head got past every marks leg and lost the
+last: "Ctrl+Z never restored both cards". Ctrl+Z is two chords split
+by a focus gate — structural undo while the files tree holds keyboard
+focus, canvas undo under the canvas — and Delete Marked destroys the
+row the palette's close would restore focus to, so on a slower runner
+the chord could land in the files tree and undo nothing the canvas
+could see. The journey now seats focus on the (empty) outline tree
+before the chord, as the modes journey seats a row before its own,
+and says the row count and the app log tail on a miss. Validated
+locally alone and in the runner's order (table, visual, then marks).
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same
