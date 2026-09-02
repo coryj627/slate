@@ -278,6 +278,18 @@ internal static class ChordTable
         public const string CanvasFollowConnectionBack =
             "slate.canvas.followConnectionBack";
         public const string CanvasTracePath = "slate.canvas.tracePath";
+        public const string CanvasToggleMark = "slate.canvas.toggleMark";
+
+        public const string CanvasClearMarks = "slate.canvas.clearMarks";
+
+        public const string CanvasShowMarks = "slate.canvas.showMarks";
+
+        public const string CanvasGroupMarked = "slate.canvas.groupMarked";
+
+        public const string CanvasDeleteMarked = "slate.canvas.deleteMarked";
+
+        public const string CanvasColorMarked = "slate.canvas.colorMarked";
+
         public const string CanvasConnectTo = "slate.canvas.connectTo";
 
         public const string CanvasConnectMode = "slate.canvas.connectMode";
@@ -994,6 +1006,25 @@ internal static class ChordTable
                 "Draw a connection from the selected card to a card you pick, "
                 + "with an optional label.",
                 "⌃⌘C", "Ctrl+Alt+C", ChordScope.Canvas),
+            // §G TG-0 (G7): the mark verbs' front doors, labels
+            // byte-identical to mac (P3). Ctrl+Alt+M is mac's ⌃⌘M in
+            // FD-3's family; Clear All has no chord, as mac allocates it.
+            Reg(Ids.CanvasToggleMark, "Canvas: Toggle Mark", CommandSection.Canvas,
+                "Mark or unmark the selected card. Bulk actions apply to every "
+                + "marked card at once.",
+                "⌃⌘M", "Ctrl+Alt+M", ChordScope.Canvas),
+            Reg(Ids.CanvasShowMarks, "Canvas: Show Marked Cards", CommandSection.Canvas,
+                "Open the marks list: jump to or unmark any marked card."),
+            Reg(Ids.CanvasGroupMarked, "Canvas: Group Marked Cards…", CommandSection.Canvas,
+                "Wrap the marked cards in a new labeled group - one action, one undo."),
+            Reg(Ids.CanvasDeleteMarked, "Canvas: Delete Marked Cards", CommandSection.Canvas,
+                "Delete every marked card and its connections - one summary, one undo."),
+            // §G TG-4 (GD-5): mac's verb has no front door; this row is
+            // Windows' — a recorded divergence assigned to the mac lane.
+            Reg(Ids.CanvasColorMarked, "Canvas: Color Marked Cards…", CommandSection.Canvas,
+                "Set every marked card's color at once - one action, one undo."),
+            Reg(Ids.CanvasClearMarks, "Canvas: Clear All Marks", CommandSection.Canvas,
+                "Unmark every marked card."),
             Reg(Ids.CanvasConnectMode, "Canvas: Connect Mode", CommandSection.Canvas,
                 "Remember the selected card, navigate to a target with the "
                 + "usual movements, press Return to connect."),

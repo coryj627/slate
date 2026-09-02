@@ -199,6 +199,7 @@ internal sealed class CanvasNavigator
         AddChord(Key.G, ModifierKeys.Control | ModifierKeys.Alt, MoveModeFromKey);
         AddChord(Key.R, ModifierKeys.Control | ModifierKeys.Alt, CommitOrEnterResizeFromKey);
         AddChord(Key.C, ModifierKeys.Control | ModifierKeys.Alt, ConnectToFromKey);
+        AddChord(Key.M, ModifierKeys.Control | ModifierKeys.Alt, ToggleMarkFromKey);
         AddChord(Key.Z, ModifierKeys.Control, UndoFromKey);
         AddChord(Key.Y, ModifierKeys.Control, RedoFromKey);
         // The viewport chords (§D D14). Zoom rides Ctrl and answers
@@ -240,6 +241,14 @@ internal sealed class CanvasNavigator
     private bool MoveModeFromKey()
     {
         _ = EnterMoveMode();
+        return true;
+    }
+
+    /// <summary>§G TG-0 (G1): Ctrl+Alt+M — mac's ⌃⌘M in FD-3's family;
+    /// the document owns every refusal, the key only relays.</summary>
+    private bool ToggleMarkFromKey()
+    {
+        _document.ToggleMark();
         return true;
     }
 
@@ -368,9 +377,11 @@ internal sealed class CanvasNavigator
                     _document.Modes.AbandonPendingCommit();
                     break;
                 case CanvasOperationOutcome.RefusedPrepare:
+                case CanvasOperationOutcome.ApplyRefused:
                     _document.Modes.ResolveCommit(
                         operation.Id, CanvasModeCommitResult.Refused());
                     break;
+                case CanvasOperationOutcome.DisplacedBeforeApply:
                 case CanvasOperationOutcome.Displaced:
                     // IF-2's arbiter rule, as in the transient
                     // completion (review round 1).
@@ -735,9 +746,11 @@ internal sealed class CanvasNavigator
                     _document.Modes.AbandonPendingCommit();
                     break;
                 case CanvasOperationOutcome.RefusedPrepare:
+                case CanvasOperationOutcome.ApplyRefused:
                     _document.Modes.ResolveCommit(
                         operation.Id, CanvasModeCommitResult.Refused());
                     break;
+                case CanvasOperationOutcome.DisplacedBeforeApply:
                 case CanvasOperationOutcome.Displaced:
                     // The completion is the one arbiter while pending
                     // (IF-2) — the F1a watcher stood down, so the

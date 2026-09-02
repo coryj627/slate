@@ -72,14 +72,21 @@ internal sealed partial class WorkspaceViewModel
             document.ConnectPromptRequested += stage =>
             {
                 CanvasCardPickerSheet = null;
-                CanvasPromptSheet =
-                    CanvasPromptViewModel.ConnectLabel(document, stage);
+                _ = TryPresentCanvasPrompt(
+                    CanvasPromptViewModel.ConnectLabel(document, stage));
             };
             document.GroupRenameRequested += (groupId, current) =>
-                CanvasPromptSheet =
-                    CanvasPromptViewModel.RenameGroup(document, groupId, current);
+                _ = TryPresentCanvasPrompt(
+                    CanvasPromptViewModel.RenameGroup(document, groupId, current));
             document.SetColorRequested += () =>
-                CanvasPromptSheet = CanvasPromptViewModel.SetColor(document);
+                _ = TryPresentCanvasPrompt(CanvasPromptViewModel.SetColor(document));
+            document.GroupMarkedRequested += () =>
+                _ = TryPresentCanvasPrompt(CanvasPromptViewModel.GroupMarked(document));
+            document.ColorMarkedRequested += () =>
+                _ = TryPresentCanvasPrompt(CanvasPromptViewModel.SetColorMarked(document));
+            document.MarksListRequested += owner =>
+                _ = TryPresentCanvasPrompt(
+                    CanvasPromptViewModel.MarksList(document, owner, CloseCanvasPromptIfCurrent));
             _canvasDocuments[key] = document;
             InstallCanvasDocumentSeams(document);
             document.Load();
@@ -375,19 +382,86 @@ internal sealed partial class WorkspaceViewModel
     public CanvasPromptViewModel? CanvasPromptSheet
     {
         get => _canvasPromptSheet;
-        private set => SetField(ref _canvasPromptSheet, value);
+        private set
+        {
+            CanvasPromptViewModel? was = _canvasPromptSheet;
+            if (SetField(ref _canvasPromptSheet, value))
+            {
+                // §G TG-2: the one place a sheet stops being current,
+                // however it closed — a live variant unsubscribes here.
+                was?.Closed();
+            }
+        }
     }
+
+    /// <summary>§G TG-2 (G4): Delete on the marks list unmarks the
+    /// active row; on any other prompt the key means nothing.</summary>
+    public void DeleteOnCanvasPrompt() =>
+        (CanvasPromptSheet as CanvasMarksListPrompt)?.UnmarkActive();
+
+    /// <summary>§G TG-2 (G3/G4): the marks list's Clear control — G3's
+    /// verb, then the sheet closes with the emptied store.</summary>
+    public void ClearMarksFromCanvasPrompt()
+    {
+        if (CanvasPromptSheet is CanvasMarksListPrompt && ActiveCanvasDocument is { } document)
+        {
+            document.ClearMarks();
+        }
+    }
+
+    public System.Windows.Input.ICommand CanvasPromptClearMarksCommand =>
+        _canvasPromptClearMarksCommand ??= new RelayCommand(
+            _ => ClearMarksFromCanvasPrompt(),
+            _ => CanvasPromptSheet is CanvasMarksListPrompt);
+
+    private RelayCommand? _canvasPromptClearMarksCommand;
 
     public void CloseCanvasPrompt() => CanvasPromptSheet = null;
 
-    /// <summary>Enter's arm on the prompt sheet: submit through the
-    /// shipped verb, then close — the verbs own every refusal and the
-    /// stage is immutable either way.</summary>
+    /// <summary>§G TG-1 (IG-38): a prompt opens only when none is up
+    /// — re-entrant opening is REFUSED, never an overwrite that a
+    /// stale completion could later close. Unreachable from the
+    /// surfaces (the sheet owns the keys and the palette refuses
+    /// beneath it); the guard makes the programmatic path honest.</summary>
+    internal bool TryPresentCanvasPrompt(CanvasPromptViewModel sheet)
+    {
+        ArgumentNullException.ThrowIfNull(sheet);
+        if (CanvasPromptSheet is not null)
+        {
+            return false;
+        }
+        CanvasPromptSheet = sheet;
+        return true;
+    }
+
+    /// <summary>Enter's arm on the prompt sheet (§G TG-1, IG-38): the
+    /// sheet closes on the submit's RESULT — Completed now, Pending
+    /// when its exact operation LANDS (the completion marshals home
+    /// and closes only if this sheet is still the current one), and
+    /// never on Refused, which keeps the sheet and its draft.</summary>
     public void SubmitCanvasPrompt()
     {
-        if (CanvasPromptSheet is { } sheet)
+        if (CanvasPromptSheet is not { } sheet)
         {
-            sheet.Submit();
+            return;
+        }
+        // The landing marshals HOME: the completion runs on the
+        // funnel's worker (the TF-11 lesson), and the sheet is a UI
+        // property — the submitting thread is the dispatcher to post to.
+        System.Windows.Threading.Dispatcher home =
+            System.Windows.Threading.Dispatcher.CurrentDispatcher;
+        CanvasPromptSubmit result = sheet.Submit(
+            () => home.BeginInvoke(() => CloseCanvasPromptIfCurrent(sheet)));
+        if (result == CanvasPromptSubmit.Completed)
+        {
+            CanvasPromptSheet = null;
+        }
+    }
+
+    private void CloseCanvasPromptIfCurrent(CanvasPromptViewModel sheet)
+    {
+        if (ReferenceEquals(CanvasPromptSheet, sheet))
+        {
             CanvasPromptSheet = null;
         }
     }
@@ -442,6 +516,18 @@ internal sealed partial class WorkspaceViewModel
     private RelayCommand? _canvasConnectToCommand;
 
     private RelayCommand? _canvasConnectModeCommand;
+
+    private RelayCommand? _canvasToggleMarkCommand;
+
+    private RelayCommand? _canvasDeleteMarkedCommand;
+
+    private RelayCommand? _canvasGroupMarkedCommand;
+
+    private RelayCommand? _canvasColorMarkedCommand;
+
+    private RelayCommand? _canvasShowMarksCommand;
+
+    private RelayCommand? _canvasClearMarksCommand;
 
     private RelayCommand? _canvasPlaceRightOfCommand;
 
@@ -522,8 +608,35 @@ internal sealed partial class WorkspaceViewModel
         _canvasWhereAmICommand ??= NavigatorCommand(
             navigator => navigator.WhereAmI());
 
-    /// <summary>§F TF-7 (F5/F6): the picker-opening verbs — the
-    /// document owns every refusal and the request.</summary>
+    /// <summary>§G TG-2 (G7): Show Marked Cards — the owner is the
+    /// active tab, the object the A14 landing is addressed to.</summary>
+    public System.Windows.Input.ICommand CanvasShowMarksCommand =>
+        _canvasShowMarksCommand ??= new RelayCommand(
+            _ =>
+            {
+                if (ActiveCanvasDocument is { } document
+                    && ActiveGroup.ActiveTab is { } tab)
+                {
+                    document.OpenMarksList(tab);
+                }
+            },
+            _ => ActiveCanvasDocument is not null);
+
+    public System.Windows.Input.ICommand CanvasGroupMarkedCommand =>
+        _canvasGroupMarkedCommand ??= DocumentCommand(document => document.RequestGroupMarked());
+
+    public System.Windows.Input.ICommand CanvasDeleteMarkedCommand =>
+        _canvasDeleteMarkedCommand ??= DocumentCommand(document => document.CanvasDeleteMarked());
+
+    public System.Windows.Input.ICommand CanvasColorMarkedCommand =>
+        _canvasColorMarkedCommand ??= DocumentCommand(document => document.RequestColorMarked());
+
+    public System.Windows.Input.ICommand CanvasToggleMarkCommand =>
+        _canvasToggleMarkCommand ??= DocumentCommand(document => document.ToggleMark());
+
+    public System.Windows.Input.ICommand CanvasClearMarksCommand =>
+        _canvasClearMarksCommand ??= DocumentCommand(document => document.ClearMarks());
+
     public System.Windows.Input.ICommand CanvasConnectModeCommand =>
         _canvasConnectModeCommand ??= NavigatorCommand(
             navigator => navigator.EnterConnectMode());
@@ -532,6 +645,8 @@ internal sealed partial class WorkspaceViewModel
         _canvasConnectToCommand ??= DocumentCommand(
             document => document.OpenCardPicker(CanvasCardPickerPurpose.ConnectTo));
 
+    /// <summary>§F TF-7 (F5/F6): the picker-opening verbs — the
+    /// document owns every refusal and the request.</summary>
     public System.Windows.Input.ICommand CanvasPlaceBelowCommand =>
         _canvasPlaceBelowCommand ??= DocumentCommand(
             document => document.OpenCardPicker(CanvasCardPickerPurpose.PlaceBelow));

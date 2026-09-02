@@ -274,7 +274,7 @@ public sealed class ContractsCitationCensus
             (
                 "F",
                 "## PR F — move and resize modes, structural placement, and the connect flow",
-                "## §W-G canonical-consumption audit",
+                "## PR G — marks: mark-then-act, the marks list, and the bulk verbs",
                 // The length pin guards marker movement; a young
                 // section pins below its honest size and rises with
                 // its records, as §E's did. TF-3's record took
@@ -352,6 +352,55 @@ public sealed class ContractsCitationCensus
                 // 80 sits above the pre-task population of 80
                 // — a twelfth time.
                 80),
+            (
+                "G",
+                "## PR G — marks: mark-then-act, the marks list, and the bulk verbs",
+                "## §W-G canonical-consumption audit",
+                // A young section pins below its honest size and
+                // rises with its records, as §F's did.
+                6_000,
+                // A DESIGN floor, the standing convention: revision 1's
+                // citations are EXISTING names (the selection store, the
+                // funnel, the prompt kinds, the FFI shapes); 4 sits
+                // above the empty pre-section population and below the
+                // landed count; each task raises it. Revision 2's
+                // thirty closures cited the shipped seams by name,
+                // lifting the pre-task population to 13.
+                //
+                // TG-0 bound the mark verbs and the apply-side seed,
+                // taking the section to 20; 18 sits above the
+                // pre-task population of 18 — a first time.
+                //
+                // TG-1 bound the prompt hierarchy and the landing,
+                // taking the section to 22; 20 sits above the
+                // pre-task population of 20 — a second time.
+                //
+                // TG-2 bound the marks list and its landing, taking
+                // the section to 25; 23 sits above the pre-task
+                // population of 22 — a third time.
+                //
+                // TG-3 bound the epochs, the effect plan and the split
+                // outcomes, taking the section to 32; 30 sits
+                // above the pre-task population of 25 — a fourth
+                // time.
+                //
+                // TG-4 bound the bulk frame and the marked color target,
+                // taking the section to 35; 33 sits above the
+                // pre-task population of 32 — a fifth time.
+                //
+                // TG-5 bound the group verb and its prompt, taking the
+                // section to 40; 38 sits above the pre-task
+                // population of 35 — a sixth time.
+                //
+                // TG-6 bound the mode and history cells, taking the
+                // section to 42; 41 sits above the pre-task
+                // population of 40 — a seventh time.
+                //
+                // TG-7 bound the journey and the outline's in-place
+                // status refresh, taking the section to 46; 45 sits
+                // above the pre-task population of 42 — an eighth
+                // time.
+                45),
         ];
 
     public static TheoryData<string, string, string> SectionRanges
@@ -1014,6 +1063,10 @@ public sealed class ContractsCitationCensus
         (
             "§F",
             "## PR F — move and resize modes, structural placement, and the connect flow",
+            "## PR G — marks: mark-then-act, the marks list, and the bulk verbs"),
+        (
+            "§G",
+            "## PR G — marks: mark-then-act, the marks list, and the bulk verbs",
             "## §W-G canonical-consumption audit"),
         (
             "divergences",

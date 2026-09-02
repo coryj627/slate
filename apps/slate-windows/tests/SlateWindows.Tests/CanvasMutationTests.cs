@@ -287,6 +287,567 @@ public sealed class CanvasMutationTests : IDisposable
         document.Shutdown();
     }
 
+    /// <summary>§G TG-6 (G6/GD-4): a mark write during a held mode is
+    /// FREE and never alters the holder — the captured set stands,
+    /// cancel leaves the marks alone, and only the next entry reads
+    /// the new set.</summary>
+    [Fact]
+    public void MarkWritesDuringAHeldModeNeverAlterTheHolder()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        document.ToggleMark();
+        document.SeatSelectionSilently("grp");
+        document.ToggleMark();
+        document.Navigator.AttachPresenter(new FakePane());
+        Assert.True(document.Navigator.EnterMoveMode());
+        Assert.Equal(2, document.Transient!.Ids.Length);
+
+        document.SeatSelectionSilently("blocker");
+        document.ToggleMark();
+
+        Assert.Equal(3, document.AppliedPublication!.MarkedIntent.Count);
+        Assert.Equal(2, document.Transient!.Ids.Length);
+        Assert.True(document.Modes.Cancel());
+        Assert.Equal(3, document.AppliedPublication!.MarkedIntent.Count);
+        Assert.True(document.Navigator.EnterMoveMode());
+        Assert.Equal(3, document.Transient!.Ids.Length);
+        Assert.True(document.Modes.Cancel());
+        document.Shutdown();
+    }
+
+    /// <summary>§G TG-6 (G6, F4d): a bulk verb under a held mode is a
+    /// funnel verb — ModeHeld, the ModeBusy sentence, nothing written,
+    /// the marks and the mode standing.</summary>
+    [Fact]
+    public void BulkVerbsDuringAHeldModeRefuseModeHeld()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        document.ToggleMark();
+        document.Navigator.AttachPresenter(new FakePane());
+        Assert.True(document.Navigator.EnterMoveMode());
+        string before = DiskBytes();
+        _announced.Clear();
+
+        document.CanvasDeleteMarked();
+
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            x => x.Text.Contains("in progress", StringComparison.Ordinal));
+        Assert.Equal(before, DiskBytes());
+        Assert.Contains("a", document.AppliedPublication!.MarkedIntent);
+        Assert.True(document.Modes.IsActive);
+        Assert.True(document.Modes.Cancel());
+        document.Shutdown();
+    }
+
+    /// <summary>§G TG-6 (G6, TF-10's column): under suspension a bulk
+    /// verb answers the ladder's ConflictPending — the conflict
+    /// sentence, nothing written.</summary>
+    [Fact]
+    public void BulkVerbsUnderSuspensionAnswerTheConflictSentence()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        document.ToggleMark();
+        document.Navigator.AttachPresenter(new FakePane());
+        Assert.True(document.Navigator.EnterMoveMode());
+        Assert.True(document.Navigator.ModeStep(1, 0, large: false));
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "board.canvas"),
+            DiskBytes() + "\n");
+        Assert.False(document.Modes.Commit());
+        Assert.True(document.Funnel.ModeSuspended);
+        string before = DiskBytes();
+        _announced.Clear();
+
+        document.CanvasDeleteMarked();
+
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            x => x.Text.Contains("changed on disk", StringComparison.Ordinal));
+        Assert.Equal(before, DiskBytes());
+        Assert.True(document.Modes.Cancel());
+        document.Shutdown();
+    }
+
+    /// <summary>§G TG-6 (G6): a mode commit KEEPS the marks — the
+    /// moving set survives its own move.</summary>
+    [Fact]
+    public void AModeCommitKeepsTheMarks()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        document.ToggleMark();
+        document.SeatSelectionSilently("grp");
+        document.ToggleMark();
+        document.Navigator.AttachPresenter(new FakePane());
+        Assert.True(document.Navigator.EnterMoveMode());
+        Assert.True(document.Navigator.ModeStep(1, 0, large: false));
+
+        Assert.True(document.Modes.Commit());
+
+        Assert.False(document.Modes.IsActive);
+        Assert.Equal(2, document.AppliedPublication!.MarkedIntent.Count);
+        document.Shutdown();
+    }
+
+    /// <summary>§G TG-6 (G8/GD-7): undo of a bulk verb speaks core's
+    /// render verbatim and applies the one inverse — colors restored,
+    /// a created group removed — while the marks are NOT history.</summary>
+    [Fact]
+    public void UndoOfABulkVerbSpeaksCoresRenderAndRestores()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        document.ToggleMark();
+        document.SeatSelectionSilently("blocker");
+        document.ToggleMark();
+        document.CanvasColorMarked("2");
+        _announced.Clear();
+
+        document.CanvasUndo();
+
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            x => x.Text.Contains("Undid: color 2 cards", StringComparison.Ordinal));
+        CanvasPopulation restored = document.AppliedPublication!.Loaded!.Population;
+        Assert.Null(restored.SceneByNode["a"].Color);
+        Assert.Equal(2, document.AppliedPublication!.MarkedIntent.Count);
+
+        var prompt = (CanvasGroupMarkedPrompt)CanvasPromptViewModel.GroupMarked(document);
+        prompt.Draft = "Bundle";
+        Assert.Equal(CanvasPromptSubmit.Pending, prompt.Submit(() => { }));
+        Assert.Empty(document.AppliedPublication!.MarkedIntent);
+        _announced.Clear();
+
+        document.CanvasUndo();
+
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            x => x.Text.Contains("Undid: group 2 cards", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            document.AppliedPublication!.Loaded!.Population.SceneNodes,
+            n => n.Kind == "group" && n.Title == "Bundle");
+        Assert.Empty(document.AppliedPublication!.MarkedIntent);
+        document.Shutdown();
+    }
+
+    /// <summary>§G TG-5 (G5/IG-21): Group Marked wraps the set in ONE
+    /// group at core's padded frame — every CreateGroup argument from
+    /// the returned rect — named by CountNoun, the captured marks
+    /// leaving with the refreshed rows, the sentence naming the label.</summary>
+    [Fact]
+    public void GroupMarkedWrapsTheSetInOneGroup()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        document.ToggleMark();
+        document.SeatSelectionSilently("blocker");
+        document.ToggleMark();
+        CanvasPopulation before = document.AppliedPublication!.Loaded!.Population;
+        CanvasSceneNode a = before.SceneByNode["a"];
+        CanvasSceneNode blocker = before.SceneByNode["blocker"];
+        var prompt = (CanvasGroupMarkedPrompt)CanvasPromptViewModel.GroupMarked(document);
+        prompt.Draft = "Bundle";
+
+        Assert.Equal(CanvasPromptSubmit.Pending, prompt.Submit(() => { }));
+
+        CanvasPopulation after = document.AppliedPublication!.Loaded!.Population;
+        CanvasSceneNode group = Assert.Single(
+            after.SceneNodes, n => n.Kind == "group" && n.Title == "Bundle");
+        Assert.True(group.X <= Math.Min(a.X, blocker.X));
+        Assert.True(group.Y <= Math.Min(a.Y, blocker.Y));
+        Assert.True(group.X + group.Width >= Math.Max(a.X + a.Width, blocker.X + blocker.Width));
+        Assert.True(group.Y + group.Height >= Math.Max(a.Y + a.Height, blocker.Y + blocker.Height));
+        Assert.Equal("group 2 cards", document.UndoStack.OfferedUndo!.Name);
+        Assert.Empty(document.AppliedPublication!.MarkedIntent);
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            x => x.Text.Contains("Grouped 2 cards", StringComparison.Ordinal)
+                && x.Text.Contains("Bundle", StringComparison.Ordinal));
+        document.Shutdown();
+    }
+
+    /// <summary>§G TG-5 (G5): an empty label is an UNLABELED group —
+    /// null on disk, "Untitled" in the sentence.</summary>
+    [Fact]
+    public void AnEmptyLabelMeansAnUnlabeledGroup()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        document.ToggleMark();
+        var prompt = (CanvasGroupMarkedPrompt)CanvasPromptViewModel.GroupMarked(document);
+
+        Assert.Equal(CanvasPromptSubmit.Pending, prompt.Submit(() => { }));
+
+        string disk = DiskBytes().Replace(" ", "").Replace("\t", "");
+        Assert.DoesNotContain("\"label\":\"\"", disk);
+        CanvasPopulation after = document.AppliedPublication!.Loaded!.Population;
+        Assert.Contains(after.SceneNodes, n => n.Kind == "group" && n.NodeId != "grp" && n.NodeId != "cramped");
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            x => x.Text.Contains("Untitled", StringComparison.Ordinal));
+        document.Shutdown();
+    }
+
+    /// <summary>§G TG-5 (G7): the front door refuses NoMarks on an
+    /// empty store and opens nothing.</summary>
+    [Fact]
+    public void GroupMarkedRefusesAtTheDoorWithoutMarks()
+    {
+        CanvasDocumentViewModel document = Open();
+        bool requested = false;
+        document.GroupMarkedRequested += () => requested = true;
+
+        document.RequestGroupMarked();
+
+        Assert.False(requested);
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            x => x.Text.Contains("No marks", StringComparison.Ordinal));
+        document.Shutdown();
+    }
+
+    /// <summary>§G TG-4 (G5/GD-2/G8): Delete Marked is ONE action over
+    /// the reading-ordered set — a marked group goes by the algebra's
+    /// one removal — named by CountNoun, the captured marks removed
+    /// with the refreshed rows, the selection dropped by resolution;
+    /// one undo restores the structure and the marks stay cleared
+    /// (marks are not history).</summary>
+    [Fact]
+    public void DeleteMarkedIsOneActionAndUndoRestoresIt()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        document.ToggleMark();
+        document.SeatSelectionSilently("grp");
+        document.ToggleMark();
+        string before = DiskBytes();
+
+        document.CanvasDeleteMarked();
+
+        string after = DiskBytes();
+        Assert.DoesNotContain("\"id\":\"a\"", after.Replace(" ", ""));
+        Assert.DoesNotContain("\"id\":\"grp\"", after.Replace(" ", ""));
+        Assert.Equal("delete 2 cards", document.UndoStack.OfferedUndo!.Name);
+        Assert.Empty(document.AppliedPublication!.MarkedIntent);
+        Assert.Null(document.Selection.Selected);
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            x => x.Text.Contains("Deleted 2 cards", StringComparison.Ordinal));
+
+        document.CanvasUndo();
+        Assert.Contains("\"id\":\"a\"", DiskBytes().Replace(" ", ""));
+        Assert.Contains("\"id\":\"grp\"", DiskBytes().Replace(" ", ""));
+        Assert.Empty(document.AppliedPublication!.MarkedIntent);
+        Assert.NotEqual(before, after);
+        document.Shutdown();
+    }
+
+    /// <summary>§G TG-4 (G5): Color Marked colors every marked node in
+    /// one action and KEEPS the marks; the typed color speaks.</summary>
+    [Fact]
+    public void ColorMarkedKeepsTheMarks()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        document.ToggleMark();
+        document.SeatSelectionSilently("blocker");
+        document.ToggleMark();
+
+        document.CanvasColorMarked("2");
+
+        // Typed, per node - the fixture's edge e1 carries color 2 too,
+        // so a byte count would read three.
+        CanvasPopulation population = document.AppliedPublication!.Loaded!.Population;
+        Assert.Equal("2", population.SceneByNode["a"].Color);
+        Assert.Equal("2", population.SceneByNode["blocker"].Color);
+        Assert.Equal("color 2 cards", document.UndoStack.OfferedUndo!.Name);
+        Assert.Equal(2, document.AppliedPublication!.MarkedIntent.Count);
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            x => x.Text.Contains("Set 2 cards", StringComparison.Ordinal));
+        document.Shutdown();
+    }
+
+    /// <summary>§G TG-4 (G5/G7): an EMPTY projection — the store holds
+    /// only a ghost — refuses NoMarks after admission, under the gate;
+    /// nothing writes and the ghost stays.</summary>
+    [Fact]
+    public void AnEmptyProjectionRefusesNoMarksAfterAdmission()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("essay");
+        document.ToggleMark();
+        document.CanvasDeleteSelection();
+        Assert.Contains("essay", document.AppliedPublication!.MarkedIntent);
+        string before = DiskBytes();
+        CanvasHistoryEntry? offered = document.UndoStack.OfferedUndo;
+        _announced.Clear();
+
+        document.CanvasDeleteMarked();
+
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            x => x.Text.Contains("No marks", StringComparison.Ordinal));
+        Assert.Equal(before, DiskBytes());
+        Assert.Same(offered, document.UndoStack.OfferedUndo);
+        Assert.Contains("essay", document.AppliedPublication!.MarkedIntent);
+        document.Shutdown();
+    }
+
+    /// <summary>§G TG-4 (GD-5, IG-55): the Color Marked prompt carries
+    /// NO count in its title and routes its choice to the bulk verb.</summary>
+    [Fact]
+    public void TheColorMarkedPromptRoutesToTheBulkVerbWithoutACount()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        document.ToggleMark();
+        var prompt = (CanvasSetColorPrompt)CanvasPromptViewModel.SetColorMarked(document);
+        Assert.True(prompt.Marked);
+        Assert.DoesNotContain(prompt.Title, char.IsDigit);
+
+        prompt.SelectedChoice = prompt.Choices[2];
+        Assert.Equal(CanvasPromptSubmit.Pending, prompt.Submit(() => { }));
+
+        Assert.Contains("\"color\":\"3\"", DiskBytes().Replace(" ", "").Replace("\t", ""));
+        Assert.Contains("a", document.AppliedPublication!.MarkedIntent);
+        document.Shutdown();
+    }
+
+    /// <summary>§G TG-3 (GD-7/IG-16): the mark effect lands in the SAME
+    /// publication as the refreshed rows — the one that carries the
+    /// write's new geometry already carries the removed marks — and
+    /// applies once.</summary>
+    [Fact]
+    public void TheMarkEffectAppliesWithTheRefreshedRows()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        document.ToggleMark();
+        document.SeatSelectionSilently("grp");
+        document.ToggleMark();
+        CanvasPublication before = document.AppliedPublication!;
+        Assert.Equal(2, before.MarkedIntent.Count);
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId("color captured"),
+            document,
+            "a",
+            before.Loaded!,
+            CanvasMutationEffect.KeepSelection,
+            markEffect: CanvasMarkEffect.RemoveCaptured,
+            capturedMarks: before.MarkEpochs);
+        CanvasPublication? carrier = null;
+        document.PublicationApplied += applied =>
+        {
+            if (carrier is null && !ReferenceEquals(applied.Loaded, before.Loaded))
+            {
+                carrier = applied;
+            }
+        };
+
+        Assert.Equal(
+            CanvasMutationAdmission.Admitted,
+            document.Funnel.Apply(
+                operation,
+                _ => new CanvasAction("color", [new CanvasOp.SetNodeColor("a", "2")]),
+                "color"));
+
+        Assert.NotNull(carrier);
+        Assert.Empty(carrier!.MarkedIntent);
+        Assert.Empty(document.Selection.Marked);
+        Assert.True(operation.MarkEffectApplied);
+        document.Shutdown();
+    }
+
+    /// <summary>§G TG-3 (IG-45): epochs — an id unmarked and RE-MARKED
+    /// after the capture is a newer write and survives RemoveCaptured;
+    /// the untouched captured id leaves.</summary>
+    [Fact]
+    public void ARemarkedIdSurvivesRemoveCaptured()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        document.ToggleMark();
+        document.SeatSelectionSilently("grp");
+        document.ToggleMark();
+        CanvasPublication captured = document.AppliedPublication!;
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId("color captured"),
+            document,
+            "a",
+            captured.Loaded!,
+            CanvasMutationEffect.KeepSelection,
+            markEffect: CanvasMarkEffect.RemoveCaptured,
+            capturedMarks: captured.MarkEpochs);
+
+        // A later local write: "a" unmarked and marked again — a new epoch.
+        _ = document.Unmark("a");
+        document.SeatSelectionSilently("a");
+        document.ToggleMark();
+        Assert.NotEqual(captured.MarkEpochs["a"], document.AppliedPublication!.MarkEpochs["a"]);
+
+        // The basis moved with those publishes? No — mark publishes keep
+        // the loaded triple (IF-1), so the operation is still current.
+        Assert.Equal(
+            CanvasMutationAdmission.Admitted,
+            document.Funnel.Apply(
+                operation,
+                _ => new CanvasAction("color", [new CanvasOp.SetNodeColor("a", "3")]),
+                "color"));
+
+        Assert.True(document.Selection.IsMarked("a"));
+        Assert.False(document.Selection.IsMarked("grp"));
+        document.Shutdown();
+    }
+
+    /// <summary>§G TG-0 (G1, IG-31): Toggle Mark transforms the ONE
+    /// authority — the publication's marked intent — the mirror
+    /// follows in the apply, and the sentence speaks the store's count
+    /// after the write, both ways.</summary>
+    [Fact]
+    public void ToggleMarkPublishesTheAuthorityAndSpeaksTheLiveCount()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+
+        document.ToggleMark();
+
+        Assert.Contains("a", document.AppliedPublication!.MarkedIntent);
+        Assert.True(document.Selection.IsMarked("a"));
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            x => x.Text.Contains("Marked \"Alpha\"", StringComparison.Ordinal)
+                && x.Text.Contains("1 marked", StringComparison.Ordinal));
+
+        _announced.Clear();
+        document.ToggleMark();
+
+        Assert.DoesNotContain("a", document.AppliedPublication!.MarkedIntent);
+        Assert.False(document.Selection.IsMarked("a"));
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            x => x.Text.Contains("Unmarked \"Alpha\"", StringComparison.Ordinal)
+                && x.Text.Contains("0 marked", StringComparison.Ordinal));
+        document.Shutdown();
+    }
+
+    /// <summary>§G TG-0 (IG-35): the order — a plainly absent selection
+    /// refuses NothingSelected, and so does an id the admitted
+    /// population cannot resolve; nothing publishes either way.</summary>
+    [Fact]
+    public void TheOrderIsSelectionThenAdmissionThenResolution()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SelectNode(null, announce: false);
+
+        document.ToggleMark();
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            x => x.Text.Contains("Nothing selected", StringComparison.OrdinalIgnoreCase));
+        Assert.Empty(document.AppliedPublication!.MarkedIntent);
+
+        _announced.Clear();
+        document.SeatSelectionSilently("never-existed");
+        document.ToggleMark();
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            x => x.Text.Contains("Nothing selected", StringComparison.OrdinalIgnoreCase));
+        Assert.Empty(document.AppliedPublication!.MarkedIntent);
+        document.Shutdown();
+    }
+
+    /// <summary>§G TG-0 (IG-34): Unmark resolves ONLY its explicit id —
+    /// the selection may be absent — and is idempotent: the second
+    /// call answers the count and speaks nothing.</summary>
+    [Fact]
+    public void UnmarkIsIdempotentAndNeverConsultsTheSelection()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        document.ToggleMark();
+        document.SelectNode(null, announce: false);
+        _announced.Clear();
+
+        Assert.Equal(0, document.Unmark("a"));
+        Assert.False(document.Selection.IsMarked("a"));
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            x => x.Text.Contains("Unmarked \"Alpha\"", StringComparison.Ordinal));
+
+        _announced.Clear();
+        Assert.Equal(0, document.Unmark("a"));
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Empty(_announced);
+        document.Shutdown();
+    }
+
+    /// <summary>§G TG-0 (G3, IG-33): Clear All speaks the PRE-CLEAR
+    /// store count, and the render's own zero arm afterward.</summary>
+    [Fact]
+    public void ClearSpeaksThePreClearCount()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        document.ToggleMark();
+        document.SeatSelectionSilently("grp");
+        document.ToggleMark();
+        _announced.Clear();
+
+        document.ClearMarks();
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            x => x.Text.Contains("Cleared 2 marks", StringComparison.Ordinal));
+        Assert.Empty(document.AppliedPublication!.MarkedIntent);
+        Assert.Empty(document.Selection.Marked);
+
+        _announced.Clear();
+        document.ClearMarks();
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            x => x.Text.Contains("No marks", StringComparison.Ordinal));
+        document.Shutdown();
+    }
+
+    /// <summary>§G TG-0 (G1/G7): Ctrl+Alt+M relays to the verb.</summary>
+    [Fact]
+    public void TheMarkChordRoutesToTheVerb()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        var pane = new FakePane();
+        document.Navigator.AttachPresenter(pane);
+
+        Assert.True(document.Navigator.HandleKey(
+            System.Windows.Input.Key.M,
+            System.Windows.Input.ModifierKeys.Control | System.Windows.Input.ModifierKeys.Alt,
+            pane));
+
+        Assert.True(document.Selection.IsMarked("a"));
+        Assert.Contains("a", document.AppliedPublication!.MarkedIntent);
+        document.Shutdown();
+    }
+
     /// <summary>§F review round 1 (F4b/IF-2, codoki's prescription):
     /// a DISPLACED outcome while the watcher stands down must not
     /// wedge the mode — the displaced resolution cancels it, the
@@ -757,7 +1318,7 @@ public sealed class CanvasMutationTests : IDisposable
     {
         CanvasDocumentViewModel document = Open();
         document.SeatSelectionSilently("a");
-        CanvasPromptViewModel prompt = CanvasPromptViewModel.SetColor(document);
+        var prompt = (CanvasSetColorPrompt)CanvasPromptViewModel.SetColor(document);
 
         Assert.False(prompt.HasTextField);
         for (byte preset = 1; preset <= 6; preset++)
@@ -769,7 +1330,7 @@ public sealed class CanvasMutationTests : IDisposable
         Assert.Null(prompt.Choices[^1].Value);
 
         prompt.SelectedChoice = prompt.Choices[2];
-        prompt.Submit();
+        Assert.Equal(CanvasPromptSubmit.Pending, prompt.Submit(() => { }));
 
         Assert.Contains(
             "\"color\":\"3\"",
@@ -837,8 +1398,10 @@ public sealed class CanvasMutationTests : IDisposable
     {
         CanvasDocumentViewModel document = Open();
         document.SeatSelectionSilently("a");
-        _ = document.Selection.ToggleMark("grp");
-        _ = document.Selection.ToggleMark("a");
+        document.SeatSelectionSilently("grp");
+        document.ToggleMark();
+        document.SeatSelectionSilently("a");
+        document.ToggleMark();
         document.OpenCardPicker(CanvasCardPickerPurpose.PlaceRightOf);
         CanvasCardPickerRequest request = document.LastCardPickerRequestForTests!;
 
@@ -953,8 +1516,10 @@ public sealed class CanvasMutationTests : IDisposable
     {
         CanvasDocumentViewModel document = Open();
         document.SeatSelectionSilently("a");
-        _ = document.Selection.ToggleMark("a");
-        _ = document.Selection.ToggleMark("grp");
+        document.SeatSelectionSilently("a");
+        document.ToggleMark();
+        document.SeatSelectionSilently("grp");
+        document.ToggleMark();
         document.OpenCardPicker(CanvasCardPickerPurpose.PlaceBelow);
         CanvasCardPickerRequest request = document.LastCardPickerRequestForTests!;
         Assert.Equal(["a", "grp"], request.Moving.ToArray());
@@ -986,8 +1551,10 @@ public sealed class CanvasMutationTests : IDisposable
     {
         CanvasDocumentViewModel document = Open();
         document.SeatSelectionSilently("essay");
-        _ = document.Selection.ToggleMark("a");
-        _ = document.Selection.ToggleMark("essay");
+        document.SeatSelectionSilently("a");
+        document.ToggleMark();
+        document.SeatSelectionSilently("essay");
+        document.ToggleMark();
         CanvasCardPickerModel? shown = null;
         document.CardPickerRequested += (_, model) => shown = model;
 

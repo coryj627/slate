@@ -250,7 +250,9 @@ internal sealed class CanvasPublication
         CanvasLoadSchedule loads,
         CanvasFilterSchedule filters,
         CanvasLoaded? loaded,
-        CanvasOperationId? committedUnpresented)
+        CanvasOperationId? committedUnpresented,
+        ImmutableDictionary<string, long>? markEpochs = null,
+        long markClock = 0)
     {
         Retired = retired;
         LoadState = loadState;
@@ -263,6 +265,8 @@ internal sealed class CanvasPublication
         Filters = filters;
         Loaded = loaded;
         CommittedUnpresented = committedUnpresented;
+        MarkEpochs = markEpochs ?? ImmutableDictionary<string, long>.Empty;
+        MarkClock = markClock;
     }
 
     /// <summary>The first publication for a document: nothing loaded,
@@ -300,6 +304,15 @@ internal sealed class CanvasPublication
     internal string? SelectedIntent { get; }
 
     internal ImmutableHashSet<string> MarkedIntent { get; }
+
+    /// <summary>§G TG-3 (IG-45): the epoch at which each marked id was
+    /// LAST WRITTEN — a mark's identity across time, so an operation
+    /// that captured an id can tell "untouched since" from "unmarked
+    /// and re-marked later" and remove only the former.</summary>
+    internal ImmutableDictionary<string, long> MarkEpochs { get; }
+
+    /// <summary>The monotonic mark clock — the last epoch handed out.</summary>
+    internal long MarkClock { get; }
 
     /// <summary>The typed needle as intent — DOCUMENT class, which is
     /// why it survives a reload and reseeds the filter machine.</summary>
@@ -350,7 +363,7 @@ internal sealed class CanvasPublication
         Copy(selectedIntent: nodeId, selectedIntentSet: true);
 
     internal CanvasPublication WithMarkedIntent(IEnumerable<string>? nodeIds) =>
-        Copy(markedIntent: CanvasModelCopy.Ids(nodeIds));
+        WithMarkedIntent(CanvasModelCopy.Ids(nodeIds));
 
     /// <summary>The already-copied form, for a caller that built the
     /// set OUTSIDE the gate — the copy is O(marks) and a transform is
@@ -358,7 +371,13 @@ internal sealed class CanvasPublication
     internal CanvasPublication WithMarkedIntent(ImmutableHashSet<string> nodeIds)
     {
         ArgumentNullException.ThrowIfNull(nodeIds);
-        return Copy(markedIntent: nodeIds);
+        // §G TG-3 (IG-45): the ONE mark transform — every id newly
+        // present takes a fresh epoch from the clock, every id no
+        // longer present drops its epoch, and an id present before and
+        // after keeps the epoch it had. Callers never stamp epochs.
+        (ImmutableDictionary<string, long> epochs, long clock) =
+            CanvasModelCopy.StampMarks(MarkEpochs, MarkClock, nodeIds);
+        return Copy(markedIntent: nodeIds, markEpochs: epochs, markClock: clock);
     }
 
     /// <remarks>Guarded, because <c>Copy</c> reads null as "not
@@ -468,7 +487,9 @@ internal sealed class CanvasPublication
         CanvasLoaded? loaded = null,
         bool loadedSet = false,
         CanvasOperationId? committedUnpresented = null,
-        bool committedUnpresentedSet = false) => new(
+        bool committedUnpresentedSet = false,
+        ImmutableDictionary<string, long>? markEpochs = null,
+        long? markClock = null) => new(
             retired ?? Retired,
             loadState ?? LoadState,
             loadMessageSet ? loadMessage : LoadMessage,
@@ -479,5 +500,7 @@ internal sealed class CanvasPublication
             loads ?? Loads,
             filters ?? Filters,
             loadedSet ? loaded : Loaded,
-            committedUnpresentedSet ? committedUnpresented : CommittedUnpresented);
+            committedUnpresentedSet ? committedUnpresented : CommittedUnpresented,
+            markEpochs ?? MarkEpochs,
+            markClock ?? MarkClock);
 }

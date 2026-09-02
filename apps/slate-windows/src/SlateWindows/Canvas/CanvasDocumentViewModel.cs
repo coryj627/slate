@@ -349,6 +349,12 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// </remarks>
     internal CanvasAnnouncer AnnouncerForTests => _announcer;
 
+    /// <summary>§G TG-2 (IG-42): the one arbiter between a filter
+    /// clearance and the landing that follows it — the boundary fires
+    /// the pending filter line NOW, so the sentence emits before the
+    /// A14 request posts.</summary>
+    internal void FireFilterLineNow() => _announcer.FireFilterLineNow();
+
     /// <summary>Shared selection + marks for every pane showing this
     /// canvas (contract A1/R-B).</summary>
     public CanvasSelection Selection { get; } = new();
@@ -1425,6 +1431,10 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         _applying = true;
         try
         {
+            // §G TG-0 (IG-31): the authority arrives — the mirror is
+            // seeded BEFORE the rows rebuild, so every projection reads
+            // the applied marks.
+            Selection.SeedMarks(current.MarkedIntent);
             Apply(current, was);
         }
         finally
@@ -1556,6 +1566,15 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 _ = _slot.Publish(s => s.Retired ? null : s.WithActiveSurface(surface));
                 break;
             case nameof(CanvasSelection.Marked):
+                // §G TG-0 (IG-31): the mirror is a PROJECTION of the
+                // publication. Its own change reaches the publication
+                // only for the two one-way seeds (a retarget's SeedFrom,
+                // a teardown's ClearMarks); an apply-side seed is the
+                // publication arriving, never a write to echo back.
+                if (_applying)
+                {
+                    return;
+                }
                 ImmutableHashSet<string> marked = CanvasModelCopy.Ids(Selection.Marked);
                 _ = _slot.Publish(s => s.Retired ? null : s.WithMarkedIntent(marked));
                 break;
@@ -2431,25 +2450,30 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
 
     /// <summary>§E TE-5c: Rename Group — the real op (IE-23's round-1
     /// catch: never SetNodeContent on a group).</summary>
-    public void CanvasRenameGroup(string groupId, string label)
+    public CanvasMutationOperation? CanvasRenameGroup(
+        string groupId, string label, Action<CanvasOperationOutcome>? completion = null)
     {
         ArgumentNullException.ThrowIfNull(groupId);
         ArgumentNullException.ThrowIfNull(label);
         if (_slot.Current.Loaded is not { } basis)
         {
             SpeakNotReady();
-            return;
+            return null;
         }
         var operation = new CanvasMutationOperation(
             new CanvasOperationId("rename group"), this, groupId,
-            basis, CanvasMutationEffect.KeepSelection);
-        _ = Funnel.Apply(
+            basis, CanvasMutationEffect.KeepSelection)
+        {
+            Completion = completion,
+        };
+        CanvasMutationAdmission admission = Funnel.Apply(
             operation,
             _ => new CanvasAction(
                 $"rename group to \"{label}\"",
                 [new CanvasOp.RenameGroup(groupId, label)]),
             $"rename group to \"{label}\"",
             confirm: () => new CanvasA11yEvent.CanvasRenamedGroup(label));
+        return admission == CanvasMutationAdmission.Admitted ? operation : null;
     }
 
     /// <summary>§E TE-5c: the delete verb's GROUP arm — the algebra's
@@ -2555,29 +2579,33 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// <summary>§E TE-5c: Set Color — a preset "1".."6", a validated
     /// hex, or null to clear (the picker's field owns the invalid-hex
     /// error surface; an invalid value never reaches the funnel).</summary>
-    public void CanvasSetColor(string? color)
+    public CanvasMutationOperation? CanvasSetColor(
+        string? color, Action<CanvasOperationOutcome>? completion = null)
     {
         if (_slot.Current.Loaded is not { } basis)
         {
             SpeakNotReady();
-            return;
+            return null;
         }
         if (Selection.Selected is not { } selected)
         {
             Speak(new CanvasA11yEvent.CanvasStatus(
                 new CanvasStatusNote.NothingSelected()));
-            return;
+            return null;
         }
         if (color is not null && !IsCanvasColor(color))
         {
             // UNREACHABLE from the surfaces (§E TE-11c): every color
             // arrives from the fixed palette rows. A guard, not a cell.
-            return;
+            return null;
         }
         var operation = new CanvasMutationOperation(
             new CanvasOperationId("set color"), this, selected,
-            basis, CanvasMutationEffect.KeepSelection);
-        _ = Funnel.Apply(
+            basis, CanvasMutationEffect.KeepSelection)
+        {
+            Completion = completion,
+        };
+        CanvasMutationAdmission admission = Funnel.Apply(
             operation,
             _ => new CanvasAction(
                 color is null
@@ -2597,6 +2625,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                             : new CanvasColor.Hex(value)
                         : null);
             });
+        return admission == CanvasMutationAdmission.Admitted ? operation : null;
     }
 
     /// <summary>§E TE-5c: Connect — one edge from the picker's
@@ -3034,7 +3063,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// generated AddEdge parameter is spelled. An empty submitted
     /// label normalizes to null (IF-27) — Enter-skips and
     /// click-with-empty-field serialize identically.</summary>
-    internal void CanvasConnect(
+    internal CanvasMutationOperation? CanvasConnect(
         CanvasConnectStage stage,
         string? label,
         object? modeToken = null,
@@ -3054,17 +3083,18 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         {
             Completion = completion,
         };
-        _ = Funnel.Apply(
+        CanvasMutationAdmission admission = Funnel.Apply(
             operation,
             handle => PrepareConnectAction(stage, clean),
             name,
             // §F TF-9 (F8/F4b): under a mode token the COMPLETION owns
             // the sentence — Committed(confirmation) speaks after the
             // clear; the picker flow keeps the funnel's confirm.
-            confirm: completion is null
+            confirm: modeToken is null
                 ? () => new CanvasA11yEvent.CanvasConnected(
                     stage.OriginTitle, stage.TargetTitle, clean)
                 : null);
+        return admission == CanvasMutationAdmission.Admitted ? operation : null;
     }
 
     /// <summary>§F TF-8/TF-9 (F7): the ONE connect preparation both
@@ -3358,6 +3388,384 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             $"align \"{primaryTitle}\"",
             confirm: () => new CanvasA11yEvent.CanvasCardAligned(
                 primaryTitle, targetTitle));
+    }
+
+    /// <summary>§G TG-0 (G1, IG-32/IG-35): Toggle Mark — the first of
+    /// the document's three mark verbs over the ONE authority, the
+    /// publication's marked intent. The order is the frozen one: a
+    /// plainly absent selection refuses NothingSelected; then the C4
+    /// structural-read admission speaks its own state; then the id must
+    /// RESOLVE in the admitted population (the event needs a title);
+    /// only then the transform publishes, applies, and speaks the
+    /// STORE's count after the write.</summary>
+    public void ToggleMark()
+    {
+        if (Selection.Selected is not { } selected)
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(
+                new CanvasStatusNote.NothingSelected()));
+            return;
+        }
+        if (!AdmitStructuralRead())
+        {
+            return;
+        }
+        if (!_rows.TryGetValue(selected, out CanvasOutlineRow? row))
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(
+                new CanvasStatusNote.NothingSelected()));
+            return;
+        }
+        ImmutableHashSet<string> before = _slot.Current.MarkedIntent;
+        bool marking = !before.Contains(selected);
+        ImmutableHashSet<string> next = marking ? before.Add(selected) : before.Remove(selected);
+        if (PublishMarks(next))
+        {
+            Speak(new CanvasA11yEvent.CanvasMarkToggled(
+                marking, row.Title, (uint)next.Count));
+        }
+    }
+
+    /// <summary>§G TG-0 (G1, IG-34): Unmark by EXPLICIT id — the marks
+    /// list's row action. Never consults the selection; idempotent (an
+    /// unmarked id is a no-change answering the count, nothing spoken);
+    /// the id must resolve, because the sentence needs a title.
+    /// Answers the resulting store count.</summary>
+    public int Unmark(string nodeId)
+    {
+        ArgumentNullException.ThrowIfNull(nodeId);
+        ImmutableHashSet<string> before = _slot.Current.MarkedIntent;
+        if (!before.Contains(nodeId))
+        {
+            return before.Count;
+        }
+        if (!AdmitStructuralRead())
+        {
+            return before.Count;
+        }
+        if (!_rows.TryGetValue(nodeId, out CanvasOutlineRow? row))
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(
+                new CanvasStatusNote.NothingSelected()));
+            return before.Count;
+        }
+        ImmutableHashSet<string> next = before.Remove(nodeId);
+        if (PublishMarks(next))
+        {
+            Speak(new CanvasA11yEvent.CanvasMarkToggled(
+                false, row.Title, (uint)next.Count));
+        }
+
+        return next.Count;
+    }
+
+    /// <summary>§G TG-0 (G3, IG-33): Clear All Marks — never refuses on
+    /// a live document; the count spoken is the PRE-CLEAR store count,
+    /// captured before the transform (the render's own No marks. arm
+    /// at zero). A retired document publishes nothing and the
+    /// announcer's boundary drops the sentence.</summary>
+    public void ClearMarks()
+    {
+        int removed = _slot.Current.MarkedIntent.Count;
+        if (PublishMarks([]))
+        {
+            Speak(new CanvasA11yEvent.CanvasMarksCleared((uint)removed));
+        }
+    }
+
+    /// <summary>§G TG-0 (IG-31): the ONE mark transform — the
+    /// publication's intent is replaced and applied at once; the
+    /// mirror follows in the apply. False when the document is
+    /// retired (nothing published, nothing to say).</summary>
+    private bool PublishMarks(ImmutableHashSet<string> next)
+    {
+        (bool published, _, _) = _slot.Publish(
+            s => s.Retired ? null : s.WithMarkedIntent(next));
+        if (!published)
+        {
+            return false;
+        }
+        ApplyPublication();
+        return true;
+    }
+
+    /// <summary>§G TG-2 (G4, IG-10/IG-36): Show Marked Cards — admission
+    /// reads STORE emptiness (an empty store refuses NoMarks and
+    /// presents nothing); the rows are the projection's. The owner —
+    /// the pane the verb ran from — is captured for the Jump's A14
+    /// landing.</summary>
+    internal event Action<object>? MarksListRequested;
+
+    public void OpenMarksList(object owner)
+    {
+        ArgumentNullException.ThrowIfNull(owner);
+        if (_slot.Current.MarkedIntent.Count == 0)
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoMarks()));
+            return;
+        }
+        MarksListRequested?.Invoke(owner);
+    }
+
+    /// <summary>§G TG-2 (IG-36, IG-52): the marked set PROJECTED through
+    /// core's reading order under the lease — a currency-bound read in
+    /// one try. Null when the lease refused or the query threw, with
+    /// the C4 table's own NotReadable sentence spoken (an existing core
+    /// arm, no host prose); the caller keeps its last current rows.</summary>
+    internal IReadOnlyList<CanvasOutlineRow>? ProjectMarkedRows()
+    {
+        string[] ids = [.. _slot.Current.MarkedIntent];
+        if (ids.Length == 0)
+        {
+            return [];
+        }
+        string[]? ordered = null;
+        try
+        {
+            if (_slot.Current.Lease is { } lease)
+            {
+                _ = lease.Invoke(
+                    () =>
+                    {
+                        CanvasPublication now = _slot.Current;
+                        return !now.Retired && now.Names(lease);
+                    },
+                    handle => ordered = _session.CanvasOrderNodes(handle, ids));
+            }
+        }
+        catch (VaultException)
+        {
+            ordered = null;
+        }
+        if (ordered is null)
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NotReadable()));
+            return null;
+        }
+
+        return [.. ordered.Where(_rows.ContainsKey).Select(id => _rows[id])];
+    }
+
+    /// <summary>§G TG-4 (G5, GD-2): Delete Marked — ONE action over the
+    /// marked set captured at invocation, projected through core's
+    /// reading order under the gate, one DeleteNode per node (a marked
+    /// group deletes by the algebra's one group removal, cards kept),
+    /// the name core's CountNoun, the captured marks removed with the
+    /// refreshed rows, the selection kept-by-resolution. An empty
+    /// projection refuses NoMarks AFTER admission; a thrown query
+    /// speaks the FD-6 arm with the engine's detail.</summary>
+    public void CanvasDeleteMarked() =>
+        _ = SubmitBulkMarked(
+            "delete marked",
+            CanvasMarkEffect.RemoveCaptured,
+            "delete",
+            (id, _) => new CanvasOp.DeleteNode(id),
+            count => new CanvasA11yEvent.CanvasDeleted(
+                new CanvasDeleteTarget.Cards((uint)count),
+                _verbosity(),
+                CanvasPhrase.UndoChord));
+
+    /// <summary>§G TG-4 (G5): Color Marked — the same one action with
+    /// SetNodeColor per node and the marks KEPT; the storage string
+    /// feeds the op, the typed color feeds the sentence (IG-22).</summary>
+    public void CanvasColorMarked(string? color)
+    {
+        if (color is not null && !IsCanvasColor(color))
+        {
+            return;
+        }
+        CanvasColor? typed = color is null ? null : new CanvasColor.Preset(byte.Parse(color));
+        _ = SubmitBulkMarked(
+            "color marked",
+            CanvasMarkEffect.Keep,
+            "color",
+            (id, _) => new CanvasOp.SetNodeColor(id, color),
+            count => new CanvasA11yEvent.CanvasBulkColorSet((uint)count, typed));
+    }
+
+    /// <summary>§G TG-4 (G5/G7): the bulk frame every marked verb
+    /// rides — the snapshot at invocation, the ladder first, the
+    /// projection under the gate, the outcome table by the funnel.
+    /// Answers the operation when admitted (the prompt sheets' landing
+    /// hook rides its completion).</summary>
+    internal CanvasMutationOperation? SubmitBulkMarked(
+        string operationLabel,
+        CanvasMarkEffect markEffect,
+        string verbWord,
+        Func<string, int, CanvasOp> opFor,
+        Func<int, CanvasA11yEvent> confirmFor,
+        Action<CanvasOperationOutcome>? completion = null)
+    {
+        ArgumentNullException.ThrowIfNull(operationLabel);
+        ArgumentNullException.ThrowIfNull(verbWord);
+        ArgumentNullException.ThrowIfNull(opFor);
+        ArgumentNullException.ThrowIfNull(confirmFor);
+        if (_slot.Current.Loaded is not { } basis)
+        {
+            SpeakNotReady();
+            return null;
+        }
+        ImmutableDictionary<string, long> snapshot = _slot.Current.MarkEpochs;
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId(operationLabel),
+            this,
+            Selection.Selected,
+            basis,
+            CanvasMutationEffect.KeepSelection,
+            markEffect: markEffect,
+            capturedMarks: snapshot)
+        {
+            Completion = completion,
+        };
+        int projected = 0;
+        CanvasMutationAdmission admission = Funnel.Apply(
+            operation,
+            handle =>
+            {
+                string[] ordered;
+                try
+                {
+                    ordered = _session.CanvasOrderNodes(handle, [.. snapshot.Keys]);
+                }
+                catch (VaultException e)
+                {
+                    Speak(new CanvasA11yEvent.CanvasActionFailed(
+                        CanvasFailedAction.CanvasAction, e.Message ?? string.Empty));
+                    return null;
+                }
+                if (ordered.Length == 0)
+                {
+                    Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoMarks()));
+                    return null;
+                }
+                projected = ordered.Length;
+                var ops = new List<CanvasOp>(ordered.Length);
+                for (int i = 0; i < ordered.Length; i++)
+                {
+                    ops.Add(opFor(ordered[i], i));
+                }
+                return new CanvasAction(BulkName(verbWord, ordered.Length), [.. ops]);
+            },
+            BulkName(verbWord, snapshot.Count),
+            confirm: () => confirmFor(projected));
+        return admission == CanvasMutationAdmission.Admitted ? operation : null;
+    }
+
+    /// <summary>F9a/CD-26: the bulk name is core's CountNoun over the
+    /// FFI, so the verb's sentence and the undo sentence group
+    /// identically at every magnitude.</summary>
+    private static string BulkName(string verbWord, int count) =>
+        verbWord + " " + SlateUniffiMethods.CountNoun((ulong)count, "card", "cards");
+
+    /// <summary>§G TG-4 (GD-5): Color Marked's front door — the Set
+    /// Color prompt over the MARKED target. An empty store refuses
+    /// NoMarks and opens nothing (a prompt opening is a store action,
+    /// G6); the submit is the funnel verb.</summary>
+    internal event Action? ColorMarkedRequested;
+
+    public void RequestColorMarked()
+    {
+        if (_slot.Current.MarkedIntent.Count == 0)
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoMarks()));
+            return;
+        }
+        ColorMarkedRequested?.Invoke();
+    }
+
+    /// <summary>§G TG-5 (G5, GD-3): Group Marked — ONE CreateGroup over
+    /// core's padded frame of the marked set, projected and framed
+    /// UNDER the gate: the snapshot at invocation; the ladder first;
+    /// `CanvasOrderNodes` then `CanvasGroupRectAround` in one try (a
+    /// throw speaks the FD-6 arm with the engine's detail); an empty
+    /// projection refuses NoMarks; a NULL frame — no member resolves
+    /// after the projection resolved them, belt-and-braces — speaks
+    /// the same closed core sentence, NoMarks (IG-52 forbids a static
+    /// host detail; mac's silence is the recorded divergence). Every
+    /// CreateGroup argument is spelled from the returned rect; an empty
+    /// label is null; the captured marks leave with the refreshed
+    /// rows; the sentence names the label or "Untitled".</summary>
+    internal CanvasMutationOperation? SubmitGroupMarked(
+        string? label, Action<CanvasOperationOutcome>? completion = null)
+    {
+        if (_slot.Current.Loaded is not { } basis)
+        {
+            SpeakNotReady();
+            return null;
+        }
+        string? clean = string.IsNullOrEmpty(label) ? null : label;
+        ImmutableDictionary<string, long> snapshot = _slot.Current.MarkEpochs;
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId("group marked"),
+            this,
+            Selection.Selected,
+            basis,
+            CanvasMutationEffect.KeepSelection,
+            markEffect: CanvasMarkEffect.RemoveCaptured,
+            capturedMarks: snapshot)
+        {
+            Completion = completion,
+        };
+        int projected = 0;
+        CanvasMutationAdmission admission = Funnel.Apply(
+            operation,
+            handle =>
+            {
+                string[] ordered;
+                CanvasRect? frame;
+                try
+                {
+                    ordered = _session.CanvasOrderNodes(handle, [.. snapshot.Keys]);
+                    if (ordered.Length == 0)
+                    {
+                        Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoMarks()));
+                        return null;
+                    }
+                    frame = _session.CanvasGroupRectAround(handle, ordered);
+                }
+                catch (VaultException e)
+                {
+                    Speak(new CanvasA11yEvent.CanvasActionFailed(
+                        CanvasFailedAction.NewGroup, e.Message ?? string.Empty));
+                    return null;
+                }
+                if (frame is null)
+                {
+                    Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoMarks()));
+                    return null;
+                }
+                projected = ordered.Length;
+                return new CanvasAction(
+                    BulkName("group", ordered.Length),
+                    [
+                        new CanvasOp.CreateGroup(
+                            SlateUniffiMethods.CanvasNewId(),
+                            clean,
+                            frame.X,
+                            frame.Y,
+                            frame.Width,
+                            frame.Height,
+                            null),
+                    ]);
+            },
+            BulkName("group", snapshot.Count),
+            confirm: () => new CanvasA11yEvent.CanvasGrouped(
+                (uint)projected, clean ?? "Untitled"));
+        return admission == CanvasMutationAdmission.Admitted ? operation : null;
+    }
+
+    /// <summary>§G TG-5 (G7): Group Marked Cards… — the label prompt's
+    /// front door; an empty store refuses NoMarks and opens nothing.</summary>
+    internal event Action? GroupMarkedRequested;
+
+    public void RequestGroupMarked()
+    {
+        if (_slot.Current.MarkedIntent.Count == 0)
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoMarks()));
+            return;
+        }
+        GroupMarkedRequested?.Invoke();
     }
 
     /// <summary>The live population's basis — the editor's commit

@@ -78,16 +78,23 @@ internal sealed class CanvasSelection : BindableBase
         ActiveSurface = source.ActiveSurface;
     }
 
-    /// <summary>PR G's entry point, present now so the marked set is
-    /// never mutated from two places. Returns the new state.</summary>
-    internal bool ToggleMark(string nodeId)
+    /// <summary>§G TG-0 (IG-31): the APPLY-SIDE seed. The publication's
+    /// marked intent is the one mark authority; this mirror is its
+    /// applied projection, replaced whole on every apply and raised
+    /// only when the contents changed — the document's verbs never
+    /// write here, they publish. `SeedFrom` and `ClearMarks` remain
+    /// the two one-way seeds (a retarget, a teardown) that the
+    /// document republishes from.</summary>
+    internal void SeedMarks(IEnumerable<string> nodeIds)
     {
-        bool marked = _marked.Add(nodeId);
-        if (!marked)
+        ArgumentNullException.ThrowIfNull(nodeIds);
+        var next = new HashSet<string>(nodeIds, StringComparer.Ordinal);
+        if (next.SetEquals(_marked))
         {
-            _ = _marked.Remove(nodeId);
+            return;
         }
+        _marked.Clear();
+        _marked.UnionWith(next);
         OnPropertyChanged(nameof(Marked));
-        return marked;
     }
 }

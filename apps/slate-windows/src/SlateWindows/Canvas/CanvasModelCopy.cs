@@ -42,6 +42,28 @@ namespace SlateWindows.Canvas;
 /// </remarks>
 internal static class CanvasModelCopy
 {
+    /// <summary>§G TG-3 (IG-45): the mark-epoch stamp — the sanctioned
+    /// builder behind the publication's one mark transform: every id
+    /// newly present takes a fresh epoch from the clock, every absent
+    /// id drops its own, an id present before and after keeps what it
+    /// had.</summary>
+    internal static (ImmutableDictionary<string, long> Epochs, long Clock) StampMarks(
+        ImmutableDictionary<string, long> current, long clock, ImmutableHashSet<string> next)
+    {
+        ArgumentNullException.ThrowIfNull(current);
+        ArgumentNullException.ThrowIfNull(next);
+        ImmutableDictionary<string, long>.Builder epochs = current.ToBuilder();
+        foreach (string gone in current.Keys.Where(id => !next.Contains(id)))
+        {
+            epochs.Remove(gone);
+        }
+        foreach (string id in next.Where(id => !current.ContainsKey(id)))
+        {
+            epochs[id] = ++clock;
+        }
+        return (epochs.ToImmutable(), clock);
+    }
+
     /// <summary>Ordinal, because node ids are byte-exact everywhere in
     /// this subsystem and a culture-sensitive set would silently merge
     /// two distinct ids.</summary>

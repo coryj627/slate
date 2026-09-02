@@ -50,6 +50,50 @@ public sealed class CanvasMutationFunnelTests
             Funnel.Apply(Operation(label), _ => new CanvasAction(label, []), label);
     }
 
+    /// <summary>§G TG-3 (IG-50): an engine refusal that is neither a
+    /// conflict nor an unindexed save is its OWN outcome — ApplyRefused
+    /// — and the funnel speaks the FD-6 arm with the engine's dynamic
+    /// detail, never silence; nothing lands.</summary>
+    [Fact]
+    public void AnApplyRefusalIsItsOwnOutcomeAndSpeaks()
+    {
+        var h = new Harness();
+        h.Writes.ApplyScript = _ => new VaultException.Io("disk full");
+        CanvasMutationOperation operation = h.Operation("color");
+        CanvasOperationOutcome? seen = null;
+        operation.Completion = outcome => seen = outcome;
+
+        Assert.Equal(
+            CanvasMutationAdmission.Admitted,
+            h.Funnel.Apply(operation, _ => new CanvasAction("color", []), "color"));
+
+        Assert.Equal(CanvasOperationOutcome.ApplyRefused, seen);
+        Assert.Contains(h.Announced, e => e is CanvasA11yEvent.CanvasActionFailed);
+        Assert.Null(h.Slot.Current.CommittedUnpresented);
+    }
+
+    /// <summary>§G TG-3 (IG-47/IG-46): a refresh whose read throws is
+    /// RefreshRefused — the write LANDED unpresented — and retains the
+    /// recovery receipt exactly as Unindexed does: the publication names
+    /// the operation, the funnel holds the operation itself.</summary>
+    [Fact]
+    public void ARefreshRefusalRetainsTheReceipt()
+    {
+        var h = new Harness();
+        h.Reads.ReadFault = new VaultException.Io("read failed");
+        CanvasMutationOperation operation = h.Operation("color");
+        CanvasOperationOutcome? seen = null;
+        operation.Completion = outcome => seen = outcome;
+
+        Assert.Equal(
+            CanvasMutationAdmission.Admitted,
+            h.Funnel.Apply(operation, _ => new CanvasAction("color", []), "color"));
+
+        Assert.Equal(CanvasOperationOutcome.RefreshRefused, seen);
+        Assert.Same(operation.Id, h.Slot.Current.CommittedUnpresented);
+        Assert.Same(operation, h.Funnel.UnpresentedReceiptForTests);
+    }
+
     /// <summary>The happy transaction: entry recorded with the apply's
     /// successor basis, rows republished on the SAME lease, gate free
     /// after.</summary>

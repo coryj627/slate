@@ -283,6 +283,18 @@ internal sealed class CanvasAnnouncer
         }
     }
 
+    /// <summary>§G TG-2 (IG-42): fire the pending FILTER line now — the
+    /// one arbiter between a filter clearance and a focus landing that
+    /// follows it: the sentence emits before the landing posts, so no
+    /// reader hears the row before the filter that revealed it.</summary>
+    internal void FireFilterLineNow()
+    {
+        if (_dispatcher.CheckAccess())
+        {
+            Fire(EventClass.Filter);
+        }
+    }
+
     /// <summary>Test hook: emit every pending debounced line NOW, so a
     /// fact is deterministic without a wall-clock wait (the mac
     /// <c>flushForTests</c> twin).</summary>

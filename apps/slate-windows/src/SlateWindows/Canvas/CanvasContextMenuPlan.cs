@@ -49,11 +49,10 @@ internal static class CanvasContextMenuPlan
         ImmutableArray<CanvasContextMenuRow>.Builder rows =
             ImmutableArray.CreateBuilder<CanvasContextMenuRow>();
         rows.Add(new(CanvasPhrase.OpenRowAction, true, null, CanvasContextVerb.Open));
+        // §G TG-0 (G7): the row is LIVE — its "arrives later" reason
+        // retired with the verb it waited for.
         rows.Add(new(
-            CanvasPhrase.ToggleMarkRowAction,
-            false,
-            CanvasPhrase.MarkingArrivesLater,
-            CanvasContextVerb.ToggleMark));
+            CanvasPhrase.ToggleMarkRowAction, true, null, CanvasContextVerb.ToggleMark));
         if (kind == "group")
         {
             // §F TF-8 (FD-4): the prompt machinery landed — the row
