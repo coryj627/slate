@@ -6166,10 +6166,7 @@ public sealed class ShellAccessibilityTests
             window.Focus();
 
             // ---- New Canvas from the File menu (TE-10) --------------
-            AutomationElement newCanvas = WaitForMenuItem(
-                window, "FileMenu", "NewCanvasMenuItem", TimeSpan.FromSeconds(10));
-            Assert.True(newCanvas.Patterns.Invoke.IsSupported);
-            newCanvas.Patterns.Invoke.Pattern.Invoke();
+            OpenNewCanvasFromFileMenu(window, automation, logDirectory);
 
             // The new document opened in its OWN tab and the onboarding
             // region leads with the REAL chord (E14's first swap).
@@ -6387,24 +6384,7 @@ public sealed class ShellAccessibilityTests
             window.Focus();
 
             // ---- A canvas with two cards, by the authoring path ----
-            AutomationElement newCanvas = WaitForMenuItem(
-                window, "FileMenu", "NewCanvasMenuItem", TimeSpan.FromSeconds(10));
-            newCanvas.Patterns.Invoke.Pattern.Invoke();
-            // The first canvas open on a fresh process is the slowest step
-            // of the journey on a loaded runner (the previous journey's
-            // app may still be tearing down); wait longer than the modes
-            // journey does and, on a miss, say what the app logged so the
-            // next miss is diagnosable rather than a bare timeout.
-            AutomationElement? tree = TryWaitForElement(
-                window, "CanvasOutlineTree", TimeSpan.FromSeconds(60));
-            if (tree is null)
-            {
-                string log = ReadSharedLog(
-                    Path.Combine(logDirectory, "slate-windows.log"));
-                Assert.Fail(
-                    "CanvasOutlineTree never appeared after New Canvas; app log tail: "
-                    + (log.Length > 3000 ? log[^3000..] : log));
-            }
+            AutomationElement tree = OpenNewCanvasFromFileMenu(window, automation, logDirectory);
             tree.Focus();
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
 
@@ -6658,11 +6638,7 @@ public sealed class ShellAccessibilityTests
             window.Focus();
 
             // ---- A canvas with two cards, by the authoring path ----
-            AutomationElement newCanvas = WaitForMenuItem(
-                window, "FileMenu", "NewCanvasMenuItem", TimeSpan.FromSeconds(10));
-            newCanvas.Patterns.Invoke.Pattern.Invoke();
-            AutomationElement tree = WaitForElement(
-                window, "CanvasOutlineTree", TimeSpan.FromSeconds(20));
+            AutomationElement tree = OpenNewCanvasFromFileMenu(window, automation, logDirectory);
             tree.Focus();
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
 
@@ -7906,6 +7882,74 @@ public sealed class ShellAccessibilityTests
             $"The editor named '{name}' did not appear. " +
             $"Observed MarkdownEditor names: [{string.Join(", ", observedNames)}].");
         return element!;
+    }
+
+    /// <summary>Opens a new canvas from the File menu once the vault is
+    /// OPEN — the files tree lists the vault's note, which the sidebar
+    /// does only after the vault has opened — and returns its outline
+    /// tree. A New Canvas invoked while the vault is still
+    /// opening is refused, the refusal spoken into the sidebar's status
+    /// and nothing else changing, which on a loaded runner read as
+    /// "CanvasOutlineTree did not become available" at the very first
+    /// canvas wait of whichever journey landed in that window (three CI
+    /// runs, two journeys, each exactly the timeout long). On a miss the
+    /// failure carries the files tree and the app log rather than a
+    /// bare timeout.</summary>
+    private static AutomationElement OpenNewCanvasFromFileMenu(
+        Window window, UIA3Automation automation, string logDirectory)
+    {
+        string[] FilesTreeNames()
+        {
+            try
+            {
+                AutomationElement? files = window.FindFirstDescendant(
+                    automation.ConditionFactory.ByAutomationId("FilesTree"));
+                return files is null
+                    ? []
+                    : files.FindAllDescendants(
+                            automation.ConditionFactory.ByControlType(ControlType.TreeItem))
+                        .Select(item => item.Name)
+                        .ToArray();
+            }
+            catch (System.Runtime.InteropServices.COMException)
+            {
+                return [];
+            }
+        }
+
+        _ = WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(30));
+        if (!SpinWait.SpinUntil(
+                () => FilesTreeNames().Any(name =>
+                    name.StartsWith("note", StringComparison.OrdinalIgnoreCase)),
+                TimeSpan.FromSeconds(60)))
+        {
+            Assert.Fail(
+                "the vault never finished opening (no note in the files tree); files tree: "
+                + string.Join(" | ", FilesTreeNames())
+                + "; app log tail: "
+                + ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log")));
+        }
+
+        AutomationElement newCanvas = WaitForMenuItem(
+            window, "FileMenu", "NewCanvasMenuItem", TimeSpan.FromSeconds(10));
+        Assert.True(newCanvas.Patterns.Invoke.IsSupported);
+        newCanvas.Patterns.Invoke.Pattern.Invoke();
+        AutomationElement? tree = TryWaitForElement(
+            window, "CanvasOutlineTree", TimeSpan.FromSeconds(30));
+        if (tree is null)
+        {
+            string[] files = FilesTreeNames();
+            bool created = files.Any(name =>
+                name.Contains("Untitled Canvas", StringComparison.Ordinal));
+            Assert.Fail(
+                (created
+                    ? "New Canvas created its file but the outline never appeared"
+                    : "New Canvas was refused or lost after the vault opened")
+                + "; files tree: " + string.Join(" | ", files)
+                + "; app log tail: "
+                + ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log")));
+        }
+        return tree!;
     }
 
     private static AutomationElement WaitForMenuItem(

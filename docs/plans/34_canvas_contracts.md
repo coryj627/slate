@@ -10278,6 +10278,31 @@ before the chord, as the modes journey seats a row before its own,
 and says the row count and the app log tail on a miss. Validated
 locally alone and in the runner's order (table, visual, then marks).
 
+The third run turned the first finding over: with the marks journey
+passing in thirteen seconds, the MODES journey — PR F's, unchanged,
+green on main — failed at the identical first canvas wait, and every
+failure across the three runs had lasted exactly the launch plus the
+timeout, never a slow open. The invoke was being lost, not delayed.
+The cause is upstream of any journey: `WaitForMainWindow` returns
+when the window exists, but the vault is still OPENING behind it (the
+status line walks "Opening…", "Scanning…", "Scan finished"), and a
+New Canvas invoked in that window is refused by the create's vault
+exception — the refusal spoken into the sidebar's status and nothing
+else changing, so the outline tree never comes and the wait runs out.
+On a loaded runner that window is wide enough to catch whichever
+canvas journey lands in it. The per-journey sixty-second wait retires
+in favour of one shared opener, `OpenNewCanvasFromFileMenu`, used by
+the authoring, modes and marks journeys alike: it waits for the files
+tree to list the vault's note (the sidebar refreshes only after the
+vault has opened), then invokes New Canvas and waits for the outline
+tree, and on a miss says whether the file was created, what the files
+tree lists, and what the app logged. The status line's text was the
+first readiness candidate and is not readable through UIA — its Name
+is the reader-facing "Vault status" and it exposes no Text pattern —
+so the files tree, the readiness the other journeys already use,
+carries it. All seven canvas journeys green locally through the
+opener.
+
 ### PR review round 1 — the commands' reach, pinned
 
 Codoki's round approved the PR and its summary carried one claim
