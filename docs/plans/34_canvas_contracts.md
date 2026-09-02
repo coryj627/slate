@@ -12574,6 +12574,80 @@ Mutations, each byte-restored: M1 the quarantine arm removed ("nothing
 to undo" again; bit); M2 the miss passed to the shell (bit); M3 the
 banner back to host text (bit). All bitten.
 
+### TH-7 — §W-G closed: the re-grep, the three findings fixed, the label class in one place
+
+The re-grep (H6), over the forty-odd files under
+`apps/slate-windows/src/SlateWindows/Canvas/`, recorded with its
+method: `OrderBy|ThenBy|Sort(` finds one `Sort` — the Escape ladder's
+rung registry in `CanvasModeController`, a state machine, not reading
+order; every ordinal is read from core's rows and every reprojection
+goes through `CanvasOrderNodes`. `Contains(` finds set and string
+membership and one rect-contains — scroll-into-view in the renderer,
+viewport arithmetic — never a group decision; group membership is
+core's `GroupPath`. Placement, sides, constants and proximity are FFI
+calls at every site (`CanvasPlaceNew`, `CanvasPlaceInsideGroup`,
+`CanvasPlaceSet`, `CanvasGroupRectAround`, `CanvasAutoSides`,
+`CanvasProximityOrder`, `CanvasConstants`); the resize Fit-to-Content
+metric is row O's designation and the viewport clamp, step and paddings
+are row I's. Three findings, fixed rather than designated (HD-7):
+
+1. **The card picker's row label** composed `⟨Kind⟩ card "⟨title⟩", in
+   ⟨container⟩` inline from `Title` with its own capitalisation — a
+   fourth copy of the P/Q label class reading the field the other
+   three do not (CD-30). The class now has ONE spelling of each clause
+   in `CanvasPhrase`: `MarkedSuffix`, `ContainerOf` (the innermost group
+   title from core's group path, else null), `ContainerClause` (the
+   title, else "canvas"), and `PickerRowLabel` = `CardReference` over
+   the SPEAKABLE name + ", in " + the container clause; `RowStatus`
+   composes from the same clauses, the marks list's row uses
+   `MarkedSuffix`, and the picker calls `PickerRowLabel` — the sinks
+   are gated, not the syntax (IH-44).
+2. **The renderer's fit extent** was a host union over the scene nodes
+   beside a binding that exports `CanvasBounds` — §W-G row H's Windows
+   half, reopened. The document gains `CurrentBounds()`, core's
+   `canvas_bounds` read under the lease (the current handle's answer,
+   null once retired or with no lease), and `AllBounds` reads it; the
+   union is gone and row H is closed again.
+3. **The renderer's zoom Value** re-spelled core's `CanvasZoom` template
+   with no pin; it now reads the one `ZoomPercent` rule (TH-5) and is
+   pinned to core's render of `CanvasZoom` for the committed percent
+   minus its single terminal period (IH-43), recorded under row I.
+
+The register: row H reopened and closed with the reason; row I
+extended (the event consumed by TH-5, the Value pinned, row O's metric
+disowned — IH-14); row R records `ConnectionStatus` as the label
+class's third member by the same designation; row S records the
+load-failure banners — the initial-open failure host text with no core
+twin, the reopen failure core's `ReopenFailed` consumed by TH-6
+(IH-17). Every row now reads closed, landed, resolved, recorded or
+open-by-designation.
+
+Facts: `TheLabelClassHelpersComposeTheStatusAndThePickerRow` (the exact
+outputs; `RowStatus` from the clauses); `ThePickerRowsCarryTheLabelClassOverSpeakableNames`
+(the picker's row for the fixture's first card is the helper's label
+over the speakable name, "Text card \"Core question\", in Research",
+and, over the committed cycle fixture whose two cards are titled
+"Same", the renamed one's label carries its SPEAKABLE name, not its
+title — the case a fixture with unique titles could not tell apart);
+`TheCanvasBoundsAreCoresUnderTheLeaseAndNoneWhenRetired` (equal to
+core's answer on a second handle of the same bytes, the group frame in
+the extent, null after shutdown); `FitCanvasContainsAndCentresCoresBounds`
+(the fit's zoom is the smaller padded ratio clamped, the bounds' centre
+on the view's centre, both edges inside, the outcome's context and
+percent); `TheZoomValueIsCoresRenderMinusItsPeriod` (at the seed and
+after a step); and the new source census `CanvasLabelClassCensus` —
+`TheLabelClassHasNoSecondComposition` (no literal under `Canvas/`
+outside `CanvasPhrase` opens the group reference, carries the card
+reference's clause, the marked suffix, the positional pair or the
+connection status, and no line falls back to "canvas" — whatever syntax
+joins it), `EverySinkCallsItsHelper` (the outline row, the picker row,
+the marks list, the move-into-group prompt, the renderer's bounds), and
+`TheRendererComputesNoBoundsUnion`. Mutations, each byte-restored: M1
+the picker label over `Title` again (the picker fact bit); M2 the host
+union restored in the renderer (both source facts bit); M3 the Value
+re-spelled with a percent sign (the pin bit); M4 the marks list's
+literal ", marked" restored (the label census bit). All bitten.
+
 ---
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
@@ -12593,8 +12667,8 @@ table.
 | E | Enter/exit group + group card count from outline `depth` walks; trace-path walk (`AppState+CanvasNavigation.swift:55–90,129–156,170–181`) | `reading_order`/`adjacency` exist | 2 | D's queries + `canvas_trace_path` (0b) | **closed** — 0b-8, 0b-9; the depth walks and the trace walk deleted (0b-2) |
 | F | Selection model + reading-order re-projection of the marked set | none (correct) | 3 / 2 | host state; `canvas_order_nodes` (0b) | **closed** — 0b-10; both re-projections deleted (0b-2). Selection model stays host state |
 | G | Undo/redo stacks, depth/session policy, menu-title composition (`AppState.swift:3987`) | `apply()` returns inverse + names | 3 | host stack; **menu title** = `CanvasUndoMenuTitle{verb,name}` | **menu title landed (0a)** |
-| H | Placement math leaks; `MIN_CARD_SIZE` only in Swift | constants in `placement.rs` | 2 | `canvas_constants()`, `canvas_group_rect_around`, `canvas_place_inside_group`, `canvas_bounds` (0b) | **closed** — 0b-4, 0b-11, 0b-12; mirrored constants, the fit re-union, the bbox fold and the move-into-group math deleted (0b-2), CD-21/CD-24. `MIN_CARD_SIZE`'s reject-not-clamp ENFORCEMENT stays host-side |
-| I | Viewport math — clamp 0.1–4.0, step 1.25, fit padding 40/120 | none | 3 | host rendering; constants pinned here; zoom % announced via `CanvasZoom` | **event landed (0a)** |
+| H | Placement math leaks; `MIN_CARD_SIZE` only in Swift | constants in `placement.rs` | 2 | `canvas_constants()`, `canvas_group_rect_around`, `canvas_place_inside_group`, `canvas_bounds` (0b) | **closed** — 0b-4, 0b-11, 0b-12; mirrored constants, the fit re-union, the bbox fold and the move-into-group math deleted (0b-2), CD-21/CD-24. `MIN_CARD_SIZE`'s reject-not-clamp ENFORCEMENT stays host-side. **REOPENED for Windows in PR H (TH-7):** the renderer's fit computed its extent as a host union of the scene nodes beside a binding that exports `CanvasBounds`; the union is gone, the fit reads core's bounds through the document under the lease, and the row is closed again |
+| I | Viewport math — clamp 0.1–4.0, step 1.25, fit padding 40/120 | none | 3 | host rendering; constants pinned here; zoom % announced via `CanvasZoom` | **event landed (0a); consumed on Windows (PR H, TH-5)** — the viewport verbs speak `CanvasZoom` with the committed percent; the renderer's read-only zoom Value is core's render of the same event minus its terminal period, pinned (TH-7); the resize Fit-to-Content text metric is row O's, not this row's |
 | J | Table column order/sort comparators/summary sentence; outline interleave | rows from core | 3 | host projection config; summary sentence stays a **static label** (never announced on mac) | resolved as label class (0a-13); **the Windows half landed in PR B** — B2 (columns), B3 (comparators, incl. the correction to the spec's Color description) and B9 (the summary label) are the projection config this row designates |
 | K | Filter predicate — title/kind/groupPath/target, case-insensitive contains | none | 2 | `canvas_filter` (0b) | **closed** — 0b-13, 0b-14; `matchesFilter` deleted (0b-2), CD-22. `filterActive` stays host UI state |
 | L | Speakable-name dedup vs core's untitled-only allocation — two uniqueness algorithms | partial, conflicting | 2 | one algorithm in core: `CardSummary.speakable_name` (0b, D-3) | **closed** — 0b-5, 0b-6, CD-20, CD-23; the renderer's used-set walk and its per-view sticky map deleted (0b-2). **PR A note:** CD-23's "which surface reads which field" answer now differs by platform — the Windows OUTLINE reads `speakable_name` where mac's reads `title` (CD-30), so row P's two copies are not byte-identical on a canvas with repeated titles |
@@ -12603,6 +12677,8 @@ table.
 | O | Resize → Fit to Content text-metrics approximation | none | 3 (D-5) | host, identical placeholder formula both hosts; the LABEL is core's (`CanvasResizePreset::FitToContent`) | **label landed (0a)** |
 | P | **The outline row's card reference** — `⟨Kind⟩ card "⟨name⟩"` / `Group "⟨label⟩"`, composed host-side by `CanvasPhrase.CardReference` (Windows) and `CanvasCardRef.phrase` (mac) | **`a11y.rs::card_ref` composes the identical clause**, but only INSIDE templates — no exported accessor renders a bare card reference (0a-10) | 3 by designation (§W-C label class, 0a-13) | host, on both platforms, until an owner designates a label accessor | **open by designation** — the two copies are pinned against core's own render by `TheCardReferenceMatchesCoresOwnComposition`, so a core wording change fails Windows CI rather than drifting. CD-30 records the `speakable_name` vs `title` difference; CD-34 the capitalisation residue |
 | Q | **The outline row's positional status** — `⟨n⟩ of ⟨m⟩ in ⟨container‖canvas⟩[, ⟨colour⟩][, marked]`, composed by `CanvasPhrase.RowStatus` (Windows) and `nodeValue` (mac) | **the same clause is the tail of `CanvasMovedTo`** at Standard and Verbose; again template-internal, with no accessor | 3 by designation (§W-C label class, 0a-13 names the outline node value explicitly) | host, both platforms | **open by designation** — same pin: the Standard render of `CanvasMovedTo` is asserted to equal `CardReference + ", " + RowStatus`, word for word |
+| R | **The connection row's status** — `connection ⟨n⟩ of ⟨m⟩`, composed by `CanvasPhrase.ConnectionStatus` (Windows) and the outline's connection line (mac) | template-internal, no accessor | 3 by designation (§W-C label class, 0a-13) | host, both platforms | **open by designation** (PR H, TH-7) — the label class's third member; a copy of the row's name is never composed (the connection row's NAME is core's render, A11/CD-14) |
+| S | **The load-failure banners** — the initial-open failure `This canvas could not be opened: …` (`CanvasPhrase.OpenFailed`) and the reopen failure after a retarget | the reopen failure IS `CanvasBlockedReason.ReopenFailed`; the initial-open failure has no core twin | 3 | host, the initial-open text; core's render, the reopen failure | **recorded** (PR H, TH-6/TH-7) — the reopen banner renders core's `ReopenFailed` with the move as its message; the initial-open banner stays host text with no twin to consume |
 
 ---
 

@@ -305,7 +305,7 @@ internal sealed class CanvasMarksListPrompt : CanvasPromptViewModel
         ImmutableArray<CanvasPromptChoice> rows = Document.ProjectMarkedRows() is { } projected
             ? [.. projected.Select(row => new CanvasPromptChoice(
                 row.NodeId,
-                CanvasPhrase.CardReference(row.Kind, row.SpeakableName) + ", marked"))]
+                CanvasPhrase.CardReference(row.Kind, row.SpeakableName) + CanvasPhrase.MarkedSuffix))]
             : Choices;
         Choices = rows;
         Title = "Marked Cards (" + rows.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) + ")";

@@ -125,6 +125,30 @@ public sealed class CanvasAnnouncerTests
         Assert.Single(_posted);
     }
 
+    /// <summary>§H TH-7 (H6, IH-44): the label class's helpers have exact
+    /// outputs — the container clause, the marked suffix, the picker row's
+    /// label over the card reference — and <c>RowStatus</c> is composed
+    /// from the same clauses, so the three sinks cannot drift.</summary>
+    [Fact]
+    public void TheLabelClassHelpersComposeTheStatusAndThePickerRow()
+    {
+        Assert.Equal("canvas", CanvasPhrase.ContainerClause(null));
+        Assert.Equal("Q3", CanvasPhrase.ContainerClause("Q3"));
+        Assert.Null(CanvasPhrase.ContainerOf([]));
+        Assert.Equal("Inner", CanvasPhrase.ContainerOf(["Outer", "Inner"]));
+        Assert.Equal(", marked", CanvasPhrase.MarkedSuffix);
+        Assert.Equal(
+            "2 of 5 in " + CanvasPhrase.ContainerClause("Q3") + ", red" + CanvasPhrase.MarkedSuffix,
+            CanvasPhrase.RowStatus(2, 5, "Q3", "red", marked: true));
+        Assert.Equal("1 of 1 in canvas", CanvasPhrase.RowStatus(1, 1, null, null, marked: false));
+        Assert.Equal(
+            CanvasPhrase.CardReference("text", "Alpha") + ", in Research",
+            CanvasPhrase.PickerRowLabel("text", "Alpha", ["Research"]));
+        Assert.Equal(
+            CanvasPhrase.CardReference("group", "Zone") + ", in canvas",
+            CanvasPhrase.PickerRowLabel("group", "Zone", []));
+    }
+
     /// <summary>
     /// Contract A9/A10 drift control. <c>CanvasPhrase.CardReference</c>
     /// and <c>CanvasPhrase.RowStatus</c> are host LABEL-class copies of

@@ -377,24 +377,15 @@ internal sealed class CanvasRendererView : FrameworkElement
     private CanvasViewportOutcome Zoomed(CanvasZoomContext? context) =>
         new CanvasViewportOutcome.Zoomed(_engine.CommittedViewport.ZoomPercent, context);
 
-    private System.Windows.Rect? AllBounds()
-    {
-        if (_engine.Current?.Source.Loaded?.Population is not { } population
-            || population.SceneNodes.Length == 0)
-        {
-            return null;
-        }
-        double left = double.MaxValue, top = double.MaxValue;
-        double right = double.MinValue, bottom = double.MinValue;
-        foreach (CanvasSceneNode node in population.SceneNodes)
-        {
-            left = Math.Min(left, node.X);
-            top = Math.Min(top, node.Y);
-            right = Math.Max(right, node.X + node.Width);
-            bottom = Math.Max(bottom, node.Y + node.Height);
-        }
-        return new System.Windows.Rect(left, top, right - left, bottom - top);
-    }
+    /// <summary>§H TH-7 (§W-G row H, IH-42): the canvas's extent is CORE's
+    /// <c>canvas_bounds</c> through the document, under the lease — the
+    /// host union that stood here was the row's Windows half, reopened
+    /// and closed. Null is an empty canvas or a retired lease: nothing
+    /// to fit.</summary>
+    private System.Windows.Rect? AllBounds() =>
+        Model?.CurrentBounds() is { } bounds
+            ? new System.Windows.Rect(bounds.X, bounds.Y, bounds.Width, bounds.Height)
+            : null;
 
     private System.Windows.Rect? SelectionBounds() =>
         _engine.Current is { } state

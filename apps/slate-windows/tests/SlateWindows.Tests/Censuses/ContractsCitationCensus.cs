@@ -489,7 +489,11 @@ public sealed class ContractsCitationCensus
                 // TH-6 bound the remaining consumers, taking the
                 // section to 95; 94 sits above the pre-task population
                 // of 88 — a sixth time.
-                94),
+                //
+                // TH-7 bound the §W-G close-out, taking the
+                // section to 113; 112 sits above the pre-task population
+                // of 95 — a seventh time.
+                112),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

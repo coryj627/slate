@@ -4777,6 +4777,27 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// compares its seed against THIS (IE-18's re-validation).</summary>
     internal string? PublishedBasis => _slot.Current.Population?.ContentHash;
 
+    /// <summary>§H TH-7 (H6, IH-42; §W-G row H): the canvas's extent is
+    /// core's <c>canvas_bounds</c> — every node including group frames —
+    /// read under the lease so the answer is the CURRENT handle's, and
+    /// null once the publication is retired or no lease stands. The
+    /// renderer's fit reads this, never a host union.</summary>
+    internal CanvasRect? CurrentBounds()
+    {
+        CanvasRect? bounds = null;
+        if (_slot.Current.Lease is { } lease)
+        {
+            _ = lease.Invoke(
+                () =>
+                {
+                    CanvasPublication now = _slot.Current;
+                    return !now.Retired && now.Names(lease);
+                },
+                handle => bounds = _session.CanvasBounds(handle));
+        }
+        return bounds;
+    }
+
     /// <summary>§E TE-6: the card picker's rows — CORE's proximity
     /// order over the lease (anchor = the selection; reading-order
     /// ties; groups included), labelled the palette way. The model
@@ -4808,14 +4829,10 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 .Select(id =>
                 {
                     CanvasOutlineRow row = _rows[id];
-                    string type = row.Kind == "group"
-                        ? "Group"
-                        : $"{char.ToUpperInvariant(row.Kind[0])}{row.Kind[1..]} card";
-                    string container = row.GroupPath.Length > 0
-                        ? row.GroupPath[^1]
-                        : "canvas";
+                    // §H TH-7 (H6, HD-7): the label class, not a fourth copy
+                    // — the speakable name (CD-30) through the one helper.
                     return new CanvasCardPickerRow(
-                        id, $"{type} \"{row.Title}\", in {container}");
+                        id, CanvasPhrase.PickerRowLabel(row.Kind, row.SpeakableName, row.GroupPath));
                 }));
     }
 
@@ -5122,6 +5139,31 @@ internal static class CanvasPhrase
             word[..lead].ToUpperInvariant(), word[lead..]);
     }
 
+    /// <summary>§H TH-7 (H6, IH-44): the label class's shared clauses — the
+    /// ONE spelling of ", marked", of the container a row sits in, and of
+    /// the picker row's label — so no sink composes a second copy.
+    /// <see cref="RowStatus"/> composes from them.</summary>
+    public const string MarkedSuffix = ", marked";
+
+    /// <summary>The container a row sits in: its innermost group's title,
+    /// or null for the canvas itself — from core's group path.</summary>
+    public static string? ContainerOf(IReadOnlyList<string> groupPath)
+    {
+        ArgumentNullException.ThrowIfNull(groupPath);
+        return groupPath.Count > 0 ? groupPath[^1] : null;
+    }
+
+    /// <summary>The container clause's word: the group's title, else
+    /// "canvas" (t0 §3's positional status).</summary>
+    public static string ContainerClause(string? container) => container ?? "canvas";
+
+    /// <summary>The card picker's row label: the card reference over the
+    /// SPEAKABLE name (CD-30's rule, the same field the outline reads),
+    /// then the container clause — the third composition of the P/Q label
+    /// class, routed through the same two helpers.</summary>
+    public static string PickerRowLabel(string kind, string speakableName, IReadOnlyList<string> groupPath) =>
+        CardReference(kind, speakableName) + ", in " + ContainerClause(ContainerOf(groupPath));
+
     /// <summary>t0 §1.2 standard context + §3 inspectability (contract
     /// A10): position, colour and marked state are pull-readable, never
     /// announcement-only. The mac <c>nodeValue</c> twin minus the
@@ -5134,14 +5176,14 @@ internal static class CanvasPhrase
         bool marked,
         bool filtered = false)
     {
-        string status = $"{ordinalN} of {totalM} in {container ?? "canvas"}";
+        string status = $"{ordinalN} of {totalM} in {ContainerClause(container)}";
         if (colorName is { Length: > 0 } color)
         {
             status += $", {color}";
         }
         if (marked)
         {
-            status += ", marked";
+            status += MarkedSuffix;
         }
         if (filtered)
         {

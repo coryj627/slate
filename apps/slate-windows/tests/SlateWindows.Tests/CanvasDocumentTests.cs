@@ -5042,6 +5042,151 @@ public sealed class CanvasDocumentTests : IDisposable
         document.Shutdown();
     });
 
+    /// <summary>§H TH-7 (H6, HD-7): the card picker's rows carry the label
+    /// class over the SPEAKABLE name — the field the outline reads
+    /// (CD-30) — through the one helper, not a fourth composition over
+    /// the title.</summary>
+    [Fact]
+    public void ThePickerRowsCarryTheLabelClassOverSpeakableNames()
+    {
+        CanvasDocumentViewModel document = NewDocument("board.canvas");
+        document.Load();
+        document.SeatSelectionSilently("loose");
+        CanvasCardPickerModel picker = document.BuildCardPickerModel();
+        CanvasOutlineRow question = document.Outline.First(row => row.NodeId == "question");
+        CanvasCardPickerRow row = Assert.Single(picker.Rows, r => r.NodeId == "question");
+        Assert.Equal(
+            CanvasPhrase.PickerRowLabel(question.Kind, question.SpeakableName, question.GroupPath),
+            row.Label);
+        Assert.Equal("Text card \"Core question\", in Research", row.Label);
+        document.Shutdown();
+
+        // Where the title repeats, the speakable name and the title DIFFER
+        // — the committed cycle fixture has two cards titled "Same" — and
+        // the label carries the speakable one.
+        File.Copy(
+            CanvasEndToEndTests.CommittedFixture("cycle.canvas"),
+            Path.Combine(_fixture.Root, "cycle.canvas"), overwrite: true);
+        CanvasDocumentViewModel cycle = NewDocument("cycle.canvas");
+        cycle.Load();
+        cycle.SeatSelectionSilently("a");
+        CanvasCardPickerModel cyclePicker = cycle.BuildCardPickerModel();
+        CanvasOutlineRow renamed = Assert.Single(
+            cycle.Outline, r => r.Title == "Same" && r.SpeakableName != r.Title);
+        CanvasCardPickerRow renamedRow = Assert.Single(cyclePicker.Rows, r => r.NodeId == renamed.NodeId);
+        Assert.Equal(
+            CanvasPhrase.PickerRowLabel(renamed.Kind, renamed.SpeakableName, renamed.GroupPath),
+            renamedRow.Label);
+        Assert.Contains(renamed.SpeakableName, renamedRow.Label);
+        Assert.DoesNotContain("\"Same\", in", renamedRow.Label);
+        cycle.Shutdown();
+    }
+
+    /// <summary>§H TH-7 (H6, IH-42; §W-G row H): the canvas's extent the
+    /// renderer fits to is CORE's <c>canvas_bounds</c>, read through the
+    /// document under the lease — equal to core's answer on another
+    /// handle of the same bytes, and null once the document is shut down
+    /// and the lease gone.</summary>
+    [Fact]
+    public void TheCanvasBoundsAreCoresUnderTheLeaseAndNoneWhenRetired()
+    {
+        CanvasDocumentViewModel document = NewDocument("board.canvas");
+        document.Load();
+        CanvasRect live = Assert.IsType<CanvasRect>(document.CurrentBounds());
+
+        CanvasOpenInfo twin = _session.OpenCanvas("board.canvas");
+        try
+        {
+            CanvasRect core = Assert.IsType<CanvasRect>(_session.CanvasBounds(twin.Handle));
+            Assert.Equal(core, live);
+        }
+        finally
+        {
+            _session.CloseCanvas(twin.Handle);
+        }
+        // The group frame is part of the extent (core's rule), so the
+        // bounds reach the group's own top-left, not the first card's.
+        Assert.Equal(-40.0, live.X);
+        Assert.Equal(-40.0, live.Y);
+
+        document.Shutdown();
+        Assert.Null(document.CurrentBounds());
+    }
+
+    /// <summary>§H TH-7 (H6, IH-42): Fit Canvas contains and centres core's
+    /// bounds under the named rules — the zoom is the smaller of the two
+    /// padded ratios clamped to [0.1, 4.0], and the bounds' centre lands
+    /// on the view's centre — and answers the fit's context.</summary>
+    [Fact]
+    public void FitCanvasContainsAndCentresCoresBounds() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = NewDocument("board.canvas");
+        document.Load();
+        var surface = new CanvasSurfaceView { Model = document };
+        using HostedWindow host = Host(surface);
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        PumpUntil(() => surface.VisualForTests.Engine.Current is not null);
+
+        CanvasRect bounds = Assert.IsType<CanvasRect>(document.CurrentBounds());
+        var outcome = Assert.IsType<CanvasViewportOutcome.Zoomed>(
+            surface.VisualForTests.Viewport(CanvasViewportVerb.FitCanvas));
+        Assert.Equal(CanvasZoomContext.FitCanvas, outcome.Context);
+
+        CanvasViewportState fitted = surface.VisualForTests.Engine.CommittedViewport;
+        double padding = CanvasViewportState.FitPadding;
+        double expectedZoom = Math.Clamp(
+            Math.Min(
+                (fitted.ViewWidth - (padding * 2)) / bounds.Width,
+                (fitted.ViewHeight - (padding * 2)) / bounds.Height),
+            CanvasViewportState.MinZoom,
+            CanvasViewportState.MaxZoom);
+        Assert.Equal(expectedZoom, fitted.Zoom, 9);
+        Assert.Equal(fitted.ZoomPercent, outcome.Percent);
+        // The bounds' centre maps to the view's centre: contained, centred.
+        double centreX = (bounds.X + (bounds.Width / 2)) * fitted.Zoom + fitted.PanX;
+        double centreY = (bounds.Y + (bounds.Height / 2)) * fitted.Zoom + fitted.PanY;
+        Assert.Equal(fitted.ViewWidth / 2, centreX, 6);
+        Assert.Equal(fitted.ViewHeight / 2, centreY, 6);
+        Assert.True(bounds.X * fitted.Zoom + fitted.PanX >= 0, "the left edge is inside the view");
+        Assert.True((bounds.X + bounds.Width) * fitted.Zoom + fitted.PanX <= fitted.ViewWidth, "the right edge is inside the view");
+        document.Shutdown();
+    });
+
+    /// <summary>§H TH-7 (H6, IH-43; §W-G row I): the renderer's read-only
+    /// zoom Value is core's render of <c>CanvasZoom</c> for the committed
+    /// percent, minus its single terminal period — at the seed and after a
+    /// step.</summary>
+    [Fact]
+    public void TheZoomValueIsCoresRenderMinusItsPeriod() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = NewDocument("board.canvas");
+        document.Load();
+        var surface = new CanvasSurfaceView { Model = document };
+        using HostedWindow host = Host(surface);
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        PumpUntil(() => surface.VisualForTests.Engine.Current is not null);
+        AutomationPeer peer = UIElementAutomationPeer.CreatePeerForElement(surface.VisualForTests);
+        var value = (System.Windows.Automation.Provider.IValueProvider)peer.GetPattern(PatternInterface.Value);
+
+        string Expected()
+        {
+            uint percent = surface.VisualForTests.Engine.CommittedViewport.ZoomPercent;
+            string rendered = CanvasAnnouncer.RenderLabel(new CanvasA11yEvent.CanvasZoom(null, percent));
+            Assert.EndsWith(".", rendered);
+            return rendered[..^1];
+        }
+
+        Assert.Equal(Expected(), value.Value);
+        Assert.Equal("Zoom 100 percent", value.Value);
+        Assert.IsType<CanvasViewportOutcome.Zoomed>(
+            surface.VisualForTests.Viewport(CanvasViewportVerb.ZoomIn));
+        Assert.Equal(Expected(), value.Value);
+        Assert.Equal("Zoom 125 percent", value.Value);
+        document.Shutdown();
+    });
+
     /// <summary>§D D14 end to end: a viewport verb through the
     /// presenter seam moves the engine's installed zoom — the
     /// pane-addressed route, no cache consulted.</summary>
