@@ -12214,6 +12214,113 @@ approval on that head; merge on the standing conditions.
 | IH-30 | MAJOR | taken — one mutation per gate's own predicate, listed in H10 |
 | IH-31 | BLOCKER | taken — H10 reproduces §5.2's sequence: format per batch, CI arbitration of the journeys, every lane's failures read, the post-implementation codex pass, both-twin CI, codoki |
 
+### THE FREEZE — read this first
+
+**This section is CLOSED to further prose revision**, frozen at
+revision 2 after two adversarial rounds, by APPLICATION OF THE
+STANDING PRECEDENT — the owner's ruling that closed §C-unit, §D, §E,
+§F, §G and §G2, applied here by the session rather than freshly
+ruled, and recorded as such; the owner may overrule. The trajectory is
+rule 5's signal on the series' schedule, and the clearest of the
+series: thirty-one findings, then twenty-two with TWENTY-ONE of them
+CREATED by revision 2's own closures — an authoring leg that marks the
+same card twice, a benchmark conflated with the navigator it does not
+drive, a fixture gate satisfiable by a no-op, a corpus key that is not
+what `A11yEventIdentity` renders, six consumers promised through a
+presenter seam that returns a `bool`, a bounds assertion across two
+dimensions, a helper census that blacklists syntax, an anchor fact
+that never opens the editor — which is the protocol's own definition
+of a patch over a missing model rather than a repair. Prose cannot
+close what the round found; the findings become the ledger below,
+each discharged BY CODE in the task whose surface it names, each
+closure recorded with its facts and its byte-restored mutations,
+exactly as the IF, IG and IG2 ledgers were.
+
+Two rows touch the frozen text of earlier sections, and each is
+discharged WITHOUT reopening it: E13 stays OPEN — the typed
+refused-open reason is core vocabulary, CD-38 records the stop point,
+and the close-out files the core issue rather than inventing the arm
+(HD-8); and E14's exact-landing rule is honoured by facts that open
+the editor and observe the caret, with a miss recorded as the STOP
+E14 names, never "record and continue" (IH-47). Where a task finds the
+frozen text and the shipped code in conflict, the shipped frozen
+sections win and the record says so.
+
+The frozen text stands with its known holes NAMED: the authoring
+leg's reseating and presenter (IH-32); the sort oracle (IH-33); the
+budget ledger's five measurements and their owners (IH-34); the
+fixture arithmetic and the no-op-proof fixture gate (IH-35, IH-36);
+the trigger ledger's key, count and the source-to-event linkage
+(IH-37, IH-38); the result-bearing presenter outcome the viewport
+consumers need (IH-39); the canvas-origin heading miss (IH-40); the
+matrix census that proves semantics, not shape (IH-41); the bounds
+proof in one dimension with the lease current (IH-42); the zoom
+Value's exact oracle (IH-43); the helpers' signatures and the sinks
+gated (IH-44); validation 13 over declarations including properties,
+and the anchor that is only a call (IH-45); the checklist's three
+distinct clauses (IH-46); the landing facts that observe the caret
+(IH-47); the upstream arithmetic (IH-48); the reconciliation key over
+every register including this section's (IH-49); the citation
+census's exact grammar (IH-50); the named reconciliation and ancestry
+gates (IH-51); one mutation per predicate (IH-52); and the execution
+sequence as §5.2 writes it (IH-53).
+
+### Round record
+
+- **Round 1** (xhigh, conforming): 31 findings — 17 blockers, 13
+  majors, 1 minor — closed by revision 2's text (the table above).
+- **Round 2** (xhigh, conforming): 22 findings — 16 blockers, 4
+  majors, 2 minors — twenty-one created by revision 2. Rule 5's
+  signal; the precedent applied; the findings are the ledger.
+
+### The ledger — IH-32 … IH-53, discharged by code
+
+| Row | Severity | Contracts | Origin | Claim | Rides |
+| --- | --- | --- | --- | --- | --- |
+| IH-32 | BLOCKER | H1 | created by revision 2 | The authoring leg marks "the new card and the anchor" — while `ToggleMark` acts on the selection only, nothing reseats it, and move mode needs an attached presenter. | TH-1 |
+| IH-33 | MAJOR | H1 | survived round 1 | The sort leg asserts "the exact post-sort order" — with no pinned sequence, so the assertion could derive from the comparator under test. | TH-0 |
+| IH-34 | BLOCKER | H2 | created by revision 2 | "All four budgets" — over five measurements; the benchmark's descriptor lookup named beside the navigator step; the runner's command without `--canvas`. | TH-2 |
+| IH-35 | MINOR | H3 | created by revision 2 | "Four of seven never scripted" — two are scripted, four are newly scripted, one is excluded. | TH-3 |
+| IH-36 | BLOCKER | H3 | created by revision 2 | The fixture gate is satisfied by a scenario with no steps — the driver permits empty operations and a run that canonicalises without mutating. | TH-3 |
+| IH-37 | BLOCKER | H4 | created by revision 2 | 187 rows keyed by "outer arm plus nested discriminant" — while `A11yEventIdentity` renders the full payload; the key and the count cannot both be true. | TH-4 |
+| IH-38 | BLOCKER | H4 | created by revision 2 | A census resolving names proves no trigger — a member that stops constructing the event still passes. | TH-4 |
+| IH-39 | BLOCKER | H4 | created by revision 2 | The viewport consumers emit percent and context — through a presenter seam whose `ViewportCommand` returns `bool`; `CanvasZoomContext` has two arms, not four. | TH-5 |
+| IH-40 | BLOCKER | H4/H9 | created by revision 2 | `HeadingNotFound` is "verified then consumed or designated" — while the workspace fires the generic editor event, never the canvas reason with heading and filename. | TH-6 |
+| IH-41 | BLOCKER | H5 | created by revision 2 | The matrix census proves shape — ten cells, non-empty, names resolve — not the semantic cells. | TH-8 |
+| IH-42 | BLOCKER | H6 | created by revision 2 | "The fit viewport equals core's bounds" — a viewport transform against a document rect. | TH-7 |
+| IH-43 | MINOR | H6 | created by revision 2 | The zoom Value is pinned to "core's Standard render" — an event with no verbosity, and a rounding rule unstated. | TH-7 |
+| IH-44 | MAJOR | H6 | created by revision 2 | A census over interpolation, concatenation and `string.Format` — while a `StringBuilder` or a join composes the same duplicate; the helpers' inputs unstated. | TH-7 |
+| IH-45 | BLOCKER | H7 | created by revision 2 | Validation 13's grammar rejects the get-only command properties the evidence already anchors, and `CanvasDocumentViewModel.cs#CanvasPlaceSet` is a call, not a declaration. | TH-9 |
+| IH-46 | BLOCKER | H8 | created by revision 2 | Item 1 collapses T's outline, table and visual clauses into one — dropping table headers and the sort announcement. | TH-10 |
+| IH-47 | BLOCKER | H9 | created by revision 2 | E14's landing is "verified" by a fact that stubs the workspace seam and never opens the editor; no block-landing fact is named. | TH-11 |
+| IH-48 | MAJOR | H9 | created by revision 2 | "Fourteen items" — fifteen inputs, ten issue records; the groupings unstated. | TH-12 |
+| IH-49 | BLOCKER | H9 | created by revision 2 | The reconciliation key omits HD, HD-D, HR and the Verified-during-implementation register. | TH-12 |
+| IH-50 | BLOCKER | H9 | created by revision 2 | "Every backticked C# identifier" — the census recognises single long tokens only. | TH-12 |
+| IH-51 | BLOCKER | H9/H10 | created by revision 2 | The generated table and the ancestry check are attributed to `ContractsCitationCensus`, which does neither; no script path, command, output or fact is named. | TH-12 |
+| IH-52 | MAJOR | H10 | created by revision 2 | The mutation table leaves twelve of the new predicates un-attacked. | TH-13 |
+| IH-53 | BLOCKER | H10 | created by revision 2 | The sequence makes the local journeys a required step and omits non-concurrency and the full rerun after a shell-wide fix. | TH-13 |
+
+### The task loop
+
+| Task | Slice | Discharges |
+| --- | --- | --- |
+| TH-0 | CanvasEndToEndTests: the class over `FixtureVault` + `VaultSession.OpenFilesystem` + the committed `sample.canvas`; OpenSampleExposesOutlineTableAndScene with the table-sort leg on the STA thread under the class's own RunSta — document, surface and grid created on that thread — and the PINNED post-sort sequences for ascending and descending Type; AnnouncementGrammarConformsPerVerbosity | IH-33 |
+| TH-1 | AuthoringLoopThenUndoChainRestoresTheCommittedBytes: the byte baseline asserted before the first verb; the exact reseating (`SelectNode`, announce off) — select and mark the new card, select and mark the anchor, submit the group, reselect the new card; a fake presenter attached for the mode; `EnterMoveMode` → `ModeStep` → `Commit`, every command's success asserted; five entries, five undos, the committed bytes | IH-32 |
+| TH-2 | LargeCanvasOpensNavigatesAndWindowsUnderBudget and the §K roll-up: the four spec budgets (open, first window, pan, the real navigator step) with their owners named, the benchmark's descriptor lookup recorded as what it is, the command pinned `--canvas --validate-budgets`, numbers pasted from the run | IH-34 |
+| TH-3 | §W-A: the Swift twin CanvasScenarioTests; read/exclusion parity in `ParityHarnessTests.swift`, scripted/exclusion parity in `MutationHarnessTests.swift`; the Windows facts with meaningful-mutation semantics — at least one successful mutation and a terminal hash that differs before the inverse replay; `empty`, `malformed`, `cycle`, `unknown_fields` scripted as pinned; the arithmetic corrected; the two false comments fixed | IH-35, IH-36 |
+| TH-4 | §W-D: the trigger LEDGER keyed by structural event and discriminant × trigger site with its count derived from the enum, the 187 identities kept as the rendering corpus; the census that resolves both platforms' members AND checks each Windows member constructs the ledger's event and each named fact asserts its identity; the no-Edit-menu designation fact; the counts corrected in the doc | IH-37, IH-38 |
+| TH-5 | The viewport consumers: a result-bearing presenter outcome (the committed percent with its optional context, the committed follow state, refused, no presenter); the navigator emitting `CanvasZoom` and `CanvasFollowSelectionToggled`; facts for the five zoom verbs and both follow states | IH-39 |
+| TH-6 | The remaining consumers: `RunHistory` telling a quarantined stack from an empty one and speaking TE-2's sentence; the retarget banner through core's `ReopenFailed` render; the canvas-origin failed-open continuation emitting `HeadingNotFound` with heading and filename, once | IH-40 |
+| TH-7 | §W-G: the bounds through a live-lease `CanvasBounds` query equal to core's rect, and `FitTo` asserted to contain and centre those bounds under the padding and clamp rules; the zoom Value pinned to `CanvasZoom(null, percent)`'s render minus its terminal period with the rounding rule stated; the helpers with exact signatures and the SINKS gated to them by a source census; rows R and S; the register closed | IH-42, IH-43, IH-44 |
+| TH-8 | §W-C: the structured manifest sourced from the peer and control contracts, every non-human cell compared exactly; the rows repaired and added; axe zero with the one waiver | IH-41 |
+| TH-9 | The matrix: validation 13 over declarations — types, methods, constructors, properties, events — by parsing, the `CanvasPlaceSet` anchor replaced by a declared member; validation 14; the `canvas` aggregate group; the surface row derived; the matrix regenerated | IH-45 |
+| TH-10 | The AT checklist with T's three clauses distinct and verbatim, the run date and evidence reference in the header, every human cell Pending, the automated twin per item | IH-46 |
+| TH-11 | E14's landing facts at the workspace level with seeded notes and file cards — a heading anchor and a block anchor — the asynchronous navigation pumped and the exact caret offset asserted; a miss recorded as the STOP | IH-47 |
+| TH-12 | The reconciliation: the generator script named by path, command, output and schema; keys qualified by (section, register kind, id) over the global registers, this section's own, and Verified during implementation; the ancestry gate as its own fact running `git merge-base --is-ancestor`; the citation census's claim narrowed to its exact grammar; the counts pinned (fifteen inputs, ten issue records, the two groupings named); the issues filed and numbered; `w6_spec.md` converted; the stale citations corrected; E13 recorded open | IH-48, IH-49, IH-50, IH-51 |
+| TH-13 | The mutation sweep — one byte-restored mutation per new predicate, the twelve named; the execution sequence recorded as §5.2 writes it (format per batch, unit and census gates, local journeys as optional serialized smoke, CI's shell gate as the acceptance, never concurrent with the unit suite, the full journey rerun after a shell-wide fix, every lane's log read); the post-implementation codex pass; the §H close-out | IH-52, IH-53 |
+
+### Implementation records
+
 ---
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
