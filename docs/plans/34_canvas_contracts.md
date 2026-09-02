@@ -10244,6 +10244,29 @@ resolution rows) await a recovery flow with a writer;
 `DisplacedBeforeApply` sentence stays unpinned because the arm is
 silent by design.
 
+### CI round 1 — the first canvas open on a loaded runner
+
+The marks journey passed locally and failed on the runner at its first
+canvas wait — "CanvasOutlineTree did not become available" twenty
+seconds after New Canvas, before a single mark was placed — while the
+modes journey, which opens a canvas by the same lines, passed in the
+same run. The TRX said why the two differed: the runner's order put
+the marks journey five milliseconds after the visual-board journey,
+whose teardown kills its app without waiting for exit, so the marks
+journey's first canvas open — the slowest step of a fresh process —
+ran under that teardown; the modes journey ran before it. The
+persisted-surface theory was checked and closed: the surface token
+lives in the vault's own `workspace.json`, and every journey opens a
+fresh vault.
+
+Two changes, both in the journey: the first canvas wait is sixty
+seconds and carries the app log tail on a miss, so the next miss is
+diagnosable rather than a bare timeout; and the journey's Up and
+Enter go through `PressKey` (type and settle) instead of
+`Keyboard.Press`, which holds the key down. Validated locally alone
+and in the runner's order (the visual-board journey, then the marks
+journey), both green.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same

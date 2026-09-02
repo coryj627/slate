@@ -6390,8 +6390,21 @@ public sealed class ShellAccessibilityTests
             AutomationElement newCanvas = WaitForMenuItem(
                 window, "FileMenu", "NewCanvasMenuItem", TimeSpan.FromSeconds(10));
             newCanvas.Patterns.Invoke.Pattern.Invoke();
-            AutomationElement tree = WaitForElement(
-                window, "CanvasOutlineTree", TimeSpan.FromSeconds(20));
+            // The first canvas open on a fresh process is the slowest step
+            // of the journey on a loaded runner (the previous journey's
+            // app may still be tearing down); wait longer than the modes
+            // journey does and, on a miss, say what the app logged so the
+            // next miss is diagnosable rather than a bare timeout.
+            AutomationElement? tree = TryWaitForElement(
+                window, "CanvasOutlineTree", TimeSpan.FromSeconds(60));
+            if (tree is null)
+            {
+                string log = ReadSharedLog(
+                    Path.Combine(logDirectory, "slate-windows.log"));
+                Assert.Fail(
+                    "CanvasOutlineTree never appeared after New Canvas; app log tail: "
+                    + (log.Length > 3000 ? log[^3000..] : log));
+            }
             tree.Focus();
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
 
@@ -6487,8 +6500,7 @@ public sealed class ShellAccessibilityTests
                 + string.Join(" | ", Rows().Select(r => r.Name))
                 + "; app log tail: "
                 + ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log")));
-            Keyboard.Press(VirtualKeyShort.UP);
-            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+            PressKey(VirtualKeyShort.UP);
             Keyboard.TypeSimultaneously(
                 VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.KEY_M);
             Assert.True(
@@ -6503,7 +6515,7 @@ public sealed class ShellAccessibilityTests
             AssertAxeClean(process, "canvas-marks-list");
 
             // ---- Jump: the sheet closes, reader focus lands on a row --
-            Keyboard.Press(VirtualKeyShort.ENTER);
+            PressKey(VirtualKeyShort.ENTER);
             Assert.True(
                 SpinWait.SpinUntil(
                     () => window.FindFirstDescendant(
