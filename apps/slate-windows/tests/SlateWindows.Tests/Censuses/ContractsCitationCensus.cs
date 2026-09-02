@@ -355,7 +355,7 @@ public sealed class ContractsCitationCensus
             (
                 "G",
                 "## PR G — marks: mark-then-act, the marks list, and the bulk verbs",
-                "## §W-G canonical-consumption audit",
+                "## PR G2 — the verb residue: front doors for §E's verbs, and the parity extras",
                 // A young section pins below its honest size and
                 // rises with its records, as §F's did.
                 6_000,
@@ -401,6 +401,19 @@ public sealed class ContractsCitationCensus
                 // above the pre-task population of 42 — an eighth
                 // time.
                 45),
+            (
+                "G2",
+                "## PR G2 — the verb residue: front doors for §E's verbs, and the parity extras",
+                "## §W-G canonical-consumption audit",
+                // A young section pins below its honest size and
+                // rises with its records, as §G's did.
+                6_000,
+                // A DESIGN floor, the standing convention: revision 1's
+                // citations are EXISTING names (§E's verbs, the prompt
+                // hierarchy, the FFI shapes); 4 sits above the empty
+                // pre-section population and below the landed count;
+                // each task raises it.
+                4),
         ];
 
     public static TheoryData<string, string, string> SectionRanges
@@ -1067,6 +1080,10 @@ public sealed class ContractsCitationCensus
         (
             "§G",
             "## PR G — marks: mark-then-act, the marks list, and the bulk verbs",
+            "## PR G2 — the verb residue: front doors for §E's verbs, and the parity extras"),
+        (
+            "§G2",
+            "## PR G2 — the verb residue: front doors for §E's verbs, and the parity extras",
             "## §W-G canonical-consumption audit"),
         (
             "divergences",
