@@ -10164,6 +10164,46 @@ Mutations, each byte-restored: M1 a mode guard added to Toggle (GD-4
 regressed), M2 the move commit clearing the marks, M3 history
 clearing the marks. All bitten.
 
+### TG-7 — the journey, axe, and the ledger sweep
+
+G9 as one FlaUI journey, `CanvasMarks_ToggleListJumpDeleteAndUndo_AreReachable`
+(gate W-C): a real keyboard authors two cards by Ctrl+Alt+N, marks
+the second by Ctrl+Alt+M, steps Up and marks the first, and the
+tree's two rows carry `marked` in their UIA ItemStatus; the palette
+opens the marks list ("Canvas: Show Marked Cards…"), the sheet is
+found by its id and axe scans it clean (`canvas-marks-list`); Enter
+Jumps — the sheet closes and reader focus lands on a card row; the
+palette's Delete Marked removes both in one action and the onboarding
+returns; Ctrl+Z restores both. One launch, every leg in sequence.
+
+The journey found what no fact had: a mark toggle is a marks-only
+publication — the loaded population is the same reference, the filter
+is unchanged, so `OutlinePublished` never fires — and the outline's
+row view-models were snapshots whose `Status` was get-only, refreshed
+only by a rebuild. The surface's peers read `IsMarked` live and were
+right; the tree's ItemStatus stayed "1 of 2 in canvas" after the
+chord. The fix is the smallest true one: `CanvasOutlineRowViewModel.Status`
+notifies, `RefreshStatus(marked, filtered)` recomposes it from the same
+core row through `CanvasPhrase.RowStatus`, and the view's
+`OnSelectionChanged` answers `Marked` with `RefreshMarks()` — every
+node row re-read from the mirror the apply just seeded, in place, no
+rebuild, so the row a reader is standing on keeps its identity and
+its focus while its status gains or loses ", marked". A rebuild would
+have been the easy shape and the wrong one: it tears every row down
+under the reader's focus for a change that moved no row.
+
+Fact: one — the same row instance's status gains ", marked" on the
+toggle and loses it on the next, identity asserted. Mutation M1, the
+`Marked` branch removed: bitten, byte-restored. The seven canvas
+journeys run green together with the screen reader stopped.
+
+The ledger sweep: every IG-31..IG-56 row is named in a TG record
+(the sweep script printed an empty "never named" set). Owed and
+recorded rather than shipped: the conflict-resolution verbs and their
+continuation matrix (IG-53's resolution rows), `WithPresented()`'s
+re-present (no caller), `DisplacedBeforeApply`'s sentence (unpinned
+by design — silent), and the mac-lane divergences GD-1..GD-7.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same

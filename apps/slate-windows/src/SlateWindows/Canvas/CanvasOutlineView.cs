@@ -25,6 +25,7 @@ internal sealed class CanvasOutlineRowViewModel : BindableBase
 {
     private bool _isExpanded;
     private bool _isSelected;
+    private string _status = string.Empty;
 
     private CanvasOutlineRowViewModel(
         string id, string name, string status, string hint, bool isGroup)
@@ -95,8 +96,33 @@ internal sealed class CanvasOutlineRowViewModel : BindableBase
     /// <summary>UIA Name (contract A9).</summary>
     public string Name { get; }
 
-    /// <summary>UIA ItemStatus (contract A10).</summary>
-    public string Status { get; }
+    /// <summary>UIA ItemStatus (contract A10). Recomposed IN PLACE when
+    /// the marked set changes (§G G1): a mark is not a republish of the
+    /// rows, so the row a reader is standing on keeps its identity and
+    /// its focus while its status gains or loses ", marked".</summary>
+    public string Status
+    {
+        get => _status;
+        private set => SetField(ref _status, value);
+    }
+
+    /// <summary>§G G1: the node row's status re-read from the same core
+    /// row with the marked flag of the moment. Connection rows carry
+    /// no mark and are left alone.</summary>
+    internal void RefreshStatus(bool marked, bool filtered)
+    {
+        if (Row is not { } row)
+        {
+            return;
+        }
+        Status = CanvasPhrase.RowStatus(
+            row.OrdinalN,
+            row.TotalM,
+            row.GroupPath.Length > 0 ? row.GroupPath[^1] : null,
+            row.ColorName,
+            marked,
+            filtered);
+    }
 
     /// <summary>UIA HelpText — the per-kind activation hint.</summary>
     public string Hint { get; }
@@ -597,6 +623,28 @@ internal sealed class CanvasOutlineView : UserControl
         if (e.PropertyName == nameof(CanvasSelection.Selected))
         {
             ApplySelection();
+        }
+        else if (e.PropertyName == nameof(CanvasSelection.Marked))
+        {
+            RefreshMarks();
+        }
+    }
+
+    /// <summary>§G G1: a marks-only publication changes no row and
+    /// raises no <see cref="CanvasDocumentViewModel.OutlinePublished"/>,
+    /// so the rows' ItemStatus is refreshed here, in place, from the
+    /// mirror the apply just seeded — the outline's ", marked" is the
+    /// publication's marked intent, never a stale snapshot of it.</summary>
+    private void RefreshMarks()
+    {
+        if (Model is not { } model)
+        {
+            return;
+        }
+        bool filtered = model.FilterActive;
+        foreach ((string id, CanvasOutlineRowViewModel row) in _byNode)
+        {
+            row.RefreshStatus(model.Selection.IsMarked(id), filtered);
         }
     }
 

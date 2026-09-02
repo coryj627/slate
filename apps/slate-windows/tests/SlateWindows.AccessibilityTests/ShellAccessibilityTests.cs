@@ -6340,6 +6340,229 @@ public sealed class ShellAccessibilityTests
     }
 
 
+    /// <summary>§G TG-7 (G9): the MARKS journey — a real keyboard marks
+    /// two cards by chord with the rows' marked state visible to UIA,
+    /// opens the marks list from the palette (sheet + axe), Jumps to a
+    /// row and lands reader focus on it, deletes the marked set in one
+    /// palette action, and undoes it in one chord. One launch, every
+    /// leg in sequence, the journey traps honored.</summary>
+    [Fact]
+    [Trait("gate", "W-C")]
+    public void CanvasMarks_ToggleListJumpDeleteAndUndo_AreReachable()
+    {
+        string testRoot = Path.Combine(
+            Path.GetTempPath(), $"slate-canvas-marks-{Guid.NewGuid():N}");
+        string vaultRoot = Path.Combine(testRoot, "Marks Vault");
+        string logDirectory = Path.Combine(testRoot, "logs");
+        Directory.CreateDirectory(vaultRoot);
+        File.WriteAllText(
+            Path.Combine(vaultRoot, "note.md"), "# Note\n\nBody.\n");
+
+        Process? process = null;
+        try
+        {
+            var startInfo = new ProcessStartInfo(SlateWindowsExe())
+            {
+                UseShellExecute = false,
+            };
+            startInfo.ArgumentList.Add(vaultRoot);
+            startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
+                $"slate-canvas-marks-{Guid.NewGuid():N}";
+            startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            process = Process.Start(startInfo)
+                ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+
+            if (!HasInteractiveDesktop(process, "Canvas marks"))
+            {
+                return;
+            }
+
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(
+                process,
+                automation,
+                Path.Combine(logDirectory, "slate-windows.log"),
+                TimeSpan.FromSeconds(30));
+            window.SetForeground();
+            window.Focus();
+
+            // ---- A canvas with two cards, by the authoring path ----
+            AutomationElement newCanvas = WaitForMenuItem(
+                window, "FileMenu", "NewCanvasMenuItem", TimeSpan.FromSeconds(10));
+            newCanvas.Patterns.Invoke.Pattern.Invoke();
+            AutomationElement tree = WaitForElement(
+                window, "CanvasOutlineTree", TimeSpan.FromSeconds(20));
+            tree.Focus();
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+
+            AutomationElement[] Rows()
+            {
+                try
+                {
+                    AutomationElement? liveTree = window.FindFirstDescendant(
+                        automation.ConditionFactory.ByAutomationId(
+                            "CanvasOutlineTree"));
+                    return liveTree is null
+                        ? []
+                        : liveTree.FindAllDescendants(
+                            automation.ConditionFactory.ByControlType(
+                                ControlType.TreeItem));
+                }
+                catch (System.Runtime.InteropServices.COMException)
+                {
+                    return [];
+                }
+            }
+
+            int MarkedRows()
+            {
+                try
+                {
+                    return Rows().Count(item =>
+                        item.Properties.ItemStatus.ValueOrDefault?.Contains(
+                            "marked", StringComparison.OrdinalIgnoreCase) == true);
+                }
+                catch (System.Runtime.InteropServices.COMException)
+                {
+                    return -1;
+                }
+            }
+
+            void RunPaletteCommand(string query, string rowPrefix)
+            {
+                window.SetForeground();
+                PressChord(
+                    VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_P);
+                AutomationElement search = WaitForElement(
+                    window, "CommandPaletteSearch", TimeSpan.FromSeconds(10));
+                search.Patterns.Value.Pattern.SetValue(query);
+                AutomationElement results = WaitForElement(
+                    window, "CommandPaletteResults", TimeSpan.FromSeconds(10));
+                AutomationElement? row = null;
+                Assert.True(
+                    SpinWait.SpinUntil(
+                        () =>
+                        {
+                            try
+                            {
+                                row = results
+                                    .FindAllDescendants(automation.ConditionFactory
+                                        .ByControlType(ControlType.ListItem))
+                                    .FirstOrDefault(item => item.Name.StartsWith(
+                                        rowPrefix, StringComparison.Ordinal));
+                                return row is not null;
+                            }
+                            catch (System.Runtime.InteropServices.COMException)
+                            {
+                                return false;
+                            }
+                        },
+                        TimeSpan.FromSeconds(10)),
+                    "no palette row for " + rowPrefix + "; app log tail: "
+                    + ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log")));
+                row!.Patterns.SelectionItem.Pattern.Select();
+                PressKey(VirtualKeyShort.ENTER);
+                Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+            }
+
+            Keyboard.TypeSimultaneously(
+                VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.KEY_N);
+            Assert.True(
+                SpinWait.SpinUntil(() => Rows().Length >= 1, TimeSpan.FromSeconds(15)),
+                "the first Ctrl+Alt+N never produced a card row");
+            Keyboard.TypeSimultaneously(
+                VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.KEY_N);
+            Assert.True(
+                SpinWait.SpinUntil(() => Rows().Length >= 2, TimeSpan.FromSeconds(15)),
+                "the second Ctrl+Alt+N never produced a card row");
+
+            // ---- Mark both by chord; the rows say so to UIA (G1) ----
+            Keyboard.TypeSimultaneously(
+                VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.KEY_M);
+            Assert.True(
+                SpinWait.SpinUntil(() => MarkedRows() == 1, TimeSpan.FromSeconds(10)),
+                "Ctrl+Alt+M never marked the selected row; statuses: "
+                + string.Join(" | ", Rows().Select(r => r.Properties.ItemStatus.ValueOrDefault ?? "<null>"))
+                + "; names: "
+                + string.Join(" | ", Rows().Select(r => r.Name))
+                + "; app log tail: "
+                + ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log")));
+            Keyboard.Press(VirtualKeyShort.UP);
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+            Keyboard.TypeSimultaneously(
+                VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.KEY_M);
+            Assert.True(
+                SpinWait.SpinUntil(() => MarkedRows() == 2, TimeSpan.FromSeconds(10)),
+                "the second Ctrl+Alt+M never marked the row above");
+
+            // ---- The marks list from the palette (G4), scanned -----
+            RunPaletteCommand("Show Marked", "Canvas: Show Marked Cards");
+            AutomationElement sheet = WaitForElement(
+                window, "CanvasPromptSheet", TimeSpan.FromSeconds(10));
+            Assert.NotNull(sheet);
+            AssertAxeClean(process, "canvas-marks-list");
+
+            // ---- Jump: the sheet closes, reader focus lands on a row --
+            Keyboard.Press(VirtualKeyShort.ENTER);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => window.FindFirstDescendant(
+                        automation.ConditionFactory.ByAutomationId(
+                            "CanvasPromptSheet")) is null,
+                    TimeSpan.FromSeconds(10)),
+                "Jump never closed the marks list");
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            return Rows().Any(item =>
+                                item.Properties.HasKeyboardFocus.ValueOrDefault);
+                        }
+                        catch (System.Runtime.InteropServices.COMException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "Jump never landed reader focus on a card row");
+
+            // ---- Delete Marked: one action removes both (G5) ---------
+            RunPaletteCommand("Delete Marked", "Canvas: Delete Marked Cards");
+            Assert.True(
+                SpinWait.SpinUntil(() => Rows().Length == 0, TimeSpan.FromSeconds(10)),
+                "Delete Marked never removed both cards");
+
+            // ---- One undo restores both (G8) --------------------------
+            WaitForElement(window, "CanvasEmptyOnboarding", TimeSpan.FromSeconds(10));
+            window.SetForeground();
+            Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_Z);
+            Assert.True(
+                SpinWait.SpinUntil(() => Rows().Length == 2, TimeSpan.FromSeconds(10)),
+                "Ctrl+Z never restored both cards");
+        }
+        finally
+        {
+            try
+            {
+                if (process is { HasExited: false })
+                {
+                    process.Kill(entireProcessTree: true);
+                    process.WaitForExit(5000);
+                }
+                process?.Dispose();
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
     /// <summary>
     /// W6-1 PR A (#745): the canvas outline journey. Opening a
     /// <c>.canvas</c> from the files tree gives a real UIA Tree whose

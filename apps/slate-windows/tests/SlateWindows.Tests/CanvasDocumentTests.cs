@@ -1121,6 +1121,45 @@ public sealed class CanvasDocumentTests : IDisposable
         document.Shutdown();
     });
 
+    /// <summary>§G TG-7 (G1, the journey's finding): a mark toggle is a
+    /// marks-only publication — no row changes, no OutlinePublished —
+    /// so the outline refreshes the SAME row's ItemStatus in place:
+    /// ", marked" arrives and leaves on the row a reader is standing
+    /// on, its identity kept.</summary>
+    [Fact]
+    public void AMarkToggleRefreshesTheRowsStatusInPlace() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = NewDocument("board.canvas");
+        document.Load();
+        var view = new CanvasOutlineView { Model = document };
+        CanvasOutlineRowViewModel group =
+            Assert.Single(view.RootsForTests, row => row.Id == "grp");
+        CanvasOutlineRowViewModel question =
+            Assert.Single(group.Children, child => child.Id == "question");
+        CanvasOutlineRow row = Row(document, "question");
+        string unmarked = CanvasPhrase.RowStatus(
+            row.OrdinalN, row.TotalM, row.GroupPath[^1], row.ColorName, marked: false);
+        Assert.Equal(unmarked, question.Status);
+        document.SeatSelectionSilently("question");
+
+        document.ToggleMark();
+
+        Assert.Equal(
+            CanvasPhrase.RowStatus(
+                row.OrdinalN, row.TotalM, row.GroupPath[^1], row.ColorName, marked: true),
+            question.Status);
+        Assert.Same(
+            question,
+            Assert.Single(
+                Assert.Single(view.RootsForTests, r => r.Id == "grp").Children,
+                child => child.Id == "question"));
+
+        document.ToggleMark();
+
+        Assert.Equal(unmarked, question.Status);
+        document.Shutdown();
+    });
+
     [Fact]
     public void TheSelectedCardsConnectionRowsAreCoreRenderedAndComeFirst() => RunSta(() =>
     {

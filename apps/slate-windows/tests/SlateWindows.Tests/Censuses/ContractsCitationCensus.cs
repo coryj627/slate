@@ -395,7 +395,12 @@ public sealed class ContractsCitationCensus
                 // TG-6 bound the mode and history cells, taking the
                 // section to 42; 41 sits above the pre-task
                 // population of 40 — a seventh time.
-                41),
+                //
+                // TG-7 bound the journey and the outline's in-place
+                // status refresh, taking the section to 46; 45 sits
+                // above the pre-task population of 42 — an eighth
+                // time.
+                45),
         ];
 
     public static TheoryData<string, string, string> SectionRanges
