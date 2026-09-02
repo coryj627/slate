@@ -95,6 +95,79 @@ public sealed class CanvasDocumentTests : IDisposable
             new CanvasAnnouncer(_announced.Add, TimeSpan.FromMinutes(1)),
             synchronousForTests);
 
+    /// <summary>§G PR review round 1: the workspace's mark commands —
+    /// the palette's and the chords' targets — REACH the document:
+    /// Toggle Mark marks the seated card, Show Marked Cards presents
+    /// the list, the sheet's Clear All Marks button command clears and
+    /// closes it, Clear Marks clears without a sheet.</summary>
+    [Fact]
+    public void TheWorkspaceMarkCommandsReachTheDocument()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        document.SeatSelectionSilently("question");
+
+        workspace.CanvasToggleMarkCommand.Execute(null);
+
+        Assert.Contains("question", document.AppliedPublication!.MarkedIntent);
+
+        workspace.CanvasShowMarksCommand.Execute(null);
+
+        var sheet = Assert.IsType<CanvasMarksListPrompt>(workspace.CanvasPromptSheet);
+        Assert.True(sheet.HasRows);
+        Assert.True(sheet.ShowsClearMarks);
+
+        workspace.CanvasPromptClearMarksCommand.Execute(null);
+
+        Assert.Null(workspace.CanvasPromptSheet);
+        Assert.Empty(document.AppliedPublication!.MarkedIntent);
+
+        workspace.CanvasToggleMarkCommand.Execute(null);
+        Assert.Single(document.AppliedPublication!.MarkedIntent);
+
+        workspace.CanvasClearMarksCommand.Execute(null);
+
+        Assert.Empty(document.AppliedPublication!.MarkedIntent);
+    }
+
+    /// <summary>§G PR review round 1: the workspace's bulk commands
+    /// reach the document — Color Marked and Group Marked present their
+    /// prompts for the marked set, Delete Marked removes it in one
+    /// action and the marks go with it.</summary>
+    [Fact]
+    public void TheWorkspaceBulkCommandsReachTheDocument()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        document.SeatSelectionSilently("question");
+        workspace.CanvasToggleMarkCommand.Execute(null);
+
+        workspace.CanvasColorMarkedCommand.Execute(null);
+
+        Assert.IsType<CanvasSetColorPrompt>(workspace.CanvasPromptSheet);
+        workspace.CloseCanvasPrompt();
+
+        workspace.CanvasGroupMarkedCommand.Execute(null);
+
+        Assert.IsType<CanvasGroupMarkedPrompt>(workspace.CanvasPromptSheet);
+        workspace.CloseCanvasPrompt();
+
+        workspace.CanvasDeleteMarkedCommand.Execute(null);
+
+        Assert.DoesNotContain(
+            document.AppliedPublication!.Loaded!.Population.Outline,
+            row => row.NodeId == "question");
+        Assert.Empty(document.AppliedPublication!.MarkedIntent);
+    }
+
     /// <summary>§G TG-6 (IG-53, the reachable row): a RELOAD while the
     /// marks list is open — the one displacement the shipped machinery
     /// can produce — carries the marks and the list reprojects; the

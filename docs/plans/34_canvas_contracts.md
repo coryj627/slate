@@ -10278,6 +10278,24 @@ before the chord, as the modes journey seats a row before its own,
 and says the row count and the app log tail on a miss. Validated
 locally alone and in the runner's order (table, visual, then marks).
 
+### PR review round 1 — the commands' reach, pinned
+
+Codoki's round approved the PR and its summary carried one claim
+worth checking: that no test exercises the new commands or the Clear
+All Marks button's binding. Checked against the diff, it was half
+right. The registrar side was already pinned (`ResolvableIds` covers
+every table id, the chords projection is byte-exact, the mac parity
+census dispositions the Windows-only color verb) and the prompt's
+binding properties (`HasRows`, `ShowsClearMarks`) and verbs
+(`ClearMarksFromCanvasPrompt`, `DeleteOnCanvasPrompt`) had facts —
+but no fact named the seven workspace commands the palette rows and
+chords resolve to. Two facts now do: the mark commands reach the
+document (Toggle marks the seated card, Show Marked Cards presents the
+list, the sheet's Clear All Marks command clears and closes it, Clear
+Marks clears without a sheet) and the bulk commands reach it (Color
+and Group Marked present their prompts for the marked set, Delete
+Marked removes it in one action with the marks going with it).
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same
