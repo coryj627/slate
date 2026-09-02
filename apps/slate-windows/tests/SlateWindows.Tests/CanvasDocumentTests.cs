@@ -95,6 +95,145 @@ public sealed class CanvasDocumentTests : IDisposable
             new CanvasAnnouncer(_announced.Add, TimeSpan.FromMinutes(1)),
             synchronousForTests);
 
+    /// <summary>§G2 TG2-2 (G2-5, IG2-15, IG2-19/35): Move into Group… lists
+    /// EVERY group in reading order and moves the card; a submit against a
+    /// reloaded document refuses PickDifferentTarget with the sheet kept.</summary>
+    [Fact]
+    public void MoveIntoGroupPromptListsEveryGroupAndRefusesAStaleSubmit()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        // A fresh EMPTY group to move into — the fixture's own group is
+        // too crowded for the engine to place a card inside it, which is
+        // the verb's NoFreeSpaceInGroup refusal, not this fact's subject.
+        Assert.NotNull(document.CanvasNewGroup("Zone"));
+        document.SeatSelectionSilently("loose");
+
+        workspace.CanvasMoveIntoGroupCommand.Execute(null);
+
+        var sheet = Assert.IsType<CanvasMoveIntoGroupPrompt>(workspace.CanvasPromptSheet);
+        Assert.Equal(2, sheet.Choices.Length);
+        Assert.Equal("grp", sheet.Choices.Single(c => c.Name.Contains("Research", StringComparison.Ordinal)).Value);
+        Assert.Contains(sheet.Choices, c => c.Name.Contains("Zone", StringComparison.Ordinal));
+        Assert.Same(tab, sheet.Context.Owner);
+
+        // A reload between open and submit: the identity moved.
+        document.Load();
+        _announced.Clear();
+        workspace.SubmitCanvasPrompt();
+        Assert.Same(sheet, workspace.CanvasPromptSheet);
+        Assert.Contains(_announced, a => a.Text.Contains("different", StringComparison.OrdinalIgnoreCase));
+        workspace.CloseCanvasPrompt();
+
+        document.SeatSelectionSilently("loose");
+        workspace.CanvasMoveIntoGroupCommand.Execute(null);
+        CanvasPromptViewModel again = workspace.CanvasPromptSheet!;
+        again.SelectedChoice = again.Choices.Single(c => c.Name.Contains("Zone", StringComparison.Ordinal));
+        workspace.SubmitCanvasPrompt();
+        PumpDispatcher();
+
+        Assert.Null(workspace.CanvasPromptSheet);
+        Assert.Contains("Zone", document.Outline.First(r => r.NodeId == "loose").GroupPath);
+    }
+
+    /// <summary>§G2 TG2-2 (G2-5, IG2-46, IG2-13): the connection verbs follow
+    /// mac's cardinality — none refuses NoConnections and presents
+    /// nothing, ONE routes directly, and the delete sentence names the
+    /// OTHER endpoint as the selected card sees it.</summary>
+    [Fact]
+    public void DeleteConnectionFollowsMacsCardinalityAndNamesTheOtherEndpoint()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+
+        document.SeatSelectionSilently("link");
+        _announced.Clear();
+        workspace.CanvasDeleteConnectionCommand.Execute(null);
+        Assert.Null(workspace.CanvasPromptSheet);
+        Assert.Contains(_announced, a => a.Text.Contains("no connections", StringComparison.OrdinalIgnoreCase));
+
+        // "evidence" is e1's TO node; the selected-relative sentence names
+        // the other endpoint, "Core question", never the to-node itself.
+        document.SeatSelectionSilently("evidence");
+        _announced.Clear();
+        workspace.CanvasDeleteConnectionCommand.Execute(null);
+        Assert.Null(workspace.CanvasPromptSheet);
+        Assert.DoesNotContain(
+            document.AppliedPublication!.Loaded!.Population.SceneEdges, e => e.EdgeId == "e1");
+        Assert.Contains(
+            _announced,
+            a => a.Text.Contains("Deleted connection", StringComparison.Ordinal)
+                && a.Text.Contains("Core question", StringComparison.Ordinal)
+                && !a.Text.Contains("Evidence so far", StringComparison.Ordinal));
+    }
+
+    /// <summary>§G2 TG2-2 (G2-4, G2-5, G2D-2, IG2-9/12/14/44/47): with MANY
+    /// connections the picker presents rows named by the outline's render
+    /// with the ordinal status; Edit Connection then ADVANCES — the
+    /// picker to the direction stage (a different sheet, preselected
+    /// from the edge), the direction to the label stage (prefilled) —
+    /// and the one write lands the chosen direction and a null label;
+    /// Escape at a stage changes nothing.</summary>
+    [Fact]
+    public void EditConnectionAdvancesThroughItsStagesAndWritesOnce()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        document.CanvasConnect("question", "loose", "second");
+        document.SeatSelectionSilently("question");
+
+        workspace.CanvasEditConnectionCommand.Execute(null);
+
+        var pick = Assert.IsType<CanvasPickConnectionPrompt>(workspace.CanvasPromptSheet);
+        Assert.Equal(2, pick.Choices.Length);
+        Assert.Equal("connection 1 of 2", pick.Choices[0].Status);
+        Assert.Equal("connection 2 of 2", pick.Choices[1].Status);
+        Assert.Contains("Evidence so far", pick.Choices.Single(c => c.Value == "e1").Name);
+        pick.SelectedChoice = pick.Choices.Single(c => c.Value == "e1");
+
+        // Escape at the picker: nothing changes.
+        workspace.CloseCanvasPrompt();
+        Assert.Contains("\"label\":\"supports\"", File.ReadAllText(Path.Combine(_fixture.Root, "board.canvas")));
+
+        workspace.CanvasEditConnectionCommand.Execute(null);
+        pick = Assert.IsType<CanvasPickConnectionPrompt>(workspace.CanvasPromptSheet);
+        pick.SelectedChoice = pick.Choices.Single(c => c.Value == "e1");
+        workspace.SubmitCanvasPrompt();
+
+        var direction = Assert.IsType<CanvasEditConnectionDirectionPrompt>(workspace.CanvasPromptSheet);
+        Assert.NotSame(pick, direction);
+        Assert.Equal(4, direction.Choices.Length);
+        Assert.Equal(nameof(CanvasConnectionDirection.ToTarget), direction.SelectedChoice?.Value);
+        Assert.Equal("Points at the target", direction.SelectedChoice?.Name);
+        direction.SelectedChoice = direction.Choices.Single(c => c.Name == "Both directions");
+        workspace.SubmitCanvasPrompt();
+
+        var label = Assert.IsType<CanvasEditConnectionLabelPrompt>(workspace.CanvasPromptSheet);
+        Assert.Equal("supports", label.Draft);
+        Assert.Equal(CanvasConnectionDirection.Both, label.Direction);
+        label.Draft = string.Empty;
+        workspace.SubmitCanvasPrompt();
+        PumpDispatcher();
+
+        Assert.Null(workspace.CanvasPromptSheet);
+        CanvasSceneEdge edge = document.AppliedPublication!.Loaded!.Population.SceneEdges.Single(e => e.EdgeId == "e1");
+        Assert.Null(edge.Label);
+        Assert.True(edge.FromArrow);
+        Assert.True(edge.ToArrow);
+    }
+
     /// <summary>§G2 TG2-1 (G2-2, G2D-11): New Group… from the palette — the
     /// prompt, then mac's label rule: an empty draft is a NULL label the
     /// verb speaks as "Untitled"; a draft with spaces is written

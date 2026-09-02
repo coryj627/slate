@@ -1173,6 +1173,42 @@
       "registered": true
     },
     {
+      "id": "slate.canvas.moveIntoGroup",
+      "label": "Canvas: Move into Group…",
+      "section": "Canvas",
+      "hint": "Move the selected card inside a group by name — no dragging or coordinates.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.editConnection",
+      "label": "Canvas: Edit Connection…",
+      "section": "Canvas",
+      "hint": "Change one of the selected card's connection labels or direction.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.deleteConnection",
+      "label": "Canvas: Delete Connection…",
+      "section": "Canvas",
+      "hint": "Delete one of the selected card's connections. Undo with Ctrl+Z.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
       "id": "slate.canvas.connectMode",
       "label": "Canvas: Connect Mode",
       "section": "Canvas",

@@ -421,7 +421,11 @@ public sealed class ContractsCitationCensus
                 // TG2-1 bound the prompt lifecycle and the first sheets,
                 // taking the section to 123; 122 sits above the
                 // pre-task population of 114 — a second time.
-                122),
+                //
+                // TG2-2 bound the choices pickers, taking the section to
+                // 134; 133 sits above the pre-task population of 123
+                // — a third time.
+                133),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

@@ -2755,6 +2755,45 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         return admission == CanvasMutationAdmission.Admitted ? operation : null;
     }
 
+    /// <summary>§G2 TG2-2 (IG2-13): Delete Connection from the SELECTED-
+    /// RELATIVE neighbor — the sentence names the other endpoint and the
+    /// direction as the reader sees them; the edge is re-validated as
+    /// that card's neighbor before anything applies.</summary>
+    public CanvasMutationOperation? CanvasDeleteConnection(
+        CanvasNeighbor neighbor, object? owner = null, Action<CanvasOperationOutcome>? completion = null)
+    {
+        ArgumentNullException.ThrowIfNull(neighbor);
+        if (_slot.Current.Loaded is not { } basis)
+        {
+            SpeakNotReady();
+            return null;
+        }
+        if (Selection.Selected is not { } selected
+            || NeighborsIfKnown(selected)?.Any(n => n.EdgeId == neighbor.EdgeId) != true)
+        {
+            SpeakNoConnections();
+            return null;
+        }
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId("delete connection"), owner ?? this, neighbor.EdgeId,
+            basis, CanvasMutationEffect.KeepSelection)
+        {
+            Completion = completion,
+        };
+        CanvasMutationAdmission admission = Funnel.Apply(
+            operation,
+            _ => new CanvasAction(
+                "delete connection",
+                [new CanvasOp.DeleteEdge(neighbor.EdgeId)]),
+            "delete connection",
+            confirm: () => new CanvasA11yEvent.CanvasDeleted(
+                new CanvasDeleteTarget.Connection(
+                    neighbor.Direction, neighbor.OtherTitle, neighbor.Label),
+                _verbosity(),
+                CanvasPhrase.UndoChord));
+        return admission == CanvasMutationAdmission.Admitted ? operation : null;
+    }
+
     /// <summary>§E TE-5c: Delete Connection — the lookup runs BEFORE
     /// the apply and a miss refuses AUDIBLY (0a-2's rule: the mac
     /// trailing-space sentence is unreachable by construction).</summary>
@@ -2766,6 +2805,14 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         {
             SpeakNotReady();
             return null;
+        }
+        // §G2 TG2-2: the selected card's own connection speaks from the
+        // neighbor; a row-less caller naming another edge keeps the
+        // edge-coordinate sentence.
+        if (Selection.Selected is { } selected
+            && NeighborsIfKnown(selected)?.FirstOrDefault(n => n.EdgeId == edgeId) is { } own)
+        {
+            return CanvasDeleteConnection(own, owner, completion);
         }
         if (basis.Population.SceneEdges.All(e => e.EdgeId != edgeId))
         {
@@ -3275,31 +3322,138 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// <summary>§G2 TG2-1 (G2-2): New Group…'s front door — mac's opener
     /// admits first, so a document that is not ready speaks that and
     /// presents nothing.</summary>
-    internal event Action? NewGroupRequested;
+    internal event Action<CanvasPromptContext>? NewGroupRequested;
 
-    internal void RequestNewGroup()
+    internal void RequestNewGroup(object? owner = null)
     {
-        if (_slot.Current.Loaded is null)
+        if (_slot.Current.Loaded is not { } loaded)
         {
             SpeakNotReady();
             return;
         }
-        NewGroupRequested?.Invoke();
+        NewGroupRequested?.Invoke(new CanvasPromptContext(owner, loaded, Selection.Selected));
     }
 
     /// <summary>§G2 TG2-1 (G2-5): Add Link Card…'s front door, the same
     /// admit-then-present shape (mac's canvasOpenAddLink).</summary>
-    internal event Action? AddLinkRequested;
+    internal event Action<CanvasPromptContext>? AddLinkRequested;
 
-    internal void RequestAddLink()
+    internal void RequestAddLink(object? owner = null)
     {
-        if (_slot.Current.Loaded is null)
+        if (_slot.Current.Loaded is not { } loaded)
         {
             SpeakNotReady();
             return;
         }
-        AddLinkRequested?.Invoke();
+        AddLinkRequested?.Invoke(new CanvasPromptContext(owner, loaded, Selection.Selected));
     }
+
+    /// <summary>§G2 TG2-2 (G2-5): Move into Group…'s front door — not-ready,
+    /// then the selection, then EVERY group in reading order (mac includes
+    /// the current one); none refuses NoGroups and presents nothing.</summary>
+    internal event Action<CanvasPromptContext, IReadOnlyList<CanvasOutlineRow>>? MoveIntoGroupRequested;
+
+    internal void RequestMoveIntoGroup(object? owner = null)
+    {
+        if (_slot.Current.Loaded is not { } loaded)
+        {
+            SpeakNotReady();
+            return;
+        }
+        if (Selection.Selected is not { } selected || !_rows.ContainsKey(selected))
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NothingSelected()));
+            return;
+        }
+        var groups = Outline.Where(row => row.Kind == "group").ToList();
+        if (groups.Count == 0)
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoGroups()));
+            return;
+        }
+        MoveIntoGroupRequested?.Invoke(new CanvasPromptContext(owner, loaded, selected), groups);
+    }
+
+    /// <summary>§G2 TG2-2 (G2-5, IG2-11, IG2-46): the connection verbs'
+    /// front doors — not-ready, the selection, then the NULLABLE neighbor
+    /// read: null (the query could not answer) speaks the read refusal,
+    /// empty speaks NoConnections, ONE routes directly (mac's rule), MANY
+    /// present the picker.</summary>
+    internal event Action<CanvasPromptContext, IReadOnlyList<CanvasNeighbor>, bool>? PickConnectionRequested;
+
+    internal event Action<CanvasPromptContext, CanvasNeighbor>? EditConnectionRequested;
+
+    internal void RequestDeleteConnection(object? owner = null) => RequestConnectionVerb(owner, toDelete: true);
+
+    internal void RequestEditConnection(object? owner = null) => RequestConnectionVerb(owner, toDelete: false);
+
+    private void RequestConnectionVerb(object? owner, bool toDelete)
+    {
+        if (_slot.Current.Loaded is not { } loaded)
+        {
+            SpeakNotReady();
+            return;
+        }
+        if (Selection.Selected is not { } selected || !_rows.ContainsKey(selected))
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NothingSelected()));
+            return;
+        }
+        IReadOnlyList<CanvasNeighbor>? neighbors = NeighborsIfKnown(selected);
+        if (neighbors is null)
+        {
+            // The query could not answer: the state's refusal, else the
+            // typed not-readable — never "no connections" about a list
+            // that never came back (IG2-11).
+            Speak(new CanvasA11yEvent.CanvasStatus(
+                ReadRefusal ?? new CanvasStatusNote.NotReadable()));
+            return;
+        }
+        if (neighbors.Count == 0)
+        {
+            SpeakNoConnections();
+            return;
+        }
+        var context = new CanvasPromptContext(owner, loaded, selected);
+        if (neighbors.Count == 1)
+        {
+            if (toDelete)
+            {
+                _ = CanvasDeleteConnection(neighbors[0], owner);
+            }
+            else
+            {
+                EditConnectionRequested?.Invoke(context, neighbors[0]);
+            }
+            return;
+        }
+        PickConnectionRequested?.Invoke(context, neighbors, toDelete);
+    }
+
+    /// <summary>§G2 TG2-2: the currency half of a prompt's submit — the
+    /// loaded identity the prompt captured is still the one applied.</summary>
+    internal bool IsCurrentLoaded(CanvasLoaded identity) =>
+        ReferenceEquals(_slot.Current.Loaded, identity);
+
+    internal void SpeakPickDifferentTarget() =>
+        Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.PickDifferentTarget()));
+
+    internal void SpeakNoConnections() =>
+        Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoConnections()));
+
+    /// <summary>§G2 TG2-2 (IG2-14): a connection row's NAME through the pure
+    /// render — the same event the outline row carries and the navigator
+    /// speaks, rendered without posting.</summary>
+    internal string ConnectionRowName(CanvasNeighbor neighbor) =>
+        CanvasAnnouncer.RenderLabel(
+            new CanvasA11yEvent.CanvasConnectionTraversed(
+                Direction: neighbor.Direction,
+                KindLabel: RowFor(neighbor.OtherNode)?.Kind ?? "text",
+                Title: neighbor.OtherTitle,
+                Label: neighbor.Label));
+
+    internal CanvasSceneEdge? SceneEdgeFor(string edgeId) =>
+        _slot.Current.Loaded?.Population.SceneEdges.FirstOrDefault(e => e.EdgeId == edgeId);
 
     internal void RequestGroupRename(string groupId)
     {

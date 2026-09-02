@@ -520,6 +520,12 @@ internal static class SlateCommandRegistrar
                 host => host.Workspace?.CanvasClearColorCommand,
             [ChordTable.Ids.CanvasNewGroup] = host => host.Workspace?.CanvasNewGroupCommand,
             [ChordTable.Ids.CanvasAddLink] = host => host.Workspace?.CanvasAddLinkCommand,
+            [ChordTable.Ids.CanvasMoveIntoGroup] =
+                host => host.Workspace?.CanvasMoveIntoGroupCommand,
+            [ChordTable.Ids.CanvasEditConnection] =
+                host => host.Workspace?.CanvasEditConnectionCommand,
+            [ChordTable.Ids.CanvasDeleteConnection] =
+                host => host.Workspace?.CanvasDeleteConnectionCommand,
             [ChordTable.Ids.CanvasShowMarks] =
                 host => host.Workspace?.CanvasShowMarksCommand,
             [ChordTable.Ids.CanvasGroupMarked] =

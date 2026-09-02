@@ -83,12 +83,20 @@ internal sealed partial class WorkspaceViewModel
             // §G2 TG2-1: the New Group and Add Link prompts carry the
             // invoking tab as the operation's owner; the group Delete's
             // confirmation is E8's Ungroup-or-Cancel.
-            document.NewGroupRequested += () =>
+            document.NewGroupRequested += context =>
+                _ = TryPresentCanvasPrompt(CanvasPromptViewModel.NewGroup(document, context));
+            document.AddLinkRequested += context =>
+                _ = TryPresentCanvasPrompt(CanvasPromptViewModel.AddLink(document, context));
+            // §G2 TG2-2: the choices pickers.
+            document.MoveIntoGroupRequested += (context, groups) =>
                 _ = TryPresentCanvasPrompt(
-                    CanvasPromptViewModel.NewGroup(document, ActiveGroup.ActiveTab));
-            document.AddLinkRequested += () =>
+                    CanvasPromptViewModel.MoveIntoGroup(document, context, groups));
+            document.PickConnectionRequested += (context, neighbors, toDelete) =>
                 _ = TryPresentCanvasPrompt(
-                    CanvasPromptViewModel.AddLink(document, ActiveGroup.ActiveTab));
+                    CanvasPromptViewModel.PickConnection(document, context, neighbors, toDelete));
+            document.EditConnectionRequested += (context, neighbor) =>
+                _ = TryPresentCanvasPrompt(
+                    CanvasPromptViewModel.EditConnectionDirection(document, context, neighbor));
             document.UngroupConfirmRequested += (groupId, title) =>
                 _ = TryPresentCanvasPrompt(
                     CanvasPromptViewModel.UngroupConfirm(document, groupId, title));
@@ -680,10 +688,24 @@ internal sealed partial class WorkspaceViewModel
             (document, owner) => document.CanvasSetColor(null, owner: owner));
 
     public System.Windows.Input.ICommand CanvasNewGroupCommand =>
-        _canvasNewGroupCommand ??= DocumentCommand(document => document.RequestNewGroup());
+        _canvasNewGroupCommand ??= DocumentCommand(
+            (document, owner) => document.RequestNewGroup(owner));
 
     public System.Windows.Input.ICommand CanvasAddLinkCommand =>
-        _canvasAddLinkCommand ??= DocumentCommand(document => document.RequestAddLink());
+        _canvasAddLinkCommand ??= DocumentCommand(
+            (document, owner) => document.RequestAddLink(owner));
+
+    public System.Windows.Input.ICommand CanvasMoveIntoGroupCommand =>
+        _canvasMoveIntoGroupCommand ??= DocumentCommand(
+            (document, owner) => document.RequestMoveIntoGroup(owner));
+
+    public System.Windows.Input.ICommand CanvasEditConnectionCommand =>
+        _canvasEditConnectionCommand ??= DocumentCommand(
+            (document, owner) => document.RequestEditConnection(owner));
+
+    public System.Windows.Input.ICommand CanvasDeleteConnectionCommand =>
+        _canvasDeleteConnectionCommand ??= DocumentCommand(
+            (document, owner) => document.RequestDeleteConnection(owner));
 
     private RelayCommand? _canvasDeleteCommand;
     private RelayCommand? _canvasEditCardCommand;
@@ -692,6 +714,9 @@ internal sealed partial class WorkspaceViewModel
     private RelayCommand? _canvasClearColorCommand;
     private RelayCommand? _canvasNewGroupCommand;
     private RelayCommand? _canvasAddLinkCommand;
+    private RelayCommand? _canvasMoveIntoGroupCommand;
+    private RelayCommand? _canvasEditConnectionCommand;
+    private RelayCommand? _canvasDeleteConnectionCommand;
 
     public System.Windows.Input.ICommand CanvasConnectModeCommand =>
         _canvasConnectModeCommand ??= NavigatorCommand(

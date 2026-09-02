@@ -11083,6 +11083,71 @@ bit only once the fact read the written url — the first version
 watched the parse, which forgives), M3 the group arm silent again,
 M4 the ItemStatus setter removed. All bitten.
 
+### TG2-2 — the choices pickers: a typed context, mac's cardinality, the two-stage edit
+
+Every prompt-backed flow now captures a typed, immutable CONTEXT at
+open — `CanvasPromptContext`: the invoking owner, the exact
+`CanvasLoaded` identity, the source node — and checks the identity
+half at submit through the document's `IsCurrentLoaded`: a submit
+against a reloaded document is a guess and refuses
+`PickDifferentTarget` with the sheet and its draft kept (IG2-35,
+IG2-19's rule applied to prompts). New Group… and Add Link Card…
+retrofit onto it; the request seams take the owner and mint the
+context with the applied loaded reference, never a later one.
+
+Move into Group… (G2-5, IG2-15) is a choices prompt over EVERY group
+in reading order, mac's rule — the current group included, a move
+into it a re-placement — each named the way every projection names a
+card; none refuses `NoGroups` and presents nothing; Enter runs the
+shipped verb with the context's owner. The connection verbs
+(`RequestDeleteConnection`, `RequestEditConnection`) share one opener
+(IG2-11, IG2-46): not-ready, the selection, then the NULLABLE neighbor
+read — a null answer speaks the state's own refusal, else the typed
+not-readable, never "no connections" about a list that never came
+back; an empty list speaks `NoConnections`; ONE connection routes
+directly (Delete runs; Edit opens the direction stage), mac's
+`canvasPromptDeleteConnection` and `canvasPromptEditConnection`; MANY
+present `CanvasPickConnectionPrompt`, whose rows are keyed by edge,
+named by the SAME pure render the outline's connection rows carry
+(`ConnectionRowName` through `CanvasAnnouncer.RenderLabel`, nothing
+posted) and carry `CanvasPhrase.ConnectionStatus` as the row's status
+onto the item's ItemStatus (IG2-14, IG2-47).
+
+Delete speaks from the SELECTED-RELATIVE neighbor (IG2-13): a new
+`CanvasDeleteConnection` overload takes the `CanvasNeighbor`,
+re-validates the edge is still that card's neighbor, and builds the
+`Connection` target from the neighbor's direction, other title and
+label — so a card standing at an edge's to-end hears the OTHER
+endpoint named, never itself. The string overload delegates to it
+whenever the edge is the selected card's own and keeps its
+edge-coordinate sentence for a row-less caller naming another edge
+(the shipped fact's shape). Edit is two stages through Advanced
+(G2D-2, IG2-12, IG2-44): `CanvasEditConnectionDirectionPrompt` — four
+choices with mac's labels phrased by meaning, "Points at the
+target", "Points back at the source", "Both directions", "No
+direction", the current one preselected from the edge's two arrow
+flags in EDGE coordinates, the frame the verb's four arms share —
+advancing to `CanvasEditConnectionLabelPrompt`, prefilled with the
+current label, whose submit runs the shipped verb ONCE with the
+chosen direction, an empty draft a null label, sides and color
+preserved by the verb. Escape at either stage changes nothing. Three
+rows, resolvers and owner-carrying commands land: Move into Group…,
+Edit Connection…, Delete Connection…; `chords.json` regenerated.
+
+Facts: three — Move into Group listing every group by name (the
+engine's reading order put a fresh group first, so the fact finds
+them by name), refusing a stale submit with the sheet kept, and
+landing into an EMPTY group (the fixture's own group is too crowded
+for the engine, which is the verb's `NoFreeSpaceInGroup` refusal and
+not this fact's subject); Delete Connection's cardinality with the
+sentence naming the other endpoint from the to-end card; Edit
+Connection advancing picker → direction (a different sheet,
+preselected) → label (prefilled) with one write landing Both and a
+null label, Escape at the picker leaving the bytes. Mutations, each
+byte-restored: M1 the single-connection direct route removed, M2 the
+stale check removed, M3 the delete sentence from the to-node again,
+M4 the picker completing instead of advancing. All bitten.
+
 ---
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)

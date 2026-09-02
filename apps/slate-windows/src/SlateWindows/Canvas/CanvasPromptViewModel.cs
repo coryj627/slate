@@ -171,11 +171,27 @@ internal abstract class CanvasPromptViewModel : System.ComponentModel.INotifyPro
         CanvasDocumentViewModel document, object owner, Action<CanvasPromptViewModel> closeIfCurrent) =>
         new CanvasMarksListPrompt(document, owner, closeIfCurrent);
 
-    internal static CanvasPromptViewModel NewGroup(CanvasDocumentViewModel document, object? owner) =>
-        new CanvasNewGroupPrompt(document, owner);
+    internal static CanvasPromptViewModel NewGroup(
+        CanvasDocumentViewModel document, CanvasPromptContext context) =>
+        new CanvasNewGroupPrompt(document, context);
 
-    internal static CanvasPromptViewModel AddLink(CanvasDocumentViewModel document, object? owner) =>
-        new CanvasAddLinkPrompt(document, owner);
+    internal static CanvasPromptViewModel AddLink(
+        CanvasDocumentViewModel document, CanvasPromptContext context) =>
+        new CanvasAddLinkPrompt(document, context);
+
+    internal static CanvasPromptViewModel MoveIntoGroup(
+        CanvasDocumentViewModel document, CanvasPromptContext context,
+        IReadOnlyList<CanvasOutlineRow> groups) =>
+        new CanvasMoveIntoGroupPrompt(document, context, groups);
+
+    internal static CanvasPromptViewModel PickConnection(
+        CanvasDocumentViewModel document, CanvasPromptContext context,
+        IReadOnlyList<CanvasNeighbor> neighbors, bool toDelete) =>
+        new CanvasPickConnectionPrompt(document, context, neighbors, toDelete);
+
+    internal static CanvasPromptViewModel EditConnectionDirection(
+        CanvasDocumentViewModel document, CanvasPromptContext context, CanvasNeighbor neighbor) =>
+        CanvasEditConnectionDirectionPrompt.For(document, context, neighbor);
 
     internal static CanvasPromptViewModel UngroupConfirm(
         CanvasDocumentViewModel document, string groupId, string title) =>
@@ -364,19 +380,24 @@ internal sealed class CanvasRenameGroupPrompt : CanvasPromptViewModel
 /// label, untrimmed) and the invoking tab as the operation's owner.</summary>
 internal sealed class CanvasNewGroupPrompt : CanvasPromptViewModel
 {
-    private readonly object? _owner;
-
-    internal CanvasNewGroupPrompt(CanvasDocumentViewModel document, object? owner)
+    internal CanvasNewGroupPrompt(CanvasDocumentViewModel document, CanvasPromptContext context)
         : base(document, "New Group", string.Empty, [])
     {
-        _owner = owner;
+        Context = context;
     }
+
+    internal CanvasPromptContext Context { get; }
 
     internal override CanvasPromptSubmit Submit(Action onLanded)
     {
         ArgumentNullException.ThrowIfNull(onLanded);
+        if (!Document.IsCurrentLoaded(Context.Identity))
+        {
+            Document.SpeakPickDifferentTarget();
+            return CanvasPromptSubmit.Refused;
+        }
         CanvasMutationOperation? operation = Document.CanvasNewGroup(
-            NormalizeLabel(Draft), owner: _owner,
+            NormalizeLabel(Draft), owner: Context.Owner,
             completion: outcome => { if (Landed(outcome)) { onLanded(); } });
         return operation is null ? CanvasPromptSubmit.Refused : CanvasPromptSubmit.Pending;
     }
@@ -388,19 +409,24 @@ internal sealed class CanvasNewGroupPrompt : CanvasPromptViewModel
 /// the draft kept.</summary>
 internal sealed class CanvasAddLinkPrompt : CanvasPromptViewModel
 {
-    private readonly object? _owner;
-
-    internal CanvasAddLinkPrompt(CanvasDocumentViewModel document, object? owner)
+    internal CanvasAddLinkPrompt(CanvasDocumentViewModel document, CanvasPromptContext context)
         : base(document, "Add Link Card", string.Empty, [])
     {
-        _owner = owner;
+        Context = context;
     }
+
+    internal CanvasPromptContext Context { get; }
 
     internal override CanvasPromptSubmit Submit(Action onLanded)
     {
         ArgumentNullException.ThrowIfNull(onLanded);
+        if (!Document.IsCurrentLoaded(Context.Identity))
+        {
+            Document.SpeakPickDifferentTarget();
+            return CanvasPromptSubmit.Refused;
+        }
         CanvasMutationOperation? operation = Document.CanvasAddLinkCard(
-            Draft.Trim(), owner: _owner,
+            Draft.Trim(), owner: Context.Owner,
             completion: outcome => { if (Landed(outcome)) { onLanded(); } });
         return operation is null ? CanvasPromptSubmit.Refused : CanvasPromptSubmit.Pending;
     }
@@ -437,6 +463,226 @@ internal sealed class CanvasUngroupConfirmPrompt : CanvasPromptViewModel
     }
 
     private static string Quote(string title) => "\u0022" + title + "\u0022";
+}
+
+/// <summary>§G2 TG2-2 (G2-2, IG2-35, IG2-19): the typed, immutable
+/// context a prompt-backed flow captures at OPEN — the invoking owner
+/// (TE-1's initiating surface), the exact loaded identity, and the
+/// source node the verb acts on (null for the verbs that need none).
+/// A submit against another identity is a guess and refuses
+/// <c>PickDifferentTarget</c> with the sheet kept.</summary>
+internal sealed record CanvasPromptContext(
+    object? Owner,
+    CanvasLoaded Identity,
+    string? SourceNode);
+
+/// <summary>§G2 TG2-2 (G2-5): Move into Group… — choices over EVERY
+/// group in reading order (mac includes the current one; a move into
+/// it re-places inside), named the way every projection names a card.
+/// Enter runs the shipped verb; Pending closes when it lands.</summary>
+internal sealed class CanvasMoveIntoGroupPrompt : CanvasPromptViewModel
+{
+    internal CanvasMoveIntoGroupPrompt(
+        CanvasDocumentViewModel document,
+        CanvasPromptContext context,
+        IReadOnlyList<CanvasOutlineRow> groups)
+        : base(
+            document,
+            "Move into Group",
+            string.Empty,
+            [.. groups.Select(g => new CanvasPromptChoice(
+                g.NodeId, CanvasPhrase.CardReference(g.Kind, g.SpeakableName)))])
+    {
+        Context = context;
+    }
+
+    internal CanvasPromptContext Context { get; }
+
+    internal override CanvasPromptSubmit Submit(Action onLanded)
+    {
+        ArgumentNullException.ThrowIfNull(onLanded);
+        if (!Document.IsCurrentLoaded(Context.Identity))
+        {
+            Document.SpeakPickDifferentTarget();
+            return CanvasPromptSubmit.Refused;
+        }
+        if (SelectedChoice?.Value is not { } groupId)
+        {
+            return CanvasPromptSubmit.Refused;
+        }
+        CanvasMutationOperation? operation = Document.CanvasMoveIntoGroup(
+            groupId, owner: Context.Owner,
+            completion: outcome => { if (Landed(outcome)) { onLanded(); } });
+        return operation is null ? CanvasPromptSubmit.Refused : CanvasPromptSubmit.Pending;
+    }
+}
+
+/// <summary>§G2 TG2-2 (G2-5, IG2-11/13/14/46): the connection picker for
+/// Delete Connection… and Edit Connection… — reached only with MANY
+/// connections (mac routes one directly). Rows are keyed by edge and
+/// named by the SAME pure render the outline's connection rows carry,
+/// with the ordinal clause as the row's status. Enter re-validates the
+/// edge is still the source card's neighbor, then deletes from the
+/// selected-relative neighbor, or ADVANCES to the direction stage.</summary>
+internal sealed class CanvasPickConnectionPrompt : CanvasPromptViewModel
+{
+    private readonly IReadOnlyList<CanvasNeighbor> _neighbors;
+
+    internal CanvasPickConnectionPrompt(
+        CanvasDocumentViewModel document,
+        CanvasPromptContext context,
+        IReadOnlyList<CanvasNeighbor> neighbors,
+        bool toDelete)
+        : base(
+            document,
+            toDelete ? "Delete Connection" : "Edit Connection",
+            string.Empty,
+            [.. neighbors.Select((n, i) => new CanvasPromptChoice(
+                n.EdgeId,
+                document.ConnectionRowName(n),
+                CanvasPhrase.ConnectionStatus(i + 1, neighbors.Count)))])
+    {
+        Context = context;
+        _neighbors = neighbors;
+        ToDelete = toDelete;
+    }
+
+    internal CanvasPromptContext Context { get; }
+
+    internal bool ToDelete { get; }
+
+    internal override CanvasPromptSubmit Submit(Action onLanded)
+    {
+        ArgumentNullException.ThrowIfNull(onLanded);
+        if (!Document.IsCurrentLoaded(Context.Identity))
+        {
+            Document.SpeakPickDifferentTarget();
+            return CanvasPromptSubmit.Refused;
+        }
+        if (SelectedChoice?.Value is not { } edgeId
+            || Context.SourceNode is not { } source
+            || Document.NeighborsIfKnown(source)?.FirstOrDefault(n => n.EdgeId == edgeId)
+                is not { } neighbor)
+        {
+            Document.SpeakNoConnections();
+            return CanvasPromptSubmit.Refused;
+        }
+        if (ToDelete)
+        {
+            CanvasMutationOperation? operation = Document.CanvasDeleteConnection(
+                neighbor, owner: Context.Owner,
+                completion: outcome => { if (Landed(outcome)) { onLanded(); } });
+            return operation is null ? CanvasPromptSubmit.Refused : CanvasPromptSubmit.Pending;
+        }
+        return new CanvasPromptSubmit.Advanced(
+            CanvasEditConnectionDirectionPrompt.For(Document, Context, neighbor));
+    }
+}
+
+/// <summary>§G2 TG2-2 (G2-5, G2D-2, IG2-12): Edit Connection's FIRST stage
+/// — the direction, four choices with mac's labels phrased by meaning,
+/// the current one preselected from the edge's two arrow flags. Enter
+/// ADVANCES to the label stage; the write happens there, once.</summary>
+internal sealed class CanvasEditConnectionDirectionPrompt : CanvasPromptViewModel
+{
+    private CanvasEditConnectionDirectionPrompt(
+        CanvasDocumentViewModel document,
+        CanvasPromptContext context,
+        CanvasNeighbor neighbor,
+        string? currentLabel,
+        CanvasConnectionDirection current)
+        : base(document, "Edit Connection: Direction", string.Empty, Choices())
+    {
+        Context = context;
+        Neighbor = neighbor;
+        CurrentLabel = currentLabel;
+        SelectedChoice = base.Choices.First(c => c.Value == current.ToString());
+    }
+
+    internal CanvasPromptContext Context { get; }
+
+    internal CanvasNeighbor Neighbor { get; }
+
+    internal string? CurrentLabel { get; }
+
+    /// <summary>The edge's arrow flags read in EDGE coordinates (from
+    /// node to node), which is the frame the verb's four arms and mac's
+    /// radio share: an arrow at the to-end alone is "Points at the
+    /// target"; at the from-end alone "Points back at the source".</summary>
+    internal static CanvasEditConnectionDirectionPrompt For(
+        CanvasDocumentViewModel document, CanvasPromptContext context, CanvasNeighbor neighbor)
+    {
+        CanvasSceneEdge? edge = document.SceneEdgeFor(neighbor.EdgeId);
+        CanvasConnectionDirection current = (edge?.FromArrow ?? false, edge?.ToArrow ?? true) switch
+        {
+            (false, true) => CanvasConnectionDirection.ToTarget,
+            (true, false) => CanvasConnectionDirection.FromTarget,
+            (true, true) => CanvasConnectionDirection.Both,
+            _ => CanvasConnectionDirection.None,
+        };
+        return new CanvasEditConnectionDirectionPrompt(
+            document, context, neighbor, edge?.Label, current);
+    }
+
+    internal override CanvasPromptSubmit Submit(Action onLanded)
+    {
+        ArgumentNullException.ThrowIfNull(onLanded);
+        if (SelectedChoice?.Value is not { } chosen)
+        {
+            return CanvasPromptSubmit.Refused;
+        }
+        return new CanvasPromptSubmit.Advanced(
+            new CanvasEditConnectionLabelPrompt(
+                Document, Context, Neighbor, Enum.Parse<CanvasConnectionDirection>(chosen), CurrentLabel));
+    }
+
+    private static ImmutableArray<CanvasPromptChoice> Choices() =>
+    [
+        new(nameof(CanvasConnectionDirection.ToTarget), "Points at the target"),
+        new(nameof(CanvasConnectionDirection.FromTarget), "Points back at the source"),
+        new(nameof(CanvasConnectionDirection.Both), "Both directions"),
+        new(nameof(CanvasConnectionDirection.None), "No direction"),
+    ];
+}
+
+/// <summary>§G2 TG2-2 (G2-5): Edit Connection's SECOND stage — the label,
+/// prefilled with the current one; an empty draft is a null label.
+/// Enter runs the shipped verb ONCE with the chosen direction, sides
+/// and color preserved by the verb; Pending closes when it lands.</summary>
+internal sealed class CanvasEditConnectionLabelPrompt : CanvasPromptViewModel
+{
+    internal CanvasEditConnectionLabelPrompt(
+        CanvasDocumentViewModel document,
+        CanvasPromptContext context,
+        CanvasNeighbor neighbor,
+        CanvasConnectionDirection direction,
+        string? currentLabel)
+        : base(document, "Edit Connection: Label", currentLabel ?? string.Empty, [])
+    {
+        Context = context;
+        Neighbor = neighbor;
+        Direction = direction;
+    }
+
+    internal CanvasPromptContext Context { get; }
+
+    internal CanvasNeighbor Neighbor { get; }
+
+    internal CanvasConnectionDirection Direction { get; }
+
+    internal override CanvasPromptSubmit Submit(Action onLanded)
+    {
+        ArgumentNullException.ThrowIfNull(onLanded);
+        if (!Document.IsCurrentLoaded(Context.Identity))
+        {
+            Document.SpeakPickDifferentTarget();
+            return CanvasPromptSubmit.Refused;
+        }
+        CanvasMutationOperation? operation = Document.CanvasEditConnection(
+            Neighbor.EdgeId, NormalizeLabel(Draft), Direction, owner: Context.Owner,
+            completion: outcome => { if (Landed(outcome)) { onLanded(); } });
+        return operation is null ? CanvasPromptSubmit.Refused : CanvasPromptSubmit.Pending;
+    }
 }
 
 /// <summary>The carried Set Color prompt (FD-4) over the SELECTION:

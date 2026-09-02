@@ -286,6 +286,9 @@ internal static class ChordTable
         public const string CanvasClearColor = "slate.canvas.clearColor";
         public const string CanvasNewGroup = "slate.canvas.newGroup";
         public const string CanvasAddLink = "slate.canvas.addLink";
+        public const string CanvasMoveIntoGroup = "slate.canvas.moveIntoGroup";
+        public const string CanvasEditConnection = "slate.canvas.editConnection";
+        public const string CanvasDeleteConnection = "slate.canvas.deleteConnection";
 
         public const string CanvasClearMarks = "slate.canvas.clearMarks";
 
@@ -1054,6 +1057,14 @@ internal static class ChordTable
                 "Create a labeled group next to the selection."),
             Reg(Ids.CanvasAddLink, "Canvas: Add Link Card…", CommandSection.Canvas,
                 "Paste or type a URL; a link card is placed next to your selection."),
+            // §G2 TG2-2: the choices pickers' front doors.
+            Reg(Ids.CanvasMoveIntoGroup, "Canvas: Move into Group…", CommandSection.Canvas,
+                "Move the selected card inside a group by name — no dragging or "
+                + "coordinates."),
+            Reg(Ids.CanvasEditConnection, "Canvas: Edit Connection…", CommandSection.Canvas,
+                "Change one of the selected card's connection labels or direction."),
+            Reg(Ids.CanvasDeleteConnection, "Canvas: Delete Connection…", CommandSection.Canvas,
+                "Delete one of the selected card's connections. Undo with Ctrl+Z."),
             Reg(Ids.CanvasConnectMode, "Canvas: Connect Mode", CommandSection.Canvas,
                 "Remember the selected card, navigate to a target with the "
                 + "usual movements, press Return to connect."),
