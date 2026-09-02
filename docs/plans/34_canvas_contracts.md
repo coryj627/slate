@@ -12321,6 +12321,47 @@ sequence as §5.2 writes it (IH-53).
 
 ### Implementation records
 
+### TH-0 — CanvasEndToEndTests: the class, the open fact with its sort leg, the grammar fact
+
+The class (H1) opens a `FixtureVault` with the COMMITTED `sample.canvas`
+copied from `SourceText.RepoRoot()` — never a test-authored twin — plus
+the two notes the fixture's file cards reference, through
+`VaultSession.OpenFilesystem` and `ScanInitial`, and builds the document
+with `CanvasDocumentViewModel` over the real session, the canvas
+announcer, `synchronousForTests: true` and the verbosity function the
+navigator battery uses; no fake source, no direct FFI apply.
+
+`OpenSampleExposesOutlineTableAndScene` runs entirely on one STA thread
+under the class's own RunSta — document, surface and grid created there,
+because the announcer captures its creation dispatcher (IH-33's
+condition): nine outline rows, nine scene nodes, the group first, the
+colour names "red" and "purple (custom)", a title carrying " › ", one
+`NextCard` seating a selection, Where-am-I rendering `WhereAmIText`;
+then the table through `CanvasSurfaceView` showing the Table surface,
+nine rows, the reader seated on the Type column, and
+`AccessibleDataGrid.ToggleSortCommand` — the command Ctrl+Alt+S runs —
+executed twice against a PINNED oracle (IH-33): ascending, the Type
+cells read File, File, Group, Group, Image, Link, Text, Text, Text —
+core's kind words in ordinal order over the fixture's two files, two
+groups, one image, one link and three text cards — and descending, the
+reverse; inside each block the ids are asserted as a SET, because B3's
+Type comparator compares Type only and the order within a block is not
+a contract on either host (mac's sort is unstable too). Nothing in the
+oracle is derived from the comparator under test.
+
+`AnnouncementGrammarConformsPerVerbosity`: on the first row with a
+connection, the selection sentence is read at each verbosity through
+`SelectNode` with the announcer flushed — Terse without " of ",
+Standard with it, Verbose with it and a connection named; then
+`CanvasDeleteSelection` speaks the destructive arm with the platform's
+undo chord as core renders it ("Ctrl+Z" on Windows), eight rows remain,
+and `CanvasUndo` restores nine.
+
+Facts: two. Mutations, each byte-restored: M1 the Type comparator keyed
+on the reversed kind word (the sort oracle bit, in both directions); M2
+the document's verbosity forced to Standard (the Terse predicate bit).
+All bitten.
+
 ---
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)

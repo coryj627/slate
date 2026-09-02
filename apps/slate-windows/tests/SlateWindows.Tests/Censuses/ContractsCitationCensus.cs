@@ -465,7 +465,11 @@ public sealed class ContractsCitationCensus
                 // citations are EXISTING names (the harnesses, the
                 // benchmarks, the matrix generator's seams); 4 sits above
                 // the empty section and below the first record.
-                4),
+                //
+                // TH-0 bound the end-to-end class with its open and grammar facts, taking the
+                // section to 66; 65 sits above the pre-task population
+                // of 61 — a first time.
+                65),
         ];
 
     public static TheoryData<string, string, string> SectionRanges
