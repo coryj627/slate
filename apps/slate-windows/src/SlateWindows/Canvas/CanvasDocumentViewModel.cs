@@ -2444,25 +2444,30 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
 
     /// <summary>§E TE-5c: Rename Group — the real op (IE-23's round-1
     /// catch: never SetNodeContent on a group).</summary>
-    public void CanvasRenameGroup(string groupId, string label)
+    public CanvasMutationOperation? CanvasRenameGroup(
+        string groupId, string label, Action<CanvasOperationOutcome>? completion = null)
     {
         ArgumentNullException.ThrowIfNull(groupId);
         ArgumentNullException.ThrowIfNull(label);
         if (_slot.Current.Loaded is not { } basis)
         {
             SpeakNotReady();
-            return;
+            return null;
         }
         var operation = new CanvasMutationOperation(
             new CanvasOperationId("rename group"), this, groupId,
-            basis, CanvasMutationEffect.KeepSelection);
-        _ = Funnel.Apply(
+            basis, CanvasMutationEffect.KeepSelection)
+        {
+            Completion = completion,
+        };
+        CanvasMutationAdmission admission = Funnel.Apply(
             operation,
             _ => new CanvasAction(
                 $"rename group to \"{label}\"",
                 [new CanvasOp.RenameGroup(groupId, label)]),
             $"rename group to \"{label}\"",
             confirm: () => new CanvasA11yEvent.CanvasRenamedGroup(label));
+        return admission == CanvasMutationAdmission.Admitted ? operation : null;
     }
 
     /// <summary>§E TE-5c: the delete verb's GROUP arm — the algebra's
@@ -2568,29 +2573,33 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// <summary>§E TE-5c: Set Color — a preset "1".."6", a validated
     /// hex, or null to clear (the picker's field owns the invalid-hex
     /// error surface; an invalid value never reaches the funnel).</summary>
-    public void CanvasSetColor(string? color)
+    public CanvasMutationOperation? CanvasSetColor(
+        string? color, Action<CanvasOperationOutcome>? completion = null)
     {
         if (_slot.Current.Loaded is not { } basis)
         {
             SpeakNotReady();
-            return;
+            return null;
         }
         if (Selection.Selected is not { } selected)
         {
             Speak(new CanvasA11yEvent.CanvasStatus(
                 new CanvasStatusNote.NothingSelected()));
-            return;
+            return null;
         }
         if (color is not null && !IsCanvasColor(color))
         {
             // UNREACHABLE from the surfaces (§E TE-11c): every color
             // arrives from the fixed palette rows. A guard, not a cell.
-            return;
+            return null;
         }
         var operation = new CanvasMutationOperation(
             new CanvasOperationId("set color"), this, selected,
-            basis, CanvasMutationEffect.KeepSelection);
-        _ = Funnel.Apply(
+            basis, CanvasMutationEffect.KeepSelection)
+        {
+            Completion = completion,
+        };
+        CanvasMutationAdmission admission = Funnel.Apply(
             operation,
             _ => new CanvasAction(
                 color is null
@@ -2610,6 +2619,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                             : new CanvasColor.Hex(value)
                         : null);
             });
+        return admission == CanvasMutationAdmission.Admitted ? operation : null;
     }
 
     /// <summary>§E TE-5c: Connect — one edge from the picker's
@@ -3047,7 +3057,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// generated AddEdge parameter is spelled. An empty submitted
     /// label normalizes to null (IF-27) — Enter-skips and
     /// click-with-empty-field serialize identically.</summary>
-    internal void CanvasConnect(
+    internal CanvasMutationOperation? CanvasConnect(
         CanvasConnectStage stage,
         string? label,
         object? modeToken = null,
@@ -3067,17 +3077,18 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         {
             Completion = completion,
         };
-        _ = Funnel.Apply(
+        CanvasMutationAdmission admission = Funnel.Apply(
             operation,
             handle => PrepareConnectAction(stage, clean),
             name,
             // §F TF-9 (F8/F4b): under a mode token the COMPLETION owns
             // the sentence — Committed(confirmation) speaks after the
             // clear; the picker flow keeps the funnel's confirm.
-            confirm: completion is null
+            confirm: modeToken is null
                 ? () => new CanvasA11yEvent.CanvasConnected(
                     stage.OriginTitle, stage.TargetTitle, clean)
                 : null);
+        return admission == CanvasMutationAdmission.Admitted ? operation : null;
     }
 
     /// <summary>§F TF-8/TF-9 (F7): the ONE connect preparation both

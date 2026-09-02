@@ -891,7 +891,7 @@ public sealed class CanvasMutationTests : IDisposable
     {
         CanvasDocumentViewModel document = Open();
         document.SeatSelectionSilently("a");
-        CanvasPromptViewModel prompt = CanvasPromptViewModel.SetColor(document);
+        var prompt = (CanvasSetColorPrompt)CanvasPromptViewModel.SetColor(document);
 
         Assert.False(prompt.HasTextField);
         for (byte preset = 1; preset <= 6; preset++)
@@ -903,7 +903,7 @@ public sealed class CanvasMutationTests : IDisposable
         Assert.Null(prompt.Choices[^1].Value);
 
         prompt.SelectedChoice = prompt.Choices[2];
-        prompt.Submit();
+        Assert.Equal(CanvasPromptSubmit.Pending, prompt.Submit(() => { }));
 
         Assert.Contains(
             "\"color\":\"3\"",

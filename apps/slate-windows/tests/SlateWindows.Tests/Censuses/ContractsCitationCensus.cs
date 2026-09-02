@@ -370,7 +370,11 @@ public sealed class ContractsCitationCensus
                 // TG-0 bound the mark verbs and the apply-side seed,
                 // taking the section to 20; 18 sits above the
                 // pre-task population of 18 — a first time.
-                18),
+                //
+                // TG-1 bound the prompt hierarchy and the landing,
+                // taking the section to 22; 20 sits above the
+                // pre-task population of 20 — a second time.
+                20),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

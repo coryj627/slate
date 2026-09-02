@@ -95,6 +95,113 @@ public sealed class CanvasDocumentTests : IDisposable
             new CanvasAnnouncer(_announced.Add, TimeSpan.FromMinutes(1)),
             synchronousForTests);
 
+    /// <summary>§G TG-1 (IG-38): a submit's sheet closes when its
+    /// OPERATION LANDS — not on the keypress: Pending keeps the sheet
+    /// until the posted landing runs, then the exact sheet closes and
+    /// the write is on disk.</summary>
+    [Fact]
+    public void ASubmitClosesOnlyWhenItsOperationLands()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+
+        document.RequestGroupRename("grp");
+        var sheet = Assert.IsType<CanvasRenameGroupPrompt>(workspace.CanvasPromptSheet);
+        Assert.Equal("grp", sheet.GroupId);
+        Assert.Equal("Research", sheet.Draft);
+        sheet.Draft = "Research 2";
+
+        workspace.SubmitCanvasPrompt();
+        Assert.Same(sheet, workspace.CanvasPromptSheet);
+
+        PumpDispatcher();
+        Assert.Null(workspace.CanvasPromptSheet);
+        Assert.Contains(
+            "Research 2",
+            File.ReadAllText(Path.Combine(_fixture.Root, "board.canvas")));
+    }
+
+    /// <summary>§G TG-1 (IG-38): a REFUSED submit keeps the sheet and
+    /// its draft — the connect's target vanished, the verb refused,
+    /// nothing closes, before or after the pump.</summary>
+    [Fact]
+    public void ARefusedSubmitKeepsTheSheetAndDraft()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        document.SeatSelectionSilently("question");
+        document.OpenCardPicker(CanvasCardPickerPurpose.ConnectTo);
+        Assert.True(document.HandleCardPick(
+            document.LastCardPickerRequestForTests!, "evidence"));
+        var sheet = Assert.IsType<CanvasConnectLabelPrompt>(workspace.CanvasPromptSheet);
+        Assert.Equal("evidence", sheet.Stage.TargetId);
+
+        document.SeatSelectionSilently("evidence");
+        document.CanvasDeleteSelection();
+        sheet.Draft = "late";
+        workspace.SubmitCanvasPrompt();
+
+        Assert.Same(sheet, workspace.CanvasPromptSheet);
+        Assert.Equal("late", sheet.Draft);
+        PumpDispatcher();
+        Assert.Same(sheet, workspace.CanvasPromptSheet);
+    }
+
+    /// <summary>§G TG-1 (IG-38): re-entrant opening is REFUSED, never
+    /// an overwrite.</summary>
+    [Fact]
+    public void AReentrantOpenIsRefusedNotOverwritten()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+
+        document.RequestGroupRename("grp");
+        CanvasPromptViewModel first = workspace.CanvasPromptSheet!;
+        document.RequestGroupRename("grp");
+
+        Assert.Same(first, workspace.CanvasPromptSheet);
+        Assert.False(workspace.TryPresentCanvasPrompt(
+            CanvasPromptViewModel.SetColor(document)));
+    }
+
+    /// <summary>§G TG-1 (IG-38): a stale landing closes only ITS sheet
+    /// — after Escape and a successor prompt, the earlier operation's
+    /// landing leaves the successor standing.</summary>
+    [Fact]
+    public void AStaleLandingNeverClosesASuccessorSheet()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        document.RequestGroupRename("grp");
+        workspace.CanvasPromptSheet!.Draft = "Renamed";
+        workspace.SubmitCanvasPrompt();
+
+        workspace.CloseCanvasPrompt();
+        document.SeatSelectionSilently("question");
+        document.RequestSetColor();
+        CanvasPromptViewModel successor = workspace.CanvasPromptSheet!;
+        Assert.IsType<CanvasSetColorPrompt>(successor);
+
+        PumpDispatcher();
+        Assert.Same(successor, workspace.CanvasPromptSheet);
+    }
+
     private WorkspaceViewModel NewWorkspace() =>
         new(
             _session,

@@ -9517,7 +9517,7 @@ mutates.
 
 **G4 — The marks list is a KIND of the TF-8 prompt sheet with a live
 projection and an addressed landing.** The prompt model becomes an
-EXHAUSTIVE variant set (GD-1): `CanvasPromptKind` = ConnectLabel,
+EXHAUSTIVE variant set (GD-1): the prompt kind (once an enum, now the hierarchy) = ConnectLabel,
 RenameGroup, SetColor(target: Selection | Marked), GroupMarked,
 MarksList — each kind with its OWN submit arm and NO default arm
 (`CanvasPromptViewModel.cs:117–130`'s fall-through retires). The
@@ -9892,6 +9892,48 @@ by design, and is recorded as such), M2 the resolution refusal
 dropped (a compilable fallback-title mutant; the first attempt did
 not compile and counted for nothing), M3 the count read after the
 clear, M4 idempotence broken. All bitten.
+
+### TG-1 — the prompt variant model: payloads, results, one identity
+
+IG-37 is discharged BY CONSTRUCTION. The prompt machinery is a
+sealed hierarchy: an abstract `CanvasPromptViewModel` owns the
+bindable surface the one XAML sheet reads (title, draft, the
+text-versus-choices shape, the choices and the active choice), and
+one class per variant carries its own payload — the connect stage,
+the group id, the color choices built from core's `CanvasColorName`
+— with an abstract `Submit` every variant MUST implement. There is
+no default arm and no nullable payload assertion: a variant that
+cannot submit cannot exist. IG-38 is discharged the same way: a
+submit answers `Refused`, `Pending` or `Completed`, and the
+workspace closes the sheet on the RESULT, never on the keypress —
+Completed closes now; Pending closes when the variant's exact
+operation LANDS (the three verbs `CanvasRenameGroup`, `CanvasSetColor`
+and `CanvasConnect` now answer their operation and carry a
+completion; the landing arms are Installed and the two
+committed-unpresented arms, G5's table); Refused keeps the sheet and
+its draft. The landing marshals HOME — the completion runs on the
+funnel's worker (TF-11's lesson), so the submit captures the
+submitting thread's dispatcher and posts the closure to it — and the
+closure runs only if THAT sheet is still the current one, so a stale
+landing can never close a successor. Re-entrant opening is REFUSED
+rather than overwritten: unreachable from the surfaces (the sheet
+owns the keys; the palette refuses beneath every sheet), the guard
+makes the programmatic path honest. The GroupMarked and MarksList
+variants and the Marked color target join with their verbs (TG-2,
+TG-4, TG-5), each forced to its own arm by the base.
+
+Facts: four, at the workspace where the sheet lives — a Pending
+submit's sheet standing until the pumped landing closes it with the
+write on disk; a refused submit (the connect's target deleted before
+Enter) keeping sheet and draft through the pump; re-entrant opening
+refused with the first sheet standing; a stale landing leaving a
+successor sheet standing. Mutations, each byte-restored: M1 Pending
+closing immediately, M2 Refused closing, M3 the re-entrancy guard
+dropped, M4 the identity check dropped. All bitten. Citation repair,
+recorded: frozen G4 cited the prompt-kind enum this task retired; the
+citation census refused the dead name, and the reference now reads
+as prose naming its successor — the prose is not re-litigated, a dead
+citation is.
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 

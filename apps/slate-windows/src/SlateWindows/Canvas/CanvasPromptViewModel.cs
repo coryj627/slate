@@ -6,96 +6,44 @@ using uniffi.slate_uniffi;
 
 namespace SlateWindows.Canvas;
 
-/// <summary>§F TF-8: what a canvas prompt is for.</summary>
-internal enum CanvasPromptKind
+/// <summary>§G TG-1 (IG-38): what a submit ANSWERED — the sheet's
+/// closure follows the result, never the keypress. Refused keeps the
+/// sheet and its draft (the verb spoke); Pending keeps it until the
+/// named operation LANDS; Completed closes now.</summary>
+internal enum CanvasPromptSubmit
 {
-    ConnectLabel,
-    RenameGroup,
-    SetColor,
+    Refused,
+    Pending,
+    Completed,
 }
 
 /// <summary>One choice row for a choices-shaped prompt.</summary>
 internal sealed record CanvasPromptChoice(string? Value, string Name);
 
 /// <summary>
-/// §F TF-8 (FD-4): the prompt machinery — ONE sheet for the label
-/// step, the carried Rename Group, and the carried Set Color. Text
-/// prompts submit their draft; the color prompt submits a CHOICE
-/// (named buttons-as-rows: color is never color-alone, and the names
-/// are core's `CanvasColorName`, never a host copy). The document
-/// verbs own every refusal; Escape dismisses committing nothing.
+/// §G TG-1 (IG-37): the prompt machinery as a SEALED HIERARCHY — one
+/// sheet, one modal membership (TF-8), every variant carrying its own
+/// payload (the connect stage, the group id, the color target) and
+/// its own <see cref="Submit"/> arm. There is no default arm: a
+/// variant that cannot submit cannot exist. The bindable surface is
+/// the base's, so the XAML sheet is the same for every variant.
 /// </summary>
-internal sealed class CanvasPromptViewModel
+internal abstract class CanvasPromptViewModel
 {
-    private readonly CanvasDocumentViewModel _document;
-    private readonly CanvasConnectStage? _stage;
-    private readonly string? _groupId;
-
-    private CanvasPromptViewModel(
-        CanvasPromptKind kind,
+    private protected CanvasPromptViewModel(
         CanvasDocumentViewModel document,
-        CanvasConnectStage? stage,
-        string? groupId,
         string title,
         string draft,
         ImmutableArray<CanvasPromptChoice> choices)
     {
-        Kind = kind;
-        _document = document;
-        _stage = stage;
-        _groupId = groupId;
+        Document = document;
         Title = title;
         Draft = draft;
         Choices = choices;
         SelectedChoice = choices.IsEmpty ? null : choices[0];
     }
 
-    internal static CanvasPromptViewModel ConnectLabel(
-        CanvasDocumentViewModel document, CanvasConnectStage stage) =>
-        new(
-            CanvasPromptKind.ConnectLabel,
-            document,
-            stage,
-            null,
-            $"Connect to \"{stage.TargetTitle}\"",
-            string.Empty,
-            []);
-
-    internal static CanvasPromptViewModel RenameGroup(
-        CanvasDocumentViewModel document, string groupId, string current) =>
-        new(
-            CanvasPromptKind.RenameGroup,
-            document,
-            null,
-            groupId,
-            "Rename Group",
-            current,
-            []);
-
-    internal static CanvasPromptViewModel SetColor(
-        CanvasDocumentViewModel document)
-    {
-        ImmutableArray<CanvasPromptChoice>.Builder choices =
-            ImmutableArray.CreateBuilder<CanvasPromptChoice>();
-        for (byte preset = 1; preset <= 6; preset++)
-        {
-            choices.Add(new CanvasPromptChoice(
-                preset.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                SlateUniffiMethods.CanvasColorName(
-                    new CanvasColor.Preset(preset))));
-        }
-        choices.Add(new CanvasPromptChoice(null, "No color"));
-        return new(
-            CanvasPromptKind.SetColor,
-            document,
-            null,
-            null,
-            "Set Color",
-            string.Empty,
-            choices.ToImmutable());
-    }
-
-    public CanvasPromptKind Kind { get; }
+    private protected CanvasDocumentViewModel Document { get; }
 
     public string Title { get; }
 
@@ -107,27 +55,110 @@ internal sealed class CanvasPromptViewModel
 
     public CanvasPromptChoice? SelectedChoice { get; set; }
 
-    /// <summary>The staged request, held immutable for its life —
-    /// the F7 pin a fact reads.</summary>
-    internal CanvasConnectStage? StageForTests => _stage;
+    /// <summary>Enter's arm: route the answer to the shipped verb and
+    /// ANSWER what happened. A Pending answer names its operation
+    /// through <paramref name="onLanded"/>, which the workspace runs
+    /// — marshalled home — when that exact operation lands, to close
+    /// this exact sheet if it is still the current one.</summary>
+    internal abstract CanvasPromptSubmit Submit(Action onLanded);
 
-    /// <summary>Enter's arm: route the answer to the shipped verb.
-    /// The connect label may be empty — Enter SKIPS, and the verb
-    /// normalizes empty to null (IF-27).</summary>
-    internal void Submit()
+    /// <summary>The landing arms of a funnel completion — the write
+    /// LANDED (installed, or committed-unpresented) — the only arms
+    /// that may close a sheet (G5's table).</summary>
+    private protected static bool Landed(CanvasOperationOutcome outcome) =>
+        outcome is CanvasOperationOutcome.Installed
+            or CanvasOperationOutcome.Unindexed
+            or CanvasOperationOutcome.RefreshRefused;
+
+    internal static CanvasPromptViewModel ConnectLabel(
+        CanvasDocumentViewModel document, CanvasConnectStage stage) =>
+        new CanvasConnectLabelPrompt(document, stage);
+
+    internal static CanvasPromptViewModel RenameGroup(
+        CanvasDocumentViewModel document, string groupId, string current) =>
+        new CanvasRenameGroupPrompt(document, groupId, current);
+
+    internal static CanvasPromptViewModel SetColor(CanvasDocumentViewModel document) =>
+        new CanvasSetColorPrompt(document);
+}
+
+/// <summary>§F TF-8 / §G TG-1: the label step of Connect To… — the
+/// immutable stage is the payload; Enter with an empty field skips
+/// (the verb normalizes empty to null).</summary>
+internal sealed class CanvasConnectLabelPrompt : CanvasPromptViewModel
+{
+    internal CanvasConnectLabelPrompt(CanvasDocumentViewModel document, CanvasConnectStage stage)
+        : base(document, "Connect to " + Quote(stage.TargetTitle), string.Empty, [])
     {
-        switch (Kind)
+        Stage = stage;
+    }
+
+    internal CanvasConnectStage Stage { get; }
+
+    internal override CanvasPromptSubmit Submit(Action onLanded)
+    {
+        ArgumentNullException.ThrowIfNull(onLanded);
+        CanvasMutationOperation? operation = Document.CanvasConnect(
+            Stage, Draft, completion: outcome => { if (Landed(outcome)) { onLanded(); } });
+        return operation is null ? CanvasPromptSubmit.Refused : CanvasPromptSubmit.Pending;
+    }
+
+    private static string Quote(string title) => "\u0022" + title + "\u0022";
+}
+
+/// <summary>The carried Rename Group prompt (FD-4): the group id is
+/// the payload, the draft seeds from the current title.</summary>
+internal sealed class CanvasRenameGroupPrompt : CanvasPromptViewModel
+{
+    internal CanvasRenameGroupPrompt(
+        CanvasDocumentViewModel document, string groupId, string current)
+        : base(document, "Rename Group", current, [])
+    {
+        GroupId = groupId;
+    }
+
+    internal string GroupId { get; }
+
+    internal override CanvasPromptSubmit Submit(Action onLanded)
+    {
+        ArgumentNullException.ThrowIfNull(onLanded);
+        CanvasMutationOperation? operation = Document.CanvasRenameGroup(
+            GroupId, Draft, completion: outcome => { if (Landed(outcome)) { onLanded(); } });
+        return operation is null ? CanvasPromptSubmit.Refused : CanvasPromptSubmit.Pending;
+    }
+}
+
+/// <summary>The carried Set Color prompt (FD-4) over the SELECTION:
+/// choices are core's names, never a host copy. The Marked target
+/// joins with its bulk verb (TG-4).</summary>
+internal sealed class CanvasSetColorPrompt : CanvasPromptViewModel
+{
+    internal CanvasSetColorPrompt(CanvasDocumentViewModel document)
+        : base(document, "Set Color", string.Empty, BuildChoices())
+    {
+    }
+
+    internal override CanvasPromptSubmit Submit(Action onLanded)
+    {
+        ArgumentNullException.ThrowIfNull(onLanded);
+        CanvasMutationOperation? operation = Document.CanvasSetColor(
+            SelectedChoice?.Value,
+            completion: outcome => { if (Landed(outcome)) { onLanded(); } });
+        return operation is null ? CanvasPromptSubmit.Refused : CanvasPromptSubmit.Pending;
+    }
+
+    private static ImmutableArray<CanvasPromptChoice> BuildChoices()
+    {
+        ImmutableArray<CanvasPromptChoice>.Builder choices =
+            ImmutableArray.CreateBuilder<CanvasPromptChoice>();
+        for (byte preset = 1; preset <= 6; preset++)
         {
-            case CanvasPromptKind.ConnectLabel:
-                _document.CanvasConnect(_stage!, Draft);
-                break;
-            case CanvasPromptKind.RenameGroup:
-                _document.CanvasRenameGroup(_groupId!, Draft);
-                break;
-            default:
-                _document.CanvasSetColor(SelectedChoice?.Value);
-                break;
+            choices.Add(new CanvasPromptChoice(
+                preset.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                SlateUniffiMethods.CanvasColorName(new CanvasColor.Preset(preset))));
         }
+        choices.Add(new CanvasPromptChoice(null, "No color"));
+        return choices.ToImmutable();
     }
 }
 
