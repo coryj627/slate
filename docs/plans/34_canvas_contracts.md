@@ -9760,6 +9760,97 @@ recorded divergence's Windows side.
 | IG-29 marks and history | G8/GD-7 (never snapshotted or replayed) |
 | IG-30 verification | G9 (named facts per row and cell; the journey kept) |
 
+
+### THE FREEZE — read this first
+
+**This section is CLOSED to further prose revision**, frozen at
+revision 2 after two adversarial rounds, by APPLICATION OF THE
+STANDING PRECEDENT — the owner's ruling that closed §C-unit, §D, §E
+and §F, applied here by the session rather than freshly ruled, and
+recorded as such; the owner may overrule. The trajectory is rule 5's
+signal on the same schedule as §E and §F: thirty findings, then
+twenty-six with NINE of the twenty-four blockers CREATED by revision
+2's own closures — the prompt variant model, the A14 landing from a
+closing sheet, the filter-clearing Jump, the typed mark effect — which
+is the protocol's own definition of a patch over a missing model
+rather than a repair. Prose cannot close what the round found; the
+findings become the ledger below, each discharged BY CODE in the task
+whose surface it names, each closure recorded with its facts and its
+byte-restored mutations, exactly as the IF ledger was.
+
+The frozen text stands with its known holes NAMED: the publication as
+the one mark authority (IG-31), the three store verbs (IG-32–35), the
+list as a currency-bound read machine (IG-36), the prompt variants as
+a sealed hierarchy with sheet identity and submit results (IG-37–38),
+A14's real outcomes and post-close posting (IG-39–41), the filter
+announcement as the one arbiter before landing (IG-42), the zero-row
+and externally-emptied list states (IG-43–44), per-id mark epochs and
+the retained receipt (IG-45–46), the split post-commit and
+continuation outcomes (IG-47–50), the ladder's silent arms (IG-51),
+core vocabulary arms in place of static detail strings (IG-52, under
+FD-6's lifted ceiling and the RefreshPending precedent), the
+resolution-versus-action rows (IG-53), the name composition (IG-54),
+the count-title (IG-55), and the inverse guarantee's true scope
+(IG-56). Where a task finds the frozen text and the shipped code in
+conflict, the shipped frozen sections win and the record says so.
+
+### Round record
+
+- **Round 1** (xhigh, conforming): 30 findings — 28 blockers, 2
+  majors — closed by revision 2's text (the table above).
+- **Round 2** (xhigh, conforming): 26 findings — 24 blockers, 1
+  major, 1 minor — nine created by revision 2. Rule 5's signal; the
+  precedent applied; the findings are the ledger.
+
+### The ledger — IG-31 … IG-56, discharged by code
+
+| Row | Severity | Contracts | Origin | Claim | Rides |
+| --- | --- | --- | --- | --- | --- |
+| IG-31 | BLOCKER | G1/G2/GD-7 | survived round 1 | “`CanvasSelection` owns the set” and the publication merely republishes it. | TG-0 |
+| IG-32 | BLOCKER | G1/G3 | created by revision 2 | G1 says the document exposes “exactly two store verbs,” `ToggleMark` and `Unmark`. | TG-0 |
+| IG-33 | BLOCKER | G2/G3 | survived round 1 | “`ClearMarks`, then `CanvasMarksCleared(count)`,” with Clear speaking the store count. | TG-0 |
+| IG-34 | BLOCKER | G1/G4 | created by revision 2 | “Both” `ToggleMark` and `Unmark(nodeId)` refuse when “a selection is absent.” | TG-0 |
+| IG-35 | BLOCKER | G1/G7 | survived round 1 | An absent or unresolvable selection always maps directly to `NothingSelected`. | TG-0 |
+| IG-36 | BLOCKER | G4/G6 | survived round 1 | The list opens and reprojects live via `CanvasOrderNodes`, including under pending commit and suspension. | TG-2 |
+| IG-37 | BLOCKER | G4/GD-1 | survived round 1 | `CanvasPromptKind = … SetColor(target: Selection \| Marked) …` is an exhaustive variant model. | TG-1 |
+| IG-38 | BLOCKER | G4/G5 | survived round 1 | No no-write outcome closes the prompt; installed outcomes close it. | TG-1 |
+| IG-39 | BLOCKER | G4 | created by revision 2 | The sheet raises `RequestFocusLanding` and then closes; the request “survives” and the surface delivers it. | TG-2 |
+| IG-40 | BLOCKER | G4 | survived round 1 | The captured owner’s surface delivers the Jump landing. | TG-2 |
+| IG-41 | BLOCKER | G4 | created by revision 2 | A vanished row uses A14’s order and speaks `CanvasActionFailed(…, "jump")` “when even that fails.” | TG-2 |
+| IG-42 | BLOCKER | G4/GD-6 | created by revision 2 | For a filtered row, `CanvasFilterCleared` is “spoken first” and focus then lands. | TG-2 |
+| IG-43 | BLOCKER | G4 | created by revision 2 | A ghost-only store opens a zero-row modal list with a Clear control. | TG-2 |
+| IG-44 | BLOCKER | G4/G5/GD-7 | created by revision 2 | The live list closes only when its own row Unmark or Clear empties the store. | TG-2 |
+| IG-45 | BLOCKER | G5/GD-7 | created by revision 2 | “Later local mark writes win” over a delayed `RemoveCaptured`. | TG-3 |
+| IG-46 | BLOCKER | G5/GD-7 | survived round 1 | The mark effect is retained “under the operation identity” for refresh-only recovery. | TG-3 |
+| IG-47 | BLOCKER | G5 | survived round 1 | `Unindexed` and `RefreshRefused` are one landed-write/recovery outcome. | TG-3 |
+| IG-48 | BLOCKER | G5/G6 | survived round 1 | `Conflict` is a terminal outcome with the prompt kept. | TG-3 |
+| IG-49 | BLOCKER | G5 | survived round 1 | Every funnel arm is in the terminal table. | TG-3 |
+| IG-50 | BLOCKER | G5 | survived round 1 | `RefusedPrepare` always has “the preparation’s own typed sentence.” | TG-3 |
+| IG-51 | BLOCKER | G5/G7 | survived round 1 | “Admission refusals … speak the ladder’s sentence.” | TG-3 |
+| IG-52 | BLOCKER | G4/G5/GD-3 | survived round 1 | Failures use `CanvasActionFailed(CanvasAction, "jump")` and `CanvasActionFailed(CanvasAction, "group")`. | TG-2/TG-5 |
+| IG-53 | MAJOR | G6/GD-4 | survived round 1 | Jump/list/prompt-opening are freely allowed during conflict suspension and pending commit. | TG-6 |
+| IG-54 | MINOR | G4 | survived round 1 | `SpeakableName` is “the unique name every Windows projection already uses.” | TG-2 |
+| IG-55 | BLOCKER | G7/G5/GD-5 | created by revision 2 | The Color Marked title carries the projected count, while the operation captures a fresh snapshot at Submit. | TG-1 |
+| IG-56 | BLOCKER | G8 | survived round 1 | Every bulk action has one real returned inverse: Delete restores structure, Color restores colors, and Group removes the group. | TG-6 |
+
+### The task loop
+
+| Task | Slice | Discharges |
+| --- | --- | --- |
+| TG-0 | The store verbs: document ToggleMark/Unmark/ClearMarks over the store with resolve-or-refuse, the live-count sentences, the Ctrl+Alt+M chord, the palette rows, the context row live with the silent seat | G1, G2(a), G3, G7's store cells |
+| TG-1 | The prompt variant model: exhaustive kinds with targets and per-kind submit arms, no default; the Group Marked and Color Marked (Marked target) kinds; the sheet/draft outcome table's keep-on-refusal seam | G4's model, G5's sheet column, GD-1, GD-5 |
+| TG-2 | The marks list kind: live projection keyed by id with the successor rule, store-vs-projection admission, SpeakableName rows, Enter's A14 landing surviving closure with the filter-clearing and vanished-row cells, Delete's spoken Unmark, Clear, Escape | G4, GD-6 |
+| TG-3 | The bulk substrate: the immutable snapshot operation, the typed mark effect applied with the refreshed rows and retained for recovery, the ladder-then-NoMarks order, the thrown-query rows, the per-arm outcome table | G5's frame, G6's funnel cells, G7's ladder, GD-7 |
+| TG-4 | Delete Marked and Color Marked end to end: reading-ordered ops, CountNoun names, the two color representations, KeepSelection, the sentences | G5's first two verbs, GD-2 |
+| TG-5 | Group Marked end to end: the seven-argument CreateGroup from core's frame, the null-frame FD-6 arm, the label normalization, the sentence | G5's third verb, GD-3 |
+| TG-6 | Marks and modes, history: the holder-immutability and mode/suspension cells, the one-inverse facts with the exact Undid render, marks-are-not-history, the action-name drift | G6, G8, GD-4 |
+| TG-7 | The journey, axe, and the ledger sweep | G9, the sweep |
+
+Ledger rows not named in a task's row ride the task whose surface
+they touch; the closing record sweeps stragglers. Each task lands
+with its facts, its byte-restored mutations, its record here, and a
+raised citation floor — the §F gauntlet, unchanged.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same
