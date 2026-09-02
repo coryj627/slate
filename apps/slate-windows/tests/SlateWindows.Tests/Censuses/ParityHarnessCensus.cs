@@ -246,4 +246,43 @@ public class ParityHarnessCensus
             }
         }
     }
+
+    /// <summary>§H TH-3 (H3, IH-36): the read half of §W-A cannot skip a
+    /// canvas fixture in silence — every <c>fixtures/canvas/*.canvas</c>
+    /// not in <c>CanvasArtifactExclusions</c> is an entry of BOTH committed
+    /// canvas artifacts, and every exclusion is a file that exists (a
+    /// stale name in the list would hide nothing and mean nothing).</summary>
+    [Fact]
+    public void EveryCanvasFixtureIsReadOrExcluded()
+    {
+        var fixtures = Directory.EnumerateFiles(CanvasFixturesDir, "*.canvas")
+            .Select(Path.GetFileName)
+            .Select(name => name!)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToList();
+        Assert.NotEmpty(fixtures);
+        foreach (string excluded in SurfaceSerializer.CanvasArtifactExclusions)
+        {
+            Assert.Contains(excluded, fixtures);
+        }
+        foreach (string artifact in (string[])["canvas_read.json", "canvas_queries.json"])
+        {
+            using var document = System.Text.Json.JsonDocument.Parse(
+                File.ReadAllBytes(Path.Combine(GoldenDir, artifact)));
+            var listed = document.RootElement.GetProperty("canvases")
+                .EnumerateArray()
+                .Select(entry => entry.GetProperty("file").GetString()!)
+                .ToHashSet(StringComparer.Ordinal);
+            foreach (string fixture in fixtures)
+            {
+                bool excluded = SurfaceSerializer.CanvasArtifactExclusions.Contains(fixture);
+                Assert.True(
+                    listed.Contains(fixture) == !excluded,
+                    excluded
+                        ? $"{artifact} lists the excluded fixture {fixture}"
+                        : $"{artifact} skips the fixture {fixture} in silence — regenerate the goldens");
+            }
+        }
+    }
+
 }

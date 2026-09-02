@@ -1370,6 +1370,42 @@ final class ParityHarnessTests: XCTestCase {
     private static func slash(_ path: String) -> String {
         path.replacingOccurrences(of: "\\", with: "/")
     }
+
+    /// W6-1 §H TH-3 (H3): the read half of §W-A cannot skip a canvas
+    /// fixture in silence on this lane either — every
+    /// `fixtures/canvas/*.canvas` not in `canvasArtifactExclusions` is an
+    /// entry of BOTH committed canvas artifacts, and every exclusion names
+    /// a fixture that exists. The Windows twin is
+    /// `ParityHarnessCensus.EveryCanvasFixtureIsReadOrExcluded`.
+    func testEveryCanvasFixtureIsReadOrExcluded() throws {
+        let fixtures = try FileManager.default
+            .contentsOfDirectory(atPath: Self.canvasFixturesDir.path)
+            .filter { $0.hasSuffix(".canvas") }
+            .sorted { Array($0.utf16).lexicographicallyPrecedes(Array($1.utf16)) }
+        XCTAssertFalse(fixtures.isEmpty)
+        for excluded in Self.canvasArtifactExclusions {
+            XCTAssertTrue(fixtures.contains(excluded), "the exclusion \(excluded) names no fixture")
+        }
+        for artifact in ["canvas_read.json", "canvas_queries.json"] {
+            let data = try Data(contentsOf: Self.goldenDir.appendingPathComponent(artifact))
+            guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                let canvases = root["canvases"] as? [[String: Any]]
+            else {
+                XCTFail("\(artifact) has no canvases array")
+                return
+            }
+            let listed = Set(canvases.compactMap { $0["file"] as? String })
+            for fixture in fixtures {
+                let excluded = Self.canvasArtifactExclusions.contains(fixture)
+                XCTAssertEqual(
+                    listed.contains(fixture), !excluded,
+                    excluded
+                        ? "\(artifact) lists the excluded fixture \(fixture)"
+                        : "\(artifact) skips the fixture \(fixture) in silence")
+            }
+        }
+    }
+
 }
 
 /// Canonical JSON writer — the Swift half of the fixed serialization

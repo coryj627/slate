@@ -477,7 +477,11 @@ public sealed class ContractsCitationCensus
                 // TH-2 bound the large canvas and the §K roll-up, taking the
                 // section to 79; 78 sits above the pre-task population
                 // of 71 — a third time.
-                78),
+                //
+                // TH-3 bound the scenario twin and the fixture censuses, taking the
+                // section to 80; 79 sits above the pre-task population
+                // of 79 — a fourth time.
+                79),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

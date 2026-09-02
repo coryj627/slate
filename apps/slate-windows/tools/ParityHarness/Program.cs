@@ -52,7 +52,7 @@ for (int i = 0; i < args.Length - 1; i++)
 }
 
 // W6-1 §E TE-11d (E18): the canvas scenario mode — scripts are data
-// (shared verbatim with the Swift twin); one artifact per scenario;
+// (shared verbatim with the Swift twin (SlateMacTests/CanvasScenarioTests.swift)); one artifact per scenario;
 // the driver enforces E18's round-trip rules itself.
 //
 //   dotnet run --project apps/slate-windows/tools/ParityHarness -- //     --canvas-scenarios crates/slate-core/tests/fixtures/canvas_scenario_golden/scenarios.json //     --out crates/slate-core/tests/fixtures/canvas_scenario_golden

@@ -4,7 +4,8 @@
 // W6-1 §E TE-11d (E18): the canvas mode of the §W-A differential
 // harness. The scenario scripts are DATA
 // (crates/slate-core/tests/fixtures/canvas_scenario_golden/scenarios.json),
-// shared verbatim with the Swift twin, so identical CanvasAction
+// shared verbatim with the Swift twin (CanvasScenarioTests.swift in
+// SlateMacTests, landed by W6-1 §H), so identical CanvasAction
 // sequences on both platforms are enforced by construction. Each
 // scenario seeds ONE fixture into a fresh temp vault as board.canvas,
 // applies each step through the REAL vault apply (the inverse-carrying

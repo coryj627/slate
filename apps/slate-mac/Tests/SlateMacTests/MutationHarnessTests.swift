@@ -689,6 +689,75 @@ final class MutationHarnessTests: XCTestCase {
         j.raw("]}")
         return j.output
     }
+
+    /// W6-1 §H TH-3 (H3): the canvas mutation half of §W-A cannot skip a
+    /// fixture in silence, and cannot cover one with a no-op, on this lane
+    /// either — every `fixtures/canvas/*.canvas` is the fixture of at
+    /// least one scenario in `canvas_scenario_golden/scenarios.json` or a
+    /// key of its `excluded` map with a non-empty reason; and every
+    /// scenario's committed artifact holds at least one step and a
+    /// terminal hash that differs from the original's. The Windows twin
+    /// is `MutationHarnessCensus.EveryCanvasFixtureIsScriptedOrExcluded`.
+    func testEveryCanvasFixtureIsScriptedOrExcluded() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()  // SlateMacTests
+            .deletingLastPathComponent()  // Tests
+            .deletingLastPathComponent()  // slate-mac
+            .deletingLastPathComponent()  // apps
+            .deletingLastPathComponent()  // repo root
+        let canvasGolden = repoRoot.appendingPathComponent(
+            "crates/slate-core/tests/fixtures/canvas_scenario_golden")
+        let canvasFixtures = repoRoot.appendingPathComponent("crates/slate-core/tests/fixtures/canvas")
+        let data = try Data(contentsOf: canvasGolden.appendingPathComponent("scenarios.json"))
+        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let scenarios = root["scenarios"] as? [[String: Any]]
+        else {
+            XCTFail("scenarios.json has no scenarios array")
+            return
+        }
+        var scripted = Set<String>()
+        var names: [String] = []
+        for scenario in scenarios {
+            guard let name = scenario["name"] as? String, let fixture = scenario["fixture"] as? String
+            else {
+                XCTFail("a scenario lacks its name or fixture")
+                return
+            }
+            names.append(name)
+            scripted.insert(canvasGolden.appendingPathComponent(fixture).standardizedFileURL.path)
+        }
+        var excluded = Set<String>()
+        for (key, reason) in root["excluded"] as? [String: String] ?? [:] {
+            let full = canvasGolden.appendingPathComponent(key).standardizedFileURL
+            XCTAssertTrue(FileManager.default.fileExists(atPath: full.path), "the exclusion \(key) names no fixture")
+            XCTAssertFalse(reason.trimmingCharacters(in: .whitespaces).isEmpty, "the exclusion \(key) carries no reason")
+            excluded.insert(full.path)
+        }
+        for fixture in try FileManager.default.contentsOfDirectory(atPath: canvasFixtures.path)
+        where fixture.hasSuffix(".canvas") {
+            let full = canvasFixtures.appendingPathComponent(fixture).standardizedFileURL.path
+            XCTAssertTrue(
+                scripted.contains(full) || excluded.contains(full),
+                "\(fixture) is neither scripted by a canvas scenario nor excluded with a reason")
+            XCTAssertFalse(
+                scripted.contains(full) && excluded.contains(full),
+                "\(fixture) is both scripted and excluded")
+        }
+        for name in names {
+            let artifactData = try Data(contentsOf: canvasGolden.appendingPathComponent(name + ".json"))
+            guard let artifact = try JSONSerialization.jsonObject(with: artifactData) as? [String: Any] else {
+                XCTFail("\(name).json is not an object")
+                return
+            }
+            XCTAssertGreaterThanOrEqual(
+                (artifact["steps"] as? [Any])?.count ?? 0, 1,
+                "\(name) has no steps — a scenario that mutates nothing covers nothing")
+            XCTAssertNotEqual(
+                artifact["terminalSha256"] as? String, artifact["originalSha256"] as? String,
+                "\(name)'s terminal bytes equal its original — no mutation landed before the inverse walk")
+        }
+    }
+
 }
 
 /// Canonical JSON writer — the Swift half of the fixed serialization
