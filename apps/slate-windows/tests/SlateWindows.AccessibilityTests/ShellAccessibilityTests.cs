@@ -6461,16 +6461,34 @@ public sealed class ShellAccessibilityTests
                 Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
             }
 
-            Keyboard.TypeSimultaneously(
-                VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.KEY_N);
-            Assert.True(
-                SpinWait.SpinUntil(() => Rows().Length >= 1, TimeSpan.FromSeconds(15)),
-                "the first Ctrl+Alt+N never produced a card row");
-            Keyboard.TypeSimultaneously(
-                VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.KEY_N);
-            Assert.True(
-                SpinWait.SpinUntil(() => Rows().Length >= 2, TimeSpan.FromSeconds(15)),
-                "the second Ctrl+Alt+N never produced a card row");
+            // §G2 TG2-4: New Card LANDS IN THE EDITOR (mac's shape); Escape
+            // commits the landing so the next chord reaches the canvas, not
+            // the sheet. The row is counted after the sheet has gone.
+            void NewCardByChord(int expectedRows, string what)
+            {
+                window.SetForeground();
+                Keyboard.TypeSimultaneously(
+                    VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.KEY_N);
+                if (TryWaitForElement(window, "CanvasCardEditorSheet", TimeSpan.FromSeconds(15)) is null)
+                {
+                    Assert.Fail(
+                        what + " never landed the new card in the editor; app log tail: "
+                        + ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log")));
+                }
+                PressKey(VirtualKeyShort.ESCAPE);
+                Assert.True(
+                    SpinWait.SpinUntil(
+                        () => window.FindFirstDescendant(
+                            automation.ConditionFactory.ByAutomationId("CanvasCardEditorSheet")) is null,
+                        TimeSpan.FromSeconds(10)),
+                    what + ": Escape never closed the editor sheet");
+                Assert.True(
+                    SpinWait.SpinUntil(() => Rows().Length >= expectedRows, TimeSpan.FromSeconds(15)),
+                    what + " never produced a card row");
+            }
+
+            NewCardByChord(1, "the first Ctrl+Alt+N");
+            NewCardByChord(2, "the second Ctrl+Alt+N");
 
             // ---- Mark both by chord; the rows say so to UIA (G1) ----
             Keyboard.TypeSimultaneously(
@@ -6552,6 +6570,589 @@ public sealed class ShellAccessibilityTests
                     + "; app log tail: "
                     + ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log")));
             }
+        }
+        finally
+        {
+            try
+            {
+                if (process is { HasExited: false })
+                {
+                    process.Kill(entireProcessTree: true);
+                    process.WaitForExit(5000);
+                }
+                process?.Dispose();
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    /// <summary>§G2 TG2-9 (G2-13): the VERB RESIDUE journey — one launch,
+    /// every leg in sequence with its reseating: New Group… by the
+    /// palette (the group prompt scanned, a name, the group in the tree);
+    /// the FIRST card reseated (the group landed selected, IG2-31); Move
+    /// into Group… and Remove from Group (the row's status names the
+    /// container); Create Connected Card by Ctrl+Alt+Shift+N (the editor
+    /// sheet opens on the landing, Escape commits); Edit Connection…
+    /// through both stages — the focused element after the atomic swap
+    /// is the label field (IG2-45) and the connection row's name carries
+    /// the label; Duplicate; Add Link Card… (a link card named by its
+    /// host); the connected card reseated and Convert Card to Note… (a
+    /// file card; the note in the files tree); Delete Connection (one
+    /// connection, no picker, the row gone); Add Note to Canvas… (the
+    /// vault file picker listing the vault's note, scanned); then the
+    /// undo chain back to two cards with the note kept (G2D-3).</summary>
+    [Fact]
+    [Trait("gate", "W-C")]
+    public void CanvasVerbs_GroupConnectDuplicateLinkConvertAndUndo_AreReachable()
+    {
+        string testRoot = Path.Combine(
+            Path.GetTempPath(), $"slate-canvas-verbs-{Guid.NewGuid():N}");
+        string vaultRoot = Path.Combine(testRoot, "Verbs Vault");
+        string logDirectory = Path.Combine(testRoot, "logs");
+        Directory.CreateDirectory(vaultRoot);
+        File.WriteAllText(
+            Path.Combine(vaultRoot, "note.md"), "# Note\n\nBody.\n");
+
+        Process? process = null;
+        try
+        {
+            var startInfo = new ProcessStartInfo(SlateWindowsExe())
+            {
+                UseShellExecute = false,
+            };
+            startInfo.ArgumentList.Add(vaultRoot);
+            startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
+                $"slate-canvas-verbs-{Guid.NewGuid():N}";
+            startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            process = Process.Start(startInfo)
+                ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+
+            if (!HasInteractiveDesktop(process, "Canvas verbs"))
+            {
+                return;
+            }
+
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(
+                process,
+                automation,
+                Path.Combine(logDirectory, "slate-windows.log"),
+                TimeSpan.FromSeconds(30));
+            window.SetForeground();
+            window.Focus();
+
+            string LogTail() => ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log"));
+
+            // ---- A canvas with two cards, by the authoring path ----
+            AutomationElement tree = OpenNewCanvasFromFileMenu(window, automation, logDirectory);
+            tree.Focus();
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+
+            AutomationElement[] Rows()
+            {
+                try
+                {
+                    AutomationElement? liveTree = window.FindFirstDescendant(
+                        automation.ConditionFactory.ByAutomationId(
+                            "CanvasOutlineTree"));
+                    return liveTree is null
+                        ? []
+                        : liveTree.FindAllDescendants(
+                            automation.ConditionFactory.ByControlType(
+                                ControlType.TreeItem));
+                }
+                catch (System.Runtime.InteropServices.COMException)
+                {
+                    return [];
+                }
+            }
+
+            static string StatusOf(AutomationElement item)
+            {
+                try
+                {
+                    return item.Properties.ItemStatus.ValueOrDefault ?? string.Empty;
+                }
+                catch (System.Runtime.InteropServices.COMException)
+                {
+                    return string.Empty;
+                }
+            }
+
+            static string NameOf(AutomationElement item)
+            {
+                try
+                {
+                    return item.Name;
+                }
+                catch (System.Runtime.InteropServices.COMException)
+                {
+                    return "<unreadable>";
+                }
+            }
+
+            // Connection rows sit under the seated node with the
+            // "connection N of M" status; node rows carry the positional
+            // one; a group row is a node row named as a group.
+            AutomationElement[] ConnectionRows() =>
+                Rows().Where(item => StatusOf(item).StartsWith("connection", StringComparison.Ordinal))
+                    .ToArray();
+            AutomationElement[] NodeRows() =>
+                Rows().Where(item => !StatusOf(item).StartsWith("connection", StringComparison.Ordinal))
+                    .ToArray();
+            AutomationElement[] CardRows() =>
+                NodeRows().Where(item => !NameOf(item).StartsWith("Group ", StringComparison.Ordinal))
+                    .ToArray();
+            string RowsDump() =>
+                string.Join(" | ", Rows().Select(item => NameOf(item) + " [" + StatusOf(item) + "]"));
+
+            string[] FilesTreeNames()
+            {
+                try
+                {
+                    AutomationElement? files = window.FindFirstDescendant(
+                        automation.ConditionFactory.ByAutomationId("FilesTree"));
+                    return files is null
+                        ? []
+                        : files.FindAllDescendants(
+                                automation.ConditionFactory.ByControlType(ControlType.TreeItem))
+                            .Select(NameOf)
+                            .ToArray();
+                }
+                catch (System.Runtime.InteropServices.COMException)
+                {
+                    return [];
+                }
+            }
+
+            void SeatTree()
+            {
+                // UIA's SetFocus refuses while the window is not the
+                // foreground one (the recorded journey trap): re-assert
+                // the foreground the way the chords do and retry once.
+                window.SetForeground();
+                for (int attempt = 0; ; attempt++)
+                {
+                    try
+                    {
+                        // With items, the focusable elements are the rows (the
+                        // container refuses SetFocus); seat the selected row, else
+                        // the first, else the empty tree itself.
+                        AutomationElement[] rows = Rows();
+                        AutomationElement target = rows.FirstOrDefault(item =>
+                            {
+                                try
+                                {
+                                    return item.Patterns.SelectionItem.Pattern.IsSelected.ValueOrDefault;
+                                }
+                                catch (System.Runtime.InteropServices.COMException)
+                                {
+                                    return false;
+                                }
+                            })
+                            ?? rows.FirstOrDefault()
+                            ?? WaitForElement(window, "CanvasOutlineTree", TimeSpan.FromSeconds(10));
+                        target.Focus();
+                        break;
+                    }
+                    catch (InvalidOperationException) when (attempt < 2)
+                    {
+                        ReassertForegroundForAChord(window);
+                        Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+                    }
+                }
+                Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+            }
+
+            void RunPaletteCommand(string query, string rowPrefix)
+            {
+                window.SetForeground();
+                PressChord(
+                    VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_P);
+                AutomationElement search = WaitForElement(
+                    window, "CommandPaletteSearch", TimeSpan.FromSeconds(10));
+                search.Patterns.Value.Pattern.SetValue(query);
+                AutomationElement results = WaitForElement(
+                    window, "CommandPaletteResults", TimeSpan.FromSeconds(10));
+                AutomationElement? row = null;
+                bool found = SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            row = results
+                                .FindAllDescendants(automation.ConditionFactory
+                                    .ByControlType(ControlType.ListItem))
+                                .FirstOrDefault(item => item.Name.StartsWith(
+                                    rowPrefix, StringComparison.Ordinal));
+                            return row is not null;
+                        }
+                        catch (System.Runtime.InteropServices.COMException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10));
+                if (!found)
+                {
+                    Assert.Fail(
+                        "no palette row for " + rowPrefix + "; app log tail: " + LogTail());
+                }
+                row!.Patterns.SelectionItem.Pattern.Select();
+                PressKey(VirtualKeyShort.ENTER);
+                Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+            }
+
+            bool SheetIsGone(string automationId)
+            {
+                try
+                {
+                    return window.FindFirstDescendant(
+                        automation.ConditionFactory.ByAutomationId(automationId)) is null;
+                }
+                catch (System.Runtime.InteropServices.COMException)
+                {
+                    return false;
+                }
+            }
+
+            void WaitForSheetToClose(string automationId, string what)
+            {
+                if (!SpinWait.SpinUntil(() => SheetIsGone(automationId), TimeSpan.FromSeconds(10)))
+                {
+                    Assert.Fail(what + " never closed " + automationId + "; app log tail: " + LogTail());
+                }
+            }
+
+            void SelectRow(string name, string what)
+            {
+                AutomationElement? row = null;
+                if (!SpinWait.SpinUntil(
+                        () =>
+                        {
+                            row = NodeRows().FirstOrDefault(item => NameOf(item) == name);
+                            return row is not null;
+                        },
+                        TimeSpan.FromSeconds(10)))
+                {
+                    Assert.Fail(
+                        what + ": no row named " + name + "; rows: " + RowsDump()
+                        + "; app log tail: " + LogTail());
+                }
+                window.SetForeground();
+                row!.Focus();
+                row.Patterns.SelectionItem.Pattern.Select();
+                Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+            }
+
+            string StatusOfRow(string name) =>
+                NodeRows().Where(item => NameOf(item) == name).Select(StatusOf).FirstOrDefault()
+                ?? "<no row>";
+
+            // §G2 TG2-4: New Card LANDS IN THE EDITOR; Escape commits the
+            // landing before the tree can be seated again.
+            void NewCardByChord(int expectedCards, string what)
+            {
+                SeatTree();
+                Keyboard.TypeSimultaneously(
+                    VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.KEY_N);
+                if (TryWaitForElement(window, "CanvasCardEditorSheet", TimeSpan.FromSeconds(15)) is null)
+                {
+                    Assert.Fail(
+                        what + " never landed the new card in the editor; rows: " + RowsDump()
+                        + "; app log tail: " + LogTail());
+                }
+                PressKey(VirtualKeyShort.ESCAPE);
+                WaitForSheetToClose("CanvasCardEditorSheet", what + " Escape");
+                Assert.True(
+                    SpinWait.SpinUntil(() => CardRows().Length >= expectedCards, TimeSpan.FromSeconds(15)),
+                    what + " never produced its card row; rows: " + RowsDump());
+            }
+
+            NewCardByChord(1, "the first Ctrl+Alt+N");
+            NewCardByChord(2, "the second Ctrl+Alt+N");
+            string[] twoCards = CardRows().Select(NameOf).ToArray();
+            Assert.Equal(2, twoCards.Length);
+            string firstCard = twoCards[0];
+            string secondCard = twoCards[1];
+
+            // ---- New Group… by the palette: the group prompt, scanned ----
+            RunPaletteCommand("New Group", "Canvas: New Group…");
+            _ = WaitForElement(window, "CanvasPromptSheet", TimeSpan.FromSeconds(10));
+            AssertAxeClean(process, "canvas-verbs-group-prompt");
+            WaitForElement(window, "CanvasPromptDraft", TimeSpan.FromSeconds(10))
+                .Patterns.Value.Pattern.SetValue("Research");
+            PressKey(VirtualKeyShort.ENTER);
+            WaitForSheetToClose("CanvasPromptSheet", "New Group");
+            const string groupRow = "Group \"Research\"";
+            if (!SpinWait.SpinUntil(
+                    () => NodeRows().Any(item => NameOf(item) == groupRow),
+                    TimeSpan.FromSeconds(10)))
+            {
+                Assert.Fail(
+                    "New Group never put the group in the tree; rows: " + RowsDump()
+                    + "; app log tail: " + LogTail());
+            }
+
+            // ---- Reseat the FIRST card (the group landed selected, IG2-31);
+            // Move into Group…: the prompt, Enter; the status names the group
+            SelectRow(firstCard, "reseat after New Group");
+            RunPaletteCommand("Move into Group", "Canvas: Move into Group…");
+            _ = WaitForElement(window, "CanvasPromptSheet", TimeSpan.FromSeconds(10));
+            PressKey(VirtualKeyShort.ENTER);
+            WaitForSheetToClose("CanvasPromptSheet", "Move into Group");
+            if (!SpinWait.SpinUntil(
+                    () => StatusOfRow(firstCard).Contains("in Research", StringComparison.Ordinal),
+                    TimeSpan.FromSeconds(10)))
+            {
+                Assert.Fail(
+                    "Move into Group never put the card in the group; status: "
+                    + StatusOfRow(firstCard) + "; rows: " + RowsDump()
+                    + "; app log tail: " + LogTail());
+            }
+
+            // ---- Remove from Group: the status names the canvas --------
+            RunPaletteCommand("Remove from Group", "Canvas: Remove from Group");
+            if (!SpinWait.SpinUntil(
+                    () => StatusOfRow(firstCard).Contains("in canvas", StringComparison.Ordinal),
+                    TimeSpan.FromSeconds(10)))
+            {
+                Assert.Fail(
+                    "Remove from Group never returned the card to the canvas; status: "
+                    + StatusOfRow(firstCard) + "; rows: " + RowsDump()
+                    + "; app log tail: " + LogTail());
+            }
+
+            // ---- Create Connected Card by chord: a third card lands in the
+            // editor; Escape commits ------------------------------------
+            SelectRow(firstCard, "reseat before Create Connected Card");
+            Keyboard.TypeSimultaneously(
+                VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_N);
+            if (TryWaitForElement(window, "CanvasCardEditorSheet", TimeSpan.FromSeconds(15)) is null)
+            {
+                Assert.Fail(
+                    "Ctrl+Alt+Shift+N never opened the editor on the connected card; rows: "
+                    + RowsDump() + "; app log tail: " + LogTail());
+            }
+            PressKey(VirtualKeyShort.ESCAPE);
+            WaitForSheetToClose("CanvasCardEditorSheet", "Escape");
+            Assert.True(
+                SpinWait.SpinUntil(() => CardRows().Length == 3, TimeSpan.FromSeconds(10)),
+                "Create Connected Card never produced a third card; rows: " + RowsDump());
+            string connected = CardRows().Select(NameOf)
+                .Single(name => name != firstCard && name != secondCard);
+
+            // ---- Select the connected text card; Edit Connection… through
+            // both stages: "Both directions", then a label ---------------
+            SelectRow(connected, "select the connected card");
+            Assert.True(
+                SpinWait.SpinUntil(() => ConnectionRows().Length == 1, TimeSpan.FromSeconds(10)),
+                "the connected card shows no connection row; rows: " + RowsDump());
+            RunPaletteCommand("Edit Connection", "Canvas: Edit Connection…");
+            _ = WaitForElement(window, "CanvasPromptSheet", TimeSpan.FromSeconds(10));
+            AutomationElement choices = WaitForElement(
+                window, "CanvasPromptChoices", TimeSpan.FromSeconds(10));
+            AutomationElement? both = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            both = choices
+                                .FindAllDescendants(automation.ConditionFactory
+                                    .ByControlType(ControlType.ListItem))
+                                .FirstOrDefault(item => item.Name.StartsWith(
+                                    "Both directions", StringComparison.Ordinal));
+                            return both is not null;
+                        }
+                        catch (System.Runtime.InteropServices.COMException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the direction stage never listed \"Both directions\"; descendants: "
+                + string.Join(" | ", choices.FindAllDescendants().Select(item =>
+                    NameOf(item) + " <" + item.Properties.ControlType.ValueOrDefault + ">"))
+                + "; focused: " + DescribeFocusedElement(automation)
+                + "; app log tail: " + LogTail());
+            both!.Patterns.SelectionItem.Pattern.Select();
+            PressKey(VirtualKeyShort.ENTER);
+            // IG2-45: the atomic swap LANDS FOCUS on the successor's first
+            // field — read the focused element, not the sheet's presence.
+            bool labelFocused = SpinWait.SpinUntil(
+                () =>
+                {
+                    try
+                    {
+                        return automation.FocusedElement()?.Properties.AutomationId.ValueOrDefault
+                            == "CanvasPromptDraft";
+                    }
+                    catch (Exception exception) when (IsTransientUiaFault(exception))
+                    {
+                        return false;
+                    }
+                },
+                TimeSpan.FromSeconds(10));
+            if (!labelFocused)
+            {
+                Assert.Fail(
+                    "the label stage never received focus after the swap; focused: "
+                    + DescribeFocusedElement(automation) + "; app log tail: " + LogTail());
+            }
+            WaitForElement(window, "CanvasPromptDraft", TimeSpan.FromSeconds(10))
+                .Patterns.Value.Pattern.SetValue("supports");
+            PressKey(VirtualKeyShort.ENTER);
+            WaitForSheetToClose("CanvasPromptSheet", "Edit Connection");
+            if (!SpinWait.SpinUntil(
+                    () => ConnectionRows().Select(NameOf).Any(name =>
+                        name.StartsWith("Linked with", StringComparison.Ordinal)
+                        && name.Contains("labelled \"supports\"", StringComparison.Ordinal)),
+                    TimeSpan.FromSeconds(10)))
+            {
+                Assert.Fail(
+                    "the connection row's name never carried the direction and the label; rows: "
+                    + RowsDump() + "; app log tail: " + LogTail());
+            }
+
+            // ---- Duplicate: a fourth card ------------------------------
+            RunPaletteCommand("Duplicate", "Canvas: Duplicate");
+            Assert.True(
+                SpinWait.SpinUntil(() => CardRows().Length == 4, TimeSpan.FromSeconds(10)),
+                "Duplicate never produced a fourth card; rows: " + RowsDump());
+
+            // ---- Add Link Card…: the URL prompt; a link card named by its host
+            RunPaletteCommand("Add Link", "Canvas: Add Link Card…");
+            _ = WaitForElement(window, "CanvasPromptSheet", TimeSpan.FromSeconds(10));
+            WaitForElement(window, "CanvasPromptDraft", TimeSpan.FromSeconds(10))
+                .Patterns.Value.Pattern.SetValue("https://example.com/paper");
+            PressKey(VirtualKeyShort.ENTER);
+            WaitForSheetToClose("CanvasPromptSheet", "Add Link Card");
+            if (!SpinWait.SpinUntil(
+                    () => CardRows().Select(NameOf).Any(name =>
+                        name.StartsWith("Link card", StringComparison.Ordinal)
+                        && name.Contains("example.com", StringComparison.Ordinal)),
+                    TimeSpan.FromSeconds(10)))
+            {
+                Assert.Fail(
+                    "Add Link Card never produced a link card named by its host; rows: "
+                    + RowsDump() + "; app log tail: " + LogTail());
+            }
+
+            // ---- Reseat the connected text card; Convert Card to Note…:
+            // the name prompt (mac's suggested path prefilled), Enter; the
+            // card is now a FILE card and the note is in the files tree --
+            string[] filesBefore = FilesTreeNames();
+            SelectRow(connected, "reseat the connected card");
+            RunPaletteCommand("Convert Card", "Canvas: Convert Card to Note…");
+            _ = WaitForElement(window, "CanvasPromptSheet", TimeSpan.FromSeconds(10));
+            PressKey(VirtualKeyShort.ENTER);
+            WaitForSheetToClose("CanvasPromptSheet", "Convert Card to Note");
+            if (!SpinWait.SpinUntil(
+                    () => CardRows().Select(NameOf).Any(name =>
+                        name.StartsWith("File card", StringComparison.Ordinal)),
+                    TimeSpan.FromSeconds(10)))
+            {
+                Assert.Fail(
+                    "Convert Card to Note never retargeted the card; rows: " + RowsDump()
+                    + "; app log tail: " + LogTail());
+            }
+            if (!SpinWait.SpinUntil(
+                    () => FilesTreeNames().Except(filesBefore).Any(),
+                    TimeSpan.FromSeconds(10)))
+            {
+                Assert.Fail(
+                    "the note never appeared in the files tree; files: "
+                    + string.Join(" | ", FilesTreeNames()) + "; app log tail: " + LogTail());
+            }
+            string[] filesWithNote = FilesTreeNames();
+
+            // ---- Delete Connection: one connection, mac's cardinality —
+            // no picker; the connection row goes --------------------------
+            Assert.True(
+                SpinWait.SpinUntil(() => ConnectionRows().Length == 1, TimeSpan.FromSeconds(10)),
+                "the converted card lost its connection row before Delete Connection; rows: "
+                + RowsDump());
+            RunPaletteCommand("Delete Connection", "Canvas: Delete Connection…");
+            if (TryWaitForElement(window, "CanvasPromptSheet", TimeSpan.FromSeconds(2)) is not null)
+            {
+                // More than one connection would list a picker; Enter takes
+                // the first. One connection deletes directly.
+                PressKey(VirtualKeyShort.ENTER);
+                WaitForSheetToClose("CanvasPromptSheet", "Delete Connection");
+            }
+            if (!SpinWait.SpinUntil(() => ConnectionRows().Length == 0, TimeSpan.FromSeconds(10)))
+            {
+                Assert.Fail(
+                    "Delete Connection never removed the connection row; rows: " + RowsDump()
+                    + "; app log tail: " + LogTail());
+            }
+
+            // ---- Add Note to Canvas…: the vault file picker lists the
+            // vault's one note; scanned; Escape ---------------------------
+            RunPaletteCommand("Add Note to Canvas", "Canvas: Add Note to Canvas…");
+            _ = WaitForElement(window, "CanvasCardPickerSheet", TimeSpan.FromSeconds(10));
+            AutomationElement pickerRows = WaitForElement(
+                window, "CanvasCardPickerRows", TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            return pickerRows
+                                .FindAllDescendants(automation.ConditionFactory
+                                    .ByControlType(ControlType.ListItem))
+                                .Any(item => item.Name.StartsWith(
+                                    "note", StringComparison.OrdinalIgnoreCase));
+                        }
+                        catch (System.Runtime.InteropServices.COMException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the note picker never listed the vault's note");
+            AssertAxeClean(process, "canvas-verbs-note-picker");
+            PressKey(VirtualKeyShort.ESCAPE);
+            WaitForSheetToClose("CanvasCardPickerSheet", "Escape");
+
+            // ---- The undo chain to two cards; the note stays (G2D-3) ----
+            // Nine one-op verbs landed after the two cards; each Ctrl+Z
+            // takes one back. The chord is seated on the outline tree each
+            // time (the canvas undo lives behind the focus gate).
+            bool BackToTwoCards() =>
+                CardRows().Length == 2
+                && NodeRows().All(item => NameOf(item) != groupRow);
+            int undos = 0;
+            while (undos < 12 && !BackToTwoCards())
+            {
+                SeatTree();
+                Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_Z);
+                undos++;
+                Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(600));
+            }
+            if (!SpinWait.SpinUntil(BackToTwoCards, TimeSpan.FromSeconds(10)))
+            {
+                Assert.Fail(
+                    "the undo chain never returned to two cards after " + undos
+                    + " chords; rows: " + RowsDump() + "; app log tail: " + LogTail());
+            }
+            Assert.True(
+                undos == 9,
+                "the undo chain took " + undos + " chords back to two cards, not nine — a verb is not one op.");
+            Assert.True(
+                FilesTreeNames().Except(filesBefore).Any(),
+                "canvas undo took the note with it (G2D-3 says it stays); files: "
+                + string.Join(" | ", FilesTreeNames()) + "; before the chain: "
+                + string.Join(" | ", filesWithNote));
         }
         finally
         {
@@ -6661,16 +7262,34 @@ public sealed class ShellAccessibilityTests
                 }
             }
 
-            Keyboard.TypeSimultaneously(
-                VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.KEY_N);
-            Assert.True(
-                SpinWait.SpinUntil(() => Rows().Length >= 1, TimeSpan.FromSeconds(15)),
-                "the first Ctrl+Alt+N never produced a card row");
-            Keyboard.TypeSimultaneously(
-                VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.KEY_N);
-            Assert.True(
-                SpinWait.SpinUntil(() => Rows().Length >= 2, TimeSpan.FromSeconds(15)),
-                "the second Ctrl+Alt+N never produced a card row");
+            // §G2 TG2-4: New Card LANDS IN THE EDITOR (mac's shape); Escape
+            // commits the landing so the next chord reaches the canvas, not
+            // the sheet. The row is counted after the sheet has gone.
+            void NewCardByChord(int expectedRows, string what)
+            {
+                window.SetForeground();
+                Keyboard.TypeSimultaneously(
+                    VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.KEY_N);
+                if (TryWaitForElement(window, "CanvasCardEditorSheet", TimeSpan.FromSeconds(15)) is null)
+                {
+                    Assert.Fail(
+                        what + " never landed the new card in the editor; app log tail: "
+                        + ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log")));
+                }
+                PressKey(VirtualKeyShort.ESCAPE);
+                Assert.True(
+                    SpinWait.SpinUntil(
+                        () => window.FindFirstDescendant(
+                            automation.ConditionFactory.ByAutomationId("CanvasCardEditorSheet")) is null,
+                        TimeSpan.FromSeconds(10)),
+                    what + ": Escape never closed the editor sheet");
+                Assert.True(
+                    SpinWait.SpinUntil(() => Rows().Length >= expectedRows, TimeSpan.FromSeconds(15)),
+                    what + " never produced a card row");
+            }
+
+            NewCardByChord(1, "the first Ctrl+Alt+N");
+            NewCardByChord(2, "the second Ctrl+Alt+N");
 
             // ---- Move mode: the M6 controls appear with the mode ----
             AutomationElement? Commit() =>
@@ -7136,9 +7755,10 @@ public sealed class ShellAccessibilityTests
 
             // Contract B6: the row-actions menu on the KEYBOARD route
             // (the Menu key; Shift+F10 is its twin), with the two
-            // unshipped verbs listed DISABLED and their reasons readable
-            // as HelpText — the channel the mac RowAction contract names
-            // and the one a screen-reader user gets. The menu is a
+            // every verb LIVE since §G2 TG2-7 (a staged verb would be listed
+            // DISABLED with its reason as HelpText — the channel the mac
+            // RowAction contract names and the one a screen-reader user
+            // gets; none remain). The menu is a
             // separate popup HWND, so it is looked up from the desktop
             // rather than under the window.
             // §E TE-8 flipped Delete LIVE on card rows; the menu is
@@ -7158,13 +7778,11 @@ public sealed class ShellAccessibilityTests
             Assert.True(
                 rowActions[0].Properties.IsEnabled.Value,
                 "Open must be live — it is the shipped verb");
-            Assert.False(
+            // §G2 TG2-7 (G2-12): Toggle Mark is LIVE from the same plan the
+            // outline reads — the last staged reason retired with it.
+            Assert.True(
                 rowActions[1].Properties.IsEnabled.Value,
-                "Toggle Mark stays staged until PR G");
-            Assert.Contains(
-                "arrives in a later slice",
-                rowActions[1].Properties.HelpText.Value,
-                StringComparison.Ordinal);
+                "Toggle Mark went live in G2-12; a staged row here is the stale hand-list");
             Assert.True(
                 rowActions[2].Properties.IsEnabled.Value,
                 "Delete went live on card rows in TE-8; a disabled Delete "

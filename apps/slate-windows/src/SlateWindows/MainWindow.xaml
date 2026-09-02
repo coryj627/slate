@@ -3794,9 +3794,11 @@
                              AutomationProperties.AutomationId="CanvasCardPickerRows"
                              AutomationProperties.Name="{Binding RowsName}">
                         <!-- §G2 TG2-3 (IG2-48): a row's Status (the vault path for a
-                             file) rides the item's UIA ItemStatus. -->
+                             file) rides the item's UIA ItemStatus; §G2 TG2-9: its UIA Name
+                             is the row's LABEL, never the record's ToString. -->
                         <ListBox.ItemContainerStyle>
                             <Style TargetType="ListBoxItem">
+                                <Setter Property="AutomationProperties.Name" Value="{Binding Label}" />
                                 <Setter Property="AutomationProperties.ItemStatus" Value="{Binding Status}" />
                             </Style>
                         </ListBox.ItemContainerStyle>
@@ -3839,9 +3841,13 @@
                              AutomationProperties.Name="Choices. Enter submits; on the marks list Enter jumps and Delete unmarks.">
                         <!-- §G2 TG2-1 (IG2-47): a choice's Status rides the item's UIA
                              ItemStatus — the connection prompts carry the outline row's
-                             ordinal clause so parallel same-named rows stay distinct. -->
+                             ordinal clause so parallel same-named rows stay distinct.
+                             §G2 TG2-9: the item's UIA Name is the choice's NAME — a bound
+                             record's container otherwise names itself by ToString, and the
+                             journey heard "CanvasPromptChoice { Value = … }" for a row. -->
                         <ListBox.ItemContainerStyle>
                             <Style TargetType="ListBoxItem">
+                                <Setter Property="AutomationProperties.Name" Value="{Binding Name}" />
                                 <Setter Property="AutomationProperties.ItemStatus" Value="{Binding Status}" />
                             </Style>
                         </ListBox.ItemContainerStyle>

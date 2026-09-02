@@ -789,6 +789,19 @@ public sealed class CanvasDocumentTests : IDisposable
         Assert.Contains(
             "Property=\"AutomationProperties.ItemStatus\" Value=\"{Binding Status}\"",
             xaml[list..end]);
+        // §G2 TG2-9: the item's UIA NAME is the choice's Name — a bound
+        // record's container otherwise names itself by ToString, which the
+        // journey heard as "CanvasPromptChoice { Value = … }". The picker's
+        // rows carry their Label the same way.
+        Assert.Contains(
+            "Property=\"AutomationProperties.Name\" Value=\"{Binding Name}\"",
+            xaml[list..end]);
+        int picker = xaml.IndexOf("AutomationProperties.AutomationId=\"CanvasCardPickerRows\"", StringComparison.Ordinal);
+        Assert.True(picker >= 0);
+        int pickerEnd = xaml.IndexOf("</ListBox>", picker, StringComparison.Ordinal);
+        Assert.Contains(
+            "Property=\"AutomationProperties.Name\" Value=\"{Binding Label}\"",
+            xaml[picker..pickerEnd]);
     }
 
     /// <summary>§G2 TG2-0 (G2-1): the five front-door commands over §E's
@@ -4757,6 +4770,48 @@ public sealed class CanvasDocumentTests : IDisposable
         document.Shutdown();
     });
 
+
+    /// <summary>§G2 TG2-9 (CD-33): a group created EMPTY opens by default
+    /// when its first member arrives — the expansion memory records a
+    /// reader's choice, and a group with nothing to expand offered none,
+    /// so the moved card is never hidden behind a collapse nobody asked
+    /// for. A group the reader DID collapse stays collapsed (E15).</summary>
+    [Fact]
+    public void AGroupCreatedEmptyOpensWhenItsFirstMemberArrives() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = NewDocument("board.canvas");
+        document.Load();
+        var view = new CanvasOutlineView { Model = document };
+        document.Selection.ActiveSurface = CanvasSurfaceKind.Outline;
+
+        Assert.NotNull(document.CanvasNewGroup("Zone"));
+        CanvasOutlineRowViewModel zone = Assert.Single(
+            view.RootsForTests, row => row.IsGroup && row.Name.Contains("Zone", StringComparison.Ordinal));
+        Assert.Empty(zone.Children);
+        Assert.False(zone.IsExpanded);
+
+        document.SeatSelectionSilently("loose");
+        Assert.NotNull(document.CanvasMoveIntoGroup(zone.Id));
+        zone = Assert.Single(
+            view.RootsForTests, row => row.IsGroup && row.Name.Contains("Zone", StringComparison.Ordinal));
+        Assert.Contains(zone.Children, row => row.Id == "loose");
+        Assert.True(zone.IsExpanded, "the group that gained its first member stayed collapsed.");
+
+        // The reader's own collapse is remembered across the next republish
+        // — on the fixture's roomy group (a fresh group holds one card; a
+        // second is refused for want of free space, the verb's own arm).
+        CanvasOutlineRowViewModel grp = Assert.Single(view.RootsForTests, row => row.Id == "grp");
+        grp.IsExpanded = false;
+        document.SeatSelectionSilently("link");
+        CanvasOperationOutcome? second = null;
+        Assert.NotNull(document.CanvasMoveIntoGroup("grp", completion: outcome => second = outcome));
+        grp = Assert.Single(view.RootsForTests, row => row.Id == "grp");
+        Assert.True(
+            grp.Children.Count(row => !row.IsConnection) == 4,
+            "second move outcome: " + second + "; children: " + string.Join(", ", grp.Children.Select(row => row.Id)));
+        Assert.False(grp.IsExpanded, "a collapse the reader chose was forgotten (E15).");
+        document.Shutdown();
+    });
 
     /// <summary>
     /// §E TE-9 (E15's cause rule, the §C m-5 sibling): a seat

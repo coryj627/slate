@@ -448,7 +448,11 @@ public sealed class ContractsCitationCensus
                 // TG2-8 bound the matrix, taking the
                 // section to 204; 203 sits above the pre-task population
                 // of 184 — a ninth time.
-                203),
+                //
+                // TG2-9 bound the journey and the sweep, taking the
+                // section to 222; 221 sits above the pre-task population
+                // of 204 — a tenth time.
+                221),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

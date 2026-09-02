@@ -666,10 +666,14 @@ internal sealed class CanvasOutlineView : UserControl
         // torn down — a funnel republish rebuilds every row, and the
         // default-open rule below would otherwise undo every collapse.
         // Group rows only: connection-host expansion is the selection's,
-        // re-derived on every sync.
+        // re-derived on every sync. And only groups that HAD members:
+        // an empty group offered no choice, so its default-collapsed
+        // state is not a collapse the reader asked for — when its first
+        // member arrives it opens by default like any other (§G2 TG2-9,
+        // CD-33; the journey found the moved card hidden behind it).
         foreach ((string id, CanvasOutlineRowViewModel row) in _byNode)
         {
-            if (row.IsGroup)
+            if (row.IsGroup && row.Children.Any(child => !child.IsConnection))
             {
                 _expansion[id] = row.IsExpanded;
             }

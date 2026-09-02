@@ -11506,6 +11506,101 @@ PR H reconciles the evidence and flips only that row (G2-14), which is
 why #745 is not added to the generator's expected issue set here.
 Discharges G2-14's matrix clause and IG2-3.
 
+### TG2-9 — The journey with its reseating, the sheets scanned, and the ledger sweep
+
+The journey (G2-13), `CanvasVerbs_GroupConnectDuplicateLinkConvertAndUndo_AreReachable`,
+gate W-C, one launch through the shared opener `OpenNewCanvasFromFileMenu`:
+two cards by chord, each landing committed with Escape (TG2-4's editor
+landing); New Group… by the palette — the group prompt scanned by axe,
+"Research" typed, the group row in the tree; the FIRST card reseated
+(the group landed selected, IG2-31); Move into Group… (the prompt,
+Enter; the row's status reads "in Research"); Remove from Group (the
+status reads "in canvas"); Create Connected Card by Ctrl+Alt+Shift+N
+(the editor sheet on the landing, Escape commits, a third card); the
+connected card selected and its connection row present; Edit
+Connection… — "Both directions" chosen at stage 1, and after the atomic
+swap the FOCUSED ELEMENT is the label field, read from UIA (IG2-45's
+fact, here at the real keyboard), "supports" typed; the connection
+row's name reads "Linked with … labelled \"supports\"" — core's own
+render; Duplicate (a fourth card); Add Link Card… (the URL prompt; a
+link card named "example.com"); the connected card reseated and Convert
+Card to Note… (mac's suggested path prefilled, Enter; a file card; a
+new item in the files tree); Delete Connection on that card (one
+connection, mac's cardinality, no picker; the connection row gone); Add
+Note to Canvas… (the vault file picker listing the vault's note, scanned
+by axe, Escape); then the undo chain — exactly nine chords, one per
+verb, each seated on a row of the outline — back to two cards and no
+group, with the note still in the files tree (G2D-3). The seat helper
+focuses the selected row (with items, the tree container refuses
+SetFocus; the rows are the focusable elements), retrying through the
+journey's foreground re-assert.
+
+Three defects the journey found, each fixed and pinned:
+
+- The outline's expansion memory (E15) recorded a group created EMPTY as
+  "collapsed" — a state the reader never chose, since there was nothing
+  to expand — so the card Move into Group placed in it was rebuilt
+  behind a collapse nobody asked for (CD-33) and had no tree item to
+  read. `CanvasOutlineView` now remembers expansion only for groups that
+  HAD members; a group's first member opens it by default like any
+  other, and a collapse the reader did choose is still kept. Pinned by
+  `AGroupCreatedEmptyOpensWhenItsFirstMemberArrives` (a fresh group's
+  first member; then a reader-collapsed group keeping its collapse
+  across a republish — on the fixture's roomy group, because a fresh
+  group holds one card and refuses a second for want of free space, the
+  verb's own arm).
+- The prompt lists named their items by the bound record's ToString: a
+  screen reader heard "CanvasPromptChoice { Value = ToTarget, Name =
+  Points at the target … }" for a direction row, and the card picker's
+  rows were the same shape. Both container styles now bind the item's
+  UIA Name — the choice's Name, the picker row's Label — beside the
+  ItemStatus they already carried. Pinned in
+  `TheSubmitFamilyAndTheChoiceStatusAreShapedAsFrozen` from the XAML's
+  side, and by this journey from UIA's.
+- The sibling journeys on this branch: `CanvasMarks_ToggleListJumpDeleteAndUndo_AreReachable`
+  and `CanvasModes_MoveResizeAndConnectPicker_AreReachable` created their
+  cards by chord and left TG2-4's editor sheet open, so the palette (the
+  marks list) and the mode keys (the resize Escape) landed in the sheet;
+  both now commit each landing with Escape, as this journey does.
+  `CanvasSurfaces_TableGridSortSelectionAndActivation_AreClean` asserted
+  the pre-G2-12 staged Toggle Mark with its reason; it now asserts the
+  live row. All eight canvas journeys pass on the branch.
+
+The ledger sweep — every §G2 row, the task that discharged it, and
+where it is pinned:
+
+- IG2-33 → TG2-0: the two-way ownership census
+  `TheCanvasMenuMirrorsMacsMenuOwnershipOverTheResidue`.
+- IG2-34, IG2-36 → TG2-0: owner-carrying commands and the navigator's
+  presenter owner; the not-ready-first order in the opener facts.
+- IG2-35, IG2-46 → TG2-2: `CanvasPromptContext` on every staged verb;
+  mac's cardinality in `DeleteConnectionFollowsMacsCardinalityAndNamesTheOtherEndpoint`.
+- IG2-37, IG2-48, IG2-49, IG2-50, IG2-52 → TG2-3: the vault picker's
+  abort-audibly rule, `ICanvasPickerSheet` with its own names, the
+  refuse-with-sheet versus never-present split, the owner check, Locate
+  File on every file card with E8 owed to the owner.
+- IG2-38, IG2-39, IG2-54 → TG2-5: the opener's NoMarks before
+  admission, Duplicate's exact set equality, the group label from the
+  scene.
+- IG2-40, IG2-53 → TG2-4: Remove from Group's parent arms; the editor
+  receipt kept out of the effect (`CanvasMutationOperation.Receipt`).
+- IG2-41, IG2-42, IG2-43, IG2-55, IG2-56, IG2-57, IG2-58 → TG2-6:
+  `ConvertWritesTheNoteThenRetargetsAndUndoKeepsTheNote`,
+  `ConvertRefusesTheTypedArmsAndSuggestsMacsPath`,
+  `ConvertAfterALandedNoteIsARecoveryStateNotARetry`.
+- IG2-44, IG2-47, IG2-51 → TG2-1: the sealed submit family, the choice
+  status on ItemStatus, the kept Ungroup confirmation.
+- IG2-45 → TG2-1's seam, read at the keyboard here: the focused element
+  after the swap is the successor's first field.
+- IG2-59, IG2-60 → TG2-7: `TheOutlineMenuEqualsThePlan`,
+  `AConnectionRowsVerbsActOnTheCapturedEdgeFromItsSeatedSource`,
+  `ANodeRowsSelectionVerbSeatsItsRowBeforeTheVerb`.
+- IG2-3 → TG2-8: the delivered set equals the inventory; the evidence
+  anchors checked by the generator.
+
+Discharges G2-13, G2-14's sweep clause, and closes IG2-45's journey
+half. No §G2 ledger row remains open.
+
 ---
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
