@@ -934,6 +934,12 @@ internal sealed class CanvasOutlineView : UserControl
                 case CanvasContextVerb.EditCard:
                     model.RequestCardEditor(nodeId);
                     break;
+                case CanvasContextVerb.ToggleMark:
+                    // §G TG-0 (G1, IG-25): every context consumer seats
+                    // its source row SILENTLY before the verb.
+                    model.SeatSelectionSilently(nodeId);
+                    model.ToggleMark();
+                    break;
                 case CanvasContextVerb.RenameGroup:
                     model.RequestGroupRename(nodeId);
                     break;

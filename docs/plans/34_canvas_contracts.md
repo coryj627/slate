@@ -9851,6 +9851,48 @@ they touch; the closing record sweeps stragglers. Each task lands
 with its facts, its byte-restored mutations, its record here, and a
 raised citation floor — the §F gauntlet, unchanged.
 
+### Implementation records
+
+### TG-0 — the mark verbs, and the publication as the one authority
+
+IG-31 is discharged BY CONSTRUCTION. The publication's marked intent
+is the one mark authority: the document's three verbs — `ToggleMark`
+over the selection, `Unmark` by explicit id, `ClearMarks` — compute
+their successor from the current publication's marked intent,
+publish `WithMarkedIntent`, and apply at once; the selection's set is
+the applied PROJECTION, seeded by `SeedMarks` at the top of the apply
+(before the rows rebuild, so every projection reads the applied
+marks) and raised only when its contents change. The mirror's public
+`ToggleMark` RETIRED, so the second mutation path IG-31 named is
+gone at the API; the mirror keeps its two one-way seeds — a
+retarget's `SeedFrom` (CD-32, its fact migrated and green) and a
+teardown's `ClearMarks` — which the document's guarded republish arm
+carries into the publication, and an apply-side seed never echoes
+back (the apply flag guards the arm). The order is the frozen one
+(IG-35): a plainly absent selection refuses NothingSelected; then
+C4's `AdmitStructuralRead` speaks its own state; then the id must
+resolve in the admitted population — the sentence needs a title —
+else NothingSelected. `Unmark` never consults the selection and is
+idempotent: an unmarked id answers the count and speaks nothing
+(IG-34); `ClearMarks` captures the PRE-CLEAR count (IG-33); three
+verbs are named (IG-32). Ctrl+Alt+M lands as mac's ⌃⌘M in FD-3's
+family; the Toggle Mark and Clear All rows carry mac's labels; the
+context-menu Toggle Mark row goes LIVE, its "arrives later" reason
+retired, and the outline dispatcher seats the source row silently
+before the verb (IG-25's rule, cited wiring).
+
+Facts: five — the authority transform both ways with the live
+count, the selection-then-resolution order, Unmark's idempotence
+without a selection, the pre-clear count and the zero arm, the
+chord. The eight existing facts that wrote the mirror directly now
+go through the verb. Mutations, each byte-restored: M1 the
+apply-side seed dropped (publication marked, mirror stale — the
+first aim, a mirror-only write, was a NON-BUG the one-way seed heals
+by design, and is recorded as such), M2 the resolution refusal
+dropped (a compilable fallback-title mutant; the first attempt did
+not compile and counted for nothing), M3 the count read after the
+clear, M4 idempotence broken. All bitten.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same

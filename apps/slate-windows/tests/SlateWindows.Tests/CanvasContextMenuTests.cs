@@ -28,7 +28,8 @@ public sealed class CanvasContextMenuTests
             ],
             text.Select(row => row.Name));
         Assert.True(text.Single(r => r.Name == CanvasPhrase.DeleteRowAction).Enabled);
-        Assert.False(text.Single(r => r.Name == CanvasPhrase.ToggleMarkRowAction).Enabled);
+        // §G TG-0: the Toggle Mark row went live with its verb.
+        Assert.True(text.Single(r => r.Name == CanvasPhrase.ToggleMarkRowAction).Enabled);
         // §F TF-8 (FD-4): the prompt machinery landed — the row is
         // LIVE on the §E commit path.
         Assert.True(

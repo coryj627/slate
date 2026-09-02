@@ -287,6 +287,140 @@ public sealed class CanvasMutationTests : IDisposable
         document.Shutdown();
     }
 
+    /// <summary>§G TG-0 (G1, IG-31): Toggle Mark transforms the ONE
+    /// authority — the publication's marked intent — the mirror
+    /// follows in the apply, and the sentence speaks the store's count
+    /// after the write, both ways.</summary>
+    [Fact]
+    public void ToggleMarkPublishesTheAuthorityAndSpeaksTheLiveCount()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+
+        document.ToggleMark();
+
+        Assert.Contains("a", document.AppliedPublication!.MarkedIntent);
+        Assert.True(document.Selection.IsMarked("a"));
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            x => x.Text.Contains("Marked \"Alpha\"", StringComparison.Ordinal)
+                && x.Text.Contains("1 marked", StringComparison.Ordinal));
+
+        _announced.Clear();
+        document.ToggleMark();
+
+        Assert.DoesNotContain("a", document.AppliedPublication!.MarkedIntent);
+        Assert.False(document.Selection.IsMarked("a"));
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            x => x.Text.Contains("Unmarked \"Alpha\"", StringComparison.Ordinal)
+                && x.Text.Contains("0 marked", StringComparison.Ordinal));
+        document.Shutdown();
+    }
+
+    /// <summary>§G TG-0 (IG-35): the order — a plainly absent selection
+    /// refuses NothingSelected, and so does an id the admitted
+    /// population cannot resolve; nothing publishes either way.</summary>
+    [Fact]
+    public void TheOrderIsSelectionThenAdmissionThenResolution()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SelectNode(null, announce: false);
+
+        document.ToggleMark();
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            x => x.Text.Contains("Nothing selected", StringComparison.OrdinalIgnoreCase));
+        Assert.Empty(document.AppliedPublication!.MarkedIntent);
+
+        _announced.Clear();
+        document.SeatSelectionSilently("never-existed");
+        document.ToggleMark();
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            x => x.Text.Contains("Nothing selected", StringComparison.OrdinalIgnoreCase));
+        Assert.Empty(document.AppliedPublication!.MarkedIntent);
+        document.Shutdown();
+    }
+
+    /// <summary>§G TG-0 (IG-34): Unmark resolves ONLY its explicit id —
+    /// the selection may be absent — and is idempotent: the second
+    /// call answers the count and speaks nothing.</summary>
+    [Fact]
+    public void UnmarkIsIdempotentAndNeverConsultsTheSelection()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        document.ToggleMark();
+        document.SelectNode(null, announce: false);
+        _announced.Clear();
+
+        Assert.Equal(0, document.Unmark("a"));
+        Assert.False(document.Selection.IsMarked("a"));
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            x => x.Text.Contains("Unmarked \"Alpha\"", StringComparison.Ordinal));
+
+        _announced.Clear();
+        Assert.Equal(0, document.Unmark("a"));
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Empty(_announced);
+        document.Shutdown();
+    }
+
+    /// <summary>§G TG-0 (G3, IG-33): Clear All speaks the PRE-CLEAR
+    /// store count, and the render's own zero arm afterward.</summary>
+    [Fact]
+    public void ClearSpeaksThePreClearCount()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        document.ToggleMark();
+        document.SeatSelectionSilently("grp");
+        document.ToggleMark();
+        _announced.Clear();
+
+        document.ClearMarks();
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            x => x.Text.Contains("Cleared 2 marks", StringComparison.Ordinal));
+        Assert.Empty(document.AppliedPublication!.MarkedIntent);
+        Assert.Empty(document.Selection.Marked);
+
+        _announced.Clear();
+        document.ClearMarks();
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            x => x.Text.Contains("No marks", StringComparison.Ordinal));
+        document.Shutdown();
+    }
+
+    /// <summary>§G TG-0 (G1/G7): Ctrl+Alt+M relays to the verb.</summary>
+    [Fact]
+    public void TheMarkChordRoutesToTheVerb()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        var pane = new FakePane();
+        document.Navigator.AttachPresenter(pane);
+
+        Assert.True(document.Navigator.HandleKey(
+            System.Windows.Input.Key.M,
+            System.Windows.Input.ModifierKeys.Control | System.Windows.Input.ModifierKeys.Alt,
+            pane));
+
+        Assert.True(document.Selection.IsMarked("a"));
+        Assert.Contains("a", document.AppliedPublication!.MarkedIntent);
+        document.Shutdown();
+    }
+
     /// <summary>§F review round 1 (F4b/IF-2, codoki's prescription):
     /// a DISPLACED outcome while the watcher stands down must not
     /// wedge the mode — the displaced resolution cancels it, the
@@ -837,8 +971,10 @@ public sealed class CanvasMutationTests : IDisposable
     {
         CanvasDocumentViewModel document = Open();
         document.SeatSelectionSilently("a");
-        _ = document.Selection.ToggleMark("grp");
-        _ = document.Selection.ToggleMark("a");
+        document.SeatSelectionSilently("grp");
+        document.ToggleMark();
+        document.SeatSelectionSilently("a");
+        document.ToggleMark();
         document.OpenCardPicker(CanvasCardPickerPurpose.PlaceRightOf);
         CanvasCardPickerRequest request = document.LastCardPickerRequestForTests!;
 
@@ -953,8 +1089,10 @@ public sealed class CanvasMutationTests : IDisposable
     {
         CanvasDocumentViewModel document = Open();
         document.SeatSelectionSilently("a");
-        _ = document.Selection.ToggleMark("a");
-        _ = document.Selection.ToggleMark("grp");
+        document.SeatSelectionSilently("a");
+        document.ToggleMark();
+        document.SeatSelectionSilently("grp");
+        document.ToggleMark();
         document.OpenCardPicker(CanvasCardPickerPurpose.PlaceBelow);
         CanvasCardPickerRequest request = document.LastCardPickerRequestForTests!;
         Assert.Equal(["a", "grp"], request.Moving.ToArray());
@@ -986,8 +1124,10 @@ public sealed class CanvasMutationTests : IDisposable
     {
         CanvasDocumentViewModel document = Open();
         document.SeatSelectionSilently("essay");
-        _ = document.Selection.ToggleMark("a");
-        _ = document.Selection.ToggleMark("essay");
+        document.SeatSelectionSilently("a");
+        document.ToggleMark();
+        document.SeatSelectionSilently("essay");
+        document.ToggleMark();
         CanvasCardPickerModel? shown = null;
         document.CardPickerRequested += (_, model) => shown = model;
 

@@ -366,7 +366,11 @@ public sealed class ContractsCitationCensus
                 // landed count; each task raises it. Revision 2's
                 // thirty closures cited the shipped seams by name,
                 // lifting the pre-task population to 13.
-                12),
+                //
+                // TG-0 bound the mark verbs and the apply-side seed,
+                // taking the section to 20; 18 sits above the
+                // pre-task population of 18 — a first time.
+                18),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

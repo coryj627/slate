@@ -278,6 +278,10 @@ internal static class ChordTable
         public const string CanvasFollowConnectionBack =
             "slate.canvas.followConnectionBack";
         public const string CanvasTracePath = "slate.canvas.tracePath";
+        public const string CanvasToggleMark = "slate.canvas.toggleMark";
+
+        public const string CanvasClearMarks = "slate.canvas.clearMarks";
+
         public const string CanvasConnectTo = "slate.canvas.connectTo";
 
         public const string CanvasConnectMode = "slate.canvas.connectMode";
@@ -994,6 +998,15 @@ internal static class ChordTable
                 "Draw a connection from the selected card to a card you pick, "
                 + "with an optional label.",
                 "⌃⌘C", "Ctrl+Alt+C", ChordScope.Canvas),
+            // §G TG-0 (G7): the mark verbs' front doors, labels
+            // byte-identical to mac (P3). Ctrl+Alt+M is mac's ⌃⌘M in
+            // FD-3's family; Clear All has no chord, as mac allocates it.
+            Reg(Ids.CanvasToggleMark, "Canvas: Toggle Mark", CommandSection.Canvas,
+                "Mark or unmark the selected card. Bulk actions apply to every "
+                + "marked card at once.",
+                "⌃⌘M", "Ctrl+Alt+M", ChordScope.Canvas),
+            Reg(Ids.CanvasClearMarks, "Canvas: Clear All Marks", CommandSection.Canvas,
+                "Unmark every marked card."),
             Reg(Ids.CanvasConnectMode, "Canvas: Connect Mode", CommandSection.Canvas,
                 "Remember the selected card, navigate to a target with the "
                 + "usual movements, press Return to connect."),

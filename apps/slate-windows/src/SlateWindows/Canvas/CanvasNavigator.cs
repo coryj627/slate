@@ -199,6 +199,7 @@ internal sealed class CanvasNavigator
         AddChord(Key.G, ModifierKeys.Control | ModifierKeys.Alt, MoveModeFromKey);
         AddChord(Key.R, ModifierKeys.Control | ModifierKeys.Alt, CommitOrEnterResizeFromKey);
         AddChord(Key.C, ModifierKeys.Control | ModifierKeys.Alt, ConnectToFromKey);
+        AddChord(Key.M, ModifierKeys.Control | ModifierKeys.Alt, ToggleMarkFromKey);
         AddChord(Key.Z, ModifierKeys.Control, UndoFromKey);
         AddChord(Key.Y, ModifierKeys.Control, RedoFromKey);
         // The viewport chords (§D D14). Zoom rides Ctrl and answers
@@ -240,6 +241,14 @@ internal sealed class CanvasNavigator
     private bool MoveModeFromKey()
     {
         _ = EnterMoveMode();
+        return true;
+    }
+
+    /// <summary>§G TG-0 (G1): Ctrl+Alt+M — mac's ⌃⌘M in FD-3's family;
+    /// the document owns every refusal, the key only relays.</summary>
+    private bool ToggleMarkFromKey()
+    {
+        _document.ToggleMark();
         return true;
     }
 

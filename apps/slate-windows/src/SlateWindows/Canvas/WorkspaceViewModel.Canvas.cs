@@ -443,6 +443,10 @@ internal sealed partial class WorkspaceViewModel
 
     private RelayCommand? _canvasConnectModeCommand;
 
+    private RelayCommand? _canvasToggleMarkCommand;
+
+    private RelayCommand? _canvasClearMarksCommand;
+
     private RelayCommand? _canvasPlaceRightOfCommand;
 
     private RelayCommand? _canvasPlaceAboveCommand;
@@ -524,6 +528,12 @@ internal sealed partial class WorkspaceViewModel
 
     /// <summary>§F TF-7 (F5/F6): the picker-opening verbs — the
     /// document owns every refusal and the request.</summary>
+    public System.Windows.Input.ICommand CanvasToggleMarkCommand =>
+        _canvasToggleMarkCommand ??= DocumentCommand(document => document.ToggleMark());
+
+    public System.Windows.Input.ICommand CanvasClearMarksCommand =>
+        _canvasClearMarksCommand ??= DocumentCommand(document => document.ClearMarks());
+
     public System.Windows.Input.ICommand CanvasConnectModeCommand =>
         _canvasConnectModeCommand ??= NavigatorCommand(
             navigator => navigator.EnterConnectMode());

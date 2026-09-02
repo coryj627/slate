@@ -1017,6 +1017,30 @@
       "registered": true
     },
     {
+      "id": "slate.canvas.toggleMark",
+      "label": "Canvas: Toggle Mark",
+      "section": "Canvas",
+      "hint": "Mark or unmark the selected card. Bulk actions apply to every marked card at once.",
+      "macChord": "⌃⌘M",
+      "mac": "Control Command M",
+      "windows": "Ctrl+Alt+M",
+      "windowsSpoken": "Control Alt M",
+      "scope": "Canvas",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.clearMarks",
+      "label": "Canvas: Clear All Marks",
+      "section": "Canvas",
+      "hint": "Unmark every marked card.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
       "id": "slate.canvas.connectMode",
       "label": "Canvas: Connect Mode",
       "section": "Canvas",

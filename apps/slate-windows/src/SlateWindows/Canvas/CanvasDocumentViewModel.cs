@@ -1425,6 +1425,10 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         _applying = true;
         try
         {
+            // §G TG-0 (IG-31): the authority arrives — the mirror is
+            // seeded BEFORE the rows rebuild, so every projection reads
+            // the applied marks.
+            Selection.SeedMarks(current.MarkedIntent);
             Apply(current, was);
         }
         finally
@@ -1556,6 +1560,15 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 _ = _slot.Publish(s => s.Retired ? null : s.WithActiveSurface(surface));
                 break;
             case nameof(CanvasSelection.Marked):
+                // §G TG-0 (IG-31): the mirror is a PROJECTION of the
+                // publication. Its own change reaches the publication
+                // only for the two one-way seeds (a retarget's SeedFrom,
+                // a teardown's ClearMarks); an apply-side seed is the
+                // publication arriving, never a write to echo back.
+                if (_applying)
+                {
+                    return;
+                }
                 ImmutableHashSet<string> marked = CanvasModelCopy.Ids(Selection.Marked);
                 _ = _slot.Publish(s => s.Retired ? null : s.WithMarkedIntent(marked));
                 break;
@@ -3358,6 +3371,105 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             $"align \"{primaryTitle}\"",
             confirm: () => new CanvasA11yEvent.CanvasCardAligned(
                 primaryTitle, targetTitle));
+    }
+
+    /// <summary>§G TG-0 (G1, IG-32/IG-35): Toggle Mark — the first of
+    /// the document's three mark verbs over the ONE authority, the
+    /// publication's marked intent. The order is the frozen one: a
+    /// plainly absent selection refuses NothingSelected; then the C4
+    /// structural-read admission speaks its own state; then the id must
+    /// RESOLVE in the admitted population (the event needs a title);
+    /// only then the transform publishes, applies, and speaks the
+    /// STORE's count after the write.</summary>
+    public void ToggleMark()
+    {
+        if (Selection.Selected is not { } selected)
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(
+                new CanvasStatusNote.NothingSelected()));
+            return;
+        }
+        if (!AdmitStructuralRead())
+        {
+            return;
+        }
+        if (!_rows.TryGetValue(selected, out CanvasOutlineRow? row))
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(
+                new CanvasStatusNote.NothingSelected()));
+            return;
+        }
+        ImmutableHashSet<string> before = _slot.Current.MarkedIntent;
+        bool marking = !before.Contains(selected);
+        ImmutableHashSet<string> next = marking ? before.Add(selected) : before.Remove(selected);
+        if (PublishMarks(next))
+        {
+            Speak(new CanvasA11yEvent.CanvasMarkToggled(
+                marking, row.Title, (uint)next.Count));
+        }
+    }
+
+    /// <summary>§G TG-0 (G1, IG-34): Unmark by EXPLICIT id — the marks
+    /// list's row action. Never consults the selection; idempotent (an
+    /// unmarked id is a no-change answering the count, nothing spoken);
+    /// the id must resolve, because the sentence needs a title.
+    /// Answers the resulting store count.</summary>
+    public int Unmark(string nodeId)
+    {
+        ArgumentNullException.ThrowIfNull(nodeId);
+        ImmutableHashSet<string> before = _slot.Current.MarkedIntent;
+        if (!before.Contains(nodeId))
+        {
+            return before.Count;
+        }
+        if (!AdmitStructuralRead())
+        {
+            return before.Count;
+        }
+        if (!_rows.TryGetValue(nodeId, out CanvasOutlineRow? row))
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(
+                new CanvasStatusNote.NothingSelected()));
+            return before.Count;
+        }
+        ImmutableHashSet<string> next = before.Remove(nodeId);
+        if (PublishMarks(next))
+        {
+            Speak(new CanvasA11yEvent.CanvasMarkToggled(
+                false, row.Title, (uint)next.Count));
+        }
+
+        return next.Count;
+    }
+
+    /// <summary>§G TG-0 (G3, IG-33): Clear All Marks — never refuses on
+    /// a live document; the count spoken is the PRE-CLEAR store count,
+    /// captured before the transform (the render's own No marks. arm
+    /// at zero). A retired document publishes nothing and the
+    /// announcer's boundary drops the sentence.</summary>
+    public void ClearMarks()
+    {
+        int removed = _slot.Current.MarkedIntent.Count;
+        if (PublishMarks([]))
+        {
+            Speak(new CanvasA11yEvent.CanvasMarksCleared((uint)removed));
+        }
+    }
+
+    /// <summary>§G TG-0 (IG-31): the ONE mark transform — the
+    /// publication's intent is replaced and applied at once; the
+    /// mirror follows in the apply. False when the document is
+    /// retired (nothing published, nothing to say).</summary>
+    private bool PublishMarks(ImmutableHashSet<string> next)
+    {
+        (bool published, _, _) = _slot.Publish(
+            s => s.Retired ? null : s.WithMarkedIntent(next));
+        if (!published)
+        {
+            return false;
+        }
+        ApplyPublication();
+        return true;
     }
 
     /// <summary>The live population's basis — the editor's commit
