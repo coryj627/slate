@@ -136,6 +136,9 @@ internal abstract class CanvasPromptViewModel : System.ComponentModel.INotifyPro
     internal static CanvasPromptViewModel SetColorMarked(CanvasDocumentViewModel document) =>
         new CanvasSetColorPrompt(document, marked: true);
 
+    internal static CanvasPromptViewModel GroupMarked(CanvasDocumentViewModel document) =>
+        new CanvasGroupMarkedPrompt(document);
+
     internal static CanvasPromptViewModel MarksList(
         CanvasDocumentViewModel document, object owner, Action<CanvasPromptViewModel> closeIfCurrent) =>
         new CanvasMarksListPrompt(document, owner, closeIfCurrent);
@@ -271,6 +274,25 @@ internal sealed class CanvasConnectLabelPrompt : CanvasPromptViewModel
     }
 
     private static string Quote(string title) => "\u0022" + title + "\u0022";
+}
+
+/// <summary>§G TG-5 (G5): the Group Marked Cards label step — a text
+/// kind; Enter with an empty field means an unlabeled group (the
+/// verb normalizes). The marked set is captured at SUBMIT.</summary>
+internal sealed class CanvasGroupMarkedPrompt : CanvasPromptViewModel
+{
+    internal CanvasGroupMarkedPrompt(CanvasDocumentViewModel document)
+        : base(document, "Group Marked Cards", string.Empty, [])
+    {
+    }
+
+    internal override CanvasPromptSubmit Submit(Action onLanded)
+    {
+        ArgumentNullException.ThrowIfNull(onLanded);
+        CanvasMutationOperation? operation = Document.SubmitGroupMarked(
+            Draft, completion: outcome => { if (Landed(outcome)) { onLanded(); } });
+        return operation is null ? CanvasPromptSubmit.Refused : CanvasPromptSubmit.Pending;
+    }
 }
 
 /// <summary>The carried Rename Group prompt (FD-4): the group id is

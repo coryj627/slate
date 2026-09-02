@@ -287,6 +287,85 @@ public sealed class CanvasMutationTests : IDisposable
         document.Shutdown();
     }
 
+    /// <summary>§G TG-5 (G5/IG-21): Group Marked wraps the set in ONE
+    /// group at core's padded frame — every CreateGroup argument from
+    /// the returned rect — named by CountNoun, the captured marks
+    /// leaving with the refreshed rows, the sentence naming the label.</summary>
+    [Fact]
+    public void GroupMarkedWrapsTheSetInOneGroup()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        document.ToggleMark();
+        document.SeatSelectionSilently("blocker");
+        document.ToggleMark();
+        CanvasPopulation before = document.AppliedPublication!.Loaded!.Population;
+        CanvasSceneNode a = before.SceneByNode["a"];
+        CanvasSceneNode blocker = before.SceneByNode["blocker"];
+        var prompt = (CanvasGroupMarkedPrompt)CanvasPromptViewModel.GroupMarked(document);
+        prompt.Draft = "Bundle";
+
+        Assert.Equal(CanvasPromptSubmit.Pending, prompt.Submit(() => { }));
+
+        CanvasPopulation after = document.AppliedPublication!.Loaded!.Population;
+        CanvasSceneNode group = Assert.Single(
+            after.SceneNodes, n => n.Kind == "group" && n.Title == "Bundle");
+        Assert.True(group.X <= Math.Min(a.X, blocker.X));
+        Assert.True(group.Y <= Math.Min(a.Y, blocker.Y));
+        Assert.True(group.X + group.Width >= Math.Max(a.X + a.Width, blocker.X + blocker.Width));
+        Assert.True(group.Y + group.Height >= Math.Max(a.Y + a.Height, blocker.Y + blocker.Height));
+        Assert.Equal("group 2 cards", document.UndoStack.OfferedUndo!.Name);
+        Assert.Empty(document.AppliedPublication!.MarkedIntent);
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            x => x.Text.Contains("Grouped 2 cards", StringComparison.Ordinal)
+                && x.Text.Contains("Bundle", StringComparison.Ordinal));
+        document.Shutdown();
+    }
+
+    /// <summary>§G TG-5 (G5): an empty label is an UNLABELED group —
+    /// null on disk, "Untitled" in the sentence.</summary>
+    [Fact]
+    public void AnEmptyLabelMeansAnUnlabeledGroup()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        document.ToggleMark();
+        var prompt = (CanvasGroupMarkedPrompt)CanvasPromptViewModel.GroupMarked(document);
+
+        Assert.Equal(CanvasPromptSubmit.Pending, prompt.Submit(() => { }));
+
+        string disk = DiskBytes().Replace(" ", "").Replace("\t", "");
+        Assert.DoesNotContain("\"label\":\"\"", disk);
+        CanvasPopulation after = document.AppliedPublication!.Loaded!.Population;
+        Assert.Contains(after.SceneNodes, n => n.Kind == "group" && n.NodeId != "grp" && n.NodeId != "cramped");
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            x => x.Text.Contains("Untitled", StringComparison.Ordinal));
+        document.Shutdown();
+    }
+
+    /// <summary>§G TG-5 (G7): the front door refuses NoMarks on an
+    /// empty store and opens nothing.</summary>
+    [Fact]
+    public void GroupMarkedRefusesAtTheDoorWithoutMarks()
+    {
+        CanvasDocumentViewModel document = Open();
+        bool requested = false;
+        document.GroupMarkedRequested += () => requested = true;
+
+        document.RequestGroupMarked();
+
+        Assert.False(requested);
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            x => x.Text.Contains("No marks", StringComparison.Ordinal));
+        document.Shutdown();
+    }
+
     /// <summary>§G TG-4 (G5/GD-2/G8): Delete Marked is ONE action over
     /// the reading-ordered set — a marked group goes by the algebra's
     /// one removal — named by CountNoun, the captured marks removed

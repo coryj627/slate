@@ -10086,6 +10086,45 @@ delete keeping the marks, M2 a host-composed name, M3 color clearing
 the marks, M4 the empty projection landing an empty action. All
 bitten.
 
+### TG-5 — Group Marked: core's frame, the seven-argument group, the closed arm
+
+The third bulk verb lands through `SubmitGroupMarked` and its prompt
+variant `CanvasGroupMarkedPrompt` — a text kind of TG-1's hierarchy
+whose Enter with an empty field means an unlabeled group (the verb
+normalizes empty to null, IF-27's rule once more). The submit runs
+ONE `CreateGroup` under the gate: the mark snapshot captured at the
+submit, the ladder first, then `CanvasOrderNodes` and
+`CanvasGroupRectAround` inside one try — a thrown query speaks
+`CanvasActionFailed(CanvasFailedAction.NewGroup, detail)` with the
+engine's dynamic message (IG-20's second silence, typed here), an
+empty projection refuses `NoMarks` after admission — and every one of
+the seven CreateGroup arguments is spelled from the returned rect
+(IG-21): the minted id, the normalized label, X, Y, Width, Height,
+null color. The captured marks leave with the refreshed rows
+(RemoveCaptured), the name is `group ⟨n⟩ card[s]` by CountNoun, and
+the sentence is `CanvasGrouped(count, label ‖ "Untitled")`.
+
+The NULL-FRAME arm (GD-3) is decided under IG-52: the frozen text's
+`"group"` detail is static host vocabulary, which 0a forbids, and a
+null frame from core after a projection that RESOLVED its members
+means exactly "no member resolves" — so the arm speaks the closed
+core sentence for that, `CanvasStatus(NoMarks)`, and writes nothing.
+It is belt-and-braces by construction (core frames every resolved
+scene node) and stands recorded as such; mac's silence there is the
+registered divergence. The front door `RequestGroupMarked` refuses
+`NoMarks` on an empty store — a prompt opening is a store action (G6)
+— and the Group Marked Cards… palette row lands with mac's label.
+
+Facts: three — the set wrapped at a frame that contains every
+member (checked against the members' own rects), the name, the
+cleared marks and the labeled sentence; the empty label as a null
+label with "Untitled" spoken; the door refusal. Mutations, each
+byte-restored: M1 the frame's extents swapped (the first aim, X and
+Y, was INVISIBLE on this fixture — both are −40 — and was re-aimed at
+width and height, recorded), M2 the label normalization dropped, M3
+the marks kept after grouping, M4 the door refusal dropped. All
+bitten.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same

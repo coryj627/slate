@@ -387,7 +387,11 @@ public sealed class ContractsCitationCensus
                 // TG-4 bound the bulk frame and the marked color target,
                 // taking the section to 35; 33 sits above the
                 // pre-task population of 32 — a fifth time.
-                33),
+                //
+                // TG-5 bound the group verb and its prompt, taking the
+                // section to 40; 38 sits above the pre-task
+                // population of 35 — a sixth time.
+                38),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

@@ -1041,6 +1041,18 @@
       "registered": true
     },
     {
+      "id": "slate.canvas.groupMarked",
+      "label": "Canvas: Group Marked Cards…",
+      "section": "Canvas",
+      "hint": "Wrap the marked cards in a new labeled group - one action, one undo.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
       "id": "slate.canvas.deleteMarked",
       "label": "Canvas: Delete Marked Cards",
       "section": "Canvas",

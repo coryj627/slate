@@ -3673,6 +3673,101 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         ColorMarkedRequested?.Invoke();
     }
 
+    /// <summary>§G TG-5 (G5, GD-3): Group Marked — ONE CreateGroup over
+    /// core's padded frame of the marked set, projected and framed
+    /// UNDER the gate: the snapshot at invocation; the ladder first;
+    /// `CanvasOrderNodes` then `CanvasGroupRectAround` in one try (a
+    /// throw speaks the FD-6 arm with the engine's detail); an empty
+    /// projection refuses NoMarks; a NULL frame — no member resolves
+    /// after the projection resolved them, belt-and-braces — speaks
+    /// the same closed core sentence, NoMarks (IG-52 forbids a static
+    /// host detail; mac's silence is the recorded divergence). Every
+    /// CreateGroup argument is spelled from the returned rect; an empty
+    /// label is null; the captured marks leave with the refreshed
+    /// rows; the sentence names the label or "Untitled".</summary>
+    internal CanvasMutationOperation? SubmitGroupMarked(
+        string? label, Action<CanvasOperationOutcome>? completion = null)
+    {
+        if (_slot.Current.Loaded is not { } basis)
+        {
+            SpeakNotReady();
+            return null;
+        }
+        string? clean = string.IsNullOrEmpty(label) ? null : label;
+        ImmutableDictionary<string, long> snapshot = _slot.Current.MarkEpochs;
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId("group marked"),
+            this,
+            Selection.Selected,
+            basis,
+            CanvasMutationEffect.KeepSelection,
+            markEffect: CanvasMarkEffect.RemoveCaptured,
+            capturedMarks: snapshot)
+        {
+            Completion = completion,
+        };
+        int projected = 0;
+        CanvasMutationAdmission admission = Funnel.Apply(
+            operation,
+            handle =>
+            {
+                string[] ordered;
+                CanvasRect? frame;
+                try
+                {
+                    ordered = _session.CanvasOrderNodes(handle, [.. snapshot.Keys]);
+                    if (ordered.Length == 0)
+                    {
+                        Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoMarks()));
+                        return null;
+                    }
+                    frame = _session.CanvasGroupRectAround(handle, ordered);
+                }
+                catch (VaultException e)
+                {
+                    Speak(new CanvasA11yEvent.CanvasActionFailed(
+                        CanvasFailedAction.NewGroup, e.Message ?? string.Empty));
+                    return null;
+                }
+                if (frame is null)
+                {
+                    Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoMarks()));
+                    return null;
+                }
+                projected = ordered.Length;
+                return new CanvasAction(
+                    BulkName("group", ordered.Length),
+                    [
+                        new CanvasOp.CreateGroup(
+                            SlateUniffiMethods.CanvasNewId(),
+                            clean,
+                            frame.X,
+                            frame.Y,
+                            frame.Width,
+                            frame.Height,
+                            null),
+                    ]);
+            },
+            BulkName("group", snapshot.Count),
+            confirm: () => new CanvasA11yEvent.CanvasGrouped(
+                (uint)projected, clean ?? "Untitled"));
+        return admission == CanvasMutationAdmission.Admitted ? operation : null;
+    }
+
+    /// <summary>§G TG-5 (G7): Group Marked Cards… — the label prompt's
+    /// front door; an empty store refuses NoMarks and opens nothing.</summary>
+    internal event Action? GroupMarkedRequested;
+
+    public void RequestGroupMarked()
+    {
+        if (_slot.Current.MarkedIntent.Count == 0)
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoMarks()));
+            return;
+        }
+        GroupMarkedRequested?.Invoke();
+    }
+
     /// <summary>The live population's basis — the editor's commit
     /// compares its seed against THIS (IE-18's re-validation).</summary>
     internal string? PublishedBasis => _slot.Current.Population?.ContentHash;
