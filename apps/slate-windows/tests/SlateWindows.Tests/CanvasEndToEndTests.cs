@@ -286,7 +286,7 @@ public sealed class CanvasEndToEndTests : IDisposable
 
         public object? Owner => null;
 
-        public bool ViewportCommand(CanvasViewportVerb verb) => false;
+        public CanvasViewportOutcome ViewportCommand(CanvasViewportVerb verb) => CanvasViewportOutcome.Refused;
 
         public bool FocusRow(string nodeId) => false;
 

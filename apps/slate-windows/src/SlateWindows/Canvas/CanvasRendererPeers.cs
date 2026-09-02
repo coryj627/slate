@@ -62,7 +62,7 @@ internal sealed class CanvasRendererAutomationPeer :
     bool IValueProvider.IsReadOnly => true;
 
     string IValueProvider.Value =>
-        $"Zoom {(int)Math.Round((_view.Engine.Current?.Viewport.Zoom ?? 1.0) * 100)} percent";
+        $"Zoom {_view.Engine.CommittedViewport.ZoomPercent} percent";
 
     void IValueProvider.SetValue(string value) =>
         throw new InvalidOperationException("the zoom value is read-only (DD-5).");

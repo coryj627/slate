@@ -1163,7 +1163,7 @@ public sealed class CanvasMutationTests : IDisposable
 
         public object? Owner => null;
 
-        public bool ViewportCommand(CanvasViewportVerb verb) => false;
+        public CanvasViewportOutcome ViewportCommand(CanvasViewportVerb verb) => CanvasViewportOutcome.Refused;
 
         public bool FocusRow(string nodeId)
         {
@@ -2116,7 +2116,7 @@ public sealed class CanvasMutationTests : IDisposable
 
         public object? Owner => null;
 
-        public bool ViewportCommand(CanvasViewportVerb verb) => false;
+        public CanvasViewportOutcome ViewportCommand(CanvasViewportVerb verb) => CanvasViewportOutcome.Refused;
 
         public bool FocusRow(string nodeId) => false;
 
@@ -2405,7 +2405,7 @@ public sealed class CanvasMutationTests : IDisposable
 
         public object? Owner => owner;
 
-        public bool ViewportCommand(CanvasViewportVerb verb) => false;
+        public CanvasViewportOutcome ViewportCommand(CanvasViewportVerb verb) => CanvasViewportOutcome.Refused;
 
         public bool FocusRow(string nodeId) => false;
 

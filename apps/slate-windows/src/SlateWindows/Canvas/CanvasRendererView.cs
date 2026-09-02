@@ -344,7 +344,7 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// zoom-to-selection compute their bounds from the installed
     /// state. The navigator has already answered the no-selection
     /// case; every arrival here acts.</summary>
-    internal bool Viewport(CanvasViewportVerb verb)
+    internal CanvasViewportOutcome Viewport(CanvasViewportVerb verb)
     {
         double centreX = ActualWidth / 2;
         double centreY = ActualHeight / 2;
@@ -352,24 +352,30 @@ internal sealed class CanvasRendererView : FrameworkElement
         {
             case CanvasViewportVerb.ZoomIn:
                 _engine.CommitViewport(v => v.ZoomedIn(centreX, centreY));
-                return true;
+                return Zoomed(null);
             case CanvasViewportVerb.ZoomOut:
                 _engine.CommitViewport(v => v.ZoomedOut(centreX, centreY));
-                return true;
+                return Zoomed(null);
             case CanvasViewportVerb.ActualSize:
                 _engine.CommitViewport(v => v.AtActualSize(centreX, centreY));
-                return true;
+                return Zoomed(null);
             case CanvasViewportVerb.FitCanvas:
-                return FitTo(AllBounds(), CanvasViewportState.FitPadding);
+                return FitTo(AllBounds(), CanvasViewportState.FitPadding, CanvasZoomContext.FitCanvas);
             case CanvasViewportVerb.ZoomToSelection:
-                return FitTo(SelectionBounds(), CanvasViewportState.FitSelectionPadding);
+                return FitTo(
+                    SelectionBounds(), CanvasViewportState.FitSelectionPadding, CanvasZoomContext.ZoomedToSelection);
             case CanvasViewportVerb.ToggleFollowSelection:
                 _engine.CommitViewport(v => v.WithFollowSelection(!v.FollowSelection));
-                return true;
+                return new CanvasViewportOutcome.FollowChanged(_engine.CommittedViewport.FollowSelection);
             default:
-                return false;
+                return CanvasViewportOutcome.Refused;
         }
     }
+
+    /// <summary>§H TH-5: the committed zoom as the percent core renders,
+    /// with the verb's context — the payload the navigator speaks.</summary>
+    private CanvasViewportOutcome Zoomed(CanvasZoomContext? context) =>
+        new CanvasViewportOutcome.Zoomed(_engine.CommittedViewport.ZoomPercent, context);
 
     private System.Windows.Rect? AllBounds()
     {
@@ -400,7 +406,8 @@ internal sealed class CanvasRendererView : FrameworkElement
 
     /// <summary>Fit: choose the zoom that contains the bounds plus
     /// padding, clamped as every zoom is, and centre them.</summary>
-    private bool FitTo(System.Windows.Rect? bounds, double padding)
+    private CanvasViewportOutcome FitTo(
+        System.Windows.Rect? bounds, double padding, CanvasZoomContext context)
     {
         if (bounds is not { } target
             || ActualWidth <= 0
@@ -408,7 +415,7 @@ internal sealed class CanvasRendererView : FrameworkElement
             || target.Width <= 0
             || target.Height <= 0)
         {
-            return true;
+            return CanvasViewportOutcome.Silent;
         }
         _engine.CommitViewport(v =>
         {
@@ -422,7 +429,7 @@ internal sealed class CanvasRendererView : FrameworkElement
             double panY = (v.ViewHeight / 2) - ((target.Y + (target.Height / 2)) * zoom);
             return v.WithZoom(zoom, 0, 0).PannedTo(panX, panY);
         });
-        return true;
+        return Zoomed(context);
     }
 
     /// <summary>The view's teardown half: detach the model, dispose

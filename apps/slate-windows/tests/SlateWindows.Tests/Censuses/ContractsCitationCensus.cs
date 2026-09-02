@@ -481,7 +481,11 @@ public sealed class ContractsCitationCensus
                 // TH-3 bound the scenario twin and the fixture censuses, taking the
                 // section to 80; 79 sits above the pre-task population
                 // of 79 — a fourth time.
-                79),
+                //
+                // TH-5 bound the viewport consumers, taking the
+                // section to 88; 87 sits above the pre-task population
+                // of 80 — a fifth time.
+                87),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

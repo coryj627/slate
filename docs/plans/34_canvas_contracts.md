@@ -12487,6 +12487,47 @@ removed (the scripted-or-excluded fact bit); M2 a scenario's terminal
 hash forced equal to its original (bit); M3 `cycle.canvas` dropped from
 the read artifact (the read-or-excluded fact bit). All bitten.
 
+### TH-5 — The viewport consumers: a result-bearing seam, core's zoom and follow events spoken
+
+The seam (H4, IH-39): `ICanvasSurfacePresenter.ViewportCommand` no
+longer answers a `bool` a payload could not ride — it answers a
+`CanvasViewportOutcome`, a sealed family: `Zoomed` with the percent the
+pane COMMITTED and the context the verb implies (none for a step or
+actual size; Fit canvas; Zoomed to selection), `FollowChanged` with the
+committed follow state, `Silent` for a pane that acted or had nothing
+to act on and speaks nothing (mac's empty-canvas fit, the silence that
+was already there), and `Refused` for a pane that could not act. The
+renderer's `Viewport` answers from the engine's new `CommittedViewport`
+— the value a verb committed, ahead of the build that will carry it —
+so the percent is what the verb did, not what the last build showed;
+`FitTo` carries its context and answers `Silent` where it used to answer
+a bare true for nothing to fit. `CanvasSurfaceView` passes the outcome
+through, `Refused` without a model. The navigator's `ViewportVerb`
+announces `CanvasZoom` with the payload for a `Zoomed` outcome and
+`CanvasFollowSelectionToggled` for a `FollowChanged` one — the two §W-D
+consumers the sweep found Windows never constructed — speaks nothing
+for `Silent`, and keeps §D ID-7's typed no-pane sentence for a refusal
+or no pane. The percent is ONE rule, `CanvasViewportState.ZoomPercent`:
+`Math.Round` of zoom × 100 with .NET's banker's rounding at an exact
+half — the expression the renderer's Value used before, and the Value
+now reads the same member from the committed viewport (TH-7 pins it
+against core's render). The six test panes moved to the new signature;
+the one that answered true answers `Silent`.
+
+Facts: `TheZoomVerbsSpeakCoresZoomEventWithTheirContext` — the five zoom
+verbs through a scripted pane, each spoken as core renders
+`CanvasZoom` with its percent and context, then a `Silent` outcome
+speaking nothing and a `Refused` one speaking the no-pane sentence,
+the pane's verb log exact; `TheFollowToggleSpeaksBothStates`; and
+`TheZoomPercentIsOneRule` (100, 125, 80). And the mounted-renderer fact
+`AViewportVerbThroughThePresenterMovesTheInstalledZoom` now asserts the
+REAL renderer's outcome — one step from 1.0 is `Zoomed(125, null)`.
+Mutations, each byte-restored: M1 the navigator dropping the zoom
+context (the fit and selection arms bit); M2 the follow arm announcing
+the negated state (both states bit); M3 the renderer's zoom step
+answering the percent from BEFORE its commit (the mounted fact bit).
+All bitten.
+
 ---
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)

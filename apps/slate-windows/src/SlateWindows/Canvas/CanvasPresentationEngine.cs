@@ -57,6 +57,10 @@ internal sealed class CanvasPresentationEngine
     /// pass reads. Null until the first source arrives.</summary>
     internal CanvasPresentationState? Current { get; private set; }
 
+    /// <summary>§H TH-5: the viewport as COMMITTED — ahead of the build
+    /// that will carry it — for the outcome a verb answers with.</summary>
+    internal CanvasViewportState CommittedViewport => _viewport;
+
     /// <summary>Raised after an install, with the old and new states —
     /// UIA events derive from this pair, never from live fields.</summary>
     internal event Action<CanvasPresentationState?, CanvasPresentationState>? StateInstalled;

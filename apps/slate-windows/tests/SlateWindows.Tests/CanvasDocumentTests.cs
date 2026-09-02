@@ -4993,10 +4993,12 @@ public sealed class CanvasDocumentTests : IDisposable
         host.UpdateLayout();
         PumpUntil(() => surface.VisualForTests.Engine.Current is not null);
 
-        Assert.True(
-            ((ICanvasSurfacePresenter)surface).ViewportCommand(
-                CanvasViewportVerb.ZoomIn),
-            "the pane refused a viewport verb with a mounted renderer.");
+        // §H TH-5 (IH-39): the REAL renderer answers with what it committed
+        // — one zoom step from 1.0 is 125 percent, no context.
+        var zoomedOutcome = Assert.IsType<CanvasViewportOutcome.Zoomed>(
+            ((ICanvasSurfacePresenter)surface).ViewportCommand(CanvasViewportVerb.ZoomIn));
+        Assert.Equal(125u, zoomedOutcome.Percent);
+        Assert.Null(zoomedOutcome.Context);
         PumpUntil(() =>
             surface.VisualForTests.Engine.Current is { } zoomed
             && zoomed.Viewport.Zoom > 1.0);
