@@ -198,6 +198,97 @@ public sealed class CanvasEndToEndTests : IDisposable
         document.Shutdown();
     }
 
+    /// <summary>The mac twin's authoring test, through the production
+    /// members and nothing else (IH-32): the baseline is the COMMITTED
+    /// bytes — the copy equals them before the first verb (HD-1) — then
+    /// create (the card lands selected), edit, connect to the anchor
+    /// (mac's: the first non-group row that is not the new card), mark
+    /// the new card and the anchor with the selection RESEATED between
+    /// them, group the marked set, reseat the new card, attach a pane
+    /// and move it by one large step, commit. Five history entries —
+    /// the offered undo stands before each of five undos and is gone
+    /// after the fifth — and the file is the committed bytes again, the
+    /// outline its original ids.</summary>
+    [Fact]
+    public void AuthoringLoopThenUndoChainRestoresTheCommittedBytes()
+    {
+        CanvasDocumentViewModel document = Open();
+        string path = Path.Combine(_fixture.Root, Canvas);
+        byte[] committed = File.ReadAllBytes(CommittedFixture(Canvas));
+        Assert.Equal(committed, File.ReadAllBytes(path));
+        Assert.Null(document.UndoStack.OfferedUndo);
+        string[] originalIds = document.Outline.Select(row => row.NodeId).ToArray();
+
+        // 1. Create — the new card lands selected.
+        document.CanvasNewCard();
+        string newId = Assert.IsType<string>(document.Selection.Selected);
+        Assert.DoesNotContain(newId, originalIds);
+        string anchor = document.Outline
+            .First(row => row.Kind != "group" && row.NodeId != newId)
+            .NodeId;
+
+        // 2. Edit the new card's text.
+        document.CanvasCommitCardEdit(newId, "E2E card");
+        Assert.Equal("E2E card", document.Outline.First(row => row.NodeId == newId).Title);
+
+        // 3. Connect it to the anchor.
+        document.CanvasConnect(newId, anchor, "e2e");
+        Assert.Single(document.NeighborsOf(newId));
+
+        // 4. Mark both — reseating between the toggles — and group the
+        //    marked set.
+        document.SelectNode(newId, announce: false);
+        document.ToggleMark();
+        document.SelectNode(anchor, announce: false);
+        document.ToggleMark();
+        Assert.Equal(2, document.AppliedPublication!.MarkedIntent.Count);
+        Assert.NotNull(document.SubmitGroupMarked("E2E Zone"));
+        Assert.Contains("E2E Zone", document.Outline.First(row => row.NodeId == newId).GroupPath);
+
+        // 5. Move the new card: reseated, a pane attached, one large step,
+        //    committed.
+        document.SelectNode(newId, announce: false);
+        document.Navigator.AttachPresenter(new EndToEndPane());
+        Assert.True(document.Navigator.EnterMoveMode(), "move mode did not enter");
+        Assert.True(document.Navigator.ModeStep(1, 0, large: true), "the move step was refused");
+        Assert.True(document.Modes.Commit(), "the move did not commit");
+        Assert.NotEqual(committed, File.ReadAllBytes(path));
+
+        // Five entries, five undos, the committed bytes.
+        for (int entry = 1; entry <= 5; entry++)
+        {
+            Assert.True(
+                document.UndoStack.OfferedUndo is not null,
+                $"no undo offered before undo {entry} — a verb did not land as one history entry");
+            document.CanvasUndo();
+        }
+        Assert.Null(document.UndoStack.OfferedUndo);
+        Assert.Equal(committed, File.ReadAllBytes(path));
+        Assert.Equal(originalIds, document.Outline.Select(row => row.NodeId).ToArray());
+        document.Shutdown();
+    }
+
+    /// <summary>The pane a mode needs attached — the mutation battery's
+    /// shape; the E2E never drives a viewport through it.</summary>
+    private sealed class EndToEndPane : ICanvasSurfacePresenter
+    {
+        public CanvasSurfaceKind Projection => CanvasSurfaceKind.Outline;
+
+        public bool ProjectionHasFocus => true;
+
+        public bool CanMoveWithinProjection(bool forward) => true;
+
+        public bool DismissTransientRegion() => false;
+
+        public object? Owner => null;
+
+        public bool ViewportCommand(CanvasViewportVerb verb) => false;
+
+        public bool FocusRow(string nodeId) => false;
+
+        public bool FocusProjection() => false;
+    }
+
     private static void RunSta(Action body)
     {
         Exception? failure = null;

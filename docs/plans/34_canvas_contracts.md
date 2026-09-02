@@ -12362,6 +12362,35 @@ on the reversed kind word (the sort oracle bit, in both directions); M2
 the document's verbosity forced to Standard (the Terse predicate bit).
 All bitten.
 
+### TH-1 — The authoring loop, then the undo chain, against the committed bytes
+
+`AuthoringLoopThenUndoChainRestoresTheCommittedBytes` (H1, IH-32): the
+baseline is the committed fixture's bytes, and HD-1's claim is asserted
+before the first verb — the copy in the vault equals the committed
+bytes, so the canonicalise-first step mac needs is not needed here.
+Then, through the production members and nothing else: `CanvasNewCard`
+(the card lands selected, its id read from the selection, absent from
+the original ids); the anchor chosen as mac chooses it — the first
+non-group row that is not the new card; `CanvasCommitCardEdit` with
+"E2E card" (the title follows); `CanvasConnect` to the anchor with the
+label "e2e" (`NeighborsOf` answers one); the marks with the selection
+RESEATED between the toggles — `SelectNode` on the new card, `ToggleMark`,
+`SelectNode` on the anchor, `ToggleMark`, two in `MarkedIntent` — and
+`SubmitGroupMarked` with "E2E Zone" (the new card's group path carries
+it); the new card reseated, a pane attached through `AttachPresenter`
+(the mutation battery's shape), `EnterMoveMode`, one large `ModeStep`
+to the right, `Modes.Commit` — every entry, step and commit asserted
+true. Five history entries, counted through the seam the stack has:
+`UndoStack.OfferedUndo` stands before each of five `CanvasUndo` calls
+and is null after the fifth; the file equals the committed bytes, byte
+for byte, and the outline is its original ids in order.
+
+Facts: one. Mutations, each byte-restored: M1 `RunHistory` returning
+after taking its snapshot without applying it (the undo chain restores
+nothing; the bytes differ); M2 `SubmitGroupMarked` dropping its label
+(the group lands unlabelled; the group-path assertion bites). All
+bitten.
+
 ---
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
