@@ -296,6 +296,7 @@ internal static class ChordTable
         public const string CanvasCreateConnectedCard = "slate.canvas.createConnectedCard";
         public const string CanvasCreateConnectedCardDirectional =
             "slate.canvas.createConnectedCardDirectional";
+        public const string CanvasDuplicate = "slate.canvas.duplicate";
 
         public const string CanvasClearMarks = "slate.canvas.clearMarks";
 
@@ -1095,6 +1096,9 @@ internal static class ChordTable
             Reg(Ids.CanvasCreateConnectedCardDirectional,
                 "Canvas: Create Connected Card (Choose Direction)…", CommandSection.Canvas,
                 "Pick the side first, then the connected card is created there."),
+            // §G2 TG2-5: Duplicate — the selection or the marked set, one action.
+            Reg(Ids.CanvasDuplicate, "Canvas: Duplicate", CommandSection.Canvas,
+                "Duplicate the selected card or the marked set — one action, one undo."),
             Reg(Ids.CanvasConnectMode, "Canvas: Connect Mode", CommandSection.Canvas,
                 "Remember the selected card, navigate to a target with the "
                 + "usual movements, press Return to connect."),

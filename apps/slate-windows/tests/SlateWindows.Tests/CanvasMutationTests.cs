@@ -2189,6 +2189,103 @@ public sealed class CanvasMutationTests : IDisposable
         Assert.Equal(before, DiskBytes());
     }
 
+    /// <summary>§G2 TG2-5 (G2-10): Duplicate of the SELECTION — a copy with
+    /// the same text and size, no edge copied, the copy seated, the
+    /// single-card sentence, and ONE undo restoring the bytes.</summary>
+    [Fact]
+    public void DuplicateCopiesTheSelectionWithoutItsEdges()
+    {
+        CanvasDocumentViewModel document = Open();
+        string before = DiskBytes();
+        int edges = document.AppliedPublication!.Loaded!.Population.SceneEdges.Length;
+        document.SeatSelectionSilently("a");
+        _announced.Clear();
+
+        CanvasMutationOperation? operation = document.CanvasDuplicate();
+
+        Assert.NotNull(operation);
+        string copy = Assert.IsType<string>(document.Selection.Selected);
+        Assert.NotEqual("a", copy);
+        CanvasPopulation population = document.AppliedPublication!.Loaded!.Population;
+        Assert.Equal("text", population.SceneByNode[copy].Kind);
+        Assert.Equal(population.SceneByNode["a"].Width, population.SceneByNode[copy].Width);
+        Assert.Equal(edges, population.SceneEdges.Length);
+        Assert.Contains(_announced, s => s.Text.StartsWith("Duplicated \"Alpha\"", StringComparison.Ordinal));
+
+        Undo(document);
+
+        Assert.Equal(before, DiskBytes());
+        document.Shutdown();
+    }
+
+    /// <summary>§G2 TG2-5 (G2-10, G2D-4, IG2-25): Duplicate of the MARKED set
+    /// expands a picked group to its members through core's containment —
+    /// one card moved into the group, only the group marked, two copies
+    /// land with the copied card inside the copied group — the marks are
+    /// kept, the bulk sentence counts, and one undo restores the bytes.</summary>
+    [Fact]
+    public void DuplicateExpandsAMarkedGroupTransitivelyAndKeepsTheMarks()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        Assert.NotNull(document.CanvasMoveIntoGroup("grp"));
+        document.SeatSelectionSilently("grp");
+        document.ToggleMark();
+        Assert.Equal(["grp"], document.AppliedPublication!.MarkedIntent.ToArray());
+        string before = DiskBytes();
+        int nodesBefore = document.AppliedPublication!.Loaded!.Population.SceneNodes.Length;
+        _announced.Clear();
+
+        Assert.NotNull(document.CanvasDuplicate());
+
+        CanvasPopulation population = document.AppliedPublication!.Loaded!.Population;
+        Assert.Equal(nodesBefore + 2, population.SceneNodes.Length);
+        CanvasSceneNode copiedGroup = Assert.Single(population.SceneNodes, n => n.Kind == "group" && n.NodeId != "grp" && n.NodeId != "cramped");
+        CanvasOutlineRow copiedCard = Assert.Single(document.Outline, r => r.Kind == "text" && r.Title == "Alpha" && r.NodeId != "a");
+        Assert.Contains(copiedGroup.Title, copiedCard.GroupPath);
+        Assert.Equal(["grp"], document.AppliedPublication!.MarkedIntent.ToArray());
+        Assert.Contains(_announced, s => s.Text.Contains("Duplicated 2 cards", StringComparison.Ordinal));
+
+        Undo(document);
+
+        Assert.Equal(before, DiskBytes());
+        document.Shutdown();
+    }
+
+    /// <summary>§G2 TG2-5 (IG2-38, IG2-39): a marked store of GHOSTS refuses
+    /// NoMarks inside prepare, after admission; a seed of one live card and
+    /// one ghost refuses the typed failure — nothing partial — and the
+    /// bytes stand either way.</summary>
+    [Fact]
+    public void DuplicateRefusesGhostsAndNeverCopiesASubset()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("essay");
+        document.ToggleMark();
+        document.CanvasDeleteSelection();
+        Assert.Contains("essay", document.AppliedPublication!.MarkedIntent);
+        string before = DiskBytes();
+        _announced.Clear();
+
+        CanvasMutationOperation? ghosts = document.CanvasDuplicate();
+
+        Assert.NotNull(ghosts);
+        Assert.Contains(_announced, s => s.Text.Contains("No marks", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(before, DiskBytes());
+
+        document.SeatSelectionSilently("a");
+        document.ToggleMark();
+        _announced.Clear();
+
+        CanvasMutationOperation? mixed = document.CanvasDuplicate();
+
+        Assert.NotNull(mixed);
+        Assert.Contains(_announced, s => s.Text.Contains("resolve", StringComparison.OrdinalIgnoreCase)
+            || s.Text.Contains("duplicate", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(before, DiskBytes());
+        document.Shutdown();
+    }
+
     /// <summary>§G2 TG2-4 (G2-9, IG2-22): Create Connected Card is ONE
     /// action carrying the exact tuple — a fresh text card at the engine's
     /// placement and a fresh edge from the ORIGIN to it with no from-end

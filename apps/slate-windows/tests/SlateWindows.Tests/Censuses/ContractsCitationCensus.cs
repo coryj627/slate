@@ -433,7 +433,10 @@ public sealed class ContractsCitationCensus
                 // TG2-4 bound Remove from Group, Create Connected Card and
                 // the editor receipt, taking the section to 159; 158
                 // sits above the pre-task population of 146 — a fifth time.
-                158),
+                //
+                // TG2-5 bound Duplicate, taking the section to 165; 164
+                // sits above the pre-task population of 159 — a sixth time.
+                164),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

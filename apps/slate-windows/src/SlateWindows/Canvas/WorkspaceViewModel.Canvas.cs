@@ -770,6 +770,10 @@ internal sealed partial class WorkspaceViewModel
         _canvasCreateConnectedCardCommand ??= DocumentCommand(
             (document, owner) => document.CanvasCreateConnectedCard(owner: owner));
 
+    public System.Windows.Input.ICommand CanvasDuplicateCommand =>
+        _canvasDuplicateCommand ??= DocumentCommand(
+            (document, owner) => document.CanvasDuplicate(owner: owner));
+
     public System.Windows.Input.ICommand CanvasCreateConnectedCardDirectionalCommand =>
         _canvasCreateConnectedCardDirectionalCommand ??= DocumentCommand(
             (document, owner) => document.RequestCreateConnectedDirection(owner));
@@ -790,6 +794,7 @@ internal sealed partial class WorkspaceViewModel
     private RelayCommand? _canvasRemoveFromGroupCommand;
     private RelayCommand? _canvasCreateConnectedCardCommand;
     private RelayCommand? _canvasCreateConnectedCardDirectionalCommand;
+    private RelayCommand? _canvasDuplicateCommand;
 
     public System.Windows.Input.ICommand CanvasConnectModeCommand =>
         _canvasConnectModeCommand ??= NavigatorCommand(

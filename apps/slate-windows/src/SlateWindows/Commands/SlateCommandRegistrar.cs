@@ -535,6 +535,7 @@ internal static class SlateCommandRegistrar
                 host => host.Workspace?.CanvasCreateConnectedCardCommand,
             [ChordTable.Ids.CanvasCreateConnectedCardDirectional] =
                 host => host.Workspace?.CanvasCreateConnectedCardDirectionalCommand,
+            [ChordTable.Ids.CanvasDuplicate] = host => host.Workspace?.CanvasDuplicateCommand,
             [ChordTable.Ids.CanvasShowMarks] =
                 host => host.Workspace?.CanvasShowMarksCommand,
             [ChordTable.Ids.CanvasGroupMarked] =

@@ -11275,6 +11275,48 @@ byte-restored: M1 the edge op dropped, M2 the owner check on the
 landing removed, M3 a card in no group answering NothingSelected, M4
 the navigator chord removed (the scope census bit). All bitten.
 
+### TG2-5 — Duplicate: a snapshot, a visited set, exact equality, nothing partial
+
+`CanvasDuplicate` (G2-10): the SEED is captured at invocation — the
+marked store's epochs when the store is non-empty (carried as the
+operation's captured marks, kept: G2D-4), else the selection; neither
+refuses `NothingSelected`. Inside `prepare`, under the gate, in one
+try: the seed is PROJECTED FIRST through `CanvasOrderNodes` — reading
+order drops a ghost silently, and core's `CanvasChildrenOf` THROWS on
+one, which the first fact found when a store of ghosts answered the
+typed failure instead of `NoMarks` — so a store of ghosts is `NoMarks`
+here, after admission (IG2-38), and a seed that shrank is the typed
+`Duplicate` failure with nothing partial (IG2-39); only live ids are
+walked. The walk is a visited set through core's containment — a
+picked group brings its members and theirs (row D) — re-projected
+through reading order with EXACT set equality demanded again; every
+member's geometry comes from the basis; `CanvasPlaceSet` anchored on
+the first member places the rects as one rigid set and its origins'
+count must equal the members' (IG2-25). One action mints, per member
+in order, a `CreateGroup` (the DERIVED title standing in for the raw
+label the scene does not expose — G2D-7's sibling, recorded: a null
+or blank group label is not preserved, IG2-54) or a `CreateNode` whose
+content follows the kind — `File` with the card's target and subpath,
+`Link` with the target, `Text` with core's node text (null the empty
+string) — at the engine's origin with the member's size and color;
+edges are never copied. The name is `duplicate "⟨title⟩"` for one
+member, else `duplicate` over core's `CountNoun`; success seats the
+FIRST copy (`SelectCreated`) and speaks `CanvasCardPlaced` with
+`Duplicated` for one member or `CanvasBulkDuplicated` with the count;
+one undo removes every copy. A row, a resolver and an owner-carrying
+command; `chords.json` regenerated.
+
+Facts: three — the selection's copy with the same text and size, no
+edge copied, the copy seated, the single sentence, one undo restoring
+the bytes; a marked GROUP expanding to its member (moved in first),
+two copies landing with the copied card inside the copied group, the
+marks kept, the bulk sentence counting two, one undo; a store of
+ghosts refusing `NoMarks` and a live-plus-ghost seed refusing the
+typed failure, the bytes standing. Mutations, each byte-restored: M1
+the seed-equality check removed (the subset copied), M2 the
+transitive walk removed, M3 the ghost arm removed, M4 the first copy
+not seated. All bitten.
+
 ---
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)

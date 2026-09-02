@@ -3588,6 +3588,172 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         return admission == CanvasMutationAdmission.Admitted ? operation : null;
     }
 
+    /// <summary>§G2 TG2-5 (G2-10, IG2-25/38/39/54): Duplicate — the SEED is
+    /// captured at invocation (the marked store's epochs when non-empty,
+    /// else the selection); inside prepare, under the gate: the seed
+    /// expands TRANSITIVELY through core's children query into a visited
+    /// set, re-projects through core's reading order with EXACT set
+    /// equality demanded (a marked store whose projection is empty is
+    /// NoMarks; any other mismatch is the typed failure — nothing
+    /// partial), places the members as one rigid set with the origins'
+    /// count checked, and mints one CreateGroup or CreateNode per member
+    /// with content by kind; edges are never copied; the marks are kept;
+    /// the first copy is seated; one inverse undoes every copy. A group's
+    /// DERIVED title stands in for its raw label and unknown fields are
+    /// not carried (G2D-7 and its sibling, recorded).</summary>
+    public CanvasMutationOperation? CanvasDuplicate(
+        object? owner = null, Action<CanvasOperationOutcome>? completion = null)
+    {
+        if (_slot.Current.Loaded is not { } basis)
+        {
+            SpeakNotReady();
+            return null;
+        }
+        ImmutableDictionary<string, long> snapshot = _slot.Current.MarkEpochs;
+        bool marked = snapshot.Count > 0;
+        string[] seed = marked
+            ? [.. snapshot.Keys]
+            : Selection.Selected is { } one && _rows.ContainsKey(one) ? [one] : [];
+        if (seed.Length == 0)
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NothingSelected()));
+            return null;
+        }
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId("duplicate"), owner ?? this, Selection.Selected,
+            basis, CanvasMutationEffect.SelectCreated,
+            capturedMarks: marked ? snapshot : null)
+        {
+            Completion = completion,
+        };
+        int copied = 0;
+        string singleTitle = string.Empty;
+        CanvasRelativeDesc? relative = null;
+        CanvasMutationAdmission admission = Funnel.Apply(
+            operation,
+            handle =>
+            {
+                try
+                {
+                    // The visited-set walk: a picked group brings its members,
+                    // and theirs, through core's containment (row D).
+                    // IG2-38/IG2-39: the SEED is projected first — reading order
+                    // drops a ghost silently, and core's children query throws on
+                    // one; a store of ghosts is NoMarks, a shrunk seed is the typed
+                    // failure (nothing partial), and only live ids are walked.
+                    string[] liveSeed = _session.CanvasOrderNodes(handle, seed);
+                    if (liveSeed.Length == 0 && marked)
+                    {
+                        Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoMarks()));
+                        return null;
+                    }
+                    if (liveSeed.Length != seed.Length)
+                    {
+                        Speak(new CanvasA11yEvent.CanvasActionFailed(
+                            CanvasFailedAction.Duplicate, "a member of the set no longer resolves"));
+                        return null;
+                    }
+                    var visited = new List<string>();
+                    var seen = new HashSet<string>(StringComparer.Ordinal);
+                    var pending = new Stack<string>(liveSeed.Reverse());
+                    while (pending.Count > 0)
+                    {
+                        string id = pending.Pop();
+                        if (!seen.Add(id))
+                        {
+                            continue;
+                        }
+                        visited.Add(id);
+                        foreach (string child in _session.CanvasChildrenOf(handle, id).Reverse())
+                        {
+                            pending.Push(child);
+                        }
+                    }
+                    string[] ordered = _session.CanvasOrderNodes(handle, [.. visited]);
+                    if (ordered.Length == 0 && marked)
+                    {
+                        // IG2-38: a store of ghosts — refused HERE, after admission.
+                        Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoMarks()));
+                        return null;
+                    }
+                    if (ordered.Length != visited.Count
+                        || !ordered.ToHashSet(StringComparer.Ordinal).SetEquals(seen))
+                    {
+                        // IG2-39: reading order drops what it cannot resolve; a
+                        // shrunk projection would duplicate a SUBSET — refused.
+                        Speak(new CanvasA11yEvent.CanvasActionFailed(
+                            CanvasFailedAction.Duplicate, "a member of the set no longer resolves"));
+                        return null;
+                    }
+                    var nodes = new CanvasSceneNode[ordered.Length];
+                    var boxes = new CanvasRect[ordered.Length];
+                    for (int i = 0; i < ordered.Length; i++)
+                    {
+                        if (basis.Population.SceneByNode.GetValueOrDefault(ordered[i]) is not { } node)
+                        {
+                            Speak(new CanvasA11yEvent.CanvasActionFailed(
+                                CanvasFailedAction.Duplicate, "a member of the set has no geometry"));
+                            return null;
+                        }
+                        nodes[i] = node;
+                        boxes[i] = new CanvasRect(node.X, node.Y, node.Width, node.Height);
+                    }
+                    CanvasSetPlacement placement = _session.CanvasPlaceSet(
+                        handle, ordered[0], boxes, null, []);
+                    if (placement.Origins.Length != ordered.Length)
+                    {
+                        Speak(new CanvasA11yEvent.CanvasActionFailed(
+                            CanvasFailedAction.Duplicate, "the engine placed a different count"));
+                        return null;
+                    }
+                    relative = placement.Relative;
+                    var ops = new List<CanvasOp>(ordered.Length);
+                    for (int i = 0; i < ordered.Length; i++)
+                    {
+                        CanvasSceneNode node = nodes[i];
+                        CanvasPoint origin = placement.Origins[i];
+                        string id = SlateUniffiMethods.CanvasNewId();
+                        if (i == 0)
+                        {
+                            operation.CreatedId = id;
+                        }
+                        if (node.Kind == "group")
+                        {
+                            ops.Add(new CanvasOp.CreateGroup(
+                                id, node.Title, origin.X, origin.Y, node.Width, node.Height, node.Color));
+                            continue;
+                        }
+                        CanvasNodeContent content = node.Kind switch
+                        {
+                            "file" or "image" => new CanvasNodeContent.File(TargetOf(node.NodeId), node.Subpath),
+                            "link" => new CanvasNodeContent.Link(TargetOf(node.NodeId)),
+                            _ => new CanvasNodeContent.Text(
+                                _session.CanvasNodeText(handle, node.NodeId) ?? string.Empty),
+                        };
+                        ops.Add(new CanvasOp.CreateNode(
+                            id, content, origin.X, origin.Y, node.Width, node.Height, node.Color));
+                    }
+                    copied = ordered.Length;
+                    singleTitle = nodes[0].Title;
+                    string name = copied == 1
+                        ? $"duplicate \"{singleTitle}\""
+                        : "duplicate " + SlateUniffiMethods.CountNoun((ulong)copied, "card", "cards");
+                    return new CanvasAction(name, [.. ops]);
+                }
+                catch (VaultException e)
+                {
+                    Speak(new CanvasA11yEvent.CanvasActionFailed(
+                        CanvasFailedAction.Duplicate, e.Message));
+                    return null;
+                }
+            },
+            "duplicate",
+            confirm: () => copied == 1
+                ? new CanvasA11yEvent.CanvasCardPlaced(CanvasPlaceVerb.Duplicated, singleTitle, relative!)
+                : new CanvasA11yEvent.CanvasBulkDuplicated((uint)copied));
+        return admission == CanvasMutationAdmission.Admitted ? operation : null;
+    }
+
     /// <summary>§G2 TG2-4 (G2-5): the directional variant's front door —
     /// the selection first (mac's canvasPromptConnectedDirection), then
     /// the direction prompt with the typed context.</summary>

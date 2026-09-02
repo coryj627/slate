@@ -1282,6 +1282,18 @@
       "registered": true
     },
     {
+      "id": "slate.canvas.duplicate",
+      "label": "Canvas: Duplicate",
+      "section": "Canvas",
+      "hint": "Duplicate the selected card or the marked set — one action, one undo.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
       "id": "slate.canvas.connectMode",
       "label": "Canvas: Connect Mode",
       "section": "Canvas",
