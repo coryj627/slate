@@ -1041,6 +1041,30 @@
       "registered": true
     },
     {
+      "id": "slate.canvas.deleteMarked",
+      "label": "Canvas: Delete Marked Cards",
+      "section": "Canvas",
+      "hint": "Delete every marked card and its connections - one summary, one undo.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.colorMarked",
+      "label": "Canvas: Color Marked Cards…",
+      "section": "Canvas",
+      "hint": "Set every marked card's color at once - one action, one undo.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
       "id": "slate.canvas.clearMarks",
       "label": "Canvas: Clear All Marks",
       "section": "Canvas",

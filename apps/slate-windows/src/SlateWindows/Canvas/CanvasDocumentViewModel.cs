@@ -3546,6 +3546,133 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         return [.. ordered.Where(_rows.ContainsKey).Select(id => _rows[id])];
     }
 
+    /// <summary>§G TG-4 (G5, GD-2): Delete Marked — ONE action over the
+    /// marked set captured at invocation, projected through core's
+    /// reading order under the gate, one DeleteNode per node (a marked
+    /// group deletes by the algebra's one group removal, cards kept),
+    /// the name core's CountNoun, the captured marks removed with the
+    /// refreshed rows, the selection kept-by-resolution. An empty
+    /// projection refuses NoMarks AFTER admission; a thrown query
+    /// speaks the FD-6 arm with the engine's detail.</summary>
+    public void CanvasDeleteMarked() =>
+        _ = SubmitBulkMarked(
+            "delete marked",
+            CanvasMarkEffect.RemoveCaptured,
+            "delete",
+            (id, _) => new CanvasOp.DeleteNode(id),
+            count => new CanvasA11yEvent.CanvasDeleted(
+                new CanvasDeleteTarget.Cards((uint)count),
+                _verbosity(),
+                CanvasPhrase.UndoChord));
+
+    /// <summary>§G TG-4 (G5): Color Marked — the same one action with
+    /// SetNodeColor per node and the marks KEPT; the storage string
+    /// feeds the op, the typed color feeds the sentence (IG-22).</summary>
+    public void CanvasColorMarked(string? color)
+    {
+        if (color is not null && !IsCanvasColor(color))
+        {
+            return;
+        }
+        CanvasColor? typed = color is null ? null : new CanvasColor.Preset(byte.Parse(color));
+        _ = SubmitBulkMarked(
+            "color marked",
+            CanvasMarkEffect.Keep,
+            "color",
+            (id, _) => new CanvasOp.SetNodeColor(id, color),
+            count => new CanvasA11yEvent.CanvasBulkColorSet((uint)count, typed));
+    }
+
+    /// <summary>§G TG-4 (G5/G7): the bulk frame every marked verb
+    /// rides — the snapshot at invocation, the ladder first, the
+    /// projection under the gate, the outcome table by the funnel.
+    /// Answers the operation when admitted (the prompt sheets' landing
+    /// hook rides its completion).</summary>
+    internal CanvasMutationOperation? SubmitBulkMarked(
+        string operationLabel,
+        CanvasMarkEffect markEffect,
+        string verbWord,
+        Func<string, int, CanvasOp> opFor,
+        Func<int, CanvasA11yEvent> confirmFor,
+        Action<CanvasOperationOutcome>? completion = null)
+    {
+        ArgumentNullException.ThrowIfNull(operationLabel);
+        ArgumentNullException.ThrowIfNull(verbWord);
+        ArgumentNullException.ThrowIfNull(opFor);
+        ArgumentNullException.ThrowIfNull(confirmFor);
+        if (_slot.Current.Loaded is not { } basis)
+        {
+            SpeakNotReady();
+            return null;
+        }
+        ImmutableDictionary<string, long> snapshot = _slot.Current.MarkEpochs;
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId(operationLabel),
+            this,
+            Selection.Selected,
+            basis,
+            CanvasMutationEffect.KeepSelection,
+            markEffect: markEffect,
+            capturedMarks: snapshot)
+        {
+            Completion = completion,
+        };
+        int projected = 0;
+        CanvasMutationAdmission admission = Funnel.Apply(
+            operation,
+            handle =>
+            {
+                string[] ordered;
+                try
+                {
+                    ordered = _session.CanvasOrderNodes(handle, [.. snapshot.Keys]);
+                }
+                catch (VaultException e)
+                {
+                    Speak(new CanvasA11yEvent.CanvasActionFailed(
+                        CanvasFailedAction.CanvasAction, e.Message ?? string.Empty));
+                    return null;
+                }
+                if (ordered.Length == 0)
+                {
+                    Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoMarks()));
+                    return null;
+                }
+                projected = ordered.Length;
+                var ops = new List<CanvasOp>(ordered.Length);
+                for (int i = 0; i < ordered.Length; i++)
+                {
+                    ops.Add(opFor(ordered[i], i));
+                }
+                return new CanvasAction(BulkName(verbWord, ordered.Length), [.. ops]);
+            },
+            BulkName(verbWord, snapshot.Count),
+            confirm: () => confirmFor(projected));
+        return admission == CanvasMutationAdmission.Admitted ? operation : null;
+    }
+
+    /// <summary>F9a/CD-26: the bulk name is core's CountNoun over the
+    /// FFI, so the verb's sentence and the undo sentence group
+    /// identically at every magnitude.</summary>
+    private static string BulkName(string verbWord, int count) =>
+        verbWord + " " + SlateUniffiMethods.CountNoun((ulong)count, "card", "cards");
+
+    /// <summary>§G TG-4 (GD-5): Color Marked's front door — the Set
+    /// Color prompt over the MARKED target. An empty store refuses
+    /// NoMarks and opens nothing (a prompt opening is a store action,
+    /// G6); the submit is the funnel verb.</summary>
+    internal event Action? ColorMarkedRequested;
+
+    public void RequestColorMarked()
+    {
+        if (_slot.Current.MarkedIntent.Count == 0)
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoMarks()));
+            return;
+        }
+        ColorMarkedRequested?.Invoke();
+    }
+
     /// <summary>The live population's basis — the editor's commit
     /// compares its seed against THIS (IE-18's re-validation).</summary>
     internal string? PublishedBasis => _slot.Current.Population?.ContentHash;

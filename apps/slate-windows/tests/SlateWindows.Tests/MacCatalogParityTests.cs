@@ -144,6 +144,9 @@ public sealed class MacCatalogParityTests
     private static readonly Dictionary<string, string> WindowsOnlyIds =
         new(StringComparer.Ordinal)
         {
+            ["slate.canvas.colorMarked"] =
+                "§G GD-5: mac's canvasColorMarked has no palette row or chord — a recorded "
+                + "divergence assigned to the mac lane; Windows lands the front door.",
             ["slate.workspace.focusNextPane"] =
                 "Windows-only pane cycling; mac navigates panes directionally only.",
             ["slate.workspace.focusPreviousPane"] =

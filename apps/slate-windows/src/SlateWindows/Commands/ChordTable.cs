@@ -284,6 +284,10 @@ internal static class ChordTable
 
         public const string CanvasShowMarks = "slate.canvas.showMarks";
 
+        public const string CanvasDeleteMarked = "slate.canvas.deleteMarked";
+
+        public const string CanvasColorMarked = "slate.canvas.colorMarked";
+
         public const string CanvasConnectTo = "slate.canvas.connectTo";
 
         public const string CanvasConnectMode = "slate.canvas.connectMode";
@@ -1009,6 +1013,12 @@ internal static class ChordTable
                 "⌃⌘M", "Ctrl+Alt+M", ChordScope.Canvas),
             Reg(Ids.CanvasShowMarks, "Canvas: Show Marked Cards", CommandSection.Canvas,
                 "Open the marks list: jump to or unmark any marked card."),
+            Reg(Ids.CanvasDeleteMarked, "Canvas: Delete Marked Cards", CommandSection.Canvas,
+                "Delete every marked card and its connections - one summary, one undo."),
+            // §G TG-4 (GD-5): mac's verb has no front door; this row is
+            // Windows' — a recorded divergence assigned to the mac lane.
+            Reg(Ids.CanvasColorMarked, "Canvas: Color Marked Cards…", CommandSection.Canvas,
+                "Set every marked card's color at once - one action, one undo."),
             Reg(Ids.CanvasClearMarks, "Canvas: Clear All Marks", CommandSection.Canvas,
                 "Unmark every marked card."),
             Reg(Ids.CanvasConnectMode, "Canvas: Connect Mode", CommandSection.Canvas,

@@ -128,7 +128,13 @@ internal abstract class CanvasPromptViewModel : System.ComponentModel.INotifyPro
         new CanvasRenameGroupPrompt(document, groupId, current);
 
     internal static CanvasPromptViewModel SetColor(CanvasDocumentViewModel document) =>
-        new CanvasSetColorPrompt(document);
+        new CanvasSetColorPrompt(document, marked: false);
+
+    /// <summary>§G TG-4 (GD-5, IG-55): the same prompt over the MARKED
+    /// target — its title carries NO count (the submit's snapshot is
+    /// the truth; a title count would be a second, stale reading).</summary>
+    internal static CanvasPromptViewModel SetColorMarked(CanvasDocumentViewModel document) =>
+        new CanvasSetColorPrompt(document, marked: true);
 
     internal static CanvasPromptViewModel MarksList(
         CanvasDocumentViewModel document, object owner, Action<CanvasPromptViewModel> closeIfCurrent) =>
@@ -294,17 +300,38 @@ internal sealed class CanvasRenameGroupPrompt : CanvasPromptViewModel
 /// joins with its bulk verb (TG-4).</summary>
 internal sealed class CanvasSetColorPrompt : CanvasPromptViewModel
 {
-    internal CanvasSetColorPrompt(CanvasDocumentViewModel document)
-        : base(document, "Set Color", string.Empty, BuildChoices())
+    internal CanvasSetColorPrompt(CanvasDocumentViewModel document, bool marked)
+        : base(document, marked ? "Set Color for Marked Cards" : "Set Color", string.Empty, BuildChoices())
     {
+        Marked = marked;
     }
+
+    /// <summary>The target: the selection, or the marked set captured
+    /// at SUBMIT (live-at-submit, immutable once submitted).</summary>
+    internal bool Marked { get; }
 
     internal override CanvasPromptSubmit Submit(Action onLanded)
     {
         ArgumentNullException.ThrowIfNull(onLanded);
-        CanvasMutationOperation? operation = Document.CanvasSetColor(
-            SelectedChoice?.Value,
-            completion: outcome => { if (Landed(outcome)) { onLanded(); } });
+        string? value = SelectedChoice?.Value;
+        void Landing(CanvasOperationOutcome outcome)
+        {
+            if (Landed(outcome))
+            {
+                onLanded();
+            }
+        }
+        CanvasMutationOperation? operation = Marked
+            ? Document.SubmitBulkMarked(
+                "color marked",
+                CanvasMarkEffect.Keep,
+                "color",
+                (id, _) => new CanvasOp.SetNodeColor(id, value),
+                count => new CanvasA11yEvent.CanvasBulkColorSet(
+                    (uint)count,
+                    value is null ? null : new CanvasColor.Preset(byte.Parse(value))),
+                completion: Landing)
+            : Document.CanvasSetColor(value, completion: Landing);
         return operation is null ? CanvasPromptSubmit.Refused : CanvasPromptSubmit.Pending;
     }
 

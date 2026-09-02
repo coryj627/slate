@@ -80,6 +80,8 @@ internal sealed partial class WorkspaceViewModel
                     CanvasPromptViewModel.RenameGroup(document, groupId, current));
             document.SetColorRequested += () =>
                 _ = TryPresentCanvasPrompt(CanvasPromptViewModel.SetColor(document));
+            document.ColorMarkedRequested += () =>
+                _ = TryPresentCanvasPrompt(CanvasPromptViewModel.SetColorMarked(document));
             document.MarksListRequested += owner =>
                 _ = TryPresentCanvasPrompt(
                     CanvasPromptViewModel.MarksList(document, owner, CloseCanvasPromptIfCurrent));
@@ -515,6 +517,10 @@ internal sealed partial class WorkspaceViewModel
 
     private RelayCommand? _canvasToggleMarkCommand;
 
+    private RelayCommand? _canvasDeleteMarkedCommand;
+
+    private RelayCommand? _canvasColorMarkedCommand;
+
     private RelayCommand? _canvasShowMarksCommand;
 
     private RelayCommand? _canvasClearMarksCommand;
@@ -611,6 +617,12 @@ internal sealed partial class WorkspaceViewModel
                 }
             },
             _ => ActiveCanvasDocument is not null);
+
+    public System.Windows.Input.ICommand CanvasDeleteMarkedCommand =>
+        _canvasDeleteMarkedCommand ??= DocumentCommand(document => document.CanvasDeleteMarked());
+
+    public System.Windows.Input.ICommand CanvasColorMarkedCommand =>
+        _canvasColorMarkedCommand ??= DocumentCommand(document => document.RequestColorMarked());
 
     public System.Windows.Input.ICommand CanvasToggleMarkCommand =>
         _canvasToggleMarkCommand ??= DocumentCommand(document => document.ToggleMark());

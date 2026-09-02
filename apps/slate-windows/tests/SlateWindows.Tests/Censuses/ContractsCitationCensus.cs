@@ -383,7 +383,11 @@ public sealed class ContractsCitationCensus
                 // outcomes, taking the section to 32; 30 sits
                 // above the pre-task population of 25 — a fourth
                 // time.
-                30),
+                //
+                // TG-4 bound the bulk frame and the marked color target,
+                // taking the section to 35; 33 sits above the
+                // pre-task population of 32 — a fifth time.
+                33),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

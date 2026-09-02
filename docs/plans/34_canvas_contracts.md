@@ -10042,6 +10042,50 @@ unpinned, recorded. Mutations, each byte-restored: M1 the effect
 ignored, M2 the epoch comparison dropped, M3 the refusal silent
 again, M4 the receipt dropped on RefreshRefused. All bitten.
 
+### TG-4 — Delete Marked and Color Marked: one action each on the substrate
+
+Both bulk verbs ride ONE frame, `SubmitBulkMarked`: the mark
+snapshot — id to epoch — captured at invocation (IG-15), the
+operation minted with `KeepSelection` (IG-17) and its typed mark
+effect, the ladder answered first, and the projection through core's
+reading order UNDER THE GATE — an empty projection refusing `NoMarks`
+after admission (G7's order), a thrown query speaking
+`CanvasActionFailed(CanvasFailedAction.CanvasAction, detail)` with
+the engine's dynamic message — then one op per projected node and
+the name core's `CountNoun` over the FFI, so the verb's sentence and
+the undo sentence group identically at every magnitude (F9a). Delete
+Marked removes the captured marks with the refreshed rows
+(RemoveCaptured, TG-3's plan) and a marked group goes by the
+algebra's one group removal, cards kept (GD-2); Color Marked keeps
+the marks (Keep) and feeds the storage string to `SetNodeColor` while
+the sentence carries the typed color (IG-22). Undo restores the
+structure through the one inverse and the marks stay cleared —
+marks are not history (G8/GD-7).
+
+Color Marked lands with a Windows front door (GD-5): `RequestColorMarked`
+refuses `NoMarks` on an empty store (a prompt opening is a store
+action, G6) and otherwise presents the Set Color prompt over the
+MARKED target — `CanvasSetColorPrompt` gained the target, its submit
+routing to the same bulk frame, its title "Set Color for Marked
+Cards" carrying NO count (IG-55: the submit's snapshot is the truth;
+a title count would be a second, stale reading). The Delete Marked
+and Color Marked palette rows land with mac's labels where mac has
+them and the recorded divergence where it does not.
+
+Facts: four — Delete Marked as one action with the group removed,
+the name, the cleared marks, the resolved selection, the spoken
+count and the undo restoring structure with marks still cleared;
+Color Marked keeping the marks with typed per-node color asserts
+(the fixture's own edge carries the same color, so a byte count
+would have lied); the empty projection refusing after admission
+with the ghost mark standing; the marked color prompt's countless
+title routing to the bulk verb. Two first cuts were fact errors
+against this fixture — the edge's color and the other harness's
+node — corrected, not the verbs. Mutations, each byte-restored: M1
+delete keeping the marks, M2 a host-composed name, M3 color clearing
+the marks, M4 the empty projection landing an empty action. All
+bitten.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same
