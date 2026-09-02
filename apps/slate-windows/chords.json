@@ -1266,7 +1266,8 @@
       "windows": "Ctrl+Alt+Shift+N",
       "windowsSpoken": "Control Alt Shift N",
       "scope": "Canvas",
-      "registered": true
+      "registered": true,
+      "divergence": "mac's ⌃⌥⌘N; the modifier rule maps it onto Ctrl+Alt+N, which New Card owns (mac's ⌥⌘N), so Shift disambiguates — the spec's §7 allocation, free on Windows."
     },
     {
       "id": "slate.canvas.createConnectedCardDirectional",
