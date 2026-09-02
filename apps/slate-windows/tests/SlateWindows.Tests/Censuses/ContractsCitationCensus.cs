@@ -473,7 +473,11 @@ public sealed class ContractsCitationCensus
                 // TH-1 bound the authoring loop and the undo chain, taking the
                 // section to 71; 70 sits above the pre-task population
                 // of 66 — a second time.
-                70),
+                //
+                // TH-2 bound the large canvas and the §K roll-up, taking the
+                // section to 79; 78 sits above the pre-task population
+                // of 71 — a third time.
+                78),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

@@ -1,6 +1,8 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Collections.Immutable;
+using System.Diagnostics;
 using System.Windows.Controls;
 using SlateWindows.Canvas;
 using SlateWindows.Grids;
@@ -54,11 +56,13 @@ public sealed class CanvasEndToEndTests : IDisposable
         Path.Combine(
             SourceText.RepoRoot(), "crates", "slate-core", "tests", "fixtures", "canvas", name);
 
-    private CanvasDocumentViewModel Open()
+    private CanvasDocumentViewModel Open() => Open(Canvas);
+
+    private CanvasDocumentViewModel Open(string path)
     {
         var document = new CanvasDocumentViewModel(
             _session,
-            Canvas,
+            path,
             new CanvasAnnouncer(_announced.Add, TimeSpan.FromMinutes(1)),
             synchronousForTests: true,
             verbosity: () => _verbosity);
@@ -287,6 +291,71 @@ public sealed class CanvasEndToEndTests : IDisposable
         public bool FocusRow(string nodeId) => false;
 
         public bool FocusProjection() => false;
+    }
+
+    /// <summary>The mac twin's §K test, on the committed 2,000-node
+    /// fixture: the open within PR A's 500 ms in the synchronous arm;
+    /// the peer topology's first windowed derivation over a 1600 × 1200
+    /// viewport materialising more than zero and fewer than 600
+    /// placements (windowing bounds the UIA tree) under 500 ms; a pan's
+    /// window hop averaging under 100 ms over ten hops; and a NAVIGATOR
+    /// step — `NextCard` on the real navigator over the real document,
+    /// not the benchmark's descriptor lookup (IH-34) — averaging under
+    /// 50 ms over fifty steps. `Stopwatch` on the derivation and the
+    /// navigator the app runs; the draw and the UIA re-frame ride the app
+    /// and the journeys (HD-D1). The measurements are printed as BENCH
+    /// lines for the §K roll-up, pasted never typed.</summary>
+    [Fact]
+    public void LargeCanvasOpensNavigatesAndWindowsUnderBudget()
+    {
+        const string large = "large_2000.canvas";
+        File.Copy(CommittedFixture(large), Path.Combine(_fixture.Root, large));
+
+        var open = Stopwatch.StartNew();
+        CanvasDocumentViewModel document = Open(large);
+        open.Stop();
+        Assert.Equal(2000, document.Outline.Count);
+        Assert.True(
+            open.ElapsedMilliseconds < 500,
+            $"opening the 2,000-node canvas took {open.ElapsedMilliseconds} ms");
+
+        CanvasPopulation population = document.AppliedPublication!.Loaded!.Population;
+        CanvasViewportState viewport = CanvasViewportState.Seed().WithViewSize(1600, 1200);
+        ImmutableHashSet<CanvasPeerKey> none = [];
+
+        var first = Stopwatch.StartNew();
+        int materialized = CanvasPeerTopology.Derive(population, viewport, none).Placements.Count;
+        first.Stop();
+        Assert.True(materialized > 0, "the first window materialised nothing");
+        Assert.True(materialized < 600, $"windowing must bound the UIA tree; {materialized} placements");
+        Assert.True(first.Elapsed.TotalMilliseconds < 500, $"first windowed derivation {first.Elapsed.TotalMilliseconds:F3} ms");
+
+        var pans = Stopwatch.StartNew();
+        for (int hop = 1; hop <= 10; hop++)
+        {
+            _ = CanvasPeerTopology.Derive(
+                population, viewport.PannedTo(-400 * hop, -250 * hop), none).Placements.Count;
+        }
+        pans.Stop();
+        double panMs = pans.Elapsed.TotalMilliseconds / 10;
+        Assert.True(panMs < 100, $"pan window hop averaged {panMs:F3} ms");
+
+        document.SelectNode(document.Outline[0].NodeId, announce: false);
+        var steps = Stopwatch.StartNew();
+        for (int step = 0; step < 50; step++)
+        {
+            document.Navigator.NextCard();
+        }
+        steps.Stop();
+        double navMs = steps.Elapsed.TotalMilliseconds / 50;
+        Assert.True(navMs < 50, $"navigator step averaged {navMs:F3} ms");
+        Assert.NotEqual(document.Outline[0].NodeId, document.Selection.Selected);
+
+        Console.WriteLine(
+            $"BENCH canvas_e2e open_2000={open.Elapsed.TotalMilliseconds:F1}ms "
+            + $"first_windowed_derivation_2000={first.Elapsed.TotalMilliseconds:F3}ms materialized={materialized} "
+            + $"pan_window_hop_2000={panMs:F3}ms nav_step_2000={navMs:F3}ms");
+        document.Shutdown();
     }
 
     private static void RunSta(Action body)

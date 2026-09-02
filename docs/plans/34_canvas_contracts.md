@@ -12391,6 +12391,39 @@ nothing; the bytes differ); M2 `SubmitGroupMarked` dropping its label
 (the group lands unlabelled; the group-path assertion bites). All
 bitten.
 
+### TH-2 — The large canvas under budget, and the §K roll-up
+
+`LargeCanvasOpensNavigatesAndWindowsUnderBudget` (H1, IH-34) on the
+committed `large_2000.canvas` copied into the vault: the open — load,
+outline, table, scene, publish — under PR A's 500 ms with 2,000 rows
+ready; `CanvasPeerTopology`'s first windowed derivation over a 1600 ×
+1200 `CanvasViewportState` materialising more than zero and fewer than
+600 placements (windowing bounds the UIA tree; 39 here) under 500 ms;
+ten pans of (−400, −250) averaging under 100 ms; and fifty
+`CanvasNavigator.NextCard` steps on the REAL navigator over the real
+document averaging under 50 ms, the selection moved — the measurement
+the benchmark's `SelectionStepRead` is not. `Stopwatch` on the
+derivation and the navigator the app runs (HD-D1); the fact prints a
+BENCH line so the roll-up pastes numbers rather than typing them.
+
+The roll-up (H2): `BENCHMARKS.md` gains "Milestone W6-1 — canvas through
+the C# binding" after the two per-PR sections, never editing them: the
+marshalling table from `CanvasOpenBenchmarks` re-run at close-out; the
+derivation table from `CanvasRendererBenchmarks` with the budget arm's
+three PASS verdicts and `SelectionStepRead` recorded as the descriptor
+lookup it is — 13 ns, kept under the 50 ms line for the ring redraw, not
+the navigator's budget; the end-to-end table named by its runner
+`CanvasEndToEndTests` and the fact; the command pinned with `--canvas
+--validate-budgets`; one environment line; the FOUR spec budgets — open,
+first window, pan hop, navigator step — each with the place that asserts
+it, the navigator's asserted by the fact alone; and the honest scope
+note beside mac's non-comparable row.
+
+Facts: one. Mutations, each byte-restored: M1 the topology's window test
+answering true for every node (2,300 placements; the windowing bound
+bit); M2 a 60 ms sleep in the navigator's adjacent step (62.7 ms
+averaged; the navigator budget bit). All bitten.
+
 ---
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
