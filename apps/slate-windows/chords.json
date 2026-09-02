@@ -2221,7 +2221,7 @@
           "apps/slate-windows/src/SlateWindows/WorkspaceViewModel.cs#ToggleReadingModeCommand"
         ],
         "tests": [
-          "apps/slate-windows/tests/SlateWindows.Tests/ReadingViewTests.cs#ReadingModeToggle"
+          "apps/slate-windows/tests/SlateWindows.Tests/ReadingViewTests.cs#ReadingModeToggle_FlipsPersistedModeAndProjectsTheDocument"
         ]
       },
       "tasksReview": {
@@ -2414,7 +2414,7 @@
       "canvasModes": {
         "implementation": [
           "apps/slate-windows/src/SlateWindows/Canvas/CanvasModeController.cs#CanvasModeController",
-          "apps/slate-windows/src/SlateWindows/Canvas/CanvasDocumentViewModel.cs#CanvasPlaceSet",
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasDocumentViewModel.cs#CanvasPlaceRelative",
           "apps/slate-windows/src/SlateWindows/Canvas/CanvasNavigator.cs#CanvasNavigator",
           "apps/slate-windows/src/SlateWindows/Canvas/WorkspaceViewModel.Canvas.cs#CanvasMoveModeCommand",
           "apps/slate-windows/src/SlateWindows/Commands/ChordTable.cs#CanvasRows"
@@ -2438,6 +2438,43 @@
           "apps/slate-windows/tests/SlateWindows.Tests/CanvasMutationTests.cs#DeleteMarkedIsOneActionAndUndoRestoresIt",
           "apps/slate-windows/tests/SlateWindows.Tests/CanvasMutationTests.cs#ColorMarkedKeepsTheMarks",
           "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#CanvasMarks_ToggleListJumpDeleteAndUndo_AreReachable"
+        ]
+      },
+      "canvas": {
+        "implementation": [
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasDocumentViewModel.cs#CanvasDocumentViewModel",
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasNavigator.cs#CanvasNavigator",
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasDocumentViewModel.cs#CanvasDeleteSelection",
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasModeController.cs#CanvasModeController",
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasDocumentViewModel.cs#ToggleMark",
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasSurfaceView.cs#CanvasSurfaceView",
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasNavigator.cs#CanvasNavigator",
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasMutationOperation.cs#CanvasMutationOperation",
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasModeController.cs#CanvasModeController",
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasContextMenuPlan.cs#CanvasContextMenuPlan"
+        ],
+        "tests": [
+          "apps/slate-windows/tests/SlateWindows.Tests/CanvasDocumentTests.cs#ShowVisualIsEnabledAndDrivesTheSurfaceSwitch",
+          "apps/slate-windows/tests/SlateWindows.Tests/CanvasNavigatorTests.cs#EveryReadVerbAnswersInEveryLoadState",
+          "apps/slate-windows/tests/SlateWindows.Tests/CanvasMutationTests.cs#UndoAndRedoVerbsRestoreBytesAndSpeakTheHistorySentence",
+          "apps/slate-windows/tests/SlateWindows.Tests/CanvasMutationTests.cs#ConnectModeConnectsTheReadersCard",
+          "apps/slate-windows/tests/SlateWindows.Tests/CanvasMutationTests.cs#ToggleMarkPublishesTheAuthorityAndSpeaksTheLiveCount",
+          "apps/slate-windows/tests/SlateWindows.Tests/CanvasEndToEndTests.cs#OpenSampleExposesOutlineTableAndScene",
+          "apps/slate-windows/tests/SlateWindows.Tests/CanvasEndToEndTests.cs#AuthoringLoopThenUndoChainRestoresTheCommittedBytes",
+          "apps/slate-windows/tests/SlateWindows.Tests/CanvasEndToEndTests.cs#LargeCanvasOpensNavigatesAndWindowsUnderBudget",
+          "apps/slate-windows/tests/SlateWindows.Tests/CanvasEndToEndTests.cs#AnnouncementGrammarConformsPerVerbosity",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#CanvasSurfaces_OutlineTreeSelectionAndActivation_AreClean",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#CanvasSurfaces_TableGridSortSelectionAndActivation_AreClean",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#CanvasSurfaces_NavigatorFilterAndWhereAmI_AreClean",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#CanvasSurfaces_VisualBoardPeersAndZoom_AreClean",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#CanvasAuthoring_NewCanvasCardEditorAndUndo_AreReachable",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#CanvasModes_MoveResizeAndConnectPicker_AreReachable",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#CanvasMarks_ToggleListJumpDeleteAndUndo_AreReachable",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#CanvasVerbs_GroupConnectDuplicateLinkConvertAndUndo_AreReachable",
+          "apps/slate-windows/tests/SlateWindows.Tests/Censuses/CanvasTriggerParityCensus.cs#TheLedgerHasARowForEveryStructuralKeyAndNoOther",
+          "apps/slate-windows/tests/SlateWindows.Tests/Censuses/WcMatrixCanvasEvidenceCensus.cs#EveryManifestSurfaceIsARowOfTenCellsAndNoCanvasRowIsUnknown",
+          "apps/slate-windows/tests/SlateWindows.Tests/Censuses/CanvasLabelClassCensus.cs#TheLabelClassHasNoSecondComposition",
+          "apps/slate-windows/tests/SlateWindows.Tests/Censuses/CanvasScenarioCensus.cs#CanvasScenarioArtifacts_MatchCommittedGoldensByteForByte"
         ]
       }
     },
@@ -2627,7 +2664,8 @@
       "#741": "commandPalette",
       "#742": "searchOverlay",
       "#743": "templates",
-      "#744": "fileManagement"
+      "#744": "fileManagement",
+      "#745": "canvas"
     }
   },
   "chordSurface": [

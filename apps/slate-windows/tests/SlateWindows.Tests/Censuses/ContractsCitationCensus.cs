@@ -501,7 +501,11 @@ public sealed class ContractsCitationCensus
                 // TH-8 bound the §W-C rows and their manifest census, taking the
                 // section to 144; 143 sits above the pre-task population
                 // of 139 — a ninth time.
-                143),
+                //
+                // TH-9 bound the matrix and the validator's teeth, taking the
+                // section to 150; 149 sits above the pre-task population
+                // of 144 — a tenth time.
+                149),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

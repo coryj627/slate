@@ -12916,6 +12916,62 @@ M4 the visual row's card pattern dropped (bit); M5 an evidence name that
 does not exist (the evidence fact bit); M6 the card editor's axe label
 removed (bit). All bitten.
 
+### TH-9 — The matrix: the surface row derived from issue-level evidence, the validator's two new teeth
+
+The evidence (H7, IH-18): `chords.json`'s `deliveryEvidence` gains the
+AGGREGATE group `canvas` — one implementation anchor and one test
+anchor from each of the five command groups (`canvasSurfaces`,
+`canvasNavigator`, `canvasMutations`, `canvasModes`, `canvasMarks`),
+the surface view, the navigator, the operation record, the mode
+controller and the context plan, and the close-out's gates: the four
+end-to-end facts, the eight canvas journeys, and the trigger, §W-C,
+label-class and scenario censuses. The issue map gains `#745` →
+`canvas`; the generator's hard-coded surface literal becomes an
+`issue_delivery_status` call like its W5 neighbours with a `#745`
+branch returning the W6-1 status string; `expected_issues` gains
+`#745`. `parity_matrix.md` regenerates with the "Accessible canvas (T
+parity)" row reading "implemented; local gates green 2026-09-02;
+interactive CI + human AT pending" — the human AT clause kept (HD-3,
+HD-5). The `docs/help/canvas.md` row stays `#756` pending: W8-6's.
+
+The validator (IH-19, IH-45): `load_delivery_evidence` grows from
+twelve validations to fourteen. (13) A marker into a C# file names a
+DECLARATION — a type head, or an accessible member head: a method, a
+constructor, a property, an event or a field — found by a head
+pattern over the file, never a substring that could live in a comment
+or an unrelated call; a TEST anchor may instead name an automation id
+the journey drives, as a quoted string the file reads. (14) An issue's
+group is SCOPE-COMPLETE: for every command group any of the issue's
+commands maps to, the issue's group carries one of that group's
+implementation anchors and one of its test anchors, so one command
+group can never stand for an issue. The first run of (13) found three
+anchors that were not declarations: `ChordTable.cs#CanvasRows` (a
+declaration the first head pattern missed by treating a generic return
+type's `<` as a terminator — the pattern corrected),
+`CanvasDocumentViewModel.cs#CanvasPlaceSet` (a call, as IH-45 said;
+now `CanvasPlaceRelative`) and `ReadingViewTests.cs#ReadingModeToggle`
+(a prefix of the fact's name; now the name). `chords.json` was
+re-serialized through the projection writer so
+`ChordsJson_IsExactlyTheTablesProjection`'s byte round-trip holds.
+
+The mirror: no CI step runs the generator and the scripts tree has no
+tests, so the two validations are mirrored in C# as
+`DeliveryEvidenceCensus` — change both together, never one —
+`EveryCSharpMarkerIsADeclarationOrAJourneysAutomationId`,
+`EveryIssueGroupIsScopeCompleteOverItsCommandGroups` (the issue of
+each command read from the generated matrix's rows) and
+`TheCanvasIssueMapsToTheAggregateOverAllFiveCommandGroups`, so the
+evidence is checked on every test run and not only when the matrix is
+regenerated.
+
+Mutations, each byte-restored: M1 `#745` mapped to `canvasSurfaces`
+alone (validation 14 fails the generator; the census's two issue facts
+bit); M2 an implementation marker moved to a call-only name
+(validation 13 fails the generator; the census's declaration fact bit);
+M3 the surface row a literal again (the regenerated matrix reads
+`pending` — checked by regeneration, the generator's own output being
+the gate). All bitten.
+
 ---
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
