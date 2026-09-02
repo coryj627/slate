@@ -9450,6 +9450,159 @@ Four facts (the resolution's two windows at the controller, the
 transient and connect halves at the document, each proving the
 document FREE afterward); two byte-restored mutations, both bitten.
 
+## PR G — marks: mark-then-act, the marks list, and the bulk verbs
+
+Milestone T's multi-select on Windows (#524, interview decision 4: no
+shift-range selection). The STORE shipped in PR A and the §C-unit
+split: `CanvasSelection.Marked` with `ToggleMark` as its one mutator
+("present now so the marked set is never mutated from two places"),
+the publication's durable `MarkedIntent`, the outline rows and the
+renderer peers rendering `marked`, `CanvasMovedTo`/`CanvasWhereAmI`
+carrying the flag, and CD-32's retarget seeding. §E handed off "marks
+verbs reuse the gate and the bulk-is-one-action rule; the marks list
+is the picker's sibling"; §F built the rigid moving set over
+test-built marks and recorded the risk. PR G lands what is missing:
+the VERBS, the marks list on TF-8's prompt machinery, the three bulk
+verbs through the funnel, the chord and rows, the context row going
+live, and the journey. Contract numbering is per-wave: G1–G9, GD-1
+onward.
+
+**G1 — Toggle Mark is the one mutator, and it speaks the live
+count.** Ctrl+Alt+M (mac ⌃⌘M, FD-3's Ctrl+Alt family), the palette
+row and the context-menu row all route to ONE document verb that
+calls `CanvasSelection.ToggleMark` on the SELECTED node — groups
+included, because mac marks any outline row (`canvasToggleMark`,
+`AppState+CanvasActions.swift:753–771`) — and announces
+`CanvasMarkToggled(marked, title, count)` with the store's count
+AFTER the toggle. No selection refuses `NothingSelected`. Arrows
+never mutate marks (PR A's rule, unchanged); a toggle republishes
+through the publication's marked intent so every pane's rows and the
+peers' `marked` state move together (`CanvasDocumentViewModel`'s
+`Marked` republish arm, the `WithMarkedIntent` seam).
+
+**G2 — Marks are durable per document and honest about the scene.**
+The set lives on the document, shared across panes, seeded across a
+retarget (CD-32), and cleared when the last tab closes (PR A's
+teardown row). A mark on a node the scene no longer holds is kept in
+the store and DROPPED by every projection: core's `CanvasOrderNodes`
+drops unknown ids silently (§W-G row F, contract 0b-10), and the
+count SPOKEN is the store's, mac's shape (`marked.count`). No verb
+reads marks except through the reading-order projection, so "in
+order" has exactly one meaning on both hosts.
+
+**G3 — Clear All Marks never refuses and speaks its count.**
+`CanvasMarksCleared(count)` — the render's own `No marks.` arm at
+zero, `Cleared ⟨n⟩ mark[s].` otherwise — from the palette row and
+from the marks list's button; the store's `ClearMarks` is the
+mutator.
+
+**G4 — The marks list is the picker's sibling on the prompt
+machinery.** A KIND of the TF-8 prompt sheet, not a new modal
+surface (GD-1): choices-shaped rows over the marked set in READING
+ORDER, each row named `⟨title⟩, marked`, the heading carrying the
+count. Enter on a row JUMPS: the selection seats the row and the
+owning presenter takes reader focus through `FocusRow` (the IF-29
+lesson), then the sheet closes. Delete on a row UNMARKS it and the
+sheet stays with the highlight kept — and closes when the set
+empties. A Clear All Marks control runs G3 and closes. Escape closes
+choosing nothing. Opening with an empty set refuses
+`CanvasStatus(NoMarks)` and presents nothing (mac's
+`canvasShowMarksList`, `:782–792`).
+
+**G5 — Bulk verbs are ONE action each, over the reading-ordered
+marked set, through the funnel.** Each bulk verb mints one §E
+operation and prepares under the gate; an empty projected set
+refuses `NoMarks`; the action NAME is core's `CountNoun` over the
+FFI (`delete ⟨n⟩ card[s]`, `color ⟨n⟩ card[s]`, `group ⟨n⟩
+card[s]`) so the undo sentence and the verb's own sentence group
+identically at ≥ 1000 (CD-6/CD-26):
+
+- **Delete Marked** — `DeleteNode` per id in reading order; success
+  clears the marks and drops the selection if it was marked;
+  announces `CanvasDeleted(Cards(count), verbosity, undo chord)`. A
+  marked GROUP deletes by the algebra's ONE group removal — frame and
+  incident edges gone, contained cards kept (ED-3, `apply.rs:410`)
+  — so no bulk delete can lose a card the user did not mark (GD-2).
+- **Color Marked** — `SetNodeColor` per id; announces
+  `CanvasBulkColorSet(count, color?)`; marks are KEPT (mac keeps
+  them, `:838–865`).
+- **Group Marked Cards…** — the label prompt (TF-8's text kind,
+  Enter with an empty field means an unlabeled group — the IF-27
+  normalization); the frame is core's `CanvasGroupRectAround(handle,
+  members)` under the gate; ONE `CreateGroup(id, label?, frame,
+  color null)`; success clears the marks and announces
+  `CanvasGrouped(count, label ‖ "Untitled")`. A null frame — no
+  member resolves — is mac's SILENT no-op (`:867–914`, the recorded
+  mac detail "deciding what the host SAYS there is PR G's"): here it
+  speaks the FD-6 arm `CanvasActionFailed(CanvasAction, "group")`
+  and writes nothing (GD-3).
+
+**G6 — Marks and modes.** The marked set IS the moving set (F2,
+unchanged); a bulk verb during a held mode refuses `ModeHeld` →
+`CanvasBlocked(ModeBusy)` (F4d, the shipped arm); a mode commit
+KEEPS the marks (mac's `canvasCommitTransient` never touches them);
+during suspension every bulk verb answers the ladder's
+ConflictPending (TF-10's column). Toggle Mark during a held mode is
+a selection-store write, not a funnel verb: it is ALLOWED, and the
+next mode entry reads the new set (GD-4).
+
+**G7 — Controls and the matrix (M6, F9's pattern).** Palette rows,
+labels byte-identical to mac (P3): `toggleMark` "Canvas: Toggle Mark"
+(Ctrl+Alt+M), `showMarks` "Canvas: Show Marked Cards", `clearMarks`
+"Canvas: Clear All Marks", `groupMarked` "Canvas: Group Marked
+Cards…", `deleteMarked` "Canvas: Delete Marked Cards". Color Marked
+has NO front door on mac — `canvasColorMarked` has no caller
+(recorded divergence, assigned there); Windows lands `colorMarked`
+"Canvas: Color Marked Cards…" on the Set Color prompt kind with a
+BULK target (GD-5). The context-menu Toggle Mark row goes LIVE and
+its "arrives later" reason retires. The matrix cells: toggle with no
+selection → `NothingSelected`; list/group/delete/color with no marks
+→ `NoMarks`; bulk verbs under a held mode → `ModeHeld`; under
+suspension → ConflictPending; the marks list's Jump onto a vanished
+row → the seat fallback, the row dropped from the list on the next
+projection.
+
+**G8 — Undo of a bulk verb is one entry, spoken by its name.** §E's
+history seam: the inverse restores every node in one checkout, and
+`CanvasHistoryApplied` speaks the F9a-style name — `Undid delete
+⟨n⟩ cards.` after `Deleted ⟨n⟩ cards.` — the pair agreeing because
+both call `CountNoun` over the FFI.
+
+**G9 — The journey.** The FlaUI marks journey: two cards authored by
+chord, both marked by Ctrl+Alt+M with the rows' `marked` state
+visible to UIA, the marks list opened (sheet + axe), Jump landing
+reader focus on the row, Delete Marked removing both in one action,
+Ctrl+Z restoring both.
+
+### Decisions
+
+- **GD-1.** The marks list is a kind of the TF-8 prompt sheet — one
+  modal membership, reused; the choices shape carries per-row
+  actions (Enter jumps, Delete unmarks) rather than per-row buttons.
+- **GD-2.** Delete Marked admits marked groups under the algebra's
+  one group removal (cards kept); the bulk sentence counts NODES.
+- **GD-3.** A null group frame speaks the FD-6 arm; mac's silence
+  is a recorded divergence assigned to the mac lane.
+- **GD-4.** Toggle Mark is a store write, never a funnel verb; it is
+  allowed during a held mode and during suspension.
+- **GD-5.** Color Marked lands with a Windows front door; mac's
+  missing row is a recorded divergence assigned there.
+
+### Recorded divergences (mac, admitted — assigned, not imported)
+
+- mac's `canvasGroupMarked` is a silent no-op when no member
+  resolves (G5, GD-3); the Swift repair is the mac lane's.
+- mac's `canvasColorMarked` has no palette row or chord (G7, GD-5).
+- mac's marks list Jump seats selection without addressing reader
+  focus (G4 applies the IF-29 lesson); same assignment.
+
+### Accepted risks
+
+- The marks list rides the prompt sheet's choices shape with keyed
+  actions; a per-row button layout is a later polish if UIA clients
+  prove to need it.
+- The journey budgets one launch for every leg, as §F's did.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same

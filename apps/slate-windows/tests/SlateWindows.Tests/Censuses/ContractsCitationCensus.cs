@@ -274,7 +274,7 @@ public sealed class ContractsCitationCensus
             (
                 "F",
                 "## PR F — move and resize modes, structural placement, and the connect flow",
-                "## §W-G canonical-consumption audit",
+                "## PR G — marks: mark-then-act, the marks list, and the bulk verbs",
                 // The length pin guards marker movement; a young
                 // section pins below its honest size and rises with
                 // its records, as §E's did. TF-3's record took
@@ -352,6 +352,19 @@ public sealed class ContractsCitationCensus
                 // 80 sits above the pre-task population of 80
                 // — a twelfth time.
                 80),
+            (
+                "G",
+                "## PR G — marks: mark-then-act, the marks list, and the bulk verbs",
+                "## §W-G canonical-consumption audit",
+                // A young section pins below its honest size and
+                // rises with its records, as §F's did.
+                6_000,
+                // A DESIGN floor, the standing convention: revision 1's
+                // citations are EXISTING names (the selection store, the
+                // funnel, the prompt kinds, the FFI shapes); 4 sits
+                // above the empty pre-section population and below the
+                // landed count; each task raises it.
+                4),
         ];
 
     public static TheoryData<string, string, string> SectionRanges
@@ -1014,6 +1027,10 @@ public sealed class ContractsCitationCensus
         (
             "§F",
             "## PR F — move and resize modes, structural placement, and the connect flow",
+            "## PR G — marks: mark-then-act, the marks list, and the bulk verbs"),
+        (
+            "§G",
+            "## PR G — marks: mark-then-act, the marks list, and the bulk verbs",
             "## §W-G canonical-consumption audit"),
         (
             "divergences",
