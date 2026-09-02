@@ -12858,6 +12858,64 @@ failure back to the generic arm (the census bit — the ledger's site no
 longer constructs `NewCard`). All bitten. TH-4 landed after TH-5 and
 TH-6 so the ledger reads the repaired tree.
 
+### TH-8 — §W-C: the matrix rows true of the surfaces, from a manifest the sources own
+
+The rows (H5): the four canvas rows of `w_c_matrix.md` carried eleven
+cells against ten columns — an anatomy cell before the control-type
+one — so the JAWS column fell off the rendered table; the anatomy is
+folded into the control-type cell and each row has ten. Four rows are
+added for the surfaces that shipped after §D — the card editor sheet
+(§E), the prompt sheets (§F, §G, §G2: the label prompts, the choices
+prompts, the marks list), the pickers on their one slot (§E, §F, §G2),
+and the context menus and row actions (§E, §G2) — each with the control
+types, the Name and HelpText sources, the patterns, the focus route,
+the notification contract and the evidence in one grammar: backticked
+journeys and facts, and `axe:` labels the journeys scan (the menus'
+popup HWND sits outside the window scan and says so). Every human cell
+is Pending.
+
+The census `WcMatrixCanvasEvidenceCensus` (IH-12, IH-41) holds a
+MANIFEST sourced from the shell, not from the matrix: for each surface
+the automation ids the shell sets (in code or XAML), the peer classes
+with the control types their bases or overrides return
+(TreeViewAutomationPeer → Tree, TreeViewDataItemAutomationPeer →
+TreeItem, an explicit AutomationControlType override → its type) and
+the PatternInterface arms their `GetPattern` handles, the native
+control types and patterns of the WPF controls the surface is built
+from, the members and strings that source Names, the journeys and facts
+that evidence it, and the axe labels. Three facts:
+`EveryManifestSurfaceIsARowOfTenCellsAndNoCanvasRowIsUnknown` (the
+title set equal both ways, ten cells, the seven non-human cells
+non-empty, the human cells Pending or a recorded run);
+`TheControlTypesPatternsAndNameSourcesAreTheSourcesOwn` (every id set
+by the shell and named in the row; every peer class present and
+returning the claimed type and handling the claimed patterns, and the
+row's cells carrying them; every Name source in the Name cell); and
+`EveryEvidenceNameResolvesAndEveryAxeLabelIsScanned` (the manifest's
+evidence in the cell; every backticked name resolving to a fact, a
+journey, a test or benchmark class, or a shell member; every `axe:`
+label scanned by an `AssertAxeClean` call, and an unscanned surface
+saying why). Axe is zero failures across the eight canvas journeys with
+the one waiver (`IsFluentCollapsedScrollBarPart`, both ways in
+`AxeWaiverTests`).
+
+What the census found in the rows it was written against: the outline
+row's Name cell never named the helpers that compose it, the table
+row's patterns cell omitted Selection, the navigator row omitted the
+filter field's Name, the visual row omitted the card peer's
+SelectionItem, the prompt row wrote its button in lower case, and the
+outline row still cited the interim card detail — CanvasCardDetail —
+that E14's swap retired and the shell no longer sets; and the table
+row named a summary id the shell never set. Each corrected in the row,
+not the manifest.
+
+Mutations, each byte-restored, on the matrix: M1 a canvas row deleted
+(the row-set fact bit); M2 the visual row's card control type wrong
+(the sources fact bit); M3 the outline row's Name source wrong (bit);
+M4 the visual row's card pattern dropped (bit); M5 an evidence name that
+does not exist (the evidence fact bit); M6 the card editor's axe label
+removed (bit). All bitten.
+
 ---
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)

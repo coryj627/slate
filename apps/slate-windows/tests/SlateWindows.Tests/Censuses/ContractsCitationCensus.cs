@@ -497,7 +497,11 @@ public sealed class ContractsCitationCensus
                 // TH-4 bound the trigger ledger and its census, taking the
                 // section to 139; 138 sits above the pre-task population
                 // of 113 — an eighth time.
-                138),
+                //
+                // TH-8 bound the §W-C rows and their manifest census, taking the
+                // section to 144; 143 sits above the pre-task population
+                // of 139 — a ninth time.
+                143),
         ];
 
     public static TheoryData<string, string, string> SectionRanges
